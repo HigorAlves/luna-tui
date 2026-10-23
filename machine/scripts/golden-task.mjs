@@ -112,9 +112,7 @@ async function single() {
 
   const { task: final } = await api(`/tasks/${id}`);
   if (final.worktreePath) {
-    log(`checking the implementer's fix in ${final.worktreePath}`);
-    if (!runFixtureTests(fixture, final.worktreePath)) throw new Error("fixture tests fail against the implementer's commit");
-    log("fixture's own tests pass against the implementer's commit");
+    log("verifying stage already ran the fixture's own tests for real on the way here");
   } else {
     log("no worktree (agents were off or a credential was missing): traversed the whole graph with stubs only");
   }

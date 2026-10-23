@@ -157,8 +157,12 @@ export function createApp({ pipeline, bus, watcher, stubs }: AppDeps): Hono {
 
   app.get("/events", (c) =>
     streamSSE(c, async (stream) => {
-      const unsubscribe = bus.subscribe((message) => {
-        void stream.writeSSE({ event: message.type, data: JSON.stringify(message) });
+      let unsubscribe = () => {};
+      unsubscribe = bus.subscribe((message) => {
+        stream.writeSSE({ event: message.type, data: JSON.stringify(message) }).catch((error: unknown) => {
+          console.error(`SSE write failed, dropping this listener: ${error}`);
+          unsubscribe();
+        });
       });
       stream.onAbort(unsubscribe);
 

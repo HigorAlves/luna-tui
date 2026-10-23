@@ -20,11 +20,14 @@ export interface Config {
   herdrBin: string;
   /** Poll GitHub issues carrying `label` in `repos` (`owner/name`) and create tasks. No repos: off. */
   githubPoll: { repos: string[]; intervalMs: number; label: string };
+  /** Days to keep a closed task's events/stage runs before pruning them. 0 disables pruning. */
+  retentionDays: number;
 }
 
 export const DEFAULT_DATABASE_URL = "postgres://hardness:hardness@127.0.0.1:5433/hardness";
 export const DEFAULT_PORT = 4317;
 export const DEFAULT_MAX_CONCURRENT_TASKS = 4;
+export const DEFAULT_RETENTION_DAYS = 90;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const port = env.MACHINE_PORT === undefined ? DEFAULT_PORT : Number(env.MACHINE_PORT);
@@ -53,6 +56,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       `MACHINE_GITHUB_POLL_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_GITHUB_POLL_INTERVAL}"`,
     );
   }
+  const retentionDays =
+    env.MACHINE_RETENTION_DAYS === undefined ? DEFAULT_RETENTION_DAYS : Number(env.MACHINE_RETENTION_DAYS);
+  if (!Number.isInteger(retentionDays) || retentionDays < 0) {
+    throw new Error(`MACHINE_RETENTION_DAYS must be a non-negative integer, got "${env.MACHINE_RETENTION_DAYS}"`);
+  }
   const home = env.HOME ?? homedir();
   return {
     databaseUrl: env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
@@ -65,5 +73,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     stateDir: env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness"),
     herdrBin: env.HERDR_BIN ?? "herdr",
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
+    retentionDays,
   };
 }

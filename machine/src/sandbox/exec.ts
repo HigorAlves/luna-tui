@@ -6,7 +6,10 @@ export interface ExecResult {
   stderr: string;
 }
 
-/** Runs a command without a shell and resolves with its exit code instead of throwing. */
+/** Runs a command without a shell and resolves with its exit code instead of throwing.
+ *  `signal` kills the process early (e.g. the task was aborted); `timeoutMs` kills it after
+ *  that long regardless — without one, a hung command blocks its caller (and whatever slot
+ *  it's holding) forever. */
 export function exec(
   command: string,
   args: string[],

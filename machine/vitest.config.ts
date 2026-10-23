@@ -1,4 +1,10 @@
 import { defineConfig } from "vitest/config";
 
-// Database tests share one Postgres database, so test files run one at a time.
-export default defineConfig({ test: { fileParallelism: false } });
+export default defineConfig({
+  test: {
+    // Multiple test files share one Postgres database (freshTestDatabase() drops and
+    // recreates its schema in each file's beforeAll). Running files in parallel races
+    // that schema recreation against another file's migrations — serialize them instead.
+    fileParallelism: false,
+  },
+});

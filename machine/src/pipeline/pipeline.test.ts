@@ -400,6 +400,40 @@ describe("concurrency", () => {
     }
     expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: false });
   });
+
+  it("never lets two simultaneous starts both claim the last slot", async () => {
+    // Unlike the test above (A started and confirmed running before B starts), this fires
+    // both starts at once — the actual race: two schedule() calls contending for one slot,
+    // not one already settled before the other begins.
+    const resolvers: Array<() => void> = [];
+    const blocking: StageRunner = () =>
+      new Promise<StageResult>((resolve) => resolvers.push(() => resolve({ outcome: "pass" })));
+    pipeline = new Pipeline(db, (stage) => (stage === "triage" ? blocking : stubs.runnerFor(stage)), {
+      maxConcurrentTasks: 1,
+    });
+
+    const a = await newTask();
+    const b = await newTask();
+
+    const [startedA, startedB] = await Promise.all([pipeline.start(a.id), pipeline.start(b.id)]);
+
+    expect([startedA.queued, startedB.queued].filter(Boolean)).toHaveLength(1);
+    // dispatch() returns as soon as a slot is reserved, before the stage loop actually
+    // reaches the runner — wait for that so `resolvers` reflects who's really running.
+    while (resolvers.length < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(resolvers).toHaveLength(1);
+
+    resolvers[0]?.();
+    while (resolvers.length < 2) await new Promise((resolve) => setTimeout(resolve, 5));
+    resolvers[1]?.();
+
+    while ((await pipeline.get(a.id)).state === "triage" || (await pipeline.get(b.id)).state === "triage") {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    expect((await pipeline.get(a.id)).state).toBe("awaiting_approval");
+    expect((await pipeline.get(b.id)).state).toBe("awaiting_approval");
+  });
 });
 
 describe("events", () => {
