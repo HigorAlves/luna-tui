@@ -59,6 +59,7 @@ Press `?` in the board for the full list. The main ones:
 | `w` | kill the ticket's worktree once you are done with it (asks first); its branch and commits stay |
 | `R` | search for a repo to set on the ticket, instead of typing a path |
 | `f` | focus the agent's watch tab in herdr |
+| `o` | open the linked GitHub issue in the browser |
 | `/` / `!` / `@` | filter by title or `#id`; show only tickets that need you; show only this repo's tickets |
 | `F` | fold: show every column at once, collapsing all but the focused one to its header bar |
 | `x` | actions menu for the selected ticket |

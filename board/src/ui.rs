@@ -403,6 +403,7 @@ fn card(task: &Task) -> ListItem<'static> {
     let look = task.look();
     let head = Line::from(vec![
         Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)),
+        Span::from(task.issue_prefix()).fg(c(SUBTEXT0)),
         Span::from(task.title.clone()).bold(),
     ]);
 
@@ -451,6 +452,9 @@ fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&Tas
         "Repo: {}",
         task.repo_path.as_deref().unwrap_or("none (add one with e to run real agents)")
     ))];
+    if let Some(source) = &task.source {
+        lines.push(muted(format!("GitHub: {}#{}  {}", source.repo, source.number, source.url)));
+    }
     if let Some(branch) = &task.branch {
         lines.push(muted(format!("Branch: {branch}")));
     }

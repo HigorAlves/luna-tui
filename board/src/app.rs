@@ -32,24 +32,35 @@ use crate::{
 };
 
 const INFO_TOAST_FOR: Duration = Duration::from_secs(3);
+/// The platform's "open this URL" program and its arguments.
+fn opener_command(url: &str) -> (&'static str, Vec<String>) {
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    (program, vec![url.to_string()])
+}
+
 /// Rows one card takes on the board, including its spacer line.
 pub const CARD_HEIGHT: usize = 3;
 
 /// Actions in the `x` menu for the selected ticket, as the key each one is.
-pub const ACTIONS: [(char, &str); 9] = [
+pub const ACTIONS: [(char, &str); 10] = [
     ('a', "advance: start, approve, answer, resume"),
     ('S', "ship: approve the Ship gate and open the PR"),
     ('r', "send back with a reason"),
     ('e', "edit the ticket"),
     ('R', "search for its repo"),
     ('f', "focus the agent's tab"),
+    ('o', "open the linked GitHub issue"),
     ('X', "abort the running stage"),
     ('w', "kill its worktree"),
     ('d', "delete"),
 ];
 
 /// Keys shown in the help overlay, as (keys, what they do).
-pub const HELP: [(&str, &str); 21] = [
+pub const HELP: [(&str, &str); 22] = [
     ("h / l", "previous / next column"),
     ("j / k", "previous / next ticket"),
     ("enter", "open details"),
@@ -63,6 +74,7 @@ pub const HELP: [(&str, &str); 21] = [
     ("w", "kill its worktree once you are done with it (asks first)"),
     ("d", "delete (asks first)"),
     ("f", "focus the agent's watch tab in herdr"),
+    ("o", "open the linked GitHub issue in the browser"),
     ("/", "filter by title or #id"),
     ("!", "show only tickets that need you"),
     ("@", "show only tickets for this repo"),
@@ -570,6 +582,16 @@ impl App {
                     self.notify(format!("no watch tab for #{} yet; it opens when an agent runs", task.short_id()), false);
                 }
             }
+            'o' => match &task.source {
+                Some(source) => {
+                    let (program, args) = opener_command(&source.url);
+                    // Detached: spawn and move on, never wait on the browser.
+                    if Command::new(program).args(args).spawn().is_err() {
+                        self.notify(format!("could not open {}", source.url), true);
+                    }
+                }
+                None => self.notify("no issue linked", false),
+            },
             _ => {}
         }
         Outcome::Continue
@@ -944,6 +966,17 @@ mod tests {
         let toast = app.toast.expect("a warning toast on startup");
         assert!(toast.error);
         assert!(toast.text.contains("pnpm dev"), "toast was: {}", toast.text);
+    }
+
+    #[test]
+    fn opener_command_uses_open_on_macos_and_xdg_open_elsewhere() {
+        let (program, args) = opener_command("https://github.com/acme/app/issues/42");
+        if cfg!(target_os = "macos") {
+            assert_eq!(program, "open");
+        } else {
+            assert_eq!(program, "xdg-open");
+        }
+        assert_eq!(args, vec!["https://github.com/acme/app/issues/42".to_string()]);
     }
 
     #[test]

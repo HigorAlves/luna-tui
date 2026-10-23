@@ -18,6 +18,17 @@ pub struct Retries {
     pub total: u32,
 }
 
+/// Where a task came from, when it was created from an outside issue. `kind` stays a plain
+/// string so kinds this board does not know still load.
+#[derive(Deserialize, Clone, Debug)]
+pub struct TaskSource {
+    #[allow(dead_code)] // kept for kinds beyond GitHub; the board only labels GitHub today
+    pub kind: String,
+    pub repo: String,
+    pub number: u64,
+    pub url: String,
+}
+
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
@@ -39,6 +50,9 @@ pub struct Task {
     pub reason: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Absent on tasks made by hand, and from machines that predate it.
+    #[serde(default)]
+    pub source: Option<TaskSource>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -108,6 +122,17 @@ pub enum Look {
 impl Task {
     pub fn short_id(&self) -> &str {
         &self.id[..self.id.len().min(8)]
+    }
+
+    /// `#42 ` when the task came from an issue, else empty. The card shows it dim.
+    pub fn issue_prefix(&self) -> String {
+        self.source.as_ref().map_or_else(String::new, |s| format!("#{} ", s.number))
+    }
+
+    #[allow(dead_code)] // the card renders the prefix dim, so it builds from `issue_prefix`
+    /// The title as a card reads it: issue number first when the task has one.
+    pub fn card_label(&self) -> String {
+        format!("{}{}", self.issue_prefix(), self.title)
     }
 
     pub fn column_index(&self) -> usize {
@@ -317,6 +342,52 @@ mod tests {
         assert_eq!(unix_secs("1970-01-01T00:00:00.000Z"), Some(0));
         assert_eq!(unix_secs("2026-10-22T23:24:22.089Z"), Some(1_792_711_462));
         assert_eq!(unix_secs("2024-02-29T12:00:00Z"), Some(1_709_208_000));
+    }
+
+    fn task_json(source: &str) -> String {
+        format!(
+            r#"{{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
+            "repoPath":null,"branch":null,"worktreePath":null,"state":"draft","column":"Intake",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"{source}}}"#
+        )
+    }
+
+    #[test]
+    fn task_with_a_github_source_deserialises() {
+        let json = task_json(
+            r#","source":{"kind":"github","repo":"acme/app","number":42,"url":"https://github.com/acme/app/issues/42"}"#,
+        );
+        let task: Task = serde_json::from_str(&json).unwrap();
+        let source = task.source.expect("source present");
+        assert_eq!(source.number, 42);
+        assert_eq!(source.repo, "acme/app");
+        assert_eq!(source.url, "https://github.com/acme/app/issues/42");
+    }
+
+    #[test]
+    fn task_without_a_source_deserialises_as_none() {
+        let task: Task = serde_json::from_str(&task_json("")).unwrap();
+        assert!(task.source.is_none());
+    }
+
+    #[test]
+    fn task_with_an_unknown_source_kind_still_deserialises() {
+        let json = task_json(r#","source":{"kind":"linear","repo":"ENG","number":7,"url":"https://x/7"}"#);
+        let task: Task = serde_json::from_str(&json).unwrap();
+        assert_eq!(task.source.unwrap().kind, "linear");
+    }
+
+    #[test]
+    fn card_label_prefixes_the_issue_number_only_when_linked() {
+        let linked: Task = serde_json::from_str(&task_json(
+            r#","source":{"kind":"github","repo":"acme/app","number":42,"url":"u"}"#,
+        ))
+        .unwrap();
+        let plain: Task = serde_json::from_str(&task_json("")).unwrap();
+        assert_eq!(linked.card_label(), "#42 Login page");
+        assert_eq!(plain.card_label(), "Login page");
     }
 
     #[test]
