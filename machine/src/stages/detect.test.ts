@@ -62,4 +62,23 @@ describe("detectChecks", () => {
   it("returns nothing for an unknown project", async () => {
     expect(await detectChecks("/w", fs({ "README.md": "" }))).toEqual({ manager: null });
   });
+
+  it("picks the manager from the lockfile and the test script", async () => {
+    const pj = JSON.stringify({ scripts: { test: "x" } });
+    expect(await detectChecks("/w", fs({ "package.json": pj }))).toMatchObject({ manager: "npm", test: ["npm", "run", "test"] });
+    expect(await detectChecks("/w", fs({ "package.json": pj, "pnpm-lock.yaml": "" }))).toMatchObject({ manager: "pnpm", test: ["pnpm", "run", "test"] });
+    expect(await detectChecks("/w", fs({ "package.json": pj, "yarn.lock": "" }))).toMatchObject({ manager: "yarn", test: ["yarn", "run", "test"] });
+  });
+
+  it("has no test command for a package.json without a test script", async () => {
+    const found = await detectChecks("/w", fs({ "package.json": JSON.stringify({ scripts: { build: "x" } }) }));
+    expect(found.test).toBeUndefined();
+  });
+
+  it("falls back to cargo test when there is a Cargo.toml and no package.json", async () => {
+    expect(await detectChecks("/w", fs({ "Cargo.toml": '[package]\nname = "x"\n' }))).toEqual({
+      manager: "cargo",
+      test: ["cargo", "test"],
+    });
+  });
 });

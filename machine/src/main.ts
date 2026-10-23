@@ -18,7 +18,7 @@ import { exec } from "./sandbox/exec.ts";
 import { loadCredential } from "./sandbox/credentials.ts";
 import { imageExists, removeLeftoverContainers } from "./sandbox/docker.ts";
 import { agentRunners, runAgent } from "./stages/agents.ts";
-import type { StageRunner } from "./stages/runner.ts";
+import type { StageContext, StageResult, StageRunner } from "./stages/runner.ts";
 import { ciWatchRunner } from "./stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "./stages/e2e.ts";
 import { evidenceRunner } from "./stages/evidence.ts";
@@ -87,6 +87,7 @@ async function realStages(): Promise<Partial<Record<TaskState, StageRunner>>> {
     stateDir: config.stateDir,
     watcher,
   };
+  verifyPack = (context) => runAgent(deps, context, "verifying");
   return {
     ...agentRunners(deps),
     // ci_watch polls the PR's checks on the host and only calls its pack when one is red.
@@ -109,23 +110,26 @@ async function realStages(): Promise<Partial<Record<TaskState, StageRunner>>> {
         stateDir: config.stateDir,
       }),
     ),
-    // Verifying runs the project's checks on the host first, then the review pack.
-    verifying: verifyRunner({
-      exec,
-      runPack: (context) => runAgent(deps, context, "verifying"),
-      stateDir: config.stateDir,
-    }),
   };
 }
 
+let verifyPack: ((context: StageContext) => Promise<StageResult>) | null = null;
 const real = await realStages();
+/** Verifying runs the project's checks on the host, so it always runs for real; the review pack joins when agents are on. */
+const realVerifyRunner = verifyRunner({
+  exec,
+  runPack: verifyPack,
+  stateDir: config.stateDir,
+});
 /** Delivering and shipping need only git and gh, not a Claude credential, so they always run for real. */
 const runnerFor = (stage: TaskState): StageRunner =>
   stage === "delivering"
     ? realDeliverRunner
-    : stage === "shipping"
-      ? real.shipping ?? shipRunner
-      : real[stage] ?? stubs.runnerFor(stage);
+    : stage === "verifying"
+      ? realVerifyRunner
+      : stage === "shipping"
+        ? real.shipping ?? shipRunner
+        : real[stage] ?? stubs.runnerFor(stage);
 
 const METRICS_DEBOUNCE_MS = 2_000;
 let metricsTimer: NodeJS.Timeout | undefined;
@@ -168,7 +172,7 @@ if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by
 
 const app = createApp({ pipeline, bus, watcher, stubs });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: "127.0.0.1" }, (info) => {
-  const agents = [...Object.keys(real), "delivering", "shipping"];
+  const agents = [...new Set([...Object.keys(real), "verifying", "delivering", "shipping"])];
   console.log(
     `machine listening on http://127.0.0.1:${info.port} · real stages: ${agents.join(", ")} · up to ${config.maxConcurrentTasks} task(s) at once`,
   );

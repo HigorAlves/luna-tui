@@ -25,6 +25,7 @@ function setup(opts: {
   detected?: Record<string, unknown>;
   pack?: StageResult;
   controller?: AbortController;
+  noPack?: boolean;
 }) {
   const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
   const calls: string[][] = [];
@@ -35,7 +36,7 @@ function setup(opts: {
   const runPack = vi.fn(async () => opts.pack ?? { outcome: "pass" as const, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } });
   const run = verifyRunner({
     exec,
-    runPack,
+    runPack: opts.noPack ? null : runPack,
     stateDir,
     detect: async () => (opts.detected ?? { manager: "pnpm", test: ["pnpm", "run", "test"], lint: ["pnpm", "run", "lint"] }) as never,
   });
@@ -110,15 +111,55 @@ describe("verifying stage", () => {
     expect(result.findings).toEqual([f]);
   });
 
-  it("proceeds to the pack when no checks are detected", async () => {
+  it("fails when no test command is detected, never reaching the pack", async () => {
     const { run, context, runPack, exec } = setup({ detected: { manager: null } });
     const result = await run(context);
     expect(exec).not.toHaveBeenCalled();
-    expect(runPack).toHaveBeenCalledOnce();
+    expect(runPack).not.toHaveBeenCalled();
+    expect(result.outcome).toBe("fail");
+    expect((result.detail as { error: string }).error).toContain("don't know how to test this repo");
+  });
+
+  it("fails when only lint is detected (no test command)", async () => {
+    const { run, context } = setup({ detected: { manager: "pnpm", lint: ["pnpm", "run", "lint"] } });
+    expect((await run(context)).outcome).toBe("fail");
+  });
+
+  it("passes without running anything when the task has no worktree", async () => {
+    const { run, context, exec, runPack } = setup({});
+    context.task = { id: "t1", worktreePath: null, repoPath: "/repo" } as unknown as TaskRow;
+    const result = await run(context);
     expect(result.outcome).toBe("pass");
-    expect((result.detail as { checks: unknown[] }).checks).toEqual([
-      { check: "none", note: expect.stringContaining("no test") },
-    ]);
+    expect(result.detail).toMatchObject({ note: "no worktree; implementer was stubbed" });
+    expect(exec).not.toHaveBeenCalled();
+    expect(runPack).not.toHaveBeenCalled();
+  });
+
+  it("sets HARDNESS_STAGE=verifying and a 30 minute budget on every check", async () => {
+    const { run, context, exec } = setup({});
+    await run(context);
+    expect(exec).toHaveBeenCalledTimes(2);
+    for (const call of exec.mock.calls) {
+      const options = (call as unknown as [string, string[], { env?: NodeJS.ProcessEnv; timeoutMs?: number; signal?: AbortSignal }])[2];
+      expect(options.env?.HARDNESS_STAGE).toBe("verifying");
+      expect(options.signal).toBeDefined();
+      expect(options.timeoutMs).toBeGreaterThan(29 * 60_000);
+      expect(options.timeoutMs).toBeLessThanOrEqual(30 * 60_000);
+    }
+  });
+
+  it("skips the review with a note when agents are off (runPack null)", async () => {
+    const s = setup({ noPack: true });
+    const result = await s.run(s.context);
+    expect(s.exec).toHaveBeenCalledTimes(2);
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ step: "checks", note: "review: skipped (agents off)" });
+  });
+
+  it("adds an error line with the failing command and its output to a red check", async () => {
+    const { run, context } = setup({ checks: { "pnpm run test": { code: 1, stdout: "boom", stderr: "" } } });
+    const result = await run(context);
+    expect((result.detail as { error: string }).error).toBe("`pnpm run test` failed:\nboom");
   });
 
   it("treats a pack that asks questions as a pass with a note", async () => {

@@ -2,7 +2,7 @@
 import { readFile as read } from "node:fs/promises";
 import { join } from "node:path";
 
-export type Manager = "pnpm" | "npm" | "yarn" | "go" | "python" | "make";
+export type Manager = "pnpm" | "npm" | "yarn" | "go" | "python" | "make" | "cargo";
 export type Argv = string[];
 
 export interface DetectedChecks {
@@ -54,6 +54,7 @@ export async function detectChecks(worktreePath: string, fs: DetectFs = diskFs(w
   if (await fs.exists("go.mod")) {
     return { manager: "go", test: ["go", "test", "./..."], lint: ["go", "vet", "./..."] };
   }
+  if (await fs.exists("Cargo.toml")) return { manager: "cargo", test: ["cargo", "test"] };
   const pyproject = await fs.readFile("pyproject.toml");
   if (pyproject !== null || (await fs.exists("pytest.ini"))) {
     const found: DetectedChecks = { manager: "python", test: ["pytest", "-q"] };

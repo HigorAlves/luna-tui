@@ -10,7 +10,7 @@ import { type DetectedChecks, detectChecks } from "./detect.ts";
 import type { StageContext, StageResult, StageRunner } from "./runner.ts";
 
 const MINUTE = 60_000;
-export const CHECKS_TIMEOUT_MS = 15 * MINUTE;
+export const CHECKS_TIMEOUT_MS = 30 * MINUTE;
 const TAIL_LINES = 60;
 const CHECK_NAMES = ["test", "lint", "typecheck"] as const;
 
@@ -18,10 +18,10 @@ export interface VerifyDeps {
   exec: (
     command: string,
     args: string[],
-    options: { cwd?: string; signal?: AbortSignal; timeoutMs?: number },
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number },
   ) => Promise<ExecResult>;
-  /** Runs the verifying review pack. */
-  runPack: (context: StageContext) => Promise<StageResult>;
+  /** Runs the verifying review pack; null when agents are off, which skips the review. */
+  runPack: ((context: StageContext) => Promise<StageResult>) | null;
   stateDir: string;
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
 }
@@ -50,7 +50,8 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
   const detect = deps.detect ?? detectChecks;
   return async (context) => {
     const { task, signal } = context;
-    if (!task.worktreePath) throw new Error("the task has no worktree to verify");
+    // No worktree means implementing was stubbed (agents off): behave like the stub, not an escalation.
+    if (!task.worktreePath) return { outcome: "pass", detail: { note: "no worktree; implementer was stubbed" } };
     const cwd = task.worktreePath;
     const aborted = (): StageResult => ({ outcome: "fail", detail: { error: "aborted" } });
     if (signal.aborted) return aborted();
@@ -67,20 +68,32 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       let result: ExecResult;
       let timedOut = false;
       if (remaining <= 0) {
-        result = { code: 1, stdout: "", stderr: "skipped: the 15 minute checks budget ran out" };
+        result = { code: 1, stdout: "", stderr: "skipped: the 30 minute checks budget ran out" };
         timedOut = true;
       } else {
-        result = await deps.exec(argv[0]!, argv.slice(1), { cwd, signal, timeoutMs: remaining });
+        result = await deps.exec(argv[0]!, argv.slice(1), {
+          cwd,
+          signal,
+          timeoutMs: remaining,
+          env: { ...process.env, HARDNESS_STAGE: "verifying" },
+        });
         timedOut = result.code !== 0 && Date.now() >= deadline;
       }
       if (signal.aborted) return aborted();
       const text = `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`;
-      const tail = tailOf(timedOut ? `${text}\ntimed out: the 15 minute checks budget ran out` : text);
+      const tail = tailOf(timedOut ? `${text}\ntimed out: the 30 minute checks budget ran out` : text);
       log.push(`$ ${cmd}\n(exit ${result.code})\n${text}\n`);
       reports.push({ name, cmd, ok: result.code === 0, tail });
     }
-    if (commands.length === 0) {
-      reports.push({ check: "none", note: "no test, lint or typecheck command detected in the worktree" });
+    if (!found.test) {
+      return {
+        outcome: "fail",
+        detail: {
+          error: `don't know how to test this repo (no test command detected) in ${cwd}`,
+          step: "checks",
+          checks: [{ check: "none", note: "no test command detected in the worktree" }],
+        },
+      };
     }
     const runDir = join(deps.stateDir, "runs", context.runId);
     await mkdir(runDir, { recursive: true });
@@ -106,6 +119,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
           step: "checks",
           failed: list,
           summary: `${failed.map((r) => r.name).join(", ")} failed`,
+          error: `\`${failed[0]!.cmd}\` failed:\n${(failed[0]!.tail ?? "").slice(-4000)}`,
           findings,
           checks: reports,
         },
@@ -114,7 +128,10 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       };
     }
 
-    // Step B: the review pack.
+    // Step B: the review pack, only when agents are on.
+    if (!deps.runPack) {
+      return { outcome: "pass", detail: { step: "checks", note: "review: skipped (agents off)", checks: reports }, run: { transcriptPath } };
+    }
     const pack = await deps.runPack(context);
     if (pack.outcome === "fail") {
       return { ...pack, detail: { ...pack.detail, step: "review", checks: reports } };
