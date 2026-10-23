@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Luna TUI mark study</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=JetBrains+Mono&display=swap" rel="stylesheet">
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 40px; background: #0b0c12; color: #e9e6dc; font: 14px/1.5 "JetBrains Mono", ui-monospace, monospace; }
+  h1 { font: 400 40px "Instrument Serif", Georgia, serif; margin: 0 0 4px; }
+  h2 { font: 12px "JetBrains Mono", monospace; letter-spacing: .12em; text-transform: uppercase; color: #8d8aa0; margin: 40px 0 14px; }
+  p.note { color: #8d8aa0; margin: 0 0 8px; max-width: 70ch; }
+  .row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 28px; }
+  figure { margin: 0; text-align: center; color: #8d8aa0; font-size: 11px; }
+  figure svg { display: block; margin: 0 auto 8px; }
+  .checker { background: repeating-conic-gradient(#1a1b24 0 25%, #12131a 0 50%) 0 0 / 20px 20px; padding: 16px; border-radius: 8px; }
+  .bar { display: inline-flex; align-items: center; gap: 12px; padding: 8px 14px; border-radius: 6px; }
+  .bar.light { background: #f3f3f5; color: #111; }
+  .bar.dark { background: #1c1c1f; color: #f3f3f5; }
+</style>
+</head>
+<body>
+<h1>Luna TUI</h1>
+<p class="note">Eclipse with Prompt eyes. Every drawing below comes from <code>scripts/mark.mjs</code>, the same builder the exporter and the site use. ES modules do not load from file://, so serve the repo root: <code>python3 -m http.server</code> and open /design/icons/luna-tui.html.</p>
+
+<h2>Mark, 1024 grid</h2>
+<div class="row" id="hero"></div>
+
+<h2>macOS size ladder</h2>
+<div class="row" id="ladder"></div>
+
+<h2>Appearances: default, dark, tinted</h2>
+<div class="row" id="appearances"></div>
+
+<h2>Grid vs tile crop</h2>
+<div class="row" id="crops"></div>
+
+<h2>One-colour glyph, menu bar</h2>
+<div class="row" id="glyphs"></div>
+
+<script type="module">
+  import { markSvg, glyphSvg } from "../../scripts/mark.mjs"
+
+  const fig = (svg, label) => {
+    const f = document.createElement("figure")
+    f.innerHTML = svg + `<figcaption>${label}</figcaption>`
+    return f
+  }
+  const sized = (svg, px) => svg.replace("<svg ", `<svg width="${px}" height="${px}" `)
+  const put = (id, items) => document.getElementById(id).append(...items)
+
+  put("hero", [fig(sized(markSvg(), 512), "1024 grid, shown at 512")])
+  put("ladder", [512, 256, 128, 64, 32, 16].map((px) => fig(sized(markSvg(), px), `${px}`)))
+  put("appearances", ["default", "dark", "tinted"].map((a) => fig(sized(markSvg({ appearance: a }), 200), a)))
+  put("crops", [
+    fig(`<div class="checker">${sized(markSvg({ fit: "grid" }), 240)}</div>`, "grid: transparent margin (macOS icon, board/icon.png)"),
+    fig(`<div class="checker">${sized(markSvg({ fit: "tile" }), 240)}</div>`, "tile: edge to edge, crop 100..924 (favicon, site)"),
+  ])
+  put("glyphs", [
+    fig(`<span class="bar light">${glyphSvg()} Luna TUI</span>`, "light menu bar"),
+    fig(`<span class="bar dark">${glyphSvg()} Luna TUI</span>`, "dark menu bar"),
+    fig(`<span class="bar dark">${glyphSvg().replace(`width="24" height="18"`, `width="96" height="72"`)}</span>`, "glyph enlarged"),
+  ])
+</script>
+</body>
+</html>

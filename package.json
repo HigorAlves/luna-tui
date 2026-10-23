@@ -16,6 +16,8 @@
     "golden": "pnpm --filter @hardness/machine golden",
     "site:dev": "pnpm --filter site dev",
     "site:build": "pnpm --filter site build",
-    "site:test": "pnpm --filter site test"
+    "site:test": "pnpm --filter site test",
+    "icons": "node scripts/export-icons.mjs",
+    "icons:gen": "node scripts/gen-brand.mjs"
   }
 }

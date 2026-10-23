@@ -4,5 +4,5 @@ packages:
   - site
 allowBuilds:
   esbuild: true
-  sharp: false
+  sharp: true
   unrs-resolver: false

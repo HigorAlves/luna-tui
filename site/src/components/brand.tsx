@@ -1,11 +1,44 @@
 import type { SVGProps } from "react"
+import { GLYPH, GLYPH_VIEWBOX, MARKS, MARK_VIEWBOX } from "@/components/brand.generated"
 
-// TEMPORARY placeholder: slice 34 replaces this with the Eclipse Prompt mark.
-export function Mark(props: SVGProps<SVGSVGElement>) {
+type Appearance = keyof typeof MARKS
+
+type MarkProps = Omit<SVGProps<SVGSVGElement>, "children"> & { size?: number; appearance?: Appearance }
+
+/** Luna's Eclipse with Prompt eyes, tile edge to edge. Markup comes from scripts/mark.mjs. */
+export function Mark({ size = 28, appearance = "default", ...props }: MarkProps) {
   return (
-    <svg viewBox="0 0 28 28" width={28} height={28} aria-hidden="true" {...props}>
-      <circle cx="14" cy="14" r="13" fill="currentColor" />
-    </svg>
+    <svg
+      viewBox={MARK_VIEWBOX}
+      width={size}
+      height={size}
+      aria-hidden="true"
+      {...props}
+      dangerouslySetInnerHTML={{ __html: MARKS[appearance] }}
+    />
+  )
+}
+
+/** One-colour crescent with the prompt; follows currentColor. */
+export function Glyph(props: Omit<SVGProps<SVGSVGElement>, "children">) {
+  return (
+    <svg
+      viewBox={GLYPH_VIEWBOX}
+      width={24}
+      height={18}
+      aria-hidden="true"
+      {...props}
+      dangerouslySetInnerHTML={{ __html: GLYPH }}
+    />
+  )
+}
+
+export function Wordmark({ size = 28 }: { size?: number }) {
+  return (
+    <span className="inline-flex items-center gap-2.5">
+      <Mark size={size} />
+      <span className="font-display-tight text-xl text-foreground">Luna TUI</span>
+    </span>
   )
 }
 
