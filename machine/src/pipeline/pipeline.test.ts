@@ -392,6 +392,12 @@ describe("concurrency", () => {
     }
 
     expect((await pipeline.get(a.id)).state).toBe("awaiting_approval");
+    // b is claimed after a's loop returns, which is after a's last transition is stored,
+    // so there is a short window where a is done and b is still queued: wait it out.
+    const deadline = Date.now() + 2000;
+    while ((await pipeline.get(b.id)).queued && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
     expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: false });
   });
 });
