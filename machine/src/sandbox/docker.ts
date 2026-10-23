@@ -57,6 +57,9 @@ export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
 
   const args = ["run", "-d", "--name", run.name, "--label", `${CONTAINER_LABEL}=1`];
   for (const [key, value] of Object.entries(run.labels)) args.push("--label", `${key}=${value}`);
+  // The agent needs outbound network for the Anthropic API, so this isn't `--network none` —
+  // but nothing it does needs write access outside its mounted worktree, /in, /out or /tmp.
+  args.push("--read-only", "--tmpfs", "/tmp:rw,size=512m", "--security-opt", "no-new-privileges");
   args.push(
     // The credential is passed by name; its value is only in docker's environment.
     "-e", run.credential.name,
