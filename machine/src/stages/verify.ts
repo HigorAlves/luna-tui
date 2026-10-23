@@ -36,7 +36,12 @@ export const verifyRunner: StageRunner = async ({ task }) => {
     };
   }
   const [bin, ...args] = command;
-  const result = await exec(bin, args, { cwd: task.worktreePath });
+  // A signal a test fixture can key off, to tell this official pipeline run apart from
+  // an agent's own exploratory `npm test` during implementing (see fixtures/golden-flaky).
+  const result = await exec(bin, args, {
+    cwd: task.worktreePath,
+    env: { ...process.env, HARDNESS_STAGE: "verifying" },
+  });
   if (result.code !== 0) {
     const output = (result.stderr || result.stdout).trim();
     return { outcome: "fail", detail: { error: `\`${command.join(" ")}\` failed:\n${output.slice(0, 4000)}` } };
