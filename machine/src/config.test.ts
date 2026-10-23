@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_DATABASE_URL, DEFAULT_MAX_CONCURRENT_TASKS, DEFAULT_PORT, loadConfig } from "./config.ts";
+import {
+  DEFAULT_DATABASE_URL,
+  DEFAULT_MAX_CONCURRENT_TASKS,
+  DEFAULT_PORT,
+  DEFAULT_RETENTION_DAYS,
+  loadConfig,
+} from "./config.ts";
 
 describe("loadConfig", () => {
   it("uses the dev defaults", () => {
@@ -13,6 +19,7 @@ describe("loadConfig", () => {
       worktreesDir: "/home/me/Developer/worktrees",
       stateDir: "/home/me/.local/state/hardness",
       herdrBin: "herdr",
+      retentionDays: DEFAULT_RETENTION_DAYS,
     });
   });
 
@@ -27,5 +34,15 @@ describe("loadConfig", () => {
   it("rejects a concurrency limit that is not a positive integer", () => {
     expect(() => loadConfig({ MACHINE_MAX_CONCURRENT: "0" })).toThrow(/MACHINE_MAX_CONCURRENT/);
     expect(() => loadConfig({ MACHINE_MAX_CONCURRENT: "abc" })).toThrow(/MACHINE_MAX_CONCURRENT/);
+  });
+
+  it("reads a custom retention window, including 0 to disable pruning", () => {
+    expect(loadConfig({ HOME: "/home/me", MACHINE_RETENTION_DAYS: "30" }).retentionDays).toBe(30);
+    expect(loadConfig({ HOME: "/home/me", MACHINE_RETENTION_DAYS: "0" }).retentionDays).toBe(0);
+  });
+
+  it("rejects a retention window that is not a non-negative integer", () => {
+    expect(() => loadConfig({ MACHINE_RETENTION_DAYS: "-1" })).toThrow(/MACHINE_RETENTION_DAYS/);
+    expect(() => loadConfig({ MACHINE_RETENTION_DAYS: "abc" })).toThrow(/MACHINE_RETENTION_DAYS/);
   });
 });

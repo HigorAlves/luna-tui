@@ -271,9 +271,9 @@ describe("concurrency", () => {
     while (resolvers.length < 1) await new Promise((resolve) => setTimeout(resolve, 5));
     expect(resolvers).toHaveLength(1);
 
-    resolvers[0]();
+    resolvers[0]?.();
     while (resolvers.length < 2) await new Promise((resolve) => setTimeout(resolve, 5));
-    resolvers[1]();
+    resolvers[1]?.();
 
     while ((await pipeline.get(a.id)).state === "triage" || (await pipeline.get(b.id)).state === "triage") {
       await new Promise((resolve) => setTimeout(resolve, 5));

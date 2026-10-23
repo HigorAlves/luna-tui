@@ -9,6 +9,7 @@ import { toEvent, toTask } from "./api/serialize.ts";
 import { loadConfig } from "./config.ts";
 import { createDataSource } from "./db/data-source.ts";
 import type { EventRow } from "./db/entities.ts";
+import { pruneOldRuns } from "./db/prune.ts";
 import { Watcher } from "./herdr/watch.ts";
 import { Pipeline } from "./pipeline/pipeline.ts";
 import { loadCredential } from "./sandbox/credentials.ts";
@@ -25,6 +26,18 @@ await db.initialize();
 const applied = await db.runMigrations();
 if (applied.length > 0) {
   console.log(`applied migrations: ${applied.map((m) => m.name).join(", ")}`);
+}
+
+if (config.retentionDays > 0) {
+  const pruned = await pruneOldRuns(db, config.retentionDays);
+  if (pruned.events > 0 || pruned.stageRuns > 0) {
+    console.log(`pruned ${pruned.events} old event(s), ${pruned.stageRuns} old stage run(s)`);
+  }
+  setInterval(
+    () =>
+      void pruneOldRuns(db, config.retentionDays).catch((error: unknown) => console.error("prune failed", error)),
+    24 * 60 * 60 * 1000,
+  ).unref();
 }
 
 const bus = new Bus();
