@@ -511,13 +511,20 @@ export class Pipeline {
     };
   }
 
-  /** The findings the latest verifying run stored on its `stage.finished` event. */
+  /** The findings the latest verifying, ci_watch or failed implementing run stored on its
+   *  `stage.finished` event. */
   private async latestVerifyingFindings(id: string): Promise<Finding[]> {
     const finished = await this.db
       .getRepository(EventEntity)
       .find({ where: { taskId: id, kind: "stage.finished" }, order: { id: "DESC" } });
-    // Whichever of the two gates failed last is what the implementer is being re-run for.
-    const latest = finished.find((event) => event.payload.stage === "verifying" || event.payload.stage === "ci_watch");
+    // Whichever failed last is what the implementer is being re-run for: a red gate, or its
+    // own previous attempt (e.g. it changed a locked test file and the commit was undone).
+    const latest = finished.find(
+      (event) =>
+        event.payload.stage === "verifying" ||
+        event.payload.stage === "ci_watch" ||
+        (event.payload.stage === "implementing" && event.payload.status === "failed"),
+    );
     const detail = latest?.payload.detail as { findings?: unknown } | undefined;
     return Array.isArray(detail?.findings) ? (detail.findings as Finding[]) : [];
   }

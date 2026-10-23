@@ -7,6 +7,7 @@ import { join } from "node:path";
 import {
   type Workspace,
   commonGitDir,
+  diffNameStatus,
   ensureWorktree,
   headCommit,
   isDirty,
@@ -16,6 +17,7 @@ import {
 import type { Watcher } from "../herdr/watch.ts";
 import type { Credential } from "../sandbox/credentials.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../sandbox/docker.ts";
+import { lockedFilesTouched } from "./locked-files.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { PACK_LIMITS, buildStageInput } from "./input.ts";
 import type { StageContext, StageResult, StageRunner } from "./runner.ts";
@@ -135,6 +137,30 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     // The implementer commits inside the container; anything left over is not part of the answer.
     if (await isDirty(workspace.path)) {
       return dirty(merged({ ...mapped, outcome: "fail", detail: { error: "implementer left uncommitted changes" } }));
+    }
+    // Tests present at the start of the run are locked; changing one needs a test_change answer.
+    const locked = lockedFilesTouched(await diffNameStatus(workspace.path, inputCommit, "HEAD"));
+    if (locked.length > 0) {
+      // Undo the commit itself, so the next attempt does not start from it.
+      await resetWorktree(workspace.path, inputCommit);
+      return merged({
+        ...mapped,
+        outcome: "fail",
+        detail: {
+          error: `modified existing test file(s) without a test_change request: ${locked.join(", ")}`,
+          lockedFiles: locked,
+        },
+        findings: locked.map((path) => ({
+          path,
+          line: 0,
+          start_line: null,
+          severity: "test",
+          title: "locked test file changed",
+          body: "Tests present at the start of the run are locked; answer kind test_change instead of editing them.",
+          suggestion_code: null,
+          confidence: 1,
+        })),
+      });
     }
   }
   if (pack === "triage") {

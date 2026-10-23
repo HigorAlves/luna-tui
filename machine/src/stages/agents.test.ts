@@ -182,6 +182,60 @@ describe("agent stages through orc packs", () => {
     expect((seen?.input as { priorFindings: Array<{ title: string }> }).priorFindings.map((x) => x.title)).toEqual(["keep"]);
   });
 
+  describe("locked test files", () => {
+    const seedTests = () => {
+      mkdirSync(join(repo, "test"), { recursive: true });
+      writeFileSync(join(repo, "test", "cart.test.js"), "old\n");
+      git(repo, "add", "-A");
+      git(repo, "commit", "-q", "-m", "tests");
+    };
+    const commitIn = (cwd: string, msg = "slice") => {
+      git(cwd, "add", "-A");
+      git(cwd, "commit", "-q", "-m", msg);
+      return git(cwd, "rev-parse", "HEAD");
+    };
+    const expectLocked = async (act: (cwd: string) => void) => {
+      seedTests();
+      const before = git(repo, "rev-parse", "HEAD");
+      const run = runners(fakeSandbox(output(), (r) => { act(r.worktree); commitIn(r.worktree); }));
+      const result = await run.implementing!(context("implementing"));
+      expect(result.outcome).toBe("fail");
+      expect(git(seen!.worktree, "rev-parse", "HEAD")).toBe(before);
+      expect(result.detail).toMatchObject({ lockedFiles: ["test/cart.test.js"] });
+      expect(String((result.detail as { error: string }).error)).toContain("test/cart.test.js");
+      expect(result.findings).toHaveLength(1);
+      expect(result.findings![0]).toMatchObject({ path: "test/cart.test.js", line: 0, severity: "test", confidence: 1 });
+    };
+
+    it("fails and undoes a commit that modified an existing test", () =>
+      expectLocked((cwd) => writeFileSync(join(cwd, "test", "cart.test.js"), "new\n")));
+    it("fails and undoes a commit that deleted an existing test", () =>
+      expectLocked((cwd) => git(cwd, "rm", "-q", "test/cart.test.js")));
+    it("fails and undoes a commit that renamed an existing test", () =>
+      expectLocked((cwd) => git(cwd, "mv", "test/cart.test.js", "src-moved.js")));
+
+    it("passes a commit that adds a new test and changes source", async () => {
+      seedTests();
+      const run = runners(fakeSandbox(output(), (r) => {
+        writeFileSync(join(r.worktree, "test", "new.test.js"), "n\n");
+        writeFileSync(join(r.worktree, "a.txt"), "changed\n");
+        commitIn(r.worktree);
+      }));
+      const result = await run.implementing!(context("implementing"));
+      expect(result.outcome).toBe("pass");
+    });
+
+    it("does not apply to other packs", async () => {
+      seedTests();
+      const run = runners(fakeSandbox(output(), (r) => {
+        writeFileSync(join(r.worktree, "test", "cart.test.js"), "new\n");
+        commitIn(r.worktree);
+      }));
+      const result = await run.test_design!(context("test_design"));
+      expect(result.outcome).toBe("pass");
+    });
+  });
+
   it("fails a pass that left uncommitted changes, and resets the worktree", async () => {
     const run = runners(
       fakeSandbox(output(), (r) => writeFileSync(join(r.worktree, "junk.txt"), "x")),

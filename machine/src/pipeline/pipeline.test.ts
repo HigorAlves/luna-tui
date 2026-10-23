@@ -285,6 +285,32 @@ describe("the ci_watch findings loop", () => {
   });
 });
 
+describe("the implementing findings loop", () => {
+  it("gives the next implementing attempt the findings its own failed run left", async () => {
+    const finding = (title: string) => ({
+      path: "test/a.test.ts", line: 0, start_line: null, severity: "test", title, body: "", suggestion_code: null, confidence: 1,
+    });
+    const seen: Array<string[] | undefined> = [];
+    let attempts = 0;
+    const runner = (stage: TaskState): StageRunner => {
+      if (stage === "implementing") {
+        return async (context) => {
+          seen.push(context.priorFindings?.map((f) => f.title));
+          attempts += 1;
+          // A locked test file was changed: the run fails and names it (agents.ts).
+          if (attempts === 1) return { outcome: "fail", detail: { findings: [finding("locked test file changed")] } };
+          return { outcome: "pass" };
+        };
+      }
+      return stubs.runnerFor(stage);
+    };
+    pipeline = new Pipeline(db, runner, { inline: true });
+    const task = await newTask();
+    await startAndApprove(task.id);
+    expect(seen).toEqual([[], ["locked test file changed"]]);
+  });
+});
+
 describe("retries and escalation", () => {
   it("escalates after three verify failures, then resumes with your guidance", async () => {
     stubs.plan("verifying", fail, fail, fail);
