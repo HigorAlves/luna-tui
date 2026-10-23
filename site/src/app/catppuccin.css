@@ -59,6 +59,7 @@
   --term-green: var(--ctp-green);
   --term-yellow: var(--ctp-yellow);
   --term-border: var(--ctp-surface0);
+  --term-card: var(--ctp-base);
 
   --status-orc: var(--ctp-green);
   --status-host: var(--ctp-blue);
@@ -94,4 +95,5 @@
   --term-green: #a6e3a1;
   --term-yellow: #f9e2af;
   --term-border: #313244;
+  --term-card: #1e1e2e;
 }

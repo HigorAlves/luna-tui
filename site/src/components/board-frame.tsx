@@ -23,15 +23,15 @@ export function BoardFrame() {
         <div className="grid min-w-[1140px] grid-cols-9 gap-2">
           {board.map((col) => (
             <div key={col.name} className="min-w-0">
-              <h3 className="mb-2 flex items-baseline justify-between font-mono text-[11px] font-normal uppercase tracking-wide text-term-muted">
+              <h3 className="mb-2 flex items-baseline gap-1.5 font-mono text-[11px] font-normal uppercase tracking-wide text-term-muted">
                 <span>{col.name}</span>
-                <span>{col.count}</span>
+                <span className="rounded bg-term-border px-1 text-[10px] text-term-foreground/70">{col.count}</span>
               </h3>
               <ul className="flex flex-col gap-2">
                 {col.cards.map((card) => (
                   <li
                     key={card.title}
-                    className={`rounded-md border border-term-border bg-background p-2 text-[11.5px] leading-snug ${card.dim ? "opacity-55" : ""} ${card.slides ? "board-slide" : ""}`}
+                    className={`rounded-md border border-term-border bg-term-card p-2 text-[11.5px] leading-snug ${card.dim ? "opacity-55" : ""} ${card.slides ? "board-slide" : ""}`}
                   >
                     <div>{card.title}</div>
                     {card.badge && (
