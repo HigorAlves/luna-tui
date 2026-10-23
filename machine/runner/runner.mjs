@@ -16,7 +16,8 @@ if (input.pack) {
   process.stdout.write(`orc ${ref} · pack ${input.pack} (attempt ${input.attempt})\n`);
   const child = spawn(
     "orc-stage",
-    ["run", "--in", "/in/stage.json", "--out", "/out", "--plugin-root", "/orc"],
+    // ORC_STAGE_DRY_RUN=1 (tooling only, e.g. the sandbox smoke) renders the prompt without a model call.
+    ["run", "--in", "/in/stage.json", "--out", "/out", "--plugin-root", "/orc", ...(process.env.ORC_STAGE_DRY_RUN === "1" ? ["--dry-run"] : [])],
     { cwd: "/work", stdio: "inherit", env: { ...process.env, ORC_FACTORY: "1" } },
   );
   child.on("error", (error) => {

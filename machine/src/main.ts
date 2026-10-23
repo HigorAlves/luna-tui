@@ -38,7 +38,7 @@ if (applied.length > 0) {
 
 if (config.retentionDays > 0) {
   try {
-    const pruned = await pruneOldRuns(db, config.retentionDays);
+    const pruned = await pruneOldRuns(db, config.retentionDays, config.stateDir);
     if (pruned.events > 0 || pruned.stageRuns > 0) {
       console.log(`pruned ${pruned.events} old event(s), ${pruned.stageRuns} old stage run(s)`);
     }
@@ -49,7 +49,7 @@ if (config.retentionDays > 0) {
   }
   setInterval(
     () =>
-      void pruneOldRuns(db, config.retentionDays).catch((error: unknown) => console.error("prune failed", error)),
+      void pruneOldRuns(db, config.retentionDays, config.stateDir).catch((error: unknown) => console.error("prune failed", error)),
     24 * 60 * 60 * 1000,
   ).unref();
 }
