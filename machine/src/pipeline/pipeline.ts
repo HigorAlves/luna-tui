@@ -455,7 +455,8 @@ export class Pipeline {
     const finished = await this.db
       .getRepository(EventEntity)
       .find({ where: { taskId: id, kind: "stage.finished" }, order: { id: "DESC" } });
-    const latest = finished.find((event) => event.payload.stage === "verifying");
+    // Whichever of the two gates failed last is what the implementer is being re-run for.
+    const latest = finished.find((event) => event.payload.stage === "verifying" || event.payload.stage === "ci_watch");
     const detail = latest?.payload.detail as { findings?: unknown } | undefined;
     return Array.isArray(detail?.findings) ? (detail.findings as Finding[]) : [];
   }

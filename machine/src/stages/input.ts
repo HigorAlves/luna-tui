@@ -27,7 +27,7 @@ export const PRIOR_FINDING_CONFIDENCE = 0.8;
 const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.map((item) => String(item)) : [];
 
-function approvedPlan(approvals: ApprovalRow[]): StageInput["plan"] {
+export function approvedPlan(approvals: ApprovalRow[]): StageInput["plan"] {
   const approval = approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
   if (!approval) return null;
   const requested = approval.requested;

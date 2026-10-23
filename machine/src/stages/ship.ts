@@ -1,49 +1,33 @@
-// The ship stage: pushes the task's branch and opens its PR with `gh`, on the host — this
-// needs your own git and gh credentials, so unlike triage and the implementer it never runs
-// in a sandboxed container.
-import { exec } from "../sandbox/exec.ts";
+// The ship stage: the PR was opened as a draft at delivering, so shipping pushes any last
+// commits and marks it ready for review. It runs on the host with your own git and gh
+// credentials, never in a sandboxed container.
+import { exec as realExec } from "../sandbox/exec.ts";
+import { type GitDeps, describe, findPr, openPr, pushBranch } from "./deliver.ts";
 import type { StageRunner } from "./runner.ts";
 
-/** Pushes the task's branch and opens a PR for it, reusing one if it already exists. */
-export const shipRunner: StageRunner = async ({ task }) => {
-  if (!task.repoPath || !task.branch || !task.worktreePath) {
-    return { outcome: "fail", detail: { error: "no branch to ship; the implementer never ran for real" } };
-  }
-  const cwd = task.worktreePath;
+export function shipRunnerWith(deps: GitDeps): StageRunner {
+  return async (context) => {
+    const { task } = context;
+    if (!task.repoPath || !task.branch || !task.worktreePath) {
+      return { outcome: "fail", detail: { error: "no branch to ship; the implementer never ran for real" } };
+    }
+    const cwd = task.worktreePath;
+    const pushError = await pushBranch(deps, task.branch, cwd);
+    if (pushError) return { outcome: "fail", detail: { error: pushError } };
 
-  const pushed = await exec("git", ["-C", cwd, "push", "-u", "origin", task.branch]);
-  if (pushed.code !== 0) {
-    return { outcome: "fail", detail: { error: `git push failed: ${describe(pushed)}` } };
-  }
+    const existing = await findPr(deps, task.branch, cwd);
+    if (!existing) {
+      // Delivering was skipped (an older task): open the PR ready, as shipping used to.
+      const opened = await openPr(deps, context, { draft: false });
+      if ("error" in opened) return { outcome: "fail", detail: { error: opened.error } };
+      return { outcome: "pass", detail: { prUrl: opened.ref.url, readied: false } };
+    }
+    if (!existing.isDraft) return { outcome: "pass", detail: { prUrl: existing.url, readied: false } };
 
-  // Reuse an existing PR for this branch rather than failing a retry on it.
-  const existing = await exec("gh", ["pr", "view", task.branch, "--json", "url"], { cwd });
-  if (existing.code === 0) {
-    const url: unknown = JSON.parse(existing.stdout).url;
-    return { outcome: "pass", detail: { prUrl: url, reused: true } };
-  }
-
-  const body = [
-    task.description,
-    task.criteria.length > 0
-      ? `\nAcceptance criteria:\n${task.criteria.map((c) => `- ${c}`).join("\n")}`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n");
-  const created = await exec(
-    "gh",
-    ["pr", "create", "--title", task.title, "--body", body, "--head", task.branch],
-    { cwd },
-  );
-  if (created.code !== 0) {
-    return { outcome: "fail", detail: { error: `gh pr create failed: ${describe(created)}` } };
-  }
-  return { outcome: "pass", detail: { prUrl: created.stdout.trim() } };
-};
-
-/** A command's output, or a hint when it produced none (e.g. the binary is missing). */
-function describe(result: { code: number; stdout: string; stderr: string }): string {
-  const text = (result.stderr || result.stdout).trim();
-  return text || `exit code ${result.code}; is \`gh\` installed and authenticated? (\`gh auth status\`)`;
+    const ready = await deps.exec("gh", ["pr", "ready", String(existing.number)], { cwd });
+    if (ready.code !== 0) return { outcome: "fail", detail: { error: `gh pr ready failed: ${describe(ready)}` } };
+    return { outcome: "pass", detail: { prUrl: existing.url, readied: true } };
+  };
 }
+
+export const shipRunner: StageRunner = shipRunnerWith({ exec: realExec });

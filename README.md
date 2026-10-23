@@ -7,19 +7,21 @@ containers, and stops at approval gates so you stay in control.
 
 ## Pipeline
 
-Every ticket moves through six stages, from Intake (not ready yet) to Done:
+Every ticket moves through these stages, from Intake (not ready yet) to Done:
 
 1. **Intake**: a ticket you're still shaping. Nothing runs until you start it.
 2. **Triage**: an agent reads the ticket and the repo, asks questions if needed, and proposes a plan.
 3. **Build**: the implementer agent writes the change on a task branch (a git worktree on the host).
 4. **Verify**: checks that the change works.
 5. **Evidence**: gathers proof for the reviewer.
-6. **Ship**: pushes the branch and opens a real PR with `gh`, then you review before closing it.
+6. **Deliver**: pushes the branch and opens a draft PR with `gh`, so CI starts early. Its body follows orc's caveman-pr shape and adds `Closes #N` when the ticket came from a GitHub issue in the same repo.
+7. **CI watch**: polls the PR's checks until they settle. A red run goes to the `ci_watch` pack: a fixable failure loops back to Build with its findings, a flake is re-run once, and infra or needs-debug failures escalate.
+8. **Ship**: marks the draft PR ready for review (it opens a ready PR only if Deliver never did), then you review before closing it.
 
 Triage and Build run orc packs (see Factory mode) when a credential and the
-runner image are available. Ship runs for real too — it's a plain host command
-(`git push` + `gh pr create`), not a Claude agent — as soon as a task has a
-branch to ship. Verify and Evidence are still stubs that pass, unless you queue
+runner image are available. Deliver and Ship run for real too — they are plain host commands
+(`git push` + `gh pr create --draft` / `gh pr ready`), not Claude agents — as soon
+as a task has a branch. CI watch polls on the host and runs its pack only for a red check. Verify and Evidence are still stubs that pass, unless you queue
 a result with `POST /dev/stubs`. See `docs/plans/0001-machine-dev.md` for the
 details.
 

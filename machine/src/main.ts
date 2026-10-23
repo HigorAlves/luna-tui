@@ -18,6 +18,8 @@ import { loadCredential } from "./sandbox/credentials.ts";
 import { imageExists, removeLeftoverContainers } from "./sandbox/docker.ts";
 import { agentRunners, runAgent } from "./stages/agents.ts";
 import type { StageRunner } from "./stages/runner.ts";
+import { ciWatchRunner } from "./stages/ci.ts";
+import { realDeliverRunner } from "./stages/deliver.ts";
 import { shipRunner } from "./stages/ship.ts";
 import { StubStages } from "./stages/stubs.ts";
 import { verifyRunner } from "./stages/verify.ts";
@@ -60,6 +62,8 @@ async function realStages(): Promise<Partial<Record<TaskState, StageRunner>>> {
   };
   return {
     ...agentRunners(deps),
+    // ci_watch polls the PR's checks on the host and only calls its pack when one is red.
+    ci_watch: ciWatchRunner({ exec, runPack: (context) => runAgent(deps, context, "ci_watch") }),
     // Verifying runs the project's checks on the host first, then the review pack.
     verifying: verifyRunner({
       exec,
@@ -70,9 +74,13 @@ async function realStages(): Promise<Partial<Record<TaskState, StageRunner>>> {
 }
 
 const real = await realStages();
-/** Shipping needs only git and gh, not a Claude credential, so it always runs for real. */
+/** Delivering and shipping need only git and gh, not a Claude credential, so they always run for real. */
 const runnerFor = (stage: TaskState): StageRunner =>
-  stage === "shipping" ? shipRunner : real[stage] ?? stubs.runnerFor(stage);
+  stage === "delivering"
+    ? realDeliverRunner
+    : stage === "shipping"
+      ? shipRunner
+      : real[stage] ?? stubs.runnerFor(stage);
 
 const METRICS_DEBOUNCE_MS = 2_000;
 let metricsTimer: NodeJS.Timeout | undefined;
@@ -115,7 +123,7 @@ if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by
 
 const app = createApp({ pipeline, bus, watcher, stubs });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: "127.0.0.1" }, (info) => {
-  const agents = [...Object.keys(real), "shipping"];
+  const agents = [...Object.keys(real), "delivering", "shipping"];
   console.log(
     `machine listening on http://127.0.0.1:${info.port} · real stages: ${agents.join(", ")} · up to ${config.maxConcurrentTasks} task(s) at once`,
   );
