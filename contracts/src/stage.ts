@@ -99,6 +99,8 @@ export const StageInput = z.object({
       brief: z.string(),
       criteria: z.array(z.string()),
       assumptions: z.array(z.string()),
+      /** The slices triage proposed, when it split the work. */
+      slices: z.array(z.unknown()).optional(),
     })
     .nullable(),
   decisions: z.array(

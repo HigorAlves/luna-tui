@@ -11,6 +11,8 @@ export interface Config {
   maxConcurrentTasks: number;
   /** Docker image for stage containers, built by `runner:build`. */
   runnerImage: string;
+  /** Docker image for the e2e stage, with a browser. Used by the QA slices. */
+  runnerQaImage: string;
   /** Task worktrees go in `<worktreesDir>/<repo>/<branch>`, like `herdr worktree`. */
   worktreesDir: string;
   /** Run inputs, outputs and transcripts. */
@@ -58,6 +60,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     agents: env.MACHINE_AGENTS !== "off",
     maxConcurrentTasks,
     runnerImage: env.RUNNER_IMAGE ?? "hardness-runner:dev",
+    runnerQaImage: env.RUNNER_QA_IMAGE ?? "hardness-runner-qa:dev",
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
     stateDir: env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness"),
     herdrBin: env.HERDR_BIN ?? "herdr",

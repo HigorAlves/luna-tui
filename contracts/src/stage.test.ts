@@ -47,6 +47,12 @@ describe("StageInput", () => {
     expect(StageInput.safeParse(stageInputExample).success).toBe(true);
   });
 
+  it("keeps the slices triage proposes in the plan", () => {
+    const slices = [{ title: "a", est_loc: 10, touchpoints: ["x.ts"], acceptance: ["works"] }];
+    const parsed = StageInput.parse({ ...stageInputExample, plan: { ...stageInputExample.plan, slices } });
+    expect(parsed.plan?.slices).toEqual(slices);
+  });
+
   it("allows a null plan and source", () => {
     const input = { ...stageInputExample, plan: null, task: { ...stageInputExample.task, source: null } };
     expect(StageInput.safeParse(input).success).toBe(true);

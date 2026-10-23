@@ -16,8 +16,8 @@ Every ticket moves through six stages, from Intake (not ready yet) to Done:
 5. **Evidence**: gathers proof for the reviewer.
 6. **Ship**: pushes the branch and opens a real PR with `gh`, then you review before closing it.
 
-Triage and Build run as real Claude agents when a credential and the runner
-image are available. Ship runs for real too — it's a plain host command
+Triage and Build run orc packs (see Factory mode) when a credential and the
+runner image are available. Ship runs for real too — it's a plain host command
 (`git push` + `gh pr create`), not a Claude agent — as soon as a task has a
 branch to ship. Verify and Evidence are still stubs that pass, unless you queue
 a result with `POST /dev/stubs`. See `docs/plans/0001-machine-dev.md` for the
@@ -88,6 +88,13 @@ the API, or the agents.
   - `MACHINE_MAX_CONCURRENT` (default `4`): tasks driving a stage at once, across every repo
   - `MACHINE_GITHUB_POLL` (default empty, off): comma-separated `owner/name` repos whose open issues labelled `MACHINE_GITHUB_LABEL` (default `ready-for-agent`) become backlog tasks; needs the `gh` CLI signed in
   - `MACHINE_GITHUB_POLL_INTERVAL` (default `300`): seconds between polls
+  - `RUNNER_IMAGE` (default `hardness-runner:dev`) and `RUNNER_QA_IMAGE` (default `hardness-runner-qa:dev`, used by the QA stage): stage images
+- **Runner image**: `pnpm --filter @hardness/machine runner:build` runs
+  `machine/runner/build.sh`, which bakes orc into the image at `/orc`. By default
+  it archives the committed HEAD of `ORC_PATH` (`ORC_SOURCE=path`, default
+  `~/Developer/system/orc`); `ORC_SOURCE=git ORC_REF=<tag|branch>` clones
+  `HigorAlves/orc` instead. The image is tagged `hardness-runner:dev` and
+  `hardness-runner:<orc sha>`.
 - **Board**: `HARDNESS_MACHINE_URL` overrides the machine address
   (default `http://127.0.0.1:4317`). `HARDNESS_REPOS_DIR` is where the board's
   repo search (`R`) looks for repos (default `~/Developer`).
@@ -102,13 +109,16 @@ branch). It needs, on the host:
 - A repo with an `origin` remote you can push to.
 
 Without either, the stage fails with a clear reason and escalates — nothing
-silently retries a `git push` against a repo with no remote. Not on the
-roadmap: shipping through `orc:ship` (or triage/implementer through `orc:triage`
-/ `orc-implementer`) directly. Those are interactive Claude Code skills that
-assume your full session — plugins, `.orc/` state, broad tool access — and the
-stage containers are deliberately the opposite of that: `settingSources: []`,
-a locked-down tool list, no plugin access. Running them for real here would
-mean removing those guardrails, not adding a shortcut.
+silently retries a `git push` against a repo with no remote.
+
+## Factory mode
+
+The agent stages run as [orc](https://github.com/HigorAlves/orc) stage packs
+(`orc-stage run`) inside the stage container: Triage, Build and the later agent
+stages each get a pack with its own prompt, tool allowlist and limits. The
+sandbox guardrails stay: `settingSources: []`, the pack's tool allowlist, one
+pinned orc plugin baked into the image at `/orc`, and read-only mounts for
+everything the stage does not own.
 
 ## API example
 

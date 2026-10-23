@@ -10,6 +10,7 @@ describe("loadConfig", () => {
       agents: true,
       maxConcurrentTasks: DEFAULT_MAX_CONCURRENT_TASKS,
       runnerImage: "hardness-runner:dev",
+      runnerQaImage: "hardness-runner-qa:dev",
       worktreesDir: "/home/me/Developer/worktrees",
       stateDir: "/home/me/.local/state/hardness",
       herdrBin: "herdr",
