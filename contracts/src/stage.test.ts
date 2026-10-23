@@ -68,6 +68,13 @@ describe("StageOutput", () => {
     expect(StageOutput.safeParse(stageOutputExample).success).toBe(true);
   });
 
+  it("parses with and without the optional answer", () => {
+    expect(StageOutput.safeParse({ ...stageOutputExample, answer: { kind: "done", criteria: ["a"] } }).success).toBe(true);
+    expect(StageOutput.safeParse({ ...stageOutputExample, answer: null }).success).toBe(true);
+    expect(StageOutput.safeParse(stageOutputExample).success).toBe(true);
+    expect(StageOutput.safeParse({ ...stageOutputExample, answer: "text" }).success).toBe(false);
+  });
+
   it("rejects a broken outcome", () => {
     expect(StageOutput.safeParse({ ...stageOutputExample, outcome: "maybe" }).success).toBe(false);
   });

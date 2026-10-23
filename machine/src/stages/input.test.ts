@@ -86,4 +86,17 @@ describe("buildStageInput", () => {
       ["ci_watch", "e2e", "evidence", "implementing", "reviewing_memory", "test_design", "triage", "verifying"],
     );
   });
+
+  it("gives the implementer the test files from the test check approval", () => {
+    const input = buildStageInput({
+      task,
+      stage: "implementing",
+      attempt: 1,
+      approvals: [
+        approval({ kind: "awaiting_test_check", requested: { summary: "s", tests: ["src/a.test.ts", "src/b.test.ts"] } }),
+      ],
+      priorFindings: [],
+    });
+    expect(input.context.tests).toEqual(["src/a.test.ts", "src/b.test.ts"]);
+  });
 });

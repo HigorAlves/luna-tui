@@ -453,6 +453,40 @@ fn json_list(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// "title (~N LOC)" per proposed slice; entries without a title are skipped.
+fn slice_lines(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let title = item["title"].as_str()?;
+                    Some(match item["est_loc"].as_u64() {
+                        Some(loc) => format!("{title} (~{loc} LOC)"),
+                        None => title.to_string(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Assumptions, the proposed slices and the test files an open gate asks you to judge.
+fn push_proposal_sections(lines: &mut Vec<Line<'static>>, requested: &Value) {
+    let heading = |text: &str| Line::from(Span::from(text.to_string()).fg(c(PEACH)).bold());
+    for (title, items) in [
+        ("Assumptions", json_list(&requested["assumptions"])),
+        ("Slices", slice_lines(&requested["slices"])),
+        ("Tests", json_list(&requested["tests"])),
+    ] {
+        if !items.is_empty() {
+            lines.extend([Line::default(), heading(title)]);
+            lines.extend(bullets(&items));
+        }
+    }
+}
+
 /// The full ticket: state, what it waits on you for, text, stage runs and activity.
 fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&TaskDetail>, scroll: &Cell<u16>) {
     let heading = |text: String| Line::from(Span::from(text).fg(c(ACCENT)).bold());
@@ -513,11 +547,7 @@ fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&Tas
             lines.extend([Line::default(), proposal_heading("Criteria to build".into())]);
             lines.extend(bullets(&criteria));
         }
-        let assumptions = json_list(&requested["assumptions"]);
-        if !assumptions.is_empty() {
-            lines.extend([Line::default(), proposal_heading("Assumptions".into())]);
-            lines.extend(bullets(&assumptions));
-        }
+        push_proposal_sections(&mut lines, requested);
         let questions = questions_of(approval);
         if !questions.is_empty() {
             lines.extend([Line::default(), proposal_heading("Questions (a to answer)".into())]);
@@ -968,5 +998,29 @@ mod tests {
         assert_eq!(rows[1][1], "–");
         assert_eq!(rows[1][4], "$0.40");
         assert_eq!(rows[2][2], "1.5m");
+    }
+
+    #[test]
+    fn slice_lines_show_title_and_size() {
+        let v: Value = serde_json::json!([{"title":"Add route","est_loc":80},{"title":"No size"},{"est_loc":5},"junk"]);
+        assert_eq!(slice_lines(&v), ["Add route (~80 LOC)", "No size"]);
+        assert!(slice_lines(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn test_gate_lists_tests_and_approval_lists_slices() {
+        let t: Value = serde_json::json!({"tests":["src/a.test.ts","src/b.test.ts"]});
+        assert_eq!(json_list(&t["tests"]), ["src/a.test.ts", "src/b.test.ts"]);
+        let mut lines = Vec::new();
+        push_proposal_sections(&mut lines, &t);
+        let text: String = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("Tests"), "{text}");
+        assert!(text.contains("  • src/a.test.ts"), "{text}");
+        let p: Value = serde_json::json!({"assumptions":["x"],"slices":[{"title":"S1","est_loc":10}]});
+        let mut lines = Vec::new();
+        push_proposal_sections(&mut lines, &p);
+        let text: String = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.find("Assumptions").unwrap() < text.find("Slices").unwrap(), "{text}");
+        assert!(text.contains("  • S1 (~10 LOC)"), "{text}");
     }
 }

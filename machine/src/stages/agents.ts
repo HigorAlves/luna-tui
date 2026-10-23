@@ -1,6 +1,7 @@
 // The stages that run as orc packs in a sandbox: the machine writes a StageInput, the
 // container runs `orc-stage run`, and the machine ingests what the pack left in /out.
 import type { PackId, TaskState } from "@hardness/contracts";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -113,7 +114,15 @@ async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId): P
     );
   }
   if (output.outcome === "needs_input") {
-    return merged({ ...mapped, detail: { summary: output.summary, questions: output.needsInput ?? [] } });
+    const answered = answerOf(output.answer)?.questions;
+    return merged({
+      ...mapped,
+      detail: {
+        summary: output.summary,
+        questions: Array.isArray(answered) ? answered : (output.needsInput ?? []),
+        ...(output.answer ? { answer: output.answer } : {}),
+      },
+    });
   }
   if (output.outcome === "test_change") {
     return merged({ ...mapped, detail: { request: output.summary } });
@@ -127,13 +136,52 @@ async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId): P
     }
   }
   if (pack === "triage") {
-    // The pack's result.json carries the summary only; criteria stay the ticket's until orc returns them.
+    const answer = answerOf(output.answer);
+    const list = (value: unknown, fallback: unknown[]): unknown[] => (Array.isArray(value) ? value : fallback);
     return merged({
       ...mapped,
-      detail: { ...mapped.detail, brief: output.summary, criteria: task.criteria, assumptions: [] },
+      detail: {
+        ...mapped.detail,
+        brief: typeof answer?.summary === "string" ? answer.summary : output.summary,
+        criteria: list(answer?.criteria, task.criteria),
+        assumptions: list(answer?.assumptions, []),
+        slices: list(answer?.slices, []),
+      },
     });
   }
+  if (pack === "test_design") {
+    const tests = await listTests(join(runDir, "out"), output.answer, output.artifacts);
+    return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, tests } });
+  }
   return merged(mapped);
+}
+
+const answerOf = (answer: unknown): Record<string, unknown> | undefined =>
+  answer && typeof answer === "object" ? (answer as Record<string, unknown>) : undefined;
+
+const TESTS_DIR = "files/tests/";
+
+/** The test files test_design wrote: its answer, `files/tests/manifest.json`, and the test artifacts. */
+async function listTests(
+  outDir: string,
+  answer: unknown,
+  artifacts: Array<{ kind: string; path: string }>,
+): Promise<string[]> {
+  const found = new Set<string>();
+  const add = (value: unknown) => {
+    if (Array.isArray(value)) for (const item of value) if (typeof item === "string" && item) found.add(item);
+  };
+  add(answerOf(answer)?.tests);
+  try {
+    add(JSON.parse(await readFile(join(outDir, TESTS_DIR, "manifest.json"), "utf8")).tests);
+  } catch {
+    // no manifest, or not JSON: the answer and artifacts still count
+  }
+  for (const artifact of artifacts) {
+    if (artifact.kind !== "test" || artifact.path === `${TESTS_DIR}manifest.json`) continue;
+    found.add(artifact.path.startsWith(TESTS_DIR) ? artifact.path.slice(TESTS_DIR.length) : artifact.path);
+  }
+  return [...found].sort();
 }
 
 const AGENT_PACKS: PackId[] = [

@@ -129,6 +129,8 @@ export const StageOutput = z.object({
   ok: z.boolean(),
   outcome: StageOutcome,
   summary: z.string(),
+  /** The pack's structured output verbatim (triage criteria, test lists, verdicts). */
+  answer: z.record(z.string(), z.unknown()).nullable().optional(),
   needsInput: z.array(NeedsInputItem).nullable(),
   requested: z.array(RequestedAction),
   findings: z.array(Finding),

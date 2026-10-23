@@ -85,4 +85,11 @@ describe("ingestStageOutput", () => {
     expect(ingested.artifacts).toEqual([]);
     expect(ingested.events).toMatchObject([{ kind: "note", payload: { missing: true, path: "gone.md" } }]);
   });
+
+  it("carries the pack answer into detail.answer", async () => {
+    const answer = { kind: "done", criteria: ["a"] };
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output({ answer })));
+    const result = toStageResult(await ingestStageOutput({ outDir, runId: "r", stateDir }));
+    expect(result.detail?.answer).toEqual(answer);
+  });
 });

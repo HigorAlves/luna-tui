@@ -188,4 +188,64 @@ describe("agent stages through orc packs", () => {
     expect(result.outcome).toBe("fail");
     expect(String(result.detail?.error)).toContain("exit code 137");
   });
+
+  it("builds the triage approval from the pack answer", async () => {
+    const slices = [{ title: "s1", est_loc: 40 }];
+    const run = runners(
+      fakeSandbox(
+        output({
+          answer: { kind: "done", summary: "the brief", criteria: ["c1"], assumptions: ["a1"], slices },
+        }),
+      ),
+    );
+    const result = await run.triage!(context("triage"));
+    expect(result.detail).toMatchObject({ brief: "the brief", criteria: ["c1"], assumptions: ["a1"], slices });
+  });
+
+  it("falls back to the summary and ticket criteria when triage has no answer", async () => {
+    const run = runners(fakeSandbox(output()));
+    const result = await run.triage!(context("triage"));
+    expect(result.detail).toMatchObject({ brief: "did it", criteria: ["works"], assumptions: [], slices: [] });
+  });
+
+  it("prefers answer.questions on triage needs_input", async () => {
+    const questions = [{ question: "q?", recommended: "r" }];
+    const run = runners(
+      fakeSandbox(output({ outcome: "needs_input", needsInput: [], answer: { kind: "questions", questions } })),
+    );
+    const result = await run.triage!(context("triage"));
+    expect(result.detail).toEqual({ summary: "did it", questions, answer: { kind: "questions", questions } });
+  });
+
+  it("lists the tests from the answer, the manifest and the test artifacts", async () => {
+    const run = runners(
+      fakeSandbox(
+        output({
+          answer: { kind: "done", tests: ["src/a.test.ts"] },
+          artifacts: [
+            { kind: "test", path: "files/tests/manifest.json", label: "m", sha256: "" },
+            { kind: "test", path: "files/tests/src/c.test.ts", label: "c", sha256: "" },
+          ],
+        }),
+        (r) => {
+          const dir = join(r.runDir, "out", "files", "tests", "src");
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(join(r.runDir, "out", "files", "tests", "manifest.json"), JSON.stringify({ tests: ["src/b.test.ts", "src/a.test.ts"] }));
+          writeFileSync(join(dir, "c.test.ts"), "x");
+        },
+      ),
+    );
+    const result = await run.test_design!(context("test_design"));
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({
+      summary: "did it",
+      tests: ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts"],
+    });
+  });
+
+  it("falls back to an empty tests list when test_design reports nothing", async () => {
+    const run = runners(fakeSandbox(output()));
+    const result = await run.test_design!(context("test_design"));
+    expect(result.detail).toMatchObject({ tests: [] });
+  });
 });

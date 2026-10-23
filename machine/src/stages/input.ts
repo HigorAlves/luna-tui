@@ -39,6 +39,12 @@ function approvedPlan(approvals: ApprovalRow[]): StageInput["plan"] {
   };
 }
 
+/** The test files the user checked at the last test check, as repo-relative paths. */
+function checkedTests(approvals: ApprovalRow[]): string[] {
+  const approval = approvals.findLast((a) => a.kind === "awaiting_test_check" && a.decision === "approved");
+  return approval ? strings(approval.requested.tests) : [];
+}
+
 export function buildStageInput(opts: {
   task: TaskRow;
   stage: TaskState;
@@ -46,7 +52,7 @@ export function buildStageInput(opts: {
   approvals: ApprovalRow[];
   priorFindings: Finding[];
   projectContext?: string | null;
-  /** Test files test_design wrote, as paths. */
+  /** Overrides the test files taken from the test check approval. */
   tests?: string[];
 }): StageInput {
   const { task, stage, attempt, approvals } = opts;
@@ -77,7 +83,7 @@ export function buildStageInput(opts: {
       })),
     priorFindings: opts.priorFindings.filter((f) => f.confidence >= PRIOR_FINDING_CONFIDENCE),
     // The container reads docs/agents/project-context.md itself.
-    context: { projectContext: opts.projectContext ?? null, tests: opts.tests ?? [] },
+    context: { projectContext: opts.projectContext ?? null, tests: opts.tests ?? (pack === "implementing" ? checkedTests(approvals) : []) },
     limits: { maxTurns, timeoutMs },
     env: { ORC_FACTORY: "1" },
   };

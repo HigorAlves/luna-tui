@@ -97,6 +97,7 @@ export function toStageResult({ output, events, artifacts }: Ingested): StageRes
     rateLimited: output.rateLimited || undefined,
     detail: {
       summary: output.summary,
+      ...(output.answer ? { answer: output.answer } : {}),
       needsInput: output.needsInput,
       requested: output.requested,
       findings: output.findings,
