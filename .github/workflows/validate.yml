@@ -1,0 +1,30 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  site:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Facts match the repo
+        run: pnpm --filter site facts:check
+      - name: Unit tests
+        run: pnpm --filter site test
+      - name: Lint
+        run: pnpm --filter site lint
+      - name: Typecheck
+        run: pnpm --filter site typecheck
+      - name: Build
+        run: pnpm --filter site build
