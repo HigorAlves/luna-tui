@@ -472,6 +472,18 @@ fn slice_lines(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// "verdict", "N artifacts" and up to three artifact paths from `requested.evidence`.
+fn evidence_lines(value: &Value) -> Vec<String> {
+    let Some(verdict) = value["verdict"].as_str() else { return Vec::new() };
+    let count = value["artifactCount"].as_u64().unwrap_or(0);
+    let mut lines = vec![
+        format!("verdict: {verdict}"),
+        format!("{count} artifact{}", if count == 1 { "" } else { "s" }),
+    ];
+    lines.extend(json_list(&value["thumbnails"]).into_iter().take(3));
+    lines
+}
+
 /// Assumptions, the proposed slices and the test files an open gate asks you to judge.
 fn push_proposal_sections(lines: &mut Vec<Line<'static>>, requested: &Value) {
     let heading = |text: &str| Line::from(Span::from(text.to_string()).fg(c(PEACH)).bold());
@@ -548,6 +560,11 @@ fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&Tas
             lines.extend(bullets(&criteria));
         }
         push_proposal_sections(&mut lines, requested);
+        let evidence = evidence_lines(&requested["evidence"]);
+        if !evidence.is_empty() {
+            lines.extend([Line::default(), proposal_heading("Evidence".into())]);
+            lines.extend(bullets(&evidence));
+        }
         let questions = questions_of(approval);
         if !questions.is_empty() {
             lines.extend([Line::default(), proposal_heading("Questions (a to answer)".into())]);
@@ -1005,6 +1022,19 @@ mod tests {
         let v: Value = serde_json::json!([{"title":"Add route","est_loc":80},{"title":"No size"},{"est_loc":5},"junk"]);
         assert_eq!(slice_lines(&v), ["Add route (~80 LOC)", "No size"]);
         assert!(slice_lines(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn evidence_lines_show_verdict_count_and_three_paths() {
+        let v: Value = serde_json::json!({"verdict":"pass","artifactCount":5,
+            "thumbnails":["/a.png","/b.png","/c.png","/d.png"]});
+        assert_eq!(
+            evidence_lines(&v),
+            ["verdict: pass", "5 artifacts", "/a.png", "/b.png", "/c.png"]
+        );
+        let one: Value = serde_json::json!({"verdict":"skipped","artifactCount":1});
+        assert_eq!(evidence_lines(&one), ["verdict: skipped", "1 artifact"]);
+        assert!(evidence_lines(&Value::Null).is_empty());
     }
 
     #[test]

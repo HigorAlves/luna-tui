@@ -21,7 +21,10 @@ import { PACK_LIMITS, buildStageInput } from "./input.ts";
 import type { StageContext, StageResult, StageRunner } from "./runner.ts";
 
 export interface AgentDeps {
+  /** The base stage image. */
   image: string;
+  /** The image with browsers, used by the e2e pack. */
+  qaImage: string;
   credential: Credential;
   worktreesDir: string;
   stateDir: string;
@@ -57,7 +60,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
 
   const sandbox = await (deps.sandbox ?? runSandbox)({
     name: container,
-    image: deps.image,
+    image: pack === "e2e" ? deps.qaImage : deps.image,
     runDir,
     worktree: workspace.path,
     writable: limits.writable,

@@ -19,6 +19,8 @@ import { imageExists, removeLeftoverContainers } from "./sandbox/docker.ts";
 import { agentRunners, runAgent } from "./stages/agents.ts";
 import type { StageRunner } from "./stages/runner.ts";
 import { ciWatchRunner } from "./stages/ci.ts";
+import { e2eRunner, missingQaImageRunner } from "./stages/e2e.ts";
+import { evidenceRunner } from "./stages/evidence.ts";
 import { realDeliverRunner } from "./stages/deliver.ts";
 import { shipRunner } from "./stages/ship.ts";
 import { StubStages } from "./stages/stubs.ts";
@@ -53,8 +55,13 @@ async function realStages(): Promise<Partial<Record<TaskState, StageRunner>>> {
   }
   const removed = await removeLeftoverContainers();
   if (removed > 0) console.log(`removed ${removed} leftover stage container(s)`);
+  const qaImage = await imageExists(config.runnerQaImage);
+  if (!qaImage) {
+    console.warn(`image ${config.runnerQaImage} is missing (pnpm runner-qa:build): e2e will be skipped`);
+  }
   const deps = {
     image: config.runnerImage,
+    qaImage: config.runnerQaImage,
     credential,
     worktreesDir: config.worktreesDir,
     stateDir: config.stateDir,
@@ -64,6 +71,15 @@ async function realStages(): Promise<Partial<Record<TaskState, StageRunner>>> {
     ...agentRunners(deps),
     // ci_watch polls the PR's checks on the host and only calls its pack when one is red.
     ci_watch: ciWatchRunner({ exec, runPack: (context) => runAgent(deps, context, "ci_watch") }),
+    // e2e skips repos with no web surface; without the QA image it passes with a note.
+    e2e: qaImage
+      ? e2eRunner({ runPack: (context) => runAgent(deps, context, "e2e") })
+      : missingQaImageRunner(),
+    // Evidence is script-only, so it runs on the host from what e2e left in the state dir.
+    evidence: evidenceRunner({
+      stateDir: config.stateDir,
+      latestE2e: (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
+    }),
     // Verifying runs the project's checks on the host first, then the review pack.
     verifying: verifyRunner({
       exec,

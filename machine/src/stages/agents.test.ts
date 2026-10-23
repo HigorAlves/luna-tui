@@ -62,6 +62,7 @@ function fakeSandbox(
 function runners(sandbox: (run: SandboxRun) => Promise<SandboxResult>) {
   return agentRunners({
     image: "img",
+    qaImage: "qa-img",
     credential: { name: "ANTHROPIC_API_KEY", value: "x" },
     worktreesDir: join(root, "worktrees"),
     stateDir,
@@ -128,6 +129,16 @@ describe("agent stages through orc packs", () => {
     expect(result.artifacts).toHaveLength(1);
     expect(existsSync(result.artifacts![0]!.path)).toBe(true);
     expect(result.detail).toMatchObject({ brief: "did it" });
+  });
+
+  it("runs e2e in the QA image and every other pack in the base image", async () => {
+    const run = runners(fakeSandbox(output()));
+    await run.e2e!(context("e2e"));
+    expect(seen?.image).toBe("qa-img");
+    await run.evidence!(context("evidence"));
+    expect(seen?.image).toBe("img");
+    await run.triage!(context("triage"));
+    expect(seen?.image).toBe("img");
   });
 
   it("maps needs_input to summary and questions", async () => {

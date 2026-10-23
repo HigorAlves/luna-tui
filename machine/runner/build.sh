@@ -3,7 +3,11 @@
 #   ORC_SOURCE=path (default)  ORC_PATH=<orc checkout>   uses that checkout's committed HEAD
 #   ORC_SOURCE=git             ORC_REF=<tag|branch>      clones github.com/HigorAlves/orc at that ref
 # Tags the image hardness-runner:dev and hardness-runner:<orc short sha>.
+# With --qa it then builds hardness-runner-qa:dev on top (Playwright, chromium, ffmpeg, agent-browser).
 set -euo pipefail
+
+qa=0
+[ "${1:-}" = "--qa" ] && qa=1
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source_mode="${ORC_SOURCE:-path}"
@@ -35,3 +39,8 @@ esac
 
 docker build --build-arg "ORC_SHA=$sha" -t hardness-runner:dev -t "hardness-runner:$sha" "$here"
 echo "built hardness-runner:dev and hardness-runner:$sha (orc $sha)"
+
+if [ "$qa" = 1 ]; then
+  docker build --build-arg "BASE=hardness-runner:$sha" -t hardness-runner-qa:dev -t "hardness-runner-qa:$sha" "$here/../runner-qa"
+  echo "built hardness-runner-qa:dev and hardness-runner-qa:$sha"
+fi

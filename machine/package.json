@@ -10,6 +10,7 @@
     "db:revert": "tsx node_modules/typeorm/cli.js migration:revert -d src/db/data-source.ts",
     "db:generate": "tsx node_modules/typeorm/cli.js migration:generate -d src/db/data-source.ts",
     "runner:build": "bash runner/build.sh",
+    "runner-qa:build": "bash runner/build.sh --qa",
     "golden": "node scripts/golden-task.mjs"
   },
   "devDependencies": {

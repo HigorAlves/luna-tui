@@ -12,8 +12,8 @@ Every ticket moves through these stages, from Intake (not ready yet) to Done:
 1. **Intake**: a ticket you're still shaping. Nothing runs until you start it.
 2. **Triage**: an agent reads the ticket and the repo, asks questions if needed, and proposes a plan.
 3. **Build**: the implementer agent writes the change on a task branch (a git worktree on the host).
-4. **Verify**: checks that the change works.
-5. **Evidence**: gathers proof for the reviewer.
+4. **Verify**: runs the project's own checks, then the review pack.
+5. **E2E and Evidence**: for a repo with a web surface, a QA agent drives the app in a browser (the `runner-qa` image) and writes a manifest, screenshots and video; repos with none skip with a recorded reason. Evidence then checks the manifest on the host and shows its verdict, artifact count and a few screenshot paths in the ship approval.
 6. **Deliver**: pushes the branch and opens a draft PR with `gh`, so CI starts early. Its body follows orc's caveman-pr shape and adds `Closes #N` when the ticket came from a GitHub issue in the same repo.
 7. **CI watch**: polls the PR's checks until they settle. A red run goes to the `ci_watch` pack: a fixable failure loops back to Build with its findings, a flake is re-run once, and infra or needs-debug failures escalate.
 8. **Ship**: marks the draft PR ready for review (it opens a ready PR only if Deliver never did), then you review before closing it.
@@ -21,7 +21,7 @@ Every ticket moves through these stages, from Intake (not ready yet) to Done:
 Triage and Build run orc packs (see Factory mode) when a credential and the
 runner image are available. Deliver and Ship run for real too — they are plain host commands
 (`git push` + `gh pr create --draft` / `gh pr ready`), not Claude agents — as soon
-as a task has a branch. CI watch polls on the host and runs its pack only for a red check. Verify and Evidence are still stubs that pass, unless you queue
+as a task has a branch. CI watch polls on the host and runs its pack only for a red check. Evidence runs on the host. Intake, Done and any stage without a runner are stubs that pass, unless you queue
 a result with `POST /dev/stubs`. See `docs/plans/0001-machine-dev.md` for the
 details.
 
@@ -50,6 +50,7 @@ the same queue.
 - Docker (for Postgres and the stage containers)
 - Node 24+ and pnpm
 - Rust (to build the board)
+- Optional, for the E2E stage: the QA image (`pnpm --filter @hardness/machine runner-qa:build`). It adds Playwright with Chromium, ffmpeg and agent-browser on top of the runner image, so expect about 2 GB more disk (a 3.9 GB image against 1.9 GB). Without it E2E is skipped with a note and the rest of the factory runs.
 - [herdr](https://herdr.dev/), to run the board as a plugin
 
 ## Quick start
@@ -96,7 +97,8 @@ the API, or the agents.
   it archives the committed HEAD of `ORC_PATH` (`ORC_SOURCE=path`, default
   `~/Developer/system/orc`); `ORC_SOURCE=git ORC_REF=<tag|branch>` clones
   `HigorAlves/orc` instead. The image is tagged `hardness-runner:dev` and
-  `hardness-runner:<orc sha>`.
+  `hardness-runner:<orc sha>`. `runner-qa:build` runs the same script with `--qa`, then
+  builds `hardness-runner-qa:dev` from `machine/runner-qa/Dockerfile` on top of it.
 - **Board**: `HARDNESS_MACHINE_URL` overrides the machine address
   (default `http://127.0.0.1:4317`). `HARDNESS_REPOS_DIR` is where the board's
   repo search (`R`) looks for repos (default `~/Developer`).

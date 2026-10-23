@@ -450,6 +450,20 @@ export class Pipeline {
     return step;
   }
 
+  /** The latest finished run of a stage for a task, with the detail it ended with. */
+  async latestStageFinish(id: string, stage: TaskState): Promise<{ runId: string; detail?: Record<string, unknown> } | null> {
+    const finished = await this.db
+      .getRepository(EventEntity)
+      .find({ where: { taskId: id, kind: "stage.finished" }, order: { id: "DESC" } });
+    const latest = finished.find((event) => event.payload.stage === stage && event.stageRunId);
+    if (!latest?.stageRunId) return null;
+    const detail = latest.payload.detail;
+    return {
+      runId: latest.stageRunId,
+      ...(detail && typeof detail === "object" ? { detail: detail as Record<string, unknown> } : {}),
+    };
+  }
+
   /** The findings the latest verifying run stored on its `stage.finished` event. */
   private async latestVerifyingFindings(id: string): Promise<Finding[]> {
     const finished = await this.db
