@@ -7,18 +7,29 @@ containers, and stops at approval gates so you stay in control.
 
 ## Pipeline
 
-Every ticket moves through five stages:
+Every ticket moves through six stages, from Intake (not ready yet) to Done:
 
-1. **Triage**: an agent reads the ticket and the repo, asks questions if needed, and proposes a plan.
-2. **Build**: the implementer agent writes the change on a task branch (a git worktree on the host).
-3. **Verify**: checks that the change works.
-4. **Evidence**: gathers proof for the reviewer.
-5. **Publish**: ships the result.
+1. **Intake**: a ticket you're still shaping. Nothing runs until you start it.
+2. **Triage**: an agent reads the ticket and the repo, asks questions if needed, and proposes a plan.
+3. **Build**: the implementer agent writes the change on a task branch (a git worktree on the host).
+4. **Verify**: checks that the change works.
+5. **Evidence**: gathers proof for the reviewer.
+6. **Ship**: pushes the branch and opens a real PR with `gh`, then you review before closing it.
 
 Triage and Build run as real Claude agents when a credential and the runner
-image are available. The other stages are stubs that pass, unless you queue a
-result with `POST /dev/stubs`. See `docs/plans/0001-machine-dev.md` for the
+image are available. Ship runs for real too — it's a plain host command
+(`git push` + `gh pr create`), not a Claude agent — as soon as a task has a
+branch to ship. Verify and Evidence are still stubs that pass, unless you queue
+a result with `POST /dev/stubs`. See `docs/plans/0001-machine-dev.md` for the
 details.
+
+The machine is one service for every repo you point a task at, not one per
+repo: `MACHINE_MAX_CONCURRENT` (default 4) caps how many tasks can be driving
+a stage at once *in total*, across all of them, not per repo. A task past
+that cap is `queued` until a slot frees — durably, in Postgres, so a restart
+doesn't lose track of it. Open as many boards as you like, from any
+workspace: they're all clients of this one machine and see the same tasks and
+the same queue.
 
 ## Repository layout
 
@@ -74,8 +85,28 @@ the API, or the agents.
   `compose.dev.yml`, so a `.env` is only needed to change them.
   - `DATABASE_URL` (default `postgres://hardness:hardness@127.0.0.1:5433/hardness`)
   - `MACHINE_PORT` (default `4317`)
+  - `MACHINE_MAX_CONCURRENT` (default `4`): tasks driving a stage at once, across every repo
 - **Board**: `HARDNESS_MACHINE_URL` overrides the machine address
-  (default `http://127.0.0.1:4317`).
+  (default `http://127.0.0.1:4317`). `HARDNESS_REPOS_DIR` is where the board's
+  repo search (`R`) looks for repos (default `~/Developer`).
+
+## Shipping
+
+Approving the Ship gate runs `git push -u origin <task branch>` from the task's
+worktree, then `gh pr create` (or reuses the PR if one is already open for that
+branch). It needs, on the host:
+
+- The [`gh` CLI](https://cli.github.com/), signed in (`gh auth status`).
+- A repo with an `origin` remote you can push to.
+
+Without either, the stage fails with a clear reason and escalates — nothing
+silently retries a `git push` against a repo with no remote. Not on the
+roadmap: shipping through `orc:ship` (or triage/implementer through `orc:triage`
+/ `orc-implementer`) directly. Those are interactive Claude Code skills that
+assume your full session — plugins, `.orc/` state, broad tool access — and the
+stage containers are deliberately the opposite of that: `settingSources: []`,
+a locked-down tool list, no plugin access. Running them for real here would
+mean removing those guardrails, not adding a shortcut.
 
 ## API example
 

@@ -46,6 +46,20 @@ export async function ensureWorktree(repoPath: string, workspace: Workspace): Pr
   await execOrThrow("git", ["-C", repoPath, ...args]);
 }
 
+/**
+ * Discards whatever a run left uncommitted. Used before a retry, so an aborted, timed out
+ * or crashed attempt never hands the next one a half-edited worktree with no explanation.
+ */
+export async function resetWorktree(path: string): Promise<void> {
+  await execOrThrow("git", ["-C", path, "reset", "--hard", "--quiet"]);
+  await execOrThrow("git", ["-C", path, "clean", "-fd", "--quiet"]);
+}
+
+/** Removes a task's worktree from disk. The branch (and its commits) stays. */
+export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
+  await execOrThrow("git", ["-C", repoPath, "worktree", "remove", "--force", worktreePath]);
+}
+
 /** The repo's shared git dir, which the worktree's `.git` file points into. */
 export function commonGitDir(repoPath: string): Promise<string> {
   return execOrThrow("git", [

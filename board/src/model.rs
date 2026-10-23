@@ -7,7 +7,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 /// Board columns, named after the pipeline stages. Same order as the machine's contracts.
-pub const COLUMNS: [&str; 6] = ["Triage", "Approved", "Build", "Verify", "Evidence", "Publish"];
+pub const COLUMNS: [&str; 9] =
+    ["Backlog", "Intake", "Triage", "Approved", "Build", "Verify", "Evidence", "Ship", "Done"];
 
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Retries {
@@ -31,6 +32,8 @@ pub struct Task {
     pub column: String,
     pub waiting_on_you: bool,
     pub running: bool,
+    /// Ready to run, but waiting for a free concurrency slot.
+    pub queued: bool,
     pub retries: Retries,
     pub resume_to: Option<String>,
     pub reason: Option<String>,
@@ -96,6 +99,7 @@ pub enum Look {
     Escalated,
     NeedsYou,
     Working,
+    Queued,
     Paused,
     Draft,
     Done,
@@ -114,29 +118,33 @@ impl Task {
         match self.state.as_str() {
             "escalated" => Look::Escalated,
             "paused_rate_limit" => Look::Paused,
-            "draft" => Look::Draft,
+            "backlog" | "draft" => Look::Draft,
             "closed" => Look::Done,
             _ if self.waiting_on_you => Look::NeedsYou,
+            _ if self.queued => Look::Queued,
             _ => Look::Working,
         }
     }
 
     /// What the task is doing, in words: the gate it waits at or the stage that runs.
     pub fn status_label(&self) -> String {
-        match self.state.as_str() {
-            "draft" => "draft".into(),
-            "awaiting_answers" => "answer questions".into(),
-            "awaiting_approval" => "approve plan".into(),
-            "awaiting_test_check" => "check tests".into(),
-            "awaiting_publish" => "choose publish".into(),
-            "reviewing_memory" => "review memory".into(),
-            "escalated" => "escalated".into(),
-            "paused_rate_limit" => "paused: usage limit".into(),
-            "closed" => "closed".into(),
-            "ci_watch" => "ci".into(),
-            "test_design" => "test design".into(),
-            other => other.into(),
-        }
+        let stage = match self.state.as_str() {
+            "backlog" => "backlog".to_string(),
+            "draft" => "intake".to_string(),
+            "awaiting_answers" => "answer questions".to_string(),
+            "awaiting_approval" => "approve plan".to_string(),
+            "awaiting_test_check" => "check tests".to_string(),
+            "awaiting_ship" => "choose ship".to_string(),
+            "shipping" => "opening PR".to_string(),
+            "reviewing_memory" => "review memory".to_string(),
+            "escalated" => "escalated".to_string(),
+            "paused_rate_limit" => "paused: usage limit".to_string(),
+            "closed" => "closed".to_string(),
+            "ci_watch" => "ci".to_string(),
+            "test_design" => "test design".to_string(),
+            other => other.to_string(),
+        };
+        if self.queued { format!("queued: {stage}") } else { stage }
     }
 }
 
@@ -149,6 +157,9 @@ pub struct TicketText {
     pub repo_path: Option<String>,
 }
 
+/// The repo isn't part of this text: it's set only through the repo picker (`R`), never typed
+/// freely, so a stray edit (or a careless `dd`) can't silently point a ticket at the wrong repo
+/// or blank it out.
 pub fn ticket_markdown(text: &TicketText) -> String {
     let mut out = format!(
         "# {}\n\n## Description\n\n{}\n\n## Acceptance criteria\n\n",
@@ -157,20 +168,17 @@ pub fn ticket_markdown(text: &TicketText) -> String {
     for item in &text.criteria {
         out.push_str(&format!("- {item}\n"));
     }
-    out.push_str("\n## Repo\n\n");
-    out.push_str(text.repo_path.as_deref().unwrap_or(""));
-    out.push('\n');
     out
 }
 
-/// Parses `ticket_markdown`. A missing title keeps `fallback_title`.
+/// Parses `ticket_markdown`. A missing title keeps `fallback_title`. Never touches
+/// `repo_path`: callers must carry that over from the ticket being edited.
 pub fn parse_ticket(markdown: &str, fallback_title: &str) -> TicketText {
     #[derive(PartialEq)]
     enum Section {
         Other,
         Description,
         Criteria,
-        Repo,
     }
 
     let mut section = Section::Other;
@@ -182,7 +190,6 @@ pub fn parse_ticket(markdown: &str, fallback_title: &str) -> TicketText {
             section = match heading.trim().to_ascii_lowercase().as_str() {
                 "description" => Section::Description,
                 "acceptance criteria" => Section::Criteria,
-                "repo" => Section::Repo,
                 _ => Section::Other,
             };
         } else if text.title.is_empty()
@@ -198,11 +205,6 @@ pub fn parse_ticket(markdown: &str, fallback_title: &str) -> TicketText {
                     let item = item.trim_start_matches("[ ] ").trim_start_matches("[x] ").trim();
                     if !item.is_empty() {
                         text.criteria.push(item.to_string());
-                    }
-                }
-                Section::Repo => {
-                    if text.repo_path.is_none() && !line.trim().is_empty() {
-                        text.repo_path = Some(line.trim().to_string());
                     }
                 }
                 Section::Other => {}
@@ -325,6 +327,10 @@ mod tests {
             criteria: vec!["1050 shows $10.50".into()],
             repo_path: Some("/repo".into()),
         };
-        assert_eq!(parse_ticket(&ticket_markdown(&text), "x"), text);
+        let markdown = ticket_markdown(&text);
+        // The repo isn't in the markdown: it's set only through the repo picker, never by
+        // editing this text, so it never round-trips through it.
+        let expected = TicketText { repo_path: None, ..text };
+        assert_eq!(parse_ticket(&markdown, "x"), expected);
     }
 }

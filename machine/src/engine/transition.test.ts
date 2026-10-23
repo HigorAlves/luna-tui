@@ -56,7 +56,8 @@ describe("happy path", () => {
       pass, // delivering
       pass, // ci_watch
       pass, // evidence
-      approved, // publish targets
+      approved, // ship targets
+      pass, // shipping
       approved, // memory proposals
     ]);
 
@@ -71,7 +72,8 @@ describe("happy path", () => {
       "delivering",
       "ci_watch",
       "evidence",
-      "awaiting_publish",
+      "awaiting_ship",
+      "shipping",
       "reviewing_memory",
       "closed",
     ]);
@@ -179,7 +181,7 @@ describe("test change requests", () => {
 });
 
 describe("stages that cannot retry", () => {
-  it.each(["triage", "test_design", "delivering"] as const)(
+  it.each(["triage", "test_design", "delivering", "shipping"] as const)(
     "escalates when %s fails and resumes it after guidance",
     (stage) => {
       const escalated = transition(at(stage), fail);

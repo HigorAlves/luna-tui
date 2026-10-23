@@ -15,6 +15,7 @@ import { loadCredential } from "./sandbox/credentials.ts";
 import { imageExists, removeLeftoverContainers } from "./sandbox/docker.ts";
 import { agentRunners } from "./stages/agents.ts";
 import type { StageRunner } from "./stages/runner.ts";
+import { shipRunner } from "./stages/ship.ts";
 import { StubStages } from "./stages/stubs.ts";
 
 const config = loadConfig();
@@ -27,6 +28,7 @@ if (applied.length > 0) {
 
 const bus = new Bus();
 const stubs = new StubStages();
+const watcher = new Watcher(config.herdrBin);
 
 /** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
 async function realStages(): Promise<Partial<Record<TaskState, StageRunner>>> {
@@ -50,12 +52,14 @@ async function realStages(): Promise<Partial<Record<TaskState, StageRunner>>> {
     credential,
     worktreesDir: config.worktreesDir,
     stateDir: config.stateDir,
-    watcher: new Watcher(config.herdrBin),
+    watcher,
   });
 }
 
 const real = await realStages();
-const runnerFor = (stage: TaskState): StageRunner => real[stage] ?? stubs.runnerFor(stage);
+/** Shipping needs only git and gh, not a Claude credential, so it always runs for real. */
+const runnerFor = (stage: TaskState): StageRunner =>
+  stage === "shipping" ? shipRunner : real[stage] ?? stubs.runnerFor(stage);
 
 /** Streams each logged event, plus the whole task whenever its state may have changed. */
 function publish(event: EventRow): void {
@@ -66,22 +70,26 @@ function publish(event: EventRow): void {
       (error: unknown) => console.error("could not publish task update", error),
     );
   }
+  if (event.kind === "transition" && event.payload.to === "closed") {
+    watcher.close(event.taskId).catch((error: unknown) => console.error("could not close watch tab", error));
+  }
 }
 
-const pipeline = new Pipeline(db, runnerFor, { onEvent: publish });
+const pipeline = new Pipeline(db, runnerFor, { onEvent: publish, maxConcurrentTasks: config.maxConcurrentTasks });
 const recovered = await pipeline.recover();
 if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by the last run`);
 
-const app = createApp({ pipeline, bus, stubs });
+const app = createApp({ pipeline, bus, watcher, stubs });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: "127.0.0.1" }, (info) => {
-  const agents = Object.keys(real);
+  const agents = [...Object.keys(real), "shipping"];
   console.log(
-    `machine listening on http://127.0.0.1:${info.port} · real stages: ${agents.length > 0 ? agents.join(", ") : "none"}`,
+    `machine listening on http://127.0.0.1:${info.port} · real stages: ${agents.join(", ")} · up to ${config.maxConcurrentTasks} task(s) at once`,
   );
 });
 
 async function shutdown(): Promise<void> {
   server.close();
+  await pipeline.shutdown();
   await db.destroy();
   process.exit(0);
 }

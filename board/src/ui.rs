@@ -1,6 +1,7 @@
 //! Drawing. Reads the app and never changes it.
 
 use std::{
+    cell::Cell,
     env,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -10,7 +11,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span, Text},
-    widgets::{Block, BorderType, Clear, List, ListItem, ListState, Paragraph, Wrap},
+    widgets::{Block, BorderType, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
 };
 use serde_json::Value;
 
@@ -37,8 +38,8 @@ const SELECTED_BG: Color = SURFACE0;
 
 /// Narrowest a column may get before the board scrolls instead of squeezing.
 const MIN_COLUMN_WIDTH: u16 = 18;
-/// Terminal width from which the selected ticket's preview sits beside the board.
-const PREVIEW_MIN_WIDTH: u16 = 110;
+/// Width of a collapsed column in folded mode: wide enough for its header bar, not its cards.
+const FOLD_WIDTH: u16 = 14;
 /// Activity lines shown with a ticket.
 const ACTIVITY_LINES: usize = 10;
 
@@ -56,6 +57,7 @@ fn look_color(look: Look) -> Color {
         Look::Escalated => c(RED),
         Look::NeedsYou => c(PEACH),
         Look::Working => c(YELLOW),
+        Look::Queued => c(SUBTEXT0),
         Look::Paused => c(LAVENDER),
         Look::Draft => c(SUBTEXT0),
         Look::Done => c(GREEN),
@@ -67,6 +69,7 @@ fn look_glyph(look: Look) -> &'static str {
         Look::Escalated => "✗",
         Look::NeedsYou => "!",
         Look::Working => spinner(),
+        Look::Queued => "…",
         Look::Paused => "⏸",
         Look::Draft => "○",
         Look::Done => "✓",
@@ -100,24 +103,82 @@ pub fn draw(frame: &mut Frame, app: &App) {
     .areas(frame.area());
 
     frame.render_widget(header_line(app), header);
-    match app.detail_task() {
-        Some(task) => render_detail(frame, body, task, app.detail.as_ref()),
-        None => render_board_area(frame, body, app),
-    }
+    render_board(frame, body, app);
     frame.render_widget(footer_line(app), footer);
 
     match &app.mode {
+        Mode::Detail(id) => {
+            if let Some(task) = app.task(id) {
+                let area = centered(frame.area(), frame.area().width * 9 / 10, frame.area().height * 8 / 10);
+                frame.render_widget(Clear, area);
+                render_detail(frame, area, task, app.detail.as_ref(), &app.detail_scroll);
+            }
+        }
         Mode::ConfirmDelete(id) => {
             if let Some(task) = app.task(id) {
-                render_confirm(frame, task, true);
+                render_confirm(
+                    frame,
+                    task,
+                    " Delete ticket? ",
+                    "Its runs and history go too. Its worktree and branch stay.",
+                );
             }
         }
         Mode::ConfirmAbort(id) => {
             if let Some(task) = app.task(id) {
-                render_confirm(frame, task, false);
+                render_confirm(
+                    frame,
+                    task,
+                    " Abort the running stage? ",
+                    "The container is stopped and the ticket waits for you.",
+                );
             }
         }
+        Mode::ConfirmWorktree(id) => {
+            if let Some(task) = app.task(id) {
+                render_confirm(
+                    frame,
+                    task,
+                    " Kill the worktree? ",
+                    "Removes its checkout from disk. The branch and its commits stay.",
+                );
+            }
+        }
+        Mode::EditTicket { id, area, vim } => {
+            let rect = centered(frame.area(), frame.area().width * 9 / 10, frame.area().height * 8 / 10);
+            frame.render_widget(Clear, rect);
+            let (label, mode_color) = match vim.mode() {
+                crate::vim::Mode::Normal => (" NORMAL ", ACCENT),
+                crate::vim::Mode::Insert => (" INSERT ", GREEN),
+            };
+            let mut area = area.clone();
+            if let Some(block) = area.block() {
+                let mut block = block
+                    .clone()
+                    .border_type(BorderType::Rounded)
+                    .border_style(Style::new().fg(c(mode_color)))
+                    .title_bottom(Line::from(label).bold().fg(c(mode_color)).left_aligned());
+                if let Some(task) = app.task(id) {
+                    block = block.title_bottom(
+                        Line::from(format!(" {} ", task.column))
+                            .bold()
+                            .fg(c(look_color(task.look())))
+                            .right_aligned(),
+                    );
+                }
+                area.set_block(block);
+            }
+            area.set_cursor_line_style(Style::new().bg(c(SURFACE0)));
+            area.set_selection_style(Style::new().bg(c(SURFACE1)));
+            area.set_cursor_style(Style::new().bg(c(mode_color)).fg(c(BASE)));
+            frame.render_widget(&area, rect);
+        }
         Mode::Actions { cursor } => render_actions(frame, app, *cursor),
+        Mode::RepoPicker { id, query, all, cursor } => {
+            if let Some(task) = app.task(id) {
+                render_repo_picker(frame, task, query, all, *cursor);
+            }
+        }
         Mode::Help => render_help(frame),
         _ => {}
     }
@@ -128,13 +189,15 @@ fn header_line(app: &App) -> Line<'static> {
     if app.online {
         let total = app.tasks.len();
         let running = app.tasks.iter().filter(|t| t.running).count();
+        let queued = app.tasks.iter().filter(|t| t.queued).count();
         let waiting = app
             .tasks
             .iter()
             .filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated))
             .count();
+        let queued_part = if queued > 0 { format!(" · {queued} queued") } else { String::new() };
         spans.push(
-            Span::from(format!("  {total} tickets · {running} running · {waiting} need you"))
+            Span::from(format!("  {total} tickets · {running} running{queued_part} · {waiting} need you"))
                 .fg(c(SUBTEXT0)),
         );
     } else {
@@ -151,8 +214,14 @@ fn header_line(app: &App) -> Line<'static> {
     if app.needs_only {
         spans.push(Span::from("  [needs you only]").fg(c(PEACH)).bold());
     }
+    if app.this_repo_only {
+        spans.push(Span::from("  [this repo only]").fg(c(PEACH)).bold());
+    }
     if !app.filter.trim().is_empty() {
         spans.push(Span::from(format!("  [filter: {}]", app.filter)).fg(c(ACCENT)).bold());
+    }
+    if app.fold {
+        spans.push(Span::from("  [folded]").fg(c(BLUE)).bold());
     }
     Line::from(spans)
 }
@@ -169,6 +238,16 @@ fn footer_line(app: &App) -> Line<'static> {
             Span::from(format!("{buf}▏")),
             Span::from("   enter create and edit · esc cancel").fg(c(SUBTEXT0)),
         ]),
+        Mode::EditTicket { vim, .. } => match vim.mode() {
+            crate::vim::Mode::Normal => hint(&[
+                ("i/a/o", "insert"),
+                ("hjkl", "move"),
+                ("dd/x", "delete"),
+                ("ctrl+s", "save"),
+                ("esc", "cancel"),
+            ]),
+            crate::vim::Mode::Insert => hint(&[("esc", "normal mode"), ("ctrl+s", "save")]),
+        },
         Mode::Filter => Line::from(vec![
             Span::from(" filter: ").fg(c(ACCENT)).bold(),
             Span::from(format!("{}▏", app.filter)),
@@ -186,19 +265,35 @@ fn footer_line(app: &App) -> Line<'static> {
                 Span::from("   enter send · esc cancel").fg(c(SUBTEXT0)),
             ])
         }
-        Mode::ConfirmDelete(_) | Mode::ConfirmAbort(_) => {
+        Mode::ConfirmDelete(_) | Mode::ConfirmAbort(_) | Mode::ConfirmWorktree(_) => {
             hint(&[("y", "yes"), ("n", "no")])
         }
         Mode::Actions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
+        Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
         Mode::Help => hint(&[("any key", "close")]),
-        Mode::Detail(_) => hint(&[
-            ("a", "advance"),
-            ("r", "send back"),
-            ("e", "edit"),
-            ("f", "focus agent"),
-            ("X", "abort"),
-            ("esc", "back"),
-        ]),
+        Mode::Detail(id) => {
+            let shippable = app.task(id).is_some_and(|t| t.state == "awaiting_ship");
+            if shippable {
+                hint(&[
+                    ("jk", "scroll"),
+                    ("S", "ship"),
+                    ("r", "send back"),
+                    ("e", "edit"),
+                    ("f", "focus agent"),
+                    ("esc", "back"),
+                ])
+            } else {
+                hint(&[
+                    ("jk", "scroll"),
+                    ("a", "advance"),
+                    ("r", "send back"),
+                    ("e", "edit"),
+                    ("f", "focus agent"),
+                    ("X", "abort"),
+                    ("esc", "back"),
+                ])
+            }
+        }
         Mode::Normal => hint(&[
             ("?", "help"),
             ("n", "new"),
@@ -220,27 +315,11 @@ fn hint(keys: &[(&str, &str)]) -> Line<'static> {
     Line::from(spans)
 }
 
-/// The board, with the selected ticket's preview beside it when the terminal is wide enough.
-fn render_board_area(frame: &mut Frame, area: Rect, app: &App) {
-    if area.width < PREVIEW_MIN_WIDTH {
-        render_board(frame, area, app);
+fn render_board(frame: &mut Frame, area: Rect, app: &App) {
+    if app.fold {
+        render_board_folded(frame, area, app);
         return;
     }
-    let [board, preview] =
-        Layout::horizontal([Constraint::Ratio(2, 3), Constraint::Ratio(1, 3)]).areas(area);
-    render_board(frame, board, app);
-    match app.selected_task() {
-        Some(task) => render_detail(frame, preview, task, app.detail.as_ref()),
-        None => frame.render_widget(
-            Block::bordered()
-                .border_type(BorderType::Rounded)
-                .border_style(Style::new().fg(c(MUTED))),
-            preview,
-        ),
-    }
-}
-
-fn render_board(frame: &mut Frame, area: Rect, app: &App) {
     let visible = ((area.width / MIN_COLUMN_WIDTH) as usize).clamp(1, COLUMNS.len());
     let start = app
         .focus
@@ -252,11 +331,33 @@ fn render_board(frame: &mut Frame, area: Rect, app: &App) {
     for (slot, rect) in rects.iter().enumerate() {
         let column = start + slot;
         app.column_rects.borrow_mut().push((column, *rect));
-        render_column(frame, *rect, app, column);
+        render_column(frame, *rect, app, column, true);
     }
 }
 
-fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize) {
+/// Every column at once: the focused one expanded, the rest collapsed to their header bar.
+/// Lets a narrow terminal keep every column's presence and count in view, instead of scrolling
+/// columns off-screen entirely.
+fn render_board_folded(frame: &mut Frame, area: Rect, app: &App) {
+    let constraints: Vec<Constraint> = (0..COLUMNS.len())
+        .map(|column| {
+            if column == app.focus {
+                Constraint::Fill(1)
+            } else {
+                Constraint::Length(FOLD_WIDTH)
+            }
+        })
+        .collect();
+    let rects = Layout::horizontal(constraints).split(area);
+
+    app.column_rects.borrow_mut().clear();
+    for (column, rect) in rects.iter().enumerate() {
+        app.column_rects.borrow_mut().push((column, *rect));
+        render_column(frame, *rect, app, column, column == app.focus);
+    }
+}
+
+fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expanded: bool) {
     let focused = column == app.focus;
     let indices = app.indices(column);
 
@@ -264,19 +365,27 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize) {
         Span::from(format!(" {} ", COLUMNS[column])).bold(),
         Span::from(format!("{} ", indices.len())).fg(c(SUBTEXT0)),
     ];
-    for look in [Look::Escalated, Look::NeedsYou, Look::Working, Look::Paused] {
+    for look in [Look::Escalated, Look::NeedsYou, Look::Working, Look::Queued, Look::Paused] {
         let count = indices.iter().filter(|&&i| app.tasks[i].look() == look).count();
         if count > 0 {
             title.push(Span::from(format!("{}{count} ", look_glyph(look))).fg(look_color(look)));
         }
     }
 
-    let items: Vec<ListItem> = indices.iter().map(|&i| card(&app.tasks[i])).collect();
     let border = if focused { ACCENT } else { MUTED };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(border)))
+        .padding(Padding::horizontal(1))
         .title(Line::from(title));
+
+    if !expanded {
+        // Folded: just the header bar (title and counts), no room to show cards legibly.
+        frame.render_widget(block, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = indices.iter().map(|&i| card(&app.tasks[i])).collect();
     let list = List::new(items)
         .block(block)
         .highlight_style(selection_style())
@@ -329,25 +438,19 @@ fn json_list(value: &Value) -> Vec<String> {
 }
 
 /// The full ticket: state, what it waits on you for, text, stage runs and activity.
-fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&TaskDetail>) {
+fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&TaskDetail>, scroll: &Cell<u16>) {
     let heading = |text: String| Line::from(Span::from(text).fg(c(ACCENT)).bold());
+    // What the agent proposed, needing your judgment, gets its own color — distinct from the
+    // plain facts (Description, Stages, Activity...) below it.
+    let proposal_heading = |text: String| Line::from(Span::from(text).fg(c(PEACH)).bold());
     let muted = |text: String| Line::from(Span::from(text).fg(c(SUBTEXT0)));
     let detail = detail.filter(|d| d.task.id == task.id);
     let look = task.look();
 
-    let mut lines = vec![
-        Line::from(vec![
-            Span::from(format!("{} {}", look_glyph(look), task.status_label()))
-                .fg(look_color(look))
-                .bold(),
-            Span::from(format!("  · {} · {} ago", task.column, age(&task.updated_at, now_secs())))
-                .fg(c(SUBTEXT0)),
-        ]),
-        muted(format!(
-            "Repo: {}",
-            task.repo_path.as_deref().unwrap_or("none (add one with e to run real agents)")
-        )),
-    ];
+    let mut lines = vec![muted(format!(
+        "Repo: {}",
+        task.repo_path.as_deref().unwrap_or("none (add one with e to run real agents)")
+    ))];
     if let Some(branch) = &task.branch {
         lines.push(muted(format!("Branch: {branch}")));
     }
@@ -368,26 +471,37 @@ fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&Tas
     if let Some(approval) = detail.and_then(TaskDetail::open_approval) {
         lines.extend([Line::default(), Line::from(Span::from(format!("Waiting on you: {}", task.status_label())).fg(look_color(look)).bold())]);
         let requested = &approval.requested;
+        if let Some(error) = requested["error"].as_str() {
+            lines.extend([Line::default(), Line::from(Span::from("Error").fg(c(RED)).bold())]);
+            lines.extend(error.lines().map(|l| Line::from(format!("  {l}")).fg(c(RED))));
+        }
         if let Some(note) = requested["note"].as_str() {
             lines.push(muted(note.to_string()));
         }
+        if let Some(url) = requested["prUrl"].as_str() {
+            let reused = requested["reused"].as_bool().unwrap_or(false);
+            lines.push(Line::from(vec![
+                Span::from(if reused { "PR (already open): " } else { "PR opened: " }).fg(c(SUBTEXT0)),
+                Span::from(url.to_string()).fg(c(BLUE)),
+            ]));
+        }
         if let Some(brief) = requested["brief"].as_str() {
-            lines.push(heading("Plan".into()));
+            lines.extend([Line::default(), proposal_heading("Plan".into())]);
             lines.extend(brief.lines().map(|l| Line::from(format!("  {l}"))));
         }
         let criteria = json_list(&requested["criteria"]);
         if !criteria.is_empty() {
-            lines.push(heading("Criteria to build".into()));
+            lines.extend([Line::default(), proposal_heading("Criteria to build".into())]);
             lines.extend(bullets(&criteria));
         }
         let assumptions = json_list(&requested["assumptions"]);
         if !assumptions.is_empty() {
-            lines.push(heading("Assumptions".into()));
+            lines.extend([Line::default(), proposal_heading("Assumptions".into())]);
             lines.extend(bullets(&assumptions));
         }
         let questions = questions_of(approval);
         if !questions.is_empty() {
-            lines.push(heading("Questions (a to answer)".into()));
+            lines.extend([Line::default(), proposal_heading("Questions (a to answer)".into())]);
             for (question, recommended) in questions {
                 lines.push(Line::from(format!("  ? {question}")));
                 lines.push(muted(format!("    recommended: {recommended}")));
@@ -431,12 +545,34 @@ fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&Tas
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(c(ACCENT)))
-        .title(Line::from(format!(" #{} {} ", task.short_id(), task.title)).bold());
+        .border_style(Style::new().fg(c(look_color(look))))
+        .padding(Padding::new(2, 2, 1, 1))
+        .title(Line::from(format!(" #{} {} ", task.short_id(), task.title)).bold())
+        .title_bottom(
+            Line::from(vec![
+                Span::from(format!(" {} {} ", look_glyph(look), task.status_label())).bold(),
+            ])
+            .fg(c(look_color(look)))
+            .left_aligned(),
+        )
+        .title_bottom(
+            Line::from(format!(" {} · {} ago ", task.column, age(&task.updated_at, now_secs())))
+                .fg(c(SUBTEXT0))
+                .right_aligned(),
+        );
+
+    // Clamp to the content's actual height, which depends on the terminal width (wrapping),
+    // so j/k can't scroll into empty space past the end.
+    let inner = block.inner(area);
+    let total_lines = Paragraph::new(Text::from(lines.clone())).wrap(Wrap { trim: false }).line_count(inner.width);
+    let offset = scroll.get().min(total_lines.saturating_sub(inner.height as usize) as u16);
+    scroll.set(offset);
+
     frame.render_widget(
         Paragraph::new(Text::from(lines))
             .block(block)
-            .wrap(Wrap { trim: false }),
+            .wrap(Wrap { trim: false })
+            .scroll((offset, 0)),
         area,
     );
 }
@@ -466,24 +602,14 @@ fn describe(event: &TaskEvent) -> String {
 }
 
 /// Popup asking to confirm a delete or an abort.
-fn render_confirm(frame: &mut Frame, task: &Task, deleting: bool) {
-    let area = centered(frame.area(), 64, 7);
+fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
+    let area = centered(frame.area(), 68, 7);
     frame.render_widget(Clear, area);
 
-    let (title, note) = if deleting {
-        (
-            " Delete ticket? ",
-            "Its runs and history go too. Its worktree and branch stay.",
-        )
-    } else {
-        (
-            " Abort the running stage? ",
-            "The container is stopped and the ticket waits for you.",
-        )
-    };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(RED)))
+        .padding(Padding::horizontal(2))
         .title(Line::from(title).fg(c(RED)).bold());
     let lines = vec![
         Line::from(Span::from(format!("#{} {}", task.short_id(), task.title)).bold()),
@@ -504,7 +630,7 @@ fn render_confirm(frame: &mut Frame, task: &Task, deleting: bool) {
 
 /// The `x` menu: each action with the key it maps to.
 fn render_actions(frame: &mut Frame, app: &App, cursor: usize) {
-    let area = centered(frame.area(), 52, ACTIONS.len() as u16 + 4);
+    let area = centered(frame.area(), 56, ACTIONS.len() as u16 + 4);
     frame.render_widget(Clear, area);
 
     let title = app
@@ -513,6 +639,7 @@ fn render_actions(frame: &mut Frame, app: &App, cursor: usize) {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
         .title(Line::from(title).bold());
     let lines: Vec<Line> = ACTIONS
         .iter()
@@ -534,13 +661,53 @@ fn render_actions(frame: &mut Frame, app: &App, cursor: usize) {
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+fn render_repo_picker(frame: &mut Frame, task: &Task, query: &str, all: &[String], cursor: usize) {
+    const VISIBLE_ROWS: usize = 10;
+    let area = centered(frame.area(), 90, VISIBLE_ROWS as u16 + 6);
+    frame.render_widget(Clear, area);
+
+    let matches = App::matching_repos(all, query);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" repo for #{} {} ", task.short_id(), task.title)).bold());
+
+    let mut lines = vec![
+        Line::from(vec![
+            Span::from(" search: ").fg(c(ACCENT)).bold(),
+            Span::from(format!("{query}▏")),
+        ]),
+        Line::default(),
+    ];
+    if matches.is_empty() {
+        lines.push(Line::from(Span::from("  no matches").fg(c(SUBTEXT0))));
+    } else {
+        // A window of rows around the cursor, so a long list still shows the selection.
+        let start = cursor.saturating_sub(VISIBLE_ROWS / 2).min(matches.len().saturating_sub(VISIBLE_ROWS));
+        for (i, repo) in matches.iter().enumerate().skip(start).take(VISIBLE_ROWS) {
+            let selected = i == cursor;
+            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            lines.push(Line::from(vec![
+                Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+                Span::from(*repo).style(style),
+            ]));
+        }
+        if matches.len() > VISIBLE_ROWS {
+            lines.push(Line::from(Span::from(format!("  … {} of {} repos", cursor + 1, matches.len())).fg(c(SUBTEXT0))));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 fn render_help(frame: &mut Frame) {
-    let area = centered(frame.area(), 72, HELP.len() as u16 + 4);
+    let area = centered(frame.area(), 76, HELP.len() as u16 + 4);
     frame.render_widget(Clear, area);
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
         .title(Line::from(" Keys · any key closes ").bold());
     let lines: Vec<Line> = HELP
         .iter()

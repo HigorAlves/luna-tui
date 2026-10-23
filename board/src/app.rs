@@ -2,7 +2,7 @@
 //! The machine owns the tickets; the board shows them and sends your decisions.
 
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
     env, fs, io,
     process::Command,
     sync::mpsc::{self, Receiver},
@@ -17,15 +17,18 @@ use ratatui::{
     },
     layout::Rect,
 };
+use tui_textarea::TextArea;
 
 use crate::{
     client::{Incoming, Machine, spawn_stream},
+    discover::{discover_repos, repos_root},
     herdr,
     model::{
         COLUMNS, Look, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
         parse_ticket, questions_of, ticket_markdown,
     },
     store,
+    vim::Vim,
 };
 
 const INFO_TOAST_FOR: Duration = Duration::from_secs(3);
@@ -33,29 +36,37 @@ const INFO_TOAST_FOR: Duration = Duration::from_secs(3);
 pub const CARD_HEIGHT: usize = 3;
 
 /// Actions in the `x` menu for the selected ticket, as the key each one is.
-pub const ACTIONS: [(char, &str); 6] = [
+pub const ACTIONS: [(char, &str); 9] = [
     ('a', "advance: start, approve, answer, resume"),
+    ('S', "ship: approve the Ship gate and open the PR"),
     ('r', "send back with a reason"),
     ('e', "edit the ticket"),
+    ('R', "search for its repo"),
     ('f', "focus the agent's tab"),
     ('X', "abort the running stage"),
+    ('w', "kill its worktree"),
     ('d', "delete"),
 ];
 
 /// Keys shown in the help overlay, as (keys, what they do).
-pub const HELP: [(&str, &str); 16] = [
+pub const HELP: [(&str, &str); 21] = [
     ("h / l", "previous / next column"),
     ("j / k", "previous / next ticket"),
     ("enter", "open details"),
-    ("n", "new ticket, then edit it in $EDITOR"),
-    ("e", "edit title, description, criteria and repo"),
-    ("a", "advance: start a draft, approve, answer, add guidance, resume"),
+    ("n", "new ticket, then edit it in place"),
+    ("e", "edit title, description and criteria in place (ctrl+s saves)"),
+    ("R", "search for its repo under HARDNESS_REPOS_DIR / ~/Developer"),
+    ("a", "advance: move to intake, start, approve, answer, add guidance, resume"),
+    ("S", "ship: approve the Ship gate and open the PR (same as a there)"),
     ("r", "send the plan or tests back, with a reason"),
     ("X", "abort the running stage (asks first)"),
+    ("w", "kill its worktree once you are done with it (asks first)"),
     ("d", "delete (asks first)"),
     ("f", "focus the agent's watch tab in herdr"),
     ("/", "filter by title or #id"),
     ("!", "show only tickets that need you"),
+    ("@", "show only tickets for this repo"),
+    ("F", "fold: show every column, only the focused one expanded"),
     ("x", "actions for the selected ticket"),
     ("esc", "clear the filter"),
     ("?", "this help"),
@@ -68,6 +79,12 @@ pub enum Mode {
     /// Typing the filter. The text lives in `App::filter`.
     Filter,
     Detail(String),
+    /// Editing a ticket's markdown in place: title, description, criteria, repo.
+    EditTicket {
+        id: String,
+        area: TextArea<'static>,
+        vim: Vim,
+    },
     /// Typing a reason: required to send back, optional guidance for an escalation.
     Reason {
         id: String,
@@ -76,7 +93,16 @@ pub enum Mode {
     },
     ConfirmDelete(String),
     ConfirmAbort(String),
+    ConfirmWorktree(String),
     Actions {
+        cursor: usize,
+    },
+    /// Searching for a repo to set on a ticket, type to filter. `all` is every repo found
+    /// under the repos root, `cursor` indexes into whichever of those match `query`.
+    RepoPicker {
+        id: String,
+        query: String,
+        all: Vec<String>,
         cursor: usize,
     },
     Help,
@@ -86,8 +112,6 @@ pub enum Mode {
 pub enum Outcome {
     Continue,
     Quit,
-    /// Edit this ticket in `$EDITOR`.
-    Edit(String),
     /// Answer this ticket's triage questions in `$EDITOR`.
     Answer(String),
 }
@@ -113,8 +137,18 @@ pub struct App {
     pub toast: Option<Toast>,
     pub filter: String,
     pub needs_only: bool,
+    pub this_repo_only: bool,
+    /// Shows every column at once, unfocused ones collapsed to their header bar. For screens
+    /// too narrow to fit all columns at a readable width.
+    pub fold: bool,
+    /// The repo this board defaults new tickets to, for the `@` filter. `None` if it
+    /// isn't inside one.
+    pub home_repo: Option<String>,
     /// Column rectangles from the last frame, for mouse clicks.
     pub column_rects: RefCell<Vec<(usize, Rect)>>,
+    /// How far the open ticket's detail popup is scrolled. `ui` clamps it to the content's
+    /// actual height, which only it knows (it depends on the terminal width).
+    pub detail_scroll: Cell<u16>,
     imported: bool,
 }
 
@@ -136,10 +170,18 @@ impl App {
             toast: None,
             filter: String::new(),
             needs_only: false,
+            this_repo_only: false,
+            fold: false,
+            home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
+            detail_scroll: Cell::new(0),
             imported: false,
         };
         app.reload();
+        if !app.online {
+            let url = app.machine_url().to_string();
+            app.notify(format!("can't reach the machine at {url} — start it with `pnpm dev`"), true);
+        }
         app
     }
 
@@ -300,15 +342,20 @@ impl App {
         self.tasks.iter().find(|t| t.id == id)
     }
 
-    pub fn detail_task(&self) -> Option<&Task> {
-        match &self.mode {
-            Mode::Detail(id) => self.task(id),
-            _ => None,
-        }
+    /// Repos from `all` whose path contains `query`, case-insensitively.
+    pub fn matching_repos<'a>(all: &'a [String], query: &str) -> Vec<&'a str> {
+        let query = query.to_lowercase();
+        all.iter()
+            .map(String::as_str)
+            .filter(|r| query.is_empty() || r.to_lowercase().contains(&query))
+            .collect()
     }
 
     fn passes_filter(&self, task: &Task) -> bool {
         if self.needs_only && !matches!(task.look(), Look::NeedsYou | Look::Escalated) {
+            return false;
+        }
+        if self.this_repo_only && task.repo_path != self.home_repo {
             return false;
         }
         let query = self.filter.trim().to_lowercase();
@@ -351,6 +398,15 @@ impl App {
         for column in 0..COLUMNS.len() {
             let len = self.indices(column).len();
             self.selection[column] = self.selection[column].min(len.saturating_sub(1));
+        }
+    }
+
+    /// Mouse wheel: scrolls the detail popup if it's open, otherwise moves the board selection.
+    pub fn scroll(&mut self, delta: i16) {
+        if matches!(self.mode, Mode::Detail(_)) {
+            self.scroll_detail(delta);
+        } else {
+            self.move_selection(delta as isize);
         }
     }
 
@@ -402,14 +458,55 @@ impl App {
         }
     }
 
+    /// Opens the ticket's markdown for editing in place: title, description, criteria, repo.
+    fn open_ticket_editor(&mut self, id: &str) {
+        let Some(task) = self.task(id) else {
+            return;
+        };
+        let text = TicketText {
+            title: task.title.clone(),
+            description: task.description.clone(),
+            criteria: task.criteria.clone(),
+            repo_path: task.repo_path.clone(),
+        };
+        let title = format!(" editing #{} {} ", task.short_id(), task.title);
+        let mut area = TextArea::new(ticket_markdown(&text).lines().map(str::to_string).collect());
+        area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+        area.set_block(
+            ratatui::widgets::Block::bordered()
+                .padding(ratatui::widgets::Padding::new(2, 2, 1, 1))
+                .title(title),
+        );
+        self.mode = Mode::EditTicket { id: id.to_string(), area, vim: Vim::new() };
+    }
+
+    /// Opens the repo search for `id`: type to filter, enter to set it on the ticket.
+    fn open_repo_picker(&mut self, id: &str) {
+        let all = repos_root().map(|root| discover_repos(&root)).unwrap_or_default();
+        if all.is_empty() {
+            self.notify("no repos found under HARDNESS_REPOS_DIR or ~/Developer; `e` to type one", true);
+            return;
+        }
+        self.mode = Mode::RepoPicker { id: id.to_string(), query: String::new(), all, cursor: 0 };
+    }
+
     /// `a`: the one obvious next step for the ticket.
     fn advance(&mut self, id: &str) -> Outcome {
         let Some(task) = self.task(id).cloned() else {
             return Outcome::Continue;
         };
         match task.state.as_str() {
+            "backlog" => self.act(|m| m.start(id), "moved to intake"),
+            "draft" if task.repo_path.is_none() => {
+                self.notify("set a repo before starting", true);
+                self.open_repo_picker(id);
+            }
             "draft" => self.act(|m| m.start(id), "started"),
             "awaiting_answers" => return Outcome::Answer(id.to_string()),
+            "escalated" if task.repo_path.is_none() => {
+                self.notify("set a repo before continuing", true);
+                self.open_repo_picker(id);
+            }
             "escalated" => {
                 self.mode = Mode::Reason {
                     id: id.to_string(),
@@ -432,7 +529,14 @@ impl App {
         };
         match key {
             'a' => return self.advance(id),
-            'e' => return Outcome::Edit(id.to_string()),
+            'S' => {
+                if task.state == "awaiting_ship" {
+                    return self.advance(id);
+                }
+                self.notify("nothing waiting to ship on this ticket", false);
+            }
+            'e' => self.open_ticket_editor(id),
+            'R' => self.open_repo_picker(id),
             'r' => {
                 if matches!(task.state.as_str(), "awaiting_approval" | "awaiting_test_check") {
                     self.mode = Mode::Reason {
@@ -449,6 +553,15 @@ impl App {
                     self.mode = Mode::ConfirmAbort(id.to_string());
                 } else {
                     self.notify("nothing is running on this ticket", false);
+                }
+            }
+            'w' => {
+                if task.worktree_path.is_none() {
+                    self.notify("no worktree for this ticket", false);
+                } else if task.running {
+                    self.notify("a stage is running on this worktree; X aborts it first", false);
+                } else {
+                    self.mode = Mode::ConfirmWorktree(id.to_string());
                 }
             }
             'd' => self.mode = Mode::ConfirmDelete(id.to_string()),
@@ -473,13 +586,15 @@ impl App {
                 self.handle_detail(key, &id)
             }
             Mode::Adding(_) => self.handle_adding(key),
+            Mode::EditTicket { .. } => self.handle_edit_ticket(key),
             Mode::Filter => self.handle_filter(key),
             Mode::Reason { .. } => self.handle_reason(key),
-            Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) => {
+            Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
                 self.handle_confirm(key, &id)
             }
             Mode::Actions { .. } => self.handle_actions(key),
+            Mode::RepoPicker { .. } => self.handle_repo_picker(key),
             Mode::Help => {
                 self.mode = Mode::Normal;
                 Outcome::Continue
@@ -501,15 +616,26 @@ impl App {
                 self.needs_only = !self.needs_only;
                 self.clamp_selection();
             }
+            KeyCode::Char('@') => {
+                if self.home_repo.is_none() {
+                    self.notify("this board isn't inside a repo", true);
+                } else {
+                    self.this_repo_only = !self.this_repo_only;
+                    self.clamp_selection();
+                }
+            }
+            KeyCode::Char('F') => self.fold = !self.fold,
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Esc => {
                 self.filter.clear();
                 self.needs_only = false;
+                self.this_repo_only = false;
                 self.clamp_selection();
             }
             KeyCode::Enter => {
                 if let Some(id) = self.selected_id() {
                     self.detail_stale = true;
+                    self.detail_scroll.set(0);
                     self.mode = Mode::Detail(id);
                 }
             }
@@ -526,8 +652,53 @@ impl App {
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Char('j') | KeyCode::Down => self.scroll_detail(1),
+            KeyCode::Char('k') | KeyCode::Up => self.scroll_detail(-1),
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// Scrolls the open detail popup. `ui` clamps this to the content's actual height on the
+    /// next frame, since only it knows that (it depends on the terminal width).
+    fn scroll_detail(&self, delta: i16) {
+        let next = self.detail_scroll.get() as i16 + delta;
+        self.detail_scroll.set(next.max(0) as u16);
+    }
+
+    /// Vim-style modal editing, like `$EDITOR` gave before editing moved in place: normal mode
+    /// navigates, `i`/`a`/`o`/... enter insert mode, ctrl+s saves (either mode), esc in normal
+    /// mode cancels. Saving parses the same markdown `e` used to write to `$EDITOR`.
+    fn handle_edit_ticket(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::EditTicket { id, area, vim } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match vim.handle(area, key) {
+            crate::vim::Outcome::Continue => {}
+            crate::vim::Outcome::Cancel => self.mode = Mode::Normal,
+            crate::vim::Outcome::Save => {
+                let id = id.clone();
+                let markdown = area.lines().join("\n");
+                self.mode = Mode::Normal;
+                let Some(task) = self.task(&id) else {
+                    return Outcome::Continue;
+                };
+                let before = TicketText {
+                    title: task.title.clone(),
+                    description: task.description.clone(),
+                    criteria: task.criteria.clone(),
+                    repo_path: task.repo_path.clone(),
+                };
+                // The repo isn't part of this text (see `ticket_markdown`), so carry the
+                // ticket's current one over rather than letting a parse with none wipe it.
+                let edited = TicketText { repo_path: task.repo_path.clone(), ..parse_ticket(&markdown, &task.title) };
+                if edited != before {
+                    self.act(|m| m.update(&id, &edited), "saved");
+                } else {
+                    self.notify("nothing changed", false);
+                }
+            }
         }
         Outcome::Continue
     }
@@ -558,7 +729,7 @@ impl App {
                         let id = task.id.clone();
                         self.upsert(task);
                         self.select(&id, true);
-                        return Outcome::Edit(id);
+                        self.open_ticket_editor(&id);
                     }
                     Err(error) => self.notify(error, true),
                 }
@@ -614,21 +785,67 @@ impl App {
     fn handle_confirm(&mut self, key: KeyEvent, id: &str) -> Outcome {
         match key.code {
             KeyCode::Char('y') => {
-                let deleting = matches!(self.mode, Mode::ConfirmDelete(_));
-                self.mode = Mode::Normal;
-                if deleting {
-                    match self.machine.delete(id) {
+                let mode = std::mem::replace(&mut self.mode, Mode::Normal);
+                match mode {
+                    Mode::ConfirmDelete(_) => match self.machine.delete(id) {
                         Ok(()) => {
                             self.forget(id);
                             self.notify("deleted", false);
                         }
                         Err(error) => self.notify(error, true),
+                    },
+                    Mode::ConfirmWorktree(_) => {
+                        self.act(|m| m.remove_worktree(id), "worktree removed");
                     }
-                } else {
-                    self.act(|m| m.abort(id), "aborted; it waits for you");
+                    _ => self.act(|m| m.abort(id), "aborted; it waits for you"),
                 }
             }
             KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// Type to filter, up/down to move, enter to set the highlighted repo on the ticket.
+    fn handle_repo_picker(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::RepoPicker { id, query, all, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char(c) => {
+                query.push(c);
+                *cursor = 0;
+            }
+            KeyCode::Backspace => {
+                query.pop();
+                *cursor = 0;
+            }
+            KeyCode::Down => {
+                let len = Self::matching_repos(all, query).len();
+                if len > 0 {
+                    *cursor = (*cursor + 1).min(len - 1);
+                }
+            }
+            KeyCode::Up => *cursor = cursor.saturating_sub(1),
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let matches = Self::matching_repos(all, query);
+                let Some(repo) = matches.get(*cursor).map(|r| r.to_string()) else {
+                    return Outcome::Continue;
+                };
+                let id = id.clone();
+                self.mode = Mode::Normal;
+                let Some(task) = self.task(&id).cloned() else {
+                    return Outcome::Continue;
+                };
+                let text = TicketText {
+                    title: task.title,
+                    description: task.description,
+                    criteria: task.criteria,
+                    repo_path: Some(repo),
+                };
+                self.act(|m| m.update(&id, &text), "repo set");
+            }
             _ => {}
         }
         Outcome::Continue
@@ -644,7 +861,7 @@ impl App {
             KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(ACTIONS.len() - 1),
             KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
             KeyCode::Enter => chosen = Some(ACTIONS[*cursor].0),
-            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
             KeyCode::Char(c) if ACTIONS.iter().any(|(k, _)| *k == c) => chosen = Some(c),
             _ => {}
         }
@@ -692,27 +909,6 @@ impl App {
         saved
     }
 
-    /// Edits the ticket's title, description, criteria and repo in `$EDITOR`.
-    pub fn edit_ticket(&mut self, terminal: &mut DefaultTerminal, id: &str) {
-        let Some(task) = self.task(id).cloned() else {
-            return;
-        };
-        let text = TicketText {
-            title: task.title.clone(),
-            description: task.description.clone(),
-            criteria: task.criteria.clone(),
-            repo_path: task.repo_path.clone(),
-        };
-        let name = format!("hardness-ticket-{}.md", task.short_id());
-        let Some(saved) = self.run_editor(terminal, &name, &ticket_markdown(&text)) else {
-            return;
-        };
-        let edited = parse_ticket(&saved, &task.title);
-        if edited != text {
-            self.act(|m| m.update(id, &edited), "saved");
-        }
-    }
-
     /// Answers triage's questions in `$EDITOR`, starting from its recommended answers.
     pub fn answer_questions(&mut self, terminal: &mut DefaultTerminal, id: &str) {
         let detail = match self.machine.detail(id) {
@@ -732,5 +928,36 @@ impl App {
             return self.notify("answer every question, keeping the `## Q:` lines", true);
         }
         self.act(|m| m.answer(id, &answers), "answers sent; triage runs again");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn warns_when_the_machine_is_unreachable_on_startup() {
+        // SAFETY: this test does not run alongside another that reads this var.
+        unsafe { std::env::set_var("HARDNESS_MACHINE_URL", "http://127.0.0.1:1") };
+        let app = App::new(Machine::from_env());
+        assert!(!app.online);
+        let toast = app.toast.expect("a warning toast on startup");
+        assert!(toast.error);
+        assert!(toast.text.contains("pnpm dev"), "toast was: {}", toast.text);
+    }
+
+    #[test]
+    fn matching_repos_filters_case_insensitively_and_keeps_order() {
+        let all = vec![
+            "/Developer/hardness-herdr".to_string(),
+            "/Developer/project-x/backend".to_string(),
+            "/Developer/project-x/frontend".to_string(),
+        ];
+        assert_eq!(App::matching_repos(&all, ""), all.iter().map(String::as_str).collect::<Vec<_>>());
+        assert_eq!(
+            App::matching_repos(&all, "PROJECT-X"),
+            vec!["/Developer/project-x/backend", "/Developer/project-x/frontend"],
+        );
+        assert_eq!(App::matching_repos(&all, "nope"), Vec::<&str>::new());
     }
 }

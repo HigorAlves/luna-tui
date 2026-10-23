@@ -2,7 +2,7 @@ id = "hardness.board"
 name = "Hardness Board"
 version = "0.1.0"
 min_herdr_version = "0.7.0"
-description = "Lazygit-style board for herdr: Triage, Approved, Build, Verify, Evidence, Publish (POC)"
+description = "Lazygit-style board for herdr: Backlog, Intake, Triage, Approved, Build, Verify, Evidence, Ship, Done (POC)"
 platforms = ["linux", "macos"]
 
 [[build]]

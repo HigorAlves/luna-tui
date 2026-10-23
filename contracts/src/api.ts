@@ -71,6 +71,8 @@ export interface Task {
   waitingOnYou: boolean;
   /** A stage is running right now. */
   running: boolean;
+  /** Ready to run, but waiting for a free concurrency slot. */
+  queued: boolean;
   retries: Retries;
   resumeTo: TaskState | null;
   reason: string | null;

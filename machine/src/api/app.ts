@@ -14,6 +14,7 @@ import { streamSSE } from "hono/streaming";
 import { ZodError, type ZodType, z } from "zod";
 
 import { TransitionError } from "../engine/transition.ts";
+import type { Watcher } from "../herdr/watch.ts";
 import { type Pipeline, TaskBusyError, TaskNotFoundError } from "../pipeline/pipeline.ts";
 import type { StubStages } from "../stages/stubs.ts";
 import type { Bus } from "./bus.ts";
@@ -26,6 +27,8 @@ const RECENT_EVENTS = 50;
 export interface AppDeps {
   pipeline: Pipeline;
   bus: Bus;
+  /** Closes a task's herdr watch tab when it is deleted; closing it on `closed` is main.ts's job. */
+  watcher?: Watcher;
   /** Enables `POST /dev/stubs` when the stub stages are in use. */
   stubs?: StubStages;
 }
@@ -52,7 +55,7 @@ function taskId(c: Context): string {
   return id;
 }
 
-export function createApp({ pipeline, bus, stubs }: AppDeps): Hono {
+export function createApp({ pipeline, bus, watcher, stubs }: AppDeps): Hono {
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -101,6 +104,7 @@ export function createApp({ pipeline, bus, stubs }: AppDeps): Hono {
   app.delete("/tasks/:id", async (c) => {
     const id = taskId(c);
     await pipeline.delete(id);
+    await watcher?.close(id);
     bus.publish({ type: "task.deleted", id });
     return c.body(null, 204);
   });
@@ -124,6 +128,9 @@ export function createApp({ pipeline, bus, stubs }: AppDeps): Hono {
 
   /** Re-runs the stage a task paused in after a usage limit. */
   app.post("/tasks/:id/resume", async (c) => c.json(toTask(await pipeline.windowReset(taskId(c)))));
+
+  /** Removes the task's worktree from disk; the task and its branch stay. */
+  app.post("/tasks/:id/worktree/remove", async (c) => c.json(toTask(await pipeline.removeWorktree(taskId(c)))));
 
   if (stubs) {
     app.post("/dev/stubs", async (c) => {

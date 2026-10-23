@@ -9,6 +9,7 @@ import {
   commonGitDir,
   ensureWorktree,
   headCommit,
+  resetWorktree,
   workspaceFor,
 } from "../git/worktree.ts";
 import type { Watcher } from "../herdr/watch.ts";
@@ -197,10 +198,16 @@ async function runAgent(deps: AgentDeps, context: StageContext, stage: AgentStag
     workspace: { branch: workspace.branch, worktreePath: workspace.path },
     run: { containerId: container, transcriptPath: sandbox.transcriptPath, inputCommit },
   };
-  const failed = (error: string): StageResult => ({ ...base, detail: { error } });
+  // However this run ends without a clean, committed answer, the next attempt should not
+  // inherit whatever it left half-edited on disk.
+  const dirty = async <T>(result: T): Promise<T> => {
+    if (stage.writable) await resetWorktree(workspace.path);
+    return result;
+  };
+  const failed = (error: string): Promise<StageResult> => dirty({ ...base, detail: { error } });
   const out = sandbox.output;
 
-  if (out?.rateLimited) return { ...base, rateLimited: true, detail: { resetsAt: out.resetsAt } };
+  if (out?.rateLimited) return dirty({ ...base, rateLimited: true, detail: { resetsAt: out.resetsAt } });
   if (sandbox.aborted) return failed("aborted");
   if (sandbox.timedOut) return failed(`timed out after ${stage.timeoutMs / MINUTE} minutes`);
   if (!out) return failed(`the container left no result (exit code ${sandbox.exitCode}); see the transcript`);

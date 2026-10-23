@@ -44,7 +44,9 @@ export type Effect =
   | { kind: "run"; stage: TaskState }
   | { kind: "wait"; gate: TaskState }
   | { kind: "pause" }
-  | { kind: "done" };
+  | { kind: "done" }
+  /** A plain state change: no stage runs, no approval gate opens. */
+  | { kind: "move" };
 
 export interface Step extends Snapshot {
   effect: Effect;
@@ -71,6 +73,13 @@ const wait = (gate: TaskState, retries: Retries): Step => ({
   retries,
   resumeTo: null,
   effect: { kind: "wait", gate },
+});
+
+const move = (state: TaskState, retries: Retries): Step => ({
+  state,
+  retries,
+  resumeTo: null,
+  effect: { kind: "move" },
 });
 
 /** Stops and asks you. On guidance, the task continues at `resumeTo`. */
@@ -128,6 +137,7 @@ export function transition(task: Snapshot, event: PipelineEvent): Step {
       if (state === "paused_rate_limit" && task.resumeTo) return run(task.resumeTo, retries);
       break;
     case "start":
+      if (state === "backlog") return move("draft", retries);
       if (state === "draft") return run("triage", retries);
       break;
     case "answered":
@@ -152,8 +162,8 @@ function approved(task: Snapshot, event: PipelineEvent): Step {
       return run("test_design", retries);
     case "awaiting_test_check":
       return enterImplementing(retries);
-    case "awaiting_publish":
-      return wait("reviewing_memory", retries);
+    case "awaiting_ship":
+      return run("shipping", retries);
     case "reviewing_memory":
       return { state: "closed", retries, resumeTo: null, effect: { kind: "done" } };
     case "escalated":
@@ -199,9 +209,13 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       if (outcome === "fail") return loopFailed(task, "ci");
       break;
     case "evidence":
-      if (outcome === "pass") return wait("awaiting_publish", retries);
+      if (outcome === "pass") return wait("awaiting_ship", retries);
       // The criteria could not be shown working: that counts against the e2e loop.
       if (outcome === "fail") return loopFailed(task, "e2e");
+      break;
+    case "shipping":
+      if (outcome === "pass") return wait("reviewing_memory", retries);
+      if (outcome === "fail") return escalate("ship failed", "shipping", retries);
       break;
   }
   throw new TransitionError(task, event);

@@ -94,6 +94,8 @@ async function main() {
   log(`created task ${id}`);
 
   await api(`/tasks/${id}/start`, { method: "POST" });
+  log("moved to intake");
+  await api(`/tasks/${id}/start`, { method: "POST" });
   log("started");
 
   await waitFor(id, ["awaiting_approval"], 10 * 60_000);
@@ -104,16 +106,22 @@ async function main() {
   log("test design done, approving the tests");
   await decide(id, "approved");
 
-  const afterImplementer = await waitFor(id, ["awaiting_publish"], 20 * 60_000);
-  log("implementer, verify, e2e, deliver, ci and evidence all passed, approving publish");
+  const afterImplementer = await waitFor(id, ["awaiting_ship"], 20 * 60_000);
+  log("implementer, verify, e2e, deliver, ci and evidence all passed, approving ship");
   await decide(id, "approved");
 
-  await waitFor(id, ["reviewing_memory"], 30_000);
-  log("approving the memory review");
-  await decide(id, "approved");
-
-  await waitFor(id, ["closed"], 30_000);
-  log("task closed");
+  // This fixture has no git remote, so shipping (a real `git push` + `gh pr create`) is
+  // expected to escalate here, not reach reviewing_memory. That's still a pass: everything
+  // this script actually verifies (the bug fix, the gates, the graph) already happened.
+  const shipped = await waitFor(id, ["reviewing_memory", "escalated"], 60_000);
+  if (shipped.state === "escalated") {
+    log(`shipping escalated as expected, no git remote on this throwaway fixture: ${shipped.reason}`);
+  } else {
+    log("approving the memory review");
+    await decide(id, "approved");
+    await waitFor(id, ["closed"], 30_000);
+    log("task closed");
+  }
 
   if (afterImplementer.worktreePath) {
     log(`checking the implementer's fix in ${afterImplementer.worktreePath}`);

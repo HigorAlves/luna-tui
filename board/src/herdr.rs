@@ -39,12 +39,25 @@ pub fn focus_task_tab(short_id: &str) -> bool {
     }
 }
 
-/// The workspace the board was opened from, when it is a git repo: the default repo for
-/// new tickets.
+/// The repo a new ticket defaults to: herdr's workspace when the board runs as its plugin,
+/// otherwise the board's own working directory. Either way, walks up to the repo root so it
+/// still finds `.git` from a subdirectory.
 pub fn workspace_repo() -> Option<String> {
-    let context: Value = serde_json::from_str(&env::var("HERDR_PLUGIN_CONTEXT_JSON").ok()?).ok()?;
-    let cwd = context["workspace_cwd"].as_str()?;
-    Path::new(cwd).join(".git").exists().then(|| cwd.to_string())
+    let from_herdr = (|| {
+        let context: Value = serde_json::from_str(&env::var("HERDR_PLUGIN_CONTEXT_JSON").ok()?).ok()?;
+        Some(context["workspace_cwd"].as_str()?.to_string())
+    })();
+    let start = from_herdr.or_else(|| env::current_dir().ok().map(|p| p.to_string_lossy().into_owned()))?;
+    repo_root(Path::new(&start)).map(|p| p.to_string_lossy().into_owned())
+}
+
+/// `dir` or the nearest ancestor that has a `.git` entry.
+fn repo_root(dir: &Path) -> Option<&Path> {
+    if dir.join(".git").exists() {
+        Some(dir)
+    } else {
+        repo_root(dir.parent()?)
+    }
 }
 
 /// When running inside herdr, names the current tab and pane "Board".
@@ -57,5 +70,30 @@ pub fn name_tab_and_pane() {
     }
     if let Ok(pane) = env::var("HERDR_PANE_ID") {
         run(&["pane", "rename", &pane, "Board"]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::repo_root;
+
+    #[test]
+    fn repo_root_walks_up_to_the_nearest_git_dir() {
+        let root = std::env::temp_dir().join(format!("hardness-repo-root-test-{}", std::process::id()));
+        let nested = root.join("a").join("b");
+        fs::create_dir_all(&nested).unwrap();
+        fs::create_dir_all(root.join(".git")).unwrap();
+
+        assert_eq!(repo_root(&nested), Some(root.as_path()));
+
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn repo_root_is_none_outside_any_repo() {
+        // /tmp itself is never a git repo, and neither is anything above it.
+        assert_eq!(repo_root(std::env::temp_dir().as_path()), None);
     }
 }

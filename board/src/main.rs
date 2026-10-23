@@ -6,10 +6,12 @@
 
 mod app;
 mod client;
+mod discover;
 mod herdr;
 mod model;
 mod store;
 mod ui;
+mod vim;
 
 use std::{io, time::Duration};
 
@@ -39,12 +41,11 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 Event::Key(key) if key.kind == KeyEventKind::Press => match app.handle_key(key) {
                     Outcome::Continue => {}
                     Outcome::Quit => return Ok(()),
-                    Outcome::Edit(id) => app.edit_ticket(terminal, &id),
                     Outcome::Answer(id) => app.answer_questions(terminal, &id),
                 },
                 Event::Mouse(mouse) => match mouse.kind {
-                    MouseEventKind::ScrollDown => app.move_selection(1),
-                    MouseEventKind::ScrollUp => app.move_selection(-1),
+                    MouseEventKind::ScrollDown => app.scroll(1),
+                    MouseEventKind::ScrollUp => app.scroll(-1),
                     MouseEventKind::Down(MouseButton::Left) => app.click(mouse.column, mouse.row),
                     _ => {}
                 },

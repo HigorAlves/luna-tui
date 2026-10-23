@@ -18,6 +18,7 @@ import {
   type TaskRow,
 } from "../db/entities.ts";
 import { NO_RETRIES, type PipelineEvent, type Step, transition } from "../engine/transition.ts";
+import { removeWorktree as removeWorktreeOnDisk } from "../git/worktree.ts";
 import type { StageResult, StageRunner } from "../stages/runner.ts";
 
 export class TaskNotFoundError extends Error {
@@ -47,6 +48,8 @@ export interface PipelineOptions {
   onEvent?: (event: EventRow) => void;
   /** Run stages inside the request instead of in the background. Tests use this. */
   inline?: boolean;
+  /** Tasks that can be driving a stage at once, across every repo. The rest queue. */
+  maxConcurrentTasks?: number;
 }
 
 interface DecisionRecord {
@@ -68,7 +71,8 @@ const RESUME_MARGIN_MS = 30_000;
 export class Pipeline {
   private readonly onEvent: (event: EventRow) => void;
   private readonly inline: boolean;
-  /** The abort signal of each task's running stage loop. */
+  private readonly maxConcurrentTasks: number;
+  /** The abort signal of each task currently driving a stage. Its size is the active count. */
   private readonly loops = new Map<string, AbortController>();
   private readonly resumeTimers = new Map<string, NodeJS.Timeout>();
 
@@ -79,6 +83,7 @@ export class Pipeline {
   ) {
     this.onEvent = options.onEvent ?? (() => {});
     this.inline = options.inline ?? false;
+    this.maxConcurrentTasks = options.maxConcurrentTasks ?? 4;
   }
 
   async createTask(input: NewTask): Promise<TaskRow> {
@@ -89,7 +94,7 @@ export class Pipeline {
       repoPath: input.repoPath ?? null,
       branch: null,
       worktreePath: null,
-      state: "draft",
+      state: "backlog",
       retries: { ...NO_RETRIES },
       resumeTo: null,
       reason: null,
@@ -131,6 +136,18 @@ export class Pipeline {
     await this.db.getRepository(TaskEntity).delete({ id });
   }
 
+  /** Removes a task's worktree from disk once you are done with it. The task, its branch
+   * and commits stay; only the checkout the agent worked in is gone. */
+  async removeWorktree(id: string): Promise<TaskRow> {
+    const task = await this.get(id);
+    if (RUNNING.has(task.state)) throw new TaskBusyError(id, task.state);
+    if (!task.repoPath || !task.worktreePath) return task;
+    await removeWorktreeOnDisk(task.repoPath, task.worktreePath);
+    await this.db.getRepository(TaskEntity).update({ id }, { worktreePath: null });
+    await this.log(id, "worktree.removed", { path: task.worktreePath });
+    return this.get(id);
+  }
+
   start(id: string): Promise<TaskRow> {
     return this.dispatch(id, { type: "start" });
   }
@@ -150,13 +167,29 @@ export class Pipeline {
     return this.dispatch(id, event, { decision: { decision, reason } });
   }
 
-  /** Stops the running stage (its container is killed) and waits for you. */
+  /** Stops the running (or merely queued) stage and waits for you. */
   async abort(id: string): Promise<TaskRow> {
     const task = await this.dispatch(id, { type: "abort" });
     this.loops.get(id)?.abort();
+    await this.db.getRepository(TaskEntity).update({ id }, { queued: false });
     clearTimeout(this.resumeTimers.get(id));
     this.resumeTimers.delete(id);
     return task;
+  }
+
+  /** Aborts every running stage (killing its container) and waits for them to wind down,
+   * so a normal Ctrl+C does not leave a container or a dirty worktree running unseen. */
+  async shutdown(): Promise<void> {
+    const ids = [...this.loops.keys()];
+    await Promise.all(
+      ids.map((id) =>
+        this.abort(id).catch((error: unknown) => console.error(`could not abort task ${id} on shutdown`, error)),
+      ),
+    );
+    const deadline = Date.now() + 5000;
+    while (this.loops.size > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 
   /** The usage window has reset: re-run the stage the task paused in. */
@@ -167,20 +200,27 @@ export class Pipeline {
   }
 
   /**
-   * After a restart no stage loop is running, so tasks left mid-stage would hang. Marks their
-   * runs aborted and escalates them, so you decide whether to re-run the stage.
+   * After a restart no stage loop is running. A task that was actually mid-container-run
+   * when the machine stopped is escalated, so you decide whether to re-run the stage; one
+   * that was merely queued for a free slot lost nothing and is simply rescheduled.
    */
   async recover(): Promise<number> {
     const stuck = await this.db
       .getRepository(TaskEntity)
-      .find({ where: { state: In([...RUNNING]) } });
+      .find({ where: { state: In([...RUNNING]) }, order: { updatedAt: "ASC" } });
     await this.db
       .getRepository(StageRunEntity)
       .update({ status: "running" }, { status: "aborted", endedAt: () => "clock_timestamp()" });
+    let escalated = 0;
     for (const task of stuck) {
-      await this.apply(task.id, { type: "abort" }, { detail: { note: "the machine restarted mid-stage" } });
+      if (task.queued) {
+        await this.schedule(task.id, task.state);
+      } else {
+        await this.apply(task.id, { type: "abort" }, { detail: { note: "the machine restarted mid-stage" } });
+        escalated++;
+      }
     }
-    return stuck.length;
+    return escalated;
   }
 
   stageRuns(id: string): Promise<StageRunRow[]> {
@@ -199,14 +239,55 @@ export class Pipeline {
     return this.db.getRepository(EventEntity).find({ where: { taskId: id }, order: { id: "ASC" } });
   }
 
-  /** Applies an event and, if it starts a stage, runs the stage loop. */
+  /** Applies an event and, if it starts a stage, runs it now or queues it for a free slot. */
   private async dispatch(id: string, event: PipelineEvent, extra: Extra = {}): Promise<TaskRow> {
     const step = await this.apply(id, event, extra);
     if (step.effect.kind === "run") {
-      const loop = this.drive(id, step.effect.stage);
-      if (this.inline) await loop;
+      await this.schedule(id, step.effect.stage);
     }
     return this.get(id);
+  }
+
+  /**
+   * Drives the stage now if a slot is free, otherwise marks the task queued for one. Always
+   * waits for that decision (and the `queued` flag) to be stored before returning; only
+   * waits for the whole run too in inline mode.
+   */
+  private async schedule(id: string, stage: TaskState): Promise<void> {
+    if (this.loops.size >= this.maxConcurrentTasks) {
+      await this.db.getRepository(TaskEntity).update({ id }, { queued: true });
+      return;
+    }
+    // Clears a stale `queued: true` from before a restart, as well as the common case
+    // where it was already false.
+    await this.db.getRepository(TaskEntity).update({ id }, { queued: false });
+    const loop = this.runAndFillSlot(id, stage);
+    if (this.inline) await loop;
+  }
+
+  /** Drives the stage, then — once its slot is free again — starts the longest-queued task. */
+  private async runAndFillSlot(id: string, stage: TaskState): Promise<void> {
+    await this.drive(id, stage);
+    if (this.loops.size >= this.maxConcurrentTasks) return;
+    // Pick a candidate unlocked, then re-check it under a row lock, so two slots freeing at
+    // once cannot both claim the same queued task.
+    const candidate = await this.db
+      .getRepository(TaskEntity)
+      .findOne({ where: { queued: true }, order: { updatedAt: "ASC" } });
+    if (!candidate) return;
+    const claimed = await this.db.transaction(async (tx) => {
+      const locked = await tx
+        .getRepository(TaskEntity)
+        .createQueryBuilder("task")
+        .where("task.id = :id", { id: candidate.id })
+        .andWhere("task.queued = :queued", { queued: true })
+        .setLock("pessimistic_write")
+        .getOne();
+      if (!locked) return null;
+      await tx.update(TaskEntity, { id: locked.id }, { queued: false });
+      return locked;
+    });
+    if (claimed) void this.runAndFillSlot(claimed.id, claimed.state);
   }
 
   /** Runs stages one after another until the task waits on you, pauses, closes or is aborted. */

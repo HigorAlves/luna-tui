@@ -19,6 +19,8 @@ export interface TaskRow {
   resumeTo: TaskState | null;
   /** Why the task is escalated, shown on the board. */
   reason: string | null;
+  /** Ready to run but waiting for a free concurrency slot. */
+  queued: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -88,9 +90,11 @@ export const TaskEntity = new EntitySchema<TaskRow>({
     retries: { type: "jsonb" },
     resumeTo: { name: "resume_to", type: "text", nullable: true },
     reason: { type: "text", nullable: true },
+    queued: { type: "boolean", default: false },
     createdAt: { name: "created_at", type: "timestamptz", createDate: true },
     updatedAt: { name: "updated_at", type: "timestamptz", updateDate: true },
   },
+  indices: [{ columns: ["queued"] }],
 });
 
 export const StageRunEntity = new EntitySchema<StageRunRow & { task?: TaskRow }>({

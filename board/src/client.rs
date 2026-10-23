@@ -142,6 +142,11 @@ impl Machine {
     pub fn resume(&self, id: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/resume"), json!({}))
     }
+
+    /// Removes the task's worktree from disk; the task and its branch stay.
+    pub fn remove_worktree(&self, id: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/worktree/remove"), json!({}))
+    }
 }
 
 /// Follows `/events` on a background thread, reconnecting while the machine is down.

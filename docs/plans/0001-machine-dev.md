@@ -76,7 +76,7 @@ Mac (host)
 | Deliver | host | stub |
 | CI watch | host | stub |
 | Evidence | agent | stub |
-| Publish | gate in the board | real gate, stub action |
+| Ship | gate in the board, then host (`git push` + `gh pr create`) | real gate, real action |
 | Close | host | stub |
 
 Stubs pass by default. A dev-only endpoint sets a stub to fail, so retry and escalation paths can be tested without agent cost.
@@ -85,12 +85,14 @@ Stubs pass by default. A dev-only endpoint sets a stub to fail, so retry and esc
 
 | Column | Task states |
 |---|---|
+| Intake | `draft` |
 | Triage | `triage`, `awaiting_answers`, `awaiting_approval` |
 | Approved | `test_design`, `awaiting_test_check` |
 | Build | `implementing`, `escalated`, `paused_rate_limit` |
 | Verify | `verifying`, `e2e`, `delivering`, `ci_watch` |
 | Evidence | `evidence` |
-| Publish | `awaiting_publish`, `reviewing_memory`, `closed` |
+| Ship | `awaiting_ship`, `shipping`, `reviewing_memory` |
+| Done | `closed` |
 
 The card states the board already shows map from the same data: a waiting gate is "needs you", a running stage is "working", `escalated` and an aborted run are "lost".
 
@@ -115,6 +117,7 @@ Trimmed from the harness plan. Memory, artifacts, checks and feedback come later
 | POST | `/tasks/:id/decision` | Approve or send back whatever the task waits on, including an escalation: `{ "decision": "approved" \| "sent_back", "reason"? }`. |
 | POST | `/tasks/:id/abort` | Stop a running or paused task; it then waits for you. |
 | POST | `/tasks/:id/resume` | Re-run the stage a task paused in after a usage limit. |
+| POST | `/tasks/:id/worktree/remove` | Remove the task's worktree from disk. The task, its branch and commits stay. |
 | GET | `/events` | SSE: `task.updated` (the whole task) and `task.event` (one activity entry), plus `ready` and a `ping` every 15 s. |
 | GET | `/health` | Liveness check. |
 | POST | `/dev/stubs` | Dev only: queue results for a stub stage, e.g. three `fail`s for `verifying`. |
@@ -168,9 +171,122 @@ The herdr plugin moves with the board, so it is relinked from `board/` once.
 
 Each phase ends with its tests passing and a short demo through the board.
 
+## Found after Phase 6, on real repos
+
+Testing the implementer against this repo itself (not just the golden fixture) surfaced
+three gaps, all fixed:
+
+- **A ticket's repo path wasn't found outside herdr.** `workspace_repo()` only checked
+  herdr's `workspace_cwd` for an exact `.git`, and returned nothing when the board ran
+  standalone. It now walks up to the repo root from either herdr's workspace or the
+  board's own working directory, so a ticket defaults to the right repo either way.
+  Starting (or resuming) a ticket with no repo path no longer fails in triage — the
+  board opens the editor and asks for one first.
+- **No way to reclaim a worktree's disk space once a ticket closed.** `POST
+  /tasks/:id/worktree/remove` (`w` in the board, asks first) removes the worktree
+  checkout; the task, its branch and commits stay, so you can still merge or inspect
+  the work. `pnpm golden` was updated to use the same cleanup so it leaves nothing
+  behind either.
+- **A task's herdr watch tab stayed open after it closed.** The machine now closes it
+  itself the moment a task reaches `closed` — and, since deleting a task bypassed that
+  same code path, `DELETE /tasks/:id` now closes its tab too.
+- **A retry after an abort, timeout, or crash reused a dirty worktree with no warning.**
+  `ensureWorktree()` only created a worktree if missing, never reset it, so a half-edited
+  attempt fed straight into the next one. The implementer's stage runner now discards
+  anything left uncommitted (`git reset --hard && git clean -fd`) whenever a run ends
+  without a clean, committed answer — aborted, timed out, crashed, or rate-limited — but
+  never on a deliberate `test_change` return, since those edits are meant to carry over.
+  Verified live: aborted a real implementer run mid-edit and confirmed the worktree came
+  back clean.
+- **Ctrl+C left containers and dirty worktrees running unseen.** Graceful shutdown now
+  aborts every running task's stage loop (killing its container) and waits up to 5s for
+  them to wind down before the process exits, instead of only relying on the next
+  startup's crash-recovery sweep. Verified live: `SIGTERM` during a real triage run killed
+  and removed its container immediately and escalated the task with `reason: "aborted"`.
+- **Opening the board with no machine running wasn't obvious enough.** The header already
+  showed a red "machine offline" banner, but nothing called it out at the moment you open
+  the board. It now also shows a startup toast telling you to run `pnpm dev`.
+- **No cap on concurrent tasks (P1 from the review).** Starting several tickets — even
+  across different repos — used to launch that many containers and agent sessions at
+  once. `MACHINE_MAX_CONCURRENT` (default 4) now caps how many tasks can be driving a
+  stage at the same time, globally, across every repo the machine knows about. A task
+  past the limit is marked `queued` on its row in Postgres (not just in memory), so a
+  restart tells a task that was genuinely mid-run (escalate it) apart from one that was
+  only waiting for a slot (just reschedule it, nothing was lost). The board shows a
+  queued ticket distinctly (grey "…", status `queued: <stage>`) rather than as running.
+  Verified live with `MACHINE_MAX_CONCURRENT=1`: two real tasks correctly took turns for
+  every stage, including two different tasks contending for the same slot mid-pipeline;
+  and after a hard kill, the task that was actually running got escalated while the one
+  that was merely queued resumed on its own.
+- **One machine serves every repo — confirmed as the intended model, with one addition.**
+  There's one machine (one Postgres, one HTTP server) per host, not one per repo; every
+  board, from any workspace, is just a client of that same machine and sees the same
+  tasks and the same queue. Added `@` in the board: filters the view to only the tickets
+  whose repo matches the one this board defaults new tickets to (herdr's workspace, or
+  the board's own working directory standalone). Off by default, so a board still shows
+  every repo's tickets unless you ask it not to.
+- **Typing a repo path by hand invites typos.** `R` in the board opens a type-to-filter
+  search over every repo under `HARDNESS_REPOS_DIR` (default `~/Developer`) — a repo
+  found directly under it, or grouped with others under a project folder
+  (`~/Developer/some-project/backend`, `.../frontend`, both found; `board/src/discover.rs`
+  stops descending the moment it finds a `.git`, so it never walks into a repo's own
+  history or a submodule). The missing-repo guards on `a` (draft, escalated) now open this
+  search instead of the markdown editor. One real gap this surfaced: the default
+  `WORKTREES_DIR` (`~/Developer/worktrees`) sits inside the default search root, so every
+  live task's own checkout would otherwise show up as a pickable "repo" — fixed by
+  skipping any directory named `worktrees`.
+
+## Intake, Ship/Done, and a popup for tickets
+
+Four more changes, from the same session, carrying through on requests made earlier that
+hadn't landed yet:
+
+- **Intake is its own column, ahead of Triage.** A ticket you create is a `draft` and now
+  shows in **Intake**, not **Triage** — nothing new in the engine, just `COLUMN_OF` giving
+  `draft` its own column, so a ticket you're still shaping is visibly separate from one
+  actually being triaged.
+- **Ship replaces Publish, and it does something real.** `awaiting_publish` is renamed
+  `awaiting_ship`; approving it no longer just waits at `reviewing_memory` — it runs a new
+  `shipping` stage (`machine/src/stages/ship.ts`) that does, on the host, exactly what a
+  person would: `git push -u origin <task branch>`, then `gh pr create` (reusing an existing
+  PR for that branch rather than failing a retry on it). This is a plain host command, not a
+  Claude agent, so it runs unconditionally — no credential needed. On any failure (no
+  remote, `gh` missing or unauthenticated, push rejected) it escalates with a clear reason
+  rather than retrying blindly; `resumeTo: "shipping"` re-runs just this stage once you've
+  fixed whatever was wrong. `closed` now has its own **Done** column, separate from **Ship**
+  (which holds `awaiting_ship`, `shipping`, `reviewing_memory`). Verified live: a real golden
+  task run reached `shipping`, attempted the push, and escalated cleanly with "ship failed"
+  since the throwaway fixture repo has no remote — `pnpm golden` now expects and accepts
+  that outcome rather than treating it as a failure.
+- **The ticket view is a popup over the board, not a full-screen replacement.** `enter`'s
+  `Mode::Detail` renders the exact same content as before (status, the open gate's content,
+  stage runs, activity), just in a centered overlay with the board still visible behind it,
+  instead of replacing the whole screen. The same popup is what shows a plan to read, tests
+  to check, or — once shipping works — the PR's URL, since that's the same gate-content
+  rendering path.
+- **Editing a ticket happens in place, not in `$EDITOR`.** `e` (and a new ticket's first
+  edit) opens a `tui-textarea`-backed text area inside the board, pre-filled with the same
+  markdown `$EDITOR` used to show; `ctrl+s` saves (reusing the existing `parse_ticket`/
+  `update` call), `esc` cancels. Nothing shells out or suspends the terminal for this
+  anymore. (`tui-textarea` on crates.io is pinned to an older ratatui; the maintained fork
+  `tui-textarea-2` — same `tui_textarea` library name, so it's a drop-in — tracks the one
+  this board already uses.) Triage's answer-questions flow still uses `$EDITOR`; it wasn't
+  part of this change.
+
+**Explicitly not done, and why:** the original ask also wanted Triage to run through
+`orc:triage`, the implementer through `orc-implementer`, and Ship through `orc:ship`
+directly. Those are interactive Claude Code skills built around a full session — your
+plugins, `.orc/` state, broad tool access (`gh`, `acli`, arbitrary `Bash`). The stage
+containers are deliberately the opposite: `settingSources: []` so a repo's own `.claude/`
+never loads, a short allowed-tools list, no plugin access at all — that boundary is the
+whole point of running agents in a disposable sandbox. Invoking those skills for real would
+mean removing the guardrails, not adding a shortcut, so it isn't done. What ships instead,
+as the concrete resolution: Ship actually opens a real PR (above), and Triage/Implementer
+already run as real, if differently-built, agents (Phase 4).
+
 ## Later, not in this plan
 
-Git and egress proxies with a secret vault, fresh clones instead of mounted worktrees, the real Verifier, Reviewer, E2E, Evidence and Publish stages, memory slots, evals, and `docker compose up` for everything.
+Git and egress proxies with a secret vault, fresh clones instead of mounted worktrees, the real Verifier, Reviewer and E2E stages, memory slots, evals, and `docker compose up` for everything.
 
 ## Risks
 

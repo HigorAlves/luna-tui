@@ -28,8 +28,11 @@ beforeEach(async () => {
   pipeline = new Pipeline(db, stubs.runnerFor, { inline: true });
 });
 
-const newTask = () =>
-  pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
+/** A task past backlog, ready for `pipeline.start()` to run triage. */
+const newTask = async () => {
+  const task = await pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
+  return pipeline.start(task.id);
+};
 
 /** Starts a task and approves the plan and the test names, which reaches the implementer. */
 async function startAndApprove(id: string) {
@@ -42,10 +45,17 @@ const stagesRun = async (id: string): Promise<TaskState[]> =>
   (await pipeline.stageRuns(id)).map((run) => run.stage);
 
 describe("creating and starting", () => {
-  it("creates a draft task with an empty retry budget", async () => {
-    const task = await newTask();
-    expect(task).toMatchObject({ state: "draft", retries: NO_RETRIES, resumeTo: null });
+  it("creates a backlog task with an empty retry budget", async () => {
+    const task = await pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
+    expect(task).toMatchObject({ state: "backlog", retries: NO_RETRIES, resumeTo: null });
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toEqual(["task.created"]);
+  });
+
+  it("moves a backlog task to intake on start, without running a stage", async () => {
+    const task = await pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
+    const started = await pipeline.start(task.id);
+    expect(started.state).toBe("draft");
+    expect(await pipeline.stageRuns(task.id)).toEqual([]);
   });
 
   it("runs triage on start and waits for you to approve the plan", async () => {
@@ -66,7 +76,7 @@ describe("the whole pipeline with stub stages", () => {
   it("runs every stage once and closes after your four approvals", async () => {
     const task = await newTask();
     await startAndApprove(task.id);
-    expect((await pipeline.get(task.id)).state).toBe("awaiting_publish");
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_ship");
 
     await pipeline.decide(task.id, "approved");
     const closed = await pipeline.decide(task.id, "approved");
@@ -81,12 +91,13 @@ describe("the whole pipeline with stub stages", () => {
       "delivering",
       "ci_watch",
       "evidence",
+      "shipping",
     ]);
     const approvals = await pipeline.approvals(task.id);
     expect(approvals.map((a) => a.kind)).toEqual([
       "awaiting_approval",
       "awaiting_test_check",
-      "awaiting_publish",
+      "awaiting_ship",
       "reviewing_memory",
     ]);
     expect(approvals.every((a) => a.decision === "approved" && a.decidedAt)).toBe(true);
@@ -143,7 +154,7 @@ describe("retries and escalation", () => {
     );
 
     const resumed = await pipeline.decide(task.id, "approved", "Mock the clock in the test");
-    expect(resumed.state).toBe("awaiting_publish");
+    expect(resumed.state).toBe("awaiting_ship");
     expect(resumed.reason).toBeNull();
   });
 
@@ -176,7 +187,7 @@ describe("rate limits", () => {
     });
 
     const resumed = await pipeline.windowReset(task.id);
-    expect(resumed.state).toBe("awaiting_publish");
+    expect(resumed.state).toBe("awaiting_ship");
   });
 
   it("can abort a paused task, which then waits for you", async () => {
@@ -195,7 +206,7 @@ describe("invalid requests", () => {
 
     await expect(pipeline.decide(task.id, "approved")).rejects.toBeInstanceOf(TransitionError);
     expect((await pipeline.get(task.id)).state).toBe("draft");
-    expect((await pipeline.events(task.id)).map((e) => e.kind)).toEqual(["task.created"]);
+    expect((await pipeline.events(task.id)).map((e) => e.kind)).toEqual(["task.created", "transition"]);
     expect(await pipeline.approvals(task.id)).toEqual([]);
   });
 
@@ -203,6 +214,39 @@ describe("invalid requests", () => {
     await expect(pipeline.start("00000000-0000-0000-0000-000000000000")).rejects.toBeInstanceOf(
       TaskNotFoundError,
     );
+  });
+});
+
+describe("concurrency", () => {
+  it("queues a task past the limit and runs it once a slot frees", async () => {
+    let finishFirst: (() => void) | undefined;
+    const blocking: StageRunner = () =>
+      new Promise<StageResult>((resolve) => {
+        finishFirst = () => resolve({ outcome: "pass" });
+      });
+    pipeline = new Pipeline(db, (stage) => (stage === "triage" ? blocking : stubs.runnerFor(stage)), {
+      maxConcurrentTasks: 1,
+    });
+
+    const a = await newTask();
+    const b = await newTask();
+
+    const startedA = await pipeline.start(a.id);
+    expect(startedA).toMatchObject({ state: "triage", queued: false });
+    // a's stage loop runs in the background; wait until it actually reaches the stub
+    // before relying on `finishFirst`, rather than assuming it is set by now.
+    while (!finishFirst) await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const startedB = await pipeline.start(b.id);
+    expect(startedB).toMatchObject({ state: "triage", queued: true });
+
+    finishFirst();
+    while ((await pipeline.get(a.id)).state === "triage") {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    expect((await pipeline.get(a.id)).state).toBe("awaiting_approval");
+    expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: false });
   });
 });
 
@@ -218,7 +262,14 @@ describe("events", () => {
     const task = await newTask();
     await pipeline.start(task.id);
 
-    expect(seen).toEqual(["task.created", "transition", "stage.started", "stage.finished", "transition"]);
+    expect(seen).toEqual([
+      "task.created",
+      "transition",
+      "transition",
+      "stage.started",
+      "stage.finished",
+      "transition",
+    ]);
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toEqual(seen);
   });
 });
