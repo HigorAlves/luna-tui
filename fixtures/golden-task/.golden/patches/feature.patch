@@ -1,0 +1,14 @@
+diff --git a/src/cart.js b/src/cart.js
+index b091d50..f249159 100644
+--- a/src/cart.js
++++ b/src/cart.js
+@@ -5,3 +5,9 @@ export function formatPrice(cents) {
+ export function cartTotal(items) {
+   return items.reduce((sum, item) => sum + item.priceCents * item.qty, 0);
+ }
++
++export function describeCart(items) {
++  const units = items.reduce((sum, item) => sum + item.qty, 0);
++  if (units === 0) return "Cart is empty";
++  return units === 1 ? "1 item" : `${units} items`;
++}

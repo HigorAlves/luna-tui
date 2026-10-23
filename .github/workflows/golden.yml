@@ -1,0 +1,84 @@
+name: golden
+
+# The golden matrix (`machine/scripts/golden-task.mjs --matrix`): real agents, real model
+# calls, so never on PRs. Nightly + on demand. Fails under an 80% pass rate.
+on:
+  schedule:
+    - cron: "43 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  golden:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      DATABASE_URL: postgres://hardness:hardness@127.0.0.1:5433/hardness
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: hardness
+          POSTGRES_PASSWORD: hardness
+          POSTGRES_DB: hardness
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U hardness -d hardness"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+    steps:
+      - name: Require an API key
+        if: env.ANTHROPIC_API_KEY == ''
+        run: |
+          echo "::error::ANTHROPIC_API_KEY secret not set — the golden matrix cannot run"
+          exit 1
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Enable pnpm
+        run: corepack enable
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - run: pnpm install --frozen-lockfile
+      - name: Write the credential
+        run: |
+          mkdir -p ~/.config/hardness
+          printf '%s' "$ANTHROPIC_API_KEY" > ~/.config/hardness/anthropic-api-key
+          chmod 600 ~/.config/hardness/anthropic-api-key
+      - name: Build the runner image
+        env:
+          ORC_SOURCE: git
+          ORC_REF: ${{ vars.ORC_REF || 'main' }}
+        run: bash machine/runner/build.sh
+      - name: Build the QA image
+        if: hashFiles('machine/runner-qa/Dockerfile') != ''
+        env:
+          ORC_SOURCE: git
+          ORC_REF: ${{ vars.ORC_REF || 'main' }}
+        run: bash machine/runner/build.sh --qa
+      - name: Migrate and start the machine
+        run: |
+          pnpm --filter @hardness/machine db:migrate
+          nohup pnpm dev > machine.log 2>&1 &
+          for _ in $(seq 1 60); do
+            curl -fs http://127.0.0.1:4317/health && exit 0
+            sleep 2
+          done
+          echo "::error::machine did not become healthy"
+          cat machine.log
+          exit 1
+      - name: Run the golden matrix
+        run: node machine/scripts/golden-task.mjs --matrix --threshold 0.8 --ceiling-usd 5
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: golden-result
+          path: |
+            golden-result.json
+            machine.log
+          if-no-files-found: ignore

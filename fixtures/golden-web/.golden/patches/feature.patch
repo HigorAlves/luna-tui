@@ -1,0 +1,12 @@
+diff --git a/src/cart.ts b/src/cart.ts
+index 3d5dffd..5c48712 100644
+--- a/src/cart.ts
++++ b/src/cart.ts
+@@ -15,6 +15,7 @@ export function cartTotal(items: Item[]): number {
+ 
+ /** The cart as an HTML list. */
+ export function renderCart(items: Item[]): string {
++  if (items.length === 0) return '<p class="empty">Your cart is empty</p>';
+   const rows = items.map((item) => `<li>${item.name} x${item.qty} - ${formatPrice(item.priceCents * item.qty)}</li>`);
+   return `<ul>${rows.join("")}</ul>`;
+ }

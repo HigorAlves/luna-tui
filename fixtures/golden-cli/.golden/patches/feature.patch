@@ -1,0 +1,14 @@
+diff --git a/main.go b/main.go
+index fc727ef..31792b4 100644
+--- a/main.go
++++ b/main.go
+@@ -17,6 +17,9 @@ func Run(in io.Reader, out io.Writer) error {
+ 	scanner := bufio.NewScanner(in)
+ 	for scanner.Scan() {
+ 		fields := strings.Fields(scanner.Text())
++		if len(fields) == 0 || strings.HasPrefix(fields[0], "#") {
++			continue
++		}
+ 		if len(fields) != 2 {
+ 			return fmt.Errorf("bad line %q", scanner.Text())
+ 		}

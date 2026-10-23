@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "test": ["go", "test", "./..."],
+  "tickets": [
+    {
+      "id": "bug",
+      "kind": "bug",
+      "title": "Repeated names overwrite their total",
+      "description": "When the same name appears on several input lines, tally prints only the last amount instead of the sum. Fix Run in main.go so repeated names add up.",
+      "criteria": [
+        "input \"alice 3\\nbob 1\\nalice 4\\n\" prints \"alice: 7\\nbob: 1\\n\"",
+        "`go test ./...` passes"
+      ],
+      "fix": "patches/bug.patch"
+    },
+    {
+      "id": "feature",
+      "kind": "feature",
+      "title": "Ignore comments and blank lines",
+      "description": "tally fails with 'bad line' on blank lines and on lines starting with '#'. Make Run skip both, and keep summing the remaining lines.",
+      "criteria": [
+        "input \"# note\\n\\nalice 3\\n  \\nalice 2\\n\" prints \"alice: 5\\n\" and returns no error",
+        "`go test ./...` passes"
+      ],
+      "seed": ["patches/bug.patch"],
+      "accept": "accept/feature",
+      "fix": "patches/feature.patch"
+    }
+  ]
+}
