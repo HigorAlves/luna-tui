@@ -80,6 +80,8 @@ async function matrix() {
   const runs = [];
   for (const fixture of fixtures) {
     for (const ticket of fixture.tickets) {
+      // runTicket grades the worktree with the ticket's hidden acceptance tests; the verifying
+      // stage already ran the fixture's own suite on the way here.
       const run = await runTicket(fixture, ticket, { ceilingUsd, expectNoRemote });
       log(`${fixture.name}/${ticket.id}: ${run.result}${run.failures.length ? ` (${run.failures.join("; ")})` : ""}`);
       runs.push(run);

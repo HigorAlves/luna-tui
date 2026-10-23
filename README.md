@@ -75,6 +75,11 @@ pnpm board:test       # board
 pnpm golden           # end-to-end, needs a running machine
 ```
 
+- `pnpm golden`: one ticket through every gate. Needs a running machine; a credential and docker for real agent stages, otherwise stubs.
+- `pnpm golden --matrix`: the grader over every fixture ticket. Needs a running machine, a credential and docker.
+- `pnpm golden:live`: abort, retry and concurrency paths in sequence. Needs a running machine with a credential and docker; concurrency needs the machine started with `MACHINE_MAX_CONCURRENT=1`.
+- `pnpm golden --selftest`: fixtures only. No machine, credential or docker.
+
 - `pnpm golden --matrix` runs every ticket of `fixtures/golden-task`, `golden-web` and `golden-cli` (a bug and a feature each) and grades the suite, stages, stubs, evidence verdict, cost and diff size. It exits 1 under an 80% pass rate and writes `golden-result.json`; `--only <fixture>`, `--ceiling-usd` and `--threshold` tune it. The nightly `golden` workflow runs it. `node machine/scripts/golden-task.mjs --selftest` checks the fixtures without a machine.
 
 `pnpm golden` drives `fixtures/golden-task/` through every gate of the pipeline

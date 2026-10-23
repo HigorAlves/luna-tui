@@ -14,7 +14,8 @@
     "golden": "node scripts/golden-task.mjs",
     "golden:concurrency": "node scripts/golden-concurrency.mjs",
     "golden:abort": "node scripts/golden-abort.mjs",
-    "golden:retry": "node scripts/golden-retry.mjs"
+    "golden:retry": "node scripts/golden-retry.mjs",
+    "golden:live": "node scripts/golden-abort.mjs && node scripts/golden-retry.mjs && node scripts/golden-concurrency.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.5",
