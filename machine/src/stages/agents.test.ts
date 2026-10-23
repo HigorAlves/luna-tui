@@ -158,6 +158,19 @@ describe("agent stages through orc packs", () => {
     expect(git(seen!.worktree, "log", "--format=%s")).toBe("slice 1\ninit");
   });
 
+  it("hands the latest verifying findings to implementing, keeping only confident ones", async () => {
+    const f = (confidence: number, title: string) => ({
+      path: "a.ts", line: 1, start_line: null, severity: "bug", title, body: "", suggestion_code: null, confidence,
+    });
+    const run = runners(fakeSandbox(output(), (r) => {
+      writeFileSync(join(r.worktree, "b.txt"), "b\n");
+      git(r.worktree, "add", "-A");
+      git(r.worktree, "commit", "-q", "-m", "slice");
+    }));
+    await run.implementing!({ ...context("implementing"), priorFindings: [f(0.9, "keep"), f(0.5, "drop")] });
+    expect((seen?.input as { priorFindings: Array<{ title: string }> }).priorFindings.map((x) => x.title)).toEqual(["keep"]);
+  });
+
   it("fails a pass that left uncommitted changes, and resets the worktree", async () => {
     const run = runners(
       fakeSandbox(output(), (r) => writeFileSync(join(r.worktree, "junk.txt"), "x")),

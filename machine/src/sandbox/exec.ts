@@ -10,13 +10,19 @@ export interface ExecResult {
 export function exec(
   command: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
+  options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     execFile(
       command,
       args,
-      { env: options.env ?? process.env, cwd: options.cwd, maxBuffer: 64 * 1024 * 1024 },
+      {
+        env: options.env ?? process.env,
+        cwd: options.cwd,
+        maxBuffer: 64 * 1024 * 1024,
+        signal: options.signal,
+        timeout: options.timeoutMs,
+      },
       (error, stdout, stderr) => {
         const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
         resolve({ code, stdout: String(stdout), stderr: String(stderr) });

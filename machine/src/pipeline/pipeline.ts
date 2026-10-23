@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { RUNNING, type TaskSource, type TaskState } from "@hardness/contracts";
+import { type Finding, RUNNING, type TaskSource, type TaskState } from "@hardness/contracts";
 import { type DataSource, type EntityManager, In, IsNull } from "typeorm";
 
 import {
@@ -450,6 +450,16 @@ export class Pipeline {
     return step;
   }
 
+  /** The findings the latest verifying run stored on its `stage.finished` event. */
+  private async latestVerifyingFindings(id: string): Promise<Finding[]> {
+    const finished = await this.db
+      .getRepository(EventEntity)
+      .find({ where: { taskId: id, kind: "stage.finished" }, order: { id: "DESC" } });
+    const latest = finished.find((event) => event.payload.stage === "verifying");
+    const detail = latest?.payload.detail as { findings?: unknown } | undefined;
+    return Array.isArray(detail?.findings) ? (detail.findings as Finding[]) : [];
+  }
+
   private async runStage(id: string, stage: TaskState, signal: AbortSignal): Promise<StageResult> {
     const runs = this.db.getRepository(StageRunEntity);
     const attempt = (await runs.countBy({ taskId: id, stage })) + 1;
@@ -467,8 +477,12 @@ export class Pipeline {
     let result: StageResult;
     let error: string | undefined;
     try {
-      const [task, approvals] = await Promise.all([this.get(id), this.approvals(id)]);
-      result = await this.runnerFor(stage)({ task, stage, attempt, runId, approvals, signal });
+      const [task, approvals, priorFindings] = await Promise.all([
+        this.get(id),
+        this.approvals(id),
+        stage === "implementing" ? this.latestVerifyingFindings(id) : Promise.resolve([]),
+      ]);
+      result = await this.runnerFor(stage)({ task, stage, attempt, runId, approvals, priorFindings, signal });
     } catch (thrown) {
       error = thrown instanceof Error ? thrown.message : String(thrown);
       result = { outcome: "fail" };

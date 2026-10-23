@@ -16,10 +16,11 @@ import { Pipeline } from "./pipeline/pipeline.ts";
 import { exec } from "./sandbox/exec.ts";
 import { loadCredential } from "./sandbox/credentials.ts";
 import { imageExists, removeLeftoverContainers } from "./sandbox/docker.ts";
-import { agentRunners } from "./stages/agents.ts";
+import { agentRunners, runAgent } from "./stages/agents.ts";
 import type { StageRunner } from "./stages/runner.ts";
 import { shipRunner } from "./stages/ship.ts";
 import { StubStages } from "./stages/stubs.ts";
+import { verifyRunner } from "./stages/verify.ts";
 
 const config = loadConfig();
 const db = createDataSource(config.databaseUrl);
@@ -50,13 +51,22 @@ async function realStages(): Promise<Partial<Record<TaskState, StageRunner>>> {
   }
   const removed = await removeLeftoverContainers();
   if (removed > 0) console.log(`removed ${removed} leftover stage container(s)`);
-  return agentRunners({
+  const deps = {
     image: config.runnerImage,
     credential,
     worktreesDir: config.worktreesDir,
     stateDir: config.stateDir,
     watcher,
-  });
+  };
+  return {
+    ...agentRunners(deps),
+    // Verifying runs the project's checks on the host first, then the review pack.
+    verifying: verifyRunner({
+      exec,
+      runPack: (context) => runAgent(deps, context, "verifying"),
+      stateDir: config.stateDir,
+    }),
+  };
 }
 
 const real = await realStages();

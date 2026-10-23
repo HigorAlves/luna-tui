@@ -18,6 +18,8 @@ export interface StageContext {
   runId: string;
   /** Everything decided on this task so far, oldest first: answers, approvals, guidance. */
   approvals: ApprovalRow[];
+  /** Findings from the latest verifying run, fed to the next implementing attempt. */
+  priorFindings?: Finding[];
   /** Aborted when you abort the task; the runner should stop its container. */
   signal: AbortSignal;
 }

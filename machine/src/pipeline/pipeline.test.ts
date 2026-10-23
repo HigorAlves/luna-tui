@@ -197,6 +197,33 @@ describe("gates", () => {
   });
 });
 
+describe("the verifying findings loop", () => {
+  it("gives the next implementing run the findings of the latest verifying run", async () => {
+    const finding = (title: string) => ({
+      path: "a.ts", line: 1, start_line: null, severity: "bug", title, body: "", suggestion_code: null, confidence: 1,
+    });
+    const seen: Array<string[] | undefined> = [];
+    const runner = (stage: TaskState): StageRunner => {
+      if (stage === "implementing") {
+        return async (context) => {
+          seen.push(context.priorFindings?.map((f) => f.title));
+          return { outcome: "pass" };
+        };
+      }
+      return stubs.runnerFor(stage);
+    };
+    pipeline = new Pipeline(db, runner, { inline: true });
+    stubs.plan(
+      "verifying",
+      { outcome: "fail", detail: { findings: [finding("first")] } },
+      { outcome: "fail", detail: { findings: [finding("second")] } },
+    );
+    const task = await newTask();
+    await startAndApprove(task.id);
+    expect(seen).toEqual([[], ["first"], ["second"]]);
+  });
+});
+
 describe("retries and escalation", () => {
   it("escalates after three verify failures, then resumes with your guidance", async () => {
     stubs.plan("verifying", fail, fail, fail);

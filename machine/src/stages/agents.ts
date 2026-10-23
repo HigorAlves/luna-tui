@@ -32,7 +32,7 @@ export interface AgentDeps {
 
 const MINUTE = 60_000;
 
-async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId): Promise<StageResult> {
+export async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId): Promise<StageResult> {
   const { task } = context;
   if (!task.repoPath) {
     throw new Error("the task has no repoPath; create it with a repo to run real stages");
@@ -47,13 +47,12 @@ async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId): P
   const container = `hardness-${task.id.slice(0, 8)}-${context.stage.replaceAll("_", "-")}-${context.attempt}`;
   const runDir = join(deps.stateDir, "runs", context.runId);
 
-  // priorFindings come from the verifying loop, wired in with that stage.
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
     attempt: context.attempt,
     approvals: context.approvals,
-    priorFindings: [],
+    priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
   });
 
   const sandbox = await (deps.sandbox ?? runSandbox)({
