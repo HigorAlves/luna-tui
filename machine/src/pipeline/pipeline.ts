@@ -258,12 +258,7 @@ export class Pipeline {
       await this.db.getRepository(TaskEntity).update({ id }, { queued: true });
       return;
     }
-    // Reserve the slot synchronously, before any `await` — otherwise two schedule() calls
-    // racing for the last slot (e.g. two tasks started back to back) can both pass the
-    // `loops.size` check above before either has actually registered, both proceeding
-    // despite only one slot being available.
-    const controller = new AbortController();
-    this.loops.set(id, controller);
+    const controller = this.reserveSlot(id);
     try {
       // Clears a stale `queued: true` from before a restart, as well as the common case
       // where it was already false. Awaited here — not inside runAndFillSlot — so the
@@ -277,13 +272,26 @@ export class Pipeline {
       if (this.loops.get(id) === controller) this.loops.delete(id);
       throw error;
     }
-    // Not awaited outside inline mode — attach a `.catch` regardless so a later failure
-    // (e.g. inside the slot-refill tail below) surfaces as a log line instead of an
-    // unhandled rejection that can crash the whole process.
-    const loop = this.runAndFillSlot(id, stage, controller).catch((error: unknown) =>
+    const loop = this.startLoop(id, stage, controller);
+    if (this.inline) await loop;
+  }
+
+  /** Creates and registers a new AbortController for `id` in `this.loops`, synchronously —
+   *  before any `await` — so a slot this reserves can never be double-claimed by a
+   *  concurrent schedule() call racing to check `this.loops.size` in between. The only path
+   *  by which `this.loops` ever gains an entry; `startLoop` below is always paired with it. */
+  private reserveSlot(id: string): AbortController {
+    const controller = new AbortController();
+    this.loops.set(id, controller);
+    return controller;
+  }
+
+  /** Starts id's drive-then-promote loop. Not awaited outside inline mode — `.catch` logs a
+   *  failure instead of letting it become an unhandled rejection that can crash the process. */
+  private startLoop(id: string, stage: TaskState, controller: AbortController): Promise<void> {
+    return this.runAndFillSlot(id, stage, controller).catch((error: unknown) =>
       console.error(`run loop for task ${id} failed`, error),
     );
-    if (this.inline) await loop;
   }
 
   /** Drives the stage, then — once its slot is free again — starts the longest-queued task.
@@ -311,11 +319,8 @@ export class Pipeline {
       return locked;
     });
     if (claimed) {
-      const nextController = new AbortController();
-      this.loops.set(claimed.id, nextController);
-      this.runAndFillSlot(claimed.id, claimed.state, nextController).catch((error: unknown) =>
-        console.error(`run loop for task ${claimed.id} failed`, error),
-      );
+      const nextController = this.reserveSlot(claimed.id);
+      void this.startLoop(claimed.id, claimed.state, nextController);
     }
   }
 
