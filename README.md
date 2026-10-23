@@ -86,6 +86,8 @@ the API, or the agents.
   - `DATABASE_URL` (default `postgres://hardness:hardness@127.0.0.1:5433/hardness`)
   - `MACHINE_PORT` (default `4317`)
   - `MACHINE_MAX_CONCURRENT` (default `4`): tasks driving a stage at once, across every repo
+  - `MACHINE_GITHUB_POLL` (default empty, off): comma-separated `owner/name` repos whose open issues labelled `MACHINE_GITHUB_LABEL` (default `ready-for-agent`) become backlog tasks; needs the `gh` CLI signed in
+  - `MACHINE_GITHUB_POLL_INTERVAL` (default `300`): seconds between polls
 - **Board**: `HARDNESS_MACHINE_URL` overrides the machine address
   (default `http://127.0.0.1:4317`). `HARDNESS_REPOS_DIR` is where the board's
   repo search (`R`) looks for repos (default `~/Developer`).

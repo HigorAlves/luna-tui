@@ -10,6 +10,7 @@ import { loadConfig } from "./config.ts";
 import { createDataSource } from "./db/data-source.ts";
 import type { EventRow } from "./db/entities.ts";
 import { Watcher } from "./herdr/watch.ts";
+import { GitHubIntake } from "./intake/github.ts";
 import { Pipeline } from "./pipeline/pipeline.ts";
 import { loadCredential } from "./sandbox/credentials.ts";
 import { imageExists, removeLeftoverContainers } from "./sandbox/docker.ts";
@@ -87,7 +88,16 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: "127.0.0.1
   );
 });
 
+let intake: GitHubIntake | undefined;
+if (config.githubPoll.repos.length > 0) {
+  const { repos, intervalMs, label } = config.githubPoll;
+  intake = new GitHubIntake({ pipeline, repos, label, intervalMs });
+  console.log(`github intake: polling ${repos.join(", ")} every ${intervalMs / 1000}s for ${label}`);
+  intake.start();
+}
+
 async function shutdown(): Promise<void> {
+  intake?.stop();
   server.close();
   await pipeline.shutdown();
   await db.destroy();

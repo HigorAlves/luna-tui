@@ -117,6 +117,16 @@ export class Pipeline {
     return task;
   }
 
+  /** The task created from this external issue, if any. */
+  async findBySource(repo: string, number: number): Promise<TaskRow | null> {
+    return this.db
+      .getRepository(TaskEntity)
+      .createQueryBuilder("task")
+      .where("task.source->>'repo' = :repo", { repo })
+      .andWhere("(task.source->>'number')::int = :number", { number })
+      .getOne();
+  }
+
   /** Edits the ticket's text. Stages started after this see the new text. */
   async update(
     id: string,
