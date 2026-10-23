@@ -1,4 +1,10 @@
-import type { TaskState } from "@hardness/contracts";
+import type {
+  ArtifactKind,
+  Finding,
+  NeedsInputItem,
+  RequestedAction,
+  TaskState,
+} from "@hardness/contracts";
 
 import type { ApprovalRow, TaskRow } from "../db/entities.ts";
 import type { StageOutcome } from "../engine/transition.ts";
@@ -24,6 +30,16 @@ export interface StageResult {
   detail?: Record<string, unknown>;
   /** The task's branch and worktree, recorded by the first stage that creates them. */
   workspace?: { branch: string; worktreePath: string };
+  /** Events the pack logged, stored as `orc.<kind>` on the run. */
+  events?: Array<{ at: string; kind: string; payload: Record<string, unknown> }>;
+  /** Files the pack produced, already copied; `path` is absolute on the host. */
+  artifacts?: Array<{ kind: ArtifactKind; path: string; label: string; sha256: string }>;
+  usage?: { turns: number | null; costUsd: number | null };
+  /** Questions for the gate; shown as the approval's `questions`. */
+  needsInput?: NeedsInputItem[];
+  /** Outward actions awaiting approval; shown as the approval's `actions`. */
+  requested?: RequestedAction[];
+  findings?: Finding[];
   /** Facts stored on this run's `stage_runs` row. */
   run?: {
     containerId?: string;

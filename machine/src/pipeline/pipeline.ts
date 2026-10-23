@@ -315,7 +315,15 @@ export class Pipeline {
         const next: PipelineEvent = result.rateLimited
           ? { type: "rate_limited" }
           : { type: "stage_done", outcome: result.outcome };
-        const step = await this.apply(id, next, { detail: result.detail });
+        const detail =
+          result.needsInput?.length || result.requested?.length
+            ? {
+                ...result.detail,
+                ...(result.needsInput?.length ? { questions: result.needsInput } : {}),
+                ...(result.requested?.length ? { actions: result.requested } : {}),
+              }
+            : result.detail;
+        const step = await this.apply(id, next, { detail });
         if (step.effect.kind === "pause") this.scheduleResume(id, result.detail?.resetsAt);
         stage = step.effect.kind === "run" ? step.effect.stage : null;
       }
@@ -440,8 +448,16 @@ export class Pipeline {
         transcriptPath: result.run?.transcriptPath ?? null,
         inputCommit: result.run?.inputCommit ?? null,
         outputCommit: result.run?.outputCommit ?? null,
+        ...(result.usage ? { turns: result.usage.turns, costUsd: result.usage.costUsd?.toString() ?? null } : {}),
       },
     );
+    for (const artifact of result.artifacts ?? []) {
+      await this.db.getRepository(ArtifactEntity).insert({ taskId: id, stageRunId: runId, ...artifact });
+    }
+    for (const item of result.events ?? []) {
+      const kind = item.kind.startsWith("orc.") ? item.kind : `orc.${item.kind}`;
+      await this.log(id, kind, { ...item.payload, at: item.at }, runId);
+    }
     if (result.workspace) {
       await this.db
         .getRepository(TaskEntity)

@@ -283,3 +283,42 @@ describe("events", () => {
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toEqual(seen);
   });
 });
+
+describe("ingested stage output", () => {
+  it("stores events, artifacts and usage the runner reports", async () => {
+    const task = await newTask();
+    stubs.plan("triage", {
+      outcome: "pass",
+      events: [{ at: "2026-01-01T00:00:00Z", kind: "tool", payload: { name: "Read" } }, { at: "t", kind: "orc.note", payload: {} }],
+      artifacts: [{ kind: "report", path: "/tmp/r.md", label: "R", sha256: "abc" }],
+      usage: { turns: 4, costUsd: 0.25 },
+    });
+    await pipeline.start(task.id);
+
+    const kinds = (await pipeline.events(task.id)).map((e) => e.kind);
+    expect(kinds).toContain("orc.tool");
+    expect(kinds).toContain("orc.note");
+    expect(kinds).not.toContain("orc.orc.note");
+    const [run] = await pipeline.stageRuns(task.id);
+    const tool = (await pipeline.events(task.id)).find((e) => e.kind === "orc.tool");
+    expect(tool).toMatchObject({ stageRunId: run?.id, payload: { name: "Read", at: "2026-01-01T00:00:00Z" } });
+    expect(await pipeline.artifacts(task.id)).toMatchObject([
+      { kind: "report", path: "/tmp/r.md", label: "R", sha256: "abc", stageRunId: run?.id },
+    ]);
+    expect(run?.turns).toBe(4);
+    expect(Number(run?.costUsd)).toBe(0.25);
+  });
+
+  it("shows needsInput and requested actions on the approval", async () => {
+    const task = await newTask();
+    const needsInput = [{ question: "Which db?", recommended: "pg" }];
+    const requested = [{ kind: "tracker_write" as const, target: "o/r#1", payload: { body: "hi" } }];
+    stubs.plan("triage", { outcome: "needs_input", needsInput, requested, detail: { summary: "s" } });
+    const asking = await pipeline.start(task.id);
+
+    expect(asking.state).toBe("awaiting_answers");
+    const [approval] = await pipeline.approvals(task.id);
+    expect(approval?.requested).toMatchObject({ summary: "s", questions: needsInput, actions: requested });
+  });
+});
+
