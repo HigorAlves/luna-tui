@@ -61,7 +61,8 @@ Press `?` in the board for the full list. The main ones:
 | `f` | focus the agent's watch tab in herdr |
 | `o` | open the linked GitHub issue in the browser |
 | `/` / `!` / `@` | filter by title or `#id`; show only tickets that need you; show only this repo's tickets |
-| `F` | fold: show every column at once, collapsing all but the focused one to its header bar |
+| `z` | fold: show every column at once, collapsing all but the focused one to its header bar |
+| `F` | Floor: the machine's 7d and 30d metrics full screen (`r` refreshes, `esc` or `F` closes) |
 | `x` | actions menu for the selected ticket |
 | `q` | quit (closes a popup instead, if one is open) |
 
@@ -123,3 +124,7 @@ Most of the board's logic only shows up when it is actually talking to a
 running machine, so unit tests here are light (markdown parsing, timestamp
 math). The real check is running it against the machine — see the repo root
 `README.md`.
+
+## Floor
+
+`F` opens the Floor: one full-screen table with a 7d and a 30d column, read from the machine's `GET /metrics?since=7d|30d`. It shows tasks closed, created and open, what needs you, running and queued now, cycle time (median and p90), first-pass rate for verifying, ci_watch and implementing, escalation rate with the top reasons, retries per task, cost, and queue depth, slot use and utilisation. A per-stage table (runs, median, p90, cost) sits below it, or beside it on terminals 110 columns or wider. Numbers load when you open the view and again on `r`; if the machine is unreachable the error shows in the footer and the last numbers stay. Fold moved from `F` to `z` to make room.

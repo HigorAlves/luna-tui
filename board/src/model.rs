@@ -3,6 +3,8 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -105,6 +107,135 @@ pub enum StreamMessage {
     Event { event: TaskEvent },
     #[serde(rename = "task.deleted")]
     Deleted { id: String },
+}
+
+/// Median and 90th percentile; `None` when there is no data.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct Stats {
+    pub median: Option<f64>,
+    pub p90: Option<f64>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct StageStats {
+    pub median: Option<f64>,
+    pub p90: Option<f64>,
+    pub runs: u64,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskCounts {
+    pub created: u64,
+    pub closed: u64,
+    pub open: u64,
+    pub waiting_on_you: u64,
+    pub running: u64,
+    pub queued: u64,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CycleTime {
+    pub task: Stats,
+    pub per_stage: BTreeMap<String, StageStats>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct FirstPass {
+    pub verifying: Option<f64>,
+    pub ci_watch: Option<f64>,
+    pub implementing: Option<f64>,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct Reason {
+    pub reason: String,
+    pub count: u64,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Escalations {
+    pub rate: Option<f64>,
+    pub top_reasons: Vec<Reason>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RetryStats {
+    pub per_task: Stats,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Cost {
+    pub total_usd: f64,
+    pub per_task_usd: Stats,
+    pub by_stage: BTreeMap<String, f64>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct Slots {
+    pub max: u64,
+    pub active: u64,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct QueueStats {
+    pub depth: u64,
+    pub slots: Slots,
+    pub utilisation: Option<f64>,
+}
+
+/// `GET /metrics?since=7d|30d`. Unknown keys are ignored so a newer machine still loads.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Metrics {
+    pub since: String,
+    #[allow(dead_code)] // part of the contract; the view only shows the start of the window
+    pub until: String,
+    pub tasks: TaskCounts,
+    pub cycle_time_ms: CycleTime,
+    pub first_pass_rate: FirstPass,
+    pub escalations: Escalations,
+    pub retries: RetryStats,
+    pub cost: Cost,
+    pub queue: QueueStats,
+}
+
+const NONE: &str = "–";
+
+/// Milliseconds as `450ms`, `1.2s`, `34m`, `1.5h`; `–` when there is no data.
+pub fn fmt_ms(ms: Option<f64>) -> String {
+    let Some(ms) = ms else {
+        return NONE.to_string();
+    };
+    let (value, unit) = if ms < 1000.0 {
+        return format!("{ms:.0}ms");
+    } else if ms < 60_000.0 {
+        (ms / 1000.0, "s")
+    } else if ms < 3_600_000.0 {
+        (ms / 60_000.0, "m")
+    } else {
+        (ms / 3_600_000.0, "h")
+    };
+    let number = if value < 10.0 {
+        format!("{value:.1}").trim_end_matches(".0").to_string()
+    } else {
+        format!("{value:.0}")
+    };
+    format!("{number}{unit}")
+}
+
+/// A 0..1 share as `83%`; `–` when there is no data.
+pub fn fmt_pct(share: Option<f64>) -> String {
+    share.map_or(NONE.to_string(), |s| format!("{:.0}%", s * 100.0))
+}
+
+/// Dollars as `$1.23`; `–` when there is no data.
+pub fn fmt_usd(usd: Option<f64>) -> String {
+    usd.map_or(NONE.to_string(), |u| format!("${u:.2}"))
 }
 
 /// How a task reads on the board. Declared most urgent first, which is the sort order.
@@ -403,5 +534,54 @@ mod tests {
         // editing this text, so it never round-trips through it.
         let expected = TicketText { repo_path: None, ..text };
         assert_eq!(parse_ticket(&markdown, "x"), expected);
+    }
+
+    const METRICS_JSON: &str = r#"{
+      "since":"2026-10-16T00:00:00.000Z","until":"2026-10-23T00:00:00.000Z",
+      "tasks":{"created":9,"closed":6,"open":3,"waitingOnYou":1,"running":1,"queued":0},
+      "cycleTimeMs":{"task":{"median":5400000,"p90":null},
+        "perStage":{"verifying":{"median":90000,"p90":120000,"runs":7},
+                    "implementing":{"median":null,"p90":null,"runs":0}}},
+      "firstPassRate":{"verifying":0.83,"ci_watch":null,"implementing":0.5},
+      "escalations":{"rate":0.25,"topReasons":[{"reason":"no tests","count":2}]},
+      "retries":{"perTask":{"median":1,"p90":3},"byLoop":{"verify":2,"e2e":0,"ci":1}},
+      "cost":{"totalUsd":12.5,"perTaskUsd":{"median":1.234,"p90":null},"byStage":{"verifying":2.5}},
+      "queue":{"depth":2,"slots":{"max":4,"active":1},"utilisation":null},
+      "futureKey":{"anything":true}
+    }"#;
+
+    #[test]
+    fn metrics_deserialise_with_nulls_and_unknown_keys() {
+        let m: Metrics = serde_json::from_str(METRICS_JSON).unwrap();
+        assert_eq!(m.tasks.closed, 6);
+        assert_eq!(m.cycle_time_ms.task.median, Some(5_400_000.0));
+        assert_eq!(m.cycle_time_ms.task.p90, None);
+        assert_eq!(m.cycle_time_ms.per_stage["verifying"].runs, 7);
+        assert_eq!(m.first_pass_rate.ci_watch, None);
+        assert_eq!(m.escalations.top_reasons[0].reason, "no tests");
+        assert_eq!(m.cost.by_stage["verifying"], 2.5);
+        assert_eq!(m.queue.slots.max, 4);
+        assert_eq!(m.queue.utilisation, None);
+    }
+
+    #[test]
+    fn fmt_ms_picks_a_readable_unit() {
+        assert_eq!(fmt_ms(Some(1200.0)), "1.2s");
+        assert_eq!(fmt_ms(Some(90_000.0)), "1.5m");
+        assert_eq!(fmt_ms(Some(5_400_000.0)), "1.5h");
+        assert_eq!(fmt_ms(Some(2_040_000.0)), "34m");
+        assert_eq!(fmt_ms(Some(12_000.0)), "12s");
+        assert_eq!(fmt_ms(Some(450.0)), "450ms");
+        assert_eq!(fmt_ms(None), "–");
+    }
+
+    #[test]
+    fn fmt_pct_and_fmt_usd() {
+        assert_eq!(fmt_pct(Some(0.83)), "83%");
+        assert_eq!(fmt_pct(Some(1.0)), "100%");
+        assert_eq!(fmt_pct(None), "–");
+        assert_eq!(fmt_usd(Some(1.234)), "$1.23");
+        assert_eq!(fmt_usd(Some(0.0)), "$0.00");
+        assert_eq!(fmt_usd(None), "–");
     }
 }

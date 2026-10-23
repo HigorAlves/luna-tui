@@ -24,7 +24,7 @@ use crate::{
     discover::{discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, Look, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
+        COLUMNS, Look, Metrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
         parse_ticket, questions_of, ticket_markdown,
     },
     store,
@@ -60,7 +60,7 @@ pub const ACTIONS: [(char, &str); 10] = [
 ];
 
 /// Keys shown in the help overlay, as (keys, what they do).
-pub const HELP: [(&str, &str); 22] = [
+pub const HELP: [(&str, &str); 23] = [
     ("h / l", "previous / next column"),
     ("j / k", "previous / next ticket"),
     ("enter", "open details"),
@@ -78,12 +78,21 @@ pub const HELP: [(&str, &str); 22] = [
     ("/", "filter by title or #id"),
     ("!", "show only tickets that need you"),
     ("@", "show only tickets for this repo"),
-    ("F", "fold: show every column, only the focused one expanded"),
+    ("z", "fold: show every column, only the focused one expanded"),
+    ("F", "Floor: 7d and 30d metrics (r refreshes, esc closes)"),
     ("x", "actions for the selected ticket"),
     ("esc", "clear the filter"),
     ("?", "this help"),
     ("q", "quit"),
 ];
+
+/// The Floor view's numbers, one window each. A window stays `None` until its first fetch
+/// succeeds; a failed refresh keeps what was there.
+#[derive(Default)]
+pub struct FloorState {
+    pub d7: Option<Metrics>,
+    pub d30: Option<Metrics>,
+}
 
 pub enum Mode {
     Normal,
@@ -153,6 +162,8 @@ pub struct App {
     /// Shows every column at once, unfocused ones collapsed to their header bar. For screens
     /// too narrow to fit all columns at a readable width.
     pub fold: bool,
+    /// The full-screen Floor view, open while this is `Some`.
+    pub floor: Option<FloorState>,
     /// The repo this board defaults new tickets to, for the `@` filter. `None` if it
     /// isn't inside one.
     pub home_repo: Option<String>,
@@ -184,6 +195,7 @@ impl App {
             needs_only: false,
             this_repo_only: false,
             fold: false,
+            floor: None,
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
             detail_scroll: Cell::new(0),
@@ -601,6 +613,9 @@ impl App {
         if self.toast.as_ref().is_some_and(|t| t.error) {
             self.toast = None;
         }
+        if self.floor.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_floor(key);
+        }
         match &self.mode {
             Mode::Normal => self.handle_normal(key),
             Mode::Detail(id) => {
@@ -622,6 +637,36 @@ impl App {
                 Outcome::Continue
             }
         }
+    }
+
+    /// Fetches both Floor windows. A failure shows in the footer and keeps the old numbers.
+    fn refresh_floor(&mut self) {
+        let mut errors = Vec::new();
+        let d7 = self.machine.metrics("7d");
+        let d30 = self.machine.metrics("30d");
+        let Some(floor) = self.floor.as_mut() else {
+            return;
+        };
+        match d7 {
+            Ok(m) => floor.d7 = Some(m),
+            Err(e) => errors.push(e),
+        }
+        match d30 {
+            Ok(m) => floor.d30 = Some(m),
+            Err(e) => errors.push(e),
+        }
+        if let Some(error) = errors.into_iter().next() {
+            self.notify(format!("floor: {error}"), true);
+        }
+    }
+
+    fn handle_floor(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('F') | KeyCode::Char('q') => self.floor = None,
+            KeyCode::Char('r') => self.refresh_floor(),
+            _ => {}
+        }
+        Outcome::Continue
     }
 
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
@@ -646,7 +691,11 @@ impl App {
                     self.clamp_selection();
                 }
             }
-            KeyCode::Char('F') => self.fold = !self.fold,
+            KeyCode::Char('z') => self.fold = !self.fold,
+            KeyCode::Char('F') => {
+                self.floor = Some(FloorState::default());
+                self.refresh_floor();
+            }
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Esc => {
                 self.filter.clear();

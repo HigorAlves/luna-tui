@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use ureq::{Agent, Body, http::Response};
 
-use crate::model::{StreamMessage, Task, TaskDetail, TicketText};
+use crate::model::{Metrics, StreamMessage, Task, TaskDetail, TicketText};
 
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -82,6 +82,11 @@ impl Machine {
 
     pub fn tasks(&self) -> Result<Vec<Task>, String> {
         Self::typed(self.agent.get(self.url("/tasks")).call())
+    }
+
+    /// Metrics for a window: `7d` or `30d`.
+    pub fn metrics(&self, since: &str) -> Result<Metrics, String> {
+        Self::typed(self.agent.get(self.url(&format!("/metrics?since={since}"))).call())
     }
 
     pub fn detail(&self, id: &str) -> Result<TaskDetail, String> {
@@ -177,6 +182,16 @@ pub fn spawn_stream(base: String, tx: Sender<Incoming>) {
     });
 }
 
+/// One stream message, or `None` for events the board does not use. `task.metrics` is
+/// ignored on purpose: the Floor view fetches its own 7d and 30d windows, and the pushed
+/// snapshot does not say which window it covers. Unknown event types are never an error.
+fn parse_stream_event(event: &str, data: &str) -> Option<StreamMessage> {
+    match event {
+        "task.updated" | "task.event" | "task.deleted" => serde_json::from_str(data).ok(),
+        _ => None,
+    }
+}
+
 /// Reads server-sent events until the stream ends. Returns false when the UI has gone away.
 fn follow(response: Response<Body>, tx: &Sender<Incoming>) -> bool {
     let reader = BufReader::new(response.into_body().into_reader());
@@ -187,9 +202,7 @@ fn follow(response: Response<Body>, tx: &Sender<Incoming>) -> bool {
             break;
         };
         if line.is_empty() {
-            let wanted = matches!(event.as_str(), "task.updated" | "task.event" | "task.deleted");
-            if wanted
-                && let Ok(message) = serde_json::from_str::<StreamMessage>(&data)
+            if let Some(message) = parse_stream_event(&event, &data)
                 && tx.send(Incoming::Message(message)).is_err()
             {
                 return false;
@@ -203,4 +216,17 @@ fn follow(response: Response<Body>, tx: &Sender<Incoming>) -> bool {
         }
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn metrics_stream_events_are_ignored_not_errors() {
+        assert!(parse_stream_event("task.metrics", r#"{"type":"task.metrics","metrics":{"x":1}}"#).is_none());
+        assert!(parse_stream_event("task.future", "not json").is_none());
+        let deleted = parse_stream_event("task.deleted", r#"{"type":"task.deleted","id":"a"}"#);
+        assert!(matches!(deleted, Some(StreamMessage::Deleted { .. })));
+    }
 }

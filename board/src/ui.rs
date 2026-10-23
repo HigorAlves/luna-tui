@@ -16,8 +16,11 @@ use ratatui::{
 use serde_json::Value;
 
 use crate::{
-    app::{ACTIONS, App, HELP, Mode},
-    model::{COLUMNS, Look, Task, TaskDetail, TaskEvent, age, now_secs, questions_of},
+    app::{ACTIONS, App, FloorState, HELP, Mode},
+    model::{
+        COLUMNS, Look, Metrics, Task, TaskDetail, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, now_secs,
+        questions_of,
+    },
 };
 
 // Catppuccin Mocha, the theme herdr is configured with.
@@ -103,6 +106,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
     .areas(frame.area());
 
     frame.render_widget(header_line(app), header);
+    if let Some(floor) = &app.floor {
+        render_floor(frame, body, floor);
+        frame.render_widget(footer_line(app), footer);
+        return;
+    }
     render_board(frame, body, app);
     frame.render_widget(footer_line(app), footer);
 
@@ -220,6 +228,9 @@ fn header_line(app: &App) -> Line<'static> {
     if !app.filter.trim().is_empty() {
         spans.push(Span::from(format!("  [filter: {}]", app.filter)).fg(c(ACCENT)).bold());
     }
+    if app.floor.is_some() {
+        spans.push(Span::from("  [floor]").fg(c(BLUE)).bold());
+    }
     if app.fold {
         spans.push(Span::from("  [folded]").fg(c(BLUE)).bold());
     }
@@ -230,6 +241,10 @@ fn footer_line(app: &App) -> Line<'static> {
     if let Some(toast) = &app.toast {
         let color = if toast.error { RED } else { GREEN };
         return Line::from(Span::from(format!(" {}", toast.text)).fg(c(color)).bold());
+    }
+
+    if app.floor.is_some() && matches!(app.mode, Mode::Normal) {
+        return hint(&[("r", "refresh"), ("esc", "close")]);
     }
 
     match &app.mode {
@@ -633,6 +648,156 @@ fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
 }
 
 /// The `x` menu: each action with the key it maps to.
+/// Cuts `text` to `width` characters, ending in `…` when it had to cut.
+fn truncate(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let kept: String = text.chars().take(width.saturating_sub(1)).collect();
+    format!("{kept}…")
+}
+
+/// One cell per window: `pick` reads a value out of a window's metrics, `–` while it has none.
+fn both(floor: &FloorState, pick: impl Fn(&Metrics) -> String) -> [String; 2] {
+    let cell = |m: &Option<Metrics>| m.as_ref().map_or(fmt_ms(None), &pick);
+    [cell(&floor.d7), cell(&floor.d30)]
+}
+
+fn median_p90(median: Option<f64>, p90: Option<f64>, f: fn(Option<f64>) -> String) -> String {
+    format!("{} / {}", f(median), f(p90))
+}
+
+/// The Floor table as (label, 7d, 30d) rows. A `None` label marks a section gap.
+fn floor_rows(floor: &FloorState) -> Vec<(String, String, String)> {
+    let mut rows: Vec<(String, String, String)> = Vec::new();
+    let mut add = |label: &str, [a, b]: [String; 2]| rows.push((label.to_string(), a, b));
+    add("Tasks closed", both(floor, |m| m.tasks.closed.to_string()));
+    add("  created", both(floor, |m| m.tasks.created.to_string()));
+    add("  open now", both(floor, |m| m.tasks.open.to_string()));
+    add(
+        "Needs you / running / queued",
+        both(floor, |m| format!("{} / {} / {}", m.tasks.waiting_on_you, m.tasks.running, m.tasks.queued)),
+    );
+    add(
+        "Cycle time median / p90",
+        both(floor, |m| median_p90(m.cycle_time_ms.task.median, m.cycle_time_ms.task.p90, fmt_ms)),
+    );
+    add("First-pass verifying", both(floor, |m| fmt_pct(m.first_pass_rate.verifying)));
+    add("  ci_watch", both(floor, |m| fmt_pct(m.first_pass_rate.ci_watch)));
+    add("  implementing", both(floor, |m| fmt_pct(m.first_pass_rate.implementing)));
+    add("Escalation rate", both(floor, |m| fmt_pct(m.escalations.rate)));
+    let reasons = [&floor.d7, &floor.d30]
+        .iter()
+        .filter_map(|m| m.as_ref().map(|m| m.escalations.top_reasons.len().min(3)))
+        .max()
+        .unwrap_or(0);
+    for i in 0..reasons {
+        let reason = move |m: &Metrics| {
+            m.escalations
+                .top_reasons
+                .get(i)
+                .map_or(String::new(), |r| format!("{}× {}", r.count, r.reason))
+        };
+        add(if i == 0 { "  top reasons" } else { "" }, both(floor, reason));
+    }
+    add(
+        "Retries/task median / p90",
+        both(floor, |m| median_p90(m.retries.per_task.median, m.retries.per_task.p90, |v| {
+            v.map_or(fmt_ms(None), |n| format!("{n:.1}").trim_end_matches(".0").to_string())
+        })),
+    );
+    add("Cost total", both(floor, |m| fmt_usd(Some(m.cost.total_usd))));
+    add("  per task median", both(floor, |m| fmt_usd(m.cost.per_task_usd.median)));
+    add(
+        "Queue depth · slots · util",
+        both(floor, |m| {
+            format!("{} · {}/{} · {}", m.queue.depth, m.queue.slots.active, m.queue.slots.max, fmt_pct(m.queue.utilisation))
+        }),
+    );
+    rows
+}
+
+/// (stage, runs, median, p90, cost) for every stage that appears in either map, by name.
+fn stage_rows(m: &Metrics) -> Vec<[String; 5]> {
+    let mut names: Vec<&String> = m.cycle_time_ms.per_stage.keys().chain(m.cost.by_stage.keys()).collect();
+    names.sort();
+    names.dedup();
+    names
+        .into_iter()
+        .map(|name| {
+            let stats = m.cycle_time_ms.per_stage.get(name);
+            [
+                name.clone(),
+                stats.map_or("–".to_string(), |s| s.runs.to_string()),
+                fmt_ms(stats.and_then(|s| s.median)),
+                fmt_ms(stats.and_then(|s| s.p90)),
+                fmt_usd(m.cost.by_stage.get(name).copied()),
+            ]
+        })
+        .collect()
+}
+
+/// The Floor view: 7d and 30d side by side, then a per-stage table (beside it when wide).
+fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
+    let label_style = Style::new().fg(c(SUBTEXT0));
+    let head_style = Style::new().fg(c(ACCENT)).bold();
+    let since = |m: &Option<Metrics>| m.as_ref().map_or("…".to_string(), |m| m.since.chars().take(10).collect());
+    let mut lines = vec![Line::from(
+        Span::from(format!(" Floor · since {} (7d) · {} (30d)", since(&floor.d7), since(&floor.d30))).style(head_style),
+    )];
+    if floor.d7.is_none() && floor.d30.is_none() {
+        lines.push(Line::from(Span::from(" no numbers yet; r to retry").style(label_style)));
+    }
+
+    let wide = area.width >= 110;
+    let [table_area, stage_area] = if wide {
+        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area)
+    } else {
+        Layout::vertical([Constraint::Length(lines.len() as u16 + floor_rows(floor).len() as u16 + 1), Constraint::Min(0)]).areas(area)
+    };
+
+    let label_w = 31usize;
+    let col_w = (table_area.width as usize).saturating_sub(label_w + 1) / 2;
+    let line_of = |label: &str, a: &str, b: &str, style: Style| {
+        Line::from(vec![
+            Span::from(format!(" {:<w$}", truncate(label, label_w - 1), w = label_w - 1)).style(label_style),
+            Span::from(format!("{:<w$}", truncate(a, col_w.saturating_sub(1)), w = col_w)).style(style),
+            Span::from(truncate(b, col_w.saturating_sub(1))).style(style),
+        ])
+    };
+    lines.push(line_of("", "7d", "30d", head_style));
+    for (label, a, b) in floor_rows(floor) {
+        lines.push(line_of(&label, &a, &b, Style::new()));
+    }
+    frame.render_widget(Paragraph::new(lines), table_area);
+
+    let Some(window) = floor.d7.as_ref().or(floor.d30.as_ref()) else {
+        return;
+    };
+    let which = if floor.d7.is_some() { "7d" } else { "30d" };
+    let stages = stage_rows(window);
+    let room = (stage_area.height as usize).saturating_sub(1);
+    let mut out = vec![Line::from(
+        Span::from(format!(" {:<14}{:>5}{:>8}{:>8}{:>9}", format!("stage · {which}"), "runs", "median", "p90", "cost"))
+            .style(head_style),
+    )];
+    for row in stages.iter().take(room.saturating_sub(usize::from(stages.len() > room))) {
+        out.push(Line::from(format!(
+            " {:<14}{:>5}{:>8}{:>8}{:>9}",
+            truncate(&row[0], 13),
+            row[1],
+            row[2],
+            row[3],
+            row[4]
+        )));
+    }
+    if stages.len() > room {
+        let hidden = stages.len() - room.saturating_sub(1);
+        out.push(Line::from(Span::from(format!(" … +{hidden} more")).style(label_style)));
+    }
+    frame.render_widget(Paragraph::new(out), stage_area);
+}
+
 fn render_actions(frame: &mut Frame, app: &App, cursor: usize) {
     let area = centered(frame.area(), 56, ACTIONS.len() as u16 + 4);
     frame.render_widget(Clear, area);
@@ -743,4 +908,65 @@ fn centered(area: Rect, width: u16, height: u16) -> Rect {
     ])
     .areas(middle);
     center
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    use super::*;
+
+    fn floor() -> FloorState {
+        let json = r#"{"since":"2026-10-16T00:00:00.000Z","until":"2026-10-23T00:00:00.000Z",
+          "tasks":{"created":9,"closed":6,"open":3,"waitingOnYou":1,"running":1,"queued":0},
+          "cycleTimeMs":{"task":{"median":5400000,"p90":null},"perStage":{
+            "verifying":{"median":90000,"p90":120000,"runs":7},
+            "implementing":{"median":null,"p90":null,"runs":0}}},
+          "firstPassRate":{"verifying":0.83,"ci_watch":null,"implementing":0.5},
+          "escalations":{"rate":0.25,"topReasons":[{"reason":"a very long escalation reason that cannot fit","count":2}]},
+          "retries":{"perTask":{"median":1,"p90":3},"byLoop":{"verify":2,"e2e":0,"ci":1}},
+          "cost":{"totalUsd":12.5,"perTaskUsd":{"median":1.234,"p90":null},"byStage":{"verifying":2.5,"shipping":0.4}},
+          "queue":{"depth":2,"slots":{"max":4,"active":1},"utilisation":null}}"#;
+        let m: Metrics = serde_json::from_str(json).unwrap();
+        FloorState { d7: Some(m.clone()), d30: Some(m) }
+    }
+
+    fn render(width: u16, height: u16, floor: &FloorState) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| render_floor(f, f.area(), floor)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn floor_fits_80x24_and_shows_the_numbers() {
+        let text = render(80, 22, &floor());
+        assert!(text.contains("Floor · since 2026-10-16"));
+        assert!(text.contains("1.5h / –"), "{text}");
+        assert!(text.contains("83%"));
+        assert!(text.contains("$12.50"));
+        assert!(text.contains("2 · 1/4 · –"));
+        assert!(text.contains("verifying"));
+        assert!(!text.contains("a very long escalation reason that cannot fit"));
+    }
+
+    #[test]
+    fn floor_with_no_numbers_and_tiny_terminals_do_not_panic() {
+        render(80, 22, &FloorState::default());
+        render(20, 5, &floor());
+        render(140, 30, &floor());
+    }
+
+    #[test]
+    fn stage_rows_merge_runs_and_cost_sorted_by_name() {
+        let rows = stage_rows(floor().d7.as_ref().unwrap());
+        let names: Vec<&str> = rows.iter().map(|r| r[0].as_str()).collect();
+        assert_eq!(names, ["implementing", "shipping", "verifying"]);
+        assert_eq!(rows[1][1], "–");
+        assert_eq!(rows[1][4], "$0.40");
+        assert_eq!(rows[2][2], "1.5m");
+    }
 }
