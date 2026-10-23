@@ -6,17 +6,26 @@ export interface ExecResult {
   stderr: string;
 }
 
-/** Runs a command without a shell and resolves with its exit code instead of throwing. */
+/** Runs a command without a shell and resolves with its exit code instead of throwing.
+ *  `signal` kills the process early (e.g. the task was aborted); `timeoutMs` kills it after
+ *  that long regardless — without one, a hung command blocks its caller (and whatever slot
+ *  it's holding) forever. */
 export function exec(
   command: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; cwd?: string } = {},
+  options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     execFile(
       command,
       args,
-      { env: options.env ?? process.env, cwd: options.cwd, maxBuffer: 64 * 1024 * 1024 },
+      {
+        env: options.env ?? process.env,
+        cwd: options.cwd,
+        maxBuffer: 64 * 1024 * 1024,
+        signal: options.signal,
+        timeout: options.timeoutMs,
+      },
       (error, stdout, stderr) => {
         const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
         resolve({ code, stdout: String(stdout), stderr: String(stderr) });

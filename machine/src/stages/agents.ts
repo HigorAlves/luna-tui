@@ -160,6 +160,10 @@ Make the smallest change that meets the criteria, and run the project's tests if
       const diff = await diffNameStatus(workspace.path, inputCommit, commit);
       const locked = lockedFilesTouched(diff);
       if (locked.length > 0) {
+        // Undo the commit itself, not just any uncommitted leftovers — otherwise the next
+        // attempt's `inputCommit` is this very commit, and the locked-file edit it caught
+        // ships anyway once a later attempt passes.
+        await resetWorktree(workspace.path, inputCommit);
         return {
           outcome: "fail",
           detail: { error: `modified existing test file(s) without a test_change request: ${locked.join(", ")}` },

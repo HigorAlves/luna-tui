@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { counterFilePath } from "../../fixtures/golden-flaky/counter-path.mjs";
+
 const MACHINE_URL = process.env.HARDNESS_MACHINE_URL ?? "http://127.0.0.1:4317";
 const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "fixtures", "golden-flaky");
 
@@ -122,9 +124,7 @@ async function main() {
   for (const { id, repoPath } of [retry, escalate]) {
     const { task } = await api(`/tasks/${id}`);
     if (task.worktreePath) {
-      // Mirrors how test/thing.test.js derives its external counter file's path.
-      const key = join(task.worktreePath, "test").replace(/[^a-zA-Z0-9]/g, "_");
-      rmSync(join(tmpdir(), `hardness-flaky-${key}.count`), { force: true });
+      rmSync(counterFilePath(join(task.worktreePath, "test")), { force: true });
       rmSync(dirname(task.worktreePath), { recursive: true, force: true });
     }
     rmSync(repoPath, { recursive: true, force: true });

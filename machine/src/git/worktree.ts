@@ -47,11 +47,13 @@ export async function ensureWorktree(repoPath: string, workspace: Workspace): Pr
 }
 
 /**
- * Discards whatever a run left uncommitted. Used before a retry, so an aborted, timed out
- * or crashed attempt never hands the next one a half-edited worktree with no explanation.
+ * Discards whatever a run left uncommitted, back to `ref` (defaults to the current HEAD).
+ * Used before a retry, so an aborted, timed out or crashed attempt never hands the next one
+ * a half-edited worktree with no explanation — and, with an explicit `ref`, to undo a commit
+ * that should never have landed (e.g. one that touched a locked test file).
  */
-export async function resetWorktree(path: string): Promise<void> {
-  await execOrThrow("git", ["-C", path, "reset", "--hard", "--quiet"]);
+export async function resetWorktree(path: string, ref = "HEAD"): Promise<void> {
+  await execOrThrow("git", ["-C", path, "reset", "--hard", "--quiet", ref]);
   await execOrThrow("git", ["-C", path, "clean", "-fd", "--quiet"]);
 }
 

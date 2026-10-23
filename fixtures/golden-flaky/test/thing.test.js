@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
 
+import { counterFilePath } from "../counter-path.mjs";
 import { thing } from "../src/thing.js";
 
 // Fails until the Verifier stage specifically (not an agent's own exploratory `npm test`
@@ -17,7 +16,7 @@ import { thing } from "../src/thing.js";
 // live inside the worktree: a real implementer agent, tidying up before reporting done, will
 // reasonably `rm` an untracked file it doesn't recognize — this one did exactly that between
 // retry attempts, which is what motivated moving it out here.
-const counterFile = join(tmpdir(), `hardness-flaky-${import.meta.dirname.replace(/[^a-zA-Z0-9]/g, "_")}.count`);
+const counterFile = counterFilePath(import.meta.dirname);
 const passAfter = Number(process.env.FLAKY_PASSES_AFTER ?? "999");
 const underVerification = process.env.HARDNESS_STAGE === "verifying";
 

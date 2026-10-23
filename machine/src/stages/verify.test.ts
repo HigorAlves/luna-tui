@@ -3,7 +3,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { detectTestCommand } from "./verify.ts";
+import type { TaskRow } from "../db/entities.ts";
+import { NO_RETRIES } from "../engine/transition.ts";
+import { detectTestCommand, verifyRunner } from "./verify.ts";
 
 let dir: string;
 
@@ -45,5 +47,35 @@ describe("detectTestCommand", () => {
 
   it("returns null when nothing recognizable is there", () => {
     expect(detectTestCommand(dir)).toBeNull();
+  });
+});
+
+describe("verifyRunner", () => {
+  it("passes without running anything when the task has no worktree (a stub-only run)", async () => {
+    const task: TaskRow = {
+      id: "t1",
+      title: "x",
+      description: "",
+      criteria: [],
+      repoPath: null,
+      branch: null,
+      worktreePath: null,
+      state: "verifying",
+      retries: { ...NO_RETRIES },
+      resumeTo: null,
+      reason: null,
+      queued: false,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+    const result = await verifyRunner({
+      task,
+      stage: "verifying",
+      attempt: 1,
+      runId: "r1",
+      approvals: [],
+      signal: new AbortController().signal,
+    });
+    expect(result).toEqual({ outcome: "pass" });
   });
 });

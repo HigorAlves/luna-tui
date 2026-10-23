@@ -17,12 +17,12 @@ export async function pruneOldRuns(db: DataSource, retentionDays: number): Promi
     )`;
     // TypeORM's query() for a Postgres DELETE ... RETURNING resolves to a [rows, rowCount]
     // tuple, not just the rows array — destructure, don't just read .length on the result.
-    const [, eventCount] = (await tx.query(`delete from events where ${cutoffCondition} returning id`, [
-      retentionDays,
-    ])) as [unknown[], number];
-    const [, stageRunCount] = (await tx.query(`delete from stage_runs where ${cutoffCondition} returning id`, [
-      retentionDays,
-    ])) as [unknown[], number];
+    // Neither delete has a foreign key to the other (both only reference `tasks`), so they
+    // can run concurrently inside the same transaction instead of paying two round trips.
+    const [[, eventCount], [, stageRunCount]] = (await Promise.all([
+      tx.query(`delete from events where ${cutoffCondition} returning id`, [retentionDays]),
+      tx.query(`delete from stage_runs where ${cutoffCondition} returning id`, [retentionDays]),
+    ])) as [[unknown[], number], [unknown[], number]];
     return { events: eventCount, stageRuns: stageRunCount };
   });
 }

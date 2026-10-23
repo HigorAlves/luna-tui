@@ -264,17 +264,32 @@ export class Pipeline {
     // despite only one slot being available.
     const controller = new AbortController();
     this.loops.set(id, controller);
-    const loop = this.runAndFillSlot(id, stage, controller);
+    try {
+      // Clears a stale `queued: true` from before a restart, as well as the common case
+      // where it was already false. Awaited here — not inside runAndFillSlot — so the
+      // `queued` flag is guaranteed stored before schedule() returns, per its own contract;
+      // otherwise recover() (which schedules a task that still reads queued:true) can race
+      // a slot freeing elsewhere and have the same task claimed and driven a second time.
+      await this.db.getRepository(TaskEntity).update({ id }, { queued: false });
+    } catch (error) {
+      // Release the slot reserved above, or a transient failure on this update leaks it
+      // for the rest of the process.
+      if (this.loops.get(id) === controller) this.loops.delete(id);
+      throw error;
+    }
+    // Not awaited outside inline mode — attach a `.catch` regardless so a later failure
+    // (e.g. inside the slot-refill tail below) surfaces as a log line instead of an
+    // unhandled rejection that can crash the whole process.
+    const loop = this.runAndFillSlot(id, stage, controller).catch((error: unknown) =>
+      console.error(`run loop for task ${id} failed`, error),
+    );
     if (this.inline) await loop;
   }
 
   /** Drives the stage, then — once its slot is free again — starts the longest-queued task.
-   *  `controller` is already registered in `this.loops` by the caller, synchronously, before
-   *  any `await` — see the comment in `schedule()`. */
+   *  `controller` is already registered in `this.loops` and the task's `queued` flag already
+   *  cleared by the caller, synchronously, before any `await` — see schedule(). */
   private async runAndFillSlot(id: string, stage: TaskState, controller: AbortController): Promise<void> {
-    // Clears a stale `queued: true` from before a restart, as well as the common case
-    // where it was already false.
-    await this.db.getRepository(TaskEntity).update({ id }, { queued: false });
     await this.drive(id, stage, controller);
     if (this.loops.size >= this.maxConcurrentTasks) return;
     // Pick a candidate unlocked, then re-check it under a row lock, so two slots freeing at
@@ -298,7 +313,9 @@ export class Pipeline {
     if (claimed) {
       const nextController = new AbortController();
       this.loops.set(claimed.id, nextController);
-      void this.runAndFillSlot(claimed.id, claimed.state, nextController);
+      this.runAndFillSlot(claimed.id, claimed.state, nextController).catch((error: unknown) =>
+        console.error(`run loop for task ${claimed.id} failed`, error),
+      );
     }
   }
 

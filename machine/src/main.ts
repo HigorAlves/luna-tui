@@ -29,9 +29,15 @@ if (applied.length > 0) {
 }
 
 if (config.retentionDays > 0) {
-  const pruned = await pruneOldRuns(db, config.retentionDays);
-  if (pruned.events > 0 || pruned.stageRuns > 0) {
-    console.log(`pruned ${pruned.events} old event(s), ${pruned.stageRuns} old stage run(s)`);
+  try {
+    const pruned = await pruneOldRuns(db, config.retentionDays);
+    if (pruned.events > 0 || pruned.stageRuns > 0) {
+      console.log(`pruned ${pruned.events} old event(s), ${pruned.stageRuns} old stage run(s)`);
+    }
+  } catch (error) {
+    // A transient DB hiccup here shouldn't block the machine from ever starting to serve —
+    // the periodic retry below gets another shot at it.
+    console.error("startup prune failed", error);
   }
   setInterval(
     () =>

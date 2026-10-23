@@ -61,6 +61,10 @@ export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
   // but nothing it does needs write access outside its mounted worktree, /in, /out or /tmp.
   args.push("--read-only", "--tmpfs", "/tmp:rw,size=512m", "--security-opt", "no-new-privileges");
   args.push(
+    // npm/yarn/pip caches, shell history and anything else that defaults to $HOME would
+    // otherwise hit the now-read-only root filesystem — point HOME at the one writable,
+    // throwaway place left: the tmpfs above.
+    "-e", "HOME=/tmp",
     // The credential is passed by name; its value is only in docker's environment.
     "-e", run.credential.name,
     // The worktree is owned by the host user, not the container's.
