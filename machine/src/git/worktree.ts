@@ -75,6 +75,11 @@ export function headCommit(path: string): Promise<string> {
   return execOrThrow("git", ["-C", path, "rev-parse", "HEAD"]);
 }
 
+/** `git diff --name-status <from> <to>` in `path`, for checking what a commit touched. */
+export function diffNameStatus(path: string, from: string, to: string): Promise<string> {
+  return execOrThrow("git", ["-C", path, "diff", "--name-status", from, to]);
+}
+
 /**
  * Commits everything the agent changed. Returns the new commit, or null when nothing changed.
  * Commits are not signed: signing needs your passphrase, which a background run cannot ask for.
