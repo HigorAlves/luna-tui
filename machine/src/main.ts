@@ -13,6 +13,7 @@ import type { EventRow } from "./db/entities.ts";
 import { Watcher } from "./herdr/watch.ts";
 import { GitHubIntake } from "./intake/github.ts";
 import { Pipeline } from "./pipeline/pipeline.ts";
+import { exec } from "./sandbox/exec.ts";
 import { loadCredential } from "./sandbox/credentials.ts";
 import { imageExists, removeLeftoverContainers } from "./sandbox/docker.ts";
 import { agentRunners } from "./stages/agents.ts";
@@ -89,12 +90,16 @@ function publish(event: EventRow): void {
     );
   }
   if (event.kind === "transition") scheduleMetrics();
-  if (event.kind === "transition" && event.payload.to === "closed") {
-    watcher.close(event.taskId).catch((error: unknown) => console.error("could not close watch tab", error));
-  }
 }
 
-const pipeline = new Pipeline(db, runnerFor, { onEvent: publish, maxConcurrentTasks: config.maxConcurrentTasks });
+/** `orc-state` marks orc's session for a task's branch completed when the task closes. */
+const orcStateBin = (await exec("which", ["orc-state"])).stdout.trim() || null;
+
+const pipeline = new Pipeline(db, runnerFor, {
+  onEvent: publish,
+  maxConcurrentTasks: config.maxConcurrentTasks,
+  closeDeps: { exec, worktreeRemove: false, orcStateBin, watcher },
+});
 const recovered = await pipeline.recover();
 if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by the last run`);
 

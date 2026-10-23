@@ -21,6 +21,7 @@ import {
 } from "../db/entities.ts";
 import { NO_RETRIES, type PipelineEvent, type Step, transition } from "../engine/transition.ts";
 import { removeWorktree as removeWorktreeOnDisk } from "../git/worktree.ts";
+import { type CloseDeps, closeTask } from "../stages/close.ts";
 import type { StageResult, StageRunner } from "../stages/runner.ts";
 
 export class TaskNotFoundError extends Error {
@@ -53,6 +54,8 @@ export interface PipelineOptions {
   inline?: boolean;
   /** Tasks that can be driving a stage at once, across every repo. The rest queue. */
   maxConcurrentTasks?: number;
+  /** What the close step needs once a task is approved for good. Without it, nothing is closed on the host. */
+  closeDeps?: CloseDeps;
 }
 
 interface DecisionRecord {
@@ -75,6 +78,7 @@ export class Pipeline {
   private readonly onEvent: (event: EventRow) => void;
   private readonly inline: boolean;
   private readonly maxConcurrentTasks: number;
+  private readonly closeDeps: CloseDeps | undefined;
   /** The abort signal of each task currently driving a stage. Its size is the active count. */
   private readonly loops = new Map<string, AbortController>();
   private readonly resumeTimers = new Map<string, NodeJS.Timeout>();
@@ -87,6 +91,7 @@ export class Pipeline {
     this.onEvent = options.onEvent ?? (() => {});
     this.inline = options.inline ?? false;
     this.maxConcurrentTasks = options.maxConcurrentTasks ?? 4;
+    this.closeDeps = options.closeDeps;
   }
 
   async createTask(input: NewTask): Promise<TaskRow> {
@@ -281,7 +286,22 @@ export class Pipeline {
     if (step.effect.kind === "run") {
       await this.schedule(id, step.effect.stage);
     }
+    if (step.effect.kind === "done") await this.close(id);
     return this.get(id);
+  }
+
+  /** Runs the host-side close step for a task that just closed and logs what it did. Never throws. */
+  private async close(id: string): Promise<void> {
+    if (!this.closeDeps) return;
+    try {
+      const report = await closeTask(await this.get(id), this.closeDeps);
+      if (report.worktreeRemoved) {
+        await this.db.getRepository(TaskEntity).update({ id }, { worktreePath: null });
+      }
+      await this.log(id, "task.closed", { ...report });
+    } catch (error) {
+      console.error(`could not close task ${id}`, error);
+    }
   }
 
   /**

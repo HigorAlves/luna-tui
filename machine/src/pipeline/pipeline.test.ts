@@ -7,6 +7,7 @@ import type { StageResult, StageRunner } from "../stages/runner.ts";
 import { StubStages } from "../stages/stubs.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { Pipeline, TaskNotFoundError } from "./pipeline.ts";
+import type { CloseReport } from "../stages/close.ts";
 
 let db: DataSource;
 const stubs = new StubStages();
@@ -111,6 +112,53 @@ describe("the whole pipeline with stub stages", () => {
       "reviewing_memory",
     ]);
     expect(approvals.every((a) => a.decision === "approved" && a.decidedAt)).toBe(true);
+  });
+});
+
+describe("closing", () => {
+  it("runs the close step after the last approval and logs the report", async () => {
+    const seen: string[] = [];
+    const closing = new Pipeline(db, stubs.runnerFor, {
+      inline: true,
+      closeDeps: {
+        exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+        worktreeRemove: false,
+        orcStateBin: null,
+        watcher: { close: async (id) => void seen.push(id) },
+      },
+    });
+    const created = await closing.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
+    await closing.start(created.id);
+    await closing.start(created.id);
+    for (let i = 0; i < 4; i++) await closing.decide(created.id, "approved");
+
+    expect((await closing.get(created.id)).state).toBe("closed");
+    const event = (await closing.events(created.id)).find((e) => e.kind === "task.closed");
+    const report = event?.payload as unknown as CloseReport;
+    expect(report.steps.map((s) => s.step)).toEqual(["orc-state", "watch-tab", "worktree"]);
+    expect(seen).toEqual([created.id]);
+  });
+
+  it("logs a failed step instead of failing the approval", async () => {
+    const closing = new Pipeline(db, stubs.runnerFor, {
+      inline: true,
+      closeDeps: {
+        exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+        worktreeRemove: false,
+        orcStateBin: null,
+        watcher: { close: async () => Promise.reject(new Error("herdr down")) },
+      },
+    });
+    const created = await closing.createTask({ title: "Login page", criteria: ["x"] });
+    await closing.start(created.id);
+    await closing.start(created.id);
+    for (let i = 0; i < 4; i++) await closing.decide(created.id, "approved");
+
+    expect((await closing.get(created.id)).state).toBe("closed");
+    const event = (await closing.events(created.id)).find((e) => e.kind === "task.closed");
+    expect((event?.payload as unknown as CloseReport).steps).toContainEqual(
+      expect.objectContaining({ step: "watch-tab", ok: false }),
+    );
   });
 });
 
