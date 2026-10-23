@@ -1,9 +1,22 @@
-# Hardness
+<div align="center">
+<img src="board/icon.png" width="112" alt="Luna TUI's icon">
 
-Hardness is a local dev harness for working with AI coding agents. You plan
+# Luna TUI
+
+**A board in your terminal that runs orc as a software factory. You approve three times.**
+
+</div>
+
+Luna waits on Claude in your [notch](https://github.com/HigorAlves/luna-notch); Luna TUI runs the factory in your terminal; [orc](https://github.com/HigorAlves/orc) is the engine both drive.
+
+Luna TUI is a local dev harness for working with AI coding agents. You plan
 tickets on a board inside [herdr](https://herdr.dev/); a machine then moves each
 ticket through a fixed pipeline, running Claude agents in throwaway Docker
 containers, and stops at approval gates so you stay in control.
+
+## Names in the code
+
+Packages (`@hardness/*`), the `hardness.board` plugin id, env vars such as `HARDNESS_MACHINE_URL`, the `~/.config/hardness/` directory and the `hardness-runner` images still say `hardness`. Renaming them is a separate change; the product name is Luna TUI.
 
 ## Pipeline
 
@@ -37,7 +50,7 @@ the same queue.
 
 | Path | What it is |
 |---|---|
-| `board/` | Hardness Board, the Rust TUI and herdr plugin. A client of the machine. |
+| `board/` | The Luna TUI board, the Rust TUI and herdr plugin. A client of the machine. |
 | `machine/` | The orchestrator: TypeScript on Node 24+, HTTP API plus an SSE stream, Postgres for state. |
 | `contracts/` | Types shared by the machine and the board. |
 | `fixtures/golden-task/` | A small repo with one seeded bug, used by `pnpm golden`. |

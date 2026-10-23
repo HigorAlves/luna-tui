@@ -193,7 +193,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 }
 
 fn header_line(app: &App) -> Line<'static> {
-    let mut spans = vec![Span::from(" Hardness Board ").fg(c(BASE)).bg(c(ACCENT)).bold()];
+    let mut spans = vec![Span::from(" Luna TUI ").fg(c(BASE)).bg(c(ACCENT)).bold()];
     if app.online {
         let total = app.tasks.len();
         let running = app.tasks.iter().filter(|t| t.running).count();
@@ -1015,6 +1015,17 @@ mod tests {
             .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn header_names_the_product_luna_tui() {
+        let mut app = App::new(crate::Machine::from_env());
+        let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains("Luna TUI"), "{text}");
+        assert!(!text.contains("Hardness"), "{text}");
+        app.online = true;
+        let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains("Luna TUI"), "{text}");
     }
 
     #[test]
