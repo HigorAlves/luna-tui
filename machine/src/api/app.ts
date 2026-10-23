@@ -18,6 +18,7 @@ import type { Watcher } from "../herdr/watch.ts";
 import { type Pipeline, TaskBusyError, TaskNotFoundError } from "../pipeline/pipeline.ts";
 import type { StubStages } from "../stages/stubs.ts";
 import type { Bus } from "./bus.ts";
+import { computeMetrics, InvalidSince, parseSince } from "./metrics.ts";
 import { toApproval, toArtifact, toEvent, toStageRun, toTask } from "./serialize.ts";
 
 const PING_EVERY_MS = 15_000;
@@ -69,6 +70,17 @@ export function createApp({ pipeline, bus, watcher, stubs }: AppDeps): Hono {
   });
 
   app.get("/health", (c) => c.json({ ok: true }));
+
+  app.get("/metrics", async (c) => {
+    let since: Date;
+    try {
+      since = parseSince(c.req.query("since"));
+    } catch (error) {
+      if (error instanceof InvalidSince) throw new BadRequest(error.message);
+      throw error;
+    }
+    return c.json(await computeMetrics(pipeline.database, { since, slots: pipeline.slots }));
+  });
 
   app.get("/tasks", async (c) => c.json((await pipeline.list()).map(toTask)));
 

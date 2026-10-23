@@ -119,6 +119,7 @@ curl -s -X POST 127.0.0.1:4317/tasks/<id>/start
 curl -s -X POST 127.0.0.1:4317/tasks/<id>/decision -H 'content-type: application/json' \
   -d '{"decision":"approved"}'
 curl -sN 127.0.0.1:4317/events      # live updates
+curl -s '127.0.0.1:4317/metrics?since=7d'   # factory metrics (7d, 30d or ISO): cycle time, first-pass, escalations, cost; also streamed as task.metrics
 ```
 
 Give a task a `"repoPath"` so the agents have a repo to work on. The full list

@@ -140,11 +140,64 @@ export interface TaskDetail {
  * - `task.updated`: a task changed; carries the whole task, so the board can just replace it.
  * - `task.event`: one entry from the task's activity log.
  * - `task.deleted`: the task is gone.
+ * - `task.metrics`: fresh factory metrics (7d window), sent after tasks change state.
  */
 export type StreamMessage =
   | { type: "task.updated"; task: Task }
   | { type: "task.event"; event: TaskEvent }
-  | { type: "task.deleted"; id: string };
+  | { type: "task.deleted"; id: string }
+  | { type: "task.metrics"; metrics: Metrics };
+
+/** Median and 90th percentile; null when there is no data. */
+export interface Stats {
+  median: number | null;
+  p90: number | null;
+}
+
+/** `GET /metrics?since=<7d|30d|ISO>`. Numbers with no data are null, never NaN. */
+export interface Metrics {
+  since: string;
+  until: string;
+  tasks: {
+    created: number;
+    closed: number;
+    open: number;
+    waitingOnYou: number;
+    running: number;
+    queued: number;
+  };
+  cycleTimeMs: {
+    /** Created to closed, for tasks closed in the window. */
+    task: Stats;
+    /** Started to ended, for passed and failed stage runs started in the window. */
+    perStage: Record<string, Stats & { runs: number }>;
+  };
+  /** Share of tasks whose first run of the stage passed. */
+  firstPassRate: {
+    verifying: number | null;
+    ci_watch: number | null;
+    implementing: number | null;
+  };
+  escalations: {
+    /** Tasks that escalated at least once over tasks started in the window. */
+    rate: number | null;
+    topReasons: { reason: string; count: number }[];
+  };
+  retries: {
+    perTask: Stats;
+    byLoop: { verify: number; e2e: number; ci: number };
+  };
+  cost: {
+    totalUsd: number;
+    perTaskUsd: Stats;
+    byStage: Record<string, number>;
+  };
+  queue: {
+    depth: number;
+    slots: { max: number; active: number };
+    utilisation: number | null;
+  };
+}
 
 /** Error body for every 4xx and 5xx response. */
 export interface ApiError {

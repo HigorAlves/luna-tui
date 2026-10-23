@@ -107,6 +107,20 @@ export class Pipeline {
     return this.get(task.id);
   }
 
+  /** The database, for read-only reports such as metrics. */
+  get database(): DataSource {
+    return this.db;
+  }
+
+  /** Stage slots: how many tasks may drive a stage at once, and how many do right now. */
+  get slots(): { max: number; active: number } {
+    return { max: this.maxConcurrentTasks, active: this.loops.size };
+  }
+
+  activeCount(): number {
+    return this.loops.size;
+  }
+
   list(): Promise<TaskRow[]> {
     return this.db.getRepository(TaskEntity).find({ order: { createdAt: "ASC" } });
   }

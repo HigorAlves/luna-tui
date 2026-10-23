@@ -5,6 +5,7 @@ import type { TaskState } from "@hardness/contracts";
 
 import { createApp } from "./api/app.ts";
 import { Bus } from "./api/bus.ts";
+import { computeMetrics, parseSince } from "./api/metrics.ts";
 import { toEvent, toTask } from "./api/serialize.ts";
 import { loadConfig } from "./config.ts";
 import { createDataSource } from "./db/data-source.ts";
@@ -62,6 +63,22 @@ const real = await realStages();
 const runnerFor = (stage: TaskState): StageRunner =>
   stage === "shipping" ? shipRunner : real[stage] ?? stubs.runnerFor(stage);
 
+const METRICS_DEBOUNCE_MS = 2_000;
+let metricsTimer: NodeJS.Timeout | undefined;
+
+/** Streams fresh 7d metrics once after a burst of transitions, so the board need not poll. */
+function scheduleMetrics(): void {
+  if (metricsTimer) return;
+  metricsTimer = setTimeout(() => {
+    metricsTimer = undefined;
+    computeMetrics(db, { since: parseSince("7d"), slots: pipeline.slots }).then(
+      (metrics) => bus.publish({ type: "task.metrics", metrics }),
+      (error: unknown) => console.error("could not publish metrics", error),
+    );
+  }, METRICS_DEBOUNCE_MS);
+  metricsTimer.unref();
+}
+
 /** Streams each logged event, plus the whole task whenever its state may have changed. */
 function publish(event: EventRow): void {
   bus.publish({ type: "task.event", event: toEvent(event) });
@@ -71,6 +88,7 @@ function publish(event: EventRow): void {
       (error: unknown) => console.error("could not publish task update", error),
     );
   }
+  if (event.kind === "transition") scheduleMetrics();
   if (event.kind === "transition" && event.payload.to === "closed") {
     watcher.close(event.taskId).catch((error: unknown) => console.error("could not close watch tab", error));
   }
