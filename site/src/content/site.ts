@@ -5,7 +5,7 @@ export { facts }
 export const REPO = "https://github.com/HigorAlves/tui-harness"
 export const LUNA = "https://luna-sigma-nine.vercel.app/"
 export const ORC = "https://orc.higoralves.dev"
-export const HERDR = "https://github.com/ogulcancelik/herdr"
+export const HERDR = "https://herdr.dev"
 
 export const nav = [
   { label: "How it runs", href: "#line" },
