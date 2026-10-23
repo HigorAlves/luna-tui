@@ -258,16 +258,24 @@ export class Pipeline {
       await this.db.getRepository(TaskEntity).update({ id }, { queued: true });
       return;
     }
-    // Clears a stale `queued: true` from before a restart, as well as the common case
-    // where it was already false.
-    await this.db.getRepository(TaskEntity).update({ id }, { queued: false });
-    const loop = this.runAndFillSlot(id, stage);
+    // Reserve the slot synchronously, before any `await` — otherwise two schedule() calls
+    // racing for the last slot (e.g. two tasks started back to back) can both pass the
+    // `loops.size` check above before either has actually registered, both proceeding
+    // despite only one slot being available.
+    const controller = new AbortController();
+    this.loops.set(id, controller);
+    const loop = this.runAndFillSlot(id, stage, controller);
     if (this.inline) await loop;
   }
 
-  /** Drives the stage, then — once its slot is free again — starts the longest-queued task. */
-  private async runAndFillSlot(id: string, stage: TaskState): Promise<void> {
-    await this.drive(id, stage);
+  /** Drives the stage, then — once its slot is free again — starts the longest-queued task.
+   *  `controller` is already registered in `this.loops` by the caller, synchronously, before
+   *  any `await` — see the comment in `schedule()`. */
+  private async runAndFillSlot(id: string, stage: TaskState, controller: AbortController): Promise<void> {
+    // Clears a stale `queued: true` from before a restart, as well as the common case
+    // where it was already false.
+    await this.db.getRepository(TaskEntity).update({ id }, { queued: false });
+    await this.drive(id, stage, controller);
     if (this.loops.size >= this.maxConcurrentTasks) return;
     // Pick a candidate unlocked, then re-check it under a row lock, so two slots freeing at
     // once cannot both claim the same queued task.
@@ -287,13 +295,16 @@ export class Pipeline {
       await tx.update(TaskEntity, { id: locked.id }, { queued: false });
       return locked;
     });
-    if (claimed) void this.runAndFillSlot(claimed.id, claimed.state);
+    if (claimed) {
+      const nextController = new AbortController();
+      this.loops.set(claimed.id, nextController);
+      void this.runAndFillSlot(claimed.id, claimed.state, nextController);
+    }
   }
 
-  /** Runs stages one after another until the task waits on you, pauses, closes or is aborted. */
-  private async drive(id: string, first: TaskState): Promise<void> {
-    const controller = new AbortController();
-    this.loops.set(id, controller);
+  /** Runs stages one after another until the task waits on you, pauses, closes or is aborted.
+   *  `controller` is already registered in `this.loops` by the caller. */
+  private async drive(id: string, first: TaskState, controller: AbortController): Promise<void> {
     try {
       let stage: TaskState | null = first;
       while (stage) {
