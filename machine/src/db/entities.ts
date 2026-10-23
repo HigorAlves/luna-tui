@@ -1,6 +1,6 @@
 // Postgres tables, declared with EntitySchema rather than decorators so they work the
 // same under tsx, Vitest and tsc. Every column type is explicit.
-import type { TaskState } from "@hardness/contracts";
+import type { ArtifactKind, TaskSource, TaskState } from "@hardness/contracts";
 import { EntitySchema } from "typeorm";
 
 import type { Retries } from "../engine/transition.ts";
@@ -11,6 +11,8 @@ export interface TaskRow {
   description: string;
   criteria: string[];
   repoPath: string | null;
+  /** The tracker item the task came from. */
+  source: TaskSource | null;
   branch: string | null;
   worktreePath: string | null;
   state: TaskState;
@@ -34,6 +36,9 @@ export interface StageRunRow {
   attempt: number;
   status: StageRunStatus;
   outcome: string | null;
+  /** numeric, returned by pg as a string. */
+  costUsd: string | null;
+  turns: number | null;
   containerId: string | null;
   inputCommit: string | null;
   outputCommit: string | null;
@@ -50,6 +55,18 @@ export interface EventRow {
   kind: string;
   payload: Record<string, unknown>;
   at: Date;
+}
+
+export interface ArtifactRow {
+  id: string;
+  stageRunId: string;
+  taskId: string;
+  kind: ArtifactKind;
+  /** Relative to the run's output folder. */
+  path: string;
+  label: string;
+  sha256: string;
+  createdAt: Date;
 }
 
 export type Decision = "approved" | "sent_back" | "answered";
@@ -84,6 +101,7 @@ export const TaskEntity = new EntitySchema<TaskRow>({
     description: { type: "text", default: "" },
     criteria: { type: "jsonb", default: () => "'[]'::jsonb" },
     repoPath: { name: "repo_path", type: "text", nullable: true },
+    source: { type: "jsonb", nullable: true },
     branch: { type: "text", nullable: true },
     worktreePath: { name: "worktree_path", type: "text", nullable: true },
     state: { type: "text" },
@@ -107,6 +125,8 @@ export const StageRunEntity = new EntitySchema<StageRunRow & { task?: TaskRow }>
     attempt: { type: "integer" },
     status: { type: "text" },
     outcome: { type: "text", nullable: true },
+    costUsd: { name: "cost_usd", type: "numeric", nullable: true },
+    turns: { type: "integer", nullable: true },
     containerId: { name: "container_id", type: "text", nullable: true },
     inputCommit: { name: "input_commit", type: "text", nullable: true },
     outputCommit: { name: "output_commit", type: "text", nullable: true },
@@ -151,4 +171,29 @@ export const ApprovalEntity = new EntitySchema<ApprovalRow & { task?: TaskRow }>
   indices: [{ columns: ["taskId"] }],
 });
 
-export const ENTITIES = [TaskEntity, StageRunEntity, EventEntity, ApprovalEntity];
+export const ArtifactEntity = new EntitySchema<ArtifactRow & { task?: TaskRow; stageRun?: StageRunRow }>({
+  name: "Artifact",
+  tableName: "artifacts",
+  columns: {
+    id: { type: "uuid", primary: true, generated: "uuid" },
+    stageRunId: { name: "stage_run_id", type: "uuid" },
+    taskId: { name: "task_id", type: "uuid" },
+    kind: { type: "text" },
+    path: { type: "text" },
+    label: { type: "text", default: "" },
+    sha256: { type: "text", default: "" },
+    createdAt: { name: "created_at", type: "timestamptz", createDate: true },
+  },
+  relations: {
+    task: taskRelation,
+    stageRun: {
+      type: "many-to-one",
+      target: "StageRun",
+      joinColumn: { name: "stage_run_id" },
+      onDelete: "CASCADE",
+    },
+  },
+  indices: [{ columns: ["taskId"] }],
+});
+
+export const ENTITIES = [TaskEntity, StageRunEntity, EventEntity, ApprovalEntity, ArtifactEntity];

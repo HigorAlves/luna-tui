@@ -3,14 +3,14 @@
 import { z } from "zod";
 
 import type { Column, TaskState } from "./index.ts";
-
-export const StageOutcome = z.enum(["pass", "fail", "needs_input", "test_change"]);
+import { type ArtifactKind, StageOutcome, TaskSource } from "./stage.ts";
 
 export const NewTaskInput = z.object({
   title: z.string().trim().min(1),
   description: z.string().optional(),
   criteria: z.array(z.string().trim().min(1)).optional(),
   repoPath: z.string().nullable().optional(),
+  source: TaskSource.nullable().optional(),
 });
 export type NewTaskInput = z.infer<typeof NewTaskInput>;
 
@@ -20,6 +20,7 @@ export const UpdateTaskInput = z.object({
   description: z.string().optional(),
   criteria: z.array(z.string().trim().min(1)).optional(),
   repoPath: z.string().nullable().optional(),
+  source: TaskSource.nullable().optional(),
 });
 export type UpdateTaskInput = z.infer<typeof UpdateTaskInput>;
 
@@ -63,6 +64,8 @@ export interface Task {
   description: string;
   criteria: string[];
   repoPath: string | null;
+  /** The tracker item this task came from, if any. */
+  source: TaskSource | null;
   branch: string | null;
   worktreePath: string | null;
   state: TaskState;
@@ -86,8 +89,22 @@ export interface StageRun {
   attempt: number;
   status: "running" | "passed" | "failed" | "paused" | "aborted";
   outcome: string | null;
+  /** Null until a stage run reports usage. */
+  costUsd: number | null;
+  turns: number | null;
   startedAt: string;
   endedAt: string | null;
+}
+
+/** A file a stage run produced, e.g. a screenshot or the QA manifest. */
+export interface Artifact {
+  id: string;
+  stageRunId: string;
+  kind: ArtifactKind;
+  path: string;
+  label: string;
+  sha256: string;
+  createdAt: string;
 }
 
 export interface Approval {
@@ -115,6 +132,7 @@ export interface TaskDetail {
   stageRuns: StageRun[];
   approvals: Approval[];
   events: TaskEvent[];
+  artifacts: Artifact[];
 }
 
 /**

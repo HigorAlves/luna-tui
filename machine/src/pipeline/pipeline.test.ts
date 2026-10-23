@@ -51,6 +51,16 @@ describe("creating and starting", () => {
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toEqual(["task.created"]);
   });
 
+  it("keeps the tracker source and starts with no artifacts", async () => {
+    const source = { kind: "github", repo: "owner/name", number: 42, url: "https://github.com/owner/name/issues/42" } as const;
+    const task = await pipeline.createTask({ title: "Login page", source });
+    expect(task.source).toEqual(source);
+    expect(await pipeline.artifacts(task.id)).toEqual([]);
+
+    const cleared = await pipeline.update(task.id, { source: null });
+    expect(cleared.source).toBeNull();
+  });
+
   it("moves a backlog task to intake on start, without running a stage", async () => {
     const task = await pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
     const started = await pipeline.start(task.id);

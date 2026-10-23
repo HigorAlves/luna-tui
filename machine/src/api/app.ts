@@ -18,7 +18,7 @@ import type { Watcher } from "../herdr/watch.ts";
 import { type Pipeline, TaskBusyError, TaskNotFoundError } from "../pipeline/pipeline.ts";
 import type { StubStages } from "../stages/stubs.ts";
 import type { Bus } from "./bus.ts";
-import { toApproval, toEvent, toStageRun, toTask } from "./serialize.ts";
+import { toApproval, toArtifact, toEvent, toStageRun, toTask } from "./serialize.ts";
 
 const PING_EVERY_MS = 15_000;
 /** Activity entries returned with one task. */
@@ -79,17 +79,19 @@ export function createApp({ pipeline, bus, watcher, stubs }: AppDeps): Hono {
 
   app.get("/tasks/:id", async (c) => {
     const id = taskId(c);
-    const [task, stageRuns, approvals, events] = await Promise.all([
+    const [task, stageRuns, approvals, events, artifacts] = await Promise.all([
       pipeline.get(id),
       pipeline.stageRuns(id),
       pipeline.approvals(id),
       pipeline.events(id),
+      pipeline.artifacts(id),
     ]);
     return c.json({
       task: toTask(task),
       stageRuns: stageRuns.map(toStageRun),
       approvals: approvals.map(toApproval),
       events: events.slice(-RECENT_EVENTS).map(toEvent),
+      artifacts: artifacts.map(toArtifact),
     });
   });
 

@@ -2,12 +2,14 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { RUNNING, type TaskState } from "@hardness/contracts";
+import { RUNNING, type TaskSource, type TaskState } from "@hardness/contracts";
 import { type DataSource, type EntityManager, In, IsNull } from "typeorm";
 
 import {
   ApprovalEntity,
   type ApprovalRow,
+  ArtifactEntity,
+  type ArtifactRow,
   type Decision,
   EventEntity,
   type EventRow,
@@ -41,6 +43,7 @@ export interface NewTask {
   description?: string;
   criteria?: string[];
   repoPath?: string | null;
+  source?: TaskSource | null;
 }
 
 export interface PipelineOptions {
@@ -92,6 +95,7 @@ export class Pipeline {
       description: input.description ?? "",
       criteria: input.criteria ?? [],
       repoPath: input.repoPath ?? null,
+      source: input.source ?? null,
       branch: null,
       worktreePath: null,
       state: "backlog",
@@ -116,7 +120,9 @@ export class Pipeline {
   /** Edits the ticket's text. Stages started after this see the new text. */
   async update(
     id: string,
-    patch: { title?: string; description?: string; criteria?: string[]; repoPath?: string | null },
+    patch: { title?: string; description?: string; criteria?: string[]; repoPath?: string | null;
+      source?: TaskSource | null;
+    },
   ): Promise<TaskRow> {
     await this.get(id);
     const changes = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
@@ -232,6 +238,12 @@ export class Pipeline {
   approvals(id: string): Promise<ApprovalRow[]> {
     return this.db
       .getRepository(ApprovalEntity)
+      .find({ where: { taskId: id }, order: { createdAt: "ASC" } });
+  }
+
+  artifacts(id: string): Promise<ArtifactRow[]> {
+    return this.db
+      .getRepository(ArtifactEntity)
       .find({ where: { taskId: id }, order: { createdAt: "ASC" } });
   }
 
