@@ -22,6 +22,7 @@ import { ciWatchRunner } from "./stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "./stages/e2e.ts";
 import { evidenceRunner } from "./stages/evidence.ts";
 import { realDeliverRunner } from "./stages/deliver.ts";
+import { memoryReviewRunner, withMemoryReview } from "./stages/memory.ts";
 import { shipRunner } from "./stages/ship.ts";
 import { StubStages } from "./stages/stubs.ts";
 import { verifyRunner } from "./stages/verify.ts";
@@ -80,6 +81,15 @@ async function realStages(): Promise<Partial<Record<TaskState, StageRunner>>> {
       stateDir: config.stateDir,
       latestE2e: (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
     }),
+    // The memory-review gate has no stage of its own: the retro pack runs after shipping and its
+    // proposal rides on the gate; approving applies it at close.
+    shipping: withMemoryReview(
+      shipRunner,
+      memoryReviewRunner({
+        runPack: (context) => runAgent(deps, context, "reviewing_memory"),
+        stateDir: config.stateDir,
+      }),
+    ),
     // Verifying runs the project's checks on the host first, then the review pack.
     verifying: verifyRunner({
       exec,
@@ -95,7 +105,7 @@ const runnerFor = (stage: TaskState): StageRunner =>
   stage === "delivering"
     ? realDeliverRunner
     : stage === "shipping"
-      ? shipRunner
+      ? real.shipping ?? shipRunner
       : real[stage] ?? stubs.runnerFor(stage);
 
 const METRICS_DEBOUNCE_MS = 2_000;

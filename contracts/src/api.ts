@@ -28,6 +28,8 @@ export const DecisionInput = z.object({
   decision: z.enum(["approved", "sent_back"]),
   // Clients may send `null` for "no reason" rather than omitting the field.
   reason: z.string().nullable().optional(),
+  /** At the memory review gate: false approves without writing the proposed rules. */
+  applyRules: z.boolean().optional(),
 });
 export type DecisionInput = z.infer<typeof DecisionInput>;
 

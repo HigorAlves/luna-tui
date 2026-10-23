@@ -60,7 +60,7 @@ pub const ACTIONS: [(char, &str); 10] = [
 ];
 
 /// Keys shown in the help overlay, as (keys, what they do).
-pub const HELP: [(&str, &str); 23] = [
+pub const HELP: [(&str, &str); 24] = [
     ("h / l", "previous / next column"),
     ("j / k", "previous / next ticket"),
     ("enter", "open details"),
@@ -69,6 +69,7 @@ pub const HELP: [(&str, &str); 23] = [
     ("R", "search for its repo under HARDNESS_REPOS_DIR / ~/Developer"),
     ("a", "advance: move to intake, start, approve, answer, add guidance, resume"),
     ("S", "ship: approve the Ship gate and open the PR (same as a there)"),
+    ("A", "memory review: approve without applying the proposed rules"),
     ("r", "send the plan or tests back, with a reason"),
     ("X", "abort the running stage (asks first)"),
     ("w", "kill its worktree once you are done with it (asks first)"),
@@ -553,6 +554,13 @@ impl App {
         };
         match key {
             'a' => return self.advance(id),
+            'A' => {
+                if task.state == "reviewing_memory" {
+                    self.act(|m| m.approve_skipping_rules(id), "approved, rules skipped");
+                } else {
+                    self.notify("no memory review waiting on this ticket", false);
+                }
+            }
             'S' => {
                 if task.state == "awaiting_ship" {
                     return self.advance(id);

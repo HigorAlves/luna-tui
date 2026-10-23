@@ -134,8 +134,9 @@ export function createApp({ pipeline, bus, watcher, stubs }: AppDeps): Hono {
   /** Approves or sends back whatever the task is waiting on, including an escalation. */
   app.post("/tasks/:id/decision", async (c) => {
     const id = taskId(c);
-    const { decision, reason } = await body(c, DecisionInput);
-    return c.json(toTask(await pipeline.decide(id, decision, reason ?? undefined)));
+    const { decision, reason, applyRules } = await body(c, DecisionInput);
+    const response = applyRules === undefined ? undefined : { applyRules };
+    return c.json(toTask(await pipeline.decide(id, decision, reason ?? undefined, response)));
   });
 
   app.post("/tasks/:id/abort", async (c) => c.json(toTask(await pipeline.abort(taskId(c)))));

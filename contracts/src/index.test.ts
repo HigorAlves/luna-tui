@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { DecisionInput } from "./api.ts";
 import { COLUMNS, COLUMN_OF, RUNNING, TaskState, WAITING_ON_USER } from "./index.ts";
 
 describe("task states", () => {
@@ -29,5 +30,18 @@ describe("task states", () => {
 
   it("rejects unknown states", () => {
     expect(TaskState.safeParse("done").success).toBe(false);
+  });
+});
+
+describe("decision input", () => {
+  it("accepts applyRules and keeps it", () => {
+    expect(DecisionInput.parse({ decision: "approved", applyRules: false, reason: "rules skipped" })).toEqual({
+      decision: "approved",
+      applyRules: false,
+      reason: "rules skipped",
+    });
+  });
+  it("leaves applyRules optional", () => {
+    expect(DecisionInput.parse({ decision: "approved" })).toEqual({ decision: "approved" });
   });
 });

@@ -484,6 +484,30 @@ fn evidence_lines(value: &Value) -> Vec<String> {
     lines
 }
 
+/// Counts, calibration and the proposed rules text from `requested.rules`, at most 12 lines of
+/// it, each cut to `width` columns. Empty when the review proposed nothing.
+fn rules_lines(value: &Value, width: usize) -> Vec<String> {
+    let Some(markdown) = value["markdown"].as_str().filter(|m| !m.trim().is_empty()) else {
+        return Vec::new();
+    };
+    const MAX: usize = 12;
+    let mut counts = format!(
+        "{} incident(s) · {} pattern(s)",
+        value["incidents"].as_u64().unwrap_or(0),
+        value["patterns"].as_u64().unwrap_or(0)
+    );
+    if let Some(bias) = value["calibration"]["estLocBias"].as_f64() {
+        counts.push_str(&format!(" · estLocBias {bias}"));
+    }
+    let text: Vec<&str> = markdown.lines().filter(|l| !l.trim().is_empty()).collect();
+    let mut lines = vec![counts];
+    lines.extend(text.iter().take(MAX).map(|l| l.chars().take(width).collect::<String>()));
+    if text.len() > MAX {
+        lines.push(format!("… +{} more", text.len() - MAX));
+    }
+    lines
+}
+
 /// Assumptions, the proposed slices and the test files an open gate asks you to judge.
 fn push_proposal_sections(lines: &mut Vec<Line<'static>>, requested: &Value) {
     let heading = |text: &str| Line::from(Span::from(text.to_string()).fg(c(PEACH)).bold());
@@ -564,6 +588,11 @@ fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&Tas
         if !evidence.is_empty() {
             lines.extend([Line::default(), proposal_heading("Evidence".into())]);
             lines.extend(bullets(&evidence));
+        }
+        let rules = rules_lines(&requested["rules"], usize::from(area.width).saturating_sub(8).max(20));
+        if !rules.is_empty() {
+            lines.extend([Line::default(), proposal_heading("Proposed rules (a applies, A skips)".into())]);
+            lines.extend(rules.iter().map(|l| Line::from(format!("  {l}"))));
         }
         let questions = questions_of(approval);
         if !questions.is_empty() {
@@ -1035,6 +1064,20 @@ mod tests {
         let one: Value = serde_json::json!({"verdict":"skipped","artifactCount":1});
         assert_eq!(evidence_lines(&one), ["verdict: skipped", "1 artifact"]);
         assert!(evidence_lines(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn rules_lines_show_counts_bias_and_truncate_to_twelve() {
+        let md: String = (1..=15).map(|i| format!("- rule {i} {}\n", "x".repeat(40))).collect();
+        let v: Value = serde_json::json!({"markdown": md, "incidents": 2, "patterns": 1,
+            "calibration": {"estLocBias": 1.4}});
+        let lines = rules_lines(&v, 20);
+        assert_eq!(lines[0], "2 incident(s) · 1 pattern(s) · estLocBias 1.4");
+        assert_eq!(lines.len(), 1 + 12 + 1);
+        assert_eq!(lines[1].chars().count(), 20);
+        assert_eq!(lines[13], "… +3 more");
+        assert!(rules_lines(&Value::Null, 20).is_empty());
+        assert!(rules_lines(&serde_json::json!({"markdown": "  \n"}), 20).is_empty());
     }
 
     #[test]

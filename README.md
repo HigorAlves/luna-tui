@@ -16,7 +16,7 @@ Every ticket moves through these stages, from Intake (not ready yet) to Done:
 5. **E2E and Evidence**: for a repo with a web surface, a QA agent drives the app in a browser (the `runner-qa` image) and writes a manifest, screenshots and video; repos with none skip with a recorded reason. Evidence then checks the manifest on the host and shows its verdict, artifact count and a few screenshot paths in the ship approval.
 6. **Deliver**: pushes the branch and opens a draft PR with `gh`, so CI starts early. Its body follows orc's caveman-pr shape and adds `Closes #N` when the ticket came from a GitHub issue in the same repo.
 7. **CI watch**: polls the PR's checks until they settle. A red run goes to the `ci_watch` pack: a fixable failure loops back to Build with its findings, a flake is re-run once, and infra or needs-debug failures escalate.
-8. **Ship**: marks the draft PR ready for review (it opens a ready PR only if Deliver never did), then you review before closing it.
+8. **Ship**: marks the draft PR ready for review (it opens a ready PR only if Deliver never did), then you review before closing it. After a passing Ship, a read-only memory review (orc's retro pack) looks at `.orc/` and `git log` and proposes rules for `docs/agents/project-context.md`; the last gate shows them, `a` commits them to the task branch (refused above 150 lines / 6 KB, pushed only if the branch has an upstream) and `A` skips them.
 
 Triage and Build run orc packs (see Factory mode) when a credential and the
 runner image are available. Deliver and Ship run for real too — they are plain host commands

@@ -114,3 +114,74 @@ describe("closeTask", () => {
     expect(second.worktreeRemoved).toBe(true);
   });
 });
+
+describe("closeTask rules step", () => {
+  const rules = { markdown: "- Run pnpm verify before any commit.\n", apply: true };
+
+  function recordingExec(upstream = true) {
+    const calls: string[][] = [];
+    const exec: CloseDeps["exec"] = async (command, args) => {
+      calls.push([command, ...args]);
+      if (args.includes("rev-parse") && !upstream) return { code: 128, stdout: "", stderr: "no upstream" };
+      return { code: 0, stdout: "origin/b\n", stderr: "" };
+    };
+    return { calls, exec };
+  }
+
+  it("writes project-context.md from the skeleton, commits it and pushes when there is an upstream", async () => {
+    const { readFileSync } = await import("node:fs");
+    const path = worktree(false);
+    const { calls, exec } = recordingExec();
+    const report = await closeTask({ ...task(path), rules }, { exec, worktreeRemove: false, orcStateBin: null });
+
+    const body = readFileSync(join(path, "docs/agents/project-context.md"), "utf8");
+    expect(body).toContain("## Critical rules");
+    expect(body).toContain("- Run pnpm verify before any commit.");
+    expect(report.steps.map((s) => s.step)).toEqual(["rules", "orc-state", "watch-tab", "worktree"]);
+    expect(report.steps[0]).toMatchObject({ step: "rules", ok: true });
+    const flat = calls.map((c) => c.join(" "));
+    expect(flat.some((c) => c.includes("add docs/agents/project-context.md"))).toBe(true);
+    expect(flat.some((c) => c.includes("commit.gpgsign=false") && c.includes("docs(context): rules from the memory review"))).toBe(true);
+    expect(flat.some((c) => c.endsWith("push"))).toBe(true);
+  });
+
+  it("does not push without an upstream", async () => {
+    const { calls, exec } = recordingExec(false);
+    await closeTask({ ...task(worktree(false)), rules }, { exec, worktreeRemove: false, orcStateBin: null });
+    expect(calls.some((c) => c.includes("push"))).toBe(false);
+  });
+
+  it("refuses when the result would exceed the cap and writes nothing", async () => {
+    const { existsSync } = await import("node:fs");
+    const path = worktree(false);
+    const { calls, exec } = recordingExec();
+    const big = { markdown: Array.from({ length: 200 }, (_, i) => `- rule ${i}`).join("\n"), apply: true };
+    const report = await closeTask({ ...task(path), rules: big }, { exec, worktreeRemove: false, orcStateBin: null });
+
+    expect(report.steps[0]).toMatchObject({ step: "rules", ok: false, note: expect.stringMatching(/^cap exceeded: \d+\/\d+/) });
+    expect(existsSync(join(path, "docs/agents/project-context.md"))).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it("skips the step when applyRules is false", async () => {
+    const { calls, exec } = recordingExec();
+    const report = await closeTask(
+      { ...task(worktree(false)), rules: { ...rules, apply: false } },
+      { exec, worktreeRemove: false, orcStateBin: null },
+    );
+    expect(report.steps[0]).toMatchObject({ step: "rules", ok: true, note: expect.stringMatching(/^skipped/) });
+    expect(calls).toEqual([]);
+  });
+
+  it("appends under Critical rules in an existing file", async () => {
+    const { mkdirSync, readFileSync, writeFileSync } = await import("node:fs");
+    const path = worktree(false);
+    mkdirSync(join(path, "docs/agents"), { recursive: true });
+    writeFileSync(join(path, "docs/agents/project-context.md"), "# Project context\n\n## Critical rules\n\n- Old.\n\n## Conventions\n\n- Keep.\n");
+    const { exec } = recordingExec();
+    await closeTask({ ...task(path), rules }, { exec, worktreeRemove: false, orcStateBin: null });
+    const body = readFileSync(join(path, "docs/agents/project-context.md"), "utf8");
+    expect(body.indexOf("- Run pnpm verify")).toBeGreaterThan(body.indexOf("- Old."));
+    expect(body.indexOf("- Run pnpm verify")).toBeLessThan(body.indexOf("## Conventions"));
+  });
+});

@@ -132,6 +132,14 @@ impl Machine {
         )
     }
 
+    /// Approves the memory review without writing its proposed rules to project-context.md.
+    pub fn approve_skipping_rules(&self, id: &str) -> Result<Task, String> {
+        self.post(
+            &format!("/tasks/{id}/decision"),
+            json!({ "decision": "approved", "applyRules": false, "reason": "rules skipped" }),
+        )
+    }
+
     pub fn answer(&self, id: &str, answers: &[(String, String)]) -> Result<Task, String> {
         let answers: serde_json::Map<String, Value> = answers
             .iter()

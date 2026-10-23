@@ -196,10 +196,15 @@ export class Pipeline {
   }
 
   /** Approves or sends back whatever the task is waiting on, including an escalation. */
-  decide(id: string, decision: "approved" | "sent_back", reason?: string): Promise<TaskRow> {
+  decide(
+    id: string,
+    decision: "approved" | "sent_back",
+    reason?: string,
+    response?: Record<string, unknown>,
+  ): Promise<TaskRow> {
     const event: PipelineEvent =
       decision === "approved" ? { type: "approved" } : { type: "sent_back" };
-    return this.dispatch(id, event, { decision: { decision, reason } });
+    return this.dispatch(id, event, { decision: { decision, reason, ...(response ? { response } : {}) } });
   }
 
   /** Stops the running (or merely queued) stage and waits for you. */
@@ -290,11 +295,20 @@ export class Pipeline {
     return this.get(id);
   }
 
+  /** The memory review's proposal and whether the approval kept it, if the gate carried one. */
+  private async approvedRules(id: string): Promise<{ markdown: string; apply: boolean } | undefined> {
+    const gate = (await this.approvals(id)).filter((a) => a.kind === "reviewing_memory" && a.decision === "approved").at(-1);
+    const rules = (gate?.requested as { rules?: { markdown?: unknown } } | undefined)?.rules;
+    if (!gate || typeof rules?.markdown !== "string" || rules.markdown.trim() === "") return undefined;
+    return { markdown: rules.markdown, apply: gate.response?.applyRules !== false };
+  }
+
   /** Runs the host-side close step for a task that just closed and logs what it did. Never throws. */
   private async close(id: string): Promise<void> {
     if (!this.closeDeps) return;
     try {
-      const report = await closeTask(await this.get(id), this.closeDeps);
+      const task = await this.get(id);
+      const report = await closeTask({ ...task, rules: await this.approvedRules(id) }, this.closeDeps);
       if (report.worktreeRemoved) {
         await this.db.getRepository(TaskEntity).update({ id }, { worktreePath: null });
       }

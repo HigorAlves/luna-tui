@@ -162,6 +162,44 @@ describe("closing", () => {
   });
 });
 
+describe("memory review decision", () => {
+  const closing = () =>
+    new Pipeline(db, stubs.runnerFor, {
+      inline: true,
+      closeDeps: { exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreeRemove: false, orcStateBin: null },
+    });
+
+  async function toMemoryGate(p: Pipeline) {
+    // reviewing_memory is a gate; the retro runs inside shipping and its rules ride on the gate.
+    stubs.plan("shipping", { outcome: "pass", detail: { rules: { markdown: "- r\n" } } });
+    const created = await p.createTask({ title: "Login page", criteria: ["x"] });
+    await p.start(created.id);
+    await p.start(created.id);
+    for (let i = 0; i < 3; i++) await p.decide(created.id, "approved");
+    return created.id;
+  }
+
+  it("stores applyRules and the reason on the approval and skips the rules step", async () => {
+    const p = closing();
+    const id = await toMemoryGate(p);
+    await p.decide(id, "approved", "rules skipped", { applyRules: false });
+
+    const gate = (await p.approvals(id)).find((a) => a.kind === "reviewing_memory");
+    expect(gate).toMatchObject({ decision: "approved", reason: "rules skipped", response: { applyRules: false } });
+    const event = (await p.events(id)).find((e) => e.kind === "task.closed");
+    const steps = (event?.payload as unknown as CloseReport).steps;
+    expect(steps[0]).toMatchObject({ step: "rules", note: expect.stringMatching(/^skipped/) });
+  });
+
+  it("offers the rules step by default when the gate carries rules", async () => {
+    const p = closing();
+    const id = await toMemoryGate(p);
+    await p.decide(id, "approved");
+    const event = (await p.events(id)).find((e) => e.kind === "task.closed");
+    expect((event?.payload as unknown as CloseReport).steps.map((s) => s.step)[0]).toBe("rules");
+  });
+});
+
 describe("gates", () => {
   it("asks triage's questions and re-runs triage with your answers", async () => {
     stubs.plan("triage", {
