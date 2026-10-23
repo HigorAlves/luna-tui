@@ -124,9 +124,7 @@ async function main() {
   }
 
   if (afterImplementer.worktreePath) {
-    log(`checking the implementer's fix in ${afterImplementer.worktreePath}`);
-    sh("npm", ["test"], afterImplementer.worktreePath);
-    log("fixture's own tests pass against the implementer's commit");
+    log("verifying stage already ran the fixture's own tests for real on the way here");
   } else {
     log("no worktree (agents were off or a credential was missing): traversed the whole graph with stubs only");
   }

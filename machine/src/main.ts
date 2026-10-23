@@ -17,6 +17,7 @@ import { agentRunners } from "./stages/agents.ts";
 import type { StageRunner } from "./stages/runner.ts";
 import { shipRunner } from "./stages/ship.ts";
 import { StubStages } from "./stages/stubs.ts";
+import { verifyRunner } from "./stages/verify.ts";
 
 const config = loadConfig();
 const db = createDataSource(config.databaseUrl);
@@ -57,9 +58,10 @@ async function realStages(): Promise<Partial<Record<TaskState, StageRunner>>> {
 }
 
 const real = await realStages();
-/** Shipping needs only git and gh, not a Claude credential, so it always runs for real. */
+/** Shipping and verifying need only git/the repo's own tooling, not a Claude credential,
+ *  so they always run for real. */
 const runnerFor = (stage: TaskState): StageRunner =>
-  stage === "shipping" ? shipRunner : real[stage] ?? stubs.runnerFor(stage);
+  stage === "shipping" ? shipRunner : stage === "verifying" ? verifyRunner : real[stage] ?? stubs.runnerFor(stage);
 
 /** Streams each logged event, plus the whole task whenever its state may have changed. */
 function publish(event: EventRow): void {
@@ -81,7 +83,7 @@ if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by
 
 const app = createApp({ pipeline, bus, watcher, stubs });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: "127.0.0.1" }, (info) => {
-  const agents = [...Object.keys(real), "shipping"];
+  const agents = [...Object.keys(real), "shipping", "verifying"];
   console.log(
     `machine listening on http://127.0.0.1:${info.port} · real stages: ${agents.join(", ")} · up to ${config.maxConcurrentTasks} task(s) at once`,
   );
