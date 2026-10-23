@@ -1,0 +1,30 @@
+{
+  "name": "@hardness/machine",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "db:migrate": "tsx node_modules/typeorm/cli.js migration:run -d src/db/data-source.ts",
+    "db:revert": "tsx node_modules/typeorm/cli.js migration:revert -d src/db/data-source.ts",
+    "db:generate": "tsx node_modules/typeorm/cli.js migration:generate -d src/db/data-source.ts",
+    "runner:build": "docker build -t hardness-runner:dev runner",
+    "golden": "node scripts/golden-task.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/pg": "^8.23.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  },
+  "dependencies": {
+    "@hardness/contracts": "workspace:*",
+    "@hono/node-server": "^2.1.5",
+    "hono": "^4.13.13",
+    "pg": "^8.23.1",
+    "typeorm": "^1.1.2",
+    "zod": "^4.6.7"
+  }
+}

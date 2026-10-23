@@ -1,0 +1,5 @@
+packages:
+  - machine
+  - contracts
+allowBuilds:
+  esbuild: true

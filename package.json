@@ -1,0 +1,18 @@
+{
+  "name": "hardness",
+  "private": true,
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @hardness/machine dev",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "db:up": "docker compose -f compose.dev.yml up -d --wait",
+    "db:down": "docker compose -f compose.dev.yml down",
+    "board:build": "cargo build --release --manifest-path board/Cargo.toml",
+    "board:test": "cargo test --manifest-path board/Cargo.toml",
+    "golden": "pnpm --filter @hardness/machine golden"
+  }
+}

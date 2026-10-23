@@ -1,0 +1,8 @@
+{
+  "name": "spike-agent-sdk",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.309"
+  }
+}

@@ -1,0 +1,122 @@
+// Runs one stage in a fresh container and deletes it afterwards. The worktree is mounted at
+// /work (read-only for read-only stages), the stage input at /in, and results come back in /out.
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+
+import type { Credential } from "./credentials.ts";
+import { exec, execOrThrow } from "./exec.ts";
+
+/** Label on every stage container, so leftovers can be found and removed. */
+export const CONTAINER_LABEL = "dev.hardness.stage";
+
+export interface RunnerOutput {
+  ok: boolean;
+  structured: unknown;
+  result: string | null;
+  error: string | null;
+  rateLimited: boolean;
+  /** Unix seconds when the usage window resets. */
+  resetsAt: number | null;
+  turns: number;
+  costUsd: number | null;
+  durationMs: number | null;
+}
+
+export interface SandboxRun {
+  name: string;
+  image: string;
+  /** Folder for this run's input, output and transcript. */
+  runDir: string;
+  worktree: string;
+  writable: boolean;
+  /** The repo's git dir, mounted read-only at the same path so git works inside. */
+  gitDir: string | null;
+  input: Record<string, unknown>;
+  timeoutMs: number;
+  credential: Credential;
+  labels: Record<string, string>;
+  signal?: AbortSignal;
+  /** Called once the container is running, e.g. to open a watch pane. */
+  onStarted?: (container: string) => void;
+}
+
+export interface SandboxResult {
+  output: RunnerOutput | null;
+  exitCode: number | null;
+  timedOut: boolean;
+  aborted: boolean;
+  transcriptPath: string;
+}
+
+export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
+  const inDir = join(run.runDir, "in");
+  const outDir = join(run.runDir, "out");
+  await mkdir(inDir, { recursive: true });
+  await mkdir(outDir, { recursive: true });
+  await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
+
+  const args = ["run", "-d", "--name", run.name, "--label", `${CONTAINER_LABEL}=1`];
+  for (const [key, value] of Object.entries(run.labels)) args.push("--label", `${key}=${value}`);
+  args.push(
+    // The credential is passed by name; its value is only in docker's environment.
+    "-e", run.credential.name,
+    // The worktree is owned by the host user, not the container's.
+    "-e", "GIT_CONFIG_COUNT=1",
+    "-e", "GIT_CONFIG_KEY_0=safe.directory",
+    "-e", "GIT_CONFIG_VALUE_0=*",
+    "-v", `${run.worktree}:/work${run.writable ? "" : ":ro"}`,
+    "-v", `${inDir}:/in:ro`,
+    "-v", `${outDir}:/out`,
+  );
+  if (run.gitDir) args.push("-v", `${run.gitDir}:${run.gitDir}:ro`);
+  args.push(run.image);
+
+  await execOrThrow("docker", args, {
+    env: { ...process.env, [run.credential.name]: run.credential.value },
+  });
+  run.onStarted?.(run.name);
+
+  let timedOut = false;
+  let aborted = false;
+  const kill = () => void exec("docker", ["kill", run.name]);
+  const timer = setTimeout(() => {
+    timedOut = true;
+    kill();
+  }, run.timeoutMs);
+  const onAbort = () => {
+    aborted = true;
+    kill();
+  };
+  run.signal?.addEventListener("abort", onAbort, { once: true });
+  if (run.signal?.aborted) onAbort();
+
+  const waited = await exec("docker", ["wait", run.name]);
+  clearTimeout(timer);
+  run.signal?.removeEventListener("abort", onAbort);
+
+  const transcriptPath = join(run.runDir, "transcript.log");
+  const logs = await exec("docker", ["logs", run.name]);
+  await writeFile(transcriptPath, logs.stdout + logs.stderr);
+  await exec("docker", ["rm", "-f", run.name]);
+
+  let output: RunnerOutput | null = null;
+  try {
+    output = JSON.parse(await readFile(join(outDir, "result.json"), "utf8")) as RunnerOutput;
+  } catch {
+    output = null;
+  }
+  const exitCode = waited.code === 0 ? Number(waited.stdout.trim()) : null;
+  return { output, exitCode, timedOut, aborted, transcriptPath };
+}
+
+/** Removes stage containers left behind by a machine that stopped mid-stage. */
+export async function removeLeftoverContainers(): Promise<number> {
+  const listed = await exec("docker", ["ps", "-aq", "--filter", `label=${CONTAINER_LABEL}=1`]);
+  const ids = listed.stdout.split("\n").filter(Boolean);
+  if (ids.length > 0) await exec("docker", ["rm", "-f", ...ids]);
+  return ids.length;
+}
+
+export async function imageExists(image: string): Promise<boolean> {
+  return (await exec("docker", ["image", "inspect", image])).code === 0;
+}

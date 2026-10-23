@@ -1,0 +1,21 @@
+# Rust
+/board/target
+
+# Node
+node_modules/
+dist/
+
+# Local settings and secrets
+.env
+.env.*
+!.env.example
+
+# Board state when run standalone
+.board.json
+board.json
+events.jsonl
+agents.json
+prompts/
+
+# Spike output
+spikes/*/out/

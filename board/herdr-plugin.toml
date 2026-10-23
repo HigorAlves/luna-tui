@@ -1,0 +1,21 @@
+id = "hardness.board"
+name = "Hardness Board"
+version = "0.1.0"
+min_herdr_version = "0.7.0"
+description = "Lazygit-style board for herdr: Triage, Approved, Build, Verify, Evidence, Publish (POC)"
+platforms = ["linux", "macos"]
+
+[[build]]
+command = ["cargo", "build", "--release"]
+
+[[panes]]
+id = "board"
+title = "Board"
+command = ["target/release/hardness-board"]
+placement = "tab"
+
+[[actions]]
+id = "open"
+title = "Open board"
+contexts = ["workspace"]
+command = ["sh", "-c", "\"$HERDR_BIN_PATH\" plugin pane open --plugin hardness.board --entrypoint board"]
