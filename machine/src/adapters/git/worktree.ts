@@ -84,6 +84,15 @@ export function commonGitDir(repoPath: string): Promise<string> {
   ]);
 }
 
+/** The commit the task branch forked from: the merge base of the worktree's HEAD and the
+ *  repo's own HEAD (which may have moved on since). Null when either side is not a repo. */
+export async function branchBase(worktreePath: string, repoPath: string): Promise<string | null> {
+  const repoHead = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "HEAD"]);
+  if (repoHead.code !== 0) return null;
+  const base = await exec("git", [...HOST_GIT, "-C", worktreePath, "merge-base", "HEAD", repoHead.stdout.trim()]);
+  return base.code === 0 ? base.stdout.trim() || null : null;
+}
+
 export function headCommit(path: string): Promise<string> {
   return execOrThrow("git", [...HOST_GIT, "-C", path, "rev-parse", "HEAD"]);
 }

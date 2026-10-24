@@ -103,6 +103,14 @@ const LegacyTestCase = z.object({
 export const VerifyResult = TestCase.extend({ outcome: z.enum(["pass", "fail"]) });
 export type VerifyResult = z.infer<typeof VerifyResult>;
 
+/** The PR, its checks and the failed run's log tail, as ci_watch receives them. */
+export const CiContext = z.object({
+  pr: z.object({ number: z.number().int(), url: z.string().nullable() }).nullable(),
+  checks: z.array(z.object({ name: z.string(), state: z.string(), url: z.string().nullable() })),
+  logs: z.string().nullable(),
+});
+export type CiContext = z.infer<typeof CiContext>;
+
 /** Schema 2 adds `context.testCases`; schema 3 renames its `test` field to `approach`. */
 export const StageInput = z.object({
   schema: z.union([z.literal(1), z.literal(2), z.literal(3)]),
@@ -138,9 +146,12 @@ export const StageInput = z.object({
   priorFindings: z.array(Finding),
   context: z.object({
     projectContext: z.string().nullable(),
-    tests: z.array(z.string()),
     /** The cases approved at the test check, for implementing and verifying. */
     testCases: z.array(z.union([TestCase, LegacyTestCase])).optional(),
+    /** Where the task branch forked from the repo; verifying diffs against it. */
+    baseCommit: z.string().nullable().optional(),
+    /** For ci_watch: what the host fetched, since the sandbox has no gh credential. */
+    ci: CiContext.nullable().optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),

@@ -153,10 +153,19 @@ describe("agent stages through orc packs", () => {
   });
 
   it("keeps the test cases test_design answered, for the test check", async () => {
-    const cases = [{ title: "rejects a bad password", criterion: "works", test: "a.test.ts > rejects" }];
-    const run = runners(fakeSandbox(output({ answer: { kind: "done", summary: "s", tests: ["a.test.ts"], cases } })));
+    const cases = [{ title: "rejects a bad password", criterion: "works", approach: "run a.test.ts, confirm it rejects" }];
+    const run = runners(fakeSandbox(output({ answer: { kind: "done", summary: "s", cases } })));
     const result = await run.test_design!(context("test_design"));
-    expect(result.detail).toMatchObject({ tests: ["a.test.ts"], cases });
+    expect(result.detail).toMatchObject({ summary: "did it", cases });
+    expect(result.detail).not.toHaveProperty("tests");
+  });
+
+  it("tells the pack where the branch forked, and hands ci_watch what the host fetched", async () => {
+    const ci = { pr: null, checks: [{ name: "lint", state: "FAILURE", url: null }], logs: "boom" };
+    await runAgent(deps(fakeSandbox(output())), context("ci_watch"), "ci_watch", { ci });
+    const input = seen!.input as unknown as StageInput;
+    expect(input.context.ci).toEqual(ci);
+    expect(input.context.baseCommit).toBe(git(repo, "rev-parse", "HEAD"));
   });
 
   it("maps needs_input to summary and questions", async () => {
@@ -340,37 +349,5 @@ describe("agent stages through orc packs", () => {
     );
     const result = await run.triage!(context("triage"));
     expect(result.detail).toEqual({ summary: "did it", questions, answer: { kind: "questions", questions } });
-  });
-
-  it("lists the tests from the answer, the manifest and the test artifacts", async () => {
-    const run = runners(
-      fakeSandbox(
-        output({
-          answer: { kind: "done", tests: ["src/a.test.ts"] },
-          artifacts: [
-            { kind: "test", path: "files/tests/manifest.json", label: "m", sha256: "" },
-            { kind: "test", path: "files/tests/src/c.test.ts", label: "c", sha256: "" },
-          ],
-        }),
-        (r) => {
-          const dir = join(r.runDir, "out", "files", "tests", "src");
-          mkdirSync(dir, { recursive: true });
-          writeFileSync(join(r.runDir, "out", "files", "tests", "manifest.json"), JSON.stringify({ tests: ["src/b.test.ts", "src/a.test.ts"] }));
-          writeFileSync(join(dir, "c.test.ts"), "x");
-        },
-      ),
-    );
-    const result = await run.test_design!(context("test_design"));
-    expect(result.outcome).toBe("pass");
-    expect(result.detail).toMatchObject({
-      summary: "did it",
-      tests: ["src/a.test.ts", "src/b.test.ts", "src/c.test.ts"],
-    });
-  });
-
-  it("falls back to an empty tests list when test_design reports nothing", async () => {
-    const run = runners(fakeSandbox(output()));
-    const result = await run.test_design!(context("test_design"));
-    expect(result.detail).toMatchObject({ tests: [] });
   });
 });

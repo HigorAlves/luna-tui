@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type Finding, type PackId, type StageInput, TestCase, type TaskState } from "@hardness/contracts";
+import { type CiContext, type Finding, type PackId, type StageInput, TestCase, type TaskState } from "@hardness/contracts";
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
 
@@ -39,12 +39,6 @@ export function approvedPlan(approvals: ApprovalRow[]): StageInput["plan"] {
   };
 }
 
-/** The test files the user checked at the last test check, as repo-relative paths. */
-function checkedTests(approvals: ApprovalRow[]): string[] {
-  const approval = approvals.findLast((a) => a.kind === "awaiting_test_check" && a.decision === "approved");
-  return approval ? strings(approval.requested.tests) : [];
-}
-
 /** The test cases approved at the last test check; anything malformed is dropped. */
 function checkedCases(approvals: ApprovalRow[]): TestCase[] {
   const approval = approvals.findLast((a) => a.kind === "awaiting_test_check" && a.decision === "approved");
@@ -59,8 +53,10 @@ export function buildStageInput(opts: {
   approvals: ApprovalRow[];
   priorFindings: Finding[];
   projectContext?: string | null;
-  /** Overrides the test files taken from the test check approval. */
-  tests?: string[];
+  /** Where the task branch forked from the repo; verifying diffs against it. */
+  baseCommit?: string | null;
+  /** For ci_watch: the PR, checks and failed-run log the host fetched. */
+  ci?: CiContext | null;
 }): StageInput {
   const { task, stage, attempt, approvals } = opts;
   const pack = stage as PackId;
@@ -92,8 +88,9 @@ export function buildStageInput(opts: {
     // The container reads docs/agents/project-context.md itself.
     context: {
       projectContext: opts.projectContext ?? null,
-      tests: opts.tests ?? (pack === "implementing" ? checkedTests(approvals) : []),
       testCases: pack === "implementing" || pack === "verifying" ? checkedCases(approvals) : [],
+      baseCommit: opts.baseCommit ?? null,
+      ci: opts.ci ?? null,
     },
     limits: { maxTurns, timeoutMs },
     env: { ORC_FACTORY: "1" },
