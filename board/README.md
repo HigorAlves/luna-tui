@@ -74,7 +74,7 @@ Press `?` in the board for the full list. The main ones:
 ## Tickets
 
 `enter` opens a ticket in a popup over the board: its status, the open gate's
-content (a plan to read, tests to check, the PR once it's shipped), stage
+content (a plan to read, test cases to check, each with the criterion it proves, the PR once it's shipped), stage
 runs and recent activity. `e` edits the same ticket in place, right there in
 the board, as the same markdown `n` fills in for a new one:
 

@@ -472,6 +472,26 @@ fn slice_lines(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// test_design's cases: what each proves (the plan criterion) and the test that does it.
+fn case_lines(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let title = item["title"].as_str()?;
+                    let test = item["test"].as_str().unwrap_or("");
+                    Some(match item["criterion"].as_str() {
+                        Some(criterion) => format!("{title} — proves: {criterion} · {test}"),
+                        None => format!("{title} · {test}"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// "verdict", "N artifacts" and up to three artifact paths from `requested.evidence`.
 fn evidence_lines(value: &Value) -> Vec<String> {
     let Some(verdict) = value["verdict"].as_str() else { return Vec::new() };
@@ -508,13 +528,17 @@ fn rules_lines(value: &Value, width: usize) -> Vec<String> {
     lines
 }
 
-/// Assumptions, the proposed slices and the test files an open gate asks you to judge.
+/// Assumptions, the proposed slices and the test cases (or, without them, the test files)
+/// an open gate asks you to judge.
 fn push_proposal_sections(lines: &mut Vec<Line<'static>>, requested: &Value) {
     let heading = |text: &str| Line::from(Span::from(text.to_string()).fg(c(PEACH)).bold());
+    let cases = case_lines(&requested["cases"]);
+    let tests = if cases.is_empty() { json_list(&requested["tests"]) } else { Vec::new() };
     for (title, items) in [
         ("Assumptions", json_list(&requested["assumptions"])),
         ("Slices", slice_lines(&requested["slices"])),
-        ("Tests", json_list(&requested["tests"])),
+        ("Test cases", cases),
+        ("Tests", tests),
     ] {
         if !items.is_empty() {
             lines.extend([Line::default(), heading(title)]);
@@ -1073,6 +1097,23 @@ mod tests {
         assert_eq!(rows[1][1], "–");
         assert_eq!(rows[1][4], "$0.40");
         assert_eq!(rows[2][2], "1.5m");
+    }
+
+    #[test]
+    fn test_cases_show_what_each_proves_and_its_test() {
+        let v: Value = serde_json::json!([
+            {"title":"rejects a bad password","criterion":"Bad password shows an error","test":"src/a.test.ts > rejects"},
+            {"title":"an edge case","criterion":null,"test":"src/b.test.ts > edge"},
+            {"criterion":"no title"}, "junk"
+        ]);
+        assert_eq!(
+            case_lines(&v),
+            [
+                "rejects a bad password — proves: Bad password shows an error · src/a.test.ts > rejects",
+                "an edge case · src/b.test.ts > edge",
+            ]
+        );
+        assert!(case_lines(&Value::Null).is_empty());
     }
 
     #[test]
