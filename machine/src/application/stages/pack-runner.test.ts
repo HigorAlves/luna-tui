@@ -142,8 +142,8 @@ describe("agent stages through orc packs", () => {
   });
 
   it.each([
-    ["an escalated outcome", { outcome: "escalated" as const }],
-    ["a pass whose answer escalated (orc before the escalated outcome)", { outcome: "pass" as const }],
+    ["an escalated outcome (schema 2)", { schema: 2 as const, outcome: "escalated" as const }],
+    ["a pass whose answer escalated (schema 1, orc before the escalated outcome)", { outcome: "pass" as const }],
   ])("reports %s as escalated, with the agent's reason and options", async (_, over) => {
     const answer = { kind: "escalated", summary: "stopped", reason: "needs a new dependency", options: ["add it", "drop it"] };
     const run = runners(fakeSandbox(output({ ...over, summary: "stopped", answer })));

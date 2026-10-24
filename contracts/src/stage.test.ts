@@ -75,6 +75,13 @@ describe("StageOutput", () => {
     expect(StageOutput.safeParse({ ...stageOutputExample, answer: "text" }).success).toBe(false);
   });
 
+  it("reads schema 2, which adds the escalated outcome, and still reads schema 1", () => {
+    expect(StageOutput.safeParse({ ...stageOutputExample, schema: 2, outcome: "escalated" }).success).toBe(true);
+    expect(StageOutput.safeParse({ ...stageOutputExample, schema: 2 }).success).toBe(true);
+    expect(StageOutput.safeParse({ ...stageOutputExample, schema: 1, outcome: "escalated" }).success).toBe(false);
+    expect(StageOutput.safeParse({ ...stageOutputExample, schema: 3 }).success).toBe(false);
+  });
+
   it("rejects a broken outcome", () => {
     expect(StageOutput.safeParse({ ...stageOutputExample, outcome: "maybe" }).success).toBe(false);
   });

@@ -124,8 +124,9 @@ export const StageInput = z.object({
 });
 export type StageInput = z.infer<typeof StageInput>;
 
+/** Schema 2 adds the `escalated` outcome; orc builds before it still write schema 1. */
 export const StageOutput = z.object({
-  schema: z.literal(1),
+  schema: z.union([z.literal(1), z.literal(2)]),
   ok: z.boolean(),
   outcome: StageOutcome,
   summary: z.string(),
@@ -146,5 +147,8 @@ export const StageOutput = z.object({
   error: z.string().nullable(),
   rateLimited: z.boolean(),
   resetsAt: z.number().nullable(),
+}).refine((output) => output.schema === 2 || output.outcome !== "escalated", {
+  message: "outcome escalated needs schema 2",
+  path: ["outcome"],
 });
 export type StageOutput = z.infer<typeof StageOutput>;
