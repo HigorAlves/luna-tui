@@ -3,37 +3,18 @@
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
 import { type Finding, RUNNING, type TaskSource, type TaskState } from "@hardness/contracts";
-import { type DataSource, type EntityManager, In, IsNull } from "typeorm";
+import type { DataSource } from "typeorm";
 
-import { ApprovalEntity, ArtifactEntity, EventEntity, StageRunEntity, TaskEntity } from "../db/schemas.ts";
-import type {
-  ApprovalRow,
-  ArtifactRow,
-  Decision,
-  EventRow,
-  StageRunRow,
-  StageRunStatus,
-  TaskRow,
-} from "../domain/task.ts";
-import { NO_RETRIES, type PipelineEvent, type Step, transition } from "../engine/transition.ts";
+import type { TaskStore } from "../application/task-store.ts";
+import { PgTaskStore } from "../db/task-store.ts";
+import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
+import { TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+import { type PipelineEvent, type Step, transition } from "../engine/transition.ts";
 import { removeWorktree as removeWorktreeOnDisk } from "../git/worktree.ts";
 import { type CloseDeps, closeTask } from "../stages/close.ts";
 import type { StageResult, StageRunner } from "../stages/runner.ts";
 
-export class TaskNotFoundError extends Error {
-  constructor(id: string) {
-    super(`task ${id} not found`);
-    this.name = "TaskNotFoundError";
-  }
-}
-
-/** The task has a stage running, so it cannot be deleted until you abort it. */
-export class TaskBusyError extends Error {
-  constructor(id: string, state: TaskState) {
-    super(`task ${id} is ${state}; abort it first`);
-    this.name = "TaskBusyError";
-  }
-}
+export { TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 
 export interface NewTask {
   title: string;
@@ -71,6 +52,7 @@ interface Extra {
 const RESUME_MARGIN_MS = 30_000;
 
 export class Pipeline {
+  private readonly store: TaskStore;
   private readonly onEvent: (event: EventRow) => void;
   private readonly inline: boolean;
   private readonly maxConcurrentTasks: number;
@@ -80,10 +62,11 @@ export class Pipeline {
   private readonly resumeTimers = new Map<string, NodeJS.Timeout>();
 
   constructor(
-    private readonly db: DataSource,
+    db: DataSource,
     private readonly runnerFor: (stage: TaskState) => StageRunner,
     options: PipelineOptions = {},
   ) {
+    this.store = new PgTaskStore(db);
     this.onEvent = options.onEvent ?? (() => {});
     this.inline = options.inline ?? false;
     this.maxConcurrentTasks = options.maxConcurrentTasks ?? 4;
@@ -91,18 +74,12 @@ export class Pipeline {
   }
 
   async createTask(input: NewTask): Promise<TaskRow> {
-    const task = await this.db.getRepository(TaskEntity).save({
+    const task = await this.store.createTask({
       title: input.title,
       description: input.description ?? "",
       criteria: input.criteria ?? [],
       repoPath: input.repoPath ?? null,
       source: input.source ?? null,
-      branch: null,
-      worktreePath: null,
-      state: "backlog",
-      retries: { ...NO_RETRIES },
-      resumeTo: null,
-      reason: null,
     });
     await this.log(task.id, "task.created", { title: task.title });
     return this.get(task.id);
@@ -118,23 +95,18 @@ export class Pipeline {
   }
 
   list(): Promise<TaskRow[]> {
-    return this.db.getRepository(TaskEntity).find({ order: { createdAt: "ASC" } });
+    return this.store.listTasks();
   }
 
   async get(id: string): Promise<TaskRow> {
-    const task = await this.db.getRepository(TaskEntity).findOneBy({ id });
+    const task = await this.store.getTask(id);
     if (!task) throw new TaskNotFoundError(id);
     return task;
   }
 
   /** The task created from this external issue, if any. */
-  async findBySource(repo: string, number: number): Promise<TaskRow | null> {
-    return this.db
-      .getRepository(TaskEntity)
-      .createQueryBuilder("task")
-      .where("task.source->>'repo' = :repo", { repo })
-      .andWhere("(task.source->>'number')::int = :number", { number })
-      .getOne();
+  findBySource(repo: string, number: number): Promise<TaskRow | null> {
+    return this.store.findTaskBySource(repo, number);
   }
 
   /** Edits the ticket's text. Stages started after this see the new text. */
@@ -147,7 +119,7 @@ export class Pipeline {
     await this.get(id);
     const changes = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
     if (Object.keys(changes).length > 0) {
-      await this.db.getRepository(TaskEntity).update({ id }, changes);
+      await this.store.updateTask(id, changes);
       await this.log(id, "task.edited", { fields: Object.keys(changes) });
     }
     return this.get(id);
@@ -159,7 +131,7 @@ export class Pipeline {
     if (RUNNING.has(task.state)) throw new TaskBusyError(id, task.state);
     clearTimeout(this.resumeTimers.get(id));
     this.resumeTimers.delete(id);
-    await this.db.getRepository(TaskEntity).delete({ id });
+    await this.store.deleteTask(id);
   }
 
   /** Removes a task's worktree from disk once you are done with it. The task, its branch
@@ -169,7 +141,7 @@ export class Pipeline {
     if (RUNNING.has(task.state)) throw new TaskBusyError(id, task.state);
     if (!task.repoPath || !task.worktreePath) return task;
     await removeWorktreeOnDisk(task.repoPath, task.worktreePath);
-    await this.db.getRepository(TaskEntity).update({ id }, { worktreePath: null });
+    await this.store.updateTask(id, { worktreePath: null });
     await this.log(id, "worktree.removed", { path: task.worktreePath });
     return this.get(id);
   }
@@ -202,7 +174,7 @@ export class Pipeline {
   async abort(id: string): Promise<TaskRow> {
     const task = await this.dispatch(id, { type: "abort" });
     this.loops.get(id)?.abort();
-    await this.db.getRepository(TaskEntity).update({ id }, { queued: false });
+    await this.store.updateTask(id, { queued: false });
     clearTimeout(this.resumeTimers.get(id));
     this.resumeTimers.delete(id);
     return task;
@@ -236,12 +208,8 @@ export class Pipeline {
    * that was merely queued for a free slot lost nothing and is simply rescheduled.
    */
   async recover(): Promise<number> {
-    const stuck = await this.db
-      .getRepository(TaskEntity)
-      .find({ where: { state: In([...RUNNING]) }, order: { updatedAt: "ASC" } });
-    await this.db
-      .getRepository(StageRunEntity)
-      .update({ status: "running" }, { status: "aborted", endedAt: () => "clock_timestamp()" });
+    const stuck = await this.store.findStuckTasks(RUNNING);
+    await this.store.markRunningStageRunsAborted();
     let escalated = 0;
     for (const task of stuck) {
       if (task.queued) {
@@ -255,25 +223,19 @@ export class Pipeline {
   }
 
   stageRuns(id: string): Promise<StageRunRow[]> {
-    return this.db
-      .getRepository(StageRunEntity)
-      .find({ where: { taskId: id }, order: { startedAt: "ASC" } });
+    return this.store.listStageRuns(id);
   }
 
   approvals(id: string): Promise<ApprovalRow[]> {
-    return this.db
-      .getRepository(ApprovalEntity)
-      .find({ where: { taskId: id }, order: { createdAt: "ASC" } });
+    return this.store.listApprovals(id);
   }
 
-  artifacts(id: string): Promise<ArtifactRow[]> {
-    return this.db
-      .getRepository(ArtifactEntity)
-      .find({ where: { taskId: id }, order: { createdAt: "ASC" } });
+  artifacts(id: string): ReturnType<TaskStore["listArtifacts"]> {
+    return this.store.listArtifacts(id);
   }
 
   events(id: string): Promise<EventRow[]> {
-    return this.db.getRepository(EventEntity).find({ where: { taskId: id }, order: { id: "ASC" } });
+    return this.store.listEvents(id);
   }
 
   /** Applies an event and, if it starts a stage, runs it now or queues it for a free slot. */
@@ -301,7 +263,7 @@ export class Pipeline {
       const task = await this.get(id);
       const report = await closeTask({ ...task, rules: await this.approvedRules(id) }, this.closeDeps);
       if (report.worktreeRemoved) {
-        await this.db.getRepository(TaskEntity).update({ id }, { worktreePath: null });
+        await this.store.updateTask(id, { worktreePath: null });
       }
       await this.log(id, "task.closed", { ...report });
     } catch (error) {
@@ -316,7 +278,7 @@ export class Pipeline {
    */
   private async schedule(id: string, stage: TaskState): Promise<void> {
     if (this.loops.size >= this.maxConcurrentTasks) {
-      await this.db.getRepository(TaskEntity).update({ id }, { queued: true });
+      await this.store.updateTask(id, { queued: true });
       return;
     }
     const controller = this.reserveSlot(id);
@@ -326,7 +288,7 @@ export class Pipeline {
       // `queued` flag is guaranteed stored before schedule() returns, per its own contract;
       // otherwise recover() (which schedules a task that still reads queued:true) can race
       // a slot freeing elsewhere and have the same task claimed and driven a second time.
-      await this.db.getRepository(TaskEntity).update({ id }, { queued: false });
+      await this.store.updateTask(id, { queued: false });
     } catch (error) {
       // Release the slot reserved above, or a transient failure on this update leaks it
       // for the rest of the process.
@@ -361,24 +323,7 @@ export class Pipeline {
   private async runAndFillSlot(id: string, stage: TaskState, controller: AbortController): Promise<void> {
     await this.drive(id, stage, controller);
     if (this.loops.size >= this.maxConcurrentTasks) return;
-    // Pick a candidate unlocked, then re-check it under a row lock, so two slots freeing at
-    // once cannot both claim the same queued task.
-    const candidate = await this.db
-      .getRepository(TaskEntity)
-      .findOne({ where: { queued: true }, order: { updatedAt: "ASC" } });
-    if (!candidate) return;
-    const claimed = await this.db.transaction(async (tx) => {
-      const locked = await tx
-        .getRepository(TaskEntity)
-        .createQueryBuilder("task")
-        .where("task.id = :id", { id: candidate.id })
-        .andWhere("task.queued = :queued", { queued: true })
-        .setLock("pessimistic_write")
-        .getOne();
-      if (!locked) return null;
-      await tx.update(TaskEntity, { id: locked.id }, { queued: false });
-      return locked;
-    });
+    const claimed = await this.store.claimOldestQueuedTask();
     if (claimed) {
       const nextController = this.reserveSlot(claimed.id);
       void this.startLoop(claimed.id, claimed.state, nextController);
@@ -435,51 +380,42 @@ export class Pipeline {
   }
 
   private async apply(id: string, event: PipelineEvent, extra: Extra): Promise<Step> {
-    const { step, logged } = await this.db.transaction(async (tx) => {
-      const task = await tx.findOne(TaskEntity, {
-        where: { id },
-        lock: { mode: "pessimistic_write" },
-      });
-      if (!task) throw new TaskNotFoundError(id);
-
+    const { step, logged } = await this.store.withTaskLock(id, async (task, tx) => {
       const step = transition(task, event);
-      await tx.update(
-        TaskEntity,
-        { id },
-        {
-          state: step.state,
-          retries: step.retries,
-          resumeTo: step.resumeTo,
-          reason: step.reason ?? null,
-        },
-      );
+      await tx.updateTask(id, {
+        state: step.state,
+        retries: step.retries,
+        resumeTo: step.resumeTo,
+        reason: step.reason ?? null,
+      });
 
-      const open = extra.decision
-        ? await tx.findOneBy(ApprovalEntity, { taskId: id, decision: IsNull() })
-        : null;
+      const open = extra.decision ? await tx.findOpenApproval(id) : null;
       if (open && extra.decision) {
-        await tx.save(ApprovalEntity, {
-          ...open,
+        await tx.decideApproval(open, {
           decision: extra.decision.decision,
           reason: extra.decision.reason ?? null,
           response: extra.decision.response ?? null,
-          decidedAt: new Date(),
         });
       }
       if (step.effect.kind === "wait") {
-        await tx.insert(ApprovalEntity, {
+        await tx.insertApproval({
           taskId: id,
           kind: step.effect.gate,
           requested: { ...extra.detail, ...(step.reason ? { reason: step.reason } : {}) },
         });
       }
 
-      const logged = await this.record(tx, id, "transition", {
-        event: event.type,
-        ...(event.type === "stage_done" ? { outcome: event.outcome } : {}),
-        from: task.state,
-        to: step.state,
-        ...(step.reason ? { reason: step.reason } : {}),
+      const logged = await tx.recordEvent({
+        taskId: id,
+        kind: "transition",
+        stageRunId: null,
+        payload: {
+          event: event.type,
+          ...(event.type === "stage_done" ? { outcome: event.outcome } : {}),
+          from: task.state,
+          to: step.state,
+          ...(step.reason ? { reason: step.reason } : {}),
+        },
       });
       return { step, logged };
     });
@@ -490,9 +426,7 @@ export class Pipeline {
 
   /** The latest finished run of a stage for a task, with the detail it ended with. */
   async latestStageFinish(id: string, stage: TaskState): Promise<{ runId: string; detail?: Record<string, unknown> } | null> {
-    const finished = await this.db
-      .getRepository(EventEntity)
-      .find({ where: { taskId: id, kind: "stage.finished" }, order: { id: "DESC" } });
+    const finished = await this.store.findFinishedEvents(id);
     const latest = finished.find((event) => event.payload.stage === stage && event.stageRunId);
     if (!latest?.stageRunId) return null;
     const detail = latest.payload.detail;
@@ -505,9 +439,7 @@ export class Pipeline {
   /** The findings the latest verifying, ci_watch or failed implementing run stored on its
    *  `stage.finished` event. */
   private async latestVerifyingFindings(id: string): Promise<Finding[]> {
-    const finished = await this.db
-      .getRepository(EventEntity)
-      .find({ where: { taskId: id, kind: "stage.finished" }, order: { id: "DESC" } });
+    const finished = await this.store.findFinishedEvents(id);
     // Whichever failed last is what the implementer is being re-run for: a red gate, or its
     // own previous attempt (e.g. it changed a locked test file and the commit was undone).
     const latest = finished.find(
@@ -521,17 +453,8 @@ export class Pipeline {
   }
 
   private async runStage(id: string, stage: TaskState, signal: AbortSignal): Promise<StageResult> {
-    const runs = this.db.getRepository(StageRunEntity);
-    const attempt = (await runs.countBy({ taskId: id, stage })) + 1;
-    // clock_timestamp() has microsecond precision, so runs keep their order.
-    const inserted = await runs.insert({
-      taskId: id,
-      stage,
-      attempt,
-      status: "running",
-      startedAt: () => "clock_timestamp()",
-    });
-    const runId = String(inserted.identifiers[0]?.id);
+    const attempt = (await this.store.countStageRunAttempts(id, stage)) + 1;
+    const runId = await this.store.insertStageRun({ taskId: id, stage, attempt });
     await this.log(id, "stage.started", { stage, attempt }, runId);
 
     let result: StageResult;
@@ -548,7 +471,7 @@ export class Pipeline {
       result = { outcome: "fail" };
     }
 
-    const status: StageRunStatus = signal.aborted
+    const status = signal.aborted
       ? "aborted"
       : result.rateLimited
         ? "paused"
@@ -556,30 +479,25 @@ export class Pipeline {
           ? "failed"
           : "passed";
     const outcome = result.rateLimited ? "rate_limited" : result.outcome;
-    await runs.update(
-      { id: runId },
-      {
-        status,
-        outcome,
-        endedAt: () => "clock_timestamp()",
-        containerId: result.run?.containerId ?? null,
-        transcriptPath: result.run?.transcriptPath ?? null,
-        inputCommit: result.run?.inputCommit ?? null,
-        outputCommit: result.run?.outputCommit ?? null,
-        ...(result.usage ? { turns: result.usage.turns, costUsd: result.usage.costUsd?.toString() ?? null } : {}),
-      },
-    );
+    await this.store.updateStageRun(runId, {
+      status,
+      outcome,
+      ended: true,
+      containerId: result.run?.containerId ?? null,
+      transcriptPath: result.run?.transcriptPath ?? null,
+      inputCommit: result.run?.inputCommit ?? null,
+      outputCommit: result.run?.outputCommit ?? null,
+      ...(result.usage ? { turns: result.usage.turns, costUsd: result.usage.costUsd?.toString() ?? null } : {}),
+    });
     for (const artifact of result.artifacts ?? []) {
-      await this.db.getRepository(ArtifactEntity).insert({ taskId: id, stageRunId: runId, ...artifact });
+      await this.store.insertArtifact({ taskId: id, stageRunId: runId, ...artifact });
     }
     for (const item of result.events ?? []) {
       const kind = item.kind.startsWith("orc.") ? item.kind : `orc.${item.kind}`;
       await this.log(id, kind, { ...item.payload, at: item.at }, runId);
     }
     if (result.workspace) {
-      await this.db
-        .getRepository(TaskEntity)
-        .update({ id }, { branch: result.workspace.branch, worktreePath: result.workspace.worktreePath });
+      await this.store.updateTask(id, { branch: result.workspace.branch, worktreePath: result.workspace.worktreePath });
     }
     await this.log(
       id,
@@ -597,22 +515,12 @@ export class Pipeline {
     return result;
   }
 
-  private record(
-    manager: EntityManager,
-    taskId: string,
-    kind: string,
-    payload: Record<string, unknown>,
-    stageRunId: string | null = null,
-  ): Promise<EventRow> {
-    return manager.save(EventEntity, manager.create(EventEntity, { taskId, kind, payload, stageRunId }));
-  }
-
   private async log(
     taskId: string,
     kind: string,
     payload: Record<string, unknown>,
     stageRunId: string | null = null,
   ): Promise<void> {
-    this.onEvent(await this.record(this.db.manager, taskId, kind, payload, stageRunId));
+    this.onEvent(await this.store.recordEvent({ taskId, kind, payload, stageRunId }));
   }
 }

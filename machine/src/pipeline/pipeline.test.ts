@@ -524,3 +524,23 @@ describe("ingested stage output", () => {
   });
 });
 
+describe("concurrent transitions on the same task", () => {
+  it("never lets two concurrent decide() calls on the same task both succeed", async () => {
+    const task = await newTask();
+    await pipeline.start(task.id);
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_approval");
+
+    const [a, b] = await Promise.allSettled([
+      pipeline.decide(task.id, "approved"),
+      pipeline.decide(task.id, "approved"),
+    ]);
+    const fulfilled = [a, b].filter((r) => r.status === "fulfilled");
+    const rejected = [a, b].filter((r) => r.status === "rejected");
+    // The row lock serializes the two transactions: whichever runs second sees the task
+    // already past awaiting_approval and its transition is rejected, not silently duplicated.
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(TransitionError);
+  });
+});
+

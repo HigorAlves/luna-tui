@@ -83,3 +83,18 @@ export interface ApprovalRow {
   createdAt: Date;
   decidedAt: Date | null;
 }
+
+export class TaskNotFoundError extends Error {
+  constructor(id: string) {
+    super(`task ${id} not found`);
+    this.name = "TaskNotFoundError";
+  }
+}
+
+/** The task has a stage running, so it cannot be deleted until you abort it. */
+export class TaskBusyError extends Error {
+  constructor(id: string, state: TaskState) {
+    super(`task ${id} is ${state}; abort it first`);
+    this.name = "TaskBusyError";
+  }
+}
