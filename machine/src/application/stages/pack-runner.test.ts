@@ -152,6 +152,13 @@ describe("agent stages through orc packs", () => {
     expect(result.detail).toMatchObject({ reason: "needs a new dependency", options: ["add it", "drop it"] });
   });
 
+  it("keeps the test cases test_design answered, for the test check", async () => {
+    const cases = [{ title: "rejects a bad password", criterion: "works", test: "a.test.ts > rejects" }];
+    const run = runners(fakeSandbox(output({ answer: { kind: "done", summary: "s", tests: ["a.test.ts"], cases } })));
+    const result = await run.test_design!(context("test_design"));
+    expect(result.detail).toMatchObject({ tests: ["a.test.ts"], cases });
+  });
+
   it("maps needs_input to summary and questions", async () => {
     const questions = [{ question: "which db?", recommended: "pg" }];
     const run = runners(fakeSandbox(output({ outcome: "needs_input", needsInput: questions })));

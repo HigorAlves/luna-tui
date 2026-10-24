@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import type { Finding, PackId, StageInput, TaskState } from "@hardness/contracts";
+import { type Finding, type PackId, type StageInput, TestCase, type TaskState } from "@hardness/contracts";
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
 
@@ -45,6 +45,13 @@ function checkedTests(approvals: ApprovalRow[]): string[] {
   return approval ? strings(approval.requested.tests) : [];
 }
 
+/** The test cases approved at the last test check; anything malformed is dropped. */
+function checkedCases(approvals: ApprovalRow[]): TestCase[] {
+  const approval = approvals.findLast((a) => a.kind === "awaiting_test_check" && a.decision === "approved");
+  const cases = approval?.requested.cases;
+  return Array.isArray(cases) ? cases.flatMap((c) => (TestCase.safeParse(c).success ? [c as TestCase] : [])) : [];
+}
+
 export function buildStageInput(opts: {
   task: TaskRow;
   stage: TaskState;
@@ -59,7 +66,7 @@ export function buildStageInput(opts: {
   const pack = stage as PackId;
   const { maxTurns, timeoutMs } = PACK_LIMITS[pack];
   return {
-    schema: 1,
+    schema: 2,
     stage,
     pack,
     attempt,
@@ -83,7 +90,11 @@ export function buildStageInput(opts: {
       })),
     priorFindings: opts.priorFindings.filter((f) => f.confidence >= PRIOR_FINDING_CONFIDENCE),
     // The container reads docs/agents/project-context.md itself.
-    context: { projectContext: opts.projectContext ?? null, tests: opts.tests ?? (pack === "implementing" ? checkedTests(approvals) : []) },
+    context: {
+      projectContext: opts.projectContext ?? null,
+      tests: opts.tests ?? (pack === "implementing" ? checkedTests(approvals) : []),
+      testCases: pack === "implementing" || pack === "verifying" ? checkedCases(approvals) : [],
+    },
     limits: { maxTurns, timeoutMs },
     env: { ORC_FACTORY: "1" },
   };

@@ -197,7 +197,11 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   }
   if (pack === "test_design") {
     const tests = await listTests(join(runDir, "out"), output.answer, output.artifacts);
-    return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, tests } });
+    const cases = answerOf(output.answer)?.cases;
+    return merged({
+      ...mapped,
+      detail: { ...mapped.detail, summary: output.summary, tests, cases: Array.isArray(cases) ? cases : [] },
+    });
   }
   return merged(mapped);
 }
