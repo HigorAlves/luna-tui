@@ -8,13 +8,13 @@ import type { DataSource } from "typeorm";
 import type { TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+import { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { removeWorktree as removeWorktreeOnDisk } from "../adapters/git/worktree.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import type { StageResult, StageRunner } from "./ports.ts";
 
-export { TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+export { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 
 export interface NewTask {
   title: string;
@@ -123,6 +123,23 @@ export class Pipeline {
       await this.log(id, "task.edited", { fields: Object.keys(changes) });
     }
     return this.get(id);
+  }
+
+  /** Edits triage's proposed plan before you approve it: only the fields given change,
+   *  the rest (including slices) stay as triage wrote them. */
+  async editPlan(
+    id: string,
+    patch: { brief?: string; criteria?: string[]; assumptions?: string[] },
+  ): Promise<TaskRow> {
+    return this.store.withTaskLock(id, async (task, tx) => {
+      const open = await tx.findOpenApproval(id);
+      if (!open || open.kind !== "awaiting_approval") throw new NoPlanToEditError(id);
+      const changes = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
+      if (Object.keys(changes).length > 0) {
+        await tx.updateApprovalRequested(open, { ...open.requested, ...changes });
+      }
+      return task;
+    });
   }
 
   /** Deletes a task with its runs, approvals and events. Its worktree is kept. */

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DecisionInput } from "./api.ts";
+import { DecisionInput, EditPlanInput } from "./api.ts";
 import { COLUMNS, COLUMN_OF, RUNNING, TaskState, WAITING_ON_USER } from "./index.ts";
 
 describe("task states", () => {
@@ -30,6 +30,22 @@ describe("task states", () => {
 
   it("rejects unknown states", () => {
     expect(TaskState.safeParse("done").success).toBe(false);
+  });
+});
+
+describe("edit plan input", () => {
+  it("accepts a partial edit", () => {
+    expect(EditPlanInput.parse({ criteria: ["c1", "c2"] })).toEqual({ criteria: ["c1", "c2"] });
+  });
+  it("accepts every field", () => {
+    expect(EditPlanInput.parse({ brief: "b", criteria: ["c"], assumptions: ["a"] })).toEqual({
+      brief: "b",
+      criteria: ["c"],
+      assumptions: ["a"],
+    });
+  });
+  it("rejects an empty edit", () => {
+    expect(EditPlanInput.safeParse({}).success).toBe(false);
   });
 });
 

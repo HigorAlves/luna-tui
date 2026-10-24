@@ -24,6 +24,17 @@ export const UpdateTaskInput = z.object({
 });
 export type UpdateTaskInput = z.infer<typeof UpdateTaskInput>;
 
+/** `PATCH /tasks/:id/plan`: edits triage's proposed plan before you approve it. Every
+ * field is optional, but at least one must be given — the slices stay untouched either way. */
+export const EditPlanInput = z
+  .object({
+    brief: z.string().optional(),
+    criteria: z.array(z.string()).optional(),
+    assumptions: z.array(z.string()).optional(),
+  })
+  .refine((input) => Object.keys(input).length > 0, { message: "give at least one field to edit" });
+export type EditPlanInput = z.infer<typeof EditPlanInput>;
+
 export const DecisionInput = z.object({
   decision: z.enum(["approved", "sent_back"]),
   // Clients may send `null` for "no reason" rather than omitting the field.

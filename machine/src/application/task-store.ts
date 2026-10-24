@@ -50,6 +50,8 @@ export interface TaskTx {
   updateTask(id: string, patch: Partial<TaskRow>): Promise<void>;
   findOpenApproval(taskId: string): Promise<ApprovalRow | null>;
   decideApproval(open: ApprovalRow, decision: DecideApprovalInput): Promise<void>;
+  /** Replaces an open approval's `requested`, leaving its decision (still open) untouched. */
+  updateApprovalRequested(open: ApprovalRow, requested: Record<string, unknown>): Promise<void>;
   insertApproval(input: { taskId: string; kind: TaskState; requested: Record<string, unknown> }): Promise<void>;
   recordEvent(input: RecordEventInput): Promise<EventRow>;
 }

@@ -109,6 +109,9 @@ export class PgTaskStore implements TaskStore {
         async decideApproval(open: ApprovalRow, decision: DecideApprovalInput) {
           await manager.save(ApprovalEntity, { ...open, ...decision, decidedAt: new Date() });
         },
+        async updateApprovalRequested(open: ApprovalRow, requested: Record<string, unknown>) {
+          await manager.save(ApprovalEntity, { ...open, requested });
+        },
         async insertApproval(input) {
           await manager.save(ApprovalEntity, manager.create(ApprovalEntity, input));
         },
