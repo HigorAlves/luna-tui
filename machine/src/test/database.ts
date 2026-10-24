@@ -3,7 +3,7 @@
 import pg from "pg";
 import type { DataSource } from "typeorm";
 
-import { createDataSource } from "../db/data-source.ts";
+import { createDataSource } from "../adapters/persistence/data-source.ts";
 
 export const TEST_DATABASE_URL =
   process.env.TEST_DATABASE_URL ?? "postgres://hardness:hardness@127.0.0.1:5433/hardness_test";

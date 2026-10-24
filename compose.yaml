@@ -1,0 +1,26 @@
+# Dev services only (Postgres). The machine itself runs on the host with `pnpm dev`.
+# Start with `pnpm db:up` (or `docker compose up -d --wait`), stop with `pnpm db:down`
+# (data is kept in the volume).
+name: hardness-dev
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      # Local dev credentials. The port is bound to localhost only.
+      POSTGRES_USER: hardness
+      POSTGRES_PASSWORD: hardness
+      POSTGRES_DB: hardness
+    ports:
+      # 5433 on the host, so it never clashes with a Postgres you run yourself.
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hardness -d hardness"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  pgdata:

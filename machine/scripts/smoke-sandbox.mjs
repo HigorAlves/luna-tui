@@ -7,11 +7,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
-import { runSandbox } from "../src/sandbox/docker.ts";
+import { runSandbox } from "../src/adapters/docker/docker.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = join(here, "..", "..", "fixtures", "golden-task");
-const image = process.env.HARDNESS_RUNNER_IMAGE ?? "hardness-runner:dev";
+const image = process.env.RUNNER_IMAGE ?? "hardness-runner:dev";
 const ident = ["-c", "user.name=Smoke", "-c", "user.email=smoke@hardness.local", "-c", "commit.gpgsign=false"];
 const git = (cwd, ...a) => execFileSync("git", [...ident, ...a], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 

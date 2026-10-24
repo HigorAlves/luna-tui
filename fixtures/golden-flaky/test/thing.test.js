@@ -7,7 +7,7 @@ import { thing } from "../src/thing.js";
 
 // Fails until the Verifier stage specifically (not an agent's own exploratory `npm test`
 // while it's still implementing) has run it FLAKY_PASSES_AFTER times, then passes forever.
-// HARDNESS_STAGE=verifying is set only by machine/src/stages/verify.ts; any other caller
+// HARDNESS_STAGE=verifying is set only by machine/src/application/stages/verify.ts; any other caller
 // (the implementer checking its own work, you running this by hand) always just passes,
 // so the counter reflects real Verifier attempts, not incidental test runs.
 //
