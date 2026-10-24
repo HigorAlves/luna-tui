@@ -51,5 +51,12 @@ export interface StageResult {
   };
 }
 
+/** Lets someone follow a task's running stage container live. */
+export interface Watcher {
+  follow(taskId: string, label: string, cwd: string, container: string): Promise<void>;
+  /** The task needs no watching anymore. */
+  close(taskId: string): Promise<void>;
+}
+
 /** Runs one stage for one task. */
 export type StageRunner = (context: StageContext) => Promise<StageResult>;

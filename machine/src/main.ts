@@ -4,6 +4,7 @@ import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
 import { Bus } from "./adapters/http/bus.ts";
+import { StreamWatcher } from "./adapters/http/watch.ts";
 import { parseSince } from "./adapters/http/metrics.ts";
 import { toEvent, toTask } from "./adapters/http/serialize.ts";
 import { buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
@@ -12,7 +13,6 @@ import { createDataSource } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns } from "./adapters/persistence/prune.ts";
 import type { EventRow } from "./domain/task.ts";
-import { Watcher } from "./adapters/herdr/watch.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { Pipeline } from "./application/pipeline.ts";
 import { exec } from "./adapters/process/exec.ts";
@@ -49,7 +49,7 @@ if (config.retentionDays > 0) {
 
 const bus = new Bus();
 const stubs = new StubStages();
-const watcher = new Watcher(config.herdrBin);
+const watcher = new StreamWatcher(bus);
 
 // `pipeline` is assigned below, after the real stages are built — `latestE2e` is only
 // ever called once a stage actually runs, by which point `pipeline` is set.

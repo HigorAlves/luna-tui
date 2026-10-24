@@ -19,7 +19,6 @@ export interface Config {
   worktreesDir: string;
   /** Run inputs, outputs and transcripts. */
   stateDir: string;
-  herdrBin: string;
   /** Poll GitHub issues carrying `label` in `repos` (`owner/name`) and create tasks. No repos: off. */
   githubPoll: { repos: string[]; intervalMs: number; label: string };
   /** Days to keep a closed task's events/stage runs before pruning them. 0 disables pruning. */
@@ -74,7 +73,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     runnerQaImage: env.RUNNER_QA_IMAGE ?? "hardness-runner-qa:dev",
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
     stateDir: env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness"),
-    herdrBin: env.HERDR_BIN ?? "herdr",
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
     retentionDays,
   };

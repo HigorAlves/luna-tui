@@ -6,6 +6,7 @@ use std::{
     env, fs, io,
     process::Command,
     sync::mpsc::{self, Receiver},
+    thread,
     time::{Duration, Instant},
 };
 
@@ -20,12 +21,12 @@ use ratatui::{
 use tui_textarea::TextArea;
 
 use crate::{
-    client::{Incoming, Machine, spawn_stream},
+    client::{Incoming, Machine},
     discover::{discover_repos, repos_root},
     herdr,
     model::{
         COLUMNS, Look, Metrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
-        parse_ticket, questions_of, ticket_markdown,
+        parse_ticket, questions_of, short_id, ticket_markdown,
     },
     store,
     vim::Vim,
@@ -179,7 +180,7 @@ pub struct App {
 impl App {
     pub fn new(machine: Machine) -> Self {
         let (tx, rx) = mpsc::channel();
-        spawn_stream(machine.base().to_string(), tx);
+        machine.follow_stream(tx);
         let mut app = Self {
             machine,
             stream: rx,
@@ -204,13 +205,13 @@ impl App {
         };
         app.reload();
         if !app.online {
-            let url = app.machine_url().to_string();
-            app.notify(format!("can't reach the machine at {url} — start it with `pnpm dev`"), true);
+            let url = app.machine_url();
+            app.notify(format!("can't reach the machine at {url} — start it with `pnpm start` or `pnpm dev`"), true);
         }
         app
     }
 
-    pub fn machine_url(&self) -> &str {
+    pub fn machine_url(&self) -> String {
         self.machine.base()
     }
 
@@ -282,7 +283,10 @@ impl App {
     pub fn pump(&mut self) {
         while let Ok(incoming) = self.stream.try_recv() {
             match incoming {
-                Incoming::Online => self.reload(),
+                Incoming::Online => {
+                    self.reload();
+                    self.catch_up_watch_tabs();
+                }
                 Incoming::Offline(reason) => {
                     self.online = false;
                     self.offline_reason = reason;
@@ -299,6 +303,13 @@ impl App {
                     }
                 }
                 Incoming::Message(StreamMessage::Deleted { id }) => self.forget(&id),
+                // herdr calls are subprocesses, so they stay off the UI thread.
+                Incoming::Message(StreamMessage::StageStarted { task_id, label, cwd, container }) => {
+                    thread::spawn(move || herdr::follow(short_id(&task_id), &label, &cwd, &container));
+                }
+                Incoming::Message(StreamMessage::Closed { id }) => {
+                    thread::spawn(move || herdr::close_task_tab(short_id(&id)));
+                }
             }
         }
     }
@@ -333,6 +344,16 @@ impl App {
         if let Some(row) = self.indices(column).iter().position(|&i| self.tasks[i].id == id) {
             self.selection[column] = row;
         }
+    }
+
+    /// Watch tabs for stages that started before the board connected.
+    fn catch_up_watch_tabs(&self) {
+        let tasks: Vec<(String, String, String)> = self
+            .tasks
+            .iter()
+            .filter_map(|t| Some((t.id.clone(), format!("#{} {}", t.short_id(), t.title), t.worktree_path.clone()?)))
+            .collect();
+        thread::spawn(move || herdr::catch_up(&tasks));
     }
 
     fn forget(&mut self, id: &str) {

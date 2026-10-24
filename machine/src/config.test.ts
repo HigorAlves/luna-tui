@@ -20,7 +20,6 @@ describe("loadConfig", () => {
       runnerQaImage: "hardness-runner-qa:dev",
       worktreesDir: "/home/me/Developer/worktrees",
       stateDir: "/home/me/.local/state/hardness",
-      herdrBin: "herdr",
       githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },
       retentionDays: DEFAULT_RETENTION_DAYS,
     });

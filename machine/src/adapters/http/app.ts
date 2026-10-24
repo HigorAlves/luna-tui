@@ -16,7 +16,7 @@ import { ZodError, type ZodType, z } from "zod";
 
 import { computeMetrics } from "../persistence/metrics-query.ts";
 import { TransitionError } from "../../domain/transition.ts";
-import type { Watcher } from "../herdr/watch.ts";
+import type { Watcher } from "../../application/ports.ts";
 import { type Pipeline, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
 import type { StubStages } from "../../application/stages/stubs.ts";
 import type { Bus } from "./bus.ts";

@@ -10,14 +10,14 @@ The machine's HTTP API, read straight from `machine/src/adapters/http/app.ts`. S
 | POST | `/tasks` | Create a task: title, description, criteria, repo path, source. |
 | GET | `/tasks/:id` | One task with its stage runs, approvals, recent events and artifacts. |
 | PATCH | `/tasks/:id` | Edit the ticket's text (title, description, criteria, repo path, source). |
-| DELETE | `/tasks/:id` | Delete a task with its runs, approvals and events (blocked while a stage is running); closes its herdr watch tab. |
+| DELETE | `/tasks/:id` | Delete a task with its runs, approvals and events (blocked while a stage is running); closes its herdr watch tab (via `task.closed`). |
 | POST | `/tasks/:id/start` | Start the pipeline. |
 | POST | `/tasks/:id/answers` | Answer triage questions: `{ "answers": { "<question>": "<answer>" } }`. |
 | POST | `/tasks/:id/decision` | Approve or send back whatever the task waits on, including an escalation: `{ "decision": "approved" \| "sent_back", "reason"?, "applyRules"? }`. |
 | POST | `/tasks/:id/abort` | Stop a running or queued stage; the task then waits for you. |
 | POST | `/tasks/:id/resume` | Re-run the stage a task paused in after a usage limit. |
 | POST | `/tasks/:id/worktree/remove` | Remove the task's worktree from disk. The task, its branch and commits stay. |
-| GET | `/events` | SSE: `task.updated` (the whole task), `task.event` (one activity entry), `task.deleted`, `task.metrics`, plus `ready` and a `ping` every 15s. |
+| GET | `/events` | SSE: `task.updated` (the whole task), `task.event` (one activity entry), `task.deleted`, `task.metrics`, `stage.started` (a stage container is running: task id, tab label, worktree, container name), `task.closed` (its watch tab can go), plus `ready` and a `ping` every 15s. |
 | POST | `/dev/stubs` | Dev only, when stub stages are in use: queue results for a stage, e.g. three `fail`s for `verifying`. |
 
 Errors use `{ "error", "message" }`: 400 for invalid input, 404 for an unknown task, 409 for an action that does not fit the task's state, 500 otherwise.

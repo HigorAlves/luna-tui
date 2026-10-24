@@ -19,7 +19,9 @@ every 2s until it reconnects.
 cargo run --release
 ```
 
-`HARDNESS_MACHINE_URL` overrides the default `http://127.0.0.1:4317`.
+The board connects to whichever machine is up: `pnpm dev`'s on `http://127.0.0.1:4317` first, then
+`pnpm start`'s container on `:4318`. It checks again on every reconnect, so switching between
+the two needs no restart. `HARDNESS_MACHINE_URL` pins one address instead.
 
 ## Install as a herdr plugin (local link)
 
@@ -112,8 +114,10 @@ that flow didn't move in place yet.
 A new ticket starts in Backlog. `a` moves it to Intake (no stage runs, it's
 just a deliberate "I'm shaping this one up" step); `a` again starts triage.
 
-The machine opens a herdr tab following each stage's agent, and closes it
-itself once the ticket is closed. Approving the Ship gate (`a` on `awaiting_ship`)
+The board opens a herdr tab following each stage's agent (`docker logs -f` on
+its container), whether the machine runs in Docker or on your host, and closes it
+once the ticket is closed. Stages already running when the board starts get a tab
+too. Tabs only open while a board is running. Approving the Ship gate (`a` on `awaiting_ship`)
 pushes the task's branch and opens a real PR with `gh` — see the root
 `README.md`'s "Shipping" section for what that needs.
 
