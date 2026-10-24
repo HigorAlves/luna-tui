@@ -17,9 +17,11 @@ function setup(opts: { polls: ExecResult[]; pack?: StageResult; maxWaitMs?: numb
   const exec = vi.fn(async (command: string, args: string[]) => {
     calls.push([command, ...args]);
     if (args[1] === "checks") return opts.polls[Math.min(poll++, opts.polls.length - 1)]!;
+    if (args[0] === "pr" && args[1] === "view") return ok(JSON.stringify({ url: "https://github.com/a/b/pull/7", number: 7, isDraft: true }));
+    if (args[0] === "run" && args[1] === "view") return ok(`log of run ${args[2]}\nFAIL src/a.test.ts > boom\n`);
     return ok();
   });
-  const runPack = vi.fn(async () => opts.pack ?? pack({ verdict: "green" }));
+  const runPack = vi.fn(async (_context: StageContext, _ci?: unknown) => opts.pack ?? pack({ verdict: "green" }));
   const sleeps: number[] = [];
   const run = ciWatchRunner({
     exec,
@@ -93,14 +95,41 @@ describe("ci_watch", () => {
     expect(result).toMatchObject({ outcome: "fail", detail: { verdict: "fixable" } });
   });
 
-  it("fails infra with the requested actions passed through", async () => {
-    const requested = [{ kind: "tracker_write", target: "ops", payload: { text: "runner down" } }];
+  it("hands the pack the PR, the checks and the failed run's log, fetched on the host", async () => {
+    const { run, context, runPack, calls } = setup({
+      polls: [checks(["lint", "FAILURE"], ["unit", "SUCCESS"])],
+      pack: pack({ verdict: "fixable", summary: "lint broke", findings: [finding] }),
+    });
+    await run(context);
+    expect(calls).toContainEqual(["gh", "run", "view", "111", "--log-failed"]);
+    expect(runPack).toHaveBeenCalledWith(context, {
+      pr: { number: 7, url: "https://github.com/a/b/pull/7" },
+      checks: [
+        { name: "lint", state: "FAILURE", url: "https://github.com/a/b/actions/runs/111/job/1" },
+        { name: "unit", state: "SUCCESS", url: "https://github.com/a/b/actions/runs/222/job/1" },
+      ],
+      logs: "log of run 111\nFAIL src/a.test.ts > boom\n",
+    });
+  });
+
+  it("escalates infra and needs_debug with the pack's reason and options", async () => {
+    for (const verdict of ["infra", "needs_debug"]) {
+      const { run, context } = setup({
+        polls: [checks(["lint", "FAILURE"])],
+        pack: pack({ kind: "escalated", verdict, summary: "runner down", reason: "runner out of disk", options: ["clean the runner"] }),
+      });
+      const result = await run(context);
+      expect(result).toMatchObject({ outcome: "escalated", detail: { verdict, reason: "runner out of disk", options: ["clean the runner"] } });
+    }
+  });
+
+  it("passes an escalated pack result straight through", async () => {
     const { run, context } = setup({
       polls: [checks(["lint", "FAILURE"])],
-      pack: pack({ verdict: "infra", summary: "runner down", requested }),
+      pack: { outcome: "escalated", detail: { reason: "gh has no credential here", options: ["add a token"] } },
     });
     const result = await run(context);
-    expect(result).toMatchObject({ outcome: "fail", detail: { verdict: "infra", requested }, requested });
+    expect(result).toMatchObject({ outcome: "escalated", detail: { reason: "gh has no credential here", step: "triage" } });
   });
 
   it("fails when CI does not settle in time", async () => {

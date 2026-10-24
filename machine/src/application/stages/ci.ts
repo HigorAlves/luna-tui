@@ -1,20 +1,22 @@
 // The ci_watch stage: poll the PR's checks until they settle. Green passes; red goes to the
 // ci_watch pack, whose verdict decides: fixable fails (the loop hands its findings to
-// implementing), flake re-runs the failed workflow once, infra and needs_debug fail with the
-// pack's `requested` actions. The engine escalates after its usual three strikes, so an infra
-// verdict costs up to three runs before the approval shows; accepted, the engine stays as is.
-import type { Finding, RequestedAction } from "@hardness/contracts";
+// implementing), flake re-runs the failed workflow once, infra and needs_debug escalate to a
+// human with the pack's reason. The pack runs in a sandbox with no gh credential, so the
+// host fetches the PR, the checks and the failed run's log and hands them over as context.
+import type { CiContext, Finding } from "@hardness/contracts";
 
-import { type ExecFn, prChecks, rerunWorkflow } from "../../adapters/github/gh.ts";
+import { type ExecFn, failedRunLog, findPr, prChecks, rerunWorkflow } from "../../adapters/github/gh.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
 const MINUTE = 60_000;
 const RERUN_WAIT_MS = 15 * MINUTE;
+/** The pack reads a log tail, not a whole run: the end is where the failure is. */
+const LOG_TAIL_CHARS = 20_000;
 
 export interface CiDeps {
   exec: ExecFn;
-  /** Runs the ci_watch pack. */
-  runPack: (context: StageContext) => Promise<StageResult>;
+  /** Runs the ci_watch pack with what the host fetched about the red run. */
+  runPack: (context: StageContext, ci: CiContext) => Promise<StageResult>;
   pollMs?: number;
   maxWaitMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -78,6 +80,24 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
             ? { outcome: "fail", detail: { error: s.error } }
             : null;
     const failedOf = (checks: Check[]) => checks.filter((c) => FAILED.has(String(c.state).toUpperCase()));
+    const runIdOf = (check: Check) => /\/actions\/runs\/(\d+)/.exec(check.link ?? "")?.[1];
+
+    /** What the pack cannot fetch itself: the PR, every check, and the failed runs' log tail. */
+    async function gather(checks: Check[], failed: Check[]): Promise<CiContext> {
+      const pr = await findPr({ exec: deps.exec }, branch, cwd);
+      const runIds = [...new Set(failed.map(runIdOf).filter((id): id is string => Boolean(id)))];
+      const logs: string[] = [];
+      for (const id of runIds) {
+        const log = await failedRunLog({ exec: deps.exec }, id, cwd, signal);
+        logs.push(log.code === 0 ? log.stdout : `(gh run view ${id} --log-failed failed: ${(log.stderr || log.stdout).trim()})`);
+      }
+      const joined = logs.join("\n");
+      return {
+        pr: pr ? { number: pr.number, url: pr.url } : null,
+        checks: checks.map((c) => ({ name: c.name, state: c.state, url: c.link ?? null })),
+        logs: joined ? joined.slice(-LOG_TAIL_CHARS) : null,
+      };
+    }
 
     const first = await settle(maxWaitMs);
     const early = stopped(first);
@@ -90,13 +110,14 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
     if (failed.length === 0) return { outcome: "pass", detail: { step: "checks", checks } };
 
     // Red: ask the pack what kind of red.
-    const pack = await deps.runPack(context);
-    if (pack.outcome === "fail") return { ...pack, detail: { ...pack.detail, step: "triage", checks } };
+    const pack = await deps.runPack(context, await gather(checks, failed));
+    if (pack.outcome === "fail" || pack.outcome === "escalated") {
+      return { ...pack, detail: { ...pack.detail, step: "triage", checks } };
+    }
     const answer = asRecord(pack.detail?.answer);
     const verdict = String(answer?.verdict ?? "fixable");
     const summary = typeof answer?.summary === "string" ? answer.summary : String(pack.detail?.summary ?? "");
     const findings = (Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[];
-    const requested = (Array.isArray(answer?.requested) ? answer.requested : pack.requested ?? []) as RequestedAction[];
     const base = { ...pack, run: pack.run };
     const fixable = (note?: string): StageResult => ({
       ...base,
@@ -107,18 +128,15 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
 
     if (verdict === "green") return { ...base, outcome: "pass", detail: { step: "checks", verdict, summary, checks } };
     if (verdict === "infra" || verdict === "needs_debug") {
-      return {
-        ...base,
-        outcome: "fail",
-        detail: { step: "checks", verdict, summary, requested, findings, checks },
-        requested,
-        findings,
-      };
+      // Nothing implementing can fix: a human decides, with the pack's reason in front of them.
+      const reason = typeof answer?.reason === "string" && answer.reason ? answer.reason : summary;
+      const options = Array.isArray(answer?.options) ? answer.options.filter((o): o is string => typeof o === "string") : [];
+      return { ...base, outcome: "escalated", detail: { step: "checks", verdict, summary, reason, options, findings, checks }, findings };
     }
     if (verdict !== "flake") return fixable();
 
     // Flake: one re-run of the failed workflow, then a second look.
-    const runId = /\/actions\/runs\/(\d+)/.exec(failed.find((c) => c.link)?.link ?? "")?.[1];
+    const runId = failed.map(runIdOf).find(Boolean);
     if (!runId) return fixable("flake verdict, but no workflow run id to re-run");
     const rerun = await rerunWorkflow({ exec: deps.exec }, runId, cwd, signal);
     if (rerun.code !== 0) return fixable(`flake verdict, but the re-run failed: ${rerun.stderr.trim()}`);

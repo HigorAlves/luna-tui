@@ -88,6 +88,11 @@ export function prChecks(deps: GitDeps, branch: string, cwd: string, signal?: Ab
   return deps.exec("gh", ["pr", "checks", branch, "--json", "name,state,link"], { cwd, signal });
 }
 
+/** The failed steps' log of one workflow run, as `gh run view --log-failed` prints it. */
+export function failedRunLog(deps: GitDeps, runId: string, cwd: string, signal?: AbortSignal): Promise<ExecResult> {
+  return deps.exec("gh", ["run", "view", runId, "--log-failed"], { cwd, signal });
+}
+
 /** Re-runs a workflow run's failed jobs. */
 export function rerunWorkflow(deps: GitDeps, runId: string, cwd: string, signal?: AbortSignal): Promise<ExecResult> {
   return deps.exec("gh", ["run", "rerun", "--failed", runId], { cwd, signal });

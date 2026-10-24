@@ -60,7 +60,7 @@ export async function buildRealStages(
   const real: Partial<Record<TaskState, StageRunner>> = {
     ...agentRunners(deps),
     // ci_watch polls the PR's checks on the host and only calls its pack when one is red.
-    ci_watch: ciWatchRunner({ exec, runPack: (context) => runAgent(deps, context, "ci_watch") }),
+    ci_watch: ciWatchRunner({ exec, runPack: (context, ci) => runAgent(deps, context, "ci_watch", { ci }) }),
     // e2e skips repos with no web surface; without the QA image it passes with a note.
     e2e: qaImage
       ? e2eRunner({ runPack: (context) => runAgent(deps, context, "e2e") })
