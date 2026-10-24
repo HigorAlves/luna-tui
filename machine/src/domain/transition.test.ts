@@ -179,6 +179,18 @@ describe("escalations from the agent", () => {
   });
 });
 
+describe("a crashed stage loop", () => {
+  it("escalates a running task with the error as the reason, keeping its retries", () => {
+    const retries = { ...NO_RETRIES, total: 2 };
+    const step = transition(at("verifying", { retries }), { type: "crash", error: "db down" });
+    expect(step).toMatchObject({ state: "escalated", resumeTo: "verifying", reason: "stage loop crashed: db down", retries });
+  });
+
+  it("is rejected outside a running state, so a late crash report cannot move a waiting task", () => {
+    expect(() => transition(at("awaiting_approval"), { type: "crash", error: "x" })).toThrow(TransitionError);
+  });
+});
+
 describe("test change requests", () => {
   it("send the implementer back to the test designer and count toward the total", () => {
     const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2 } }), {

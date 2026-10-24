@@ -37,7 +37,9 @@ export type PipelineEvent =
   | { type: "sent_back" }
   | { type: "rate_limited" }
   | { type: "window_reset" }
-  | { type: "abort" };
+  | { type: "abort" }
+  /** The stage loop threw outside any stage (a DB hiccup, a pool timeout): the task must not stay "running". */
+  | { type: "crash"; error: string };
 
 /** What the machine does after a transition. */
 export type Effect =
@@ -122,6 +124,9 @@ export function transition(task: Snapshot, event: PipelineEvent): Step {
   const { state, retries } = task;
 
   switch (event.type) {
+    case "crash":
+      if (RUNNING.has(state)) return escalate(`stage loop crashed: ${event.error}`, state, retries);
+      break;
     case "abort":
       if (RUNNING.has(state)) return escalate("aborted", state, retries);
       if (state === "paused_rate_limit" && task.resumeTo) {
