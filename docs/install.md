@@ -5,20 +5,23 @@
 - Docker (for Postgres and the stage containers)
 - Node 24+ and pnpm
 - Rust (to build the board)
-- Optional, for the E2E stage: the QA image (`pnpm --filter @hardness/machine runner-qa:build`). It adds Playwright with Chromium, ffmpeg and agent-browser on top of the runner image, so expect about 2 GB more disk (a 3.9 GB image against 1.9 GB). Without it E2E is skipped with a note and the rest of the factory runs.
+- orc, which the stage images bake in: a checkout next to this repo or at `ORC_PATH` (otherwise its `main` is cloned). `pnpm start` and `pnpm dev` build both images first (`pnpm images`): the runner image and the QA image on top of it, which adds Playwright with Chromium, ffmpeg and agent-browser (about 2 GB more disk: 3.9 GB against 1.9 GB). The first build takes a while; later ones reuse Docker's cache.
 - [herdr](https://herdr.dev/), to run the board as a plugin
 
 ## Quick start
 
 ```sh
 pnpm install
-docker compose up -d --wait   # Postgres on 127.0.0.1:5433 (pnpm db:up does the same)
-pnpm --filter @hardness/machine runner:build   # the stage container image
-pnpm dev              # the machine on http://127.0.0.1:4317, with hot reload
+pnpm start            # builds the stage images, then Postgres + the machine on http://127.0.0.1:4318, in Docker
 pnpm board:build      # the board; then `herdr plugin link ./board` once
 ```
 
-`pnpm dev` loads `machine/.env` if one exists (copy `machine/.env.example` to change a default). `pnpm db:down` stops Postgres and keeps its data. For board usage and keys, see [`board/README.md`](../board/README.md).
+## Two ways to run
+
+- **`pnpm start`** (or `docker compose up -d`): Postgres and the machine both run in Docker, so there's no server to keep open in a terminal. It passes your `gh auth token` and git identity to the machine; `pnpm stop` stops both and keeps the data. Stage containers still run on your Docker, so repos, worktrees and run folders are mounted at the same paths as on your host (see [configuration.md](./configuration.md#compose)).
+- **`pnpm dev`**: for working on the harness itself. It stops the machine container, starts only Postgres (`docker compose up postgres`), and runs the machine on your host at http://127.0.0.1:4317 with hot reload, loading `machine/.env` if one exists. `pnpm db:down` stops Postgres and keeps its data.
+
+Both use the same database, so tasks carry over when you switch. For board usage and keys, see [`board/README.md`](../board/README.md).
 
 ## Checks
 

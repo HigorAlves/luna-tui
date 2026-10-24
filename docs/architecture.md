@@ -42,7 +42,7 @@ The card states the board already shows map from the same data: a waiting gate i
 | `contracts/` | Types shared by the machine and the board. |
 | `fixtures/` | Fixture repos used by `pnpm golden` (one seeded bug or feature each). |
 | `docs/` | This folder. |
-| `compose.yaml` | Postgres for local development. |
+| `compose.yaml` | Postgres and the machine (`docker compose up`); `pnpm dev` starts only Postgres. |
 
 ## Layout inside `machine/src`
 
@@ -50,7 +50,7 @@ Grouped by layer, not by technology:
 
 - `domain/` — pure types and logic with no I/O: task/stage-run/event rows, the transition engine, locked-files/pr-body/detect-checks helpers, memory-rule parsing, stage-input building.
 - `application/` — use cases and ports: `pipeline.ts` (orchestrates the transition engine and the stage runners), `task-store.ts` (the persistence port `pipeline.ts` depends on, never a concrete DB call), `ports.ts` (the `StageRunner`/`StageContext`/`StageResult` contract), the stage runners under `application/stages/` (`pack-runner.ts`, `verify.ts`, `deliver.ts`, `ship.ts`, `ci.ts`, `e2e.ts`, `evidence.ts`, `memory.ts`, `ingest.ts`, `stubs.ts`), and the GitHub poll loop (`intake.ts`).
-- `adapters/` — everything that talks to the outside world: `persistence/` (Postgres via TypeORM, implementing the `TaskStore` port), `http/` (the Hono API), `docker/` (the stage sandbox), `process/` (the generic subprocess runner), `git/` (worktrees), `github/` (the `gh` CLI), `herdr/` (the live-follow watcher).
+- `adapters/` — everything that talks to the outside world: `persistence/` (Postgres via TypeORM, implementing the `TaskStore` port), `http/` (the Hono API), `docker/` (the stage sandbox), `process/` (the generic subprocess runner), `git/` (worktrees), `github/` (the `gh` CLI). `http/` also announces running stage containers on the event stream, which the board follows in herdr tabs.
 - `bootstrap/` — wires the above together at startup (`stages.ts`); `main.ts` itself is just the entry point.
 
 Dependencies point inward: `adapters` depend on `application` ports, `application` depends on `domain` types, nothing in `domain` or `application` imports `typeorm`, `pg`, `hono`, or shells out to `docker`/`gh` directly.

@@ -143,12 +143,17 @@ export interface TaskDetail {
  * - `task.event`: one entry from the task's activity log.
  * - `task.deleted`: the task is gone.
  * - `task.metrics`: fresh factory metrics (7d window), sent after tasks change state.
+ * - `stage.started`: a stage container is running; the board opens a herdr tab at `cwd`
+ *   labelled `label` that follows `container`'s logs.
+ * - `task.closed`: the task is done or deleted; the board closes its watch tab.
  */
 export type StreamMessage =
   | { type: "task.updated"; task: Task }
   | { type: "task.event"; event: TaskEvent }
   | { type: "task.deleted"; id: string }
-  | { type: "task.metrics"; metrics: Metrics };
+  | { type: "task.metrics"; metrics: Metrics }
+  | { type: "stage.started"; taskId: string; label: string; cwd: string; container: string }
+  | { type: "task.closed"; id: string };
 
 /** Median and 90th percentile; null when there is no data. */
 export interface Stats {

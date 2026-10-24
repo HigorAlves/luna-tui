@@ -107,6 +107,12 @@ pub enum StreamMessage {
     Event { event: TaskEvent },
     #[serde(rename = "task.deleted")]
     Deleted { id: String },
+    /// A stage container is running: follow it in the task's watch tab.
+    #[serde(rename = "stage.started", rename_all = "camelCase")]
+    StageStarted { task_id: String, label: String, cwd: String, container: String },
+    /// The task is done or deleted: its watch tab can go.
+    #[serde(rename = "task.closed")]
+    Closed { id: String },
 }
 
 /// Median and 90th percentile; `None` when there is no data.
@@ -250,9 +256,14 @@ pub enum Look {
     Done,
 }
 
+/// The first 8 characters of a task id: what cards and watch-tab labels show.
+pub fn short_id(id: &str) -> &str {
+    &id[..id.len().min(8)]
+}
+
 impl Task {
     pub fn short_id(&self) -> &str {
-        &self.id[..self.id.len().min(8)]
+        short_id(&self.id)
     }
 
     /// `#42 ` when the task came from an issue, else empty. The card shows it dim.

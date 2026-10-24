@@ -6,11 +6,14 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "pnpm --filter @hardness/machine dev",
+    "start": "pnpm images && GH_TOKEN=\"${GH_TOKEN:-$(gh auth token 2>/dev/null)}\" LUNA_GIT_NAME=\"${LUNA_GIT_NAME:-$(git config user.name)}\" LUNA_GIT_EMAIL=\"${LUNA_GIT_EMAIL:-$(git config user.email)}\" docker compose up -d --build --wait",
+    "stop": "docker compose down",
+    "dev": "docker compose stop machine 2>/dev/null; pnpm images && pnpm db:up && pnpm --filter @hardness/machine dev",
+    "images": "bash machine/runner/build.sh --qa",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
-    "db:up": "docker compose up -d --wait",
-    "db:down": "docker compose down",
+    "db:up": "docker compose up -d --wait postgres",
+    "db:down": "docker compose stop postgres",
     "board:build": "cargo build --release --manifest-path board/Cargo.toml",
     "board:test": "cargo test --manifest-path board/Cargo.toml",
     "golden": "pnpm --filter @hardness/machine golden",

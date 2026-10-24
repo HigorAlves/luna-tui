@@ -5,6 +5,8 @@ import { join } from "node:path";
 export interface Config {
   databaseUrl: string;
   port: number;
+  /** Interface the API binds to. 127.0.0.1 on the host; 0.0.0.0 inside the compose container. */
+  host: string;
   /** Run Triage and Implementer as real agents. Off: every stage is a stub. */
   agents: boolean;
   /** Tasks that can be driving a stage at once, across every repo. The rest queue. */
@@ -17,7 +19,6 @@ export interface Config {
   worktreesDir: string;
   /** Run inputs, outputs and transcripts. */
   stateDir: string;
-  herdrBin: string;
   /** Poll GitHub issues carrying `label` in `repos` (`owner/name`) and create tasks. No repos: off. */
   githubPoll: { repos: string[]; intervalMs: number; label: string };
   /** Days to keep a closed task's events/stage runs before pruning them. 0 disables pruning. */
@@ -65,13 +66,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     databaseUrl: env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
     port,
+    host: env.MACHINE_HOST ?? "127.0.0.1",
     agents: env.MACHINE_AGENTS !== "off",
     maxConcurrentTasks,
     runnerImage: env.RUNNER_IMAGE ?? "hardness-runner:dev",
     runnerQaImage: env.RUNNER_QA_IMAGE ?? "hardness-runner-qa:dev",
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
     stateDir: env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness"),
-    herdrBin: env.HERDR_BIN ?? "herdr",
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
     retentionDays,
   };

@@ -4,7 +4,7 @@
 import type { TaskState } from "@hardness/contracts";
 
 import type { Config } from "../config.ts";
-import type { Watcher } from "../adapters/herdr/watch.ts";
+import type { Watcher } from "../application/ports.ts";
 import { agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";

@@ -14,13 +14,12 @@ import {
   resetWorktree,
   workspaceFor,
 } from "../../adapters/git/worktree.ts";
-import type { Watcher } from "../../adapters/herdr/watch.ts";
 import type { Credential } from "../../adapters/docker/credentials.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
 import { lockedFilesTouched } from "../../domain/locked-files.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
-import type { StageContext, StageResult, StageRunner } from "../ports.ts";
+import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
 
 export interface AgentDeps {
   /** The base stage image. */

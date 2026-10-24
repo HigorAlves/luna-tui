@@ -8,11 +8,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
-import { agentRunners } from "./pack-runner.ts";
+import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
 import type { StageContext } from "../ports.ts";
 
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", ...args], {
+  execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
     encoding: "utf8",
   }).trim();
 
@@ -59,8 +59,8 @@ function fakeSandbox(
   };
 }
 
-function runners(sandbox: (run: SandboxRun) => Promise<SandboxResult>) {
-  return agentRunners({
+function deps(sandbox: (run: SandboxRun) => Promise<SandboxResult>): AgentDeps {
+  return {
     image: "img",
     qaImage: "qa-img",
     credential: { name: "ANTHROPIC_API_KEY", value: "x" },
@@ -68,8 +68,10 @@ function runners(sandbox: (run: SandboxRun) => Promise<SandboxResult>) {
     stateDir,
     watcher: { follow: vi.fn() } as never,
     sandbox,
-  });
+  };
 }
+
+const runners = (sandbox: (run: SandboxRun) => Promise<SandboxResult>) => agentRunners(deps(sandbox));
 
 const context = (stage: StageContext["stage"]): StageContext => ({
   task: {
@@ -102,11 +104,9 @@ beforeEach(() => {
 });
 
 describe("agent stages through orc packs", () => {
-  it("registers a runner for every agent pack", () => {
+  it("registers a runner for every pack dispatched unmodified; the rest are wrapped in bootstrap", () => {
     const r = runners(fakeSandbox(output()));
-    expect(Object.keys(r).sort()).toEqual(
-      ["ci_watch", "e2e", "evidence", "implementing", "reviewing_memory", "test_design", "triage", "verifying"],
-    );
+    expect(Object.keys(r).sort()).toEqual(["implementing", "test_design", "triage"]);
   });
 
   it("sends a StageInput to a read-only sandbox and returns outcome, events, artifacts and usage", async () => {
@@ -132,12 +132,12 @@ describe("agent stages through orc packs", () => {
   });
 
   it("runs e2e in the QA image and every other pack in the base image", async () => {
-    const run = runners(fakeSandbox(output()));
-    await run.e2e!(context("e2e"));
+    const d = deps(fakeSandbox(output()));
+    await runAgent(d, context("e2e"), "e2e");
     expect(seen?.image).toBe("qa-img");
-    await run.evidence!(context("evidence"));
+    await runAgent(d, context("evidence"), "evidence");
     expect(seen?.image).toBe("img");
-    await run.triage!(context("triage"));
+    await runAgent(d, context("triage"), "triage");
     expect(seen?.image).toBe("img");
   });
 

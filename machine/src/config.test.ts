@@ -13,13 +13,13 @@ describe("loadConfig", () => {
     expect(loadConfig({ HOME: "/home/me" })).toEqual({
       databaseUrl: DEFAULT_DATABASE_URL,
       port: DEFAULT_PORT,
+      host: "127.0.0.1",
       agents: true,
       maxConcurrentTasks: DEFAULT_MAX_CONCURRENT_TASKS,
       runnerImage: "hardness-runner:dev",
       runnerQaImage: "hardness-runner-qa:dev",
       worktreesDir: "/home/me/Developer/worktrees",
       stateDir: "/home/me/.local/state/hardness",
-      herdrBin: "herdr",
       githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },
       retentionDays: DEFAULT_RETENTION_DAYS,
     });
@@ -40,6 +40,10 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ MACHINE_GITHUB_POLL_INTERVAL: "0" })).toThrow(/MACHINE_GITHUB_POLL_INTERVAL/);
     expect(() => loadConfig({ MACHINE_GITHUB_POLL_INTERVAL: "x" })).toThrow(/MACHINE_GITHUB_POLL_INTERVAL/);
     expect(() => loadConfig({ MACHINE_GITHUB_POLL: "nope" })).toThrow(/MACHINE_GITHUB_POLL/);
+  });
+
+  it("binds to the host in MACHINE_HOST, so a container can listen on every interface", () => {
+    expect(loadConfig({ HOME: "/h", MACHINE_HOST: "0.0.0.0" }).host).toBe("0.0.0.0");
   });
 
   it("rejects a port that is not a number", () => {
