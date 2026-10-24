@@ -337,6 +337,8 @@ describe("retries and escalation", () => {
     const escalated = await startAndApprove(task.id);
     expect(escalated).toMatchObject({ state: "escalated", reason: "the plan needs a new dependency", resumeTo: "implementing" });
     expect(await stagesRun(task.id)).not.toContain("verifying");
+    const run = (await pipeline.stageRuns(task.id)).find((r) => r.stage === "implementing");
+    expect(run).toMatchObject({ status: "failed", outcome: "escalated" });
   });
 
   it("treats a runner that throws as a failed run", async () => {

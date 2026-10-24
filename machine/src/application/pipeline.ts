@@ -479,7 +479,7 @@ export class Pipeline {
       ? "aborted"
       : result.rateLimited
         ? "paused"
-        : result.outcome === "fail"
+        : result.outcome === "fail" || result.outcome === "escalated"
           ? "failed"
           : "passed";
     const outcome = result.rateLimited ? "rate_limited" : result.outcome;
