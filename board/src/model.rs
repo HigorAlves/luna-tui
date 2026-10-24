@@ -315,6 +315,97 @@ impl Task {
     }
 }
 
+/// Triage's proposed plan, the part you can edit before approving. Slices aren't here:
+/// they're shown for reference but edited only by triage itself.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct PlanEdit {
+    pub brief: String,
+    pub criteria: Vec<String>,
+    pub assumptions: Vec<String>,
+}
+
+/// An open `awaiting_approval` gate's requested plan, read for editing. Fields absent from
+/// `requested` (an older run, or one with nothing to say) come back empty.
+pub fn plan_edit_of(requested: &Value) -> PlanEdit {
+    let strings = |value: &Value| -> Vec<String> {
+        value.as_array().map(|items| items.iter().filter_map(|i| i.as_str().map(str::to_string)).collect()).unwrap_or_default()
+    };
+    PlanEdit {
+        brief: requested["brief"].as_str().unwrap_or_default().to_string(),
+        criteria: strings(&requested["criteria"]),
+        assumptions: strings(&requested["assumptions"]),
+    }
+}
+
+pub fn plan_markdown(edit: &PlanEdit) -> String {
+    let mut out = format!("# Plan
+
+## Brief
+
+{}
+
+## Criteria to build
+
+", edit.brief);
+    for item in &edit.criteria {
+        out.push_str(&format!("- {item}
+"));
+    }
+    out.push_str("
+## Assumptions
+
+");
+    for item in &edit.assumptions {
+        out.push_str(&format!("- {item}
+"));
+    }
+    out
+}
+
+/// Parses `plan_markdown`.
+pub fn parse_plan(markdown: &str) -> PlanEdit {
+    #[derive(PartialEq)]
+    enum Section {
+        Other,
+        Brief,
+        Criteria,
+        Assumptions,
+    }
+
+    let mut section = Section::Other;
+    let mut edit = PlanEdit::default();
+    let mut brief = Vec::new();
+
+    for line in markdown.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            section = match heading.trim().to_ascii_lowercase().as_str() {
+                "brief" => Section::Brief,
+                "criteria to build" => Section::Criteria,
+                "assumptions" => Section::Assumptions,
+                _ => Section::Other,
+            };
+            continue;
+        }
+        if line.starts_with("# ") {
+            continue;
+        }
+        let bullet = |line: &str| {
+            let item = line.trim_start().trim_start_matches("- ").trim();
+            item.to_string()
+        };
+        match section {
+            Section::Brief => brief.push(line),
+            Section::Criteria if !line.trim().is_empty() => edit.criteria.push(bullet(line)),
+            Section::Assumptions if !line.trim().is_empty() => edit.assumptions.push(bullet(line)),
+            _ => {}
+        }
+    }
+
+    edit.brief = brief.join("
+").trim().to_string();
+    edit
+}
+
 /// A ticket's editable text, as shown in `$EDITOR`.
 #[derive(Debug, Default, PartialEq)]
 pub struct TicketText {
@@ -530,6 +621,38 @@ mod tests {
         let plain: Task = serde_json::from_str(&task_json("")).unwrap();
         assert_eq!(linked.card_label(), "#42 Login page");
         assert_eq!(plain.card_label(), "Login page");
+    }
+
+    #[test]
+    fn plan_edit_of_reads_brief_criteria_and_assumptions_from_requested() {
+        let requested: Value = serde_json::json!({
+            "brief": "Build the exporter",
+            "criteria": ["c1", "c2"],
+            "assumptions": ["a1"],
+            "slices": [{"title": "s"}],
+        });
+        assert_eq!(
+            plan_edit_of(&requested),
+            PlanEdit { brief: "Build the exporter".into(), criteria: vec!["c1".into(), "c2".into()], assumptions: vec!["a1".into()] }
+        );
+        assert_eq!(plan_edit_of(&Value::Null), PlanEdit::default());
+    }
+
+    #[test]
+    fn plan_edit_round_trips() {
+        let edit = PlanEdit {
+            brief: "Build the exporter".into(),
+            criteria: vec!["handles a/b & c".into(), "exports UTF-8".into()],
+            assumptions: vec!["CSV only for now".into()],
+        };
+        let markdown = plan_markdown(&edit);
+        assert_eq!(parse_plan(&markdown), edit);
+    }
+
+    #[test]
+    fn plan_edit_with_no_assumptions_round_trips() {
+        let edit = PlanEdit { brief: "b".into(), criteria: vec!["c".into()], assumptions: vec![] };
+        assert_eq!(parse_plan(&plan_markdown(&edit)), edit);
     }
 
     #[test]

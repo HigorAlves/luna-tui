@@ -26,7 +26,7 @@ use crate::{
     herdr,
     model::{
         COLUMNS, Look, Metrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
-        parse_ticket, questions_of, short_id, ticket_markdown,
+        parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown,
     },
     store,
     vim::Vim,
@@ -108,6 +108,18 @@ pub enum Mode {
         area: TextArea<'static>,
         vim: Vim,
     },
+    /// Which side of `EditPlan` has keyboard focus. Tab switches; a save covers both.
+    /// Editing triage's plan and the ticket side by side: left the plan (brief, criteria,
+    /// assumptions — slices stay as triage wrote them), right the ticket's own text. Open
+    /// while a ticket is `awaiting_approval`, in place of the plain ticket editor.
+    EditPlan {
+        id: String,
+        plan_area: TextArea<'static>,
+        ticket_area: TextArea<'static>,
+        focus: PlanPane,
+        plan_vim: Vim,
+        ticket_vim: Vim,
+    },
     /// Typing a reason: required to send back, optional guidance for an escalation.
     Reason {
         id: String,
@@ -129,6 +141,18 @@ pub enum Mode {
         cursor: usize,
     },
     Help,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PlanPane {
+    Plan,
+    Ticket,
+}
+
+/// Whether `task` is at the plan gate with its plan already fetched into `detail`, so `e`
+/// opens the two-pane plan editor instead of the plain ticket editor.
+fn has_open_plan(task: &Task, detail: Option<&TaskDetail>) -> bool {
+    task.state == "awaiting_approval" && detail.is_some_and(|d| d.task.id == task.id && d.open_approval().is_some())
 }
 
 /// What the event loop must do after a key press.
@@ -526,6 +550,50 @@ impl App {
         self.mode = Mode::EditTicket { id: id.to_string(), area, vim: Vim::new() };
     }
 
+    /// Opens triage's plan and the ticket side by side: left the plan, right the ticket's
+    /// own text. Only reachable while the ticket is `awaiting_approval` with its plan
+    /// already fetched (`has_open_plan`), so the plan pane always has something to show.
+    fn open_plan_editor(&mut self, id: &str) {
+        let Some(task) = self.task(id).cloned() else {
+            return;
+        };
+        let Some(requested) = self.detail.as_ref().and_then(TaskDetail::open_approval).map(|a| a.requested.clone()) else {
+            return;
+        };
+        let plan_edit = plan_edit_of(&requested);
+        let ticket_text = TicketText {
+            title: task.title.clone(),
+            description: task.description.clone(),
+            criteria: task.criteria.clone(),
+            repo_path: task.repo_path.clone(),
+        };
+
+        let mut plan_area = TextArea::new(plan_markdown(&plan_edit).lines().map(str::to_string).collect());
+        plan_area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+        plan_area.set_block(
+            ratatui::widgets::Block::bordered()
+                .padding(ratatui::widgets::Padding::new(2, 2, 1, 1))
+                .title(" plan — tab switches panes, ctrl+s saves both "),
+        );
+
+        let mut ticket_area = TextArea::new(ticket_markdown(&ticket_text).lines().map(str::to_string).collect());
+        ticket_area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+        ticket_area.set_block(
+            ratatui::widgets::Block::bordered()
+                .padding(ratatui::widgets::Padding::new(2, 2, 1, 1))
+                .title(format!(" ticket #{} {} ", task.short_id(), task.title)),
+        );
+
+        self.mode = Mode::EditPlan {
+            id: id.to_string(),
+            plan_area,
+            ticket_area,
+            focus: PlanPane::Plan,
+            plan_vim: Vim::new(),
+            ticket_vim: Vim::new(),
+        };
+    }
+
     /// Opens the repo search for `id`: type to filter, enter to set it on the ticket.
     fn open_repo_picker(&mut self, id: &str) {
         let all = repos_root().map(|root| discover_repos(&root)).unwrap_or_default();
@@ -588,7 +656,13 @@ impl App {
                 }
                 self.notify("nothing waiting to ship on this ticket", false);
             }
-            'e' => self.open_ticket_editor(id),
+            'e' => {
+                if has_open_plan(&task, self.detail.as_ref()) {
+                    self.open_plan_editor(id);
+                } else {
+                    self.open_ticket_editor(id);
+                }
+            }
             'R' => self.open_repo_picker(id),
             'r' => {
                 if matches!(task.state.as_str(), "awaiting_approval" | "awaiting_test_check") {
@@ -653,6 +727,7 @@ impl App {
             }
             Mode::Adding(_) => self.handle_adding(key),
             Mode::EditTicket { .. } => self.handle_edit_ticket(key),
+            Mode::EditPlan { .. } => self.handle_edit_plan(key),
             Mode::Filter => self.handle_filter(key),
             Mode::Reason { .. } => self.handle_reason(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
@@ -770,6 +845,92 @@ impl App {
     /// Vim-style modal editing, like `$EDITOR` gave before editing moved in place: normal mode
     /// navigates, `i`/`a`/`o`/... enter insert mode, ctrl+s saves (either mode), esc in normal
     /// mode cancels. Saving parses the same markdown `e` used to write to `$EDITOR`.
+    /// Tab always switches panes (never a literal tab in either text), ctrl+s saves what
+    /// changed in both, esc in either pane's normal mode cancels the whole editor.
+    fn handle_edit_plan(&mut self, key: KeyEvent) -> Outcome {
+        if key.code == KeyCode::Tab {
+            if let Mode::EditPlan { focus, .. } = &mut self.mode {
+                *focus = match focus {
+                    PlanPane::Plan => PlanPane::Ticket,
+                    PlanPane::Ticket => PlanPane::Plan,
+                };
+            }
+            return Outcome::Continue;
+        }
+        let Mode::EditPlan { plan_area, ticket_area, focus, plan_vim, ticket_vim, .. } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let outcome = match focus {
+            PlanPane::Plan => plan_vim.handle(plan_area, key),
+            PlanPane::Ticket => ticket_vim.handle(ticket_area, key),
+        };
+        match outcome {
+            crate::vim::Outcome::Continue => {}
+            crate::vim::Outcome::Cancel => self.mode = Mode::Normal,
+            crate::vim::Outcome::Save => self.save_plan_editor(),
+        }
+        Outcome::Continue
+    }
+
+    /// Saves whichever pane(s) changed: the plan via `PATCH .../plan`, the ticket via the
+    /// usual `update`. Either can fail without undoing the other.
+    fn save_plan_editor(&mut self) {
+        let Mode::EditPlan { id, plan_area, ticket_area, .. } = &self.mode else {
+            return;
+        };
+        let id = id.clone();
+        let plan_markdown_text = plan_area.lines().join("
+");
+        let ticket_markdown_text = ticket_area.lines().join("
+");
+        self.mode = Mode::Normal;
+
+        let Some(task) = self.task(&id).cloned() else {
+            return;
+        };
+        let before_plan = self
+            .detail
+            .as_ref()
+            .and_then(TaskDetail::open_approval)
+            .map(|a| plan_edit_of(&a.requested))
+            .unwrap_or_default();
+        let edited_plan = parse_plan(&plan_markdown_text);
+        let before_ticket = TicketText {
+            title: task.title.clone(),
+            description: task.description.clone(),
+            criteria: task.criteria.clone(),
+            repo_path: task.repo_path.clone(),
+        };
+        let edited_ticket = TicketText { repo_path: task.repo_path.clone(), ..parse_ticket(&ticket_markdown_text, &task.title) };
+
+        let mut changed = false;
+        if edited_plan != before_plan {
+            changed = true;
+            match self.machine.edit_plan(&id, &edited_plan) {
+                Ok(task) => {
+                    self.upsert(task);
+                    self.detail_stale = true;
+                }
+                Err(error) => {
+                    self.notify(error, true);
+                    return;
+                }
+            }
+        }
+        if edited_ticket != before_ticket {
+            changed = true;
+            match self.machine.update(&id, &edited_ticket) {
+                Ok(task) => self.upsert(task),
+                Err(error) => {
+                    self.notify(error, true);
+                    return;
+                }
+            }
+        }
+        self.select(&id, true);
+        self.notify(if changed { "saved" } else { "nothing changed" }, false);
+    }
+
     fn handle_edit_ticket(&mut self, key: KeyEvent) -> Outcome {
         let Mode::EditTicket { id, area, vim } = &mut self.mode else {
             return Outcome::Continue;
@@ -1035,6 +1196,45 @@ impl App {
 mod tests {
     use super::*;
 
+    fn task_at(state: &str) -> Task {
+        let json = format!(
+            r#"{{"id":"t1","title":"Login page","description":"","criteria":[],
+            "repoPath":null,"branch":null,"worktreePath":null,"state":"{state}","column":"Approved",
+            "waitingOnYou":true,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+        );
+        serde_json::from_str(&json).unwrap()
+    }
+
+    #[test]
+    fn has_open_plan_true_only_for_awaiting_approval_with_an_open_gate() {
+        let task = task_at("awaiting_approval");
+        let detail: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{{"id":"t1","title":"x","description":"","criteria":[],
+            "repoPath":null,"branch":null,"worktreePath":null,"state":"awaiting_approval","column":"Approved",
+            "waitingOnYou":true,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}},
+            "stageRuns":[],"approvals":[{{"requested":{{"brief":"b"}},"decision":null}}],"events":[]}}"#
+        )).unwrap();
+
+        assert!(has_open_plan(&task, Some(&detail)));
+        assert!(!has_open_plan(&task_at("draft"), Some(&detail)));
+        assert!(!has_open_plan(&task, None));
+
+        let mismatched = task_at("awaiting_approval");
+        let other_detail: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{{"id":"other","title":"x","description":"","criteria":[],
+            "repoPath":null,"branch":null,"worktreePath":null,"state":"awaiting_approval","column":"Approved",
+            "waitingOnYou":true,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}},
+            "stageRuns":[],"approvals":[{{"requested":{{"brief":"b"}},"decision":null}}],"events":[]}}"#
+        )).unwrap();
+        assert!(!has_open_plan(&mismatched, Some(&other_detail)));
+    }
+
     #[test]
     fn warns_when_the_machine_is_unreachable_on_startup() {
         // SAFETY: this test does not run alongside another that reads this var.
@@ -1044,6 +1244,59 @@ mod tests {
         let toast = app.toast.expect("a warning toast on startup");
         assert!(toast.error);
         assert!(toast.text.contains("pnpm dev"), "toast was: {}", toast.text);
+    }
+
+    fn plan_editor() -> Mode {
+        Mode::EditPlan {
+            id: "t1".to_string(),
+            plan_area: TextArea::new(vec!["# Plan".to_string()]),
+            ticket_area: TextArea::new(vec!["# Ticket".to_string()]),
+            focus: PlanPane::Plan,
+            plan_vim: Vim::new(),
+            ticket_vim: Vim::new(),
+        }
+    }
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, ratatui::crossterm::event::KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn tab_switches_focus_between_the_plan_and_ticket_panes() {
+        // SAFETY: every test here sets the same value, so a parallel run can't race on it.
+        unsafe { std::env::set_var("HARDNESS_MACHINE_URL", "http://127.0.0.1:1") };
+        let mut app = App::new(Machine::from_env());
+        app.mode = plan_editor();
+
+        app.handle_key(key(KeyCode::Tab));
+        let Mode::EditPlan { focus, .. } = &app.mode else { panic!("still editing") };
+        assert_eq!(*focus, PlanPane::Ticket);
+
+        app.handle_key(key(KeyCode::Tab));
+        let Mode::EditPlan { focus, .. } = &app.mode else { panic!("still editing") };
+        assert_eq!(*focus, PlanPane::Plan);
+    }
+
+    #[test]
+    fn esc_in_normal_mode_cancels_the_whole_plan_editor() {
+        // SAFETY: every test here sets the same value, so a parallel run can't race on it.
+        unsafe { std::env::set_var("HARDNESS_MACHINE_URL", "http://127.0.0.1:1") };
+        let mut app = App::new(Machine::from_env());
+        app.mode = plan_editor();
+
+        app.handle_key(key(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn ctrl_s_returns_to_normal_whether_or_not_the_save_reaches_the_machine() {
+        // SAFETY: every test here sets the same value, so a parallel run can't race on it.
+        unsafe { std::env::set_var("HARDNESS_MACHINE_URL", "http://127.0.0.1:1") };
+        let mut app = App::new(Machine::from_env());
+        app.mode = plan_editor();
+
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), ratatui::crossterm::event::KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Normal));
     }
 
     #[test]
