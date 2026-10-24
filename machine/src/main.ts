@@ -2,24 +2,24 @@
 // mid-stage, then serves the API on localhost.
 import { serve } from "@hono/node-server";
 
-import { createApp } from "./api/app.ts";
-import { Bus } from "./api/bus.ts";
-import { parseSince } from "./api/metrics.ts";
-import { toEvent, toTask } from "./api/serialize.ts";
+import { createApp } from "./adapters/http/app.ts";
+import { Bus } from "./adapters/http/bus.ts";
+import { parseSince } from "./adapters/http/metrics.ts";
+import { toEvent, toTask } from "./adapters/http/serialize.ts";
 import { buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig } from "./config.ts";
-import { createDataSource } from "./db/data-source.ts";
-import { computeMetrics } from "./db/metrics-query.ts";
-import { pruneOldRuns } from "./db/prune.ts";
+import { createDataSource } from "./adapters/persistence/data-source.ts";
+import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
+import { pruneOldRuns } from "./adapters/persistence/prune.ts";
 import type { EventRow } from "./domain/task.ts";
-import { Watcher } from "./herdr/watch.ts";
-import { GitHubIntake } from "./intake/github.ts";
-import { Pipeline } from "./pipeline/pipeline.ts";
-import { exec } from "./sandbox/exec.ts";
-import { realDeliverRunner } from "./stages/deliver.ts";
-import { shipRunner } from "./stages/ship.ts";
-import { StubStages } from "./stages/stubs.ts";
-import { verifyRunner } from "./stages/verify.ts";
+import { Watcher } from "./adapters/herdr/watch.ts";
+import { GitHubIntake } from "./application/intake.ts";
+import { Pipeline } from "./application/pipeline.ts";
+import { exec } from "./adapters/process/exec.ts";
+import { realDeliverRunner } from "./application/stages/deliver.ts";
+import { shipRunner } from "./application/stages/ship.ts";
+import { StubStages } from "./application/stages/stubs.ts";
+import { verifyRunner } from "./application/stages/verify.ts";
 
 const config = loadConfig();
 const db = createDataSource(config.databaseUrl);

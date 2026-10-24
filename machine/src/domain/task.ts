@@ -1,8 +1,8 @@
 // Plain domain types for a task and everything attached to it. No TypeORM here — see
-// ../db/schemas.ts for the persistence mapping of these same shapes.
+// ../adapters/persistence/schemas.ts for the persistence mapping of these same shapes.
 import type { ArtifactKind, TaskSource, TaskState } from "@hardness/contracts";
 
-import type { Retries } from "../engine/transition.ts";
+import type { Retries } from "./transition.ts";
 
 export interface TaskRow {
   id: string;

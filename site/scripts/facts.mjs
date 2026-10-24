@@ -15,7 +15,7 @@ export function collectFacts(repoRoot) {
   const contracts = readFileSync(join(repoRoot, "contracts/src/index.ts"), "utf8")
   const columns = contracts.match(/COLUMNS\s*=\s*\[([^\]]*)\]/)?.[1]
   const states = contracts.match(/TaskState\s*=\s*z\.enum\(\[([^\]]*)\]/)?.[1]
-  const input = readFileSync(join(repoRoot, "machine/src/stages/input.ts"), "utf8")
+  const input = readFileSync(join(repoRoot, "machine/src/domain/stage-input.ts"), "utf8")
   const limits = input.match(/PACK_LIMITS[^=]*=\s*\{([\s\S]*?)\n\};/)?.[1]
   if (columns === undefined || states === undefined || limits === undefined) throw new Error("facts: could not parse contracts or PACK_LIMITS")
   const machine = join(repoRoot, "machine")

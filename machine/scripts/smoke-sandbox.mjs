@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
-import { runSandbox } from "../src/sandbox/docker.ts";
+import { runSandbox } from "../src/adapters/docker/docker.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = join(here, "..", "..", "fixtures", "golden-task");

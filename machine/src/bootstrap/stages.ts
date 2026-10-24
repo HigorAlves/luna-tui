@@ -4,17 +4,17 @@
 import type { TaskState } from "@hardness/contracts";
 
 import type { Config } from "../config.ts";
-import type { Watcher } from "../herdr/watch.ts";
-import { agentRunners, runAgent } from "../stages/agents.ts";
-import { ciWatchRunner } from "../stages/ci.ts";
-import { e2eRunner, missingQaImageRunner } from "../stages/e2e.ts";
-import { type EvidenceDeps, evidenceRunner } from "../stages/evidence.ts";
-import { memoryReviewRunner, withMemoryReview } from "../stages/memory.ts";
-import type { StageContext, StageResult, StageRunner } from "../stages/runner.ts";
-import { shipRunner } from "../stages/ship.ts";
-import { loadCredential } from "../sandbox/credentials.ts";
-import { imageExists, removeLeftoverContainers } from "../sandbox/docker.ts";
-import { exec } from "../sandbox/exec.ts";
+import type { Watcher } from "../adapters/herdr/watch.ts";
+import { agentRunners, runAgent } from "../application/stages/pack-runner.ts";
+import { ciWatchRunner } from "../application/stages/ci.ts";
+import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
+import { type EvidenceDeps, evidenceRunner } from "../application/stages/evidence.ts";
+import { memoryReviewRunner, withMemoryReview } from "../application/stages/memory.ts";
+import type { StageContext, StageResult, StageRunner } from "../application/ports.ts";
+import { shipRunner } from "../application/stages/ship.ts";
+import { loadCredential } from "../adapters/docker/credentials.ts";
+import { imageExists, removeLeftoverContainers } from "../adapters/docker/docker.ts";
+import { exec } from "../adapters/process/exec.ts";
 
 export interface RealStagesResult {
   real: Partial<Record<TaskState, StageRunner>>;
