@@ -10,10 +10,12 @@ export const MACHINE_URL = process.env.HARDNESS_MACHINE_URL ?? "http://127.0.0.1
 export const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "fixtures");
 
 /** Stages whose runs are agent packs: a real run reports usage, a stub run does not. */
-export const AGENT_STAGES = ["triage", "test_design", "implementing"];
+export const AGENT_STAGES = ["triage", "test_design", "implementing", "verifying"];
 /** Stages every graded run has to have passed. */
 export const CORE_STAGES = ["triage", "test_design", "implementing", "verifying"];
 export const MAX_DIFF_LINES = 300;
+/** A test file in any of the fixture ecosystems: verifying must leave at least one in the diff. */
+export const TEST_FILE = /(^|\/)(test_[^/]+\.py|[^/]+_test\.go|[^/]+_spec\.rb|[^/]+\.(test|spec)\.[cm]?[jt]sx?)$|(^|\/)(tests?|__tests__|spec)\//;
 const SHIPPED = ["awaiting_ship", "shipping", "reviewing_memory", "closed"];
 
 const started = Date.now();
@@ -192,8 +194,8 @@ export function passRate(runs) {
  * stage on the path passed, no stub ran, evidence verdict pass|skipped, cost under the
  * ceiling, diff within budget.
  */
-export function grade({ detail, testPassed, diffLines, ceilingUsd, expectNoRemote }) {
-  const { task, stageRuns, approvals } = detail;
+export function grade({ detail, testPassed, diffLines, ceilingUsd, expectNoRemote, changedFiles = [] }) {
+  const { task, stageRuns, approvals, events = [] } = detail;
   const failures = [];
   const lastRun = (stage) => stageRuns.filter((r) => r.stage === stage).at(-1);
 
@@ -243,7 +245,28 @@ export function grade({ detail, testPassed, diffLines, ceilingUsd, expectNoRemot
 
   if (!testPassed) failures.push("fixture tests fail in the worktree");
 
-  const checks = { suite: testPassed, stages, stubFree, evidence, cost, size };
+  // verifying authors the proof: a test file must be in the diff, and every scenario
+  // test_design named (each with an approach) must come back from verifying as a pass.
+  const authored = changedFiles.some((f) => TEST_FILE.test(f));
+  if (!authored) failures.push("no test file in the diff: verifying authored nothing");
+  const cases = approvals.find((a) => a.kind === "awaiting_test_check")?.requested?.cases ?? [];
+  const verifyingDetail = events.filter((e) => e.kind === "stage.finished" && e.payload?.stage === "verifying").at(-1)?.payload?.detail;
+  const results = Array.isArray(verifyingDetail?.results) ? verifyingDetail.results : [];
+  let scenarios = cases.length > 0;
+  if (!scenarios) failures.push("test_design named no scenarios");
+  for (const c of cases) {
+    if (typeof c.approach !== "string" || !c.approach.trim()) {
+      scenarios = false;
+      failures.push(`scenario without an approach: ${c.title}`);
+    }
+    const result = results.find((r) => r.title === c.title);
+    if (result?.outcome !== "pass") {
+      scenarios = false;
+      failures.push(`scenario not proven by verifying: ${c.title} (${result ? result.outcome : "no result"})`);
+    }
+  }
+
+  const checks = { suite: testPassed, stages, stubFree, evidence, cost, size, authored, scenarios };
   return { result: Object.values(checks).every(Boolean) ? "pass" : "fail", checks, failures, costUsd, verdict };
 }
 
@@ -264,12 +287,15 @@ export async function runTicket(fixture, ticket, { ceilingUsd, expectNoRemote })
     worktreePath = detail.task.worktreePath;
     let testPassed = false;
     let diffLines = 0;
+    let changedFiles = [];
     if (worktreePath) {
+      // Read the diff before the hidden acceptance tests land on top of it.
+      diffLines = parseShortstat(git(worktreePath, "diff", "--shortstat", `${seed}..HEAD`));
+      changedFiles = git(worktreePath, "diff", "--name-only", `${seed}..HEAD`).split("\n").filter(Boolean);
       overlayAccept(fixture, ticket, worktreePath);
       testPassed = runFixtureTests(fixture, worktreePath);
-      diffLines = parseShortstat(git(worktreePath, "diff", "--shortstat", `${seed}..HEAD`));
     }
-    const graded = grade({ detail, testPassed, diffLines, ceilingUsd, expectNoRemote });
+    const graded = grade({ detail, testPassed, diffLines, ceilingUsd, expectNoRemote, changedFiles });
     if (!worktreePath) graded.failures.push("no worktree: the implementer never ran");
     Object.assign(entry, graded, { diffLines, result: worktreePath ? graded.result : "fail" });
   } catch (error) {
