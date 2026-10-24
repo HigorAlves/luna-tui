@@ -66,7 +66,7 @@ export function buildStageInput(opts: {
   const pack = stage as PackId;
   const { maxTurns, timeoutMs } = PACK_LIMITS[pack];
   return {
-    schema: 2,
+    schema: 3,
     stage,
     pack,
     attempt,
