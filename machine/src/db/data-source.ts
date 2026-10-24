@@ -3,7 +3,7 @@
 import { DataSource } from "typeorm";
 
 import { loadConfig } from "../config.ts";
-import { ENTITIES } from "./entities.ts";
+import { ENTITIES } from "./schemas.ts";
 import { MIGRATIONS } from "./migrations/index.ts";
 
 export function createDataSource(url: string): DataSource {

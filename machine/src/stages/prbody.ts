@@ -1,7 +1,7 @@
 // The PR title and body, in the orc caveman-pr shape: a one-line what, terse why bullets from
 // the approved plan, the acceptance criteria, and `Closes #N` when the PR lands in the source
 // repo. No attribution, no trailers beyond the close line.
-import type { TaskRow } from "../db/entities.ts";
+import type { TaskRow } from "../domain/task.ts";
 import type { StageInput } from "@hardness/contracts";
 
 export const TITLE_MAX = 60;

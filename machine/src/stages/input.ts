@@ -1,7 +1,7 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
 import type { Finding, PackId, StageInput, TaskState } from "@hardness/contracts";
 
-import type { ApprovalRow, TaskRow } from "../db/entities.ts";
+import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 
 const MINUTE = 60_000;
 

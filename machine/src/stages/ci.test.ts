@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { TaskRow } from "../db/entities.ts";
+import type { TaskRow } from "../domain/task.ts";
 import type { ExecResult } from "../sandbox/exec.ts";
 import { ciWatchRunner } from "./ci.ts";
 import type { StageContext, StageResult } from "./runner.ts";

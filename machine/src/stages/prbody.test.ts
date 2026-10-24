@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { TaskRow } from "../db/entities.ts";
+import type { TaskRow } from "../domain/task.ts";
 import { buildPr } from "./prbody.ts";
 
 const task = (over: Partial<TaskRow> = {}) =>

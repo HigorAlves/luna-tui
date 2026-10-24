@@ -10,7 +10,7 @@ import {
   WAITING_ON_USER,
 } from "@hardness/contracts";
 
-import type { ApprovalRow, ArtifactRow, EventRow, StageRunRow, TaskRow } from "../db/entities.ts";
+import type { ApprovalRow, ArtifactRow, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 
 const iso = (date: Date | null) => (date ? date.toISOString() : null);
 

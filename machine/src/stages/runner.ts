@@ -6,7 +6,7 @@ import type {
   TaskState,
 } from "@hardness/contracts";
 
-import type { ApprovalRow, TaskRow } from "../db/entities.ts";
+import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 import type { StageOutcome } from "../engine/transition.ts";
 
 export interface StageContext {

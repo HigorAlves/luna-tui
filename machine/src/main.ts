@@ -9,7 +9,7 @@ import { computeMetrics, parseSince } from "./api/metrics.ts";
 import { toEvent, toTask } from "./api/serialize.ts";
 import { loadConfig } from "./config.ts";
 import { createDataSource } from "./db/data-source.ts";
-import type { EventRow } from "./db/entities.ts";
+import type { EventRow } from "./domain/task.ts";
 import { pruneOldRuns } from "./db/prune.ts";
 import { Watcher } from "./herdr/watch.ts";
 import { GitHubIntake } from "./intake/github.ts";

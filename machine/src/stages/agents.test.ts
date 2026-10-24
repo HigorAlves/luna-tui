@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { StageInput, type StageOutput } from "@hardness/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { TaskRow } from "../db/entities.ts";
+import type { TaskRow } from "../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../sandbox/docker.ts";
 import { agentRunners } from "./agents.ts";
 import type { StageContext } from "./runner.ts";

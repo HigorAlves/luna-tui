@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import type { TaskRow } from "../db/entities.ts";
+import type { TaskRow } from "../domain/task.ts";
 import type { ExecResult } from "../sandbox/exec.ts";
 import type { StageContext, StageResult } from "./runner.ts";
 import { verifyRunner } from "./verify.ts";

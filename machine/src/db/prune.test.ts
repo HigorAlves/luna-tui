@@ -7,7 +7,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { NO_RETRIES } from "../engine/transition.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { EventEntity, StageRunEntity, TaskEntity } from "./entities.ts";
+import { EventEntity, StageRunEntity, TaskEntity } from "./schemas.ts";
 import { pruneOldRuns } from "./prune.ts";
 
 let db: DataSource;

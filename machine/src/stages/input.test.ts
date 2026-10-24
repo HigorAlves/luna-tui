@@ -1,7 +1,7 @@
 import { StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import type { ApprovalRow, TaskRow } from "../db/entities.ts";
+import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 import { PACK_LIMITS, buildStageInput } from "./input.ts";
 
 const task = {

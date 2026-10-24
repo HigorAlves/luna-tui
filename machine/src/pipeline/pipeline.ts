@@ -5,20 +5,16 @@
 import { type Finding, RUNNING, type TaskSource, type TaskState } from "@hardness/contracts";
 import { type DataSource, type EntityManager, In, IsNull } from "typeorm";
 
-import {
-  ApprovalEntity,
-  type ApprovalRow,
-  ArtifactEntity,
-  type ArtifactRow,
-  type Decision,
-  EventEntity,
-  type EventRow,
-  StageRunEntity,
-  type StageRunRow,
-  type StageRunStatus,
-  TaskEntity,
-  type TaskRow,
-} from "../db/entities.ts";
+import { ApprovalEntity, ArtifactEntity, EventEntity, StageRunEntity, TaskEntity } from "../db/schemas.ts";
+import type {
+  ApprovalRow,
+  ArtifactRow,
+  Decision,
+  EventRow,
+  StageRunRow,
+  StageRunStatus,
+  TaskRow,
+} from "../domain/task.ts";
 import { NO_RETRIES, type PipelineEvent, type Step, transition } from "../engine/transition.ts";
 import { removeWorktree as removeWorktreeOnDisk } from "../git/worktree.ts";
 import { type CloseDeps, closeTask } from "../stages/close.ts";
