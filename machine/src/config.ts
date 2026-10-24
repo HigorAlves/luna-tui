@@ -5,6 +5,8 @@ import { join } from "node:path";
 export interface Config {
   databaseUrl: string;
   port: number;
+  /** Interface the API binds to. 127.0.0.1 on the host; 0.0.0.0 inside the compose container. */
+  host: string;
   /** Run Triage and Implementer as real agents. Off: every stage is a stub. */
   agents: boolean;
   /** Tasks that can be driving a stage at once, across every repo. The rest queue. */
@@ -65,6 +67,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     databaseUrl: env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
     port,
+    host: env.MACHINE_HOST ?? "127.0.0.1",
     agents: env.MACHINE_AGENTS !== "off",
     maxConcurrentTasks,
     runnerImage: env.RUNNER_IMAGE ?? "hardness-runner:dev",

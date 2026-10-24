@@ -64,7 +64,7 @@ jobs:
       - name: Migrate and start the machine
         run: |
           pnpm --filter @hardness/machine db:migrate
-          nohup pnpm dev > machine.log 2>&1 &
+          nohup pnpm --filter @hardness/machine start > machine.log 2>&1 &
           for _ in $(seq 1 60); do
             curl -fs http://127.0.0.1:4317/health && exit 0
             sleep 2
@@ -84,7 +84,7 @@ jobs:
         env:
           HARDNESS_MACHINE_URL: http://127.0.0.1:4318
         run: |
-          MACHINE_PORT=4318 MACHINE_MAX_CONCURRENT=1 nohup pnpm dev > machine-live.log 2>&1 &
+          MACHINE_PORT=4318 MACHINE_MAX_CONCURRENT=1 nohup pnpm --filter @hardness/machine start > machine-live.log 2>&1 &
           for _ in $(seq 1 60); do
             curl -fs http://127.0.0.1:4318/health && break
             sleep 2
