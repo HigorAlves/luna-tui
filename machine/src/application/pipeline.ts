@@ -341,7 +341,11 @@ export class Pipeline {
         if (controller.signal.aborted) return;
         const next: PipelineEvent = result.rateLimited
           ? { type: "rate_limited" }
-          : { type: "stage_done", outcome: result.outcome };
+          : {
+              type: "stage_done",
+              outcome: result.outcome,
+              ...(typeof result.detail?.reason === "string" ? { reason: result.detail.reason } : {}),
+            };
         const detail =
           result.needsInput?.length || result.requested?.length
             ? {

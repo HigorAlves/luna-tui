@@ -330,6 +330,15 @@ describe("retries and escalation", () => {
     expect(resumed.reason).toBeNull();
   });
 
+  it("escalates with the agent's own reason when it stops on purpose, without verifying", async () => {
+    stubs.plan("implementing", { outcome: "escalated", detail: { reason: "the plan needs a new dependency" } });
+    const task = await newTask();
+
+    const escalated = await startAndApprove(task.id);
+    expect(escalated).toMatchObject({ state: "escalated", reason: "the plan needs a new dependency", resumeTo: "implementing" });
+    expect(await stagesRun(task.id)).not.toContain("verifying");
+  });
+
   it("treats a runner that throws as a failed run", async () => {
     const throwing: StageRunner = async () => {
       throw new Error("container exited with 137");

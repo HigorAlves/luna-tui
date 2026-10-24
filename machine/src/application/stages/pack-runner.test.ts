@@ -141,6 +141,17 @@ describe("agent stages through orc packs", () => {
     expect(seen?.image).toBe("img");
   });
 
+  it.each([
+    ["an escalated outcome", { outcome: "escalated" as const }],
+    ["a pass whose answer escalated (orc before the escalated outcome)", { outcome: "pass" as const }],
+  ])("reports %s as escalated, with the agent's reason and options", async (_, over) => {
+    const answer = { kind: "escalated", summary: "stopped", reason: "needs a new dependency", options: ["add it", "drop it"] };
+    const run = runners(fakeSandbox(output({ ...over, summary: "stopped", answer })));
+    const result = await run.implementing!(context("implementing"));
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ reason: "needs a new dependency", options: ["add it", "drop it"] });
+  });
+
   it("maps needs_input to summary and questions", async () => {
     const questions = [{ question: "which db?", recommended: "pg" }];
     const run = runners(fakeSandbox(output({ outcome: "needs_input", needsInput: questions })));

@@ -131,6 +131,23 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     return merged({ ...mapped, detail: { request: output.summary } });
   }
 
+  // The agent stopped on purpose. orc before the `escalated` outcome reported this as a pass.
+  const stopped = answerOf(output.answer);
+  if (output.outcome === "escalated" || stopped?.kind === "escalated") {
+    return dirty(
+      merged({
+        ...mapped,
+        outcome: "escalated",
+        detail: {
+          ...mapped.detail,
+          summary: output.summary,
+          reason: typeof stopped?.reason === "string" && stopped.reason ? stopped.reason : output.summary,
+          options: Array.isArray(stopped?.options) ? stopped.options : [],
+        },
+      }),
+    );
+  }
+
   // outcome pass
   if (pack === "implementing") {
     // The implementer commits inside the container; anything left over is not part of the answer.

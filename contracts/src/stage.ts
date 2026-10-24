@@ -4,7 +4,7 @@
 import { z } from "zod";
 
 /** What a stage run decided. Lives here, not in api.ts, so the two files do not import each other in a loop. */
-export const StageOutcome = z.enum(["pass", "fail", "needs_input", "test_change"]);
+export const StageOutcome = z.enum(["pass", "fail", "needs_input", "test_change", "escalated"]);
 export type StageOutcome = z.infer<typeof StageOutcome>;
 
 /** The tracker item a task came from. */

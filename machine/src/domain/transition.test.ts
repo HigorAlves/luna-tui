@@ -161,6 +161,24 @@ describe("retry loops", () => {
   });
 });
 
+describe("escalations from the agent", () => {
+  it("escalate at once with the agent's reason, and resume the same stage", () => {
+    const retries = { ...NO_RETRIES, total: 2 };
+    const step = transition(at("implementing", { retries }), {
+      type: "stage_done",
+      outcome: "escalated",
+      reason: "the plan needs a new dependency",
+    });
+    expect(step).toMatchObject({ state: "escalated", resumeTo: "implementing", reason: "the plan needs a new dependency", retries });
+    expect(transition(step, approved).state).toBe("implementing");
+  });
+
+  it("fall back to a generic reason when the agent gives none", () => {
+    const step = transition(at("verifying"), { type: "stage_done", outcome: "escalated" });
+    expect(step).toMatchObject({ state: "escalated", resumeTo: "verifying", reason: "verifying escalated" });
+  });
+});
+
 describe("test change requests", () => {
   it("send the implementer back to the test designer and count toward the total", () => {
     const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2 } }), {
