@@ -5,7 +5,7 @@
 // verdict costs up to three runs before the approval shows; accepted, the engine stays as is.
 import type { Finding, RequestedAction } from "@hardness/contracts";
 
-import type { ExecFn } from "./deliver.ts";
+import { type ExecFn, prChecks, rerunWorkflow } from "../github/gh.ts";
 import type { StageContext, StageResult, StageRunner } from "./runner.ts";
 
 const MINUTE = 60_000;
@@ -52,7 +52,7 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
       const deadline = Date.now() + waitMs;
       for (;;) {
         if (signal.aborted) return { kind: "aborted" };
-        const polled = await deps.exec("gh", ["pr", "checks", branch, "--json", "name,state,link"], { cwd, signal });
+        const polled = await prChecks({ exec: deps.exec }, branch, cwd, signal);
         let checks: Check[] = [];
         try {
           const parsed: unknown = JSON.parse(polled.stdout || "[]");
@@ -120,7 +120,7 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
     // Flake: one re-run of the failed workflow, then a second look.
     const runId = /\/actions\/runs\/(\d+)/.exec(failed.find((c) => c.link)?.link ?? "")?.[1];
     if (!runId) return fixable("flake verdict, but no workflow run id to re-run");
-    const rerun = await deps.exec("gh", ["run", "rerun", "--failed", runId], { cwd, signal });
+    const rerun = await rerunWorkflow({ exec: deps.exec }, runId, cwd, signal);
     if (rerun.code !== 0) return fixable(`flake verdict, but the re-run failed: ${rerun.stderr.trim()}`);
     const second = await settle(RERUN_WAIT_MS);
     const stoppedAgain = stopped(second);

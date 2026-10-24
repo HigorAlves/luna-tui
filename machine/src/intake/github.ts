@@ -1,9 +1,9 @@
 // Polls GitHub for labelled issues and turns each new one into a backlog task. The `gh`
 // CLI does the talking, so auth is whatever `gh auth login` set up.
+import { defaultGh, type Gh, listReadyIssues } from "../github/gh.ts";
 import type { Pipeline } from "../pipeline/pipeline.ts";
-import { type ExecResult, exec } from "../sandbox/exec.ts";
 
-export type Gh = (args: string[]) => Promise<ExecResult>;
+export type { Gh } from "../github/gh.ts";
 
 export interface GitHubIntakeOptions {
   pipeline: Pipeline;
@@ -12,13 +12,6 @@ export interface GitHubIntakeOptions {
   intervalMs: number;
   /** Runs the gh CLI. Tests inject a fake. */
   gh?: Gh;
-}
-
-interface Issue {
-  number: number;
-  title: string;
-  body: string | null;
-  url: string;
 }
 
 /** The items of an issue body's markdown checklist, e.g. `- [ ] text`. */
@@ -38,7 +31,7 @@ export class GitHubIntake {
   private readonly gh: Gh;
 
   constructor(private readonly options: GitHubIntakeOptions) {
-    this.gh = options.gh ?? ((args) => exec("gh", args));
+    this.gh = options.gh ?? defaultGh;
   }
 
   /** Polls now, then on every interval. Never throws. */
@@ -66,18 +59,17 @@ export class GitHubIntake {
   }
 
   private async pollRepo(repo: string): Promise<void> {
-    const result = await this.gh([
-      "issue", "list", "--repo", repo, "--label", this.options.label, "--state", "open",
-      "--json", "number,title,body,url", "--limit", "50",
-    ]);
-    if (result.code !== 0) {
-      if (/auth/i.test(result.stderr)) {
+    let issues;
+    try {
+      issues = await listReadyIssues(this.gh, repo, this.options.label);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/auth/i.test(message)) {
         if (this.warnedAuth) return;
         this.warnedAuth = true;
       }
-      throw new Error(`gh issue list failed: ${result.stderr.trim()}`);
+      throw error;
     }
-    const issues = JSON.parse(result.stdout) as Issue[];
     for (const issue of issues) {
       if (await this.options.pipeline.findBySource(repo, issue.number)) continue;
       const body = issue.body ?? "";

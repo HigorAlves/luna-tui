@@ -1,8 +1,8 @@
 // The ship stage: the PR was opened as a draft at delivering, so shipping pushes any last
 // commits and marks it ready for review. It runs on the host with your own git and gh
 // credentials, never in a sandboxed container.
+import { type GitDeps, describe, findPr, markPrReady, openPr, pushBranch } from "../github/gh.ts";
 import { exec as realExec } from "../sandbox/exec.ts";
-import { type GitDeps, describe, findPr, openPr, pushBranch } from "./deliver.ts";
 import type { StageRunner } from "./runner.ts";
 
 export function shipRunnerWith(deps: GitDeps): StageRunner {
@@ -24,7 +24,7 @@ export function shipRunnerWith(deps: GitDeps): StageRunner {
     }
     if (!existing.isDraft) return { outcome: "pass", detail: { prUrl: existing.url, readied: false } };
 
-    const ready = await deps.exec("gh", ["pr", "ready", String(existing.number)], { cwd });
+    const ready = await markPrReady(deps, existing.number, cwd);
     if (ready.code !== 0) return { outcome: "fail", detail: { error: `gh pr ready failed: ${describe(ready)}` } };
     return { outcome: "pass", detail: { prUrl: existing.url, readied: true } };
   };
