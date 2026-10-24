@@ -19,7 +19,8 @@ export type TaskSource = z.infer<typeof TaskSource>;
 /** A question the stage could not answer alone, with the answer it would pick. */
 export const NeedsInputItem = z.object({
   question: z.string(),
-  recommended: z.string(),
+  /** orc's schema allows null when the stage has no default to offer. */
+  recommended: z.string().nullable(),
 });
 export type NeedsInputItem = z.infer<typeof NeedsInputItem>;
 
@@ -57,12 +58,14 @@ export type StageArtifact = z.infer<typeof StageArtifact>;
 export const Finding = z.object({
   path: z.string(),
   line: z.number().int(),
-  start_line: z.number().int().nullable(),
+  // orc's pack schemas require path/line/severity/title/body/confidence only; the rest is
+  // optional there, so it must be optional here or every run with a finding fails to ingest.
+  start_line: z.number().int().nullable().optional(),
   side: z.string().optional(),
   severity: z.string(),
   title: z.string(),
   body: z.string(),
-  suggestion_code: z.string().nullable(),
+  suggestion_code: z.string().nullable().optional(),
   confidence: z.number().min(0).max(1),
 });
 export type Finding = z.infer<typeof Finding>;
@@ -167,9 +170,11 @@ export const StageOutput = z.object({
     durationMs: z.number().int(),
     model: z.string(),
   }),
-  error: z.string().nullable(),
+  /** orc may pass the SDK's error object through verbatim. */
+  error: z.union([z.string(), z.record(z.string(), z.unknown())]).nullable(),
   rateLimited: z.boolean(),
-  resetsAt: z.number().nullable(),
+  /** Epoch seconds. run.mjs writes it as a string (`String(info.resetsAt)`). */
+  resetsAt: z.union([z.number(), z.string()]).nullable(),
 }).refine((output) => output.schema === 2 || output.outcome !== "escalated", {
   message: "outcome escalated needs schema 2",
   path: ["outcome"],

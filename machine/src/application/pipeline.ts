@@ -16,6 +16,15 @@ import type { StageResult, StageRunner } from "./ports.ts";
 
 export { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 
+/** A reset time as epoch seconds: orc writes a string (epoch or ISO), older builds a number. */
+export function resetSeconds(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string" || value.trim() === "") return null;
+  if (/^\d+(\.\d+)?$/.test(value.trim())) return Number(value);
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : Math.floor(parsed / 1000);
+}
+
 export interface NewTask {
   title: string;
   description?: string;
@@ -384,11 +393,17 @@ export class Pipeline {
     }
   }
 
+  /** True while a paused task has a resume timer armed. */
+  hasResumeTimer(id: string): boolean {
+    return this.resumeTimers.has(id);
+  }
+
   /** Re-runs a paused stage shortly after its usage window resets. */
   private scheduleResume(id: string, resetsAt: unknown): void {
+    const at = resetSeconds(resetsAt);
     // Without a reset time, `POST /tasks/:id/resume` continues the task.
-    if (typeof resetsAt !== "number") return;
-    const delay = Math.max(0, resetsAt * 1000 - Date.now()) + RESUME_MARGIN_MS;
+    if (at === null) return;
+    const delay = Math.max(0, at * 1000 - Date.now()) + RESUME_MARGIN_MS;
     clearTimeout(this.resumeTimers.get(id));
     const timer = setTimeout(() => {
       this.resumeTimers.delete(id);
