@@ -111,18 +111,31 @@ describe("verifying stage", () => {
     expect(result.findings).toEqual([f]);
   });
 
-  it("fails when no test command is detected, never reaching the pack", async () => {
+  it("skips the checks with a note when no test command is detected, and still runs the pack", async () => {
     const { run, context, runPack, exec } = setup({ detected: { manager: null } });
     const result = await run(context);
     expect(exec).not.toHaveBeenCalled();
-    expect(runPack).not.toHaveBeenCalled();
-    expect(result.outcome).toBe("fail");
-    expect((result.detail as { error: string }).error).toContain("don't know how to test this repo");
+    expect(runPack).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("pass");
+    expect(String(result.detail?.note)).toContain("no test command");
   });
 
-  it("fails when only lint is detected (no test command)", async () => {
-    const { run, context } = setup({ detected: { manager: "pnpm", lint: ["pnpm", "run", "lint"] } });
-    expect((await run(context)).outcome).toBe("fail");
+  it("runs lint when only lint is detected, skips the test check, and runs the pack", async () => {
+    const { run, context, runPack, calls } = setup({ detected: { manager: "pnpm", lint: ["pnpm", "run", "lint"] } });
+    const result = await run(context);
+    expect(calls).toEqual([["pnpm", "run", "lint"]]);
+    expect(runPack).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("pass");
+  });
+
+  it("still fails on a red lint even when there is no test command", async () => {
+    const { run, context, runPack } = setup({
+      detected: { manager: "pnpm", lint: ["pnpm", "run", "lint"] },
+      checks: { "pnpm run lint": { code: 1, stdout: "", stderr: "eslint: 3 errors" } },
+    });
+    const result = await run(context);
+    expect(runPack).not.toHaveBeenCalled();
+    expect(result.outcome).toBe("fail");
   });
 
   it("passes without running anything when the task has no worktree", async () => {

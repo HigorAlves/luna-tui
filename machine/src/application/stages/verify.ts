@@ -85,16 +85,10 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       log.push(`$ ${cmd}\n(exit ${result.code})\n${text}\n`);
       reports.push({ name, cmd, ok: result.code === 0, tail });
     }
-    if (!found.test) {
-      return {
-        outcome: "fail",
-        detail: {
-          error: `don't know how to test this repo (no test command detected) in ${cwd}`,
-          step: "checks",
-          checks: [{ check: "none", note: "no test command detected in the worktree" }],
-        },
-      };
-    }
+    // No test command (a docs, shell or markdown-only repo): the pack still proves each
+    // scenario by direct check, so the stage goes on with a note instead of failing here.
+    const noTests = !found.test;
+    if (noTests) reports.push({ check: "none", note: "no test command detected; verifying proves the scenarios by direct check" });
     const runDir = join(deps.stateDir, "runs", context.runId);
     await mkdir(runDir, { recursive: true });
     const transcriptPath = join(runDir, "checks.log");
@@ -129,6 +123,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     }
 
     // Step B: the review pack, only when agents are on.
+    const noTestsNote = noTests ? { note: "no test command detected; verifying proves the scenarios by direct check" } : {};
     if (!deps.runPack) {
       return { outcome: "pass", detail: { step: "checks", note: "review: skipped (agents off)", checks: reports }, run: { transcriptPath } };
     }
@@ -158,6 +153,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         findings,
         results,
         checks: reports,
+        ...noTestsNote,
         ...(asked ? { note: "the reviewer asked a question; a reviewer should not, so the review counts as a pass" } : {}),
       },
       findings,
