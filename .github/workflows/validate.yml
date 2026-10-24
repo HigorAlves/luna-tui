@@ -6,6 +6,87 @@ on:
     branches: [main]
 
 jobs:
+  machine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TEST_DATABASE_URL: postgres://hardness:hardness@127.0.0.1:5433/hardness_test
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: hardness
+          POSTGRES_PASSWORD: hardness
+          POSTGRES_DB: hardness
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U hardness -d hardness"
+          --health-interval 2s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: false
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Git identity for the worktree tests
+        run: git config --global user.email ci@example.invalid && git config --global user.name ci
+      - name: Unit tests
+        run: pnpm --filter @hardness/machine test
+      - name: Typecheck
+        run: pnpm --filter @hardness/machine typecheck
+      # Every golden fixture ticket must be red with its seed and green with its reference
+      # patch; a fixture that drifts would grade real agent runs against a broken bar.
+      - name: Golden fixtures self-validate
+        run: node machine/scripts/golden-task.mjs --selftest
+
+  contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      # Includes the orc conformance test against contracts/fixtures/orc/ (pnpm vendor:orc).
+      - name: Unit tests
+        run: pnpm --filter @hardness/contracts test
+      - name: Typecheck
+        run: pnpm --filter @hardness/contracts typecheck
+
+  board:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: board
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: board
+      # rustfmt is not enforced yet: the crate predates it (133 hunks of drift); a format-only
+      # PR adds `cargo fmt --check` here. large_enum_variant is allowed until the three
+      # enums it names are boxed.
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings -A clippy::large_enum_variant
+      - name: Tests
+        run: cargo test
+
   site:
     runs-on: ubuntu-latest
     timeout-minutes: 10
