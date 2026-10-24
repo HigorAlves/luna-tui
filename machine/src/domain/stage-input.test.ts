@@ -79,6 +79,11 @@ describe("buildStageInput", () => {
     expect(input.env).toEqual({ ORC_FACTORY: "1" });
   });
 
+  it("keeps test_design read-only and verifying writable, matching orc's packs", () => {
+    expect(PACK_LIMITS.test_design).toMatchObject({ writable: false });
+    expect(PACK_LIMITS.verifying).toMatchObject({ writable: true, maxTurns: 60, timeoutMs: 20 * 60_000 });
+  });
+
   it("has no plan before one is approved, and covers all eight packs", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();

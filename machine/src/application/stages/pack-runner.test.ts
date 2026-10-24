@@ -243,7 +243,7 @@ describe("agent stages through orc packs", () => {
       expect(result.outcome).toBe("pass");
     });
 
-    it("does not apply to other packs", async () => {
+    it("does not apply to a read-only pack", async () => {
       seedTests();
       const run = runners(fakeSandbox(output(), (r) => {
         writeFileSync(join(r.worktree, "test", "cart.test.js"), "new\n");
@@ -252,6 +252,35 @@ describe("agent stages through orc packs", () => {
       const result = await run.test_design!(context("test_design"));
       expect(result.outcome).toBe("pass");
     });
+
+    it("applies to verifying too: touching a locked test fails", async () => {
+      seedTests();
+      const d = deps(fakeSandbox(output(), (r) => {
+        writeFileSync(join(r.worktree, "test", "cart.test.js"), "changed\n");
+        commitIn(r.worktree);
+      }));
+      const result = await runAgent(d, context("verifying"), "verifying");
+      expect(result.outcome).toBe("fail");
+      expect(result.detail?.lockedFiles).toEqual(["test/cart.test.js"]);
+    });
+
+    it("verifying can add a new test and commit cleanly", async () => {
+      seedTests();
+      const d = deps(fakeSandbox(output(), (r) => {
+        writeFileSync(join(r.worktree, "test", "new.test.js"), "n\n");
+        commitIn(r.worktree);
+      }));
+      const result = await runAgent(d, context("verifying"), "verifying");
+      expect(result.outcome).toBe("pass");
+    });
+  });
+
+  it("fails a verifying pass that left uncommitted changes, resetting the worktree, same as implementing", async () => {
+    const d = deps(fakeSandbox(output(), (r) => writeFileSync(join(r.worktree, "junk.txt"), "x")));
+    const result = await runAgent(d, context("verifying"), "verifying");
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ error: "verifying left uncommitted changes" });
+    expect(existsSync(join(seen!.worktree, "junk.txt"))).toBe(false);
   });
 
   it("fails a pass that left uncommitted changes, and resets the worktree", async () => {

@@ -12,9 +12,9 @@ const MINUTE = 60_000;
  */
 export const PACK_LIMITS: Record<PackId, { maxTurns: number; timeoutMs: number; writable: boolean }> = {
   triage: { maxTurns: 30, timeoutMs: 10 * MINUTE, writable: false },
-  test_design: { maxTurns: 40, timeoutMs: 15 * MINUTE, writable: true },
+  test_design: { maxTurns: 40, timeoutMs: 15 * MINUTE, writable: false },
   implementing: { maxTurns: 80, timeoutMs: 30 * MINUTE, writable: true },
-  verifying: { maxTurns: 40, timeoutMs: 15 * MINUTE, writable: false },
+  verifying: { maxTurns: 60, timeoutMs: 20 * MINUTE, writable: true },
   e2e: { maxTurns: 60, timeoutMs: 20 * MINUTE, writable: true },
   evidence: { maxTurns: 0, timeoutMs: 5 * MINUTE, writable: false },
   ci_watch: { maxTurns: 30, timeoutMs: 10 * MINUTE, writable: false },
