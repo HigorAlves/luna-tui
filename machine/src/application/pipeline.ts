@@ -386,14 +386,18 @@ export class Pipeline {
   private async apply(id: string, event: PipelineEvent, extra: Extra): Promise<Step> {
     const { step, logged } = await this.store.withTaskLock(id, async (task, tx) => {
       const step = transition(task, event);
+      const open = extra.decision ? await tx.findOpenApproval(id) : null;
+      // Approving the plan adopts triage's criteria: the ticket's, refined and added to.
+      const planned = task.state === "awaiting_approval" && event.type === "approved" ? open?.requested.criteria : undefined;
+      const criteria = Array.isArray(planned) && planned.length > 0 ? planned.map(String) : undefined;
       await tx.updateTask(id, {
         state: step.state,
         retries: step.retries,
         resumeTo: step.resumeTo,
         reason: step.reason ?? null,
+        ...(criteria ? { criteria } : {}),
       });
 
-      const open = extra.decision ? await tx.findOpenApproval(id) : null;
       if (open && extra.decision) {
         await tx.decideApproval(open, {
           decision: extra.decision.decision,

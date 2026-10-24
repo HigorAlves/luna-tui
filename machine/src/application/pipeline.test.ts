@@ -200,6 +200,27 @@ describe("memory review decision", () => {
   });
 });
 
+describe("acceptance criteria", () => {
+  it("adopts triage's refined criteria when you approve the plan", async () => {
+    const criteria = ["Bad password shows an error", "Five failures lock the account"];
+    stubs.plan("triage", { outcome: "pass", detail: { brief: "b", criteria } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+
+    const approved = await pipeline.decide(task.id, "approved");
+    expect(approved.criteria).toEqual(criteria);
+  });
+
+  it("keeps the ticket's criteria when triage proposes none", async () => {
+    stubs.plan("triage", { outcome: "pass", detail: { brief: "b", criteria: [] } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+
+    const approved = await pipeline.decide(task.id, "approved");
+    expect(approved.criteria).toEqual(["Bad password shows an error"]);
+  });
+});
+
 describe("gates", () => {
   it("asks triage's questions and re-runs triage with your answers", async () => {
     stubs.plan("triage", {
