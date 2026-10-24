@@ -80,8 +80,18 @@ export const PackId = z.enum([
 ]);
 export type PackId = z.infer<typeof PackId>;
 
+/** One behaviour test_design pins down: the plan criterion it proves, and the test that does. */
+export const TestCase = z.object({
+  title: z.string(),
+  criterion: z.string().nullable(),
+  /** `<path> > <test name>`. */
+  test: z.string(),
+});
+export type TestCase = z.infer<typeof TestCase>;
+
+/** Schema 2 adds `context.testCases`. */
 export const StageInput = z.object({
-  schema: z.literal(1),
+  schema: z.union([z.literal(1), z.literal(2)]),
   stage: z.string(),
   pack: PackId,
   attempt: z.number().int(),
@@ -115,6 +125,8 @@ export const StageInput = z.object({
   context: z.object({
     projectContext: z.string().nullable(),
     tests: z.array(z.string()),
+    /** The cases approved at the test check, for implementing and verifying. */
+    testCases: z.array(TestCase).optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),

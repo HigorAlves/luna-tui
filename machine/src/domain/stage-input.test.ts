@@ -74,7 +74,7 @@ describe("buildStageInput", () => {
       { at: "awaiting_approval", decision: "approved", reason: "go", answers: {} },
     ]);
     expect(input.priorFindings.map((f) => f.title)).toEqual(["keep", "edge"]);
-    expect(input.context).toEqual({ projectContext: null, tests: ["tests/a.test.ts"] });
+    expect(input.context).toEqual({ projectContext: null, tests: ["tests/a.test.ts"], testCases: [] });
     expect(input.limits).toEqual({ maxTurns: 80, timeoutMs: 1_800_000 });
     expect(input.env).toEqual({ ORC_FACTORY: "1" });
   });
@@ -98,5 +98,22 @@ describe("buildStageInput", () => {
       priorFindings: [],
     });
     expect(input.context.tests).toEqual(["src/a.test.ts", "src/b.test.ts"]);
+  });
+
+  it("gives implementing and verifying the test cases approved at the test check (schema 2)", () => {
+    const cases = [
+      { title: "rejects a bad password", criterion: "no crash", test: "src/a.test.ts > rejects" },
+      { title: "an edge case", criterion: null, test: "src/b.test.ts > edge" },
+    ];
+    const approvals = [
+      approval({ kind: "awaiting_test_check", requested: { tests: ["src/a.test.ts"], cases: [...cases, "junk"] } }),
+    ];
+    const at = (stage: "implementing" | "verifying" | "e2e") =>
+      buildStageInput({ task, stage, attempt: 1, approvals, priorFindings: [] });
+    expect(at("implementing").schema).toBe(2);
+    expect(at("implementing").context.testCases).toEqual(cases);
+    expect(at("verifying").context.testCases).toEqual(cases);
+    expect(at("e2e").context.testCases).toEqual([]);
+    expect(StageInput.safeParse(at("verifying")).success).toBe(true);
   });
 });
