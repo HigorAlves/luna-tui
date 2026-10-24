@@ -6,7 +6,7 @@ import { how } from "@/content/landing"
 afterEach(cleanup)
 
 describe("How", () => {
-  it("is the #how section with the heading and the three approvals in order", () => {
+  it("is the #how section with the heading and the three steps in order", () => {
     const { container } = render(<How />)
     expect(container.querySelector("section")?.id).toBe("how")
     expect(screen.getByRole("heading", { level: 2, name: how.title })).toBeTruthy()

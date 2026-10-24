@@ -26,8 +26,8 @@ export const cta = { primary: "Install Luna TUI", secondary: "See it run", githu
 export const hero = {
   eyebrow: "A software factory for one person",
   title: "Turn your tickets into the PR you'd have shipped.",
-  lead: "A board in your terminal that runs orc. Agents work in sealed containers; you approve three times.",
-  checks: ["Runs 100% local", "You approve three times"],
+  lead: "A board in your terminal that runs orc. Agents work in sealed containers; you keep the final say.",
+  checks: ["Runs 100% local", "You keep the final say"],
   equation: [
     { name: "Ticket", tag: "issue" },
     { name: "Repo", tag: "worktree" },
@@ -39,7 +39,7 @@ export const hero = {
 
 export const how = {
   eyebrow: "How it works",
-  title: "From ticket to PR in three approvals.",
+  title: "From ticket to PR, you at every gate.",
   steps: [
     {
       title: "Approve the plan",

@@ -3,7 +3,7 @@
 
 # Luna TUI
 
-**A board in your terminal that runs orc as a software factory. You approve three times.**
+**A board in your terminal that runs orc as a software factory. You keep the final say.**
 
 </div>
 
