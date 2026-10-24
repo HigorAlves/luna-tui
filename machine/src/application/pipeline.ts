@@ -245,6 +245,19 @@ export class Pipeline {
         escalated++;
       }
     }
+    // Resume timers live in memory, so a restart during a usage window would otherwise park
+    // every paused task until someone clicks resume. Re-arm from the pause's own reset time.
+    for (const task of await this.store.findStuckTasks(new Set<TaskState>(["paused_rate_limit"]))) {
+      const latest = (await this.store.findFinishedEvents(task.id))[0];
+      const detail = latest?.payload.detail as Record<string, unknown> | undefined;
+      const at = resetSeconds(detail?.resetsAt);
+      if (at === null) continue;
+      if (at * 1000 <= Date.now()) {
+        await this.windowReset(task.id).catch((error: unknown) => console.error(`could not resume task ${task.id}`, error));
+      } else {
+        this.scheduleResume(task.id, at);
+      }
+    }
     return escalated;
   }
 
@@ -388,6 +401,9 @@ export class Pipeline {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`stage loop for task ${id} stopped: ${message}`);
       await this.log(id, "loop.crashed", { error: message }).catch(() => {});
+      // Leave the task where you can see it, not "running" with no loop behind it. Fails
+      // quietly when the task already moved on (the crash came after its last transition).
+      await this.apply(id, { type: "crash", error: message }, {}).catch(() => {});
     } finally {
       if (this.loops.get(id) === controller) this.loops.delete(id);
     }
