@@ -212,16 +212,10 @@ async function listTests(
   return [...found].sort();
 }
 
-const AGENT_PACKS: PackId[] = [
-  "triage",
-  "test_design",
-  "implementing",
-  "verifying",
-  "e2e",
-  "evidence",
-  "ci_watch",
-  "reviewing_memory",
-];
+// verifying, evidence, e2e, ci_watch and reviewing_memory are each wrapped in their own
+// stage-specific runner in bootstrap/stages.ts (around the same runAgent call), so the
+// blanket map below only needs the packs that are dispatched unmodified.
+const AGENT_PACKS: PackId[] = ["triage", "test_design", "implementing"];
 
 /** Runners for the stages that run as orc packs. Every other stage stays a stub. */
 export function agentRunners(deps: AgentDeps): Partial<Record<TaskState, StageRunner>> {
