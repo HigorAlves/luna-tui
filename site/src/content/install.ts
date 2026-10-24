@@ -1,5 +1,5 @@
 export const installCommands = [
-  "git clone https://github.com/HigorAlves/tui-harness && cd tui-harness",
+  "git clone https://github.com/HigorAlves/luna-tui && cd luna-tui",
   "pnpm install && pnpm db:up",
   "pnpm --filter @hardness/machine runner:build",
   "pnpm board:build && herdr plugin link ./board",
