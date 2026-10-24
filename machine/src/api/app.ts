@@ -11,14 +11,16 @@ import {
 } from "@hardness/contracts";
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import type { DataSource } from "typeorm";
 import { ZodError, type ZodType, z } from "zod";
 
+import { computeMetrics } from "../db/metrics-query.ts";
 import { TransitionError } from "../engine/transition.ts";
 import type { Watcher } from "../herdr/watch.ts";
 import { type Pipeline, TaskBusyError, TaskNotFoundError } from "../pipeline/pipeline.ts";
 import type { StubStages } from "../stages/stubs.ts";
 import type { Bus } from "./bus.ts";
-import { computeMetrics, InvalidSince, parseSince } from "./metrics.ts";
+import { InvalidSince, parseSince } from "./metrics.ts";
 import { toApproval, toArtifact, toEvent, toStageRun, toTask } from "./serialize.ts";
 
 const PING_EVERY_MS = 15_000;
@@ -26,6 +28,7 @@ const PING_EVERY_MS = 15_000;
 const RECENT_EVENTS = 50;
 
 export interface AppDeps {
+  db: DataSource;
   pipeline: Pipeline;
   bus: Bus;
   /** Closes a task's herdr watch tab when it is deleted; closing it on `closed` is main.ts's job. */
@@ -56,7 +59,7 @@ function taskId(c: Context): string {
   return id;
 }
 
-export function createApp({ pipeline, bus, watcher, stubs }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, watcher, stubs }: AppDeps): Hono {
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -79,7 +82,7 @@ export function createApp({ pipeline, bus, watcher, stubs }: AppDeps): Hono {
       if (error instanceof InvalidSince) throw new BadRequest(error.message);
       throw error;
     }
-    return c.json(await computeMetrics(pipeline.database, { since, slots: pipeline.slots }));
+    return c.json(await computeMetrics(db, { since, slots: pipeline.slots }));
   });
 
   app.get("/tasks", async (c) => c.json((await pipeline.list()).map(toTask)));

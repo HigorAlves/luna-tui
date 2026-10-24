@@ -30,7 +30,7 @@ beforeEach(async () => {
   pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, maxConcurrentTasks: 2 });
 });
 
-const app = () => createApp({ pipeline, bus: new Bus() });
+const app = () => createApp({ db, pipeline, bus: new Bus() });
 
 async function getMetrics(query = ""): Promise<Metrics> {
   const response = await app().request(`/metrics${query}`);

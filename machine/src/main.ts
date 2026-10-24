@@ -5,7 +5,8 @@ import type { TaskState } from "@hardness/contracts";
 
 import { createApp } from "./api/app.ts";
 import { Bus } from "./api/bus.ts";
-import { computeMetrics, parseSince } from "./api/metrics.ts";
+import { parseSince } from "./api/metrics.ts";
+import { computeMetrics } from "./db/metrics-query.ts";
 import { toEvent, toTask } from "./api/serialize.ts";
 import { loadConfig } from "./config.ts";
 import { createDataSource } from "./db/data-source.ts";
@@ -170,7 +171,7 @@ const pipeline = new Pipeline(db, runnerFor, {
 const recovered = await pipeline.recover();
 if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by the last run`);
 
-const app = createApp({ pipeline, bus, watcher, stubs });
+const app = createApp({ db, pipeline, bus, watcher, stubs });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: "127.0.0.1" }, (info) => {
   const agents = [...new Set([...Object.keys(real), "verifying", "delivering", "shipping"])];
   console.log(
