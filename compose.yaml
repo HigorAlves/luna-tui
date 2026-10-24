@@ -38,7 +38,8 @@ services:
       retries: 20
       start_period: 5s
     ports:
-      - "127.0.0.1:${MACHINE_PORT:-4317}:4317"
+      # 4318 on the host, so the board can tell this machine from a `pnpm dev` one on 4317.
+      - "127.0.0.1:${MACHINE_DOCKER_PORT:-4318}:4317"
     environment:
       DATABASE_URL: postgres://hardness:hardness@postgres:5432/hardness
       MACHINE_HOST: 0.0.0.0
@@ -56,9 +57,10 @@ services:
       RUNNER_QA_IMAGE: ${RUNNER_QA_IMAGE:-hardness-runner-qa:dev}
       # gh and git push to GitHub over https with this token (`pnpm start` passes `gh auth token`).
       GH_TOKEN: ${GH_TOKEN:-}
-      # Repos are owned by your user, not the container's; gh answers git's https auth; and
-      # commits made here (the approved memory rules) carry your identity (`pnpm start` reads it).
-      GIT_CONFIG_COUNT: "4"
+      # Repos are owned by your user, not the container's; gh answers git's https auth;
+      # commits made here (the approved memory rules) carry your identity (`pnpm start` reads
+      # it); and ssh GitHub remotes go over https, since there is no ssh key in here.
+      GIT_CONFIG_COUNT: "6"
       GIT_CONFIG_KEY_0: safe.directory
       GIT_CONFIG_VALUE_0: "*"
       GIT_CONFIG_KEY_1: credential.https://github.com.helper
@@ -67,8 +69,10 @@ services:
       GIT_CONFIG_VALUE_2: ${LUNA_GIT_NAME:-}
       GIT_CONFIG_KEY_3: user.email
       GIT_CONFIG_VALUE_3: ${LUNA_GIT_EMAIL:-}
-      # herdr runs on the host, so watch panes are off in here.
-      HERDR_BIN: herdr-not-in-container
+      GIT_CONFIG_KEY_4: "url.https://github.com/.insteadOf"
+      GIT_CONFIG_VALUE_4: "git@github.com:"
+      GIT_CONFIG_KEY_5: "url.https://github.com/.insteadOf"
+      GIT_CONFIG_VALUE_5: "ssh://git@github.com/"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - ${LUNA_REPOS_DIR:-${HOME}/Developer}:${LUNA_REPOS_DIR:-${HOME}/Developer}

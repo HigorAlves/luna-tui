@@ -6,9 +6,10 @@
     "node": ">=24"
   },
   "scripts": {
-    "start": "GH_TOKEN=\"${GH_TOKEN:-$(gh auth token 2>/dev/null)}\" LUNA_GIT_NAME=\"${LUNA_GIT_NAME:-$(git config user.name)}\" LUNA_GIT_EMAIL=\"${LUNA_GIT_EMAIL:-$(git config user.email)}\" docker compose up -d --build --wait",
+    "start": "pnpm images && GH_TOKEN=\"${GH_TOKEN:-$(gh auth token 2>/dev/null)}\" LUNA_GIT_NAME=\"${LUNA_GIT_NAME:-$(git config user.name)}\" LUNA_GIT_EMAIL=\"${LUNA_GIT_EMAIL:-$(git config user.email)}\" docker compose up -d --build --wait",
     "stop": "docker compose down",
-    "dev": "docker compose stop machine 2>/dev/null; pnpm db:up && pnpm --filter @hardness/machine dev",
+    "dev": "docker compose stop machine 2>/dev/null; pnpm images && pnpm db:up && pnpm --filter @hardness/machine dev",
+    "images": "bash machine/runner/build.sh --qa",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "db:up": "docker compose up -d --wait postgres",

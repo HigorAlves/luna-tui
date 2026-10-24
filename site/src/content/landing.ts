@@ -276,18 +276,13 @@ export const orc = {
   mascot: { button: "Zug zug", replies: ["Zug zug.", "Slice committed.", "Tests stay locked.", "Back to work."] },
   setup: {
     title: `Set it up in ${installCommands.length} commands`,
-    lead: "Clone, install, build the stage image, link the board, then one command starts Postgres and the machine in Docker. No account, no server to babysit.",
+    lead: "Clone, install, link the board, then one command builds the stage images and starts Postgres and the machine in Docker. No account, no server to babysit.",
     tabs: [
       { id: "agents", label: "Board + agents", commands: installCommands },
       {
         id: "stubs",
         label: "Board only",
         commands: ["pnpm install", "pnpm board:build && herdr plugin link ./board", "MACHINE_AGENTS=off pnpm start"],
-      },
-      {
-        id: "qa",
-        label: "With QA",
-        commands: [...installCommands.slice(0, 3), "pnpm --filter @hardness/machine runner-qa:build", ...installCommands.slice(3)],
       },
     ],
     copy: "Copy",

@@ -22,8 +22,7 @@ Every ticket moves Intake → Triage → Build → Verify → E2E/Evidence → D
 
 ```bash
 pnpm install
-pnpm --filter @hardness/machine runner:build   # the stage container image
-pnpm start                                      # Postgres + the machine on http://127.0.0.1:4317
+pnpm start    # builds the stage images, then Postgres + the machine on http://127.0.0.1:4318
 ```
 
 Working on the harness itself? `pnpm dev` runs only Postgres in Docker and the machine on your host, with hot reload. For the board, Rust prerequisites and the full checks: [docs/install.md](docs/install.md).
