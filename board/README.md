@@ -57,7 +57,7 @@ Press `?` in the board for the full list. The main ones:
 | `h` / `l`, `j` / `k` | move between columns and tickets |
 | `enter` | open the ticket in a popup over the board |
 | `n` / `e` / `d` | new ticket, edit in place with vim-style keys (`i`/`a`/`o`… insert, `esc`/`q` back to normal, `ctrl+s` saves), delete (asks first) |
-| `a` | advance: move a backlog ticket to intake, start it, approve a plan or tests, answer triage's questions, add guidance to an escalation, resume after a usage limit |
+| `a` | advance: move a backlog ticket to intake, start it, approve a plan or tests, answer triage's questions, retry an escalation (with optional guidance; it resumes the stage it stopped in with a fresh retry budget), resume after a usage limit |
 | `A` | memory review: approve without writing the proposed rules to `docs/agents/project-context.md` (`a` applies them) |
 | `r` | send the plan or tests back, with a required reason |
 | `X` | abort the running or paused stage (asks first) |
