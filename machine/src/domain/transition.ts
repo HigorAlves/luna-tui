@@ -1,6 +1,6 @@
 // The pipeline as a pure function: given a task's state and an event, return the next
 // state and what the machine should do next. No database, no I/O, so every path is
-// unit tested. The graph follows docs/plans/0001-machine-dev.md.
+// unit tested. The graph is documented in docs/architecture.md.
 import { RUNNING, type TaskState } from "@hardness/contracts";
 
 /** Failures allowed in one retry loop (verify, e2e, ci) before asking you. */

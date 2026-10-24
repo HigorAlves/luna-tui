@@ -18,7 +18,7 @@ export const COLUMNS = [
 ] as const;
 export type Column = (typeof COLUMNS)[number];
 
-/** Every state a task can be in, from the stage graph in docs/plans/0001-machine-dev.md. */
+/** Every state a task can be in, from the stage graph in docs/architecture.md. */
 export const TaskState = z.enum([
   "backlog",
   "draft",
