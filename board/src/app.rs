@@ -48,7 +48,7 @@ pub const CARD_HEIGHT: usize = 3;
 
 /// Actions in the `x` menu for the selected ticket, as the key each one is.
 pub const ACTIONS: [(char, &str); 10] = [
-    ('a', "advance: start, approve, answer, resume"),
+    ('a', "advance: start, approve, answer, retry, resume"),
     ('S', "ship: approve the Ship gate and open the PR"),
     ('r', "send back with a reason"),
     ('e', "edit the ticket"),
@@ -68,7 +68,7 @@ pub const HELP: [(&str, &str); 24] = [
     ("n", "new ticket, then edit it in place"),
     ("e", "edit title, description and criteria in place (ctrl+s saves)"),
     ("R", "search for its repo under HARDNESS_REPOS_DIR / ~/Developer"),
-    ("a", "advance: move to intake, start, approve, answer, add guidance, resume"),
+    ("a", "advance: move to intake, start, approve, answer, retry an escalation, resume"),
     ("S", "ship: approve the Ship gate and open the PR (same as a there)"),
     ("A", "memory review: approve without applying the proposed rules"),
     ("r", "send the plan or tests back, with a reason"),

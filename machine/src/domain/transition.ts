@@ -27,11 +27,11 @@ export interface Snapshot {
   resumeTo: TaskState | null;
 }
 
-export type StageOutcome = "pass" | "fail" | "needs_input" | "test_change";
+export type StageOutcome = "pass" | "fail" | "needs_input" | "test_change" | "escalated";
 
 export type PipelineEvent =
   | { type: "start" }
-  | { type: "stage_done"; outcome: StageOutcome }
+  | { type: "stage_done"; outcome: StageOutcome; reason?: string }
   | { type: "answered" }
   | { type: "approved" }
   | { type: "sent_back" }
@@ -176,6 +176,11 @@ function approved(task: Snapshot, event: PipelineEvent): Step {
 function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_done" }>): Step {
   const { state, retries } = task;
   const { outcome } = event;
+
+  // The agent stopped on purpose and says why: a human decides, so no retry is spent.
+  if (outcome === "escalated" && RUNNING.has(state)) {
+    return escalate(event.reason || `${state} escalated`, state, retries);
+  }
 
   switch (state) {
     case "triage":

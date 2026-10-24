@@ -523,6 +523,15 @@ fn push_proposal_sections(lines: &mut Vec<Line<'static>>, requested: &Value) {
     }
 }
 
+/// Where a paused or escalated ticket picks up; an escalated one also says how to retry it.
+fn continues_line(state: &str, stage: &str) -> String {
+    if state == "escalated" {
+        format!("Continues at: {stage} · a retries it (add guidance if you like)")
+    } else {
+        format!("Continues at: {stage}")
+    }
+}
+
 /// The full ticket: state, what it waits on you for, text, stage runs and activity.
 fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&TaskDetail>, scroll: &Cell<u16>) {
     let heading = |text: String| Line::from(Span::from(text).fg(c(ACCENT)).bold());
@@ -544,7 +553,7 @@ fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&Tas
         lines.push(muted(format!("Branch: {branch}")));
     }
     if let Some(stage) = &task.resume_to {
-        lines.push(muted(format!("Continues at: {stage}")));
+        lines.push(muted(continues_line(&task.state, stage)));
     }
     if let Some(reason) = &task.reason {
         lines.push(Line::from(format!("Why: {reason}")).fg(look_color(look)));
@@ -1015,6 +1024,15 @@ mod tests {
             .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    #[test]
+    fn an_escalated_ticket_says_a_retries_it() {
+        assert_eq!(
+            continues_line("escalated", "implementing"),
+            "Continues at: implementing · a retries it (add guidance if you like)"
+        );
+        assert_eq!(continues_line("paused_rate_limit", "verifying"), "Continues at: verifying");
     }
 
     #[test]

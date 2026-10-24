@@ -200,6 +200,27 @@ describe("memory review decision", () => {
   });
 });
 
+describe("acceptance criteria", () => {
+  it("adopts triage's refined criteria when you approve the plan", async () => {
+    const criteria = ["Bad password shows an error", "Five failures lock the account"];
+    stubs.plan("triage", { outcome: "pass", detail: { brief: "b", criteria } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+
+    const approved = await pipeline.decide(task.id, "approved");
+    expect(approved.criteria).toEqual(criteria);
+  });
+
+  it("keeps the ticket's criteria when triage proposes none", async () => {
+    stubs.plan("triage", { outcome: "pass", detail: { brief: "b", criteria: [] } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+
+    const approved = await pipeline.decide(task.id, "approved");
+    expect(approved.criteria).toEqual(["Bad password shows an error"]);
+  });
+});
+
 describe("gates", () => {
   it("asks triage's questions and re-runs triage with your answers", async () => {
     stubs.plan("triage", {
@@ -328,6 +349,17 @@ describe("retries and escalation", () => {
     const resumed = await pipeline.decide(task.id, "approved", "Mock the clock in the test");
     expect(resumed.state).toBe("awaiting_ship");
     expect(resumed.reason).toBeNull();
+  });
+
+  it("escalates with the agent's own reason when it stops on purpose, without verifying", async () => {
+    stubs.plan("implementing", { outcome: "escalated", detail: { reason: "the plan needs a new dependency" } });
+    const task = await newTask();
+
+    const escalated = await startAndApprove(task.id);
+    expect(escalated).toMatchObject({ state: "escalated", reason: "the plan needs a new dependency", resumeTo: "implementing" });
+    expect(await stagesRun(task.id)).not.toContain("verifying");
+    const run = (await pipeline.stageRuns(task.id)).find((r) => r.stage === "implementing");
+    expect(run).toMatchObject({ status: "failed", outcome: "escalated" });
   });
 
   it("treats a runner that throws as a failed run", async () => {
