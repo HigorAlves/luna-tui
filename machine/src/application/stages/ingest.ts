@@ -70,7 +70,10 @@ export async function ingestStageOutput(opts: {
   const artifacts: IngestedArtifact[] = [];
   const base = join(stateDir, "runs", runId, "files");
   for (const artifact of output.artifacts) {
-    const dest = join(base, artifact.path);
+    // orc's paths are relative to /out and already start with files/ (files/qa/qa-manifest.json);
+    // mirror them under runs/<id>/files/ without doubling that prefix, which is where the
+    // evidence stage (runs/<id>/files/qa/) and the board expect them.
+    const dest = join(base, artifact.path.replace(/^files\//, ""));
     try {
       await mkdir(dirname(dest), { recursive: true });
       await copyFile(join(outDir, artifact.path), dest);
