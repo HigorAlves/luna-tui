@@ -7,6 +7,7 @@ import { join } from "node:path";
 import {
   type Workspace,
   commonGitDir,
+  gitIdentity,
   diffNameStatus,
   ensureWorktree,
   headCommit,
@@ -66,6 +67,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     worktree: workspace.path,
     writable: limits.writable,
     gitDir: await commonGitDir(task.repoPath),
+    gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
     input: input as unknown as Record<string, unknown>,
     timeoutMs: limits.timeoutMs,
     credential: deps.credential,

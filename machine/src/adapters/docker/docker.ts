@@ -16,8 +16,11 @@ export interface SandboxRun {
   runDir: string;
   worktree: string;
   writable: boolean;
-  /** The repo's git dir, mounted read-only at the same path so git works inside. */
+  /** The repo's git dir, mounted at the same path so git works inside: writable for a
+   * writable stage, since committing writes objects, refs and the worktree's index there. */
   gitDir: string | null;
+  /** Who a writable stage commits as. The container has no gitconfig of its own. */
+  gitIdentity?: { name: string; email: string } | null;
   input: Record<string, unknown>;
   timeoutMs: number;
   credential: Credential;
@@ -53,15 +56,24 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     "-e", "ORC_STATE_DIR=/tmp/orc-state",
     // The credential is passed by name; its value is only in docker's environment.
     "-e", run.credential.name,
-    // The worktree is owned by the host user, not the container's.
-    "-e", "GIT_CONFIG_COUNT=1",
+    // The worktree is owned by the host user, not the container's; and there is no gpg key
+    // in here, so a commit must not try to sign.
+    "-e", "GIT_CONFIG_COUNT=2",
     "-e", "GIT_CONFIG_KEY_0=safe.directory",
     "-e", "GIT_CONFIG_VALUE_0=*",
+    "-e", "GIT_CONFIG_KEY_1=commit.gpgsign",
+    "-e", "GIT_CONFIG_VALUE_1=false",
     "-v", `${run.worktree}:/work${run.writable ? "" : ":ro"}`,
     "-v", `${inDir}:/in:ro`,
     "-v", `${outDir}:/out`,
   );
-  if (run.gitDir) args.push("-v", `${run.gitDir}:${run.gitDir}:ro`);
+  if (run.gitDir) args.push("-v", `${run.gitDir}:${run.gitDir}${run.writable ? "" : ":ro"}`);
+  if (run.gitIdentity) {
+    const { name, email } = run.gitIdentity;
+    for (const who of ["AUTHOR", "COMMITTER"]) {
+      args.push("-e", `GIT_${who}_NAME=${name}`, "-e", `GIT_${who}_EMAIL=${email}`);
+    }
+  }
   for (const [key, value] of Object.entries(run.extraEnv ?? {})) args.push("-e", `${key}=${value}`);
   args.push(run.image);
 

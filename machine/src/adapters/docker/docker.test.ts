@@ -38,6 +38,22 @@ describe("sandboxArgs", () => {
     expect(args.join(" ")).toContain("-e ORC_STAGE_DRY_RUN=1");
   });
 
+  it("mounts the git dir writable for a writable stage, which commits", () => {
+    const args = sandboxArgs(run({ writable: true, gitDir: "/g/.git" }), "/i", "/o");
+    expect(args).toContain("/g/.git:/g/.git");
+    expect(args).not.toContain("/g/.git:/g/.git:ro");
+  });
+
+  it("commits as you, unsigned: the container has no gitconfig and no gpg key", () => {
+    const args = sandboxArgs(run({ gitIdentity: { name: "Ada L", email: "ada@x.dev" } }), "/i", "/o").join(" ");
+    for (const env of ["GIT_AUTHOR_NAME=Ada L", "GIT_AUTHOR_EMAIL=ada@x.dev", "GIT_COMMITTER_NAME=Ada L", "GIT_COMMITTER_EMAIL=ada@x.dev"]) {
+      expect(args).toContain(`-e ${env}`);
+    }
+    expect(args).toContain("-e GIT_CONFIG_COUNT=2");
+    expect(args).toContain("-e GIT_CONFIG_KEY_1=commit.gpgsign -e GIT_CONFIG_VALUE_1=false");
+    expect(sandboxArgs(run(), "/i", "/o").join(" ")).not.toContain("GIT_AUTHOR_NAME");
+  });
+
   it("passes the credential by name, never its value", () => {
     const args = sandboxArgs(run(), "/i", "/o");
     expect(args).toContain("ANTHROPIC_API_KEY");

@@ -62,6 +62,13 @@ export async function removeWorktree(repoPath: string, worktreePath: string): Pr
   await execOrThrow("git", ["-C", repoPath, "worktree", "remove", "--force", worktreePath]);
 }
 
+/** `user.name` and `user.email` as git resolves them for `repoPath`, or null if either is unset. */
+export async function gitIdentity(repoPath: string): Promise<{ name: string; email: string } | null> {
+  const read = async (key: string) => (await exec("git", ["-C", repoPath, "config", key])).stdout.trim();
+  const [name, email] = await Promise.all([read("user.name"), read("user.email")]);
+  return name && email ? { name, email } : null;
+}
+
 /** The repo's shared git dir, which the worktree's `.git` file points into. */
 export function commonGitDir(repoPath: string): Promise<string> {
   return execOrThrow("git", [
