@@ -1,5 +1,6 @@
-# Dev services only. The machine itself runs on the host with `pnpm dev`.
-# Start with `pnpm db:up`, stop with `pnpm db:down` (data is kept in the volume).
+# Dev services only (Postgres). The machine itself runs on the host with `pnpm dev`.
+# Start with `pnpm db:up` (or `docker compose up -d --wait`), stop with `pnpm db:down`
+# (data is kept in the volume).
 name: hardness-dev
 
 services:

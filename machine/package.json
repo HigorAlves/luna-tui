@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/main.ts",
+    "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
+    "start": "tsx --env-file-if-exists=.env src/main.ts",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "db:migrate": "tsx node_modules/typeorm/cli.js migration:run -d src/db/data-source.ts",
