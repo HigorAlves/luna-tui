@@ -1,7 +1,8 @@
 "use client"
 
+import { CheckIcon, CopyIcon } from "lucide-react"
 import { useEffect, useRef, useState } from "react"
-import { Button } from "@/components/ui/button"
+import { cn } from "cn"
 
 /** Select the text of the nearest `[data-copy-source]` so the user can copy by hand. */
 function selectFallback(el: HTMLElement | null) {
@@ -14,7 +15,7 @@ function selectFallback(el: HTMLElement | null) {
   sel?.addRange(range)
 }
 
-export function CopyButton({ text }: { text: string }) {
+export function CopyButton({ text, label = "Copy", done = "Copied", className }: { text: string; label?: string; done?: string; className?: string }) {
   const [copied, setCopied] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(timer.current), [])
@@ -33,8 +34,18 @@ export function CopyButton({ text }: { text: string }) {
   }
 
   return (
-    <Button type="button" variant="ghost" className="font-mono text-xs" onClick={onClick} aria-live="polite">
-      {copied ? "Copied" : "Copy"}
-    </Button>
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-xs text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50",
+        className,
+      )}
+    >
+      {copied ? <CheckIcon className="size-3.5 text-brand" /> : <CopyIcon className="size-3.5" />}
+      <span aria-live="polite" className="max-sm:sr-only">
+        {copied ? done : label}
+      </span>
+    </button>
   )
 }
