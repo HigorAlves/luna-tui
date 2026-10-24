@@ -1,0 +1,99 @@
+/* Catppuccin: Mocha is the default (dark), Latte is the light theme.
+   next-themes puts .dark or .light on <html>; [data-theme=light] works too. */
+
+:root,
+.dark {
+  color-scheme: dark;
+  --ctp-base: #1e1e2e;
+  --ctp-mantle: #181825;
+  --ctp-crust: #11111b;
+  --ctp-surface0: #313244;
+  --ctp-surface1: #45475a;
+  --ctp-overlay0: #6c7086;
+  --ctp-subtext0: #a6adc8;
+  --ctp-text: #cdd6f4;
+  --ctp-yellow: #f9e2af;
+  --ctp-green: #a6e3a1;
+  --ctp-blue: #89b4fa;
+  --ctp-peach: #fab387;
+  --ctp-red: #f38ba8;
+  --ctp-lavender: #b4befe;
+
+  --background: var(--ctp-base);
+  --foreground: var(--ctp-text);
+  --card: var(--ctp-mantle);
+  --card-foreground: var(--ctp-text);
+  --popover: var(--ctp-mantle);
+  --popover-foreground: var(--ctp-text);
+  --primary: var(--ctp-yellow);
+  --primary-foreground: var(--ctp-crust);
+  --secondary: var(--ctp-surface0);
+  --secondary-foreground: var(--ctp-text);
+  --muted: var(--ctp-surface0);
+  --muted-foreground: var(--ctp-subtext0);
+  --accent: var(--ctp-surface0);
+  --accent-foreground: var(--ctp-yellow);
+  --destructive: var(--ctp-red);
+  --border: var(--ctp-surface0);
+  --input: var(--ctp-surface1);
+  --ring: var(--ctp-yellow);
+  --chart-1: var(--ctp-yellow);
+  --chart-2: var(--ctp-blue);
+  --chart-3: var(--ctp-peach);
+  --chart-4: var(--ctp-lavender);
+  --chart-5: var(--ctp-red);
+  --radius: 0.75rem;
+  --sidebar: var(--ctp-mantle);
+  --sidebar-foreground: var(--ctp-text);
+  --sidebar-primary: var(--ctp-yellow);
+  --sidebar-primary-foreground: var(--ctp-crust);
+  --sidebar-accent: var(--ctp-surface0);
+  --sidebar-accent-foreground: var(--ctp-text);
+  --sidebar-border: var(--ctp-surface0);
+  --sidebar-ring: var(--ctp-yellow);
+
+  /* terminal panels stay Mocha crust in both themes */
+  --term: var(--ctp-crust);
+  --term-foreground: var(--ctp-text);
+  --term-muted: var(--ctp-overlay0);
+  --term-green: var(--ctp-green);
+  --term-yellow: var(--ctp-yellow);
+  --term-border: var(--ctp-surface0);
+  --term-card: var(--ctp-base);
+
+  --status-orc: var(--ctp-green);
+  --status-host: var(--ctp-blue);
+  --status-you: var(--ctp-peach);
+}
+
+.light,
+[data-theme="light"] {
+  color-scheme: light;
+  --ctp-base: #eff1f5;
+  --ctp-mantle: #e6e9ef;
+  --ctp-crust: #dce0e8;
+  --ctp-surface0: #ccd0da;
+  --ctp-text: #4c4f69;
+  --ctp-subtext0: #6c6f85;
+  --ctp-yellow: #df8e1d;
+  --ctp-green: #40a02b;
+  --ctp-blue: #1e66f5;
+  --ctp-peach: #fe640b;
+  --ctp-red: #d20f39;
+
+  --primary-foreground: var(--ctp-base);
+  --accent-foreground: var(--ctp-text);
+  --input: var(--ctp-surface0);
+  --card: var(--ctp-mantle);
+  --muted-foreground: var(--ctp-subtext0);
+  --chart-4: #7287fd;
+  --sidebar-primary-foreground: var(--ctp-base);
+
+  --term: #11111b;
+  --term-foreground: #cdd6f4;
+  --term-muted: #6c7086;
+  --term-green: #a6e3a1;
+  --term-yellow: #f9e2af;
+  --term-border: #313244;
+  --term-card: #1e1e2e;
+}

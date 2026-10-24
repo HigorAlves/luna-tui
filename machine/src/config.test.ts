@@ -16,11 +16,30 @@ describe("loadConfig", () => {
       agents: true,
       maxConcurrentTasks: DEFAULT_MAX_CONCURRENT_TASKS,
       runnerImage: "hardness-runner:dev",
+      runnerQaImage: "hardness-runner-qa:dev",
       worktreesDir: "/home/me/Developer/worktrees",
       stateDir: "/home/me/.local/state/hardness",
       herdrBin: "herdr",
+      githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },
       retentionDays: DEFAULT_RETENTION_DAYS,
     });
+  });
+
+  it("reads the GitHub poll settings", () => {
+    expect(
+      loadConfig({
+        HOME: "/h",
+        MACHINE_GITHUB_POLL: "a/b, c/d,",
+        MACHINE_GITHUB_POLL_INTERVAL: "60",
+        MACHINE_GITHUB_LABEL: "go",
+      }).githubPoll,
+    ).toEqual({ repos: ["a/b", "c/d"], intervalMs: 60_000, label: "go" });
+  });
+
+  it("rejects a bad poll interval or repo", () => {
+    expect(() => loadConfig({ MACHINE_GITHUB_POLL_INTERVAL: "0" })).toThrow(/MACHINE_GITHUB_POLL_INTERVAL/);
+    expect(() => loadConfig({ MACHINE_GITHUB_POLL_INTERVAL: "x" })).toThrow(/MACHINE_GITHUB_POLL_INTERVAL/);
+    expect(() => loadConfig({ MACHINE_GITHUB_POLL: "nope" })).toThrow(/MACHINE_GITHUB_POLL/);
   });
 
   it("rejects a port that is not a number", () => {

@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Golden cart</title>
+  </head>
+  <body>
+    <h1>Cart</h1>
+    <form id="add-form">
+      <input id="name" name="name" placeholder="Item" required />
+      <input id="price" name="price" type="number" step="0.01" min="0" placeholder="Price" required />
+      <input id="qty" name="qty" type="number" min="1" value="1" required />
+      <button type="submit">Add</button>
+    </form>
+    <div id="cart"></div>
+    <p id="total"></p>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

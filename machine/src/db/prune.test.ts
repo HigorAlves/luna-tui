@@ -1,3 +1,7 @@
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -98,5 +102,43 @@ describe("pruneOldRuns", () => {
     const result = await pruneOldRuns(db, 0);
 
     expect(result).toEqual({ events: 0, stageRuns: 0 });
+  });
+
+  describe("run folders", () => {
+    async function runFolder(stateDir: string, taskId: string): Promise<string> {
+      const [row] = await db.getRepository(StageRunEntity).findBy({ taskId });
+      const dir = join(stateDir, "runs", row!.id);
+      mkdirSync(join(dir, "files"), { recursive: true });
+      writeFileSync(join(dir, "files", "a.txt"), "x");
+      return dir;
+    }
+
+    it("removes the folder of every pruned stage run, keeps a recent task's", async () => {
+      const stateDir = mkdtempSync(join(tmpdir(), "prune-"));
+      const oldId = await seedClosedTask(new Date(Date.now() - 100 * 24 * 60 * 60 * 1000));
+      const recentId = await seedClosedTask(new Date());
+      const oldDir = await runFolder(stateDir, oldId);
+      const recentDir = await runFolder(stateDir, recentId);
+
+      await pruneOldRuns(db, 90, stateDir);
+
+      expect(existsSync(oldDir)).toBe(false);
+      expect(existsSync(recentDir)).toBe(true);
+      expect(await db.getRepository(StageRunEntity).findBy({ taskId: oldId })).toEqual([]);
+    });
+
+    it("tolerates a missing folder", async () => {
+      const stateDir = mkdtempSync(join(tmpdir(), "prune-"));
+      await seedClosedTask(new Date(Date.now() - 100 * 24 * 60 * 60 * 1000));
+      await expect(pruneOldRuns(db, 90, stateDir)).resolves.toEqual({ events: 1, stageRuns: 1 });
+    });
+
+    it("removes nothing when retentionDays is 0", async () => {
+      const stateDir = mkdtempSync(join(tmpdir(), "prune-"));
+      const id = await seedClosedTask(new Date(Date.now() - 365 * 24 * 60 * 60 * 1000));
+      const dir = await runFolder(stateDir, id);
+      await pruneOldRuns(db, 0, stateDir);
+      expect(existsSync(dir)).toBe(true);
+    });
   });
 });

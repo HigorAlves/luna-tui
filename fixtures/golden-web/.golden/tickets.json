@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "test": ["npm", "test"],
+  "install": ["npm", "install", "--no-audit", "--no-fund"],
+  "tickets": [
+    {
+      "id": "bug",
+      "kind": "bug",
+      "title": "Cart total ignores quantity",
+      "description": "Adding 2 pens at $5.00 and 1 ink at $1.50 shows a total of $6.50 instead of $11.50: cartTotal in src/cart.ts adds the unit price once per line and ignores qty. Fix it.",
+      "criteria": [
+        "cartTotal([{pen, 500c, qty 2}, {ink, 150c, qty 1}]) returns 1150",
+        "`npm test` passes"
+      ],
+      "fix": "patches/bug.patch"
+    },
+    {
+      "id": "feature",
+      "kind": "feature",
+      "title": "Show a message for an empty cart",
+      "description": "An empty cart renders an empty list. Make renderCart in src/cart.ts return a paragraph that says the cart is empty, so the page tells the shopper what is going on.",
+      "criteria": [
+        "renderCart([]) returns the string '<p class=\"empty\">Your cart is empty</p>'",
+        "renderCart with items still returns the list",
+        "`npm test` passes"
+      ],
+      "seed": ["patches/bug.patch"],
+      "accept": "accept/feature",
+      "fix": "patches/feature.patch"
+    }
+  ]
+}

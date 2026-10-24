@@ -1,129 +1,119 @@
 #!/usr/bin/env node
-// Phase 6: the golden task. Drives a small fixture repo through the whole pipeline
-// graph via the machine's HTTP API, the same way a person would through the board.
+// The golden task. Drives a small fixture repo through the whole pipeline graph via the
+// machine's HTTP API, the same way a person would through the board.
 // Run after `pnpm dev` (and, for a real implementer run, with a credential and the
-// runner image built): `pnpm --filter @hardness/machine golden`.
+// runner image built): `pnpm golden`.
 //
-// This is the regression check for the whole graph: any change that breaks a
+// Modes:
+//   (none)                       the single golden run: fixtures/golden-task, its bug ticket.
+//   --matrix                     every fixture x ticket, graded; exit 1 under --threshold.
+//     --only <fixture>           restrict the matrix to one fixture.
+//     --ceiling-usd <n>          per-run cost ceiling (default 5).
+//     --threshold <r>            minimum pass rate (default 0.8).
+//     --expect-no-remote[=false] fixtures have no git remote, so escalating at `delivering`
+//                                is the expected end of the path (default true).
+//     --out <file>               result file (default golden-result.json).
+//   --selftest                   no machine needed: each ticket must be red with its seed
+//                                and green with its reference patch.
+//
+// The single run is the regression check for the whole graph: any change that breaks a
 // transition, a gate, or the implementer's commit should break this script.
-import { execFileSync } from "node:child_process";
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { rmSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
+import { parseArgs } from "node:util";
 
-const MACHINE_URL = process.env.HARDNESS_MACHINE_URL ?? "http://127.0.0.1:4317";
-const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "fixtures", "golden-task");
+import {
+  api,
+  drive,
+  elapsed,
+  ensureMachine,
+  formatTable,
+  listFixtures,
+  loadFixture,
+  log,
+  passRate,
+  runFixtureTests,
+  runTicket,
+  selftestTicket,
+  setupRepo,
+} from "./golden-lib.mjs";
 
-const TICKET = {
-  title: "Cart totals show wrong price",
-  description:
-    "formatPrice drops the second decimal digit for round dollar amounts, e.g. $1.00 shows as $1.0. " +
-    "Fix formatPrice in src/cart.js so prices always show two decimals.",
-  criteria: [
-    'formatPrice(1234) returns "$12.34"',
-    'formatPrice(100) returns "$1.00"',
-    "`npm test` passes",
-  ],
-};
+const { values: flags } = parseArgs({
+  options: {
+    matrix: { type: "boolean", default: false },
+    selftest: { type: "boolean", default: false },
+    only: { type: "string" },
+    "ceiling-usd": { type: "string", default: "5" },
+    threshold: { type: "string", default: "0.8" },
+    "expect-no-remote": { type: "string", default: "true" },
+    out: { type: "string", default: "golden-result.json" },
+  },
+});
 
-const started = Date.now();
-const elapsed = () => `${((Date.now() - started) / 1000).toFixed(1)}s`;
-const log = (msg) => console.log(`[${elapsed()}] ${msg}`);
-
-function sh(cmd, args, cwd) {
-  return execFileSync(cmd, args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+function selectedFixtures() {
+  const known = listFixtures();
+  const names = flags.only ? [flags.only] : known;
+  for (const name of names) if (!known.includes(name)) throw new Error(`unknown fixture "${name}" (have: ${known.join(", ")})`);
+  return names.map(loadFixture);
 }
 
-async function api(path, opts = {}) {
-  const res = await fetch(`${MACHINE_URL}${path}`, {
-    ...opts,
-    headers: { "content-type": "application/json", ...opts.headers },
-  });
-  const text = await res.text();
-  const json = text ? JSON.parse(text) : undefined;
-  if (!res.ok) throw new Error(`${opts.method ?? "GET"} ${path} -> ${res.status}: ${JSON.stringify(json)}`);
-  return json;
-}
-
-/** A throwaway git repo with the fixture's seeded bug, fresh for this run. */
-function setupRepo() {
-  const dir = mkdtempSync(join(tmpdir(), "hardness-golden-"));
-  cpSync(FIXTURE_DIR, dir, { recursive: true });
-  const git = (...args) => sh("git", ["-c", "commit.gpgsign=false", ...args], dir);
-  git("init", "-q");
-  git("-c", "user.name=Golden Task", "-c", "user.email=golden@hardness.local", "add", "-A");
-  git("-c", "user.name=Golden Task", "-c", "user.email=golden@hardness.local", "commit", "-q", "-m", "seed: known bug");
-  return dir;
-}
-
-/** Polls `/tasks/:id` until its state is in `targets`, fails fast on `escalated`. */
-async function waitFor(id, targets, timeoutMs) {
-  const deadline = Date.now() + timeoutMs;
-  let last;
-  while (Date.now() < deadline) {
-    const { task } = await api(`/tasks/${id}`);
-    if (task.state !== last) {
-      log(`  state -> ${task.state}`);
-      last = task.state;
+function selftest() {
+  let bad = 0;
+  for (const fixture of selectedFixtures()) {
+    for (const ticket of fixture.tickets) {
+      const { red, green } = selftestTicket(fixture, ticket);
+      const ok = red && green;
+      if (!ok) bad++;
+      console.log(`${ok ? "ok  " : "FAIL"} ${fixture.name}/${ticket.id}: seed ${red ? "red" : "NOT red"}, patch ${green ? "green" : "NOT green"}`);
     }
-    if (targets.includes(task.state)) return task;
-    if (task.state === "escalated" && !targets.includes("escalated")) {
-      throw new Error(`task escalated: ${task.reason}`);
-    }
-    await new Promise((r) => setTimeout(r, 2000));
   }
-  throw new Error(`timed out after ${timeoutMs}ms waiting for one of [${targets.join(", ")}], last state ${last}`);
+  if (bad > 0) throw new Error(`${bad} fixture ticket(s) failed self-validation`);
 }
 
-async function decide(id, decision, reason) {
-  return api(`/tasks/${id}/decision`, { method: "POST", body: JSON.stringify({ decision, reason }) });
-}
+async function matrix() {
+  const ceilingUsd = Number(flags["ceiling-usd"]);
+  const threshold = Number(flags.threshold);
+  const expectNoRemote = flags["expect-no-remote"] !== "false";
+  const fixtures = selectedFixtures();
+  await ensureMachine();
 
-async function main() {
-  try {
-    await api("/health");
-  } catch {
-    throw new Error(`machine is not reachable at ${MACHINE_URL} - start it with "pnpm dev" first`);
+  const runs = [];
+  for (const fixture of fixtures) {
+    for (const ticket of fixture.tickets) {
+      // runTicket grades the worktree with the ticket's hidden acceptance tests; the verifying
+      // stage already ran the fixture's own suite on the way here.
+      const run = await runTicket(fixture, ticket, { ceilingUsd, expectNoRemote });
+      log(`${fixture.name}/${ticket.id}: ${run.result}${run.failures.length ? ` (${run.failures.join("; ")})` : ""}`);
+      runs.push(run);
+    }
   }
 
-  const repoPath = setupRepo();
+  const rate = passRate(runs);
+  console.log(`\n${formatTable(runs)}\n\npass rate ${(rate * 100).toFixed(0)}% (threshold ${(threshold * 100).toFixed(0)}%)`);
+  writeFileSync(flags.out, `${JSON.stringify({ schema: 1, ceilingUsd, expectNoRemote, runs, passRate: rate }, null, 2)}\n`);
+  log(`wrote ${flags.out}`);
+  if (rate < threshold) throw new Error(`pass rate ${rate.toFixed(2)} is under ${threshold}`);
+}
+
+async function single() {
+  await ensureMachine();
+  const fixture = loadFixture("golden-task");
+  const ticket = fixture.tickets.find((t) => t.id === "bug");
+  const { dir: repoPath } = setupRepo(fixture, ticket);
   log(`fixture repo at ${repoPath}`);
 
-  const { id } = await api("/tasks", { method: "POST", body: JSON.stringify({ ...TICKET, repoPath }) });
-  log(`created task ${id}`);
-
-  await api(`/tasks/${id}/start`, { method: "POST" });
-  log("moved to intake");
-  await api(`/tasks/${id}/start`, { method: "POST" });
-  log("started");
-
-  await waitFor(id, ["awaiting_approval"], 10 * 60_000);
-  log("triage done, approving the plan");
-  await decide(id, "approved");
-
-  await waitFor(id, ["awaiting_test_check"], 60_000);
-  log("test design done, approving the tests");
-  await decide(id, "approved");
-
-  const afterImplementer = await waitFor(id, ["awaiting_ship"], 20 * 60_000);
-  log("implementer, verify, e2e, deliver, ci and evidence all passed, approving ship");
-  await decide(id, "approved");
-
-  // This fixture has no git remote, so shipping (a real `git push` + `gh pr create`) is
-  // expected to escalate here, not reach reviewing_memory. That's still a pass: everything
-  // this script actually verifies (the bug fix, the gates, the graph) already happened.
-  const shipped = await waitFor(id, ["reviewing_memory", "escalated"], 60_000);
-  if (shipped.state === "escalated") {
-    log(`shipping escalated as expected, no git remote on this throwaway fixture: ${shipped.reason}`);
-  } else {
-    log("approving the memory review");
-    await decide(id, "approved");
-    await waitFor(id, ["closed"], 30_000);
-    log("task closed");
+  const { id, task } = await drive(ticket, repoPath);
+  // This fixture has no git remote, so the delivering stage (push + draft PR) escalates
+  // before evidence and ship. That is still a pass: the fix, the gates and the graph
+  // up to delivery already happened.
+  if (task.state === "escalated") {
+    const detail = await api(`/tasks/${id}`);
+    if (detail.stageRuns.at(-1)?.stage !== "delivering") throw new Error(`task escalated: ${task.reason}`);
+    log(`delivering escalated as expected, no git remote on this throwaway fixture: ${task.reason}`);
   }
 
-  if (afterImplementer.worktreePath) {
+  const { task: final } = await api(`/tasks/${id}`);
+  if (final.worktreePath) {
     log("verifying stage already ran the fixture's own tests for real on the way here");
   } else {
     log("no worktree (agents were off or a credential was missing): traversed the whole graph with stubs only");
@@ -131,12 +121,15 @@ async function main() {
 
   // The worktree lives at `<worktreesDir>/<basename(repoPath)>/task-<name>`; since repoPath
   // is unique per run, its parent directory is ours alone to remove.
-  if (afterImplementer.worktreePath) rmSync(dirname(afterImplementer.worktreePath), { recursive: true, force: true });
+  if (final.worktreePath) rmSync(dirname(final.worktreePath), { recursive: true, force: true });
   rmSync(repoPath, { recursive: true, force: true });
   log(`golden task passed in ${elapsed()}`);
 }
 
-main().catch((error) => {
-  console.error(`\n[${elapsed()}] golden task FAILED: ${error.message}`);
-  process.exit(1);
-});
+const mode = flags.selftest ? selftest : flags.matrix ? matrix : single;
+Promise.resolve()
+  .then(mode)
+  .catch((error) => {
+    console.error(`\n[${elapsed()}] golden ${flags.selftest ? "selftest" : flags.matrix ? "matrix" : "task"} FAILED: ${error.message}`);
+    process.exit(1);
+  });

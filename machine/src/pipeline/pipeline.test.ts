@@ -7,6 +7,7 @@ import type { StageResult, StageRunner } from "../stages/runner.ts";
 import { StubStages } from "../stages/stubs.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { Pipeline, TaskNotFoundError } from "./pipeline.ts";
+import type { CloseReport } from "../stages/close.ts";
 
 let db: DataSource;
 const stubs = new StubStages();
@@ -49,6 +50,16 @@ describe("creating and starting", () => {
     const task = await pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
     expect(task).toMatchObject({ state: "backlog", retries: NO_RETRIES, resumeTo: null });
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toEqual(["task.created"]);
+  });
+
+  it("keeps the tracker source and starts with no artifacts", async () => {
+    const source = { kind: "github", repo: "owner/name", number: 42, url: "https://github.com/owner/name/issues/42" } as const;
+    const task = await pipeline.createTask({ title: "Login page", source });
+    expect(task.source).toEqual(source);
+    expect(await pipeline.artifacts(task.id)).toEqual([]);
+
+    const cleared = await pipeline.update(task.id, { source: null });
+    expect(cleared.source).toBeNull();
   });
 
   it("moves a backlog task to intake on start, without running a stage", async () => {
@@ -104,6 +115,91 @@ describe("the whole pipeline with stub stages", () => {
   });
 });
 
+describe("closing", () => {
+  it("runs the close step after the last approval and logs the report", async () => {
+    const seen: string[] = [];
+    const closing = new Pipeline(db, stubs.runnerFor, {
+      inline: true,
+      closeDeps: {
+        exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+        worktreeRemove: false,
+        orcStateBin: null,
+        watcher: { close: async (id) => void seen.push(id) },
+      },
+    });
+    const created = await closing.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
+    await closing.start(created.id);
+    await closing.start(created.id);
+    for (let i = 0; i < 4; i++) await closing.decide(created.id, "approved");
+
+    expect((await closing.get(created.id)).state).toBe("closed");
+    const event = (await closing.events(created.id)).find((e) => e.kind === "task.closed");
+    const report = event?.payload as unknown as CloseReport;
+    expect(report.steps.map((s) => s.step)).toEqual(["orc-state", "watch-tab", "worktree"]);
+    expect(seen).toEqual([created.id]);
+  });
+
+  it("logs a failed step instead of failing the approval", async () => {
+    const closing = new Pipeline(db, stubs.runnerFor, {
+      inline: true,
+      closeDeps: {
+        exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+        worktreeRemove: false,
+        orcStateBin: null,
+        watcher: { close: async () => Promise.reject(new Error("herdr down")) },
+      },
+    });
+    const created = await closing.createTask({ title: "Login page", criteria: ["x"] });
+    await closing.start(created.id);
+    await closing.start(created.id);
+    for (let i = 0; i < 4; i++) await closing.decide(created.id, "approved");
+
+    expect((await closing.get(created.id)).state).toBe("closed");
+    const event = (await closing.events(created.id)).find((e) => e.kind === "task.closed");
+    expect((event?.payload as unknown as CloseReport).steps).toContainEqual(
+      expect.objectContaining({ step: "watch-tab", ok: false }),
+    );
+  });
+});
+
+describe("memory review decision", () => {
+  const closing = () =>
+    new Pipeline(db, stubs.runnerFor, {
+      inline: true,
+      closeDeps: { exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreeRemove: false, orcStateBin: null },
+    });
+
+  async function toMemoryGate(p: Pipeline) {
+    // reviewing_memory is a gate; the retro runs inside shipping and its rules ride on the gate.
+    stubs.plan("shipping", { outcome: "pass", detail: { rules: { markdown: "- r\n" } } });
+    const created = await p.createTask({ title: "Login page", criteria: ["x"] });
+    await p.start(created.id);
+    await p.start(created.id);
+    for (let i = 0; i < 3; i++) await p.decide(created.id, "approved");
+    return created.id;
+  }
+
+  it("stores applyRules and the reason on the approval and skips the rules step", async () => {
+    const p = closing();
+    const id = await toMemoryGate(p);
+    await p.decide(id, "approved", "rules skipped", { applyRules: false });
+
+    const gate = (await p.approvals(id)).find((a) => a.kind === "reviewing_memory");
+    expect(gate).toMatchObject({ decision: "approved", reason: "rules skipped", response: { applyRules: false } });
+    const event = (await p.events(id)).find((e) => e.kind === "task.closed");
+    const steps = (event?.payload as unknown as CloseReport).steps;
+    expect(steps[0]).toMatchObject({ step: "rules", note: expect.stringMatching(/^skipped/) });
+  });
+
+  it("offers the rules step by default when the gate carries rules", async () => {
+    const p = closing();
+    const id = await toMemoryGate(p);
+    await p.decide(id, "approved");
+    const event = (await p.events(id)).find((e) => e.kind === "task.closed");
+    expect((event?.payload as unknown as CloseReport).steps.map((s) => s.step)[0]).toBe("rules");
+  });
+});
+
 describe("gates", () => {
   it("asks triage's questions and re-runs triage with your answers", async () => {
     stubs.plan("triage", {
@@ -136,6 +232,82 @@ describe("gates", () => {
       decision: "sent_back",
       reason: "Split it into two tickets",
     });
+  });
+});
+
+describe("the verifying findings loop", () => {
+  it("gives the next implementing run the findings of the latest verifying run", async () => {
+    const finding = (title: string) => ({
+      path: "a.ts", line: 1, start_line: null, severity: "bug", title, body: "", suggestion_code: null, confidence: 1,
+    });
+    const seen: Array<string[] | undefined> = [];
+    const runner = (stage: TaskState): StageRunner => {
+      if (stage === "implementing") {
+        return async (context) => {
+          seen.push(context.priorFindings?.map((f) => f.title));
+          return { outcome: "pass" };
+        };
+      }
+      return stubs.runnerFor(stage);
+    };
+    pipeline = new Pipeline(db, runner, { inline: true });
+    stubs.plan(
+      "verifying",
+      { outcome: "fail", detail: { findings: [finding("first")] } },
+      { outcome: "fail", detail: { findings: [finding("second")] } },
+    );
+    const task = await newTask();
+    await startAndApprove(task.id);
+    expect(seen).toEqual([[], ["first"], ["second"]]);
+  });
+});
+
+describe("the ci_watch findings loop", () => {
+  it("gives implementing the findings of a failed ci_watch run", async () => {
+    const finding = (title: string) => ({
+      path: "a.ts", line: 1, start_line: null, severity: "bug", title, body: "", suggestion_code: null, confidence: 1,
+    });
+    const seen: Array<string[] | undefined> = [];
+    const runner = (stage: TaskState): StageRunner => {
+      if (stage === "implementing") {
+        return async (context) => {
+          seen.push(context.priorFindings?.map((f) => f.title));
+          return { outcome: "pass" };
+        };
+      }
+      return stubs.runnerFor(stage);
+    };
+    pipeline = new Pipeline(db, runner, { inline: true });
+    stubs.plan("ci_watch", { outcome: "fail", detail: { findings: [finding("ci red")] } });
+    const task = await newTask();
+    await startAndApprove(task.id);
+    expect(seen).toEqual([[], ["ci red"]]);
+  });
+});
+
+describe("the implementing findings loop", () => {
+  it("gives the next implementing attempt the findings its own failed run left", async () => {
+    const finding = (title: string) => ({
+      path: "test/a.test.ts", line: 0, start_line: null, severity: "test", title, body: "", suggestion_code: null, confidence: 1,
+    });
+    const seen: Array<string[] | undefined> = [];
+    let attempts = 0;
+    const runner = (stage: TaskState): StageRunner => {
+      if (stage === "implementing") {
+        return async (context) => {
+          seen.push(context.priorFindings?.map((f) => f.title));
+          attempts += 1;
+          // A locked test file was changed: the run fails and names it (agents.ts).
+          if (attempts === 1) return { outcome: "fail", detail: { findings: [finding("locked test file changed")] } };
+          return { outcome: "pass" };
+        };
+      }
+      return stubs.runnerFor(stage);
+    };
+    pipeline = new Pipeline(db, runner, { inline: true });
+    const task = await newTask();
+    await startAndApprove(task.id);
+    expect(seen).toEqual([[], ["locked test file changed"]]);
   });
 });
 
@@ -246,6 +418,12 @@ describe("concurrency", () => {
     }
 
     expect((await pipeline.get(a.id)).state).toBe("awaiting_approval");
+    // b is claimed after a's loop returns, which is after a's last transition is stored,
+    // so there is a short window where a is done and b is still queued: wait it out.
+    const deadline = Date.now() + 2000;
+    while ((await pipeline.get(b.id)).queued && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
     expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: false });
   });
 
@@ -307,3 +485,42 @@ describe("events", () => {
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toEqual(seen);
   });
 });
+
+describe("ingested stage output", () => {
+  it("stores events, artifacts and usage the runner reports", async () => {
+    const task = await newTask();
+    stubs.plan("triage", {
+      outcome: "pass",
+      events: [{ at: "2026-01-01T00:00:00Z", kind: "tool", payload: { name: "Read" } }, { at: "t", kind: "orc.note", payload: {} }],
+      artifacts: [{ kind: "report", path: "/tmp/r.md", label: "R", sha256: "abc" }],
+      usage: { turns: 4, costUsd: 0.25 },
+    });
+    await pipeline.start(task.id);
+
+    const kinds = (await pipeline.events(task.id)).map((e) => e.kind);
+    expect(kinds).toContain("orc.tool");
+    expect(kinds).toContain("orc.note");
+    expect(kinds).not.toContain("orc.orc.note");
+    const [run] = await pipeline.stageRuns(task.id);
+    const tool = (await pipeline.events(task.id)).find((e) => e.kind === "orc.tool");
+    expect(tool).toMatchObject({ stageRunId: run?.id, payload: { name: "Read", at: "2026-01-01T00:00:00Z" } });
+    expect(await pipeline.artifacts(task.id)).toMatchObject([
+      { kind: "report", path: "/tmp/r.md", label: "R", sha256: "abc", stageRunId: run?.id },
+    ]);
+    expect(run?.turns).toBe(4);
+    expect(Number(run?.costUsd)).toBe(0.25);
+  });
+
+  it("shows needsInput and requested actions on the approval", async () => {
+    const task = await newTask();
+    const needsInput = [{ question: "Which db?", recommended: "pg" }];
+    const requested = [{ kind: "tracker_write" as const, target: "o/r#1", payload: { body: "hi" } }];
+    stubs.plan("triage", { outcome: "needs_input", needsInput, requested, detail: { summary: "s" } });
+    const asking = await pipeline.start(task.id);
+
+    expect(asking.state).toBe("awaiting_answers");
+    const [approval] = await pipeline.approvals(task.id);
+    expect(approval?.requested).toMatchObject({ summary: "s", questions: needsInput, actions: requested });
+  });
+});
+

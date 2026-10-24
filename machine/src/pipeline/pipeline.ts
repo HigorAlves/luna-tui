@@ -2,12 +2,14 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { RUNNING, type TaskState } from "@hardness/contracts";
+import { type Finding, RUNNING, type TaskSource, type TaskState } from "@hardness/contracts";
 import { type DataSource, type EntityManager, In, IsNull } from "typeorm";
 
 import {
   ApprovalEntity,
   type ApprovalRow,
+  ArtifactEntity,
+  type ArtifactRow,
   type Decision,
   EventEntity,
   type EventRow,
@@ -19,6 +21,7 @@ import {
 } from "../db/entities.ts";
 import { NO_RETRIES, type PipelineEvent, type Step, transition } from "../engine/transition.ts";
 import { removeWorktree as removeWorktreeOnDisk } from "../git/worktree.ts";
+import { type CloseDeps, closeTask } from "../stages/close.ts";
 import type { StageResult, StageRunner } from "../stages/runner.ts";
 
 export class TaskNotFoundError extends Error {
@@ -41,6 +44,7 @@ export interface NewTask {
   description?: string;
   criteria?: string[];
   repoPath?: string | null;
+  source?: TaskSource | null;
 }
 
 export interface PipelineOptions {
@@ -50,6 +54,8 @@ export interface PipelineOptions {
   inline?: boolean;
   /** Tasks that can be driving a stage at once, across every repo. The rest queue. */
   maxConcurrentTasks?: number;
+  /** What the close step needs once a task is approved for good. Without it, nothing is closed on the host. */
+  closeDeps?: CloseDeps;
 }
 
 interface DecisionRecord {
@@ -72,6 +78,7 @@ export class Pipeline {
   private readonly onEvent: (event: EventRow) => void;
   private readonly inline: boolean;
   private readonly maxConcurrentTasks: number;
+  private readonly closeDeps: CloseDeps | undefined;
   /** The abort signal of each task currently driving a stage. Its size is the active count. */
   private readonly loops = new Map<string, AbortController>();
   private readonly resumeTimers = new Map<string, NodeJS.Timeout>();
@@ -84,6 +91,7 @@ export class Pipeline {
     this.onEvent = options.onEvent ?? (() => {});
     this.inline = options.inline ?? false;
     this.maxConcurrentTasks = options.maxConcurrentTasks ?? 4;
+    this.closeDeps = options.closeDeps;
   }
 
   async createTask(input: NewTask): Promise<TaskRow> {
@@ -92,6 +100,7 @@ export class Pipeline {
       description: input.description ?? "",
       criteria: input.criteria ?? [],
       repoPath: input.repoPath ?? null,
+      source: input.source ?? null,
       branch: null,
       worktreePath: null,
       state: "backlog",
@@ -101,6 +110,20 @@ export class Pipeline {
     });
     await this.log(task.id, "task.created", { title: task.title });
     return this.get(task.id);
+  }
+
+  /** The database, for read-only reports such as metrics. */
+  get database(): DataSource {
+    return this.db;
+  }
+
+  /** Stage slots: how many tasks may drive a stage at once, and how many do right now. */
+  get slots(): { max: number; active: number } {
+    return { max: this.maxConcurrentTasks, active: this.loops.size };
+  }
+
+  activeCount(): number {
+    return this.loops.size;
   }
 
   list(): Promise<TaskRow[]> {
@@ -113,10 +136,22 @@ export class Pipeline {
     return task;
   }
 
+  /** The task created from this external issue, if any. */
+  async findBySource(repo: string, number: number): Promise<TaskRow | null> {
+    return this.db
+      .getRepository(TaskEntity)
+      .createQueryBuilder("task")
+      .where("task.source->>'repo' = :repo", { repo })
+      .andWhere("(task.source->>'number')::int = :number", { number })
+      .getOne();
+  }
+
   /** Edits the ticket's text. Stages started after this see the new text. */
   async update(
     id: string,
-    patch: { title?: string; description?: string; criteria?: string[]; repoPath?: string | null },
+    patch: { title?: string; description?: string; criteria?: string[]; repoPath?: string | null;
+      source?: TaskSource | null;
+    },
   ): Promise<TaskRow> {
     await this.get(id);
     const changes = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
@@ -161,10 +196,15 @@ export class Pipeline {
   }
 
   /** Approves or sends back whatever the task is waiting on, including an escalation. */
-  decide(id: string, decision: "approved" | "sent_back", reason?: string): Promise<TaskRow> {
+  decide(
+    id: string,
+    decision: "approved" | "sent_back",
+    reason?: string,
+    response?: Record<string, unknown>,
+  ): Promise<TaskRow> {
     const event: PipelineEvent =
       decision === "approved" ? { type: "approved" } : { type: "sent_back" };
-    return this.dispatch(id, event, { decision: { decision, reason } });
+    return this.dispatch(id, event, { decision: { decision, reason, ...(response ? { response } : {}) } });
   }
 
   /** Stops the running (or merely queued) stage and waits for you. */
@@ -235,6 +275,12 @@ export class Pipeline {
       .find({ where: { taskId: id }, order: { createdAt: "ASC" } });
   }
 
+  artifacts(id: string): Promise<ArtifactRow[]> {
+    return this.db
+      .getRepository(ArtifactEntity)
+      .find({ where: { taskId: id }, order: { createdAt: "ASC" } });
+  }
+
   events(id: string): Promise<EventRow[]> {
     return this.db.getRepository(EventEntity).find({ where: { taskId: id }, order: { id: "ASC" } });
   }
@@ -245,7 +291,31 @@ export class Pipeline {
     if (step.effect.kind === "run") {
       await this.schedule(id, step.effect.stage);
     }
+    if (step.effect.kind === "done") await this.close(id);
     return this.get(id);
+  }
+
+  /** The memory review's proposal and whether the approval kept it, if the gate carried one. */
+  private async approvedRules(id: string): Promise<{ markdown: string; apply: boolean } | undefined> {
+    const gate = (await this.approvals(id)).filter((a) => a.kind === "reviewing_memory" && a.decision === "approved").at(-1);
+    const rules = (gate?.requested as { rules?: { markdown?: unknown } } | undefined)?.rules;
+    if (!gate || typeof rules?.markdown !== "string" || rules.markdown.trim() === "") return undefined;
+    return { markdown: rules.markdown, apply: gate.response?.applyRules !== false };
+  }
+
+  /** Runs the host-side close step for a task that just closed and logs what it did. Never throws. */
+  private async close(id: string): Promise<void> {
+    if (!this.closeDeps) return;
+    try {
+      const task = await this.get(id);
+      const report = await closeTask({ ...task, rules: await this.approvedRules(id) }, this.closeDeps);
+      if (report.worktreeRemoved) {
+        await this.db.getRepository(TaskEntity).update({ id }, { worktreePath: null });
+      }
+      await this.log(id, "task.closed", { ...report });
+    } catch (error) {
+      console.error(`could not close task ${id}`, error);
+    }
   }
 
   /**
@@ -336,7 +406,15 @@ export class Pipeline {
         const next: PipelineEvent = result.rateLimited
           ? { type: "rate_limited" }
           : { type: "stage_done", outcome: result.outcome };
-        const step = await this.apply(id, next, { detail: result.detail });
+        const detail =
+          result.needsInput?.length || result.requested?.length
+            ? {
+                ...result.detail,
+                ...(result.needsInput?.length ? { questions: result.needsInput } : {}),
+                ...(result.requested?.length ? { actions: result.requested } : {}),
+              }
+            : result.detail;
+        const step = await this.apply(id, next, { detail });
         if (step.effect.kind === "pause") this.scheduleResume(id, result.detail?.resetsAt);
         stage = step.effect.kind === "run" ? step.effect.stage : null;
       }
@@ -419,6 +497,38 @@ export class Pipeline {
     return step;
   }
 
+  /** The latest finished run of a stage for a task, with the detail it ended with. */
+  async latestStageFinish(id: string, stage: TaskState): Promise<{ runId: string; detail?: Record<string, unknown> } | null> {
+    const finished = await this.db
+      .getRepository(EventEntity)
+      .find({ where: { taskId: id, kind: "stage.finished" }, order: { id: "DESC" } });
+    const latest = finished.find((event) => event.payload.stage === stage && event.stageRunId);
+    if (!latest?.stageRunId) return null;
+    const detail = latest.payload.detail;
+    return {
+      runId: latest.stageRunId,
+      ...(detail && typeof detail === "object" ? { detail: detail as Record<string, unknown> } : {}),
+    };
+  }
+
+  /** The findings the latest verifying, ci_watch or failed implementing run stored on its
+   *  `stage.finished` event. */
+  private async latestVerifyingFindings(id: string): Promise<Finding[]> {
+    const finished = await this.db
+      .getRepository(EventEntity)
+      .find({ where: { taskId: id, kind: "stage.finished" }, order: { id: "DESC" } });
+    // Whichever failed last is what the implementer is being re-run for: a red gate, or its
+    // own previous attempt (e.g. it changed a locked test file and the commit was undone).
+    const latest = finished.find(
+      (event) =>
+        event.payload.stage === "verifying" ||
+        event.payload.stage === "ci_watch" ||
+        (event.payload.stage === "implementing" && event.payload.status === "failed"),
+    );
+    const detail = latest?.payload.detail as { findings?: unknown } | undefined;
+    return Array.isArray(detail?.findings) ? (detail.findings as Finding[]) : [];
+  }
+
   private async runStage(id: string, stage: TaskState, signal: AbortSignal): Promise<StageResult> {
     const runs = this.db.getRepository(StageRunEntity);
     const attempt = (await runs.countBy({ taskId: id, stage })) + 1;
@@ -436,8 +546,12 @@ export class Pipeline {
     let result: StageResult;
     let error: string | undefined;
     try {
-      const [task, approvals] = await Promise.all([this.get(id), this.approvals(id)]);
-      result = await this.runnerFor(stage)({ task, stage, attempt, runId, approvals, signal });
+      const [task, approvals, priorFindings] = await Promise.all([
+        this.get(id),
+        this.approvals(id),
+        stage === "implementing" ? this.latestVerifyingFindings(id) : Promise.resolve([]),
+      ]);
+      result = await this.runnerFor(stage)({ task, stage, attempt, runId, approvals, priorFindings, signal });
     } catch (thrown) {
       error = thrown instanceof Error ? thrown.message : String(thrown);
       result = { outcome: "fail" };
@@ -461,8 +575,16 @@ export class Pipeline {
         transcriptPath: result.run?.transcriptPath ?? null,
         inputCommit: result.run?.inputCommit ?? null,
         outputCommit: result.run?.outputCommit ?? null,
+        ...(result.usage ? { turns: result.usage.turns, costUsd: result.usage.costUsd?.toString() ?? null } : {}),
       },
     );
+    for (const artifact of result.artifacts ?? []) {
+      await this.db.getRepository(ArtifactEntity).insert({ taskId: id, stageRunId: runId, ...artifact });
+    }
+    for (const item of result.events ?? []) {
+      const kind = item.kind.startsWith("orc.") ? item.kind : `orc.${item.kind}`;
+      await this.log(id, kind, { ...item.payload, at: item.at }, runId);
+    }
     if (result.workspace) {
       await this.db
         .getRepository(TaskEntity)

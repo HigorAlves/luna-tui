@@ -1,5 +1,7 @@
 # Plan 0001: the machine, dev version
 
+The product is now called Luna TUI; this plan keeps the working name Hardness.
+
 The machine is a TypeScript orchestrator that runs the harness pipeline from the
 Local Dev Harness plan and drives the Hardness Board. This plan covers the **dev
 version**: the orchestrator runs on the host with `pnpm dev`, and only Postgres

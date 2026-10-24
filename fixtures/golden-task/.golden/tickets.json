@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "test": ["npm", "test"],
+  "tickets": [
+    {
+      "id": "bug",
+      "kind": "bug",
+      "title": "Cart totals show wrong price",
+      "description": "formatPrice drops the second decimal digit for round dollar amounts, e.g. $1.00 shows as $1.0. Fix formatPrice in src/cart.js so prices always show two decimals.",
+      "criteria": [
+        "formatPrice(1234) returns \"$12.34\"",
+        "formatPrice(100) returns \"$1.00\"",
+        "`npm test` passes"
+      ],
+      "fix": "patches/bug.patch"
+    },
+    {
+      "id": "feature",
+      "kind": "feature",
+      "title": "Describe the cart in words",
+      "description": "Add describeCart(items) to src/cart.js: it returns \"Cart is empty\" for no items, otherwise the total quantity as \"1 item\" or \"N items\".",
+      "criteria": [
+        "describeCart([]) returns \"Cart is empty\"",
+        "one unit returns \"1 item\"; three units across two lines return \"3 items\"",
+        "`npm test` passes"
+      ],
+      "seed": ["patches/bug.patch"],
+      "accept": "accept/feature",
+      "fix": "patches/feature.patch"
+    }
+  ]
+}

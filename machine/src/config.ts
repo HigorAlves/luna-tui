@@ -11,11 +11,15 @@ export interface Config {
   maxConcurrentTasks: number;
   /** Docker image for stage containers, built by `runner:build`. */
   runnerImage: string;
+  /** Docker image for the e2e stage, with a browser. Used by the QA slices. */
+  runnerQaImage: string;
   /** Task worktrees go in `<worktreesDir>/<repo>/<branch>`, like `herdr worktree`. */
   worktreesDir: string;
   /** Run inputs, outputs and transcripts. */
   stateDir: string;
   herdrBin: string;
+  /** Poll GitHub issues carrying `label` in `repos` (`owner/name`) and create tasks. No repos: off. */
+  githubPoll: { repos: string[]; intervalMs: number; label: string };
   /** Days to keep a closed task's events/stage runs before pruning them. 0 disables pruning. */
   retentionDays: number;
 }
@@ -37,6 +41,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!Number.isInteger(maxConcurrentTasks) || maxConcurrentTasks < 1) {
     throw new Error(`MACHINE_MAX_CONCURRENT must be a positive integer, got "${env.MACHINE_MAX_CONCURRENT}"`);
   }
+  const repos = (env.MACHINE_GITHUB_POLL ?? "")
+    .split(",")
+    .map((repo) => repo.trim())
+    .filter((repo) => repo !== "");
+  for (const repo of repos) {
+    if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
+      throw new Error(`MACHINE_GITHUB_POLL must list owner/name repos, got "${repo}"`);
+    }
+  }
+  const pollSeconds = env.MACHINE_GITHUB_POLL_INTERVAL === undefined ? 300 : Number(env.MACHINE_GITHUB_POLL_INTERVAL);
+  if (!Number.isInteger(pollSeconds) || pollSeconds < 1) {
+    throw new Error(
+      `MACHINE_GITHUB_POLL_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_GITHUB_POLL_INTERVAL}"`,
+    );
+  }
   const retentionDays =
     env.MACHINE_RETENTION_DAYS === undefined ? DEFAULT_RETENTION_DAYS : Number(env.MACHINE_RETENTION_DAYS);
   if (!Number.isInteger(retentionDays) || retentionDays < 0) {
@@ -49,9 +68,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     agents: env.MACHINE_AGENTS !== "off",
     maxConcurrentTasks,
     runnerImage: env.RUNNER_IMAGE ?? "hardness-runner:dev",
+    runnerQaImage: env.RUNNER_QA_IMAGE ?? "hardness-runner-qa:dev",
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
     stateDir: env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness"),
     herdrBin: env.HERDR_BIN ?? "herdr",
+    githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
     retentionDays,
   };
 }

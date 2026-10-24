@@ -24,7 +24,7 @@ use crate::{
     discover::{discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, Look, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
+        COLUMNS, Look, Metrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
         parse_ticket, questions_of, ticket_markdown,
     },
     store,
@@ -32,24 +32,35 @@ use crate::{
 };
 
 const INFO_TOAST_FOR: Duration = Duration::from_secs(3);
+/// The platform's "open this URL" program and its arguments.
+fn opener_command(url: &str) -> (&'static str, Vec<String>) {
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    (program, vec![url.to_string()])
+}
+
 /// Rows one card takes on the board, including its spacer line.
 pub const CARD_HEIGHT: usize = 3;
 
 /// Actions in the `x` menu for the selected ticket, as the key each one is.
-pub const ACTIONS: [(char, &str); 9] = [
+pub const ACTIONS: [(char, &str); 10] = [
     ('a', "advance: start, approve, answer, resume"),
     ('S', "ship: approve the Ship gate and open the PR"),
     ('r', "send back with a reason"),
     ('e', "edit the ticket"),
     ('R', "search for its repo"),
     ('f', "focus the agent's tab"),
+    ('o', "open the linked GitHub issue"),
     ('X', "abort the running stage"),
     ('w', "kill its worktree"),
     ('d', "delete"),
 ];
 
 /// Keys shown in the help overlay, as (keys, what they do).
-pub const HELP: [(&str, &str); 21] = [
+pub const HELP: [(&str, &str); 24] = [
     ("h / l", "previous / next column"),
     ("j / k", "previous / next ticket"),
     ("enter", "open details"),
@@ -58,20 +69,31 @@ pub const HELP: [(&str, &str); 21] = [
     ("R", "search for its repo under HARDNESS_REPOS_DIR / ~/Developer"),
     ("a", "advance: move to intake, start, approve, answer, add guidance, resume"),
     ("S", "ship: approve the Ship gate and open the PR (same as a there)"),
+    ("A", "memory review: approve without applying the proposed rules"),
     ("r", "send the plan or tests back, with a reason"),
     ("X", "abort the running stage (asks first)"),
     ("w", "kill its worktree once you are done with it (asks first)"),
     ("d", "delete (asks first)"),
     ("f", "focus the agent's watch tab in herdr"),
+    ("o", "open the linked GitHub issue in the browser"),
     ("/", "filter by title or #id"),
     ("!", "show only tickets that need you"),
     ("@", "show only tickets for this repo"),
-    ("F", "fold: show every column, only the focused one expanded"),
+    ("z", "fold: show every column, only the focused one expanded"),
+    ("F", "Floor: 7d and 30d metrics (r refreshes, esc closes)"),
     ("x", "actions for the selected ticket"),
     ("esc", "clear the filter"),
     ("?", "this help"),
     ("q", "quit"),
 ];
+
+/// The Floor view's numbers, one window each. A window stays `None` until its first fetch
+/// succeeds; a failed refresh keeps what was there.
+#[derive(Default)]
+pub struct FloorState {
+    pub d7: Option<Metrics>,
+    pub d30: Option<Metrics>,
+}
 
 pub enum Mode {
     Normal,
@@ -141,6 +163,8 @@ pub struct App {
     /// Shows every column at once, unfocused ones collapsed to their header bar. For screens
     /// too narrow to fit all columns at a readable width.
     pub fold: bool,
+    /// The full-screen Floor view, open while this is `Some`.
+    pub floor: Option<FloorState>,
     /// The repo this board defaults new tickets to, for the `@` filter. `None` if it
     /// isn't inside one.
     pub home_repo: Option<String>,
@@ -172,6 +196,7 @@ impl App {
             needs_only: false,
             this_repo_only: false,
             fold: false,
+            floor: None,
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
             detail_scroll: Cell::new(0),
@@ -529,6 +554,13 @@ impl App {
         };
         match key {
             'a' => return self.advance(id),
+            'A' => {
+                if task.state == "reviewing_memory" {
+                    self.act(|m| m.approve_skipping_rules(id), "approved, rules skipped");
+                } else {
+                    self.notify("no memory review waiting on this ticket", false);
+                }
+            }
             'S' => {
                 if task.state == "awaiting_ship" {
                     return self.advance(id);
@@ -570,6 +602,16 @@ impl App {
                     self.notify(format!("no watch tab for #{} yet; it opens when an agent runs", task.short_id()), false);
                 }
             }
+            'o' => match &task.source {
+                Some(source) => {
+                    let (program, args) = opener_command(&source.url);
+                    // Detached: spawn and move on, never wait on the browser.
+                    if Command::new(program).args(args).spawn().is_err() {
+                        self.notify(format!("could not open {}", source.url), true);
+                    }
+                }
+                None => self.notify("no issue linked", false),
+            },
             _ => {}
         }
         Outcome::Continue
@@ -578,6 +620,9 @@ impl App {
     pub fn handle_key(&mut self, key: KeyEvent) -> Outcome {
         if self.toast.as_ref().is_some_and(|t| t.error) {
             self.toast = None;
+        }
+        if self.floor.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_floor(key);
         }
         match &self.mode {
             Mode::Normal => self.handle_normal(key),
@@ -602,6 +647,36 @@ impl App {
         }
     }
 
+    /// Fetches both Floor windows. A failure shows in the footer and keeps the old numbers.
+    fn refresh_floor(&mut self) {
+        let mut errors = Vec::new();
+        let d7 = self.machine.metrics("7d");
+        let d30 = self.machine.metrics("30d");
+        let Some(floor) = self.floor.as_mut() else {
+            return;
+        };
+        match d7 {
+            Ok(m) => floor.d7 = Some(m),
+            Err(e) => errors.push(e),
+        }
+        match d30 {
+            Ok(m) => floor.d30 = Some(m),
+            Err(e) => errors.push(e),
+        }
+        if let Some(error) = errors.into_iter().next() {
+            self.notify(format!("floor: {error}"), true);
+        }
+    }
+
+    fn handle_floor(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('F') | KeyCode::Char('q') => self.floor = None,
+            KeyCode::Char('r') => self.refresh_floor(),
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Char('q') => return Outcome::Quit,
@@ -624,7 +699,11 @@ impl App {
                     self.clamp_selection();
                 }
             }
-            KeyCode::Char('F') => self.fold = !self.fold,
+            KeyCode::Char('z') => self.fold = !self.fold,
+            KeyCode::Char('F') => {
+                self.floor = Some(FloorState::default());
+                self.refresh_floor();
+            }
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Esc => {
                 self.filter.clear();
@@ -944,6 +1023,17 @@ mod tests {
         let toast = app.toast.expect("a warning toast on startup");
         assert!(toast.error);
         assert!(toast.text.contains("pnpm dev"), "toast was: {}", toast.text);
+    }
+
+    #[test]
+    fn opener_command_uses_open_on_macos_and_xdg_open_elsewhere() {
+        let (program, args) = opener_command("https://github.com/acme/app/issues/42");
+        if cfg!(target_os = "macos") {
+            assert_eq!(program, "open");
+        } else {
+            assert_eq!(program, "xdg-open");
+        }
+        assert_eq!(args, vec!["https://github.com/acme/app/issues/42".to_string()]);
     }
 
     #[test]

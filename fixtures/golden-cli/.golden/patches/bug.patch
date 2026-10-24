@@ -1,0 +1,13 @@
+diff --git a/main.go b/main.go
+index 39dd080..fc727ef 100644
+--- a/main.go
++++ b/main.go
+@@ -24,7 +24,7 @@ func Run(in io.Reader, out io.Writer) error {
+ 		if err != nil {
+ 			return fmt.Errorf("bad amount %q", fields[1])
+ 		}
+-		totals[fields[0]] = amount
++		totals[fields[0]] += amount
+ 	}
+ 	if err := scanner.Err(); err != nil {
+ 		return err

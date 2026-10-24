@@ -18,7 +18,8 @@ import type { Watcher } from "../herdr/watch.ts";
 import { type Pipeline, TaskBusyError, TaskNotFoundError } from "../pipeline/pipeline.ts";
 import type { StubStages } from "../stages/stubs.ts";
 import type { Bus } from "./bus.ts";
-import { toApproval, toEvent, toStageRun, toTask } from "./serialize.ts";
+import { computeMetrics, InvalidSince, parseSince } from "./metrics.ts";
+import { toApproval, toArtifact, toEvent, toStageRun, toTask } from "./serialize.ts";
 
 const PING_EVERY_MS = 15_000;
 /** Activity entries returned with one task. */
@@ -70,6 +71,17 @@ export function createApp({ pipeline, bus, watcher, stubs }: AppDeps): Hono {
 
   app.get("/health", (c) => c.json({ ok: true }));
 
+  app.get("/metrics", async (c) => {
+    let since: Date;
+    try {
+      since = parseSince(c.req.query("since"));
+    } catch (error) {
+      if (error instanceof InvalidSince) throw new BadRequest(error.message);
+      throw error;
+    }
+    return c.json(await computeMetrics(pipeline.database, { since, slots: pipeline.slots }));
+  });
+
   app.get("/tasks", async (c) => c.json((await pipeline.list()).map(toTask)));
 
   app.post("/tasks", async (c) => {
@@ -79,17 +91,19 @@ export function createApp({ pipeline, bus, watcher, stubs }: AppDeps): Hono {
 
   app.get("/tasks/:id", async (c) => {
     const id = taskId(c);
-    const [task, stageRuns, approvals, events] = await Promise.all([
+    const [task, stageRuns, approvals, events, artifacts] = await Promise.all([
       pipeline.get(id),
       pipeline.stageRuns(id),
       pipeline.approvals(id),
       pipeline.events(id),
+      pipeline.artifacts(id),
     ]);
     return c.json({
       task: toTask(task),
       stageRuns: stageRuns.map(toStageRun),
       approvals: approvals.map(toApproval),
       events: events.slice(-RECENT_EVENTS).map(toEvent),
+      artifacts: artifacts.map(toArtifact),
     });
   });
 
@@ -120,8 +134,9 @@ export function createApp({ pipeline, bus, watcher, stubs }: AppDeps): Hono {
   /** Approves or sends back whatever the task is waiting on, including an escalation. */
   app.post("/tasks/:id/decision", async (c) => {
     const id = taskId(c);
-    const { decision, reason } = await body(c, DecisionInput);
-    return c.json(toTask(await pipeline.decide(id, decision, reason ?? undefined)));
+    const { decision, reason, applyRules } = await body(c, DecisionInput);
+    const response = applyRules === undefined ? undefined : { applyRules };
+    return c.json(toTask(await pipeline.decide(id, decision, reason ?? undefined, response)));
   });
 
   app.post("/tasks/:id/abort", async (c) => c.json(toTask(await pipeline.abort(taskId(c)))));

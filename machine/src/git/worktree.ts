@@ -93,3 +93,8 @@ export async function commitAll(path: string, message: string): Promise<string |
   await execOrThrow("git", ["-C", path, "-c", "commit.gpgsign=false", "commit", "-q", "-m", message]);
   return headCommit(path);
 }
+
+/** True when the worktree has uncommitted or untracked changes. */
+export async function isDirty(path: string): Promise<boolean> {
+  return (await execOrThrow("git", ["-C", path, "status", "--porcelain"])) !== "";
+}

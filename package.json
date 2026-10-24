@@ -13,6 +13,11 @@
     "db:down": "docker compose -f compose.dev.yml down",
     "board:build": "cargo build --release --manifest-path board/Cargo.toml",
     "board:test": "cargo test --manifest-path board/Cargo.toml",
-    "golden": "pnpm --filter @hardness/machine golden"
+    "golden": "pnpm --filter @hardness/machine golden",
+    "site:dev": "pnpm --filter site dev",
+    "site:build": "pnpm --filter site build",
+    "site:test": "pnpm --filter site test",
+    "icons": "node scripts/export-icons.mjs",
+    "icons:gen": "node scripts/gen-brand.mjs"
   }
 }

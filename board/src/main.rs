@@ -1,4 +1,4 @@
-//! Hardness Board: a lazygit-style view of the machine's tickets, inside herdr.
+//! Luna TUI board: a lazygit-style view of the machine's tickets, inside herdr.
 //!
 //! Modules: `model` (tickets and markdown), `client` (the machine's API and event stream),
 //! `store` (one-time import of the old local board), `herdr` (CLI calls), `app`

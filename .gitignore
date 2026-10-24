@@ -19,3 +19,11 @@ prompts/
 
 # Spike output
 spikes/*/out/
+
+# Built by machine/runner/build.sh
+machine/runner/vendor/
+
+# site
+site/.next/
+site/next-env.d.ts
+site/*.tsbuildinfo

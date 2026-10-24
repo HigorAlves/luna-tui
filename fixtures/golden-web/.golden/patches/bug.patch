@@ -1,0 +1,13 @@
+diff --git a/src/cart.ts b/src/cart.ts
+index 36dad29..3d5dffd 100644
+--- a/src/cart.ts
++++ b/src/cart.ts
+@@ -10,7 +10,7 @@ export function formatPrice(cents: number): string {
+ 
+ /** The cart total in cents. */
+ export function cartTotal(items: Item[]): number {
+-  return items.reduce((sum, item) => sum + item.priceCents, 0);
++  return items.reduce((sum, item) => sum + item.priceCents * item.qty, 0);
+ }
+ 
+ /** The cart as an HTML list. */
