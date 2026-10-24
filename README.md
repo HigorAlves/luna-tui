@@ -54,9 +54,8 @@ the same queue.
 | `machine/` | The orchestrator: TypeScript on Node 24+, HTTP API plus an SSE stream, Postgres for state. |
 | `contracts/` | Types shared by the machine and the board. |
 | `fixtures/golden-task/` | A small repo with one seeded bug, used by `pnpm golden`. |
-| `spikes/` | Throwaway experiments, kept with their results. |
 | `docs/plans/` | Plans. Start with `0001-machine-dev.md`. |
-| `compose.dev.yml` | Postgres for local development. |
+| `compose.yaml` | Postgres for local development. |
 
 ## Prerequisites
 
