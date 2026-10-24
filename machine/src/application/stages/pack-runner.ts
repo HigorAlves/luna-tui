@@ -1,6 +1,7 @@
 // The stages that run as orc packs in a sandbox: the machine writes a StageInput, the
 // container runs `orc-stage run`, and the machine ingests what the pack left in /out.
 import type { PackId, TaskState } from "@hardness/contracts";
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -36,6 +37,9 @@ export interface AgentDeps {
 }
 
 const MINUTE = 60_000;
+/** Kept read-only inside a writable stage's git dir: a planted hook or a rewritten config
+ *  would otherwise run on the host, as you, at the next git command the machine issues. */
+const GIT_READ_ONLY = ["hooks", "config"];
 
 export async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId): Promise<StageResult> {
   const { task } = context;
@@ -49,6 +53,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       : workspaceFor(task, task.repoPath, deps.worktreesDir);
   await ensureWorktree(task.repoPath, workspace);
   const inputCommit = await headCommit(workspace.path);
+  const gitDir = await commonGitDir(task.repoPath);
   const container = `hardness-${task.id.slice(0, 8)}-${context.stage.replaceAll("_", "-")}-${context.attempt}`;
   const runDir = join(deps.stateDir, "runs", context.runId);
 
@@ -66,7 +71,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     runDir,
     worktree: workspace.path,
     writable: limits.writable,
-    gitDir: await commonGitDir(task.repoPath),
+    gitDir,
+    gitReadOnly: GIT_READ_ONLY.filter((sub) => existsSync(join(gitDir, sub))),
     gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
     input: input as unknown as Record<string, unknown>,
     timeoutMs: limits.timeoutMs,

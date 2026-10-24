@@ -30,14 +30,14 @@ const view = (isDraft: boolean) => ok(JSON.stringify({ url: "https://x/pull/3", 
 
 describe("shipping", () => {
   it("marks a draft PR ready", async () => {
-    const { run, context, calls } = setup({ "git -C /wt push": ok(), "gh pr view": view(true), "gh pr ready": ok() });
+    const { run, context, calls } = setup({ "git -c core.hooksPath=/dev/null -C /wt push": ok(), "gh pr view": view(true), "gh pr ready": ok() });
     const result = await run(context);
     expect(result).toMatchObject({ outcome: "pass", detail: { prUrl: "https://x/pull/3", readied: true } });
     expect(calls).toContainEqual(["gh", "pr", "ready", "3"]);
   });
 
   it("does nothing to a PR that is already ready", async () => {
-    const { run, context, calls } = setup({ "git -C /wt push": ok(), "gh pr view": view(false) });
+    const { run, context, calls } = setup({ "git -c core.hooksPath=/dev/null -C /wt push": ok(), "gh pr view": view(false) });
     const result = await run(context);
     expect(result).toMatchObject({ outcome: "pass", detail: { readied: false } });
     expect(calls.some((c) => c[2] === "ready")).toBe(false);
@@ -45,7 +45,7 @@ describe("shipping", () => {
 
   it("creates a non-draft PR when delivering never opened one", async () => {
     const { run, context, calls } = setup({
-      "git -C /wt push": ok(),
+      "git -c core.hooksPath=/dev/null -C /wt push": ok(),
       "gh pr view": bad("no pull requests found"),
       "gh repo view": ok(JSON.stringify({ nameWithOwner: "a/b" })),
       "gh pr create": ok("https://x/pull/9\n"),
@@ -56,7 +56,7 @@ describe("shipping", () => {
   });
 
   it("fails when marking ready fails", async () => {
-    const { run, context } = setup({ "git -C /wt push": ok(), "gh pr view": view(true), "gh pr ready": bad("boom") });
+    const { run, context } = setup({ "git -c core.hooksPath=/dev/null -C /wt push": ok(), "gh pr view": view(true), "gh pr ready": bad("boom") });
     const result = await run(context);
     expect(result.outcome).toBe("fail");
     expect(String(result.detail?.error)).toContain("boom");

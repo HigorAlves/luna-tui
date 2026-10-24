@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import { HOST_GIT } from "../adapters/git/worktree.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { CAP_BYTES, CAP_LINES, CONTEXT_FILE, mergeRules } from "./stages/memory.ts";
 
@@ -62,7 +63,7 @@ async function applyRules(
 
   await mkdir(dirname(file), { recursive: true });
   await writeFile(file, merged);
-  const run = async (args: string[]): Promise<ExecResult> => deps.exec("git", ["-C", worktreePath, ...args]);
+  const run = async (args: string[]): Promise<ExecResult> => deps.exec("git", [...HOST_GIT, "-C", worktreePath, ...args]);
   const added = await run(["add", CONTEXT_FILE]);
   if (added.code !== 0) throw new Error(`git add failed: ${(added.stderr || added.stdout).trim()}`);
   const committed = await run(["-c", "commit.gpgsign=false", "commit", "-m", "docs(context): rules from the memory review"]);
@@ -107,7 +108,7 @@ export async function closeTask(task: CloseTarget, deps: CloseDeps): Promise<Clo
   const worktree = await attempt("worktree", async () => {
     if (!task.worktreePath || !task.repoPath) return "skipped: the task has no worktree";
     if (!deps.worktreeRemove) return "kept: remove it from the board with w";
-    const result = await deps.exec("git", ["-C", task.repoPath, "worktree", "remove", "--force", task.worktreePath]);
+    const result = await deps.exec("git", [...HOST_GIT, "-C", task.repoPath, "worktree", "remove", "--force", task.worktreePath]);
     if (result.code !== 0) throw new Error(`git worktree remove failed: ${(result.stderr || result.stdout).trim()}`);
     worktreeRemoved = true;
     return "worktree removed";

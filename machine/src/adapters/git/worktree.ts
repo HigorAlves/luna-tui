@@ -5,6 +5,10 @@ import { basename, join } from "node:path";
 
 import { exec, execOrThrow } from "../process/exec.ts";
 
+/** Every git command the machine runs on the host carries this: a stage can write into
+ *  the shared .git dir, and a hook it left there must never execute as you. */
+export const HOST_GIT = ["-c", "core.hooksPath=/dev/null"] as const;
+
 export interface Workspace {
   branch: string;
   path: string;
@@ -38,12 +42,12 @@ export function workspaceFor(
 export async function ensureWorktree(repoPath: string, workspace: Workspace): Promise<void> {
   if (existsSync(join(workspace.path, ".git"))) return;
   const branchExists =
-    (await exec("git", ["-C", repoPath, "rev-parse", "--verify", "--quiet", workspace.branch]))
+    (await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", "--quiet", workspace.branch]))
       .code === 0;
   const args = branchExists
     ? ["worktree", "add", workspace.path, workspace.branch]
     : ["worktree", "add", "-b", workspace.branch, workspace.path, "HEAD"];
-  await execOrThrow("git", ["-C", repoPath, ...args]);
+  await execOrThrow("git", [...HOST_GIT, "-C", repoPath, ...args]);
 }
 
 /**
@@ -53,25 +57,25 @@ export async function ensureWorktree(repoPath: string, workspace: Workspace): Pr
  * that should never have landed (e.g. one that touched a locked test file).
  */
 export async function resetWorktree(path: string, ref = "HEAD"): Promise<void> {
-  await execOrThrow("git", ["-C", path, "reset", "--hard", "--quiet", ref]);
-  await execOrThrow("git", ["-C", path, "clean", "-fd", "--quiet"]);
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "reset", "--hard", "--quiet", ref]);
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "clean", "-fd", "--quiet"]);
 }
 
 /** Removes a task's worktree from disk. The branch (and its commits) stays. */
 export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
-  await execOrThrow("git", ["-C", repoPath, "worktree", "remove", "--force", worktreePath]);
+  await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "remove", "--force", worktreePath]);
 }
 
 /** `user.name` and `user.email` as git resolves them for `repoPath`, or null if either is unset. */
 export async function gitIdentity(repoPath: string): Promise<{ name: string; email: string } | null> {
-  const read = async (key: string) => (await exec("git", ["-C", repoPath, "config", key])).stdout.trim();
+  const read = async (key: string) => (await exec("git", [...HOST_GIT, "-C", repoPath, "config", key])).stdout.trim();
   const [name, email] = await Promise.all([read("user.name"), read("user.email")]);
   return name && email ? { name, email } : null;
 }
 
 /** The repo's shared git dir, which the worktree's `.git` file points into. */
 export function commonGitDir(repoPath: string): Promise<string> {
-  return execOrThrow("git", [
+  return execOrThrow("git", [...HOST_GIT, 
     "-C",
     repoPath,
     "rev-parse",
@@ -81,12 +85,12 @@ export function commonGitDir(repoPath: string): Promise<string> {
 }
 
 export function headCommit(path: string): Promise<string> {
-  return execOrThrow("git", ["-C", path, "rev-parse", "HEAD"]);
+  return execOrThrow("git", [...HOST_GIT, "-C", path, "rev-parse", "HEAD"]);
 }
 
 /** `git diff --name-status <from> <to>` in `path`, for checking what a commit touched. */
 export function diffNameStatus(path: string, from: string, to: string): Promise<string> {
-  return execOrThrow("git", ["-C", path, "diff", "--name-status", from, to]);
+  return execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--name-status", from, to]);
 }
 
 /**
@@ -94,14 +98,14 @@ export function diffNameStatus(path: string, from: string, to: string): Promise<
  * Commits are not signed: signing needs your passphrase, which a background run cannot ask for.
  */
 export async function commitAll(path: string, message: string): Promise<string | null> {
-  await execOrThrow("git", ["-C", path, "add", "-A"]);
-  const staged = await exec("git", ["-C", path, "diff", "--cached", "--quiet"]);
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "add", "-A"]);
+  const staged = await exec("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--quiet"]);
   if (staged.code === 0) return null;
-  await execOrThrow("git", ["-C", path, "-c", "commit.gpgsign=false", "commit", "-q", "-m", message]);
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "-c", "commit.gpgsign=false", "commit", "-q", "-m", message]);
   return headCommit(path);
 }
 
 /** True when the worktree has uncommitted or untracked changes. */
 export async function isDirty(path: string): Promise<boolean> {
-  return (await execOrThrow("git", ["-C", path, "status", "--porcelain"])) !== "";
+  return (await execOrThrow("git", [...HOST_GIT, "-C", path, "status", "--porcelain"])) !== "";
 }

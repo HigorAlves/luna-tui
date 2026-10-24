@@ -30,7 +30,7 @@ function setup(replies: Record<string, ExecResult>, over: Record<string, unknown
 describe("delivering", () => {
   it("pushes and opens a draft PR, logging pr.opened", async () => {
     const { run, context, calls } = setup({
-      "git -C /wt push": ok(),
+      "git -c core.hooksPath=/dev/null -C /wt push": ok(),
       "gh pr view hardness/t1": bad("no pull requests found"),
       "gh repo view": ok(JSON.stringify({ nameWithOwner: "acme/widgets" })),
       "gh pr create": ok("https://github.com/acme/widgets/pull/7\n"),
@@ -46,7 +46,7 @@ describe("delivering", () => {
 
   it("reuses an existing PR", async () => {
     const { run, context, calls } = setup({
-      "git -C /wt push": ok(),
+      "git -c core.hooksPath=/dev/null -C /wt push": ok(),
       "gh pr view hardness/t1": ok(JSON.stringify({ url: "https://x/pull/3", number: 3, isDraft: true })),
     });
     const result = await run(context);
@@ -55,7 +55,7 @@ describe("delivering", () => {
   });
 
   it("fails with the push error and does not open a PR", async () => {
-    const { run, context, calls } = setup({ "git -C /wt push": bad("rejected: non-fast-forward") });
+    const { run, context, calls } = setup({ "git -c core.hooksPath=/dev/null -C /wt push": bad("rejected: non-fast-forward") });
     const result = await run(context);
     expect(result.outcome).toBe("fail");
     expect(String(result.detail?.error)).toContain("rejected: non-fast-forward");
