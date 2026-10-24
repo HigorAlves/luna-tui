@@ -55,7 +55,7 @@ function fakeSandbox(
       join(out, "events.jsonl"),
       `${JSON.stringify({ at: "2026-01-01T00:00:00Z", kind: "slice_committed", payload: { id: 1 } })}\n`,
     );
-    return { output: null, exitCode, timedOut: false, aborted: false, transcriptPath: join(run.runDir, "t.log") };
+    return { exitCode, timedOut: false, aborted: false, transcriptPath: join(run.runDir, "t.log") };
   };
 }
 
@@ -260,7 +260,7 @@ describe("agent stages through orc packs", () => {
   it("fails with the transcript hint when the container left no result", async () => {
     const run = runners(async (r) => {
       seen = r;
-      return { output: null, exitCode: 137, timedOut: false, aborted: false, transcriptPath: "t" };
+      return { exitCode: 137, timedOut: false, aborted: false, transcriptPath: "t" };
     });
     const result = await run.triage!(context("triage"));
     expect(result.outcome).toBe("fail");

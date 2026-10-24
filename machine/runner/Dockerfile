@@ -23,10 +23,7 @@ RUN echo "${ORC_SHA}" > /orc/.orc-ref \
  && chmod -R a+rX /orc
 ENV PATH="/orc/bin:${PATH}"
 
-# Legacy single-prompt runner, kept for stage inputs without a pack.
 WORKDIR /runner
-COPY package.json ./
-RUN npm install --omit=dev --no-audit --no-fund
 COPY runner.mjs ./
 
 # Not root: Claude Code refuses some modes as root, and the stage should not own the image.

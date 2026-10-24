@@ -1,6 +1,6 @@
 // Runs one stage in a fresh container and deletes it afterwards. The worktree is mounted at
 // /work (read-only for read-only stages), the stage input at /in, and results come back in /out.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { Credential } from "./credentials.ts";
@@ -8,19 +8,6 @@ import { exec, execOrThrow } from "./exec.ts";
 
 /** Label on every stage container, so leftovers can be found and removed. */
 export const CONTAINER_LABEL = "dev.hardness.stage";
-
-export interface RunnerOutput {
-  ok: boolean;
-  structured: unknown;
-  result: string | null;
-  error: string | null;
-  rateLimited: boolean;
-  /** Unix seconds when the usage window resets. */
-  resetsAt: number | null;
-  turns: number;
-  costUsd: number | null;
-  durationMs: number | null;
-}
 
 export interface SandboxRun {
   name: string;
@@ -43,7 +30,6 @@ export interface SandboxRun {
 }
 
 export interface SandboxResult {
-  output: RunnerOutput | null;
   exitCode: number | null;
   timedOut: boolean;
   aborted: boolean;
@@ -119,14 +105,8 @@ export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
   await writeFile(transcriptPath, logs.stdout + logs.stderr);
   await exec("docker", ["rm", "-f", run.name]);
 
-  let output: RunnerOutput | null = null;
-  try {
-    output = JSON.parse(await readFile(join(outDir, "result.json"), "utf8")) as RunnerOutput;
-  } catch {
-    output = null;
-  }
   const exitCode = waited.code === 0 ? Number(waited.stdout.trim()) : null;
-  return { output, exitCode, timedOut, aborted, transcriptPath };
+  return { exitCode, timedOut, aborted, transcriptPath };
 }
 
 /** Removes stage containers left behind by a machine that stopped mid-stage. */
