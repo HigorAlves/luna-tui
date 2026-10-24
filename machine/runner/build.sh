@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Builds the stage image with the orc plugin baked in at /orc.
 #   ORC_SOURCE=path (default)  ORC_PATH=<orc checkout>   uses that checkout's committed HEAD
+#     default assumes a sibling checkout at ~/Developer/system/orc; override with ORC_PATH=/your/path
+#     if orc lives somewhere else, or use ORC_SOURCE=git below instead.
 #   ORC_SOURCE=git             ORC_REF=<tag|branch>      clones github.com/HigorAlves/orc at that ref
 # Tags the image hardness-runner:dev and hardness-runner:<orc short sha>.
 # With --qa it then builds hardness-runner-qa:dev on top (Playwright, chromium, ffmpeg, agent-browser).

@@ -1,5 +1,6 @@
-// Stand-ins for stages that are not built yet. They pass unless told otherwise, so the
-// whole pipeline can run end to end, and failure paths can be tested on demand.
+// Stub stages: used when MACHINE_AGENTS=off / no credential, and the /dev/stubs test seam
+// the golden scripts drive. They pass unless told otherwise, so the whole pipeline can run
+// end to end, and failure paths can be tested on demand.
 import type { TaskState } from "@hardness/contracts";
 
 import type { StageResult, StageRunner } from "./runner.ts";
