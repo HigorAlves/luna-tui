@@ -112,10 +112,10 @@ const recovered = await pipeline.recover();
 if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by the last run`);
 
 const app = createApp({ db, pipeline, bus, watcher, stubs });
-const server = serve({ fetch: app.fetch, port: config.port, hostname: "127.0.0.1" }, (info) => {
+const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
   const agents = [...new Set([...Object.keys(real), "verifying", "delivering", "shipping"])];
   console.log(
-    `machine listening on http://127.0.0.1:${info.port} · real stages: ${agents.join(", ")} · up to ${config.maxConcurrentTasks} task(s) at once`,
+    `machine listening on http://${config.host}:${info.port} · real stages: ${agents.join(", ")} · up to ${config.maxConcurrentTasks} task(s) at once`,
   );
 });
 

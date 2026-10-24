@@ -42,7 +42,7 @@ The card states the board already shows map from the same data: a waiting gate i
 | `contracts/` | Types shared by the machine and the board. |
 | `fixtures/` | Fixture repos used by `pnpm golden` (one seeded bug or feature each). |
 | `docs/` | This folder. |
-| `compose.yaml` | Postgres for local development. |
+| `compose.yaml` | Postgres and the machine (`docker compose up`); `pnpm dev` starts only Postgres. |
 
 ## Layout inside `machine/src`
 

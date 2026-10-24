@@ -1,13 +1,13 @@
-# Dev services only (Postgres). The machine itself runs on the host with `pnpm dev`.
-# Start with `pnpm db:up` (or `docker compose up -d --wait`), stop with `pnpm db:down`
-# (data is kept in the volume).
+# `docker compose up` (or `pnpm start`) runs Postgres and the machine: local "prod", nothing
+# to keep running on the side. `pnpm dev` starts only Postgres (`docker compose up postgres`)
+# and runs the machine on the host with hot reload, for working on the harness itself.
 name: hardness-dev
 
 services:
   postgres:
     image: postgres:16
     environment:
-      # Local dev credentials. The port is bound to localhost only.
+      # Local credentials. The port is bound to localhost only.
       POSTGRES_USER: hardness
       POSTGRES_PASSWORD: hardness
       POSTGRES_DB: hardness
@@ -21,6 +21,59 @@ services:
       interval: 2s
       timeout: 3s
       retries: 20
+
+  machine:
+    build:
+      context: .
+      dockerfile: machine/Dockerfile
+    image: hardness-machine:local
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4317/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    ports:
+      - "127.0.0.1:${MACHINE_PORT:-4317}:4317"
+    environment:
+      DATABASE_URL: postgres://hardness:hardness@postgres:5432/hardness
+      MACHINE_HOST: 0.0.0.0
+      MACHINE_PORT: "4317"
+      # Stage containers are started through the host's Docker, which resolves mounts on the
+      # host. So every path the machine hands to `docker run` must be the same path in here:
+      # repos and worktrees under LUNA_REPOS_DIR, run folders under the state dir.
+      WORKTREES_DIR: ${WORKTREES_DIR:-${HOME}/Developer/worktrees}
+      MACHINE_STATE_DIR: ${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}
+      MACHINE_AGENTS: ${MACHINE_AGENTS:-on}
+      MACHINE_MAX_CONCURRENT: ${MACHINE_MAX_CONCURRENT:-4}
+      MACHINE_GITHUB_POLL: ${MACHINE_GITHUB_POLL:-}
+      MACHINE_GITHUB_LABEL: ${MACHINE_GITHUB_LABEL:-ready-for-agent}
+      RUNNER_IMAGE: ${RUNNER_IMAGE:-hardness-runner:dev}
+      RUNNER_QA_IMAGE: ${RUNNER_QA_IMAGE:-hardness-runner-qa:dev}
+      # gh and git push to GitHub over https with this token (`pnpm start` passes `gh auth token`).
+      GH_TOKEN: ${GH_TOKEN:-}
+      # Repos are owned by your user, not the container's; gh answers git's https auth; and
+      # commits made here (the approved memory rules) carry your identity (`pnpm start` reads it).
+      GIT_CONFIG_COUNT: "4"
+      GIT_CONFIG_KEY_0: safe.directory
+      GIT_CONFIG_VALUE_0: "*"
+      GIT_CONFIG_KEY_1: credential.https://github.com.helper
+      GIT_CONFIG_VALUE_1: "!gh auth git-credential"
+      GIT_CONFIG_KEY_2: user.name
+      GIT_CONFIG_VALUE_2: ${LUNA_GIT_NAME:-}
+      GIT_CONFIG_KEY_3: user.email
+      GIT_CONFIG_VALUE_3: ${LUNA_GIT_EMAIL:-}
+      # herdr runs on the host, so watch panes are off in here.
+      HERDR_BIN: herdr-not-in-container
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${LUNA_REPOS_DIR:-${HOME}/Developer}:${LUNA_REPOS_DIR:-${HOME}/Developer}
+      - ${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}:${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}
+      - ${HOME}/.config/hardness:/root/.config/hardness:ro
 
 volumes:
   pgdata:

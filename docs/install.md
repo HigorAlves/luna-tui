@@ -12,13 +12,17 @@
 
 ```sh
 pnpm install
-docker compose up -d --wait   # Postgres on 127.0.0.1:5433 (pnpm db:up does the same)
 pnpm --filter @hardness/machine runner:build   # the stage container image
-pnpm dev              # the machine on http://127.0.0.1:4317, with hot reload
+pnpm start            # Postgres + the machine on http://127.0.0.1:4317, in Docker
 pnpm board:build      # the board; then `herdr plugin link ./board` once
 ```
 
-`pnpm dev` loads `machine/.env` if one exists (copy `machine/.env.example` to change a default). `pnpm db:down` stops Postgres and keeps its data. For board usage and keys, see [`board/README.md`](../board/README.md).
+## Two ways to run
+
+- **`pnpm start`** (or `docker compose up -d`): Postgres and the machine both run in Docker, so there's no server to keep open in a terminal. It passes your `gh auth token` and git identity to the machine; `pnpm stop` stops both and keeps the data. Stage containers still run on your Docker, so repos, worktrees and run folders are mounted at the same paths as on your host (see [configuration.md](./configuration.md#compose)). herdr watch panes are off in this mode, since herdr runs on the host.
+- **`pnpm dev`**: for working on the harness itself. It stops the machine container, starts only Postgres (`docker compose up postgres`), and runs the machine on your host with hot reload, loading `machine/.env` if one exists. `pnpm db:down` stops Postgres and keeps its data.
+
+Both use the same database, so tasks carry over when you switch. For board usage and keys, see [`board/README.md`](../board/README.md).
 
 ## Checks
 

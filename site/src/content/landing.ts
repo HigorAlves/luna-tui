@@ -266,7 +266,7 @@ export const orc = {
   terminal: {
     title: "~/acme/billing-api · luna",
     lines: [
-      { kind: "prompt", text: "pnpm dev" },
+      { kind: "prompt", text: "pnpm start" },
       { kind: "head", text: "machine · 127.0.0.1:4317 · 2/4 slots" },
       { kind: "sub", text: "#39 implementing · orc-stage run implementing (attempt 1)" },
       { kind: "sub", text: "slice 1/2 committed a1f3c9e · locked tests 3/3 green" },
@@ -276,13 +276,13 @@ export const orc = {
   mascot: { button: "Zug zug", replies: ["Zug zug.", "Slice committed.", "Tests stay locked.", "Back to work."] },
   setup: {
     title: `Set it up in ${installCommands.length} commands`,
-    lead: "Clone, start Postgres, build the stage image, link the board, start the machine. No account, no server.",
+    lead: "Clone, install, build the stage image, link the board, then one command starts Postgres and the machine in Docker. No account, no server to babysit.",
     tabs: [
       { id: "agents", label: "Board + agents", commands: installCommands },
       {
         id: "stubs",
         label: "Board only",
-        commands: ["pnpm install && pnpm db:up", "pnpm board:build && herdr plugin link ./board", "MACHINE_AGENTS=off pnpm dev"],
+        commands: ["pnpm install", "pnpm board:build && herdr plugin link ./board", "MACHINE_AGENTS=off pnpm start"],
       },
       {
         id: "qa",
@@ -371,7 +371,7 @@ export const faq = {
   items: [
     {
       q: "What runs on my computer?",
-      a: "A TypeScript machine with an HTTP API, Postgres in Docker, one throwaway container per stage, and the board in herdr. Nothing is hosted.",
+      a: "Postgres and the machine (an HTTP API) in Docker, one throwaway container per stage, and the board in herdr. Nothing is hosted.",
     },
     {
       q: "Can the agent see my whole disk?",
