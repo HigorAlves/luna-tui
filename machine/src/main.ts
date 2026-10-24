@@ -9,6 +9,7 @@ import { toEvent, toTask } from "./api/serialize.ts";
 import { loadConfig } from "./config.ts";
 import { createDataSource } from "./db/data-source.ts";
 import type { EventRow } from "./db/entities.ts";
+import { pruneOldRuns } from "./db/prune.ts";
 import { Watcher } from "./herdr/watch.ts";
 import { Pipeline } from "./pipeline/pipeline.ts";
 import { loadCredential } from "./sandbox/credentials.ts";
@@ -17,6 +18,7 @@ import { agentRunners } from "./stages/agents.ts";
 import type { StageRunner } from "./stages/runner.ts";
 import { shipRunner } from "./stages/ship.ts";
 import { StubStages } from "./stages/stubs.ts";
+import { verifyRunner } from "./stages/verify.ts";
 
 const config = loadConfig();
 const db = createDataSource(config.databaseUrl);
@@ -24,6 +26,24 @@ await db.initialize();
 const applied = await db.runMigrations();
 if (applied.length > 0) {
   console.log(`applied migrations: ${applied.map((m) => m.name).join(", ")}`);
+}
+
+if (config.retentionDays > 0) {
+  try {
+    const pruned = await pruneOldRuns(db, config.retentionDays);
+    if (pruned.events > 0 || pruned.stageRuns > 0) {
+      console.log(`pruned ${pruned.events} old event(s), ${pruned.stageRuns} old stage run(s)`);
+    }
+  } catch (error) {
+    // A transient DB hiccup here shouldn't block the machine from ever starting to serve —
+    // the periodic retry below gets another shot at it.
+    console.error("startup prune failed", error);
+  }
+  setInterval(
+    () =>
+      void pruneOldRuns(db, config.retentionDays).catch((error: unknown) => console.error("prune failed", error)),
+    24 * 60 * 60 * 1000,
+  ).unref();
 }
 
 const bus = new Bus();
@@ -57,9 +77,10 @@ async function realStages(): Promise<Partial<Record<TaskState, StageRunner>>> {
 }
 
 const real = await realStages();
-/** Shipping needs only git and gh, not a Claude credential, so it always runs for real. */
+/** Shipping and verifying need only git/the repo's own tooling, not a Claude credential,
+ *  so they always run for real. */
 const runnerFor = (stage: TaskState): StageRunner =>
-  stage === "shipping" ? shipRunner : real[stage] ?? stubs.runnerFor(stage);
+  stage === "shipping" ? shipRunner : stage === "verifying" ? verifyRunner : real[stage] ?? stubs.runnerFor(stage);
 
 /** Streams each logged event, plus the whole task whenever its state may have changed. */
 function publish(event: EventRow): void {
@@ -81,7 +102,7 @@ if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by
 
 const app = createApp({ pipeline, bus, watcher, stubs });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: "127.0.0.1" }, (info) => {
-  const agents = [...Object.keys(real), "shipping"];
+  const agents = [...Object.keys(real), "shipping", "verifying"];
   console.log(
     `machine listening on http://127.0.0.1:${info.port} · real stages: ${agents.join(", ")} · up to ${config.maxConcurrentTasks} task(s) at once`,
   );

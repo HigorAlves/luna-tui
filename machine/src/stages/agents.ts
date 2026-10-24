@@ -7,6 +7,7 @@ import {
   type Workspace,
   commitAll,
   commonGitDir,
+  diffNameStatus,
   ensureWorktree,
   headCommit,
   resetWorktree,
@@ -15,6 +16,7 @@ import {
 import type { Watcher } from "../herdr/watch.ts";
 import type { Credential } from "../sandbox/credentials.ts";
 import { runSandbox } from "../sandbox/docker.ts";
+import { lockedFilesTouched } from "./locked-files.ts";
 import type { StageContext, StageResult, StageRunner } from "./runner.ts";
 
 export interface AgentDeps {
@@ -34,7 +36,12 @@ interface AgentStage {
   schema: Record<string, unknown>;
   prompt(context: StageContext, workspace: Workspace): string;
   /** Turns the agent's structured answer into a stage result. */
-  finish(answer: Record<string, unknown>, context: StageContext, workspace: Workspace): Promise<StageResult>;
+  finish(
+    answer: Record<string, unknown>,
+    context: StageContext,
+    workspace: Workspace,
+    inputCommit: string,
+  ): Promise<StageResult>;
 }
 
 const MINUTE = 60_000;
@@ -143,12 +150,26 @@ ${bullets(plan.assumptions)}
 ${history(approvals)}${attempt > 1 ? `\nThis is attempt ${attempt}; earlier attempts did not pass. Check the current state of the files before changing them.\n` : ""}
 Make the smallest change that meets the criteria, and run the project's tests if it has any. Then answer kind "done" with a summary. If a test you were given is wrong and blocks you, answer kind "test_change" with the request instead of editing that test.`;
   },
-  finish: async (answer, { task }, workspace) => {
+  finish: async (answer, { task }, workspace, inputCommit) => {
     if (answer.kind === "test_change") {
       return { outcome: "test_change", detail: { request: answer.request ?? answer.summary } };
     }
     const summary = String(answer.summary ?? "");
     const commit = await commitAll(workspace.path, `${task.title}\n\n${summary}`.trim());
+    if (commit) {
+      const diff = await diffNameStatus(workspace.path, inputCommit, commit);
+      const locked = lockedFilesTouched(diff);
+      if (locked.length > 0) {
+        // Undo the commit itself, not just any uncommitted leftovers — otherwise the next
+        // attempt's `inputCommit` is this very commit, and the locked-file edit it caught
+        // ships anyway once a later attempt passes.
+        await resetWorktree(workspace.path, inputCommit);
+        return {
+          outcome: "fail",
+          detail: { error: `modified existing test file(s) without a test_change request: ${locked.join(", ")}` },
+        };
+      }
+    }
     return {
       outcome: "pass",
       detail: { summary, commit },
@@ -215,7 +236,7 @@ async function runAgent(deps: AgentDeps, context: StageContext, stage: AgentStag
     return failed(out.error ?? "the agent gave no structured answer");
   }
 
-  const result = await stage.finish(out.structured as Record<string, unknown>, context, workspace);
+  const result = await stage.finish(out.structured as Record<string, unknown>, context, workspace, inputCommit);
   return {
     ...base,
     ...result,

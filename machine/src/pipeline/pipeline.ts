@@ -258,16 +258,47 @@ export class Pipeline {
       await this.db.getRepository(TaskEntity).update({ id }, { queued: true });
       return;
     }
-    // Clears a stale `queued: true` from before a restart, as well as the common case
-    // where it was already false.
-    await this.db.getRepository(TaskEntity).update({ id }, { queued: false });
-    const loop = this.runAndFillSlot(id, stage);
+    const controller = this.reserveSlot(id);
+    try {
+      // Clears a stale `queued: true` from before a restart, as well as the common case
+      // where it was already false. Awaited here — not inside runAndFillSlot — so the
+      // `queued` flag is guaranteed stored before schedule() returns, per its own contract;
+      // otherwise recover() (which schedules a task that still reads queued:true) can race
+      // a slot freeing elsewhere and have the same task claimed and driven a second time.
+      await this.db.getRepository(TaskEntity).update({ id }, { queued: false });
+    } catch (error) {
+      // Release the slot reserved above, or a transient failure on this update leaks it
+      // for the rest of the process.
+      if (this.loops.get(id) === controller) this.loops.delete(id);
+      throw error;
+    }
+    const loop = this.startLoop(id, stage, controller);
     if (this.inline) await loop;
   }
 
-  /** Drives the stage, then — once its slot is free again — starts the longest-queued task. */
-  private async runAndFillSlot(id: string, stage: TaskState): Promise<void> {
-    await this.drive(id, stage);
+  /** Creates and registers a new AbortController for `id` in `this.loops`, synchronously —
+   *  before any `await` — so a slot this reserves can never be double-claimed by a
+   *  concurrent schedule() call racing to check `this.loops.size` in between. The only path
+   *  by which `this.loops` ever gains an entry; `startLoop` below is always paired with it. */
+  private reserveSlot(id: string): AbortController {
+    const controller = new AbortController();
+    this.loops.set(id, controller);
+    return controller;
+  }
+
+  /** Starts id's drive-then-promote loop. Not awaited outside inline mode — `.catch` logs a
+   *  failure instead of letting it become an unhandled rejection that can crash the process. */
+  private startLoop(id: string, stage: TaskState, controller: AbortController): Promise<void> {
+    return this.runAndFillSlot(id, stage, controller).catch((error: unknown) =>
+      console.error(`run loop for task ${id} failed`, error),
+    );
+  }
+
+  /** Drives the stage, then — once its slot is free again — starts the longest-queued task.
+   *  `controller` is already registered in `this.loops` and the task's `queued` flag already
+   *  cleared by the caller, synchronously, before any `await` — see schedule(). */
+  private async runAndFillSlot(id: string, stage: TaskState, controller: AbortController): Promise<void> {
+    await this.drive(id, stage, controller);
     if (this.loops.size >= this.maxConcurrentTasks) return;
     // Pick a candidate unlocked, then re-check it under a row lock, so two slots freeing at
     // once cannot both claim the same queued task.
@@ -287,13 +318,15 @@ export class Pipeline {
       await tx.update(TaskEntity, { id: locked.id }, { queued: false });
       return locked;
     });
-    if (claimed) void this.runAndFillSlot(claimed.id, claimed.state);
+    if (claimed) {
+      const nextController = this.reserveSlot(claimed.id);
+      void this.startLoop(claimed.id, claimed.state, nextController);
+    }
   }
 
-  /** Runs stages one after another until the task waits on you, pauses, closes or is aborted. */
-  private async drive(id: string, first: TaskState): Promise<void> {
-    const controller = new AbortController();
-    this.loops.set(id, controller);
+  /** Runs stages one after another until the task waits on you, pauses, closes or is aborted.
+   *  `controller` is already registered in `this.loops` by the caller. */
+  private async drive(id: string, first: TaskState, controller: AbortController): Promise<void> {
     try {
       let stage: TaskState | null = first;
       while (stage) {
