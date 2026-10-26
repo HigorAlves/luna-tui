@@ -665,8 +665,11 @@ export class Pipeline {
         event.payload.stage === "ci_watch" ||
         (event.payload.stage === "implementing" && event.payload.status === "failed"),
     );
+    // The pack runner reports findings at the result's top level; a stub or an older event
+    // may carry them inside detail.
     const detail = latest?.payload.detail as { findings?: unknown } | undefined;
-    return Array.isArray(detail?.findings) ? (detail.findings as Finding[]) : [];
+    const findings = latest?.payload.findings ?? detail?.findings;
+    return Array.isArray(findings) ? (findings as Finding[]) : [];
   }
 
   private async runStage(id: string, stage: TaskState, signal: AbortSignal): Promise<StageResult> {
@@ -726,6 +729,8 @@ export class Pipeline {
         outcome,
         ...(error ? { error } : {}),
         ...(result.detail ? { detail: result.detail } : {}),
+        // What the next implementing attempt is handed as prior findings (see latestVerifyingFindings).
+        ...(result.findings?.length ? { findings: result.findings } : {}),
       },
       runId,
     );

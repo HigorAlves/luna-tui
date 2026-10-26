@@ -352,6 +352,29 @@ describe("the ci_watch findings loop", () => {
 });
 
 describe("the implementing findings loop", () => {
+  it("carries findings a failed run reports at the top level, the way the pack runner does", async () => {
+    const finding = (title: string) => ({
+      path: "junk.txt", line: 0, start_line: null, severity: "risk", title, body: "", suggestion_code: null, confidence: 1,
+    });
+    const seen: Array<string[] | undefined> = [];
+    let attempts = 0;
+    const runner = (stage: TaskState): StageRunner => {
+      if (stage === "implementing") {
+        return async (context) => {
+          seen.push(context.priorFindings?.map((f) => f.title));
+          attempts += 1;
+          if (attempts === 1) return { outcome: "fail", detail: { error: "left uncommitted changes" }, findings: [finding("left uncommitted")] };
+          return { outcome: "pass" };
+        };
+      }
+      return stubs.runnerFor(stage);
+    };
+    pipeline = new Pipeline(db, runner, { inline: true });
+    const task = await newTask();
+    await startAndApprove(task.id);
+    expect(seen).toEqual([[], ["left uncommitted"]]);
+  });
+
   it("gives the next implementing attempt the findings its own failed run left", async () => {
     const finding = (title: string) => ({
       path: "test/a.test.ts", line: 0, start_line: null, severity: "test", title, body: "", suggestion_code: null, confidence: 1,
