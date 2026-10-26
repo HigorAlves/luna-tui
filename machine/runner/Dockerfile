@@ -5,6 +5,7 @@
 FROM node:24-slim
 
 ARG GH_VERSION=2.63.2
+ARG GO_VERSION=1.25.1
 ARG ORC_SHA=unknown
 
 RUN apt-get update \
@@ -14,6 +15,14 @@ RUN apt-get update \
     | tar -xz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_${arch}/bin/gh" \
  && gh --version \
  && rm -rf /var/lib/apt/lists/*
+
+# Go, for repos whose suite is `go test ./...` (fixtures/golden-cli is one). The stage runs
+# with HOME=/tmp on a read-only root, so the module and build caches land on the tmpfs;
+# GOTOOLCHAIN=local keeps a go.mod from downloading another toolchain mid-stage.
+RUN arch="$(dpkg --print-architecture)" \
+ && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" | tar -xz -C /usr/local \
+ && /usr/local/go/bin/go version
+ENV PATH="/usr/local/go/bin:${PATH}" GOTOOLCHAIN=local
 
 # The orc plugin (the directory holding .claude-plugin/plugin.json), pinned to one commit.
 # The Agent SDK is installed now so a stage needs no network to start.
