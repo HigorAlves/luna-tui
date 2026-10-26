@@ -88,6 +88,16 @@ describe("buildStageInput", () => {
   const orcFixtures = join(import.meta.dirname, "..", "..", "..", "contracts", "fixtures", "orc");
   const orcPacks = JSON.parse(readFileSync(join(orcFixtures, "stages.json"), "utf8")).packs as Record<string, { maxTurns: number; timeoutMs: number; writable: boolean }>;
 
+  it("sizes implementing's budget to the plan: turns and time scale with the slice count, up to four times", () => {
+    const sliced = (n: number) => [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices: Array.from({ length: n }, (_, i) => ({ ...slices[0]!, title: `s${i}` })) } })];
+    const limitsFor = (stage: "implementing" | "verifying", n: number) =>
+      buildStageInput({ task, stage, attempt: 1, approvals: sliced(n), priorFindings: [] }).limits;
+    expect(limitsFor("implementing", 1)).toEqual({ maxTurns: 80, timeoutMs: 1_800_000 });
+    expect(limitsFor("implementing", 3)).toEqual({ maxTurns: 240, timeoutMs: 5_400_000 });
+    expect(limitsFor("implementing", 6)).toEqual({ maxTurns: 320, timeoutMs: 7_200_000 });
+    expect(limitsFor("verifying", 3)).toEqual({ maxTurns: 60, timeoutMs: 1_200_000 });
+  });
+
   it("mirrors every pack's maxTurns, timeoutMs and writable from orc's stages.json", () => {
     for (const [pack, limits] of Object.entries(PACK_LIMITS)) {
       const theirs = orcPacks[pack];

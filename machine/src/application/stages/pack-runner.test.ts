@@ -381,6 +381,21 @@ describe("agent stages through orc packs", () => {
     expect(existsSync(seen!.stateMount!)).toBe(true);
   });
 
+  it("gives the sandbox the time budget the stage input carries, not the pack's flat default", async () => {
+    const run = runners(fakeSandbox(output()));
+    const slice = { title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] };
+    const planned = {
+      ...context("implementing"),
+      approvals: [
+        { id: "ap1", kind: "awaiting_approval", decision: "approved", requested: { brief: "b", criteria: [], assumptions: [], slices: [slice, slice, slice] } } as unknown as StageContext["approvals"][number],
+      ],
+    };
+    await run.implementing!(planned);
+    const input = seen!.input as { limits: { timeoutMs: number } };
+    expect(input.limits.timeoutMs).toBe(3 * 30 * 60_000);
+    expect(seen!.timeoutMs).toBe(input.limits.timeoutMs);
+  });
+
   it("fails a verifying pass that left uncommitted changes, resetting the worktree, same as implementing", async () => {
     const d = deps(fakeSandbox(output(), (r) => writeFileSync(join(r.worktree, "junk.txt"), "x")));
     const result = await runAgent(d, context("verifying"), "verifying");

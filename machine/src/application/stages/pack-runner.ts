@@ -105,7 +105,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     gitReadOnly: GIT_READ_ONLY.filter((sub) => existsSync(join(gitDir, sub))),
     gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
     input: input as unknown as Record<string, unknown>,
-    timeoutMs: limits.timeoutMs,
+    // The input's budget, which implementing scales with the plan's slice count.
+    timeoutMs: input.limits.timeoutMs,
     credential: deps.credential,
     labels: { "dev.hardness.task": task.id },
     signal: context.signal,
@@ -128,7 +129,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   const failed = (error: string): Promise<StageResult> => dirty({ ...base, detail: { error } });
 
   if (sandbox.aborted) return failed("aborted");
-  if (sandbox.timedOut) return failed(`timed out after ${limits.timeoutMs / MINUTE} minutes`);
+  if (sandbox.timedOut) return failed(`timed out after ${input.limits.timeoutMs / MINUTE} minutes`);
   if (sandbox.stuck) return failed(`stuck: ${sandbox.stuck}`);
 
   let ingested;

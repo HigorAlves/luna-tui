@@ -21,6 +21,17 @@ export const PACK_LIMITS: Record<PackId, { maxTurns: number; timeoutMs: number; 
   reviewing_memory: { maxTurns: 30, timeoutMs: 10 * MINUTE, writable: false },
 };
 
+/** Implementing's turns and time scale with the plan's slice count, up to this many times the pack default. */
+export const BUDGET_SCALE_MAX = 4;
+
+/** The budget a stage gets: the pack default, or for implementing the default times the slice count (1..4). */
+export function budgetFor(pack: PackId, slices: number): { maxTurns: number; timeoutMs: number } {
+  const { maxTurns, timeoutMs } = PACK_LIMITS[pack];
+  if (pack !== "implementing") return { maxTurns, timeoutMs };
+  const factor = Math.min(BUDGET_SCALE_MAX, Math.max(1, slices));
+  return { maxTurns: maxTurns * factor, timeoutMs: timeoutMs * factor };
+}
+
 /** Findings below this are not fed back to the implementer. */
 export const PRIOR_FINDING_CONFIDENCE = 0.8;
 
@@ -60,7 +71,8 @@ export function buildStageInput(opts: {
 }): StageInput {
   const { task, stage, attempt, approvals } = opts;
   const pack = stage as PackId;
-  const { maxTurns, timeoutMs } = PACK_LIMITS[pack];
+  const plan = approvedPlan(approvals);
+  const { maxTurns, timeoutMs } = budgetFor(pack, plan?.slices?.length ?? 0);
   return {
     schema: 3,
     stage,
@@ -75,7 +87,7 @@ export function buildStageInput(opts: {
       branch: task.branch ?? "",
       source: task.source,
     },
-    plan: approvedPlan(approvals),
+    plan,
     decisions: approvals
       .filter((a) => a.decision !== null)
       .map((a) => ({
