@@ -1,6 +1,6 @@
 // Task worktrees on the host. Each task gets its own branch and checkout; the agent works
 // there through a bind mount, and the machine commits on the host.
-import { existsSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import { exec, execOrThrow } from "../process/exec.ts";
@@ -38,16 +38,51 @@ export function workspaceFor(
   };
 }
 
-/** Creates the worktree on a new branch from the repo's HEAD, unless it already exists. */
+/** A lock older than this was left by a git that died, not one that is running. */
+const STALE_LOCK_MS = 60_000;
+const FETCH_TIMEOUT_MS = 60_000;
+
+/**
+ * Creates the worktree on a new branch, unless it already exists. The branch starts from
+ * origin's default branch after a fetch (your checkout may be days behind it); with no
+ * origin, from the repo's HEAD. A registration whose directory went missing is pruned first,
+ * and an index.lock a killed git left in an existing worktree is cleared.
+ */
 export async function ensureWorktree(repoPath: string, workspace: Workspace): Promise<void> {
-  if (existsSync(join(workspace.path, ".git"))) return;
+  if (existsSync(join(workspace.path, ".git"))) {
+    await clearStaleLock(workspace.path);
+    return;
+  }
+  await exec("git", [...HOST_GIT, "-C", repoPath, "worktree", "prune"]);
   const branchExists =
     (await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", "--quiet", workspace.branch]))
       .code === 0;
   const args = branchExists
     ? ["worktree", "add", workspace.path, workspace.branch]
-    : ["worktree", "add", "-b", workspace.branch, workspace.path, "HEAD"];
+    : ["worktree", "add", "-b", workspace.branch, workspace.path, await startPoint(repoPath)];
   await execOrThrow("git", [...HOST_GIT, "-C", repoPath, ...args]);
+}
+
+/** `origin/<default>` freshly fetched when the repo has an origin; HEAD otherwise. */
+async function startPoint(repoPath: string): Promise<string> {
+  const head = await exec("git", [...HOST_GIT, "-C", repoPath, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
+  if (head.code !== 0) return "HEAD";
+  const ref = head.stdout.trim().replace(/^refs\/remotes\//, "");
+  const fetched = await exec("git", [...HOST_GIT, "-C", repoPath, "fetch", "--quiet", "origin"], { timeoutMs: FETCH_TIMEOUT_MS });
+  if (fetched.code !== 0) console.warn(`git fetch origin failed in ${repoPath}; basing on the last fetched ${ref}`);
+  return ref;
+}
+
+async function clearStaleLock(worktreePath: string): Promise<void> {
+  const gitDir = await exec("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "--git-dir"]);
+  if (gitDir.code !== 0) return;
+  const dir = gitDir.stdout.trim();
+  const lock = join(dir.startsWith("/") ? dir : join(worktreePath, dir), "index.lock");
+  try {
+    if (Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS) rmSync(lock, { force: true });
+  } catch {
+    // no lock, or gone already
+  }
 }
 
 /**

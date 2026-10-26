@@ -27,6 +27,13 @@ describe("sandboxArgs", () => {
     }
   });
 
+  it("caps memory, cpu and process count, so a runaway stage cannot take the machine down", () => {
+    const args = sandboxArgs(run(), "/i", "/o").join(" ");
+    expect(args).toContain("--memory 4g");
+    expect(args).toContain("--cpus 2");
+    expect(args).toContain("--pids-limit 1024");
+  });
+
   it("mounts the worktree read-only unless writable", () => {
     expect(sandboxArgs(run(), "/i", "/o")).toContain("/wt:/work:ro");
     expect(sandboxArgs(run({ writable: true }), "/i", "/o")).toContain("/wt:/work");
