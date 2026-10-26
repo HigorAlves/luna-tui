@@ -19,7 +19,7 @@ use tui_textarea::TextArea;
 use crate::{
     app::{ACTIONS, App, FloorState, HELP, Mode},
     model::{
-        Approval, COLUMNS, Look, Metrics, Task, TaskDetail, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, spend_p90,
+        Approval, COLUMNS, Look, Metrics, REPO_COLOUR_SLOTS, Task, TaskDetail, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, repo_colour_slot, spend_p90,
         now_secs, questions_of,
     },
 };
@@ -484,13 +484,28 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
 }
 
 /// A board card: id and title, then state, age, worktree and how many implementer runs.
+/// One colour per repo, so a column scans by repo: the bar and the name share it.
+const REPO_COLOURS: [Color; REPO_COLOUR_SLOTS] = [BLUE, GREEN, PEACH, LAVENDER, YELLOW, RED];
+
+/// The card's first line: a repo-coloured bar, the id, the repo's name, the title.
+fn card_head(task: &Task) -> Line<'static> {
+    let mut spans = Vec::new();
+    if let Some(repo) = task.repo_name() {
+        let colour = REPO_COLOURS[repo_colour_slot(repo)];
+        spans.push(Span::from("▌").fg(c(colour)));
+        spans.push(Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)));
+        spans.push(Span::from(format!("{repo} ")).fg(c(colour)));
+    } else {
+        spans.push(Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)));
+    }
+    spans.push(Span::from(task.issue_prefix()).fg(c(SUBTEXT0)));
+    spans.push(Span::from(task.title.clone()).bold());
+    Line::from(spans)
+}
+
 fn card(task: &Task, spend_p90: Option<f64>) -> ListItem<'static> {
     let look = task.look();
-    let head = Line::from(vec![
-        Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)),
-        Span::from(task.issue_prefix()).fg(c(SUBTEXT0)),
-        Span::from(task.title.clone()).bold(),
-    ]);
+    let head = card_head(task);
 
     let mut meta = vec![
         Span::raw("  "),
@@ -1385,6 +1400,23 @@ mod tests {
         let line_after = |row: usize| text.lines().nth(row + 1).unwrap_or("").to_string();
         assert!(line_after(row3).contains('$'), "the expensive card is marked: {text}");
         assert!(!line_after(row0).contains('$'), "a cheap card is not: {text}");
+    }
+
+    #[test]
+    fn a_card_shows_its_repo_name_after_the_id() {
+        const TASK: &str = r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
+            "repoPath":"/Developer/projects/luna-tui","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
+        let task: Task = serde_json::from_str(TASK).unwrap();
+        let head = card_head(&task).to_string();
+        assert!(head.contains("luna-tui"), "{head}");
+        assert!(head.starts_with('▌'), "a repo bar leads the card: {head}");
+        let mut bare = task.clone();
+        bare.repo_path = None;
+        let head = card_head(&bare).to_string();
+        assert!(!head.contains("luna-tui") && !head.starts_with('▌'), "{head}");
     }
 
     #[test]

@@ -396,6 +396,13 @@ describe("agent stages through orc packs", () => {
     expect(seen!.timeoutMs).toBe(input.limits.timeoutMs);
   });
 
+  it("labels the watch tab with the repo's name, so five repos' Build tabs read apart", async () => {
+    const follow = vi.fn();
+    const d = { ...deps(fakeSandbox(output(), (r) => r.onStarted?.("c1"))), watcher: { follow } as never };
+    await runAgent(d, context("triage"), "triage");
+    expect(follow).toHaveBeenCalledWith("11111111-2222-3333-4444-555555555555", expect.stringMatching(/^#11111111 repo · Fix it$/), expect.any(String), "c1");
+  });
+
   it("fails a verifying pass that left uncommitted changes, resetting the worktree, same as implementing", async () => {
     const d = deps(fakeSandbox(output(), (r) => writeFileSync(join(r.worktree, "junk.txt"), "x")));
     const result = await runAgent(d, context("verifying"), "verifying");
