@@ -14,7 +14,7 @@ import type { ApprovalRow, ArtifactRow, EventRow, StageRunRow, TaskRow } from ".
 
 const iso = (date: Date | null) => (date ? date.toISOString() : null);
 
-export const toTask = (row: TaskRow): Task => ({
+export const toTask = (row: TaskRow, spentUsd: number | null = null): Task => ({
   id: row.id,
   title: row.title,
   description: row.description,
@@ -31,6 +31,7 @@ export const toTask = (row: TaskRow): Task => ({
   retries: row.retries,
   resumeTo: row.resumeTo,
   reason: row.reason,
+  spentUsd,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });
