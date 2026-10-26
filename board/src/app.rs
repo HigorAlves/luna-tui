@@ -71,7 +71,7 @@ pub const ACTIONS: [(char, &str); 14] = [
 ];
 
 /// Keys shown in the help overlay, as (keys, what they do).
-pub const HELP: [(&str, &str); 27] = [
+pub const HELP: [(&str, &str); 29] = [
     ("h / l", "previous / next column"),
     ("j / k", "previous / next ticket"),
     ("enter", "open details"),
@@ -90,7 +90,9 @@ pub const HELP: [(&str, &str); 27] = [
     ("/", "filter by title, #id or repo"),
     ("!", "show only tickets that need you"),
     ("@", "show only tickets for this repo"),
-    ("z", "fold: show every column, only the focused one expanded"),
+    ("zc / zo", "fold / unfold the focused column (Done starts folded)"),
+    ("zz", "fold every column but the focused one"),
+    ("gs / gr / ga", "order columns by stage, by repo, by age"),
     ("F", "Floor: 7d and 30d metrics (r refreshes, esc closes)"),
     ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
     ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
@@ -152,6 +154,18 @@ pub fn bulk_targets(tasks: &[Task], ids: &[String], action: BulkAction) -> Vec<S
 /// Every ticket waiting on the usage window.
 pub fn paused_ids(tasks: &[Task]) -> Vec<String> {
     tasks.iter().filter(|t| t.state == "paused_rate_limit").map(|t| t.id.clone()).collect()
+}
+
+/// How the tickets inside a column are ordered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum GroupBy {
+    /// Most urgent look first, then oldest created: the default.
+    #[default]
+    Stage,
+    /// By repo name, then as Stage: one board reads per repo.
+    Repo,
+    /// Oldest created first, whatever the look.
+    Age,
 }
 
 pub enum Mode {
@@ -262,6 +276,12 @@ pub struct App {
     pub slots: Option<Slots>,
     /// The Digest view, open while this is `Some`.
     pub digest: Option<DigestState>,
+    /// Columns folded to their header; Done starts folded, it grows forever.
+    pub folded: BTreeSet<usize>,
+    /// How tickets are ordered inside a column (`gs`/`gr`/`ga`).
+    pub group: GroupBy,
+    /// A two-key sequence in flight: `z` (fold) or `g` (group).
+    prefix: Option<char>,
     /// When the board was last open (unix seconds): the Digest's since, the cards' new dot.
     pub last_seen_secs: Option<u64>,
     /// The repo this board defaults new tickets to, for the `@` filter. `None` if it
@@ -301,6 +321,9 @@ impl App {
             marked: BTreeSet::new(),
             slots: None,
             digest: None,
+            folded: COLUMNS.iter().position(|c| *c == "Done").into_iter().collect(),
+            group: GroupBy::default(),
+            prefix: None,
             last_seen_secs: store::last_seen_secs_at(&store::state_path()),
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
@@ -545,9 +568,18 @@ impl App {
             .filter(|(_, t)| t.column_index() == column && self.passes_filter(t))
             .map(|(i, _)| i)
             .collect();
+        let done = COLUMNS.iter().position(|c| *c == "Done");
         found.sort_by(|&a, &b| {
             let (a, b) = (&self.tasks[a], &self.tasks[b]);
-            (a.look(), &a.created_at).cmp(&(b.look(), &b.created_at))
+            // Done reads newest first: the one that just closed is the one you want.
+            if Some(column) == done {
+                return b.created_at.cmp(&a.created_at);
+            }
+            match self.group {
+                GroupBy::Stage => (a.look(), &a.created_at).cmp(&(b.look(), &b.created_at)),
+                GroupBy::Repo => (a.repo_name(), a.look(), &a.created_at).cmp(&(b.repo_name(), b.look(), &b.created_at)),
+                GroupBy::Age => a.created_at.cmp(&b.created_at),
+            }
         });
         found
     }
@@ -882,6 +914,25 @@ impl App {
         Outcome::Continue
     }
 
+    /// The second key of `z…` (fold) and `g…` (group): `zc`/`zo` fold/unfold the focused
+    /// column, `zz` the whole board; `gs`/`gr`/`ga` order columns by stage, repo or age.
+    fn prefixed(&mut self, prefix: char, c: char) {
+        match (prefix, c) {
+            ('z', 'c') => {
+                self.folded.insert(self.focus);
+            }
+            ('z', 'o') => {
+                self.folded.remove(&self.focus);
+            }
+            ('z', 'z') => self.fold = !self.fold,
+            ('g', 's') => self.group = GroupBy::Stage,
+            ('g', 'r') => self.group = GroupBy::Repo,
+            ('g', 'a') => self.group = GroupBy::Age,
+            _ => self.notify(format!("{prefix}{c} is not a key; zc/zo fold, zz folds all, gs/gr/ga group"), false),
+        }
+        self.clamp_selection();
+    }
+
     /// True when the ticket changed since the board was last open.
     pub fn is_new(&self, task: &Task) -> bool {
         digest::is_new(task, self.last_seen_secs)
@@ -1023,6 +1074,12 @@ impl App {
     }
 
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
+        if let Some(prefix) = self.prefix.take() {
+            if let KeyCode::Char(c) = key.code {
+                self.prefixed(prefix, c);
+            }
+            return Outcome::Continue;
+        }
         match key.code {
             KeyCode::Char('q') => return Outcome::Quit,
             KeyCode::Char('h') | KeyCode::Left => self.switch_column(-1),
@@ -1044,7 +1101,11 @@ impl App {
                     self.clamp_selection();
                 }
             }
-            KeyCode::Char('z') => self.fold = !self.fold,
+            KeyCode::Char('z') | KeyCode::Char('g') => {
+                if let KeyCode::Char(c) = key.code {
+                    self.prefix = Some(c);
+                }
+            }
             KeyCode::Char('F') => {
                 self.floor = Some(FloorState::default());
                 self.refresh_floor();
@@ -1843,6 +1904,64 @@ mod tests {
         assert_eq!(app.digest.as_ref().map(|d| d.cursor), Some(1), "two entries: the cursor stops at the last");
         press(&mut app, KeyCode::Esc);
         assert!(app.digest.is_none());
+    }
+
+    #[test]
+    fn done_is_folded_by_default_and_sorted_newest_first_and_z_prefix_folds_a_column() {
+        let mut app = App::new(Machine::from_env());
+        let done = COLUMNS.iter().position(|c| *c == "Done").unwrap();
+        assert!(app.folded.contains(&done), "Done starts folded");
+        let mut old = ticket("aaaaaaaa0000", "closed", false, false);
+        old.column = "Done".into();
+        old.created_at = "2026-10-20T10:00:00.000Z".into();
+        let mut new = ticket("bbbbbbbb0000", "closed", false, false);
+        new.column = "Done".into();
+        new.created_at = "2026-10-22T10:00:00.000Z".into();
+        app.tasks.push(old);
+        app.tasks.push(new);
+        let ids: Vec<&str> = app.indices(done).iter().map(|&i| app.tasks[i].id.as_str()).collect();
+        assert_eq!(ids, vec!["bbbbbbbb0000", "aaaaaaaa0000"], "newest first in Done");
+        app.focus = done;
+        let press = |app: &mut App, code: KeyCode| { app.handle_key(KeyEvent::from(code)); };
+        press(&mut app, KeyCode::Char('z'));
+        press(&mut app, KeyCode::Char('o'));
+        assert!(!app.folded.contains(&done), "zo unfolds");
+        press(&mut app, KeyCode::Char('z'));
+        press(&mut app, KeyCode::Char('c'));
+        assert!(app.folded.contains(&done), "zc folds");
+        press(&mut app, KeyCode::Char('z'));
+        press(&mut app, KeyCode::Char('z'));
+        assert!(app.fold, "zz folds the whole board");
+    }
+
+    #[test]
+    fn g_prefix_groups_a_column_by_stage_repo_or_age() {
+        let mut app = App::new(Machine::from_env());
+        let mut a = ticket("aaaaaaaa0000", "implementing", true, true);
+        a.repo_path = Some("/r/zeta".into());
+        a.created_at = "2026-10-22T10:00:00.000Z".into();
+        let mut b = ticket("bbbbbbbb0000", "implementing", true, true);
+        b.repo_path = Some("/r/alpha".into());
+        b.created_at = "2026-10-21T10:00:00.000Z".into();
+        app.tasks.push(a);
+        app.tasks.push(b);
+        let build = app.tasks[0].column_index();
+        let ids = |app: &App| app.indices(build).iter().map(|&i| app.tasks[i].id.clone()).collect::<Vec<String>>();
+        assert_eq!(ids(&app), ["bbbbbbbb0000", "aaaaaaaa0000"], "by stage: same look, oldest created first");
+        let press = |app: &mut App, code: KeyCode| { app.handle_key(KeyEvent::from(code)); };
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Char('r'));
+        assert_eq!(app.group, GroupBy::Repo);
+        assert_eq!(ids(&app), ["bbbbbbbb0000", "aaaaaaaa0000"], "alpha before zeta");
+        app.tasks[1].repo_path = Some("/r/zz".into());
+        assert_eq!(ids(&app), ["aaaaaaaa0000", "bbbbbbbb0000"], "repo name decides");
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Char('a'));
+        assert_eq!(app.group, GroupBy::Age);
+        assert_eq!(ids(&app), ["bbbbbbbb0000", "aaaaaaaa0000"], "oldest first, whatever the look");
+        press(&mut app, KeyCode::Char('g'));
+        press(&mut app, KeyCode::Char('s'));
+        assert_eq!(app.group, GroupBy::Stage);
     }
 
     #[test]
