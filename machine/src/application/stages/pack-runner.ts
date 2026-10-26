@@ -174,7 +174,15 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     run: { ...base.run, ...result.run },
   });
 
-  if (output.rateLimited) return dirty(merged({ ...mapped, outcome: "fail", rateLimited: true }));
+  // A usage window spent mid-run leaves no answer: pause until it resets. A run that still
+  // finished with one keeps it; the answer is paid for, and the next stage finds out for
+  // itself whether the window is open. The reset time rides along for the record.
+  const unfinished = !output.ok || output.outcome === "fail" || (output.answer == null && output.outcome === "pass");
+  if (output.rateLimited && unfinished) return dirty(merged({ ...mapped, outcome: "fail", rateLimited: true }));
+  if (output.rateLimited) {
+    mapped.rateLimited = undefined;
+    mapped.detail = { ...mapped.detail, usageWindow: { resetsAt: output.resetsAt ?? null } };
+  }
   if (output.outcome === "fail" || !output.ok) {
     return dirty(
       merged({ ...mapped, outcome: "fail", detail: { ...mapped.detail, error: output.error ?? output.summary } }),
