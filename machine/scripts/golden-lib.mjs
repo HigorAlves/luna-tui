@@ -15,7 +15,12 @@ export const AGENT_STAGES = ["triage", "test_design", "implementing", "verifying
 export const CORE_STAGES = ["triage", "test_design", "implementing", "verifying"];
 export const MAX_DIFF_LINES = 300;
 /** A test file in any of the fixture ecosystems: verifying must leave at least one in the diff. */
-export const TEST_FILE = /(^|\/)(test_[^/]+\.py|[^/]+_test\.go|[^/]+_spec\.rb|[^/]+\.(test|spec)\.[cm]?[jt]sx?)$|(^|\/)(tests?|__tests__|spec)\//;
+export /** Scenario titles as verifying echoes them: it tends to drop a parenthetical tail such as
+ *  "(assumption)" and to change case or punctuation; the proof is the same scenario. */
+const titleKey = (title) => String(title ?? "").replace(/\s*\([^)]*\)\s*$/, "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+export const sameTitle = (a, b) => titleKey(a) === titleKey(b);
+
+const TEST_FILE = /(^|\/)(test_[^/]+\.py|[^/]+_test\.go|[^/]+_spec\.rb|[^/]+\.(test|spec)\.[cm]?[jt]sx?)$|(^|\/)(tests?|__tests__|spec)\//;
 const SHIPPED = ["awaiting_ship", "shipping", "reviewing_memory", "closed"];
 
 const started = Date.now();
@@ -259,7 +264,7 @@ export function grade({ detail, testPassed, diffLines, ceilingUsd, expectNoRemot
       scenarios = false;
       failures.push(`scenario without an approach: ${c.title}`);
     }
-    const result = results.find((r) => r.title === c.title);
+    const result = results.find((r) => sameTitle(r.title, c.title));
     if (result?.outcome !== "pass") {
       scenarios = false;
       failures.push(`scenario not proven by verifying: ${c.title} (${result ? result.outcome : "no result"})`);
