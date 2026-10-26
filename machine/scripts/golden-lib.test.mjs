@@ -126,6 +126,12 @@ describe("grade", () => {
     const unproven = shipped();
     unproven.events[1].payload.detail.results = [results()[0]];
     expect(grade({ ...base, detail: unproven }).failures).toContain("scenario not proven by verifying: empty cart is zero (no result)");
+
+    // Verifying tends to trim a scenario's parenthetical tail or its case; the proof still counts.
+    const trimmed = shipped();
+    trimmed.approvals[0].requested.cases = [{ ...cases[0], title: "Quantity multiplies the price (assumption)" }, cases[1]];
+    trimmed.events[1].payload.detail.results = [{ ...results()[0], title: "quantity multiplies the price" }, results()[1]];
+    expect(grade({ ...base, detail: trimmed }).checks.scenarios).toBe(true);
   });
 
   test("a skipped evidence verdict passes", () => {
