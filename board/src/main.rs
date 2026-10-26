@@ -6,6 +6,7 @@
 
 mod app;
 mod client;
+mod digest;
 mod discover;
 mod herdr;
 mod inbox;
@@ -90,5 +91,7 @@ fn main() -> io::Result<()> {
     let result = run(&mut terminal, &mut app);
     let _ = execute!(io::stdout(), DisableMouseCapture);
     ratatui::restore();
+    // Next time, the Digest and the cards' new dots are measured from now.
+    let _ = store::write_last_seen_at(&store::state_path(), model::now_secs());
     result
 }
