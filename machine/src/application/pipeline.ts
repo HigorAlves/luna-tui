@@ -59,6 +59,10 @@ interface Extra {
 
 /** Extra wait after a usage window's reset time before trying again. */
 const RESUME_MARGIN_MS = 30_000;
+/** A running task with no loop younger than this may be between its transition and its slot. */
+const ORPHAN_GRACE_MS = 60_000;
+/** How long one rate-limit result holds every claim when it names no reset time. */
+const LATCH_FALLBACK_MS = 5 * 60_000;
 
 export class Pipeline {
   private readonly store: TaskStore;
@@ -69,6 +73,9 @@ export class Pipeline {
   /** The abort signal of each task currently driving a stage. Its size is the active count. */
   private readonly loops = new Map<string, AbortController>();
   private readonly resumeTimers = new Map<string, NodeJS.Timeout>();
+  /** While set and in the future, no slot is claimed: one usage window is shared by every stage. */
+  private latch: number | null = null;
+  private supervisor: NodeJS.Timeout | undefined;
 
   constructor(
     db: DataSource,
@@ -221,10 +228,49 @@ export class Pipeline {
     }
   }
 
+  /** Epoch ms until which claims are held because a stage hit a usage limit; null when open. */
+  get latchedUntil(): number | null {
+    return this.latch !== null && this.latch > Date.now() ? this.latch : null;
+  }
+
+  /** Runs tick() every `intervalMs` until stopSupervisor(). */
+  startSupervisor(intervalMs: number): void {
+    this.stopSupervisor();
+    this.supervisor = setInterval(() => {
+      this.tick().catch((error: unknown) => console.error("supervisor tick failed", error));
+    }, intervalMs);
+    this.supervisor.unref();
+  }
+
+  stopSupervisor(): void {
+    clearInterval(this.supervisor);
+    this.supervisor = undefined;
+  }
+
+  /**
+   * The supervisor: one periodic pass that catches what event-driven scheduling misses.
+   * A running task nobody is driving is escalated (a crash that never reached the catch, a
+   * restart, a lost claim); a paused task without a timer gets one back; then free slots
+   * are filled from the queue, unless a usage window is latched.
+   */
+  async tick(): Promise<void> {
+    const cutoff = Date.now() - ORPHAN_GRACE_MS;
+    for (const task of await this.store.findStuckTasks(RUNNING)) {
+      if (task.queued || this.loops.has(task.id) || task.updatedAt.getTime() > cutoff) continue;
+      await this.apply(task.id, { type: "crash", error: "no stage loop was driving it" }, {}).catch((error: unknown) =>
+        console.error(`could not escalate orphaned task ${task.id}`, error),
+      );
+    }
+    await this.rearmPaused();
+    await this.fillSlots();
+  }
+
   /** The usage window has reset: re-run the stage the task paused in. */
   windowReset(id: string): Promise<TaskRow> {
     clearTimeout(this.resumeTimers.get(id));
     this.resumeTimers.delete(id);
+    // A reset, from the timer or from you, is the word that the window is open again.
+    this.latch = null;
     return this.dispatch(id, { type: "window_reset" });
   }
 
@@ -245,9 +291,15 @@ export class Pipeline {
         escalated++;
       }
     }
-    // Resume timers live in memory, so a restart during a usage window would otherwise park
-    // every paused task until someone clicks resume. Re-arm from the pause's own reset time.
+    await this.rearmPaused();
+    return escalated;
+  }
+
+  /** Resume timers live in memory, so a restart during a usage window would otherwise park
+   *  every paused task until someone clicks resume. Re-arm from the pause's own reset time. */
+  private async rearmPaused(): Promise<void> {
     for (const task of await this.store.findStuckTasks(new Set<TaskState>(["paused_rate_limit"]))) {
+      if (this.resumeTimers.has(task.id)) continue;
       const latest = (await this.store.findFinishedEvents(task.id))[0];
       const detail = latest?.payload.detail as Record<string, unknown> | undefined;
       const at = resetSeconds(detail?.resetsAt);
@@ -258,7 +310,18 @@ export class Pipeline {
         this.scheduleResume(task.id, at);
       }
     }
-    return escalated;
+  }
+
+  /** Claims queued tasks into free slots, oldest first, until the pool is full, the queue is
+   *  empty, or a usage window is latched. The one place a slot is ever filled from the queue. */
+  private async fillSlots(): Promise<void> {
+    while (this.loops.size < this.maxConcurrentTasks && this.latchedUntil === null) {
+      const claimed = await this.store.claimOldestQueuedTask();
+      if (!claimed) return;
+      const controller = this.reserveSlot(claimed.id);
+      const loop = this.startLoop(claimed.id, claimed.state, controller);
+      if (this.inline) await loop;
+    }
   }
 
   stageRuns(id: string): Promise<StageRunRow[]> {
@@ -316,7 +379,7 @@ export class Pipeline {
    * waits for the whole run too in inline mode.
    */
   private async schedule(id: string, stage: TaskState): Promise<void> {
-    if (this.loops.size >= this.maxConcurrentTasks) {
+    if (this.loops.size >= this.maxConcurrentTasks || this.latchedUntil !== null) {
       await this.store.updateTask(id, { queued: true });
       return;
     }
@@ -361,12 +424,7 @@ export class Pipeline {
    *  cleared by the caller, synchronously, before any `await` — see schedule(). */
   private async runAndFillSlot(id: string, stage: TaskState, controller: AbortController): Promise<void> {
     await this.drive(id, stage, controller);
-    if (this.loops.size >= this.maxConcurrentTasks) return;
-    const claimed = await this.store.claimOldestQueuedTask();
-    if (claimed) {
-      const nextController = this.reserveSlot(claimed.id);
-      void this.startLoop(claimed.id, claimed.state, nextController);
-    }
+    await this.fillSlots();
   }
 
   /** Runs stages one after another until the task waits on you, pauses, closes or is aborted.
@@ -394,7 +452,13 @@ export class Pipeline {
               }
             : result.detail;
         const step = await this.apply(id, next, { detail });
-        if (step.effect.kind === "pause") this.scheduleResume(id, result.detail?.resetsAt);
+        if (step.effect.kind === "pause") {
+          this.scheduleResume(id, result.detail?.resetsAt);
+          // One usage window is shared by every stage: hold claims until it resets, or the
+          // whole queue would line up to hit the same wall.
+          const at = resetSeconds(result.detail?.resetsAt);
+          this.latch = Math.max(this.latch ?? 0, at !== null ? at * 1000 + RESUME_MARGIN_MS : Date.now() + LATCH_FALLBACK_MS);
+        }
         stage = step.effect.kind === "run" ? step.effect.stage : null;
       }
     } catch (error) {
