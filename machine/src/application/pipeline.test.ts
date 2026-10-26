@@ -466,6 +466,29 @@ describe("test_change undoes verifying's tests", () => {
   });
 });
 
+describe("the card triad", () => {
+  it("records tests passed/total from verifying's results and the diff of a writable pass on the task", async () => {
+    const diffs: string[] = [];
+    pipeline = new Pipeline(db, stubs.runnerFor, {
+      inline: true,
+      diffStat: async (worktree, repoPath) => {
+        diffs.push(`${worktree}@${repoPath}`);
+        return { added: 142, removed: 18 };
+      },
+    });
+    stubs.plan("implementing", { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/x" }, run: { inputCommit: "base1", outputCommit: "out1" } });
+    stubs.plan("verifying", {
+      outcome: "pass",
+      detail: { step: "review", results: [{ title: "a", outcome: "pass" }, { title: "b", outcome: "fail" }, { title: "c", outcome: "pass" }] },
+    });
+    const task = await newTask();
+    await startAndApprove(task.id);
+    const row = await pipeline.get(task.id);
+    expect(row).toMatchObject({ diffAdded: 142, diffRemoved: 18, testsPassed: 2, testsTotal: 3 });
+    expect(diffs).toEqual(["/wt/x@null"]);
+  });
+});
+
 describe("spend per task", () => {
   it("sums each task's stage runs, so a list can mark the expensive tickets", async () => {
     const a = await newTask();
@@ -476,10 +499,12 @@ describe("spend per task", () => {
         [id, cost],
       );
     }
-    const spend = await pipeline.spendByTask();
-    expect(spend.get(a.id)).toBeCloseTo(0.5);
-    expect(spend.get(b.id)).toBeUndefined();
-    expect(await pipeline.spentUsd(a.id)).toBeCloseTo(0.5);
+    await db.query("update stage_runs set ended_at = started_at + interval '90 seconds' where task_id = $1", [a.id]);
+    const usage = await pipeline.usageByTask();
+    expect(usage.get(a.id)?.spentUsd).toBeCloseTo(0.5);
+    expect(usage.get(a.id)?.workedMs).toBe(180_000);
+    expect(usage.get(b.id)).toMatchObject({ spentUsd: 0 });
+    expect((await pipeline.taskUsage(a.id)).spentUsd).toBeCloseTo(0.5);
   });
 });
 

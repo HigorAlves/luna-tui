@@ -24,6 +24,12 @@ export interface TaskRow {
   queued: boolean;
   /** When it joined the queue: claims go in this order, so editing a queued ticket keeps its place. */
   queuedAt: Date | null;
+  /** The branch's diff against its base after the last writable run; null until one ran. */
+  diffAdded: number | null;
+  diffRemoved: number | null;
+  /** Verifying's results, passed over total, from its latest run; null until it ran. */
+  testsPassed: number | null;
+  testsTotal: number | null;
   createdAt: Date;
   updatedAt: Date;
 }

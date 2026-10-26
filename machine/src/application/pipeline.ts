@@ -11,7 +11,8 @@ import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
-import { removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
+import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
+import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import type { StageResult, StageRunner } from "./ports.ts";
 
@@ -45,6 +46,8 @@ export interface PipelineOptions {
   maxPerRepo?: number | null;
   /** Undoes one commit in a worktree; tests pass a fake. */
   revertCommit?: (worktreePath: string, sha: string) => Promise<void>;
+  /** The branch's diff against its base, for the card; tests pass a fake. */
+  diffStat?: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   /** What the close step needs once a task is approved for good. Without it, nothing is closed on the host. */
   closeDeps?: CloseDeps;
   /** Spend ceilings in USD; either unset means no ceiling of that kind. */
@@ -94,6 +97,7 @@ export class Pipeline {
   private readonly maxConcurrentTasks: number;
   private readonly maxPerRepo: number | null;
   private readonly revertCommit: (worktreePath: string, sha: string) => Promise<void>;
+  private readonly diffStat: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   private readonly closeDeps: CloseDeps | undefined;
   readonly budget: Required<Budget>;
   private readonly restartPolicy: RestartPolicy;
@@ -117,6 +121,7 @@ export class Pipeline {
     this.maxConcurrentTasks = options.maxConcurrentTasks ?? 4;
     this.maxPerRepo = options.maxPerRepo ?? null;
     this.revertCommit = options.revertCommit ?? revertCommit;
+    this.diffStat = options.diffStat ?? branchDiffStat;
     this.closeDeps = options.closeDeps;
     this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
     this.restartPolicy = options.restartPolicy ?? "requeue";
@@ -158,14 +163,14 @@ export class Pipeline {
     return this.store.listTasks();
   }
 
-  /** Spend per task for every task that has any, in one query. */
-  spendByTask(): Promise<Map<string, number>> {
-    return this.store.spendByTask();
+  /** Spend and worked time per task for every task that has a run, in one query. */
+  usageByTask(): Promise<Map<string, TaskUsage>> {
+    return this.store.usageByTask();
   }
 
-  /** What one task has spent across its stage runs. */
-  spentUsd(id: string): Promise<number> {
-    return this.store.taskSpendUsd(id);
+  /** What one task has spent, and how long its runs took. */
+  taskUsage(id: string): Promise<TaskUsage> {
+    return this.store.taskUsage(id);
   }
 
   async get(id: string): Promise<TaskRow> {
@@ -708,6 +713,22 @@ export class Pipeline {
     };
   }
 
+  /** The card's numbers: the branch's diff after a writable pass, tests passed/total after verifying. */
+  private async recordTriad(id: string, stage: TaskState, status: string, result: StageResult): Promise<void> {
+    const patch: Partial<TaskRow> = {};
+    if ((stage === "implementing" || stage === "verifying") && status === "passed" && result.workspace?.worktreePath) {
+      const task = await this.store.getTask(id);
+      const diff = await this.diffStat(result.workspace.worktreePath, task?.repoPath ?? null).catch(() => null);
+      if (diff) Object.assign(patch, { diffAdded: diff.added, diffRemoved: diff.removed });
+    }
+    const results = (result.detail as { results?: unknown } | undefined)?.results;
+    if (stage === "verifying" && Array.isArray(results)) {
+      const passed = results.filter((r) => (r as { outcome?: string }).outcome === "pass").length;
+      Object.assign(patch, { testsPassed: passed, testsTotal: results.length });
+    }
+    if (Object.keys(patch).length > 0) await this.store.updateTask(id, patch);
+  }
+
   /** Reverts the commit the latest verifying run added (its tests), when it added one. Returns
    *  the escalation reason when the revert fails, else null. */
   private async undoVerifyingTests(id: string): Promise<string | null> {
@@ -810,6 +831,7 @@ export class Pipeline {
     if (result.workspace) {
       await this.store.updateTask(id, { branch: result.workspace.branch, worktreePath: result.workspace.worktreePath });
     }
+    await this.recordTriad(id, stage, status, result);
     await this.log(
       id,
       "stage.finished",
