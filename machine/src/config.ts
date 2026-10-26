@@ -27,7 +27,13 @@ export interface Config {
   taskBudgetUsd: number | null;
   /** Spend ceiling over the trailing 24 hours; null means none. Over it, nothing new is claimed. */
   dailyBudgetUsd: number | null;
+  /** What happens to a task mid-stage when the machine stops: back to the queue (its stage re-runs
+   *  on boot, no approval needed) or escalated for you to resume, as before. */
+  restartPolicy: RestartPolicy;
 }
+
+export type RestartPolicy = "requeue" | "escalate";
+const RESTART_POLICIES: readonly RestartPolicy[] = ["requeue", "escalate"];
 
 function optionalUsd(env: NodeJS.ProcessEnv, key: string): number | null {
   const raw = env[key];
@@ -74,6 +80,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!Number.isInteger(retentionDays) || retentionDays < 0) {
     throw new Error(`MACHINE_RETENTION_DAYS must be a non-negative integer, got "${env.MACHINE_RETENTION_DAYS}"`);
   }
+  const restartPolicy = (env.MACHINE_RESTART_POLICY ?? "requeue") as RestartPolicy;
+  if (!RESTART_POLICIES.includes(restartPolicy)) {
+    throw new Error(`MACHINE_RESTART_POLICY must be requeue or escalate, got "${env.MACHINE_RESTART_POLICY}"`);
+  }
   const home = env.HOME ?? homedir();
   return {
     databaseUrl: env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
@@ -89,5 +99,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     retentionDays,
     taskBudgetUsd: optionalUsd(env, "MACHINE_TASK_BUDGET_USD"),
     dailyBudgetUsd: optionalUsd(env, "MACHINE_DAILY_BUDGET_USD"),
+    restartPolicy,
   };
 }

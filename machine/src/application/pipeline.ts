@@ -5,6 +5,7 @@
 import { type Finding, RUNNING, type TaskSource, type TaskState } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
+import type { RestartPolicy } from "../config.ts";
 import type { TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
@@ -44,6 +45,8 @@ export interface PipelineOptions {
   closeDeps?: CloseDeps;
   /** Spend ceilings in USD; either unset means no ceiling of that kind. */
   budget?: Budget;
+  /** On shutdown: `requeue` (default) parks running tasks for the next boot; `escalate` waits for you. */
+  restartPolicy?: RestartPolicy;
 }
 
 export interface Budget {
@@ -83,6 +86,9 @@ export class Pipeline {
   private readonly maxConcurrentTasks: number;
   private readonly closeDeps: CloseDeps | undefined;
   readonly budget: Required<Budget>;
+  private readonly restartPolicy: RestartPolicy;
+  /** Set by shutdown(): no slot is filled and no loop started from here on. */
+  private stopping = false;
   /** The abort signal of each task currently driving a stage. Its size is the active count. */
   private readonly loops = new Map<string, AbortController>();
   private readonly resumeTimers = new Map<string, NodeJS.Timeout>();
@@ -101,6 +107,7 @@ export class Pipeline {
     this.maxConcurrentTasks = options.maxConcurrentTasks ?? 4;
     this.closeDeps = options.closeDeps;
     this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
+    this.restartPolicy = options.restartPolicy ?? "requeue";
   }
 
   /** What the trailing 24 hours have cost, in USD. */
@@ -238,19 +245,33 @@ export class Pipeline {
     return task;
   }
 
-  /** Aborts every running stage (killing its container) and waits for them to wind down,
-   * so a normal Ctrl+C does not leave a container or a dirty worktree running unseen. */
+  /** Stops every running stage (killing its container) and waits for them to wind down, so a
+   *  normal Ctrl+C does not leave a container or a dirty worktree running unseen. Under the
+   *  `requeue` policy the tasks go back to the queue, state kept, and recover() re-runs the
+   *  stage on the next boot; under `escalate` they wait for you, as an abort does. */
   async shutdown(): Promise<void> {
+    this.stopping = true;
+    this.stopSupervisor();
     const ids = [...this.loops.keys()];
     await Promise.all(
       ids.map((id) =>
-        this.abort(id).catch((error: unknown) => console.error(`could not abort task ${id} on shutdown`, error)),
+        (this.restartPolicy === "requeue" ? this.park(id) : this.abort(id)).catch((error: unknown) =>
+          console.error(`could not stop task ${id} on shutdown`, error),
+        ),
       ),
     );
     const deadline = Date.now() + 5000;
     while (this.loops.size > 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
+  }
+
+  /** Back to the queue with its state kept: the stage is cut short (its run ends `aborted`, the
+   *  worktree reset as any failed attempt's is) and runs again from the top on the next boot. */
+  private async park(id: string): Promise<void> {
+    await this.store.updateTask(id, { queued: true });
+    await this.log(id, "task.parked", { reason: "machine shutting down; the stage re-runs on the next boot" });
+    this.loops.get(id)?.abort();
   }
 
   /** Epoch ms until which claims are held because a stage hit a usage limit; null when open. */
@@ -340,7 +361,7 @@ export class Pipeline {
   /** Claims queued tasks into free slots, oldest first, until the pool is full, the queue is
    *  empty, or a usage window is latched. The one place a slot is ever filled from the queue. */
   private async fillSlots(): Promise<void> {
-    while (this.loops.size < this.maxConcurrentTasks && this.latchedUntil === null) {
+    while (!this.stopping && this.loops.size < this.maxConcurrentTasks && this.latchedUntil === null) {
       if (await this.dayOver()) return;
       const claimed = await this.store.claimOldestQueuedTask();
       if (!claimed) return;
@@ -405,7 +426,7 @@ export class Pipeline {
    * waits for the whole run too in inline mode.
    */
   private async schedule(id: string, stage: TaskState): Promise<void> {
-    if (this.loops.size >= this.maxConcurrentTasks || this.latchedUntil !== null) {
+    if (this.stopping || this.loops.size >= this.maxConcurrentTasks || this.latchedUntil !== null) {
       await this.store.updateTask(id, { queued: true });
       return;
     }

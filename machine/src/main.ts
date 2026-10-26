@@ -114,6 +114,7 @@ pipeline = new Pipeline(db, runnerFor, {
   onEvent: publish,
   maxConcurrentTasks: config.maxConcurrentTasks,
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
+  restartPolicy: config.restartPolicy,
   closeDeps: { exec, worktreeRemove: false, orcStateBin, watcher },
 });
 const recovered = await pipeline.recover();
