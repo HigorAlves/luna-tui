@@ -60,6 +60,7 @@ fn look_color(look: Look) -> Color {
     match look {
         Look::Escalated => c(RED),
         Look::NeedsYou => c(PEACH),
+        Look::Stale => c(PEACH),
         Look::Working => c(YELLOW),
         Look::Queued => c(SUBTEXT0),
         Look::Paused => c(LAVENDER),
@@ -71,10 +72,11 @@ fn look_color(look: Look) -> Color {
 fn look_glyph(look: Look) -> &'static str {
     match look {
         Look::Escalated => "✗",
-        Look::NeedsYou => "!",
+        Look::NeedsYou => "⏸",
+        Look::Stale => "⌛",
         Look::Working => spinner(),
         Look::Queued => "…",
-        Look::Paused => "⏸",
+        Look::Paused => "⏳",
         Look::Draft => "○",
         Look::Done => "✓",
     }
@@ -504,6 +506,11 @@ fn card_head(task: &Task) -> Line<'static> {
 }
 
 fn card(task: &Task, spend_p90: Option<f64>) -> ListItem<'static> {
+    ListItem::new(card_lines(task, spend_p90))
+}
+
+/// The card's three lines: head, status, and the triad (or a blank spacer without one).
+fn card_lines(task: &Task, spend_p90: Option<f64>) -> Vec<Line<'static>> {
     let look = task.look();
     let head = card_head(task);
 
@@ -528,7 +535,8 @@ fn card(task: &Task, spend_p90: Option<f64>) -> ListItem<'static> {
         meta.push(Span::from("  $").fg(c(SUBTEXT0)));
     }
 
-    ListItem::new(vec![head, Line::from(meta), Line::default()])
+    let third = task.triad().map_or_else(Line::default, |t| Line::from(Span::from(format!("  {t}")).fg(c(SUBTEXT0))));
+    vec![head, Line::from(meta), third]
 }
 
 fn bullets(items: &[String]) -> Vec<Line<'static>> {
@@ -1417,6 +1425,32 @@ mod tests {
         bare.repo_path = None;
         let head = card_head(&bare).to_string();
         assert!(!head.contains("luna-tui") && !head.starts_with('▌'), "{head}");
+    }
+
+    #[test]
+    fn glyphs_tell_waiting_on_you_from_waiting_on_the_window_from_stale() {
+        assert_eq!(look_glyph(Look::NeedsYou), "⏸");
+        assert_eq!(look_glyph(Look::Paused), "⏳");
+        assert_eq!(look_glyph(Look::Stale), "⌛");
+    }
+
+    #[test]
+    fn a_card_s_second_line_is_the_triad_when_the_task_has_one() {
+        const TASK: &str = r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
+            "repoPath":"/r/app","branch":null,"worktreePath":null,"state":"implementing","column":"Build",
+            "waitingOnYou":false,"running":true,"queued":false,
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":1},"resumeTo":null,"reason":null,
+            "workedMs":240000,"diff":{"added":142,"removed":18},"tests":{"passed":7,"total":9},
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
+        let task: Task = serde_json::from_str(TASK).unwrap();
+        let lines: Vec<String> = card_lines(&task, None).iter().map(|l| l.to_string()).collect();
+        assert!(lines[2].contains("worked 4.0m · +142 −18 · tests 7/9"), "{lines:?}");
+        let mut bare = task.clone();
+        bare.worked_ms = None;
+        bare.diff = None;
+        bare.tests = None;
+        let lines: Vec<String> = card_lines(&bare, None).iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines[2].trim(), "", "no numbers, no line: {lines:?}");
     }
 
     #[test]
