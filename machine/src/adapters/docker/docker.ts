@@ -53,7 +53,9 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   for (const [key, value] of Object.entries(run.labels)) args.push("--label", `${key}=${value}`);
   // The agent needs outbound network for the Anthropic API, so this isn't `--network none` —
   // but nothing it does needs write access outside its mounted worktree, /in, /out or /tmp.
-  args.push("--read-only", "--tmpfs", "/tmp:rw,size=512m", "--security-opt", "no-new-privileges", ...SANDBOX_LIMITS);
+  // The tmpfs is `exec`: Docker's default is noexec, and `go test` runs the test binary it
+  // builds under TMPDIR. The worktree bind mount is executable anyway, so this hides nothing.
+  args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...SANDBOX_LIMITS);
   args.push(
     // npm/yarn/pip caches, shell history and anything else that defaults to $HOME would
     // otherwise hit the now-read-only root filesystem — point HOME at the one writable,

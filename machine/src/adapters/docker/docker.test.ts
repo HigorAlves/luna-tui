@@ -21,7 +21,7 @@ function run(over: Partial<SandboxRun> = {}): SandboxRun {
 describe("sandboxArgs", () => {
   it("hardens the container and points HOME, TMPDIR and orc state at the tmpfs", () => {
     const args = sandboxArgs(run(), "/state/runs/r1/in", "/state/runs/r1/out");
-    expect(args).toEqual(expect.arrayContaining(["--read-only", "--tmpfs", "/tmp:rw,size=512m", "--security-opt", "no-new-privileges"]));
+    expect(args).toEqual(expect.arrayContaining(["--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges"]));
     for (const env of ["HOME=/tmp", "TMPDIR=/tmp", "ORC_STATE_DIR=/tmp/orc-state"]) {
       expect(args.join(" ")).toContain(`-e ${env}`);
     }
