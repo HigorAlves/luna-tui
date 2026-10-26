@@ -3,8 +3,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { randomUUID } from "node:crypto";
+
 import type { Credential } from "./credentials.ts";
-import { exec, execOrThrow } from "../process/exec.ts";
+import { type ExecResult, exec, execOrThrow } from "../process/exec.ts";
 
 /** Label on every stage container, so leftovers can be found and removed. */
 export const CONTAINER_LABEL = "dev.hardness.stage";
@@ -137,6 +139,61 @@ export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
 
   const exitCode = waited.code === 0 ? Number(waited.stdout.trim()) : null;
   return { exitCode, timedOut, aborted, transcriptPath };
+}
+
+/** One command run in the stage image over a worktree: a project's own checks (verify Step
+ *  A, the locked-test replay). On the host they would run against node_modules a Linux
+ *  container installed, with Linux binaries in them. */
+export interface SandboxExec {
+  name: string;
+  image: string;
+  worktree: string;
+  argv: string[];
+  /** The only env the command sees besides HOME and TMPDIR; never the host's. */
+  env?: Record<string, string>;
+}
+
+/** The `docker run` argument list for one command. Pure. */
+export function sandboxExecArgs(run: SandboxExec): string[] {
+  const [command, ...rest] = run.argv;
+  const args = ["run", "--rm", "--name", run.name, "--label", `${CONTAINER_LABEL}=1`];
+  args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...SANDBOX_LIMITS);
+  args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp");
+  for (const [key, value] of Object.entries(run.env ?? {})) args.push("-e", `${key}=${value}`);
+  // Writable: a test runner writes its cache next to the code (node_modules/.vite, go's are on the tmpfs).
+  args.push("-v", `${run.worktree}:/work`, "-w", "/work", "--entrypoint", command!, run.image, ...rest);
+  return args;
+}
+
+/** Runs the command and resolves with its exit code and output. A timeout or abort kills the
+ *  docker client; the container is then removed by name, so it never outlives the call. */
+export async function execInSandbox(
+  run: SandboxExec,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<ExecResult> {
+  const result = await exec("docker", sandboxExecArgs(run), options);
+  await exec("docker", ["rm", "-f", run.name]);
+  return result;
+}
+
+/** An `exec` for the stages that run a project's checks: same signature as the host one,
+ *  `cwd` is the worktree, and only HARDNESS_* env reaches the container. */
+export function sandboxExecutor(image: string) {
+  return (
+    command: string,
+    args: string[],
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number } = {},
+  ): Promise<ExecResult> => {
+    if (!options.cwd) throw new Error("sandboxExecutor needs cwd: the worktree to mount");
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries(options.env ?? {})) {
+      if (key.startsWith("HARDNESS_") && typeof value === "string") env[key] = value;
+    }
+    return execInSandbox(
+      { name: `hardness-check-${randomUUID().slice(0, 8)}`, image, worktree: options.cwd, argv: [command, ...args], env },
+      { signal: options.signal, timeoutMs: options.timeoutMs },
+    );
+  };
 }
 
 /** Removes stage containers left behind by a machine that stopped mid-stage. */

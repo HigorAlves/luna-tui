@@ -13,7 +13,7 @@ import { memoryReviewRunner, withMemoryReview } from "../application/stages/memo
 import type { StageContext, StageResult, StageRunner } from "../application/ports.ts";
 import { shipRunner } from "../application/stages/ship.ts";
 import { loadCredential } from "../adapters/docker/credentials.ts";
-import { imageExists, removeLeftoverContainers } from "../adapters/docker/docker.ts";
+import { imageExists, removeLeftoverContainers, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { exec } from "../adapters/process/exec.ts";
 
 export interface RealStagesResult {
@@ -21,6 +21,8 @@ export interface RealStagesResult {
   /** The verifying stage's review pack, or null when agents are off; `main.ts` passes this
    *  straight into `verifyRunner({ runPack: verifyPack, ... })`. */
   verifyPack: ((context: StageContext) => Promise<StageResult>) | null;
+  /** Runs a project's checks inside the runner image; null when stages are stubs. */
+  checksExec: ReturnType<typeof sandboxExecutor> | null;
 }
 
 /** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
@@ -31,16 +33,16 @@ export async function buildRealStages(
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
-    return { real: {}, verifyPack: null };
+    return { real: {}, verifyPack: null, checksExec: null };
   }
   const credential = await loadCredential();
   if (!credential) {
     console.warn("no Claude credential in ~/.config/hardness: every stage is a stub");
-    return { real: {}, verifyPack: null };
+    return { real: {}, verifyPack: null, checksExec: null };
   }
   if (!(await imageExists(config.runnerImage))) {
     console.warn(`image ${config.runnerImage} is missing (pnpm runner:build): every stage is a stub`);
-    return { real: {}, verifyPack: null };
+    return { real: {}, verifyPack: null, checksExec: null };
   }
   const removed = await removeLeftoverContainers();
   if (removed > 0) console.log(`removed ${removed} leftover stage container(s)`);
@@ -48,6 +50,9 @@ export async function buildRealStages(
   if (!qaImage) {
     console.warn(`image ${config.runnerQaImage} is missing (pnpm runner-qa:build): e2e will be skipped`);
   }
+  // A project's own checks run in the stage image too: what implementing installed there
+  // (node_modules with Linux binaries, a Go cache) does not run on the host.
+  const checksExec = sandboxExecutor(config.runnerImage);
   const deps = {
     image: config.runnerImage,
     qaImage: config.runnerQaImage,
@@ -55,6 +60,7 @@ export async function buildRealStages(
     worktreesDir: config.worktreesDir,
     stateDir: config.stateDir,
     watcher,
+    exec: checksExec,
   };
   const verifyPack = (context: StageContext) => runAgent(deps, context, "verifying");
   const real: Partial<Record<TaskState, StageRunner>> = {
@@ -77,7 +83,7 @@ export async function buildRealStages(
       }),
     ),
   };
-  return { real, verifyPack };
+  return { real, verifyPack, checksExec };
 }
 
 export interface RunnerForDeps {

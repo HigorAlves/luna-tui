@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { sandboxArgs, type SandboxRun } from "./docker.ts";
+import { sandboxArgs, sandboxExecArgs, type SandboxRun } from "./docker.ts";
 
 function run(over: Partial<SandboxRun> = {}): SandboxRun {
   return {
@@ -72,5 +72,33 @@ describe("sandboxArgs", () => {
     const args = sandboxArgs(run(), "/i", "/o");
     expect(args).toContain("ANTHROPIC_API_KEY");
     expect(args.join(" ")).not.toContain("sk-secret-value");
+  });
+});
+
+describe("sandboxExecArgs", () => {
+  // A project's own checks (verify Step A, the locked-test replay) run in the stage image,
+  // not on the host: node_modules installed by a Linux container hold Linux binaries.
+  const args = sandboxExecArgs({
+    name: "chk1",
+    image: "img:1",
+    worktree: "/wt",
+    argv: ["npm", "run", "test"],
+    env: { HARDNESS_STAGE: "verifying" },
+  });
+
+  it("runs the command as the entrypoint in the worktree, writable, and removes the container after", () => {
+    expect(args.slice(0, 2)).toEqual(["run", "--rm"]);
+    expect(args).toEqual(expect.arrayContaining(["--name", "chk1", "-v", "/wt:/work", "-w", "/work", "--entrypoint", "npm"]));
+    expect(args.slice(-3)).toEqual(["img:1", "run", "test"]);
+  });
+
+  it("is hardened like a stage: read-only root, exec tmpfs, no new privileges, the limits, HOME on the tmpfs", () => {
+    expect(args).toEqual(expect.arrayContaining(["--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", "-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", "--memory", "4g"]));
+  });
+
+  it("passes only the env it was given, never the host's, and no credential", () => {
+    const envs = args.filter((_, i) => args[i - 1] === "-e");
+    expect(envs).toEqual(["HOME=/tmp", "TMPDIR=/tmp", "HARDNESS_STAGE=verifying"]);
+    expect(args.join(" ")).not.toMatch(/ANTHROPIC|CLAUDE/);
   });
 });
