@@ -65,6 +65,90 @@ pub const ACTIONS: [(char, &str); 14] = [
     ('d', "delete"),
 ];
 
+/// Which view `?` was pressed in: the sheet shows that view's keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HelpFor {
+    Board,
+    Floor,
+    Inbox,
+    Digest,
+    Detail,
+}
+
+impl HelpFor {
+    pub fn title(self) -> &'static str {
+        match self {
+            HelpFor::Board => " Keys · any key closes ",
+            HelpFor::Floor => " Floor keys · any key closes ",
+            HelpFor::Inbox => " Inbox keys · any key closes ",
+            HelpFor::Digest => " Digest keys · any key closes ",
+            HelpFor::Detail => " Ticket keys · any key closes ",
+        }
+    }
+
+    /// The keys that work in this view, as (keys, what they do).
+    pub fn keys(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            HelpFor::Board => HELP,
+            HelpFor::Floor => FLOOR_HELP,
+            HelpFor::Inbox => INBOX_HELP,
+            HelpFor::Digest => DIGEST_HELP,
+            HelpFor::Detail => DETAIL_HELP,
+        }
+    }
+}
+
+pub const FLOOR_HELP: &[(&str, &str)] = &[
+    ("tab / shift+tab", "focus the next / previous repo; the numbers follow"),
+    ("r", "refresh"),
+    ("esc", "close"),
+];
+
+pub const INBOX_HELP: &[(&str, &str)] = &[
+    ("j / k", "previous / next ticket"),
+    ("h / l", "previous / next split (1-5 jump)"),
+    ("a", "advance: approve, answer, retry"),
+    ("r", "send back with a reason"),
+    ("e", "edit in place"),
+    ("A", "approve every ticket in the split, after one yes"),
+    ("enter", "open the ticket"),
+    ("esc", "close"),
+];
+
+pub const DIGEST_HELP: &[(&str, &str)] = &[
+    ("j / k", "previous / next entry"),
+    ("enter", "jump to the ticket"),
+    ("o", "open its PR or issue in the browser"),
+    ("esc", "close"),
+];
+
+pub const DETAIL_HELP: &[(&str, &str)] = &[
+    ("j / k", "scroll"),
+    ("a", "advance: start, approve, answer, retry, resume"),
+    ("S", "ship"),
+    ("r", "send back with a reason"),
+    ("e", "edit in place"),
+    ("X / w / d", "abort / kill the worktree / delete (each asks)"),
+    ("f", "focus its herdr tab"),
+    ("o", "open the linked issue"),
+    ("esc", "close"),
+];
+
+/// What `:` understands. Typed as `:name args`.
+pub const COMMANDS: &[(&str, &str)] = &[
+    ("q", "quit"),
+    ("new <title>", "new ticket, then edit it in place"),
+    ("filter <text>", "filter by title, #id or repo (bare: clear)"),
+    ("repo <name>", "show only that repo"),
+    ("open <#id>", "open a ticket by id prefix"),
+    ("group stage|repo|age", "order columns"),
+    ("fold / unfold", "fold / unfold the focused column"),
+    ("slots <n>", "resize the pool"),
+    ("drain / resume", "take no new work / carry on"),
+    ("floor / inbox / digest", "open that view"),
+    ("help", "this sheet"),
+];
+
 /// Keys shown in the help overlay, as (keys, what they do).
 pub const HELP: &[(&str, &str)] = &[
     ("h / l", "previous / next column"),
@@ -96,6 +180,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
     ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
     ("x", "actions for the selected ticket (P resumes every paused one)"),
+    (":", "command palette: q, new, filter, repo, open, group, fold, slots, drain, floor, inbox, digest"),
     ("esc", "clear the filter"),
     ("?", "this help"),
     ("q", "quit"),
@@ -202,6 +287,8 @@ pub enum Mode {
     Adding(String),
     /// Typing the filter. The text lives in `App::filter`.
     Filter,
+    /// Typing a `:` command; enter runs it, esc closes.
+    Command(String),
     Detail(String),
     /// Editing a ticket's markdown in place: title, description, criteria, repo.
     EditTicket {
@@ -252,7 +339,7 @@ pub enum Mode {
         all: Vec<String>,
         cursor: usize,
     },
-    Help,
+    Help(HelpFor),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -979,6 +1066,7 @@ impl App {
             Mode::Answer { .. } => self.handle_answer(key),
             Mode::EditPlan { .. } => self.handle_edit_plan(key),
             Mode::Filter => self.handle_filter(key),
+            Mode::Command(_) => self.handle_command(key),
             Mode::Reason { .. } => self.handle_reason(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
@@ -988,7 +1076,7 @@ impl App {
             Mode::ConfirmMany { .. } => self.handle_confirm_many(key),
             Mode::Actions { .. } => self.handle_actions(key),
             Mode::RepoPicker { .. } => self.handle_repo_picker(key),
-            Mode::Help => {
+            Mode::Help(_) => {
                 self.mode = Mode::Normal;
                 Outcome::Continue
             }
@@ -1040,6 +1128,7 @@ impl App {
     fn handle_floor(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Esc | KeyCode::Char('F') | KeyCode::Char('q') => self.floor = None,
+            KeyCode::Char('?') => self.mode = Mode::Help(HelpFor::Floor),
             KeyCode::Char('r') => self.refresh_floor(),
             KeyCode::Tab | KeyCode::BackTab => {
                 if let Some(floor) = self.floor.as_mut() {
@@ -1126,6 +1215,10 @@ impl App {
                 self.digest = None;
                 return Outcome::Continue;
             }
+            KeyCode::Char('?') => {
+                self.mode = Mode::Help(HelpFor::Digest);
+                return Outcome::Continue;
+            }
             KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(entries.len().saturating_sub(1)),
             KeyCode::Char('k') | KeyCode::Up => next.cursor = state.cursor.saturating_sub(1),
             KeyCode::Enter => {
@@ -1181,6 +1274,10 @@ impl App {
         match key.code {
             KeyCode::Esc | KeyCode::Char('I') | KeyCode::Char('q') => {
                 self.inbox = None;
+                return Outcome::Continue;
+            }
+            KeyCode::Char('?') => {
+                self.mode = Mode::Help(HelpFor::Inbox);
                 return Outcome::Continue;
             }
             KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(ids.len().saturating_sub(1)),
@@ -1314,7 +1411,8 @@ impl App {
                     self.marked.extend(ids);
                 }
             }
-            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('?') => self.mode = Mode::Help(HelpFor::Board),
+            KeyCode::Char(':') => self.mode = Mode::Command(String::new()),
             KeyCode::Esc => {
                 self.filter.clear();
                 self.needs_only = false;
@@ -1448,6 +1546,7 @@ impl App {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
             KeyCode::Char('j') | KeyCode::Down => self.scroll_detail(1),
             KeyCode::Char('k') | KeyCode::Up => self.scroll_detail(-1),
+            KeyCode::Char('?') => self.mode = Mode::Help(HelpFor::Detail),
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
         }
@@ -1631,6 +1730,104 @@ impl App {
                 self.mode = Mode::Normal;
             }
             _ => {}
+        }
+        self.clamp_selection();
+        Outcome::Continue
+    }
+
+    /// Typing a `:` command.
+    fn handle_command(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::Command(text) = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char(c) => text.push(c),
+            KeyCode::Backspace => {
+                if text.pop().is_none() {
+                    self.mode = Mode::Normal;
+                }
+            }
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let line = text.trim().to_string();
+                self.mode = Mode::Normal;
+                return self.run_command(&line);
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// Runs one palette command: `name` and whatever follows it.
+    fn run_command(&mut self, line: &str) -> Outcome {
+        let (name, rest) = line.split_once(char::is_whitespace).map_or((line, ""), |(n, r)| (n, r.trim()));
+        match name {
+            "" => {}
+            "q" | "quit" => return Outcome::Quit,
+            "new" if rest.is_empty() => self.mode = Mode::Adding(String::new()),
+            "new" => {
+                self.mode = Mode::Adding(rest.to_string());
+                return self.handle_adding(KeyEvent::from(KeyCode::Enter));
+            }
+            "filter" => {
+                self.filter = rest.to_string();
+                self.needs_only = false;
+                self.clamp_selection();
+            }
+            "repo" => {
+                self.filter = rest.to_string();
+                self.clamp_selection();
+            }
+            "open" => {
+                let wanted = rest.trim_start_matches('#');
+                match self.tasks.iter().find(|t| !wanted.is_empty() && t.id.starts_with(wanted)).map(|t| t.id.clone()) {
+                    Some(id) => {
+                        self.select(&id, true);
+                        self.detail_stale = true;
+                        self.detail_scroll.set(0);
+                        self.mode = Mode::Detail(id);
+                    }
+                    None => self.notify(format!("no ticket starts with #{wanted}"), true),
+                }
+            }
+            "group" => match rest {
+                "stage" => self.group = GroupBy::Stage,
+                "repo" => self.group = GroupBy::Repo,
+                "age" => self.group = GroupBy::Age,
+                _ => self.notify("group takes stage, repo or age", true),
+            },
+            "fold" => {
+                self.folded.insert(self.focus);
+            }
+            "unfold" => {
+                self.folded.remove(&self.focus);
+            }
+            "slots" => match rest.parse::<u64>() {
+                Ok(n) if n >= 1 => match self.machine.set_slots(n) {
+                    Ok(slots) => {
+                        self.slots = Some(slots);
+                        self.notify(format!("{n} slot(s)"), false);
+                    }
+                    Err(error) => self.notify(error, true),
+                },
+                _ => self.notify("slots takes a number, e.g. :slots 3", true),
+            },
+            "drain" => self.pool_key('D'),
+            "resume" => match self.machine.resume_claims() {
+                Ok(slots) => {
+                    self.slots = Some(slots);
+                    self.notify("carrying on: the queue is picked up again", false);
+                }
+                Err(error) => self.notify(error, true),
+            },
+            "floor" => {
+                self.floor = Some(FloorState::default());
+                self.refresh_floor();
+            }
+            "inbox" => self.inbox = Some(InboxState::default()),
+            "digest" => self.digest = Some(DigestState::default()),
+            "help" | "?" => self.mode = Mode::Help(HelpFor::Board),
+            other => self.notify(format!("unknown command: {other} (try :help)"), true),
         }
         self.clamp_selection();
         Outcome::Continue
@@ -2310,6 +2507,94 @@ mod tests {
         app.tasks.retain(|t| !t.waiting_on_you && t.state != "escalated");
         app.handle_key(KeyEvent::from(KeyCode::Char(']')));
         assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("nothing needs you"));
+    }
+
+    fn type_command(app: &mut App, text: &str) -> Outcome {
+        app.handle_key(KeyEvent::from(KeyCode::Char(':')));
+        assert!(matches!(app.mode, Mode::Command(_)), "colon opens the palette");
+        for ch in text.chars() {
+            app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter))
+    }
+
+    #[test]
+    fn the_colon_palette_runs_board_commands_by_name() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.tasks.push(ticket("bbbbbbbb0000", "implementing", true, true));
+        app.toast = None;
+
+        type_command(&mut app, "group repo");
+        assert_eq!(app.group, GroupBy::Repo);
+        type_command(&mut app, "filter bbbb");
+        assert_eq!(app.filter, "bbbb");
+        assert_eq!(app.indices(app.tasks[0].column_index()).len(), 1);
+        type_command(&mut app, "filter");
+        assert_eq!(app.filter, "", "bare filter clears it");
+        type_command(&mut app, "open aaaaaaaa");
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"), "open by id prefix");
+        app.mode = Mode::Normal;
+        type_command(&mut app, "fold");
+        assert!(app.folded.contains(&app.focus));
+        type_command(&mut app, "unfold");
+        assert!(!app.folded.contains(&app.focus));
+        type_command(&mut app, "inbox");
+        assert!(app.inbox.is_some());
+        app.inbox = None;
+        type_command(&mut app, "digest");
+        assert!(app.digest.is_some());
+        app.digest = None;
+        type_command(&mut app, "help");
+        assert!(matches!(app.mode, Mode::Help(_)));
+        app.mode = Mode::Normal;
+        type_command(&mut app, "slots x");
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("slots takes a number, e.g. :slots 3"));
+        type_command(&mut app, "frobnicate");
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("unknown command: frobnicate (try :help)"));
+        assert!(matches!(type_command(&mut app, "q"), Outcome::Quit));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char(':')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal), "esc closes the palette");
+    }
+
+    #[test]
+    fn question_mark_shows_the_keys_of_the_view_you_are_in() {
+        let mut app = App::new(Machine::from_env());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Board)));
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        assert!(matches!(app.mode, Mode::Normal), "any key closes it");
+
+        app.inbox = Some(InboxState::default());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Inbox)));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(app.inbox.is_some(), "closing the help keeps the view");
+        app.inbox = None;
+
+        app.digest = Some(DigestState::default());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Digest)));
+        app.mode = Mode::Normal;
+        app.digest = None;
+
+        app.floor = Some(FloorState::default());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Floor)));
+        app.mode = Mode::Normal;
+        app.floor = None;
+
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.mode = Mode::Detail("aaaaaaaa0000".to_string());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Detail)));
+        assert!(HelpFor::Inbox.keys().iter().any(|(k, _)| *k == "A"));
+        assert!(HelpFor::Floor.keys().iter().any(|(k, _)| k.starts_with("tab")));
+        assert!(HelpFor::Digest.keys().iter().any(|(k, _)| *k == "o"));
+        assert!(HelpFor::Detail.keys().iter().any(|(k, _)| *k == "j / k"));
     }
 
     #[test]

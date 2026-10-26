@@ -19,7 +19,7 @@ use tui_textarea::TextArea;
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::{
-    app::{ACTIONS, App, FloorState, HELP, Mode},
+    app::{ACTIONS, App, COMMANDS, FloorState, HelpFor, Mode},
     model::{
         Approval, COLUMNS, Look, Metrics, REPO_COLOUR_SLOTS, Task, TaskDetail, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, repo_colour_slot, spend_p90,
         now_secs, questions_of,
@@ -249,7 +249,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
         Mode::ConfirmMany { action, ids } => render_note(frame, " Marked tickets ", &format!("{}  y / n", action.question(ids.len()))),
-        Mode::Help => render_help(frame),
+        Mode::Help(ctx) => render_help(frame, *ctx),
         _ => {}
     }
 }
@@ -390,7 +390,12 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
         Mode::ConfirmMany { .. } => hint(&[("y", "do it to all of them"), ("n", "cancel")]),
-        Mode::Help => hint(&[("any key", "close")]),
+        Mode::Help(_) => hint(&[("any key", "close")]),
+        Mode::Command(text) => Line::from(vec![
+            Span::from(" :").fg(c(ACCENT)).bold(),
+            Span::from(format!("{text}▏")),
+            Span::from("   enter run · esc close · :help lists commands").fg(c(SUBTEXT0)),
+        ]),
         Mode::Detail(id) => {
             let shippable = app.task(id).is_some_and(|t| t.state == "awaiting_ship");
             if shippable {
@@ -1397,24 +1402,32 @@ fn render_repo_picker(frame: &mut Frame, task: &Task, query: &str, all: &[String
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn render_help(frame: &mut Frame) {
-    let area = centered(frame.area(), 76, HELP.len() as u16 + 4);
+/// The keys of the view `?` was pressed in; the board's sheet also lists the `:` commands.
+fn render_help(frame: &mut Frame, ctx: HelpFor) {
+    let keys = ctx.keys();
+    let commands: &[(&str, &str)] = if ctx == HelpFor::Board { COMMANDS } else { &[] };
+    let rows = keys.len() + if commands.is_empty() { 0 } else { commands.len() + 2 };
+    let area = centered(frame.area(), 84, (rows as u16 + 4).min(frame.area().height));
     frame.render_widget(Clear, area);
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
         .padding(Padding::horizontal(2))
-        .title(Line::from(" Keys · any key closes ").bold());
-    let lines: Vec<Line> = HELP
-        .iter()
-        .map(|(keys, what)| {
-            Line::from(vec![
-                Span::from(format!("{keys:<8}")).fg(c(ACCENT)).bold(),
-                Span::from(*what),
-            ])
-        })
-        .collect();
+        .title(Line::from(ctx.title()).bold());
+    let width = keys.iter().chain(commands).map(|(k, _)| k.chars().count()).max().unwrap_or(8) + 2;
+    let row = |keys: &str, what: &str| {
+        Line::from(vec![
+            Span::from(format!("{keys:<width$}")).fg(c(ACCENT)).bold(),
+            Span::from(what.to_string()),
+        ])
+    };
+    let mut lines: Vec<Line> = keys.iter().map(|(k, w)| row(k, w)).collect();
+    if !commands.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::from("Commands, typed after :").fg(c(SUBTEXT0))));
+        lines.extend(commands.iter().map(|(k, w)| row(k, w)));
+    }
     frame.render_widget(
         Paragraph::new(lines).block(block).wrap(Wrap { trim: false }),
         area,
