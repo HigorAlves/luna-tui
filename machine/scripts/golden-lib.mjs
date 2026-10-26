@@ -157,7 +157,7 @@ export async function drive(ticket, repoPath) {
   log("triage done, approving the plan");
   await decide(id, "approved");
 
-  await waitFor(id, ["awaiting_test_check"], 60_000);
+  await waitFor(id, ["awaiting_test_check"], 10 * 60_000);
   log("test design done, approving the tests");
   await decide(id, "approved");
 

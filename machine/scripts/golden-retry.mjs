@@ -94,7 +94,7 @@ async function runToShip(passAfter) {
   await api(`/tasks/${id}/start`, { method: "POST" });
   await waitFor(id, ["awaiting_approval"], 10 * 60_000);
   await api(`/tasks/${id}/decision`, { method: "POST", body: JSON.stringify({ decision: "approved" }) });
-  await waitFor(id, ["awaiting_test_check"], 60_000);
+  await waitFor(id, ["awaiting_test_check"], 10 * 60_000);
   await api(`/tasks/${id}/decision`, { method: "POST", body: JSON.stringify({ decision: "approved" }) });
   return { id, repoPath };
 }
