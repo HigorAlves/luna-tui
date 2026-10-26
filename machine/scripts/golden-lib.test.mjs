@@ -1,6 +1,6 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { grade, parseShortstat, passRate } from "./golden-lib.mjs";
+import { api, grade, parseShortstat, passRate } from "./golden-lib.mjs";
 
 const run = (stage, extra = {}) => ({
   stage,
@@ -144,4 +144,21 @@ test("parseShortstat adds insertions and deletions", () => {
 test("passRate is passed over total, 0 for none", () => {
   expect(passRate([{ result: "pass" }, { result: "fail" }, { result: "pass" }, { result: "pass" }])).toBe(0.75);
   expect(passRate([])).toBe(0);
+});
+
+describe("api", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  test("retries once when fetch itself fails, as it does on a keep-alive socket the server closed", async () => {
+    const ok = { ok: true, status: 200, text: async () => JSON.stringify({ ok: true }) };
+    const fetch = vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(ok);
+    vi.stubGlobal("fetch", fetch);
+    await expect(api("/health")).resolves.toEqual({ ok: true });
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  test("gives up after the second failure", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+    await expect(api("/health")).rejects.toThrow(/fetch failed/);
+  });
 });
