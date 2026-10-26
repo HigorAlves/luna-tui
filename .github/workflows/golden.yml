@@ -86,15 +86,21 @@ jobs:
       - name: Run the golden matrix
         run: node machine/scripts/golden-task.mjs --matrix --threshold 0.8 --ceiling-usd 5
       # golden-concurrency needs the machine started with MACHINE_MAX_CONCURRENT=1 (it reads no
-      # env itself, it only talks to HARDNESS_MACHINE_URL). Rather than restart the main machine
-      # (4317, default cap), start a second instance on 4318 with the cap at 1 and point the
-      # whole golden:live run at it. The main machine is idle after the matrix; both share the
-      # one Postgres, and the live paths create their own tasks, so nothing is shared by id.
+      # env itself, it only talks to HARDNESS_MACHINE_URL), so the live paths get their own
+      # machine on 4318 with the cap at 1. The matrix machine is stopped first: two machines on
+      # one Postgres each claim the other's queued tasks and, after a minute, escalate the
+      # other's running ones as orphans (the supervisor assumes one machine per database).
       - name: Live failure paths
         continue-on-error: false
         env:
           HARDNESS_MACHINE_URL: http://127.0.0.1:4318
         run: |
+          pkill -TERM -f 'tsx.*src/main.ts' || true
+          for _ in $(seq 1 30); do
+            curl -fs http://127.0.0.1:4317/health >/dev/null 2>&1 || break
+            sleep 1
+          done
+          curl -fs http://127.0.0.1:4317/health >/dev/null 2>&1 && { echo "::error::matrix machine still up"; exit 1; }
           MACHINE_PORT=4318 MACHINE_MAX_CONCURRENT=1 nohup pnpm --filter @hardness/machine start > machine-live.log 2>&1 &
           for _ in $(seq 1 60); do
             curl -fs http://127.0.0.1:4318/health && break
