@@ -205,6 +205,17 @@ describe("agent stages through orc packs", () => {
     expect(input.context.baseCommit).toBe(git(repo, "rev-parse", "HEAD"));
   });
 
+  it("keeps a finished answer that was also flagged rate-limited; only a run with no answer pauses", async () => {
+    // The SDK's usage warning used to arrive with a complete brief; the answer is paid for.
+    const finished = await runners(fakeSandbox(output({ rateLimited: true, resetsAt: "1793080800", answer: { kind: "brief", summary: "s" } }))).triage!(context("triage"));
+    expect(finished.outcome).toBe("pass");
+    expect(finished.rateLimited).toBeUndefined();
+    expect(finished.detail).toMatchObject({ brief: "s", usageWindow: { resetsAt: "1793080800" } });
+
+    const cut = await runners(fakeSandbox(output({ ok: false, outcome: "fail", rateLimited: true, resetsAt: "1793080800", error: "usage limit" }))).triage!(context("triage"));
+    expect(cut).toMatchObject({ outcome: "fail", rateLimited: true });
+  });
+
   it("maps needs_input to summary and questions", async () => {
     const questions = [{ question: "which db?", recommended: "pg" }];
     const run = runners(fakeSandbox(output({ outcome: "needs_input", needsInput: questions })));
