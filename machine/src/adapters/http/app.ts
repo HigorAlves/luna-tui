@@ -15,6 +15,8 @@ import { streamSSE } from "hono/streaming";
 import type { DataSource } from "typeorm";
 import { ZodError, type ZodType, z } from "zod";
 
+const SlotsInput = z.object({ max: z.number().int().min(1) });
+
 import { computeMetrics } from "../persistence/metrics-query.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
@@ -74,7 +76,15 @@ export function createApp({ db, pipeline, bus, watcher, stubs }: AppDeps): Hono 
     return fail(c, 500, "internal", error.message);
   });
 
-  app.get("/health", (c) => c.json({ ok: true }));
+  app.get("/health", (c) => c.json({ ok: true, slots: pipeline.slots }));
+
+  // "Stop picking up work" / "carry on" / "run N at once": the knobs for leaving and for debugging.
+  app.post("/drain", (c) => c.json(pipeline.drain()));
+  app.post("/resume", (c) => c.json(pipeline.resumeClaims()));
+  app.patch("/slots", async (c) => {
+    const { max } = await body(c, SlotsInput);
+    return c.json(pipeline.setSlots(max));
+  });
 
   app.get("/metrics", async (c) => {
     let since: Date;

@@ -8,7 +8,7 @@ import { ratio, stats } from "../http/metrics.ts";
 export interface MetricsOptions {
   since: Date;
   until?: Date;
-  slots: { max: number; active: number };
+  slots: { max: number; active: number; draining: boolean };
   /** The spend ceilings, when set, and the trailing-24h spend they apply to. */
   budget?: { taskUsd: number | null; dailyUsd: number | null; spentTodayUsd: number };
 }

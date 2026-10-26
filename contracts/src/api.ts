@@ -181,6 +181,13 @@ export interface Stats {
 }
 
 /** `GET /metrics?since=<7d|30d|ISO>`. Numbers with no data are null, never NaN. */
+/** The stage pool: size, in use, and whether the machine is draining. `GET /health`, `POST /drain`, `POST /resume` and `PATCH /slots` all answer with it. */
+export interface Slots {
+  max: number;
+  active: number;
+  draining: boolean;
+}
+
 export interface Metrics {
   since: string;
   until: string;
@@ -220,7 +227,7 @@ export interface Metrics {
   };
   queue: {
     depth: number;
-    slots: { max: number; active: number };
+    slots: Slots;
     utilisation: number | null;
   };
   /** Spend ceilings (null = none) and the trailing-24h spend the daily one applies to. */

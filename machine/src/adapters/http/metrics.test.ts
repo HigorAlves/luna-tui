@@ -74,7 +74,7 @@ describe("GET /metrics", () => {
     expect(m.firstPassRate).toEqual({ verifying: null, ci_watch: null, implementing: null });
     expect(m.escalations).toEqual({ rate: null, topReasons: [] });
     expect(m.cost.totalUsd).toBe(0);
-    expect(m.queue).toEqual({ depth: 0, slots: { max: 2, active: 0 }, utilisation: 0 });
+    expect(m.queue).toEqual({ depth: 0, slots: { max: 2, active: 0, draining: false }, utilisation: 0 });
   });
 
   it("counts tasks, cycle time, first pass, escalations and retries from a seeded pipeline", async () => {

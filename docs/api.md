@@ -4,7 +4,10 @@ The machine's HTTP API, read straight from `machine/src/adapters/http/app.ts`. S
 
 | Method | Path | Does |
 |---|---|---|
-| GET | `/health` | Liveness check. |
+| GET | `/health` | Liveness check; also the stage pool: `slots {max, active, draining}`. |
+| POST | `/drain` | Take no new work: running stages finish, the queue waits. Answers with the pool. |
+| POST | `/resume` | Carry on: the queue is picked up again at once. |
+| PATCH | `/slots` | `{max}`: resize the pool at run time (at least 1). |
 | GET | `/metrics` | Factory metrics over a window: `?since=7d\|30d\|<ISO timestamp>` (default `7d`). Cycle time, first-pass rate, escalations, cost, queue depth; also streamed as `task.metrics`. |
 | GET | `/tasks` | List every task with its state and column. |
 | POST | `/tasks` | Create a task: title, description, criteria, repo path, source. |
