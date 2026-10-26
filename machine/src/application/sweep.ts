@@ -60,6 +60,23 @@ export async function sweepRunFolders(db: DataSource, stateDir: string): Promise
   return orphans.length;
 }
 
+/** Removes `<stateDir>/tasks/<id>` (orc's per-task state, the slice ledger) for tasks that no
+ *  longer exist; a deleted task's dir would otherwise stay forever. Returns how many went. */
+export async function sweepTaskState(db: DataSource, stateDir: string): Promise<number> {
+  const tasksDir = join(stateDir, "tasks");
+  let names: string[];
+  try {
+    names = await readdir(tasksDir);
+  } catch {
+    return 0;
+  }
+  if (names.length === 0) return 0;
+  const alive = new Set(((await db.query("select id from tasks")) as { id: string }[]).map((r) => r.id));
+  const orphans = names.filter((name) => !alive.has(name));
+  await Promise.all(orphans.map((name) => rm(join(tasksDir, name), { recursive: true, force: true })));
+  return orphans.length;
+}
+
 type ExecFn = (command: string, args: string[]) => Promise<ExecResult>;
 const RUNNER_REPOS = ["hardness-runner", "hardness-runner-qa"];
 
