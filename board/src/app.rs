@@ -5,7 +5,7 @@ use std::{
     cell::{Cell, RefCell},
     env, fs, io,
     process::Command,
-    sync::mpsc::{self, Receiver},
+    sync::mpsc::{self, Receiver, Sender},
     thread,
     time::{Duration, Instant},
 };
@@ -156,6 +156,9 @@ pub fn paused_ids(tasks: &[Task]) -> Vec<String> {
     tasks.iter().filter(|t| t.state == "paused_rate_limit").map(|t| t.id.clone()).collect()
 }
 
+/// A burst of events for the open ticket becomes one detail refetch, not one per event.
+const DETAIL_DEBOUNCE: Duration = Duration::from_millis(300);
+
 /// How the tickets inside a column are ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum GroupBy {
@@ -248,6 +251,14 @@ pub struct Toast {
 pub struct App {
     machine: Machine,
     stream: Receiver<Incoming>,
+    /// Our end of the stream, for work that answers from another thread (the detail fetch).
+    tx: Sender<Incoming>,
+    /// The ticket whose detail is being fetched right now, if any.
+    pub detail_pending: Option<String>,
+    /// When the last detail fetch started: a burst of events coalesces into one refetch.
+    detail_fetched_at: Option<Instant>,
+    /// `indices()` per column for the current tasks, filter and order; see `order_key`.
+    order_cache: RefCell<Option<(u64, Vec<Vec<usize>>)>>,
     pub tasks: Vec<Task>,
     pub online: bool,
     pub offline_reason: String,
@@ -298,10 +309,14 @@ pub struct App {
 impl App {
     pub fn new(machine: Machine) -> Self {
         let (tx, rx) = mpsc::channel();
-        machine.follow_stream(tx);
+        machine.follow_stream(tx.clone());
         let mut app = Self {
             machine,
             stream: rx,
+            tx,
+            detail_pending: None,
+            detail_fetched_at: None,
+            order_cache: RefCell::new(None),
             tasks: Vec::new(),
             online: false,
             notices: Vec::new(),
@@ -416,6 +431,18 @@ impl App {
                     self.catch_up_watch_tabs();
                 }
                 Incoming::Offline(reason) => self.went_offline(reason),
+                Incoming::Detail { id, detail } => {
+                    if self.detail_pending.as_deref() == Some(id.as_str()) {
+                        self.detail_pending = None;
+                    }
+                    let wanted = match &self.mode {
+                        Mode::Detail(open) => open == &id,
+                        _ => self.selected_id().as_deref() == Some(id.as_str()),
+                    };
+                    if wanted {
+                        self.detail = detail;
+                    }
+                }
                 Incoming::Message(StreamMessage::Updated { task }) => {
                     if self.shows_detail_of(&task.id) {
                         self.detail_stale = true;
@@ -528,7 +555,23 @@ impl App {
         if (self.shows_detail_of(&id) && !self.detail_stale) || !self.online {
             return;
         }
-        self.detail = self.machine.detail(&id).ok();
+        // One fetch at a time, off the UI thread, and not more often than every 300ms: a burst
+        // of events for the open ticket becomes one refetch instead of a frozen board.
+        if self.detail_pending.is_some() {
+            return;
+        }
+        if self.detail_stale && self.detail_fetched_at.is_some_and(|t| t.elapsed() < DETAIL_DEBOUNCE) {
+            return;
+        }
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        let fetching = id.clone();
+        thread::spawn(move || {
+            let detail = machine.detail(&fetching).ok();
+            let _ = tx.send(Incoming::Detail { id: fetching, detail });
+        });
+        self.detail_pending = Some(id);
+        self.detail_fetched_at = Some(Instant::now());
         self.detail_stale = false;
     }
 
@@ -561,6 +604,37 @@ impl App {
 
     /// Indices into `tasks` for the visible tickets in `column`, most urgent first.
     pub fn indices(&self, column: usize) -> Vec<usize> {
+        let key = self.order_key();
+        if let Some((cached_key, columns)) = self.order_cache.borrow().as_ref()
+            && *cached_key == key
+        {
+            return columns.get(column).cloned().unwrap_or_default();
+        }
+        let columns: Vec<Vec<usize>> = (0..COLUMNS.len()).map(|c| self.order(c)).collect();
+        let found = columns.get(column).cloned().unwrap_or_default();
+        *self.order_cache.borrow_mut() = Some((key, columns));
+        found
+    }
+
+    /// True when `indices()` would answer from the cache right now (tests).
+    #[cfg(test)]
+    pub fn order_cached(&self) -> bool {
+        self.order_cache.borrow().as_ref().is_some_and(|(k, _)| *k == self.order_key())
+    }
+
+    /// Everything the order of a column depends on, hashed: the tasks (what sorts and filters
+    /// them), the filter, the toggles, the group. Cheaper than sorting nine columns a frame.
+    fn order_key(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        for t in &self.tasks {
+            (&t.id, &t.updated_at, &t.state, t.queued, t.running, t.waiting_on_you, &t.column, &t.repo_path, &t.created_at, &t.title).hash(&mut h);
+        }
+        (&self.filter, self.needs_only, self.this_repo_only, &self.home_repo, self.group as u8).hash(&mut h);
+        h.finish()
+    }
+
+    fn order(&self, column: usize) -> Vec<usize> {
         let mut found: Vec<usize> = self
             .tasks
             .iter()
@@ -1962,6 +2036,46 @@ mod tests {
         press(&mut app, KeyCode::Char('g'));
         press(&mut app, KeyCode::Char('s'));
         assert_eq!(app.group, GroupBy::Stage);
+    }
+
+    #[test]
+    fn the_detail_is_fetched_off_the_ui_thread_and_lands_through_the_stream() {
+        let mut app = App::new(Machine::from_env());
+        app.online = true;
+        let task = ticket("aaaaaaaa0000", "awaiting_approval", false, false);
+        app.tasks.push(task.clone());
+        app.mode = Mode::Detail(task.id.clone());
+        app.detail_stale = true;
+        let before = std::time::Instant::now();
+        app.ensure_detail();
+        assert!(before.elapsed() < std::time::Duration::from_millis(100), "ensure_detail must not block on the machine");
+        assert_eq!(app.detail_pending.as_deref(), Some(task.id.as_str()));
+        app.ensure_detail();
+        assert_eq!(app.detail_pending.as_deref(), Some(task.id.as_str()), "one fetch in flight at a time");
+        let detail: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{},"stageRuns":[],"approvals":[],"events":[]}}"#,
+            serde_json::to_string(&serde_json::json!({
+                "id": task.id, "title": "t", "description": "", "criteria": [], "repoPath": null, "branch": null,
+                "worktreePath": null, "state": "awaiting_approval", "column": "Triage", "waitingOnYou": true,
+                "running": false, "queued": false, "retries": {"verify":0,"e2e":0,"ci":0,"total":0}, "resumeTo": null,
+                "reason": null, "createdAt": "2026-10-22T23:24:22.089Z", "updatedAt": "2026-10-22T23:24:22.089Z"
+            })).unwrap()
+        )).unwrap();
+        app.tx.send(Incoming::Detail { id: task.id.clone(), detail: Some(detail) }).unwrap();
+        app.pump();
+        assert!(app.detail_pending.is_none());
+        assert!(app.shows_detail_of(&task.id), "the answer landed");
+    }
+
+    #[test]
+    fn column_order_is_cached_per_frame_and_still_sees_a_new_ticket() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        let build = app.tasks[0].column_index();
+        assert_eq!(app.indices(build), vec![0]);
+        assert!(app.order_cached(), "the second call in a frame is a cache hit");
+        app.tasks.push(ticket("bbbbbbbb0000", "implementing", true, true));
+        assert_eq!(app.indices(build).len(), 2, "a changed task list invalidates the cache");
     }
 
     #[test]
