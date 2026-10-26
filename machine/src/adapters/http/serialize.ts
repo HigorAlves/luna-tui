@@ -14,7 +14,7 @@ import type { ApprovalRow, ArtifactRow, EventRow, StageRunRow, TaskRow } from ".
 
 const iso = (date: Date | null) => (date ? date.toISOString() : null);
 
-export const toTask = (row: TaskRow, spentUsd: number | null = null): Task => ({
+export const toTask = (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null): Task => ({
   id: row.id,
   title: row.title,
   description: row.description,
@@ -31,7 +31,10 @@ export const toTask = (row: TaskRow, spentUsd: number | null = null): Task => ({
   retries: row.retries,
   resumeTo: row.resumeTo,
   reason: row.reason,
-  spentUsd,
+  spentUsd: usage?.spentUsd ?? null,
+  workedMs: usage?.workedMs ?? null,
+  diff: row.diffAdded !== null && row.diffRemoved !== null ? { added: row.diffAdded, removed: row.diffRemoved } : null,
+  tests: row.testsPassed !== null && row.testsTotal !== null ? { passed: row.testsPassed, total: row.testsTotal } : null,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });

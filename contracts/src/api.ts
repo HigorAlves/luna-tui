@@ -94,6 +94,12 @@ export interface Task {
   reason: string | null;
   /** What every stage run of this task has cost so far; null when unknown or nothing ran. */
   spentUsd: number | null;
+  /** Wall time its stage runs took so far; null when unknown. */
+  workedMs: number | null;
+  /** The branch's diff against its base after the last writable run. */
+  diff: { added: number; removed: number } | null;
+  /** Verifying's results, passed over total, from its latest run. */
+  tests: { passed: number; total: number } | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -122,7 +122,7 @@ function publish(event: EventRow): void {
   bus.publish({ type: "task.event", event: toEvent(event) });
   if (event.kind === "transition" || event.kind === "task.created") {
     pipeline.get(event.taskId).then(
-      async (task) => bus.publish({ type: "task.updated", task: toTask(task, await pipeline.spentUsd(task.id)) }),
+      async (task) => bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id)) }),
       (error: unknown) => console.error("could not publish task update", error),
     );
   }

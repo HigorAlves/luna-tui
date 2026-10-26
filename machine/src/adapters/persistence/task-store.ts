@@ -6,6 +6,7 @@ import { In, IsNull } from "typeorm";
 
 import type {
   ClaimOptions,
+  TaskUsage,
   DecideApprovalInput,
   InsertStageRunInput,
   NewTaskRow,
@@ -17,6 +18,12 @@ import type {
 import { type ApprovalRow, type ArtifactRow, type EventRow, type StageRunRow, type TaskRow, TaskNotFoundError } from "../../domain/task.ts";
 import { NO_RETRIES } from "../../domain/transition.ts";
 import { ApprovalEntity, ArtifactEntity, EventEntity, StageRunEntity, TaskEntity } from "./schemas.ts";
+
+/** Per task: dollars spent and milliseconds the stage runs took (a running one counts to now). */
+const USAGE_SELECT =
+  "sum(cost_usd) as usd, sum(extract(epoch from (coalesce(ended_at, now()) - started_at)) * 1000) as ms";
+const USAGE_SQL = `select task_id, ${USAGE_SELECT} from stage_runs group by task_id`;
+const USAGE_SQL_ONE = `select ${USAGE_SELECT} from stage_runs where task_id = $1`;
 
 export class PgTaskStore implements TaskStore {
   constructor(private readonly db: DataSource) {}
@@ -145,11 +152,14 @@ export class PgTaskStore implements TaskStore {
     return Number(row?.usd ?? 0);
   }
 
-  async spendByTask(): Promise<Map<string, number>> {
-    const rows = (await this.db.query(
-      "select task_id, sum(cost_usd) as usd from stage_runs where cost_usd is not null group by task_id",
-    )) as { task_id: string; usd: string }[];
-    return new Map(rows.map((r) => [r.task_id, Number(r.usd)]));
+  async usageByTask(): Promise<Map<string, TaskUsage>> {
+    const rows = (await this.db.query(USAGE_SQL)) as { task_id: string; usd: string | null; ms: string | null }[];
+    return new Map(rows.map((r) => [r.task_id, { spentUsd: Number(r.usd ?? 0), workedMs: Math.round(Number(r.ms ?? 0)) }]));
+  }
+
+  async taskUsage(taskId: string): Promise<TaskUsage> {
+    const [row] = (await this.db.query(`${USAGE_SQL_ONE}`, [taskId])) as { usd: string | null; ms: string | null }[];
+    return { spentUsd: Number(row?.usd ?? 0), workedMs: Math.round(Number(row?.ms ?? 0)) };
   }
 
   async spendSinceUsd(since: Date): Promise<number> {

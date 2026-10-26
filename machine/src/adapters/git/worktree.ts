@@ -128,6 +128,21 @@ export async function branchBase(worktreePath: string, repoPath: string): Promis
   return base.code === 0 ? base.stdout.trim() || null : null;
 }
 
+/** Lines added and removed on the branch since `base`, from `git diff --shortstat`. */
+export async function diffShortstat(path: string, base: string): Promise<{ added: number; removed: number }> {
+  const out = await execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--shortstat", `${base}..HEAD`]);
+  const added = Number(/(\d+) insertion/.exec(out)?.[1] ?? 0);
+  const removed = Number(/(\d+) deletion/.exec(out)?.[1] ?? 0);
+  return { added, removed };
+}
+
+/** The branch's diff against the repo's current HEAD base; null when the base is unknown. */
+export async function branchDiffStat(worktreePath: string, repoPath: string | null): Promise<{ added: number; removed: number } | null> {
+  if (!repoPath) return null;
+  const base = await branchBase(worktreePath, repoPath);
+  return base ? diffShortstat(worktreePath, base) : null;
+}
+
 export function headCommit(path: string): Promise<string> {
   return execOrThrow("git", [...HOST_GIT, "-C", path, "rev-parse", "HEAD"]);
 }

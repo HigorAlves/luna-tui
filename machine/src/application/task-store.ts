@@ -56,6 +56,12 @@ export interface TaskTx {
   recordEvent(input: RecordEventInput): Promise<EventRow>;
 }
 
+/** What a task's stage runs add up to: dollars, and wall time in them. */
+export interface TaskUsage {
+  spentUsd: number;
+  workedMs: number;
+}
+
 /** How the next queued task is picked: oldest in the queue, the repo with the fewest running
  *  tasks first, never a repo at `maxPerRepo` (null: no cap). */
 export interface ClaimOptions {
@@ -84,8 +90,10 @@ export interface TaskStore {
   listStageRuns(taskId: string): Promise<StageRunRow[]>;
   /** What the task's stage runs have cost so far, in USD. */
   taskSpendUsd(taskId: string): Promise<number>;
-  /** Spend per task, for the tasks that have any; one query for a whole list. */
-  spendByTask(): Promise<Map<string, number>>;
+  /** Spend and worked time per task, for the tasks that have any run; one query for a whole list. */
+  usageByTask(): Promise<Map<string, TaskUsage>>;
+  /** One task's spend and worked time. */
+  taskUsage(taskId: string): Promise<TaskUsage>;
   /** What every stage run started since `since` has cost, in USD. */
   spendSinceUsd(since: Date): Promise<number>;
   countStageRunAttempts(taskId: string, stage: TaskState): Promise<number>;
