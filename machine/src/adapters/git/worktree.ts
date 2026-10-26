@@ -149,7 +149,8 @@ export async function commitAll(path: string, message: string): Promise<string |
   return headCommit(path);
 }
 
-/** True when the worktree has uncommitted or untracked changes. */
-export async function isDirty(path: string): Promise<boolean> {
-  return (await execOrThrow("git", [...HOST_GIT, "-C", path, "status", "--porcelain"])) !== "";
+/** What the worktree has uncommitted or untracked, one `git status --porcelain` line each. */
+export async function dirtyFiles(path: string): Promise<string[]> {
+  const status = await execOrThrow("git", [...HOST_GIT, "-C", path, "status", "--porcelain"]);
+  return status === "" ? [] : status.split("\n");
 }
