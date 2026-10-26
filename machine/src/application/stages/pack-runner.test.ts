@@ -152,6 +152,11 @@ describe("agent stages through orc packs", () => {
     expect(result.detail).toMatchObject({ reason: "needs a new dependency", options: ["add it", "drop it"] });
   });
 
+  it("gives the sandbox the repo's cache volume, so a retry or the next task of the repo installs warm", async () => {
+    await runners(fakeSandbox(output())).triage!(context("triage"));
+    expect(seen!.cacheVolume).toBe("hardness-cache-repo");
+  });
+
   it("keeps triage's confidence and risk on the plan, for the timer approval", async () => {
     const answer = { kind: "brief", summary: "s", criteria: ["c"], confidence: "high", risk: "low" };
     const run = runners(fakeSandbox(output({ answer })));

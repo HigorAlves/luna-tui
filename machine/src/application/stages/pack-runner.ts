@@ -19,7 +19,7 @@ import {
   workspaceFor,
 } from "../../adapters/git/worktree.ts";
 import type { Credential } from "../../adapters/docker/credentials.ts";
-import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
+import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
 import { StuckDetector } from "../../domain/stuck.ts";
@@ -102,6 +102,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   const sandbox = await (deps.sandbox ?? runSandbox)({
     name: container,
     stateMount,
+    cacheVolume: cacheVolumeFor(task.repoPath),
     image: pack === "e2e" ? deps.qaImage : deps.image,
     runDir,
     worktree: workspace.path,
