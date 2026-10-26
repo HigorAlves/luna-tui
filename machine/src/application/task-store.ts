@@ -84,6 +84,8 @@ export interface TaskStore {
   listStageRuns(taskId: string): Promise<StageRunRow[]>;
   /** What the task's stage runs have cost so far, in USD. */
   taskSpendUsd(taskId: string): Promise<number>;
+  /** Spend per task, for the tasks that have any; one query for a whole list. */
+  spendByTask(): Promise<Map<string, number>>;
   /** What every stage run started since `since` has cost, in USD. */
   spendSinceUsd(since: Date): Promise<number>;
   countStageRunAttempts(taskId: string, stage: TaskState): Promise<number>;

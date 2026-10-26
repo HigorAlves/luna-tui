@@ -92,6 +92,8 @@ export interface Task {
   retries: Retries;
   resumeTo: TaskState | null;
   reason: string | null;
+  /** What every stage run of this task has cost so far; null when unknown or nothing ran. */
+  spentUsd: number | null;
   createdAt: string;
   updatedAt: string;
 }

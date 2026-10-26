@@ -50,6 +50,9 @@ pub struct Task {
     pub retries: Retries,
     pub resume_to: Option<String>,
     pub reason: Option<String>,
+    /// What every stage run of this ticket has cost so far; None when unknown.
+    #[serde(default)]
+    pub spent_usd: Option<f64>,
     pub created_at: String,
     pub updated_at: String,
     /// Absent on tasks made by hand, and from machines that predate it.
@@ -269,6 +272,22 @@ pub fn fmt_pct(share: Option<f64>) -> String {
 /// Dollars as `$1.23`; `–` when there is no data.
 pub fn fmt_usd(usd: Option<f64>) -> String {
     usd.map_or(NONE.to_string(), |u| format!("${u:.2}"))
+}
+
+/// The spend above which a card gets its dim `$`: the p90 over the loaded tickets that have
+/// spent anything, and only once there are three of them to compare.
+pub fn spend_p90(tasks: &[Task]) -> Option<f64> {
+    let mut spends: Vec<f64> = tasks.iter().filter_map(|t| t.spent_usd).collect();
+    if spends.len() < 3 {
+        return None;
+    }
+    spends.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // Linear interpolation between ranks (R-7), so a handful of tickets still has a p90
+    // below its most expensive one.
+    let position = 0.9 * (spends.len() - 1) as f64;
+    let (lower, upper) = (position.floor() as usize, position.ceil() as usize);
+    let fraction = position - lower as f64;
+    Some(spends[lower] + (spends[upper] - spends[lower]) * fraction)
 }
 
 /// How a task reads on the board. Declared most urgent first, which is the sort order.
@@ -640,6 +659,20 @@ mod tests {
         assert_eq!(detail.spent_usd(), Some(0.5));
         let bare: StageRun = serde_json::from_str(r#"{"stage":"triage","attempt":1,"status":"passed"}"#).unwrap();
         assert_eq!(bare.cost_usd, None);
+    }
+
+    #[test]
+    fn the_spend_p90_marks_only_the_expensive_tickets_and_needs_a_few_to_compare() {
+        let t = |spent: Option<f64>| -> Task {
+            let mut task: Task = serde_json::from_str(&task_json("")).unwrap();
+            task.spent_usd = spent;
+            task
+        };
+        assert_eq!(spend_p90(&[t(Some(0.1)), t(Some(0.2))]), None);
+        let tasks = [t(Some(0.1)), t(Some(0.2)), t(Some(0.3)), t(Some(5.0)), t(None)];
+        let p90 = spend_p90(&tasks).unwrap();
+        assert!(tasks[3].spent_usd.unwrap() > p90 && tasks[2].spent_usd.unwrap() <= p90, "p90 {p90}");
+        assert_eq!(t(None).spent_usd, None);
     }
 
     #[test]

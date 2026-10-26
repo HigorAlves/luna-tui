@@ -88,7 +88,10 @@ export function createApp({ db, pipeline, bus, watcher, stubs }: AppDeps): Hono 
     return c.json(await computeMetrics(db, { since, slots: pipeline.slots, budget }));
   });
 
-  app.get("/tasks", async (c) => c.json((await pipeline.list()).map(toTask)));
+  app.get("/tasks", async (c) => {
+    const [rows, spend] = await Promise.all([pipeline.list(), pipeline.spendByTask()]);
+    return c.json(rows.map((row) => toTask(row, spend.get(row.id) ?? null)));
+  });
 
   app.post("/tasks", async (c) => {
     const input = await body(c, NewTaskInput);
@@ -97,15 +100,16 @@ export function createApp({ db, pipeline, bus, watcher, stubs }: AppDeps): Hono 
 
   app.get("/tasks/:id", async (c) => {
     const id = taskId(c);
-    const [task, stageRuns, approvals, events, artifacts] = await Promise.all([
+    const [task, stageRuns, approvals, events, artifacts, spentUsd] = await Promise.all([
       pipeline.get(id),
       pipeline.stageRuns(id),
       pipeline.approvals(id),
       pipeline.events(id),
       pipeline.artifacts(id),
+      pipeline.spentUsd(id),
     ]);
     return c.json({
-      task: toTask(task),
+      task: toTask(task, spentUsd),
       stageRuns: stageRuns.map(toStageRun),
       approvals: approvals.map(toApproval),
       events: events.slice(-RECENT_EVENTS).map(toEvent),
