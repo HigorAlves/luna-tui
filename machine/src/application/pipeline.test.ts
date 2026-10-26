@@ -446,6 +446,33 @@ describe("retries and escalation", () => {
   });
 });
 
+describe("the stuck detector", () => {
+  const same = { outcome: "fail" as const, detail: { error: "implementer left uncommitted changes: ?? .orc/x/slices.json" } };
+
+  it("escalates a stage that fails the same way three times instead of spending the whole retry cap", async () => {
+    stubs.plan("implementing", same, same, same);
+    const task = await newTask();
+    const escalated = await startAndApprove(task.id);
+    expect(escalated).toMatchObject({ state: "escalated", resumeTo: "implementing" });
+    expect(escalated.reason).toMatch(/stuck: implementing failed the same way 3 times/);
+    expect(escalated.reason).toContain("slices.json");
+    expect((await pipeline.stageRuns(task.id)).filter((r) => r.stage === "implementing")).toHaveLength(3);
+  });
+
+  it("keeps retrying while the failures differ", async () => {
+    stubs.plan(
+      "implementing",
+      { outcome: "fail", detail: { error: "one" } },
+      { outcome: "fail", detail: { error: "two" } },
+      { outcome: "fail", detail: { error: "three" } },
+    );
+    const task = await newTask();
+    const done = await startAndApprove(task.id);
+    expect(done.state).not.toBe("escalated");
+    expect((await pipeline.stageRuns(task.id)).filter((r) => r.stage === "implementing")).toHaveLength(4);
+  });
+});
+
 describe("restart recovery", () => {
   it("re-arms the resume timer of a task paused on a usage limit", async () => {
     vi.useFakeTimers();
