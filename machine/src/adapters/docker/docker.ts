@@ -8,6 +8,10 @@ import { exec, execOrThrow } from "../process/exec.ts";
 
 /** Label on every stage container, so leftovers can be found and removed. */
 export const CONTAINER_LABEL = "dev.hardness.stage";
+/** What one stage may take of the machine: one runaway build or fork bomb stays one slot's problem. */
+export const SANDBOX_LIMITS = ["--memory", "4g", "--cpus", "2", "--pids-limit", "1024"];
+/** `docker wait` gets this long past the stage's own timeout before the container is forced down. */
+const WAIT_GRACE_MS = 60_000;
 
 export interface SandboxRun {
   name: string;
@@ -49,7 +53,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   for (const [key, value] of Object.entries(run.labels)) args.push("--label", `${key}=${value}`);
   // The agent needs outbound network for the Anthropic API, so this isn't `--network none` —
   // but nothing it does needs write access outside its mounted worktree, /in, /out or /tmp.
-  args.push("--read-only", "--tmpfs", "/tmp:rw,size=512m", "--security-opt", "no-new-privileges");
+  args.push("--read-only", "--tmpfs", "/tmp:rw,size=512m", "--security-opt", "no-new-privileges", ...SANDBOX_LIMITS);
   args.push(
     // npm/yarn/pip caches, shell history and anything else that defaults to $HOME would
     // otherwise hit the now-read-only root filesystem — point HOME at the one writable,
@@ -118,7 +122,9 @@ export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
   run.signal?.addEventListener("abort", onAbort, { once: true });
   if (run.signal?.aborted) onAbort();
 
-  const waited = await exec("docker", ["wait", run.name]);
+  // An outer deadline: the kill above asks the container to stop; if the daemon never
+  // reports it gone, this call must still return so the slot is freed.
+  const waited = await exec("docker", ["wait", run.name], { timeoutMs: run.timeoutMs + WAIT_GRACE_MS });
   clearTimeout(timer);
   run.signal?.removeEventListener("abort", onAbort);
 
