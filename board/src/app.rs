@@ -610,7 +610,6 @@ impl App {
             return Outcome::Continue;
         };
         match task.state.as_str() {
-            "backlog" => self.act(|m| m.start(id), "moved to intake"),
             "draft" if task.repo_path.is_none() => {
                 self.notify("set a repo before starting", true);
                 self.open_repo_picker(id);

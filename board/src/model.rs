@@ -9,8 +9,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 /// Board columns, named after the pipeline stages. Same order as the machine's contracts.
-pub const COLUMNS: [&str; 9] =
-    ["Backlog", "Intake", "Triage", "Approved", "Build", "Verify", "Evidence", "Ship", "Done"];
+pub const COLUMNS: [&str; 8] =
+    ["Intake", "Triage", "Approved", "Build", "Verify", "Evidence", "Ship", "Done"];
 
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Retries {
@@ -285,7 +285,7 @@ impl Task {
         match self.state.as_str() {
             "escalated" => Look::Escalated,
             "paused_rate_limit" => Look::Paused,
-            "backlog" | "draft" => Look::Draft,
+            "draft" => Look::Draft,
             "closed" => Look::Done,
             _ if self.waiting_on_you => Look::NeedsYou,
             _ if self.queued => Look::Queued,
@@ -296,7 +296,6 @@ impl Task {
     /// What the task is doing, in words: the gate it waits at or the stage that runs.
     pub fn status_label(&self) -> String {
         let stage = match self.state.as_str() {
-            "backlog" => "backlog".to_string(),
             "draft" => "intake".to_string(),
             "awaiting_answers" => "answer questions".to_string(),
             "awaiting_approval" => "approve plan".to_string(),
@@ -585,6 +584,16 @@ mod tests {
             "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"{source}}}"#
         )
+    }
+
+    #[test]
+    fn there_is_no_backlog_column_and_a_new_ticket_sits_in_intake() {
+        assert_eq!(COLUMNS.len(), 8);
+        assert_eq!(COLUMNS[0], "Intake");
+        let task: Task = serde_json::from_str(&task_json("")).unwrap();
+        assert_eq!(task.column_index(), 0);
+        assert!(matches!(task.look(), Look::Draft));
+        assert_eq!(task.status_label(), "intake");
     }
 
     #[test]
