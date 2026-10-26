@@ -24,6 +24,7 @@ describe("loadConfig", () => {
       retentionDays: DEFAULT_RETENTION_DAYS,
       taskBudgetUsd: null,
       dailyBudgetUsd: null,
+      restartPolicy: "requeue",
     });
   });
 
@@ -59,6 +60,12 @@ describe("loadConfig", () => {
   it("rejects a concurrency limit that is not a positive integer", () => {
     expect(() => loadConfig({ MACHINE_MAX_CONCURRENT: "0" })).toThrow(/MACHINE_MAX_CONCURRENT/);
     expect(() => loadConfig({ MACHINE_MAX_CONCURRENT: "abc" })).toThrow(/MACHINE_MAX_CONCURRENT/);
+  });
+
+  it("requeues running tasks on shutdown unless told to escalate them", () => {
+    expect(loadConfig({ HOME: "/home/me" }).restartPolicy).toBe("requeue");
+    expect(loadConfig({ HOME: "/home/me", MACHINE_RESTART_POLICY: "escalate" }).restartPolicy).toBe("escalate");
+    expect(() => loadConfig({ MACHINE_RESTART_POLICY: "resume" })).toThrow(/MACHINE_RESTART_POLICY/);
   });
 
   it("has no spend ceilings unless you set them", () => {

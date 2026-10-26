@@ -603,6 +603,53 @@ describe("budgets", () => {
   });
 });
 
+describe("restart policy", () => {
+  /** A stage that runs until the machine stops it, the way a real container does. */
+  const untilAborted: StageRunner = ({ signal }) =>
+    new Promise<StageResult>((resolve) => signal.addEventListener("abort", () => resolve({ outcome: "fail" }), { once: true }));
+  let reached = 0;
+  const counting: StageRunner = (context) => {
+    reached++;
+    return untilAborted(context);
+  };
+  const runnerFor = (stage: TaskState) => (stage === "triage" ? counting : stubs.runnerFor(stage));
+
+  it("parks running tasks in the queue on shutdown, so a restart resumes them with no approval", async () => {
+    reached = 0;
+    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 1 });
+    const a = await newTask();
+    const b = await newTask();
+    await pipeline.start(a.id);
+    while (reached < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(await pipeline.start(b.id)).toMatchObject({ state: "triage", queued: true });
+
+    await pipeline.shutdown();
+
+    expect(await pipeline.get(a.id)).toMatchObject({ state: "triage", queued: true, reason: null });
+    expect((await pipeline.stageRuns(a.id)).at(-1)).toMatchObject({ stage: "triage", status: "aborted" });
+    expect((await pipeline.events(a.id)).map((e) => e.kind)).toContain("task.parked");
+    // The slot a freed must not be filled while shutting down.
+    expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: true });
+    expect(await stagesRun(b.id)).toEqual([]);
+
+    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true });
+    expect(await restarted.recover()).toBe(0);
+    expect((await restarted.get(a.id)).state).toBe("awaiting_approval");
+    expect((await restarted.get(b.id)).state).toBe("awaiting_approval");
+  });
+
+  it("escalates them instead under the escalate policy, as before", async () => {
+    reached = 0;
+    pipeline = new Pipeline(db, runnerFor, { restartPolicy: "escalate" });
+    const a = await newTask();
+    await pipeline.start(a.id);
+    while (reached < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+
+    await pipeline.shutdown();
+    expect(await pipeline.get(a.id)).toMatchObject({ state: "escalated", reason: "aborted", resumeTo: "triage", queued: false });
+  });
+});
+
 describe("rate limits", () => {
   it("pauses on a usage limit and re-runs the same stage when the window resets", async () => {
     stubs.plan("implementing", { outcome: "pass", rateLimited: true });
