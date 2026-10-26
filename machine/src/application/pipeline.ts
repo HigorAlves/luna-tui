@@ -191,11 +191,17 @@ export class Pipeline {
   }
 
   /** Deletes a task with its runs, approvals and events. Its worktree is kept. */
+  /** Deletes the task and the checkout it worked in; the branch and its commits stay. */
   async delete(id: string): Promise<void> {
     const task = await this.get(id);
     if (RUNNING.has(task.state)) throw new TaskBusyError(id, task.state);
     clearTimeout(this.resumeTimers.get(id));
     this.resumeTimers.delete(id);
+    if (task.repoPath && task.worktreePath) {
+      await removeWorktreeOnDisk(task.repoPath, task.worktreePath).catch((error: unknown) =>
+        console.error(`could not remove the worktree of deleted task ${id}`, error),
+      );
+    }
     await this.store.deleteTask(id);
   }
 

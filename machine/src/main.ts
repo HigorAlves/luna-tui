@@ -12,6 +12,7 @@ import { loadConfig } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns } from "./adapters/persistence/prune.ts";
+import { sweepImages, sweepRunFolders, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { Pipeline } from "./application/pipeline.ts";
@@ -29,23 +30,38 @@ if (applied.length > 0) {
   console.log(`applied migrations: ${applied.map((m) => m.name).join(", ")}`);
 }
 
-if (config.retentionDays > 0) {
-  try {
-    const pruned = await pruneOldRuns(db, config.retentionDays, config.stateDir);
-    if (pruned.events > 0 || pruned.stageRuns > 0) {
-      console.log(`pruned ${pruned.events} old event(s), ${pruned.stageRuns} old stage run(s)`);
+/** The nightly housekeeping: old history pruned, closed tasks' checkouts and merged branches
+ *  removed, orphaned run folders and superseded runner images gone. Each step fails alone. */
+async function sweep(): Promise<void> {
+  const step = async (name: string, fn: () => Promise<string | null>) => {
+    try {
+      const note = await fn();
+      if (note) console.log(`sweep: ${note}`);
+    } catch (error) {
+      console.error(`sweep: ${name} failed`, error);
     }
-  } catch (error) {
-    // A transient DB hiccup here shouldn't block the machine from ever starting to serve —
-    // the periodic retry below gets another shot at it.
-    console.error("startup prune failed", error);
-  }
-  setInterval(
-    () =>
-      void pruneOldRuns(db, config.retentionDays, config.stateDir).catch((error: unknown) => console.error("prune failed", error)),
-    24 * 60 * 60 * 1000,
-  ).unref();
+  };
+  await step("prune", async () => {
+    if (config.retentionDays <= 0) return null;
+    const pruned = await pruneOldRuns(db, config.retentionDays, config.stateDir);
+    return pruned.events > 0 || pruned.stageRuns > 0 ? `pruned ${pruned.events} old event(s), ${pruned.stageRuns} old stage run(s)` : null;
+  });
+  await step("worktrees", async () => {
+    const swept = await sweepWorktrees(db, config.worktreeRetentionDays);
+    return swept.worktrees > 0 ? `removed ${swept.worktrees} closed task worktree(s), ${swept.branches} merged branch(es)` : null;
+  });
+  await step("run folders", async () => {
+    const removed = await sweepRunFolders(db, config.stateDir);
+    return removed > 0 ? `removed ${removed} run folder(s) no stage run owns` : null;
+  });
+  await step("images", async () => {
+    const removed = await sweepImages();
+    return removed.length > 0 ? `untagged ${removed.join(", ")}` : null;
+  });
 }
+// A transient hiccup here must not stop the machine from serving; tomorrow's pass retries.
+await sweep();
+setInterval(() => void sweep(), 24 * 60 * 60 * 1000).unref();
 
 const bus = new Bus();
 const stubs = new StubStages();

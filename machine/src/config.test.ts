@@ -25,6 +25,7 @@ describe("loadConfig", () => {
       taskBudgetUsd: null,
       dailyBudgetUsd: null,
       restartPolicy: "requeue",
+      worktreeRetentionDays: 7,
     });
   });
 
@@ -66,6 +67,12 @@ describe("loadConfig", () => {
     expect(loadConfig({ HOME: "/home/me" }).restartPolicy).toBe("requeue");
     expect(loadConfig({ HOME: "/home/me", MACHINE_RESTART_POLICY: "escalate" }).restartPolicy).toBe("escalate");
     expect(() => loadConfig({ MACHINE_RESTART_POLICY: "resume" })).toThrow(/MACHINE_RESTART_POLICY/);
+  });
+
+  it("sweeps closed tasks' worktrees after a week unless told otherwise", () => {
+    expect(loadConfig({ HOME: "/home/me" }).worktreeRetentionDays).toBe(7);
+    expect(loadConfig({ HOME: "/home/me", MACHINE_WORKTREE_RETENTION_DAYS: "0" }).worktreeRetentionDays).toBe(0);
+    expect(() => loadConfig({ MACHINE_WORKTREE_RETENTION_DAYS: "soon" })).toThrow(/MACHINE_WORKTREE_RETENTION_DAYS/);
   });
 
   it("has no spend ceilings unless you set them", () => {
