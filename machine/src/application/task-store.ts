@@ -75,6 +75,10 @@ export interface TaskStore {
   withTaskLock<T>(id: string, fn: (task: TaskRow, tx: TaskTx) => Promise<T>): Promise<T>;
 
   listStageRuns(taskId: string): Promise<StageRunRow[]>;
+  /** What the task's stage runs have cost so far, in USD. */
+  taskSpendUsd(taskId: string): Promise<number>;
+  /** What every stage run started since `since` has cost, in USD. */
+  spendSinceUsd(since: Date): Promise<number>;
   countStageRunAttempts(taskId: string, stage: TaskState): Promise<number>;
   insertStageRun(input: InsertStageRunInput): Promise<string>;
   updateStageRun(id: string, patch: UpdateStageRunInput): Promise<void>;

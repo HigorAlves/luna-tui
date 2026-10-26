@@ -23,6 +23,18 @@ export interface Config {
   githubPoll: { repos: string[]; intervalMs: number; label: string };
   /** Days to keep a closed task's events/stage runs before pruning them. 0 disables pruning. */
   retentionDays: number;
+  /** Spend ceiling for one task (sum of its stage runs); null means none. Over it, the task escalates. */
+  taskBudgetUsd: number | null;
+  /** Spend ceiling over the trailing 24 hours; null means none. Over it, nothing new is claimed. */
+  dailyBudgetUsd: number | null;
+}
+
+function optionalUsd(env: NodeJS.ProcessEnv, key: string): number | null {
+  const raw = env[key];
+  if (raw === undefined || raw === "") return null;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) throw new Error(`${key} must be a positive amount in USD, got "${raw}"`);
+  return value;
 }
 
 export const DEFAULT_DATABASE_URL = "postgres://hardness:hardness@127.0.0.1:5433/hardness";
@@ -75,5 +87,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     stateDir: env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness"),
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
     retentionDays,
+    taskBudgetUsd: optionalUsd(env, "MACHINE_TASK_BUDGET_USD"),
+    dailyBudgetUsd: optionalUsd(env, "MACHINE_DAILY_BUDGET_USD"),
   };
 }

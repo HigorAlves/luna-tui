@@ -84,7 +84,8 @@ export function createApp({ db, pipeline, bus, watcher, stubs }: AppDeps): Hono 
       if (error instanceof InvalidSince) throw new BadRequest(error.message);
       throw error;
     }
-    return c.json(await computeMetrics(db, { since, slots: pipeline.slots }));
+    const budget = { ...pipeline.budget, spentTodayUsd: await pipeline.spentTodayUsd() };
+    return c.json(await computeMetrics(db, { since, slots: pipeline.slots, budget }));
   });
 
   app.get("/tasks", async (c) => c.json((await pipeline.list()).map(toTask)));

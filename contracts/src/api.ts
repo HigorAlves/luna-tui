@@ -215,6 +215,13 @@ export interface Metrics {
     slots: { max: number; active: number };
     utilisation: number | null;
   };
+  /** Spend ceilings (null = none) and the trailing-24h spend the daily one applies to. */
+  budget: {
+    taskUsd: number | null;
+    dailyUsd: number | null;
+    spentTodayUsd: number;
+    remainingTodayUsd: number | null;
+  };
 }
 
 /** Error body for every 4xx and 5xx response. */

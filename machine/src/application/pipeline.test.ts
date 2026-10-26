@@ -554,6 +554,55 @@ describe("the supervisor tick", () => {
   });
 });
 
+describe("budgets", () => {
+  const costly = (costUsd: number): StageResult => ({ outcome: "pass", usage: { turns: 1, costUsd } });
+  const backdateRuns = (taskId: string) =>
+    db.query("update stage_runs set started_at = now() - interval '25 hours' where task_id = $1", [taskId]);
+
+  it("escalates a task that spent past its own ceiling before its next stage runs", async () => {
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, budget: { taskUsd: 2 } });
+    stubs.plan("triage", costly(3));
+    const task = await newTask();
+    expect((await pipeline.start(task.id)).state).toBe("awaiting_approval");
+
+    const held = await pipeline.decide(task.id, "approved");
+    expect(held).toMatchObject({ state: "escalated", reason: "budget: task spent $3.00 of $2.00", resumeTo: "test_design" });
+    expect(await stagesRun(task.id)).toEqual(["triage"]);
+  });
+
+  it("holds the queue while the day's spend is over the ceiling, and drains it once it is not", async () => {
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, budget: { dailyUsd: 2 } });
+    stubs.plan("triage", costly(3));
+    const a = await newTask();
+    expect((await pipeline.start(a.id)).state).toBe("awaiting_approval");
+
+    const b = await newTask();
+    expect(await pipeline.start(b.id)).toMatchObject({ state: "triage", queued: true });
+    await pipeline.tick();
+    expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: true });
+    expect(await stagesRun(b.id)).toEqual([]);
+
+    await backdateRuns(a.id);
+    await pipeline.tick();
+    expect(await pipeline.get(b.id)).toMatchObject({ state: "awaiting_approval", queued: false });
+  });
+
+  it("parks a running task between stages once the day's ceiling is reached, instead of escalating it", async () => {
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, budget: { dailyUsd: 2 } });
+    stubs.plan("triage", costly(3));
+    const task = await newTask();
+    expect((await pipeline.start(task.id)).state).toBe("awaiting_approval");
+
+    expect(await pipeline.decide(task.id, "approved")).toMatchObject({ state: "test_design", queued: true });
+    expect(await stagesRun(task.id)).toEqual(["triage"]);
+    expect((await pipeline.events(task.id)).map((e) => e.kind)).toContain("budget.held");
+
+    await backdateRuns(task.id);
+    await pipeline.tick();
+    expect(await pipeline.get(task.id)).toMatchObject({ state: "awaiting_test_check", queued: false });
+  });
+});
+
 describe("rate limits", () => {
   it("pauses on a usage limit and re-runs the same stage when the window resets", async () => {
     stubs.plan("implementing", { outcome: "pass", rateLimited: true });

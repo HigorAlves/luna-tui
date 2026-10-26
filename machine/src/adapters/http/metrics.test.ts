@@ -114,6 +114,16 @@ describe("GET /metrics", () => {
     expect(m.cost.perTaskUsd).toEqual({ median: 1.5, p90: 1.5 });
   });
 
+  it("reports the spend ceilings and what is left of the day's", async () => {
+    expect((await getMetrics()).budget).toEqual({ taskUsd: null, dailyUsd: null, spentTodayUsd: 0, remainingTodayUsd: null });
+
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, maxConcurrentTasks: 2, budget: { taskUsd: 5, dailyUsd: 10 } });
+    const { closed } = await seed();
+    await db.query("update stage_runs set cost_usd = 1.5 where task_id = $1 and stage = 'implementing'", [closed.id]);
+    await db.query("update stage_runs set cost_usd = 4, started_at = now() - interval '2 days' where task_id = $1 and stage = 'triage'", [closed.id]);
+    expect((await getMetrics()).budget).toEqual({ taskUsd: 5, dailyUsd: 10, spentTodayUsd: 1.5, remainingTodayUsd: 8.5 });
+  });
+
   it("filters by window", async () => {
     await seed();
     const future = new Date(Date.now() + 60_000).toISOString();

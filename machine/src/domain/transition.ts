@@ -39,7 +39,9 @@ export type PipelineEvent =
   | { type: "window_reset" }
   | { type: "abort" }
   /** The stage loop threw outside any stage (a DB hiccup, a pool timeout): the task must not stay "running". */
-  | { type: "crash"; error: string };
+  | { type: "crash"; error: string }
+  /** The task spent past its ceiling; `reason` is the budget line shown on the board. */
+  | { type: "over_budget"; reason: string };
 
 /** What the machine does after a transition. */
 export type Effect =
@@ -126,6 +128,9 @@ export function transition(task: Snapshot, event: PipelineEvent): Step {
   switch (event.type) {
     case "crash":
       if (RUNNING.has(state)) return escalate(`stage loop crashed: ${event.error}`, state, retries);
+      break;
+    case "over_budget":
+      if (RUNNING.has(state)) return escalate(event.reason, state, retries);
       break;
     case "abort":
       if (RUNNING.has(state)) return escalate("aborted", state, retries);

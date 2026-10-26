@@ -9,6 +9,8 @@ export interface MetricsOptions {
   since: Date;
   until?: Date;
   slots: { max: number; active: number };
+  /** The spend ceilings, when set, and the trailing-24h spend they apply to. */
+  budget?: { taskUsd: number | null; dailyUsd: number | null; spentTodayUsd: number };
 }
 
 const FIRST_PASS_STAGES = ["verifying", "ci_watch", "implementing"] as const;
@@ -114,5 +116,12 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
       byStage: costByStage,
     },
     queue: { depth: tasks.queued, slots, utilisation: ratio(slots.active, slots.max) },
+    budget: {
+      taskUsd: options.budget?.taskUsd ?? null,
+      dailyUsd: options.budget?.dailyUsd ?? null,
+      spentTodayUsd: options.budget?.spentTodayUsd ?? 0,
+      remainingTodayUsd:
+        options.budget?.dailyUsd == null ? null : Math.max(0, options.budget.dailyUsd - options.budget.spentTodayUsd),
+    },
   };
 }
