@@ -20,6 +20,7 @@ use ratatui::{
 };
 use tui_textarea::TextArea;
 
+use crate::notify::{self, Notice};
 use crate::{
     client::{Incoming, Machine},
     discover::{discover_repos, repos_root},
@@ -175,6 +176,8 @@ pub struct App {
     pub tasks: Vec<Task>,
     pub online: bool,
     pub offline_reason: String,
+    /// What herdr (or the terminal bell) should tell you; the main loop drains it.
+    notices: Vec<Notice>,
     /// Details of the ticket being viewed or previewed.
     pub detail: Option<TaskDetail>,
     detail_stale: bool,
@@ -210,6 +213,7 @@ impl App {
             stream: rx,
             tasks: Vec::new(),
             online: false,
+            notices: Vec::new(),
             offline_reason: "connecting".to_string(),
             detail: None,
             detail_stale: true,
@@ -311,10 +315,7 @@ impl App {
                     self.reload();
                     self.catch_up_watch_tabs();
                 }
-                Incoming::Offline(reason) => {
-                    self.online = false;
-                    self.offline_reason = reason;
-                }
+                Incoming::Offline(reason) => self.went_offline(reason),
                 Incoming::Message(StreamMessage::Updated { task }) => {
                     if self.shows_detail_of(&task.id) {
                         self.detail_stale = true;
@@ -346,6 +347,10 @@ impl App {
     /// re-sorts its column, so the next key never lands on a different ticket.
     fn upsert(&mut self, task: Task) {
         let selected = self.selected_id();
+        let before = self.tasks.iter().find(|t| t.id == task.id).map(Task::look);
+        if let Some(notice) = notify::notice_for(before, &task) {
+            self.notices.push(notice);
+        }
         match self.tasks.iter_mut().find(|t| t.id == task.id) {
             Some(existing) => *existing = task,
             None => self.tasks.push(task),
@@ -354,6 +359,25 @@ impl App {
         if let Some(id) = selected {
             self.select(&id, false);
         }
+    }
+
+    /// The machine stopped answering: remembered, and told once per outage.
+    pub fn went_offline(&mut self, reason: String) {
+        if self.online {
+            self.notices.push(notify::offline_notice(&reason));
+        }
+        self.online = false;
+        self.offline_reason = reason;
+    }
+
+    /// Everything queued for you since the last call.
+    pub fn take_notices(&mut self) -> Vec<Notice> {
+        std::mem::take(&mut self.notices)
+    }
+
+    /// How many tickets wait on you right now: the Board tab's badge.
+    pub fn needs_you_count(&self) -> usize {
+        self.tasks.iter().filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated)).count()
     }
 
     /// Highlights a ticket. With `follow`, the board also moves to the ticket's column.
@@ -1324,6 +1348,37 @@ mod tests {
         task.repo_path = None;
         app.filter = "luna".into();
         assert!(!app.passes_filter(&task));
+    }
+
+    #[test]
+    fn a_ticket_reaching_a_gate_queues_a_notice_once_and_going_offline_queues_one() {
+        let mut app = App::new(Machine::from_env());
+        let json = |state: &str, waiting: bool| -> Task {
+            serde_json::from_str(&format!(
+                r#"{{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
+                "repoPath":null,"branch":null,"worktreePath":null,"state":"{state}","column":"Build",
+                "waitingOnYou":{waiting},"running":false,"queued":false,
+                "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+                "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+            ))
+            .unwrap()
+        };
+        app.upsert(json("implementing", false));
+        assert!(app.take_notices().is_empty());
+        app.upsert(json("awaiting_approval", true));
+        let notices = app.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].title, "Needs you");
+        assert_eq!(app.needs_you_count(), 1);
+        app.upsert(json("awaiting_approval", true));
+        assert!(app.take_notices().is_empty(), "an update that stays at the gate is not news");
+
+        app.online = true;
+        app.went_offline("connection refused".into());
+        app.went_offline("connection refused".into());
+        let notices = app.take_notices();
+        assert_eq!(notices.len(), 1, "offline is told once per outage");
+        assert_eq!(notices[0].title, "Machine offline");
     }
 
     #[test]
