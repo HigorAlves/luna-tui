@@ -21,6 +21,7 @@
     "site:build": "pnpm --filter site build",
     "site:test": "pnpm --filter site test",
     "icons": "node scripts/export-icons.mjs",
-    "icons:gen": "node scripts/gen-brand.mjs"
+    "icons:gen": "node scripts/gen-brand.mjs",
+    "vendor:orc": "node scripts/vendor-orc.mjs"
   }
 }

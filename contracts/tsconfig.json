@@ -7,7 +7,12 @@
     "noUncheckedIndexedAccess": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
-    "noEmit": true
+    "noEmit": true,
+    "types": [
+      "node"
+    ]
   },
-  "include": ["src"]
+  "include": [
+    "src"
+  ]
 }

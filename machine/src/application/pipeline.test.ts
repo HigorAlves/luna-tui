@@ -1,6 +1,6 @@
 import type { TaskState } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NO_RETRIES, TransitionError } from "../domain/transition.ts";
 import type { StageResult, StageRunner } from "./ports.ts";
@@ -431,6 +431,20 @@ describe("rate limits", () => {
 
     const resumed = await pipeline.windowReset(task.id);
     expect(resumed.state).toBe("awaiting_ship");
+  });
+
+  it("schedules the resume from a string resetsAt, the shape orc actually writes", async () => {
+    vi.useFakeTimers();
+    try {
+      const inOneHour = Math.floor(Date.now() / 1000) + 3600;
+      stubs.plan("implementing", { outcome: "pass", rateLimited: true, detail: { resetsAt: String(inOneHour) } });
+      const task = await newTask();
+      const paused = await startAndApprove(task.id);
+      expect(paused.state).toBe("paused_rate_limit");
+      expect(pipeline.hasResumeTimer(task.id)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("can abort a paused task, which then waits for you", async () => {

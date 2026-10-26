@@ -96,6 +96,22 @@ describe("StageInput", () => {
 });
 
 describe("StageOutput", () => {
+  // What orc actually writes (run.mjs + stages.json), not what the example happens to show.
+  it("accepts a finding exactly as orc's verifying/ci_watch schema shapes it: no start_line, no suggestion_code", () => {
+    const finding = { path: "src/a.ts", line: 7, severity: "bug", title: "off by one", body: "b", confidence: 0.9 };
+    expect(StageOutput.safeParse({ ...stageOutputExample, findings: [finding] }).success).toBe(true);
+  });
+
+  it("accepts resetsAt as the string run.mjs writes, and as a number", () => {
+    expect(StageOutput.safeParse({ ...stageOutputExample, rateLimited: true, resetsAt: "1761300000" }).success).toBe(true);
+    expect(StageOutput.safeParse({ ...stageOutputExample, rateLimited: true, resetsAt: 1761300000 }).success).toBe(true);
+  });
+
+  it("accepts a question with no recommended answer, and an object error", () => {
+    expect(StageOutput.safeParse({ ...stageOutputExample, outcome: "needs_input", needsInput: [{ question: "which db?", recommended: null }] }).success).toBe(true);
+    expect(StageOutput.safeParse({ ...stageOutputExample, ok: false, outcome: "fail", error: { code: "E", message: "boom" } }).success).toBe(true);
+  });
+
   it("parses the contract example", () => {
     expect(StageOutput.safeParse(stageOutputExample).success).toBe(true);
   });

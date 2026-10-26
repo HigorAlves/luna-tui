@@ -33,6 +33,24 @@ beforeEach(async () => {
 });
 
 describe("ingestStageOutput", () => {
+  it("lands an e2e manifest where the evidence stage reads it", async () => {
+    await mkdir(join(outDir, "files", "qa"), { recursive: true });
+    await writeFile(join(outDir, "files", "qa", "qa-manifest.json"), JSON.stringify({ verdict: "pass" }));
+    await writeFile(
+      join(outDir, "result.json"),
+      JSON.stringify(output({ artifacts: [{ kind: "qa-manifest", path: "files/qa/qa-manifest.json", label: "manifest", sha256: "" }] })),
+    );
+    await writeFile(join(outDir, "events.jsonl"), "");
+
+    await ingestStageOutput({ outDir, runId: "e2e-run", stateDir });
+
+    const { evidenceRunner } = await import("./evidence.ts");
+    const runner = evidenceRunner({ stateDir, latestE2e: async () => ({ runId: "e2e-run" }) });
+    const result = await runner({ task: { id: "t1" }, stage: "evidence", attempt: 1, runId: "ev", approvals: [] } as never);
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ verdict: "pass" });
+  });
+
   it("parses the result, events and copies artifacts with a computed sha256", async () => {
     const body = "hello report";
     await mkdir(join(outDir, "files"), { recursive: true });
@@ -56,7 +74,9 @@ describe("ingestStageOutput", () => {
     expect(ingested.output.summary).toBe("done");
     expect(ingested.events.map((e) => e.kind)).toEqual(["tool", "orc.malformed", "note"]);
     expect(ingested.events[1]?.payload).toEqual({ line: "not json" });
-    const dest = join(stateDir, "runs", "run1", "files", "files/r.md");
+    // orc's artifact paths are relative to /out and already start with files/; the copy
+    // must not double it, or evidence (which reads runs/<id>/files/qa/) never finds a manifest.
+    const dest = join(stateDir, "runs", "run1", "files", "r.md");
     expect(ingested.artifacts).toEqual([
       { kind: "report", path: dest, label: "R", sha256: createHash("sha256").update(body).digest("hex") },
     ]);

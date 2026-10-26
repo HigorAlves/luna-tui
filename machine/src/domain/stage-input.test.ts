@@ -1,4 +1,8 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+
 import { StageInput } from "@hardness/contracts";
+import { Ajv2020 } from "ajv/dist/2020.js";
 import { describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
@@ -79,9 +83,31 @@ describe("buildStageInput", () => {
     expect(input.env).toEqual({ ORC_FACTORY: "1" });
   });
 
-  it("keeps test_design read-only and verifying writable, matching orc's packs", () => {
-    expect(PACK_LIMITS.test_design).toMatchObject({ writable: false });
-    expect(PACK_LIMITS.verifying).toMatchObject({ writable: true, maxTurns: 60, timeoutMs: 20 * 60_000 });
+  // orc's packs, vendored by `pnpm vendor:orc`; the two copies of these limits must agree,
+  // since the machine enforces timeoutMs on the container and writable on the mount.
+  const orcFixtures = join(import.meta.dirname, "..", "..", "..", "contracts", "fixtures", "orc");
+  const orcPacks = JSON.parse(readFileSync(join(orcFixtures, "stages.json"), "utf8")).packs as Record<string, { maxTurns: number; timeoutMs: number; writable: boolean }>;
+
+  it("mirrors every pack's maxTurns, timeoutMs and writable from orc's stages.json", () => {
+    for (const [pack, limits] of Object.entries(PACK_LIMITS)) {
+      const theirs = orcPacks[pack];
+      expect(theirs, `orc has no pack ${pack}`).toBeDefined();
+      expect(limits, pack).toEqual({ maxTurns: theirs!.maxTurns, timeoutMs: theirs!.timeoutMs, writable: theirs!.writable });
+    }
+  });
+
+  it("builds an input orc's own stage-input schema accepts", () => {
+    const ajv = new Ajv2020({ strict: false, allErrors: true });
+    const validate = ajv.compile(JSON.parse(readFileSync(join(orcFixtures, "stage-input.json"), "utf8")));
+    const cases = [{ title: "t", criterion: "c", approach: "a" }];
+    const approvals = [
+      approval({ requested: { brief: "do it", criteria: ["c1"], assumptions: [], slices } }),
+      approval({ kind: "awaiting_test_check", requested: { cases } }),
+    ];
+    for (const stage of ["triage", "implementing", "verifying"] as const) {
+      const input = buildStageInput({ task, stage, attempt: 1, approvals, priorFindings: [finding(0.9, "keep")] });
+      expect(validate(input), `${stage}: ${JSON.stringify(validate.errors)}`).toBe(true);
+    }
   });
 
   it("has no plan before one is approved, and covers all eight packs", () => {
