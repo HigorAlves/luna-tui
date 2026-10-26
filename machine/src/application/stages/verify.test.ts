@@ -74,6 +74,17 @@ describe("verifying stage", () => {
     expect(readFileSync(join(stateDir, "runs", "run-1", "checks.log"), "utf8")).toContain("line 99");
   });
 
+  it("escalates, never retrying, when the test command itself is missing from the runner image", async () => {
+    // Exit 127 is the shell's "command not found": no implementing attempt can fix the image.
+    const { run, context, runPack } = setup({
+      checks: { "pnpm run test": { code: 127, stdout: "", stderr: "sh: pnpm: not found\n" } },
+    });
+    const result = await run(context);
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ reason: expect.stringMatching(/pnpm run test.*runner image/) });
+    expect(runPack).not.toHaveBeenCalled();
+  });
+
   it("runs the review pack when checks pass and fails on its fail verdict", async () => {
     const f = finding();
     const { run, context, runPack } = setup({

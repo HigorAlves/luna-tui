@@ -80,6 +80,18 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         timedOut = result.code !== 0 && Date.now() >= deadline;
       }
       if (signal.aborted) return aborted();
+      // The shell's "command not found": the runner image lacks the tool. No implementing
+      // attempt can fix that, so this escalates instead of burning the retry cap.
+      if (result.code === 127) {
+        return {
+          outcome: "escalated",
+          detail: {
+            step: "checks",
+            reason: `\`${cmd}\` cannot run: the runner image lacks the tool (exit 127: ${tailOf(result.stderr || result.stdout).trim() || "command not found"})`,
+            options: ["add the tool to machine/runner/Dockerfile and rebuild (pnpm images)", "change the repo's test command"],
+          },
+        };
+      }
       const text = `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`;
       const tail = tailOf(timedOut ? `${text}\ntimed out: the 30 minute checks budget ran out` : text);
       log.push(`$ ${cmd}\n(exit ${result.code})\n${text}\n`);

@@ -70,12 +70,14 @@ const watcher = new StreamWatcher(bus);
 // `pipeline` is assigned below, after the real stages are built — `latestE2e` is only
 // ever called once a stage actually runs, by which point `pipeline` is set.
 let pipeline: Pipeline;
-const { real, verifyPack } = await buildRealStages(config, watcher, (taskId) =>
+const { real, verifyPack, checksExec } = await buildRealStages(config, watcher, (taskId) =>
   pipeline.latestStageFinish(taskId, "e2e"),
 );
-/** Verifying runs the project's checks on the host, so it always runs for real; the review pack joins when agents are on. */
+/** Verifying always runs for real: the project's checks in the runner image when there is one
+ *  (what implementing installed there does not run on the host), else on the host; the review
+ *  pack joins when agents are on. */
 const realVerifyRunner = verifyRunner({
-  exec,
+  exec: checksExec ?? exec,
   runPack: verifyPack,
   stateDir: config.stateDir,
 });
