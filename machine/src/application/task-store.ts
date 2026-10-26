@@ -35,9 +35,9 @@ export interface InsertStageRunInput {
 export interface UpdateStageRunInput {
   status: StageRunStatus;
   outcome: string | null;
-  containerId: string | null;
+  containerId?: string;
   transcriptPath: string | null;
-  inputCommit: string | null;
+  inputCommit?: string;
   outputCommit: string | null;
   turns?: number | null;
   costUsd?: string | null;
@@ -69,6 +69,10 @@ export interface ClaimOptions {
   maxPerRepo: number | null;
   /** Repos whose tasks stay queued for now (over their monthly budget). */
   excludeRepos?: ReadonlySet<string>;
+  /** A repo's own cap from its PIPELINE.md, over `maxPerRepo`. */
+  repoCaps?: ReadonlyMap<string, number>;
+  /** Tasks that may drive one stage at once; a stage not named has no cap. */
+  maxPerStage?: Readonly<Record<string, number>>;
 }
 
 export interface TaskStore {
@@ -79,7 +83,10 @@ export interface TaskStore {
   updateTask(id: string, patch: Partial<TaskRow>): Promise<void>;
   deleteTask(id: string): Promise<void>;
   findStuckTasks(running: ReadonlySet<TaskState>): Promise<TaskRow[]>;
-  markRunningStageRunsAborted(): Promise<void>;
+  /** Ends every stage run still `running` as aborted, except the ones a restart re-attached to. */
+  markRunningStageRunsAborted(except?: readonly string[]): Promise<void>;
+  /** The container's name and the commit it started from, known once the stage is under way. */
+  markStageRunStarted(id: string, facts: { containerId: string; inputCommit: string | null }): Promise<void>;
   /** Finds the longest-queued task and claims it (clearing `queued`) under a row lock, so
    *  two slots freeing at once cannot both claim the same task. Null when none is queued. */
   claimNextQueuedTask(options: ClaimOptions): Promise<TaskRow | null>;

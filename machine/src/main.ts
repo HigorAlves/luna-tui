@@ -143,6 +143,7 @@ pipeline = new Pipeline(db, runnerFor, {
   onEvent: publish,
   maxConcurrentTasks: config.maxConcurrentTasks,
   maxPerRepo: config.maxPerRepo,
+  maxPerStage: config.maxPerStage,
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
   closeDeps: { exec, worktreeRemove: false, orcStateBin, watcher },

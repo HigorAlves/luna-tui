@@ -2,7 +2,7 @@
 // query here is the same TypeORM call pipeline.ts used to make directly.
 import type { TaskState } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
-import { In, IsNull } from "typeorm";
+import { In, IsNull, Not } from "typeorm";
 
 import type {
   ClaimOptions,
@@ -75,10 +75,17 @@ export class PgTaskStore implements TaskStore {
       .find({ where: { state: In([...running]) }, order: { updatedAt: "ASC" } });
   }
 
-  async markRunningStageRunsAborted(): Promise<void> {
+  async markRunningStageRunsAborted(except: readonly string[] = []): Promise<void> {
     await this.db
       .getRepository(StageRunEntity)
-      .update({ status: "running" }, { status: "aborted", endedAt: () => "clock_timestamp()" });
+      .update(
+        except.length > 0 ? { status: "running", id: Not(In([...except])) } : { status: "running" },
+        { status: "aborted", endedAt: () => "clock_timestamp()" },
+      );
+  }
+
+  async markStageRunStarted(id: string, facts: { containerId: string; inputCommit: string | null }): Promise<void> {
+    await this.db.getRepository(StageRunEntity).update({ id }, facts);
   }
 
   async claimNextQueuedTask(options: ClaimOptions): Promise<TaskRow | null> {
@@ -94,10 +101,17 @@ export class PgTaskStore implements TaskStore {
     if (queued.length === 0) return null;
     const active = await repo.find({ where: { queued: false, state: In([...options.running]) } });
     const runningBy = new Map<string | null, number>();
-    for (const task of active) runningBy.set(task.repoPath, (runningBy.get(task.repoPath) ?? 0) + 1);
+    const runningStage = new Map<string, number>();
+    for (const task of active) {
+      runningBy.set(task.repoPath, (runningBy.get(task.repoPath) ?? 0) + 1);
+      runningStage.set(task.state, (runningStage.get(task.state) ?? 0) + 1);
+    }
     const load = (task: TaskRow) => runningBy.get(task.repoPath) ?? 0;
+    const repoCap = (task: TaskRow) => (task.repoPath ? options.repoCaps?.get(task.repoPath) : undefined) ?? options.maxPerRepo;
+    const stageCap = (task: TaskRow) => options.maxPerStage?.[task.state] ?? null;
     const candidate = queued
-      .filter((task) => options.maxPerRepo === null || load(task) < options.maxPerRepo)
+      .filter((task) => repoCap(task) === null || load(task) < repoCap(task)!)
+      .filter((task) => stageCap(task) === null || (runningStage.get(task.state) ?? 0) < stageCap(task)!)
       .filter((task) => task.repoPath === null || !options.excludeRepos?.has(task.repoPath))
       .sort((a, b) => load(a) - load(b))[0];
     if (!candidate) return null;

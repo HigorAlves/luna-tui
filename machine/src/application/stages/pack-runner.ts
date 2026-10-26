@@ -76,10 +76,14 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       ? { branch: task.branch, path: task.worktreePath }
       : workspaceFor(task, task.repoPath, deps.worktreesDir);
   await ensureWorktree(task.repoPath, workspace);
-  const inputCommit = await headCommit(workspace.path);
+  // After a restart, the container the last machine started may still be running: its name and
+  // the commit it started from come from the run row, and the sandbox waits on it instead.
+  const resume = context.resume;
+  const inputCommit = resume?.inputCommit ?? (await headCommit(workspace.path));
   const gitDir = await commonGitDir(task.repoPath);
-  const container = `hardness-${task.id.slice(0, 8)}-${context.stage.replaceAll("_", "-")}-${context.attempt}`;
+  const container = resume?.container ?? `hardness-${task.id.slice(0, 8)}-${context.stage.replaceAll("_", "-")}-${context.attempt}`;
   const runDir = join(deps.stateDir, "runs", context.runId);
+  if (!resume) await context.started?.({ container, inputCommit });
 
   const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
   const input = buildStageInput({
@@ -101,6 +105,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   await mkdir(stateMount, { recursive: true });
   const sandbox = await (deps.sandbox ?? runSandbox)({
     name: container,
+    attach: Boolean(resume),
     stateMount,
     cacheVolume: cacheVolumeFor(task.repoPath),
     image: pack === "e2e" ? deps.qaImage : deps.image,

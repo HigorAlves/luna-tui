@@ -27,6 +27,7 @@ describe("loadConfig", () => {
       restartPolicy: "requeue",
       worktreeRetentionDays: 7,
       maxPerRepo: null,
+      maxPerStage: {},
       repoMap: {},
       reposDir: "/home/me/Developer",
     });

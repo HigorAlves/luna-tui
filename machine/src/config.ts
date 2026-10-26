@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { RUNNING, type TaskState } from "@hardness/contracts";
+
 /** Settings read from the environment. Defaults match compose.dev.yml and herdr's config. */
 export interface Config {
   databaseUrl: string;
@@ -13,6 +15,8 @@ export interface Config {
   maxConcurrentTasks: number;
   /** Running tasks one repo may hold at once, so it cannot take every slot; null means no cap. */
   maxPerRepo: number | null;
+  /** Tasks that may drive one stage at once, e.g. `{ implementing: 2, e2e: 1 }`; a stage not named has no cap. */
+  maxPerStage: Record<string, number>;
   /** Docker image for stage containers, built by `runner:build`. */
   runnerImage: string;
   /** Docker image for the e2e stage, with a browser. Used by the QA slices. */
@@ -106,6 +110,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!RESTART_POLICIES.includes(restartPolicy)) {
     throw new Error(`MACHINE_RESTART_POLICY must be requeue or escalate, got "${env.MACHINE_RESTART_POLICY}"`);
   }
+  const maxPerStage: Record<string, number> = {};
+  for (const pair of (env.MACHINE_MAX_PER_STAGE ?? "").split(",").map((p) => p.trim()).filter(Boolean)) {
+    const match = /^([a-z0-9_]+)=(\d+)$/.exec(pair);
+    const stage = match?.[1] as TaskState | undefined;
+    const cap = Number(match?.[2]);
+    if (!stage || !RUNNING.has(stage) || !Number.isInteger(cap) || cap < 1) {
+      throw new Error(`MACHINE_MAX_PER_STAGE must list <running stage>=<positive integer> pairs, got "${pair}"`);
+    }
+    maxPerStage[stage] = cap;
+  }
   const repoMap: Record<string, string> = {};
   for (const pair of (env.MACHINE_REPO_MAP ?? "").split(",").map((p) => p.trim()).filter(Boolean)) {
     const match = /^([\w.-]+\/[\w.-]+)=(\/.+)$/.exec(pair);
@@ -129,6 +143,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     retentionDays,
     worktreeRetentionDays,
     maxPerRepo: optionalPositiveInt(env, "MACHINE_MAX_PER_REPO"),
+    maxPerStage,
     taskBudgetUsd: optionalUsd(env, "MACHINE_TASK_BUDGET_USD"),
     dailyBudgetUsd: optionalUsd(env, "MACHINE_DAILY_BUDGET_USD"),
     restartPolicy,

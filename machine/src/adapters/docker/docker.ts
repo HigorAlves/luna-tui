@@ -76,6 +76,8 @@ export interface SandboxRun {
   stateMount?: string;
   /** The repo's cache volume (`cacheVolumeFor`), mounted at /cache with the package managers pointed at it. */
   cacheVolume?: string;
+  /** The container is already running (a restart found it): wait on it instead of starting one. */
+  attach?: boolean;
 }
 
 export interface SandboxResult {
@@ -139,17 +141,16 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
 }
 
 export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
-  const inDir = join(run.runDir, "in");
-  const outDir = join(run.runDir, "out");
-  await mkdir(inDir, { recursive: true });
-  await mkdir(outDir, { recursive: true });
-  await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
-
-  const args = sandboxArgs(run, inDir, outDir);
-
-  await execOrThrow("docker", args, {
-    env: { ...process.env, [run.credential.name]: run.credential.value },
-  });
+  if (!run.attach) {
+    const inDir = join(run.runDir, "in");
+    const outDir = join(run.runDir, "out");
+    await mkdir(inDir, { recursive: true });
+    await mkdir(outDir, { recursive: true });
+    await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
+    await execOrThrow("docker", sandboxArgs(run, inDir, outDir), {
+      env: { ...process.env, [run.credential.name]: run.credential.value },
+    });
+  }
   run.onStarted?.(run.name);
 
   let timedOut = false;
@@ -274,12 +275,25 @@ export function sandboxExecutor(image: string) {
   };
 }
 
-/** Removes stage containers left behind by a machine that stopped mid-stage. */
+/** Removes stage containers a previous machine left behind: the stopped ones. A container still
+ *  running is left for recover() to re-attach to, or to remove once it decides not to. */
 export async function removeLeftoverContainers(): Promise<number> {
-  const listed = await exec("docker", ["ps", "-aq", "--filter", `label=${CONTAINER_LABEL}=1`]);
+  const statuses = ["exited", "created", "dead"].flatMap((status) => ["--filter", `status=${status}`]);
+  const listed = await exec("docker", ["ps", "-aq", "--filter", `label=${CONTAINER_LABEL}=1`, ...statuses]);
   const ids = listed.stdout.split("\n").filter(Boolean);
   if (ids.length > 0) await exec("docker", ["rm", "-f", ...ids]);
   return ids.length;
+}
+
+/** True while a container of that name is running. */
+export async function containerRunning(name: string): Promise<boolean> {
+  const inspected = await exec("docker", ["inspect", "-f", "{{.State.Running}}", name]);
+  return inspected.code === 0 && inspected.stdout.trim() === "true";
+}
+
+/** Stops and removes one container by name; nothing happens when it is already gone. */
+export async function removeContainer(name: string): Promise<void> {
+  await exec("docker", ["rm", "-f", name]);
 }
 
 export async function imageExists(image: string): Promise<boolean> {

@@ -22,6 +22,10 @@ export interface StageContext {
   priorFindings?: Finding[];
   /** Aborted when you abort the task; the runner should stop its container. */
   signal: AbortSignal;
+  /** Set after a restart found the stage's container still running: wait on it, do not start another. */
+  resume?: { container: string; inputCommit: string | null };
+  /** Tells the machine the container's name and the commit it started from, as soon as they are known. */
+  started?: (facts: { container: string; inputCommit: string | null }) => Promise<void>;
 }
 
 export interface StageResult {
