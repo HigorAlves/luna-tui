@@ -10,6 +10,7 @@ The machine's HTTP API, read straight from `machine/src/adapters/http/app.ts`. S
 | POST | `/tasks` | Create a task: title, description, criteria, repo path, source. |
 | GET | `/tasks/:id` | One task with its stage runs, approvals, recent events and artifacts. |
 | PATCH | `/tasks/:id` | Edit the ticket's text (title, description, criteria, repo path, source). |
+| PATCH | `/tasks/:id/plan` | Edit triage's proposed plan while it awaits your approval: `{ "brief"?, "criteria"?, "assumptions"? }`, at least one field. Only the fields given change; slices stay as triage wrote them. 409 if there's no open plan to edit. |
 | DELETE | `/tasks/:id` | Delete a task with its runs, approvals and events (blocked while a stage is running); closes its herdr watch tab (via `task.closed`). |
 | POST | `/tasks/:id/start` | Start the pipeline. |
 | POST | `/tasks/:id/answers` | Answer triage questions: `{ "answers": { "<question>": "<answer>" } }`. |

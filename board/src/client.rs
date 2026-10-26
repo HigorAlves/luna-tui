@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use ureq::{Agent, Body, http::Response};
 
-use crate::model::{Metrics, StreamMessage, Task, TaskDetail, TicketText};
+use crate::model::{Metrics, PlanEdit, StreamMessage, Task, TaskDetail, TicketText};
 
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -124,6 +124,13 @@ impl Machine {
             "repoPath": text.repo_path,
         });
         Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}"))).send_json(body))
+    }
+
+    /// Edits triage's proposed plan while it awaits your approval. Slices aren't sent: they
+    /// stay as triage wrote them.
+    pub fn edit_plan(&self, id: &str, edit: &PlanEdit) -> Result<Task, String> {
+        let body = json!({ "brief": edit.brief, "criteria": edit.criteria, "assumptions": edit.assumptions });
+        Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/plan"))).send_json(body))
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {

@@ -4,6 +4,7 @@ import {
   AnswersInput,
   type ApiError,
   DecisionInput,
+  EditPlanInput,
   NewTaskInput,
   StubPlanInput,
   TaskState,
@@ -17,7 +18,7 @@ import { ZodError, type ZodType, z } from "zod";
 import { computeMetrics } from "../persistence/metrics-query.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { type Pipeline, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { NoPlanToEditError, type Pipeline, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
 import type { StubStages } from "../../application/stages/stubs.ts";
 import type { Bus } from "./bus.ts";
 import { InvalidSince, parseSince } from "./metrics.ts";
@@ -66,6 +67,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs }: AppDeps): Hono 
     if (error instanceof TaskNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof TransitionError) return fail(c, 409, "invalid_transition", error.message);
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
+    if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
     if (error instanceof ZodError) return fail(c, 400, "invalid_request", z.prettifyError(error));
     if (error instanceof BadRequest) return fail(c, 400, "invalid_request", error.message);
     console.error(error);
@@ -114,6 +116,14 @@ export function createApp({ db, pipeline, bus, watcher, stubs }: AppDeps): Hono 
     const id = taskId(c);
     const patch = await body(c, UpdateTaskInput);
     const task = toTask(await pipeline.update(id, patch));
+    bus.publish({ type: "task.updated", task });
+    return c.json(task);
+  });
+
+  app.patch("/tasks/:id/plan", async (c) => {
+    const id = taskId(c);
+    const patch = await body(c, EditPlanInput);
+    const task = toTask(await pipeline.editPlan(id, patch));
     bus.publish({ type: "task.updated", task });
     return c.json(task);
   });

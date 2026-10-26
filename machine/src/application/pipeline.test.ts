@@ -221,6 +221,45 @@ describe("acceptance criteria", () => {
   });
 });
 
+describe("editing the plan before approving", () => {
+  it("merges edited fields into the open plan approval, keeping what you didn't touch", async () => {
+    const slices = [{ title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }];
+    stubs.plan("triage", {
+      outcome: "pass",
+      detail: { brief: "old brief", criteria: ["c1"], assumptions: ["a1"], slices },
+    });
+    const task = await newTask();
+    await pipeline.start(task.id);
+
+    await pipeline.editPlan(task.id, { brief: "new brief", criteria: ["c1", "c2"] });
+
+    const approval = (await pipeline.approvals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
+    expect(approval?.requested).toMatchObject({ brief: "new brief", criteria: ["c1", "c2"], assumptions: ["a1"], slices });
+  });
+
+  it("is what gets adopted once you approve", async () => {
+    stubs.plan("triage", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+
+    await pipeline.editPlan(task.id, { criteria: ["edited criterion"] });
+    const approved = await pipeline.decide(task.id, "approved");
+    expect(approved.criteria).toEqual(["edited criterion"]);
+  });
+
+  it("rejects editing when there is no open plan to edit", async () => {
+    const task = await newTask();
+    await expect(pipeline.editPlan(task.id, { brief: "x" })).rejects.toThrow(/no plan/i);
+  });
+
+  it("rejects editing an answers or test-check gate", async () => {
+    stubs.plan("triage", { outcome: "needs_input", detail: { questions: [{ question: "q", recommended: "r" }] } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    await expect(pipeline.editPlan(task.id, { brief: "x" })).rejects.toThrow(/no plan/i);
+  });
+});
+
 describe("gates", () => {
   it("asks triage's questions and re-runs triage with your answers", async () => {
     stubs.plan("triage", {

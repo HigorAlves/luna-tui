@@ -78,6 +78,13 @@ content (a plan to read, test cases to check, each with the criterion it proves,
 runs and recent activity. `e` edits the same ticket in place, right there in
 the board, as the same markdown `n` fills in for a new one:
 
+While a ticket is `awaiting_approval`, the popup (and `e`) splits into two columns
+instead: triage's plan on the left (brief, criteria to build, assumptions — slices stay as
+triage wrote them), the ticket's own description and criteria on the right. `tab` moves
+between the two while editing; `ctrl+s` saves whichever side changed, so you can tighten
+the plan's criteria, add a missing assumption, or fix the ticket's own wording before you
+approve. On a terminal narrower than 110 columns the two stack instead, plan first.
+
 ```markdown
 # Login page
 

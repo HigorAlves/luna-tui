@@ -98,3 +98,11 @@ export class TaskBusyError extends Error {
     this.name = "TaskBusyError";
   }
 }
+
+/** No open `awaiting_approval` gate to edit, so there is no plan on the ticket right now. */
+export class NoPlanToEditError extends Error {
+  constructor(id: string) {
+    super(`task ${id} has no plan awaiting approval`);
+    this.name = "NoPlanToEditError";
+  }
+}
