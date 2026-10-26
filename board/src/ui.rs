@@ -325,10 +325,10 @@ fn footer_line(app: &App) -> Line<'static> {
                     ("esc", "cancel"),
                 ]),
                 crate::vim::Mode::Insert => {
-                    return Line::from(vec![
+                    Line::from(vec![
                         Span::from(format!(" editing the {pane} ")).fg(c(ACCENT)).bold(),
                         Span::from("   esc normal mode · ctrl+s save both").fg(c(SUBTEXT0)),
-                    ]);
+                    ])
                 }
             }
         }
@@ -628,12 +628,11 @@ fn continues_line(state: &str, stage: &str) -> String {
 /// The full ticket: state, what it waits on you for, text, stage runs and activity.
 fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&TaskDetail>, scroll: &Cell<u16>) {
     let detail = detail.filter(|d| d.task.id == task.id);
-    if task.state == "awaiting_approval" {
-        if let Some(approval) = detail.and_then(TaskDetail::open_approval) {
+    if task.state == "awaiting_approval"
+        && let Some(approval) = detail.and_then(TaskDetail::open_approval) {
             render_plan_and_ticket(frame, area, task, detail, approval, scroll);
             return;
         }
-    }
 
     let heading = |text: String| Line::from(Span::from(text).fg(c(ACCENT)).bold());
     // What the agent proposed, needing your judgment, gets its own color — distinct from the

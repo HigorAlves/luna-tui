@@ -1210,28 +1210,24 @@ mod tests {
     #[test]
     fn has_open_plan_true_only_for_awaiting_approval_with_an_open_gate() {
         let task = task_at("awaiting_approval");
-        let detail: TaskDetail = serde_json::from_str(&format!(
-            r#"{{"task":{{"id":"t1","title":"x","description":"","criteria":[],
+        let detail: TaskDetail = serde_json::from_str(r#"{"task":{"id":"t1","title":"x","description":"","criteria":[],
             "repoPath":null,"branch":null,"worktreePath":null,"state":"awaiting_approval","column":"Approved",
             "waitingOnYou":true,"running":false,"queued":false,
-            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
-            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}},
-            "stageRuns":[],"approvals":[{{"requested":{{"brief":"b"}},"decision":null}}],"events":[]}}"#
-        )).unwrap();
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"},
+            "stageRuns":[],"approvals":[{"requested":{"brief":"b"},"decision":null}],"events":[]}"#).unwrap();
 
         assert!(has_open_plan(&task, Some(&detail)));
         assert!(!has_open_plan(&task_at("draft"), Some(&detail)));
         assert!(!has_open_plan(&task, None));
 
         let mismatched = task_at("awaiting_approval");
-        let other_detail: TaskDetail = serde_json::from_str(&format!(
-            r#"{{"task":{{"id":"other","title":"x","description":"","criteria":[],
+        let other_detail: TaskDetail = serde_json::from_str(r#"{"task":{"id":"other","title":"x","description":"","criteria":[],
             "repoPath":null,"branch":null,"worktreePath":null,"state":"awaiting_approval","column":"Approved",
             "waitingOnYou":true,"running":false,"queued":false,
-            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
-            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}},
-            "stageRuns":[],"approvals":[{{"requested":{{"brief":"b"}},"decision":null}}],"events":[]}}"#
-        )).unwrap();
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"},
+            "stageRuns":[],"approvals":[{"requested":{"brief":"b"},"decision":null}],"events":[]}"#).unwrap();
         assert!(!has_open_plan(&mismatched, Some(&other_detail)));
     }
 
