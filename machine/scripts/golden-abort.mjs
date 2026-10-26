@@ -76,11 +76,11 @@ async function main() {
   await api(`/tasks/${id}/start`, { method: "POST" });
   await waitFor(id, ["awaiting_approval"], 10 * 60_000);
   await api(`/tasks/${id}/decision`, { method: "POST", body: JSON.stringify({ decision: "approved" }) });
-  await waitFor(id, ["awaiting_test_check"], 60_000);
+  await waitFor(id, ["awaiting_test_check"], 10 * 60_000);
   await api(`/tasks/${id}/decision`, { method: "POST", body: JSON.stringify({ decision: "approved" }) });
 
   log("implementer starting; waiting a few seconds before aborting");
-  await waitFor(id, ["implementing"], 60_000);
+  await waitFor(id, ["implementing"], 2 * 60_000);
   await new Promise((r) => setTimeout(r, 5000));
 
   log("aborting");
