@@ -30,7 +30,7 @@ export class PgTaskStore implements TaskStore {
       source: input.source,
       branch: null,
       worktreePath: null,
-      state: "backlog",
+      state: "draft",
       retries: { ...NO_RETRIES },
       resumeTo: null,
       reason: null,

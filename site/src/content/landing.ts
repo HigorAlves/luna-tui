@@ -107,7 +107,7 @@ export const github = {
   features: [
     {
       title: "Issues become tickets",
-      body: "The machine polls the repos you list. A labelled issue becomes a backlog ticket, its checklist becomes the criteria.",
+      body: "The machine polls the repos you list. A labelled issue becomes a ticket in Intake, its checklist becomes the criteria.",
     },
     {
       title: "A draft PR, early",
@@ -136,7 +136,7 @@ export const board = {
   features: [
     {
       title: "Columns follow state",
-      body: "Nine columns from Backlog to Done, driven by the machine. No dragging a card to pretend work moved.",
+      body: "Eight columns from Intake to Done, driven by the machine. No dragging a card to pretend work moved.",
     },
     {
       title: "One key per gate",

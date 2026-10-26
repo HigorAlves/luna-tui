@@ -147,7 +147,6 @@ export function transition(task: Snapshot, event: PipelineEvent): Step {
       if (state === "paused_rate_limit" && task.resumeTo) return run(task.resumeTo, retries);
       break;
     case "start":
-      if (state === "backlog") return move("draft", retries);
       if (state === "draft") return run("triage", retries);
       break;
     case "answered":
