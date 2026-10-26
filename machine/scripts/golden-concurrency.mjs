@@ -59,13 +59,12 @@ async function waitFor(id, targets, timeoutMs) {
   throw new Error(`timed out waiting for [${targets.join(", ")}], last state ${last}`);
 }
 
-async function createAndStart(suffix) {
+async function create(suffix) {
   const repoPath = setupRepo(suffix);
   const { id } = await api("/tasks", {
     method: "POST",
     body: JSON.stringify({ title: `concurrency check ${suffix}`, repoPath }),
   });
-  await api(`/tasks/${id}/start`, { method: "POST" });
   return { id, repoPath };
 }
 
@@ -76,9 +75,9 @@ async function main() {
     throw new Error(`machine not reachable at ${MACHINE_URL} — start it with a real credential and MACHINE_MAX_CONCURRENT=1 pnpm dev`);
   }
 
-  log("creating two tasks, both moved to intake");
-  const a = await createAndStart("a");
-  const b = await createAndStart("b");
+  log("creating two tasks in intake");
+  const a = await create("a");
+  const b = await create("b");
 
   log("starting both triage runs back to back — only one slot available");
   const startA = api(`/tasks/${a.id}/start`, { method: "POST" });

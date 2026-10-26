@@ -1,4 +1,4 @@
-// Polls GitHub for labelled issues and turns each new one into a backlog task. The `gh`
+// Polls GitHub for labelled issues and turns each new one into a task in Intake. The `gh`
 // CLI does the talking, so auth is whatever `gh auth login` set up.
 import { defaultGh, type Gh, listReadyIssues } from "../adapters/github/gh.ts";
 import type { Pipeline } from "./pipeline.ts";

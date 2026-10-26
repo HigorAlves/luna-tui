@@ -17,7 +17,7 @@ describe("buildRunnerFor", () => {
     expect(runnerFor("verifying")).toBe("verify");
     expect(runnerFor("shipping")).toBe("ship");
     expect(runnerFor("triage")).toBe(real.triage);
-    expect(runnerFor("backlog")).toBe(stub);
+    expect(runnerFor("draft")).toBe(stub);
   });
 
   it("prefers the real map's shipping runner (the memory-review wrapper) over the stub ship runner", () => {

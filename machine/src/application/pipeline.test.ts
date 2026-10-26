@@ -35,11 +35,8 @@ beforeEach(async () => {
   pipeline = new Pipeline(db, stubs.runnerFor, { inline: true });
 });
 
-/** A task past backlog, ready for `pipeline.start()` to run triage. */
-const newTask = async () => {
-  const task = await pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
-  return pipeline.start(task.id);
-};
+/** A ticket in Intake (draft), ready for `pipeline.start()` to run triage. */
+const newTask = () => pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
 
 /** Starts a task and approves the plan and the test names, which reaches the implementer. */
 async function startAndApprove(id: string) {
@@ -52,9 +49,9 @@ const stagesRun = async (id: string): Promise<TaskState[]> =>
   (await pipeline.stageRuns(id)).map((run) => run.stage);
 
 describe("creating and starting", () => {
-  it("creates a backlog task with an empty retry budget", async () => {
+  it("creates a task in Intake with an empty retry budget", async () => {
     const task = await pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
-    expect(task).toMatchObject({ state: "backlog", retries: NO_RETRIES, resumeTo: null });
+    expect(task).toMatchObject({ state: "draft", retries: NO_RETRIES, resumeTo: null });
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toEqual(["task.created"]);
   });
 
@@ -66,13 +63,6 @@ describe("creating and starting", () => {
 
     const cleared = await pipeline.update(task.id, { source: null });
     expect(cleared.source).toBeNull();
-  });
-
-  it("moves a backlog task to intake on start, without running a stage", async () => {
-    const task = await pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
-    const started = await pipeline.start(task.id);
-    expect(started.state).toBe("draft");
-    expect(await pipeline.stageRuns(task.id)).toEqual([]);
   });
 
   it("runs triage on start and waits for you to approve the plan", async () => {
@@ -135,7 +125,6 @@ describe("closing", () => {
     });
     const created = await closing.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
     await closing.start(created.id);
-    await closing.start(created.id);
     for (let i = 0; i < 4; i++) await closing.decide(created.id, "approved");
 
     expect((await closing.get(created.id)).state).toBe("closed");
@@ -156,7 +145,6 @@ describe("closing", () => {
       },
     });
     const created = await closing.createTask({ title: "Login page", criteria: ["x"] });
-    await closing.start(created.id);
     await closing.start(created.id);
     for (let i = 0; i < 4; i++) await closing.decide(created.id, "approved");
 
@@ -179,7 +167,6 @@ describe("memory review decision", () => {
     // reviewing_memory is a gate; the retro runs inside shipping and its rules ride on the gate.
     stubs.plan("shipping", { outcome: "pass", detail: { rules: { markdown: "- r\n" } } });
     const created = await p.createTask({ title: "Login page", criteria: ["x"] });
-    await p.start(created.id);
     await p.start(created.id);
     for (let i = 0; i < 3; i++) await p.decide(created.id, "approved");
     return created.id;
@@ -629,7 +616,6 @@ describe("the supervisor tick", () => {
 
       // Another task asking for a slot during the window queues instead of hitting the same wall.
       const waiting = await pipeline.createTask({ title: "Second" });
-      expect(await pipeline.start(waiting.id)).toMatchObject({ state: "draft" });
       expect(await pipeline.start(waiting.id)).toMatchObject({ state: "triage", queued: true });
       await pipeline.tick();
       expect(await pipeline.get(waiting.id)).toMatchObject({ state: "triage", queued: true });
@@ -734,11 +720,8 @@ describe("fair claims", () => {
   const holding: StageRunner = ({ signal }) =>
     new Promise<StageResult>((resolve) => signal.addEventListener("abort", () => resolve({ outcome: "fail" }), { once: true }));
   const runnerFor = (stage: TaskState) => (stage === "triage" ? holding : stubs.runnerFor(stage));
-  /** A ticket in draft, one `start` away from running. */
-  const create = async (repoPath: string) => {
-    const task = await pipeline.createTask({ title: `t ${repoPath}`, criteria: ["c"], repoPath });
-    return pipeline.start(task.id);
-  };
+  /** A ticket in Intake, one `start` away from running. */
+  const create = (repoPath: string) => pipeline.createTask({ title: `t ${repoPath}`, criteria: ["c"], repoPath });
   const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 
   it("claims in the order tasks joined the queue, even when a queued ticket was edited meanwhile", async () => {
@@ -905,7 +888,7 @@ describe("invalid requests", () => {
 
     await expect(pipeline.decide(task.id, "approved")).rejects.toBeInstanceOf(TransitionError);
     expect((await pipeline.get(task.id)).state).toBe("draft");
-    expect((await pipeline.events(task.id)).map((e) => e.kind)).toEqual(["task.created", "transition"]);
+    expect((await pipeline.events(task.id)).map((e) => e.kind)).toEqual(["task.created"]);
     expect(await pipeline.approvals(task.id)).toEqual([]);
   });
 
@@ -1003,7 +986,6 @@ describe("events", () => {
 
     expect(seen).toEqual([
       "task.created",
-      "transition",
       "transition",
       "stage.started",
       "stage.finished",

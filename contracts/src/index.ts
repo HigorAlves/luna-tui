@@ -6,7 +6,6 @@ export * from "./stage.ts";
 
 /** Board columns, named after the harness stages. Same order as the Rust board. */
 export const COLUMNS = [
-  "Backlog",
   "Intake",
   "Triage",
   "Approved",
@@ -20,7 +19,6 @@ export type Column = (typeof COLUMNS)[number];
 
 /** Every state a task can be in, from the stage graph in docs/architecture.md. */
 export const TaskState = z.enum([
-  "backlog",
   "draft",
   "triage",
   "awaiting_answers",
@@ -44,7 +42,6 @@ export type TaskState = z.infer<typeof TaskState>;
 
 /** The board column each task state is shown in. */
 export const COLUMN_OF: Record<TaskState, Column> = {
-  backlog: "Backlog",
   draft: "Intake",
   triage: "Triage",
   awaiting_answers: "Triage",

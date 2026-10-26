@@ -42,12 +42,10 @@ async function getMetrics(query = ""): Promise<Metrics> {
 async function seed() {
   const closed = await pipeline.createTask({ title: "closed" });
   await pipeline.start(closed.id);
-  await pipeline.start(closed.id);
   for (let i = 0; i < 4; i++) await pipeline.decide(closed.id, "approved");
 
   stubs.plan("verifying", fail, fail, fail);
   const escalated = await pipeline.createTask({ title: "escalated" });
-  await pipeline.start(escalated.id);
   await pipeline.start(escalated.id);
   await pipeline.decide(escalated.id, "approved");
   await pipeline.decide(escalated.id, "approved");

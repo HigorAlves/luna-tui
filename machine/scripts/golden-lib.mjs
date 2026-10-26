@@ -167,8 +167,6 @@ export async function drive(ticket, repoPath) {
   });
   log(`created task ${id}`);
   await api(`/tasks/${id}/start`, { method: "POST" });
-  log("moved to intake");
-  await api(`/tasks/${id}/start`, { method: "POST" });
   log("started");
 
   await waitFor(id, ["awaiting_approval"], 10 * 60_000);

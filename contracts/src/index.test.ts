@@ -60,4 +60,11 @@ describe("decision input", () => {
   it("leaves applyRules optional", () => {
     expect(DecisionInput.parse({ decision: "approved" })).toEqual({ decision: "approved" });
   });
+
+  it("has no backlog: a new ticket's first state is draft, shown in Intake, eight columns in all", () => {
+    expect(COLUMNS).toHaveLength(8);
+    expect(COLUMNS[0]).toBe("Intake");
+    expect(TaskState.options).not.toContain("backlog");
+    expect(COLUMN_OF.draft).toBe("Intake");
+  });
 });

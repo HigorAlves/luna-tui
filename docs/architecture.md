@@ -21,7 +21,6 @@ The machine is one service for every repo you point a task at, not one per repo:
 
 | Column | Task states |
 |---|---|
-| Backlog | `backlog` |
 | Intake | `draft` |
 | Triage | `triage`, `awaiting_answers`, `awaiting_approval` |
 | Approved | `test_design`, `awaiting_test_check` |
