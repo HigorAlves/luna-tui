@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type Finding, RUNNING, type TaskSource, type TaskState } from "@hardness/contracts";
+import { type BudgetAlert, type Finding, RUNNING, type TaskSource, type TaskState } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -15,6 +15,8 @@ import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } 
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import type { StageResult, StageRunner } from "./ports.ts";
+import type { Policy } from "../domain/policy.ts";
+import { PolicyStore } from "./policy.ts";
 
 export { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 
@@ -54,7 +56,15 @@ export interface PipelineOptions {
   budget?: Budget;
   /** On shutdown: `requeue` (default) parks running tasks for the next boot; `escalate` waits for you. */
   restartPolicy?: RestartPolicy;
+  /** Each repo's PIPELINE.md (its monthly budget, auto-approval, concurrency); defaults when absent. */
+  policies?: Pick<PolicyStore, "for">;
+  /** Called once per threshold a scope crosses: 80, 90 and 100% of a task's, a repo's month's or the day's ceiling. */
+  onAlert?: (alert: BudgetAlert) => void;
 }
+
+export type { BudgetAlert } from "@hardness/contracts";
+
+const ALERT_STEPS: ReadonlyArray<80 | 90 | 100> = [80, 90, 100];
 
 export interface Budget {
   /** Per task, over all its stage runs. Over it, the task escalates before its next stage. */
@@ -65,6 +75,11 @@ export interface Budget {
 
 const DAY_MS = 24 * 60 * 60_000;
 const usd = (value: number) => `$${value.toFixed(2)}`;
+/** The first instant of the current calendar month, local time. */
+const monthStart = (now = new Date()) => new Date(now.getFullYear(), now.getMonth(), 1);
+/** `2026-10`, the repo-month alert key. */
+const monthKey = (now = new Date()) => `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+const dayKey = (now = new Date()) => now.toISOString().slice(0, 10);
 
 interface DecisionRecord {
   decision: Decision;
@@ -103,6 +118,10 @@ export class Pipeline {
   private readonly closeDeps: CloseDeps | undefined;
   readonly budget: Required<Budget>;
   private readonly restartPolicy: RestartPolicy;
+  private readonly policies: Pick<PolicyStore, "for">;
+  private readonly onAlert: (alert: BudgetAlert) => void;
+  /** The highest threshold already raised per scope key (`task:<id>`, `repo:<path>:<month>`, `day:<date>`). */
+  private readonly alerted = new Map<string, number>();
   /** Set by shutdown(): no slot is filled and no loop started from here on. */
   private stopping = false;
   /** The abort signal of each task currently driving a stage. Its size is the active count. */
@@ -127,6 +146,30 @@ export class Pipeline {
     this.closeDeps = options.closeDeps;
     this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
     this.restartPolicy = options.restartPolicy ?? "requeue";
+    this.policies = options.policies ?? new PolicyStore();
+    this.onAlert = options.onAlert ?? (() => {});
+  }
+
+  /** The repo's policy, from its PIPELINE.md. */
+  policyFor(repoPath: string | null): Promise<Policy> {
+    return this.policies.for(repoPath);
+  }
+
+  /** What the repo has spent this calendar month, in USD. */
+  private repoSpentThisMonthUsd(repoPath: string): Promise<number> {
+    return this.store.repoSpendSinceUsd(repoPath, monthStart());
+  }
+
+  /** The repos that cannot start a stage right now: over their PIPELINE.md monthly ceiling.
+   *  Only repos with a queued task are looked at, so an idle repo costs no query. */
+  private async reposOverMonth(): Promise<Set<string>> {
+    const over = new Set<string>();
+    const queued = (await this.store.listTasks()).filter((t) => t.queued && t.repoPath);
+    for (const repo of new Set(queued.map((t) => t.repoPath!))) {
+      const { monthlyBudgetUsd } = await this.policies.for(repo);
+      if (monthlyBudgetUsd !== null && (await this.repoSpentThisMonthUsd(repo)) >= monthlyBudgetUsd) over.add(repo);
+    }
+    return over;
   }
 
   /** What the trailing 24 hours have cost, in USD. */
@@ -440,7 +483,11 @@ export class Pipeline {
   private async fillSlots(): Promise<void> {
     while (!this.stopping && !this.draining && this.loops.size < this.maxConcurrentTasks && this.latchedUntil === null) {
       if (await this.dayOver()) return;
-      const claimed = await this.store.claimNextQueuedTask({ running: RUNNING, maxPerRepo: this.maxPerRepo });
+      const claimed = await this.store.claimNextQueuedTask({
+        running: RUNNING,
+        maxPerRepo: this.maxPerRepo,
+        excludeRepos: await this.reposOverMonth(),
+      });
       if (!claimed) return;
       const controller = this.reserveSlot(claimed.id);
       const loop = this.startLoop(claimed.id, claimed.state, controller);
@@ -641,7 +688,44 @@ export class Pipeline {
         return true;
       }
     }
+    if (await this.heldForRepoMonth(id, stage)) return true;
     return this.heldForDay(id, stage);
+  }
+
+  /** Over the repo's monthly ceiling (its PIPELINE.md): the task waits in the queue, state
+   *  kept, and the queue skips the repo until the month moves on or the ceiling is raised. */
+  private async heldForRepoMonth(id: string, stage: TaskState): Promise<boolean> {
+    const task = await this.store.getTask(id);
+    if (!task?.repoPath) return false;
+    const { monthlyBudgetUsd } = await this.policies.for(task.repoPath);
+    if (monthlyBudgetUsd === null) return false;
+    const spent = await this.repoSpentThisMonthUsd(task.repoPath);
+    if (spent < monthlyBudgetUsd) return false;
+    await this.enqueue(id);
+    await this.log(id, "budget.held", { stage, reason: `budget: ${task.repoPath} spent ${usd(spent)} of ${usd(monthlyBudgetUsd)} this month` });
+    return true;
+  }
+
+  /** After a run with a cost: each ceiling the spend has crossed a new threshold of, once. */
+  private async raiseAlerts(id: string): Promise<void> {
+    const task = await this.store.getTask(id);
+    if (!task) return;
+    const repo = task.repoPath;
+    const raise = async (scope: BudgetAlert["scope"], key: string, limitUsd: number | null, spent: () => Promise<number>) => {
+      if (limitUsd === null) return;
+      const spentUsd = await spent();
+      const reached = ALERT_STEPS.filter((pct) => spentUsd >= (limitUsd * pct) / 100);
+      const highest = reached.at(-1);
+      if (highest === undefined || highest <= (this.alerted.get(key) ?? 0)) return;
+      this.alerted.set(key, highest);
+      this.onAlert({ scope, taskId: id, repo, pct: highest, spentUsd: Math.round(spentUsd * 100) / 100, limitUsd });
+    };
+    await raise("task", `task:${id}`, this.budget.taskUsd, () => this.store.taskSpendUsd(id));
+    if (repo) {
+      const { monthlyBudgetUsd } = await this.policies.for(repo);
+      await raise("repo", `repo:${repo}:${monthKey()}`, monthlyBudgetUsd, () => this.repoSpentThisMonthUsd(repo));
+    }
+    await raise("day", `day:${dayKey()}`, this.budget.dailyUsd, () => this.spentTodayUsd());
   }
 
   /** Over the day's ceiling: the task waits in the queue, state kept, and says why. */
@@ -846,6 +930,7 @@ export class Pipeline {
       outputCommit: result.run?.outputCommit ?? null,
       ...(result.usage ? { turns: result.usage.turns, costUsd: result.usage.costUsd?.toString() ?? null } : {}),
     });
+    if (result.usage?.costUsd) await this.raiseAlerts(id);
     for (const artifact of result.artifacts ?? []) {
       await this.store.insertArtifact({ taskId: id, stageRunId: runId, ...artifact });
     }

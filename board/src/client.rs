@@ -271,7 +271,7 @@ fn spawn_stream(shared: Arc<RwLock<String>>, candidates: Vec<String>, tx: Sender
 /// snapshot does not say which window it covers. Unknown event types are never an error.
 fn parse_stream_event(event: &str, data: &str) -> Option<StreamMessage> {
     match event {
-        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed" => {
+        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed" | "budget.alert" => {
             serde_json::from_str(data).ok()
         }
         _ => None,

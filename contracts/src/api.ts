@@ -165,14 +165,27 @@ export interface TaskDetail {
  * - `stage.started`: a stage container is running; the board opens a herdr tab at `cwd`
  *   labelled `label` that follows `container`'s logs.
  * - `task.closed`: the task is done or deleted; the board closes its watch tab.
+ * - `budget.alert`: a spend crossed 80, 90 or 100% of a ceiling (a task's, a repo's month's, the day's).
  */
 export type StreamMessage =
   | { type: "task.updated"; task: Task }
+  | { type: "budget.alert"; alert: BudgetAlert }
   | { type: "task.event"; event: TaskEvent }
   | { type: "task.deleted"; id: string }
   | { type: "task.metrics"; metrics: Metrics }
   | { type: "stage.started"; taskId: string; label: string; cwd: string; container: string }
   | { type: "task.closed"; id: string };
+
+/** A spend passing a threshold of a ceiling; raised once per scope and threshold. */
+export interface BudgetAlert {
+  scope: "task" | "repo" | "day";
+  /** The task whose run crossed the line. */
+  taskId: string;
+  repo: string | null;
+  pct: 80 | 90 | 100;
+  spentUsd: number;
+  limitUsd: number;
+}
 
 /** Median and 90th percentile; null when there is no data. */
 export interface Stats {

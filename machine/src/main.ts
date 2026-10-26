@@ -17,6 +17,7 @@ import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { RepoMap } from "./application/repo-map.ts";
 import { Pipeline } from "./application/pipeline.ts";
+import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
 import { realDeliverRunner } from "./application/stages/deliver.ts";
 import { shipRunner } from "./application/stages/ship.ts";
@@ -75,8 +76,13 @@ const watcher = new StreamWatcher(bus);
 // `pipeline` is assigned below, after the real stages are built — `latestE2e` is only
 // ever called once a stage actually runs, by which point `pipeline` is set.
 let pipeline: Pipeline;
-const { real, verifyPack, checksExec } = await buildRealStages(config, watcher, (taskId) =>
-  pipeline.latestStageFinish(taskId, "e2e"),
+/** Every repo's PIPELINE.md, read on demand; shared so a bad edit warns once. */
+const policies = new PolicyStore();
+const { real, verifyPack, checksExec } = await buildRealStages(
+  config,
+  watcher,
+  (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
+  policies,
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
@@ -140,6 +146,11 @@ pipeline = new Pipeline(db, runnerFor, {
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
   closeDeps: { exec, worktreeRemove: false, orcStateBin, watcher },
+  policies,
+  onAlert: (alert) => {
+    console.warn(`budget: ${alert.scope} at ${alert.pct}% ($${alert.spentUsd.toFixed(2)} of $${alert.limitUsd.toFixed(2)})${alert.repo ? ` · ${alert.repo}` : ""}`);
+    bus.publish({ type: "budget.alert", alert });
+  },
 });
 const recovered = await pipeline.recover();
 if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by the last run`);

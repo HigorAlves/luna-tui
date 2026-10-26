@@ -11,7 +11,8 @@ import { NO_RETRIES, TransitionError } from "../domain/transition.ts";
 import type { StageResult, StageRunner } from "./ports.ts";
 import { StubStages } from "./stages/stubs.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { Pipeline, TaskNotFoundError } from "./pipeline.ts";
+import { type BudgetAlert, Pipeline, TaskNotFoundError } from "./pipeline.ts";
+import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
 import type { CloseReport } from "./close-task.ts";
 
@@ -717,6 +718,70 @@ describe("budgets", () => {
     await backdateRuns(task.id);
     await pipeline.tick();
     expect(await pipeline.get(task.id)).toMatchObject({ state: "awaiting_test_check", queued: false });
+  });
+});
+
+describe("a repo's monthly budget and the alerts", () => {
+  const costly = (costUsd: number): StageResult => ({ outcome: "pass", usage: { turns: 1, costUsd } });
+  const policies = (monthly: Record<string, number | null>) => ({
+    for: async (repoPath: string | null) => ({ ...DEFAULT_POLICY, monthlyBudgetUsd: repoPath ? (monthly[repoPath] ?? null) : null }),
+  });
+
+  it("parks a task between stages once its repo spent its month, and the queue skips that repo", async () => {
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: policies({ "/r/a": 2 }) });
+    stubs.plan("triage", costly(3));
+    const a = await pipeline.createTask({ title: "a", repoPath: "/r/a" });
+    expect((await pipeline.start(a.id)).state).toBe("awaiting_approval");
+    expect(await pipeline.decide(a.id, "approved")).toMatchObject({ state: "test_design", queued: true });
+    const held = (await pipeline.events(a.id)).find((e) => e.kind === "budget.held");
+    expect(held?.payload.reason).toBe("budget: /r/a spent $3.00 of $2.00 this month");
+
+    // Another task of the same repo waits in the queue; one of another repo goes.
+    const a2 = await pipeline.createTask({ title: "a2", repoPath: "/r/a" });
+    expect(await pipeline.start(a2.id)).toMatchObject({ state: "triage", queued: true });
+    const b = await pipeline.createTask({ title: "b", repoPath: "/r/b" });
+    expect((await pipeline.start(b.id)).state).toBe("awaiting_approval");
+    await pipeline.tick();
+    expect(await pipeline.get(a.id)).toMatchObject({ state: "test_design", queued: true });
+    expect(await pipeline.get(a2.id)).toMatchObject({ state: "triage", queued: true });
+
+    // Last month's spend does not count.
+    await db.query("update stage_runs set started_at = date_trunc('month', now()) - interval '1 day'");
+    await pipeline.tick();
+    expect(await pipeline.get(a.id)).toMatchObject({ state: "awaiting_test_check", queued: false });
+    expect(await pipeline.get(a2.id)).toMatchObject({ state: "awaiting_approval", queued: false });
+  });
+
+  it("raises each threshold once per scope: task, repo-month and day", async () => {
+    const alerts: BudgetAlert[] = [];
+    pipeline = new Pipeline(db, stubs.runnerFor, {
+      inline: true,
+      budget: { taskUsd: 10, dailyUsd: 100 },
+      policies: policies({ "/r/a": 10 }),
+      onAlert: (alert) => alerts.push(alert),
+    });
+    stubs.plan("triage", costly(8.5), costly(8.5));
+    stubs.plan("test_design", costly(0.6));
+    const a = await pipeline.createTask({ title: "a", repoPath: "/r/a" });
+    await pipeline.start(a.id);
+    expect(alerts).toEqual([
+      { scope: "task", taskId: a.id, repo: "/r/a", pct: 80, spentUsd: 8.5, limitUsd: 10 },
+      { scope: "repo", taskId: a.id, repo: "/r/a", pct: 80, spentUsd: 8.5, limitUsd: 10 },
+    ]);
+    await pipeline.decide(a.id, "approved");
+    expect(alerts.slice(2)).toEqual([
+      { scope: "task", taskId: a.id, repo: "/r/a", pct: 90, spentUsd: 9.1, limitUsd: 10 },
+      { scope: "repo", taskId: a.id, repo: "/r/a", pct: 90, spentUsd: 9.1, limitUsd: 10 },
+    ]);
+    const a2 = await pipeline.createTask({ title: "a2", repoPath: "/r/a" });
+    expect(alerts).toHaveLength(4);
+    await pipeline.start(a2.id);
+    expect(alerts.slice(4)).toEqual([
+      { scope: "task", taskId: a2.id, repo: "/r/a", pct: 80, spentUsd: 8.5, limitUsd: 10 },
+      { scope: "repo", taskId: a2.id, repo: "/r/a", pct: 100, spentUsd: 17.6, limitUsd: 10 },
+    ]);
+    // The day's ceiling, far away, never fires; a repeat run past a line already raised stays quiet.
+    expect(alerts.some((a) => a.scope === "day")).toBe(false);
   });
 });
 

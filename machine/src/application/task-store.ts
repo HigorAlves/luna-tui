@@ -67,6 +67,8 @@ export interface TaskUsage {
 export interface ClaimOptions {
   running: ReadonlySet<TaskState>;
   maxPerRepo: number | null;
+  /** Repos whose tasks stay queued for now (over their monthly budget). */
+  excludeRepos?: ReadonlySet<string>;
 }
 
 export interface TaskStore {
@@ -96,6 +98,8 @@ export interface TaskStore {
   taskUsage(taskId: string): Promise<TaskUsage>;
   /** What every stage run started since `since` has cost, in USD. */
   spendSinceUsd(since: Date): Promise<number>;
+  /** What one repo's stage runs started since `since` have cost, in USD. */
+  repoSpendSinceUsd(repoPath: string, since: Date): Promise<number>;
   countStageRunAttempts(taskId: string, stage: TaskState): Promise<number>;
   insertStageRun(input: InsertStageRunInput): Promise<string>;
   updateStageRun(id: string, patch: UpdateStageRunInput): Promise<void>;

@@ -490,6 +490,11 @@ impl App {
                 Incoming::Message(StreamMessage::Closed { id }) => {
                     thread::spawn(move || herdr::close_task_tab(short_id(&id)));
                 }
+                Incoming::Message(StreamMessage::BudgetAlert { alert }) => {
+                    let line = alert.line();
+                    self.notices.push(Notice { title: "Budget".to_string(), body: line.clone() });
+                    self.notify(format!("budget: {line}"), alert.pct >= 100);
+                }
             }
         }
     }
@@ -2145,6 +2150,28 @@ mod tests {
         assert_eq!(app.floor.as_ref().unwrap().focused(), None, "back to all");
         app.handle_key(KeyEvent::from(KeyCode::BackTab));
         assert_eq!(app.floor.as_ref().unwrap().focused(), Some(None));
+    }
+
+    #[test]
+    fn a_budget_alert_becomes_a_notice_and_a_toast_that_turns_red_at_the_ceiling() {
+        let mut app = App::new(Machine::from_env());
+        let alert = |pct: u8| {
+            serde_json::from_str::<StreamMessage>(&format!(
+                r#"{{"type":"budget.alert","alert":{{"scope":"repo","taskId":"aaaaaaaa0000","repo":"/r/luna-tui","pct":{pct},"spentUsd":18,"limitUsd":20}}}}"#
+            ))
+            .unwrap()
+        };
+        app.tx.send(Incoming::Message(alert(90))).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].title, "Budget");
+        assert_eq!(notices[0].body, "repo luna-tui at 90%: $18.00 of $20.00 this month");
+        let toast = app.toast.as_ref().expect("a toast");
+        assert!(!toast.error);
+        app.tx.send(Incoming::Message(alert(100))).unwrap();
+        app.pump();
+        assert!(app.toast.as_ref().unwrap().error, "the ceiling itself reads as an error");
     }
 
     #[test]

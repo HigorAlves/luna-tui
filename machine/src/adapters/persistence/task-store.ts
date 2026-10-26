@@ -98,6 +98,7 @@ export class PgTaskStore implements TaskStore {
     const load = (task: TaskRow) => runningBy.get(task.repoPath) ?? 0;
     const candidate = queued
       .filter((task) => options.maxPerRepo === null || load(task) < options.maxPerRepo)
+      .filter((task) => task.repoPath === null || !options.excludeRepos?.has(task.repoPath))
       .sort((a, b) => load(a) - load(b))[0];
     if (!candidate) return null;
     return this.db.transaction(async (tx) => {
@@ -164,6 +165,15 @@ export class PgTaskStore implements TaskStore {
 
   async spendSinceUsd(since: Date): Promise<number> {
     const [row] = (await this.db.query("select coalesce(sum(cost_usd), 0) as usd from stage_runs where started_at >= $1", [since])) as { usd: string }[];
+    return Number(row?.usd ?? 0);
+  }
+
+  async repoSpendSinceUsd(repoPath: string, since: Date): Promise<number> {
+    const [row] = (await this.db.query(
+      `select coalesce(sum(r.cost_usd), 0) as usd from stage_runs r join tasks t on t.id = r.task_id
+        where t.repo_path = $1 and r.started_at >= $2`,
+      [repoPath, since],
+    )) as { usd: string }[];
     return Number(row?.usd ?? 0);
   }
 
