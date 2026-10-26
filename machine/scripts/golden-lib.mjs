@@ -103,10 +103,23 @@ export function selftestTicket(fixture, ticket) {
 // ---------- HTTP ----------
 
 export async function api(path, opts = {}) {
-  const res = await fetch(`${MACHINE_URL}${path}`, {
-    ...opts,
-    headers: { "content-type": "application/json", ...opts.headers },
-  });
+  const request = () =>
+    fetch(`${MACHINE_URL}${path}`, {
+      ...opts,
+      headers: { "content-type": "application/json", ...opts.headers },
+    });
+  let res;
+  try {
+    res = await request();
+  } catch (error) {
+    // "fetch failed" with no response: usually a keep-alive socket the server closed while
+    // the client was idle (ECONNRESET under undici). One retry after a beat. A POST that did
+    // reach the server would run twice; the driver's writes are a create and state moves on
+    // a task it then reads back, so the worst case is one orphaned task, not a wrong grade.
+    if (!(error instanceof TypeError)) throw error;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    res = await request();
+  }
   const text = await res.text();
   const json = text ? JSON.parse(text) : undefined;
   if (!res.ok) throw new Error(`${opts.method ?? "GET"} ${path} -> ${res.status}: ${JSON.stringify(json)}`);
