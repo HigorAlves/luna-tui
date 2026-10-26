@@ -137,6 +137,11 @@ export function diffNameStatus(path: string, from: string, to: string): Promise<
   return execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--name-status", from, to]);
 }
 
+/** Puts `files` back as they are at `ref`, leaving HEAD alone (undo with resetWorktree). */
+export async function restoreFiles(path: string, ref: string, files: string[]): Promise<void> {
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "checkout", ref, "--", ...files]);
+}
+
 /**
  * Commits everything the agent changed. Returns the new commit, or null when nothing changed.
  * Commits are not signed: signing needs your passphrase, which a background run cannot ask for.

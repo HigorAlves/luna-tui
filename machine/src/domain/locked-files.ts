@@ -38,3 +38,16 @@ export function lockedFilesTouched(diffNameStatus: string): string[] {
   }
   return touched;
 }
+
+/** The subset of lockedFilesTouched that was deleted or renamed away (status D, R, C): a
+ *  change no replay can vindicate, since the file's tests are simply gone from HEAD. */
+export function lockedFilesRemoved(diffNameStatus: string): string[] {
+  const removed: string[] = [];
+  for (const line of diffNameStatus.split("\n")) {
+    if (!line.trim()) continue;
+    const [status = "", ...pathParts] = line.split("\t");
+    const path = status.startsWith("R") || status.startsWith("C") ? (pathParts[0] ?? "") : pathParts.join("\t");
+    if ((status === "D" || status.startsWith("R") || status.startsWith("C")) && looksLikeTestPath(path)) removed.push(path);
+  }
+  return removed;
+}
