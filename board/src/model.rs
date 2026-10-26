@@ -384,7 +384,7 @@ impl Task {
         }
     }
 
-    /// The card's second line: `worked 4.0m · +142 −18 · tests 7/9`, the parts the task has.
+    /// The card's second line: `worked 4m · +142 −18 · tests 7/9`, the parts the task has.
     pub fn triad(&self) -> Option<String> {
         let parts: Vec<String> = [
             self.worked_ms.map(|ms| format!("worked {}", fmt_ms(Some(ms)))),
@@ -753,9 +753,9 @@ mod tests {
         task.worked_ms = Some(240_000.0);
         task.diff = Some(Diff { added: 142, removed: 18 });
         task.tests = Some(Tests { passed: 7, total: 9 });
-        assert_eq!(task.triad().as_deref(), Some("worked 4.0m · +142 −18 · tests 7/9"));
+        assert_eq!(task.triad().as_deref(), Some("worked 4m · +142 −18 · tests 7/9"));
         task.diff = None;
-        assert_eq!(task.triad().as_deref(), Some("worked 4.0m · tests 7/9"));
+        assert_eq!(task.triad().as_deref(), Some("worked 4m · tests 7/9"));
         let full: Task = serde_json::from_str(&task_json(r#","workedMs":1500,"diff":{"added":1,"removed":0},"tests":{"passed":1,"total":1}"#)).unwrap();
         assert_eq!(full.triad().as_deref(), Some("worked 1.5s · +1 −0 · tests 1/1"));
     }

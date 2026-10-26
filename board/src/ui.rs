@@ -1444,7 +1444,7 @@ mod tests {
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
         let task: Task = serde_json::from_str(TASK).unwrap();
         let lines: Vec<String> = card_lines(&task, None).iter().map(|l| l.to_string()).collect();
-        assert!(lines[2].contains("worked 4.0m · +142 −18 · tests 7/9"), "{lines:?}");
+        assert!(lines[2].contains("worked 4m · +142 −18 · tests 7/9"), "{lines:?}");
         let mut bare = task.clone();
         bare.worked_ms = None;
         bare.diff = None;
