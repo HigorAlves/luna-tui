@@ -2,6 +2,7 @@
 // container runs `orc-stage run`, and the machine ingests what the pack left in /out.
 import type { CiContext, PackId, TaskState } from "@hardness/contracts";
 import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
@@ -89,8 +90,13 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
 
   // Watches the transcript as it streams: a loop on one call is stopped before it spends the turn budget.
   const detector = new StuckDetector();
+  // orc's own state (the slice ledger) lives per task on the host: it outlives the attempt
+  // and you can read it; a stage no longer re-seeds it blind.
+  const stateMount = join(deps.stateDir, "tasks", task.id, "orc");
+  await mkdir(stateMount, { recursive: true });
   const sandbox = await (deps.sandbox ?? runSandbox)({
     name: container,
+    stateMount,
     image: pack === "e2e" ? deps.qaImage : deps.image,
     runDir,
     worktree: workspace.path,
@@ -227,6 +233,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       }
     }
     if (replayed) mapped.detail = { ...mapped.detail, lockedFiles: locked, lockedTestsReplayed: true };
+    // Where the run left the branch; a later test_change reverts verifying's tests by this.
+    mapped.run = { ...mapped.run, outputCommit: await headCommit(workspace.path) };
     if (locked.length > 0 && !replayed) {
       // Undo the commit itself, so the next attempt does not start from it.
       await resetWorktree(workspace.path, inputCommit);

@@ -43,6 +43,9 @@ export interface SandboxRun {
   onStarted?: (container: string) => void;
   /** Sees each transcript line as it streams; a returned reason stops the container as stuck. */
   onLine?: (line: string) => string | null;
+  /** Host dir mounted at /state for orc's own state (the slice ledger), so it outlives the
+   *  attempt and can be read from outside; without it, state lives on the tmpfs. */
+  stateMount?: string;
 }
 
 export interface SandboxResult {
@@ -68,9 +71,9 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     // otherwise hit the now-read-only root filesystem — point HOME at the one writable,
     // throwaway place left: the tmpfs above.
     "-e", "HOME=/tmp",
-    // Temp files and orc's state live on the same tmpfs (orc also self-detects a read-only cwd).
+    // Temp files live on the tmpfs; orc's state too, unless a host dir is mounted for it below.
     "-e", "TMPDIR=/tmp",
-    "-e", "ORC_STATE_DIR=/tmp/orc-state",
+    "-e", `ORC_STATE_DIR=${run.stateMount ? "/state" : "/tmp/orc-state"}`,
     // The credential is passed by name; its value is only in docker's environment.
     "-e", run.credential.name,
     // The worktree is owned by the host user, not the container's; and there is no gpg key
@@ -84,6 +87,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     "-v", `${inDir}:/in:ro`,
     "-v", `${outDir}:/out`,
   );
+  if (run.stateMount) args.push("-v", `${run.stateMount}:/state`);
   if (run.gitDir) {
     args.push("-v", `${run.gitDir}:${run.gitDir}${run.writable ? "" : ":ro"}`);
     // Later mounts shadow earlier ones, so these ride over the writable mount above.

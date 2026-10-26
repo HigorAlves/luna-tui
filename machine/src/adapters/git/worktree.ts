@@ -137,6 +137,11 @@ export function diffNameStatus(path: string, from: string, to: string): Promise<
   return execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--name-status", from, to]);
 }
 
+/** Undoes one commit with a new commit on top (never rewrites history a person may have fetched). */
+export async function revertCommit(path: string, sha: string): Promise<void> {
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "-c", "commit.gpgsign=false", "revert", "--no-edit", sha]);
+}
+
 /** Puts `files` back as they are at `ref`, leaving HEAD alone (undo with resetWorktree). */
 export async function restoreFiles(path: string, ref: string, files: string[]): Promise<void> {
   await execOrThrow("git", [...HOST_GIT, "-C", path, "checkout", ref, "--", ...files]);

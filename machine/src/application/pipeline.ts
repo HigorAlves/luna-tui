@@ -11,7 +11,7 @@ import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
-import { removeWorktree as removeWorktreeOnDisk } from "../adapters/git/worktree.ts";
+import { removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import type { StageResult, StageRunner } from "./ports.ts";
 
@@ -43,6 +43,8 @@ export interface PipelineOptions {
   maxConcurrentTasks?: number;
   /** Running tasks one repo may hold at once; null or absent means no cap. */
   maxPerRepo?: number | null;
+  /** Undoes one commit in a worktree; tests pass a fake. */
+  revertCommit?: (worktreePath: string, sha: string) => Promise<void>;
   /** What the close step needs once a task is approved for good. Without it, nothing is closed on the host. */
   closeDeps?: CloseDeps;
   /** Spend ceilings in USD; either unset means no ceiling of that kind. */
@@ -91,6 +93,7 @@ export class Pipeline {
   private readonly inline: boolean;
   private readonly maxConcurrentTasks: number;
   private readonly maxPerRepo: number | null;
+  private readonly revertCommit: (worktreePath: string, sha: string) => Promise<void>;
   private readonly closeDeps: CloseDeps | undefined;
   readonly budget: Required<Budget>;
   private readonly restartPolicy: RestartPolicy;
@@ -113,6 +116,7 @@ export class Pipeline {
     this.inline = options.inline ?? false;
     this.maxConcurrentTasks = options.maxConcurrentTasks ?? 4;
     this.maxPerRepo = options.maxPerRepo ?? null;
+    this.revertCommit = options.revertCommit ?? revertCommit;
     this.closeDeps = options.closeDeps;
     this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
     this.restartPolicy = options.restartPolicy ?? "requeue";
@@ -543,10 +547,13 @@ export class Pipeline {
         // An abort already moved the task on; this stage's result no longer applies.
         if (controller.signal.aborted) return;
         const stuck = result.outcome === "fail" ? await this.stuckReason(id, stage) : null;
+        // A test_change sends the task back to test_design; verifying's tests, the ones
+        // implementing says are wrong, must not stay locked in the branch meanwhile.
+        const revertFailed = stage === "implementing" && result.outcome === "test_change" ? await this.undoVerifyingTests(id) : null;
         const next: PipelineEvent = result.rateLimited
           ? { type: "rate_limited" }
-          : stuck
-            ? { type: "stage_done", outcome: "escalated", reason: stuck }
+          : (stuck ?? revertFailed)
+            ? { type: "stage_done", outcome: "escalated", reason: (stuck ?? revertFailed)! }
             : {
                 type: "stage_done",
                 outcome: result.outcome,
@@ -689,6 +696,23 @@ export class Pipeline {
       runId: latest.stageRunId,
       ...(detail && typeof detail === "object" ? { detail: detail as Record<string, unknown> } : {}),
     };
+  }
+
+  /** Reverts the commit the latest verifying run added (its tests), when it added one. Returns
+   *  the escalation reason when the revert fails, else null. */
+  private async undoVerifyingTests(id: string): Promise<string | null> {
+    const runs = await this.store.listStageRuns(id);
+    const verifying = runs.filter((r) => r.stage === "verifying" && r.outputCommit && r.outputCommit !== r.inputCommit).at(-1);
+    const task = await this.store.getTask(id);
+    if (!verifying?.outputCommit || !task?.worktreePath) return null;
+    try {
+      await this.revertCommit(task.worktreePath, verifying.outputCommit);
+      await this.log(id, "tests.reverted", { commit: verifying.outputCommit, stageRunId: verifying.id });
+      return null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return `could not revert verifying's tests ${verifying.outputCommit}: ${message}`;
+    }
   }
 
   /** The stuck detector's attempt-level rule: a stage that just failed for the third time in a
