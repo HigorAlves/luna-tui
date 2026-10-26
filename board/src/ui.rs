@@ -442,13 +442,17 @@ fn render_board(frame: &mut Frame, area: Rect, app: &App) {
         .focus
         .saturating_sub(visible - 1)
         .min(COLUMNS.len() - visible);
-    let rects = Layout::horizontal(vec![Constraint::Ratio(1, visible as u32); visible]).split(area);
+    // A folded column (`zc`; Done by default) keeps only its header bar; the others share the rest.
+    let constraints: Vec<Constraint> = (0..visible)
+        .map(|slot| if app.folded.contains(&(start + slot)) { Constraint::Length(FOLD_WIDTH) } else { Constraint::Fill(1) })
+        .collect();
+    let rects = Layout::horizontal(constraints).split(area);
 
     app.column_rects.borrow_mut().clear();
     for (slot, rect) in rects.iter().enumerate() {
         let column = start + slot;
         app.column_rects.borrow_mut().push((column, *rect));
-        render_column(frame, *rect, app, column, true);
+        render_column(frame, *rect, app, column, !app.folded.contains(&column));
     }
 }
 
