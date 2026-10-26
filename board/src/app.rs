@@ -22,7 +22,7 @@ use tui_textarea::TextArea;
 
 use std::collections::BTreeSet;
 
-use crate::digest;
+use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
@@ -71,7 +71,7 @@ pub const ACTIONS: [(char, &str); 14] = [
 ];
 
 /// Keys shown in the help overlay, as (keys, what they do).
-pub const HELP: [(&str, &str); 26] = [
+pub const HELP: [(&str, &str); 27] = [
     ("h / l", "previous / next column"),
     ("j / k", "previous / next ticket"),
     ("enter", "open details"),
@@ -93,6 +93,7 @@ pub const HELP: [(&str, &str); 26] = [
     ("z", "fold: show every column, only the focused one expanded"),
     ("F", "Floor: 7d and 30d metrics (r refreshes, esc closes)"),
     ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
+    ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
     ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
     ("x", "actions for the selected ticket (P resumes every paused one)"),
     ("esc", "clear the filter"),
@@ -259,6 +260,8 @@ pub struct App {
     pub marked: BTreeSet<String>,
     /// The stage pool as `/health` last reported it; None until the first answer.
     pub slots: Option<Slots>,
+    /// The Digest view, open while this is `Some`.
+    pub digest: Option<DigestState>,
     /// When the board was last open (unix seconds): the Digest's since, the cards' new dot.
     pub last_seen_secs: Option<u64>,
     /// The repo this board defaults new tickets to, for the `@` filter. `None` if it
@@ -297,6 +300,7 @@ impl App {
             inbox: None,
             marked: BTreeSet::new(),
             slots: None,
+            digest: None,
             last_seen_secs: store::last_seen_secs_at(&store::state_path()),
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
@@ -819,6 +823,9 @@ impl App {
         if self.inbox.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_inbox(key);
         }
+        if self.digest.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_digest(key);
+        }
         match &self.mode {
             Mode::Normal => self.handle_normal(key),
             Mode::Detail(id) => {
@@ -878,6 +885,62 @@ impl App {
     /// True when the ticket changed since the board was last open.
     pub fn is_new(&self, task: &Task) -> bool {
         digest::is_new(task, self.last_seen_secs)
+    }
+
+    /// The Digest's keys: move, jump to the ticket, open its PR, close.
+    fn handle_digest(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.digest.clone() else {
+            return Outcome::Continue;
+        };
+        let entries = digest::entries(&self.tasks, self.last_seen_secs);
+        let under_cursor = entries.get(state.cursor.min(entries.len().saturating_sub(1))).map(|(_, i)| self.tasks[*i].id.clone());
+        let mut next = state.clone();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('D') | KeyCode::Char('q') => {
+                self.digest = None;
+                return Outcome::Continue;
+            }
+            KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(entries.len().saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => next.cursor = state.cursor.saturating_sub(1),
+            KeyCode::Enter => {
+                if let Some(id) = under_cursor {
+                    self.digest = None;
+                    self.select(&id, true);
+                    self.detail_stale = true;
+                    self.detail_scroll.set(0);
+                    self.mode = Mode::Detail(id);
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('o') => {
+                if let Some(id) = under_cursor {
+                    self.open_pr_or_issue(&id);
+                }
+                return Outcome::Continue;
+            }
+            _ => {}
+        }
+        self.digest = Some(next);
+        Outcome::Continue
+    }
+
+    /// Opens the ticket's PR (from its Ship gate) in the browser, else its issue, else says so.
+    fn open_pr_or_issue(&mut self, id: &str) {
+        let pr = self
+            .machine
+            .detail(id)
+            .ok()
+            .and_then(|d| d.approvals.iter().find_map(|a| a.requested["prUrl"].as_str().map(String::from)));
+        let issue = self.task(id).and_then(|t| t.source.as_ref().map(|s| s.url.clone()));
+        match pr.or(issue) {
+            Some(url) => {
+                let (program, args) = opener_command(&url);
+                if Command::new(program).args(args).spawn().is_err() {
+                    self.notify(format!("could not open {url}"), true);
+                }
+            }
+            None => self.notify("no PR or issue linked to this ticket yet", false),
+        }
     }
 
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
@@ -987,6 +1050,7 @@ impl App {
                 self.refresh_floor();
             }
             KeyCode::Char('I') => self.inbox = Some(InboxState::default()),
+            KeyCode::Char('D') => self.digest = Some(DigestState::default()),
             KeyCode::Char('v') => {
                 // Toggle: remove it if it was marked, else mark it.
                 if let Some(id) = self.selected_id().filter(|id| !self.marked.remove(id)) {
@@ -1763,6 +1827,22 @@ mod tests {
         assert!(app.is_new(&closed));
         app.last_seen_secs = crate::model::unix_secs("2026-10-23T21:00:00Z");
         assert!(!app.is_new(&closed));
+    }
+
+    #[test]
+    fn the_digest_opens_with_d_moves_and_closes() {
+        let mut app = App::new(Machine::from_env());
+        app.last_seen_secs = crate::model::unix_secs("2026-10-22T21:00:00Z");
+        app.tasks.push(ticket("aaaaaaaa0000", "closed", false, false));
+        app.tasks.push(ticket("bbbbbbbb0000", "escalated", false, false));
+        let press = |app: &mut App, code: KeyCode| { app.handle_key(KeyEvent::from(code)); };
+        press(&mut app, KeyCode::Char('D'));
+        assert_eq!(app.digest.as_ref().map(|d| d.cursor), Some(0));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.digest.as_ref().map(|d| d.cursor), Some(1), "two entries: the cursor stops at the last");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.digest.is_none());
     }
 
     #[test]

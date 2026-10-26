@@ -16,6 +16,7 @@ use ratatui::{
 use serde_json::Value;
 use tui_textarea::TextArea;
 
+use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::{
     app::{ACTIONS, App, FloorState, HELP, Mode},
@@ -112,6 +113,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(header_line(app), header);
     if let Some(floor) = &app.floor {
         render_floor(frame, body, floor);
+        frame.render_widget(footer_line(app), footer);
+        return;
+    }
+    if let Some(digest) = app.digest.as_ref().filter(|_| matches!(app.mode, Mode::Normal)) {
+        render_digest(frame, body, app, digest);
         frame.render_widget(footer_line(app), footer);
         return;
     }
@@ -308,6 +314,9 @@ fn footer_line(app: &App) -> Line<'static> {
 
     if app.floor.is_some() && matches!(app.mode, Mode::Normal) {
         return hint(&[("r", "refresh"), ("esc", "close")]);
+    }
+    if app.digest.is_some() && matches!(app.mode, Mode::Normal) {
+        return hint(&[("j/k", "move"), ("enter", "jump to the ticket"), ("o", "open the PR"), ("esc", "close")]);
     }
     if app.inbox.is_some() && matches!(app.mode, Mode::Normal) {
         return hint(&[("j/k", "move"), ("h/l", "split"), ("a/r/e", "act"), ("A", "approve all"), ("enter", "open"), ("esc", "close")]);
@@ -1146,6 +1155,56 @@ fn render_inbox(frame: &mut Frame, area: Rect, app: &App, inbox: &InboxState) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+/// The Digest: what changed since the board was last open, by group, newest first.
+fn render_digest(frame: &mut Frame, area: Rect, app: &App, digest: &DigestState) {
+    let now = now_secs();
+    let since = app.last_seen_secs.map_or("ever".to_string(), |s| format!("{} ago", age_secs(now.saturating_sub(s))));
+    let entries = digest::entries(&app.tasks, app.last_seen_secs);
+    let mut lines = vec![Line::from(Span::from(format!(" Digest · since {since} · {} change(s)", entries.len())).fg(c(ACCENT)).bold())];
+    if entries.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::from("  ✓ nothing new").fg(c(GREEN))));
+    }
+    let cursor = digest.cursor.min(entries.len().saturating_sub(1));
+    let mut last_group = None;
+    for (row, (group, i)) in entries.iter().enumerate() {
+        if last_group != Some(*group) {
+            lines.push(Line::default());
+            lines.push(Line::from(Span::from(format!(" {}", group.label())).fg(c(SUBTEXT0)).bold()));
+            last_group = Some(*group);
+        }
+        let task = &app.tasks[*i];
+        let look = task.look_at(now);
+        let selected = row == cursor;
+        let what = task.reason.clone().unwrap_or_else(|| task.status_label());
+        let repo = task.repo_name().map(|r| format!("{r} · ")).unwrap_or_default();
+        let mut line = vec![
+            Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+            Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)),
+            Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)),
+            Span::from(repo).fg(c(SUBTEXT0)),
+            Span::from(task.title.clone()).bold(),
+            Span::from(format!("   {what}")).fg(look_color(look)),
+            Span::from(format!(" · {}", age(&task.updated_at, now))).fg(c(SUBTEXT0)),
+        ];
+        if selected {
+            line = line.into_iter().map(|s| s.bg(c(SELECTED_BG))).collect();
+        }
+        lines.push(Line::from(line));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// `3h`, `2d`: a duration in seconds, in the largest unit that fits.
+fn age_secs(secs: u64) -> String {
+    match secs {
+        s if s < 60 => format!("{s}s"),
+        s if s < 3600 => format!("{}m", s / 60),
+        s if s < 86_400 => format!("{}h", s / 3600),
+        s => format!("{}d", s / 86_400),
+    }
+}
+
 /// A small centered box with one line of text, for a yes/no that has no single ticket.
 fn render_note(frame: &mut Frame, title: &str, note: &str) {
     let width = (note.len() as u16 + 6).min(frame.area().width.saturating_sub(4)).max(20);
@@ -1608,6 +1667,30 @@ mod tests {
         .unwrap();
         assert!(card_head(&task, false, true).to_string().contains('•'));
         assert!(!card_head(&task, false, false).to_string().contains('•'));
+    }
+
+    #[test]
+    fn the_digest_groups_what_changed_newest_first() {
+        let mut app = App::new(crate::Machine::from_env());
+        app.last_seen_secs = crate::model::unix_secs("2026-10-22T21:00:00Z");
+        let task: Task = serde_json::from_str(
+            r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
+            "repoPath":"/r/luna-tui","branch":null,"worktreePath":null,"state":"escalated","column":"Build",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":"deliver failed",
+            "createdAt":"2026-10-22T20:00:00.000Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#,
+        )
+        .unwrap();
+        app.tasks.push(task);
+        app.digest = Some(DigestState::default());
+        let mut terminal = Terminal::new(TestBackend::new(120, 12)).unwrap();
+        terminal.draw(|f| render_digest(f, f.area(), &app, app.digest.as_ref().unwrap())).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let text = (0..12).map(|y| (0..120).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("Escalated"), "{text}");
+        assert!(text.contains("luna-tui · Login page"), "{text}");
+        assert!(text.contains("deliver failed"), "{text}");
+        assert_eq!(age_secs(7200), "2h");
     }
 
     #[test]
