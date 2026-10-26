@@ -215,7 +215,15 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
         });
         await resetWorktree(workspace.path);
         if (ran.code === 0) replayed = true;
-        else replayError = `changed existing test file(s) and the tests that were there no longer pass: ${locked.join(", ")}`;
+        else {
+          // Exit 127 is "command not found": the suite never ran (vitest not installed, say),
+          // which is not the same as the original tests failing. Either way, show the tail.
+          const tail = `${ran.stdout}\n${ran.stderr}`.trim().split("\n").slice(-12).join("\n");
+          replayError =
+            ran.code === 127
+              ? `changed existing test file(s), and the test command could not run to prove them (\`${found.test.join(" ")}\`, exit 127; install what it needs first): ${locked.join(", ")}\n${tail}`
+              : `changed existing test file(s) and the tests that were there no longer pass: ${locked.join(", ")}\n${tail}`;
+        }
       }
     }
     if (replayed) mapped.detail = { ...mapped.detail, lockedFiles: locked, lockedTestsReplayed: true };
@@ -237,9 +245,10 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           severity: "test",
           title: "locked test file changed",
           body:
-            pack === "implementing"
+            replayError ??
+            (pack === "implementing"
               ? "Tests present at the start of the run are locked; answer kind test_change instead of editing them."
-              : "Tests present at the start of the run are locked; add a new test file instead of editing this one.",
+              : "Tests present at the start of the run are locked; add a new test file instead of editing this one."),
           suggestion_code: null,
           confidence: 1,
         })),
