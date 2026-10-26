@@ -73,6 +73,8 @@ const runnerFor = buildRunnerFor({
 });
 
 const METRICS_DEBOUNCE_MS = 2_000;
+/** The supervisor pass: orphans escalated, paused timers re-armed, free slots filled. */
+const SUPERVISOR_MS = 30_000;
 let metricsTimer: NodeJS.Timeout | undefined;
 
 /** Streams fresh 7d metrics once after a burst of transitions, so the board need not poll. */
@@ -110,6 +112,7 @@ pipeline = new Pipeline(db, runnerFor, {
 });
 const recovered = await pipeline.recover();
 if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by the last run`);
+pipeline.startSupervisor(SUPERVISOR_MS);
 
 const app = createApp({ db, pipeline, bus, watcher, stubs });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
@@ -129,6 +132,7 @@ if (config.githubPoll.repos.length > 0) {
 
 async function shutdown(): Promise<void> {
   intake?.stop();
+  pipeline.stopSupervisor();
   server.close();
   await pipeline.shutdown();
   await db.destroy();

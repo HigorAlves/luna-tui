@@ -468,6 +468,92 @@ describe("restart recovery", () => {
   });
 });
 
+describe("the supervisor tick", () => {
+  /** What a lost wakeup leaves behind: a task queued for a slot while no loop is finishing. */
+  const parkQueued = (id: string, state: TaskState) =>
+    db.query("update tasks set state = $2, queued = true, updated_at = now() - interval '5 minutes' where id = $1", [id, state]);
+
+  it("fills a free slot the queue was waiting on", async () => {
+    const task = await pipeline.createTask({ title: "Login page" });
+    await parkQueued(task.id, "triage");
+    await pipeline.tick();
+    expect(await pipeline.get(task.id)).toMatchObject({ state: "awaiting_approval", queued: false });
+  });
+
+  it("escalates a running task no loop is driving, once it has sat there past the grace period", async () => {
+    const task = await pipeline.createTask({ title: "Login page" });
+    await db.query("update tasks set state = 'implementing', queued = false, updated_at = now() - interval '5 minutes' where id = $1", [task.id]);
+    const fresh = await pipeline.createTask({ title: "Just transitioned" });
+    await db.query("update tasks set state = 'implementing', queued = false where id = $1", [fresh.id]);
+
+    await pipeline.tick();
+
+    expect(await pipeline.get(task.id)).toMatchObject({
+      state: "escalated",
+      reason: "stage loop crashed: no stage loop was driving it",
+      resumeTo: "implementing",
+    });
+    // Inside the grace period it may be a task between its transition and its slot: left alone.
+    expect((await pipeline.get(fresh.id)).state).toBe("implementing");
+  });
+
+  it("leaves a task whose loop is alive untouched", async () => {
+    let finish: (() => void) | undefined;
+    const blocking: StageRunner = () => new Promise<StageResult>((resolve) => (finish = () => resolve({ outcome: "pass" })));
+    pipeline = new Pipeline(db, (stage) => (stage === "triage" ? blocking : stubs.runnerFor(stage)));
+    const task = await newTask();
+    await pipeline.start(task.id);
+    while (!finish) await new Promise((resolve) => setTimeout(resolve, 5));
+    await db.query("update tasks set updated_at = now() - interval '5 minutes' where id = $1", [task.id]);
+
+    await pipeline.tick();
+    expect((await pipeline.get(task.id)).state).toBe("triage");
+
+    finish();
+    while ((await pipeline.get(task.id)).state === "triage") await new Promise((resolve) => setTimeout(resolve, 5));
+  });
+
+  it("re-arms the resume timer of a paused task that lost it", async () => {
+    vi.useFakeTimers();
+    try {
+      const inOneHour = Math.floor(Date.now() / 1000) + 3600;
+      stubs.plan("implementing", { outcome: "pass", rateLimited: true, detail: { resetsAt: String(inOneHour) } });
+      const task = await newTask();
+      expect((await startAndApprove(task.id)).state).toBe("paused_rate_limit");
+
+      const restarted = new Pipeline(db, stubs.runnerFor, { inline: true });
+      await restarted.tick();
+      expect(restarted.hasResumeTimer(task.id)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("claims nothing while a usage window is latched, then drains the queue once it resets", async () => {
+    vi.useFakeTimers();
+    try {
+      const inOneHour = Math.floor(Date.now() / 1000) + 3600;
+      stubs.plan("implementing", { outcome: "pass", rateLimited: true, detail: { resetsAt: String(inOneHour) } });
+      const paused = await newTask();
+      expect((await startAndApprove(paused.id)).state).toBe("paused_rate_limit");
+      expect(pipeline.latchedUntil).not.toBeNull();
+
+      // Another task asking for a slot during the window queues instead of hitting the same wall.
+      const waiting = await pipeline.createTask({ title: "Second" });
+      expect(await pipeline.start(waiting.id)).toMatchObject({ state: "draft" });
+      expect(await pipeline.start(waiting.id)).toMatchObject({ state: "triage", queued: true });
+      await pipeline.tick();
+      expect(await pipeline.get(waiting.id)).toMatchObject({ state: "triage", queued: true });
+
+      vi.setSystemTime(Date.now() + 3600 * 1000 + 60_000);
+      await pipeline.tick();
+      expect(await pipeline.get(waiting.id)).toMatchObject({ state: "awaiting_approval", queued: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("rate limits", () => {
   it("pauses on a usage limit and re-runs the same stage when the window resets", async () => {
     stubs.plan("implementing", { outcome: "pass", rateLimited: true });
