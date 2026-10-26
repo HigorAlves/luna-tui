@@ -14,6 +14,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `MACHINE_PORT` | `4317` | HTTP port the machine listens on |
 | `MACHINE_HOST` | `127.0.0.1` | interface the API binds to (`0.0.0.0` inside the compose container) |
 | `MACHINE_MAX_CONCURRENT` | `4` | tasks driving a stage at once, across every repo |
+| `MACHINE_MAX_PER_REPO` | unset | running tasks one repo may hold at once, so it cannot take every slot; unset means no cap. Claims go oldest-queued first, the repo with the fewest running tasks first |
 | `MACHINE_AGENTS` | on | set to `off` to make every stage a stub (no credential or Docker needed) |
 | `MACHINE_GITHUB_POLL` | empty, off | comma-separated `owner/name` repos whose open issues labelled `MACHINE_GITHUB_LABEL` become backlog tasks; needs the `gh` CLI signed in |
 | `MACHINE_GITHUB_POLL_INTERVAL` | `300` | seconds between GitHub polls |

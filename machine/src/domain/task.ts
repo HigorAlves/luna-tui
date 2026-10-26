@@ -22,6 +22,8 @@ export interface TaskRow {
   reason: string | null;
   /** Ready to run but waiting for a free concurrency slot. */
   queued: boolean;
+  /** When it joined the queue: claims go in this order, so editing a queued ticket keeps its place. */
+  queuedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

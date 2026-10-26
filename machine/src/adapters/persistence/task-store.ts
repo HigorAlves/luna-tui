@@ -5,6 +5,7 @@ import type { DataSource } from "typeorm";
 import { In, IsNull } from "typeorm";
 
 import type {
+  ClaimOptions,
   DecideApprovalInput,
   InsertStageRunInput,
   NewTaskRow,
@@ -73,12 +74,24 @@ export class PgTaskStore implements TaskStore {
       .update({ status: "running" }, { status: "aborted", endedAt: () => "clock_timestamp()" });
   }
 
-  async claimOldestQueuedTask(): Promise<TaskRow | null> {
-    // Pick a candidate unlocked, then re-check it under a row lock, so two slots freeing at
-    // once cannot both claim the same queued task.
-    const candidate = await this.db
-      .getRepository(TaskEntity)
-      .findOne({ where: { queued: true }, order: { updatedAt: "ASC" } });
+  async claimNextQueuedTask(options: ClaimOptions): Promise<TaskRow | null> {
+    // Candidates oldest first by the time they joined the queue (a ticket edited while it
+    // waits keeps its place), then the repo with the fewest running tasks goes first and a
+    // repo at its cap waits; pick unlocked, then re-check under a row lock so two slots
+    // freeing at once cannot both claim the same task.
+    const repo = this.db.getRepository(TaskEntity);
+    const queued = await repo.find({
+      where: { queued: true },
+      order: { queuedAt: { direction: "ASC", nulls: "LAST" }, updatedAt: "ASC" },
+    });
+    if (queued.length === 0) return null;
+    const active = await repo.find({ where: { queued: false, state: In([...options.running]) } });
+    const runningBy = new Map<string | null, number>();
+    for (const task of active) runningBy.set(task.repoPath, (runningBy.get(task.repoPath) ?? 0) + 1);
+    const load = (task: TaskRow) => runningBy.get(task.repoPath) ?? 0;
+    const candidate = queued
+      .filter((task) => options.maxPerRepo === null || load(task) < options.maxPerRepo)
+      .sort((a, b) => load(a) - load(b))[0];
     if (!candidate) return null;
     return this.db.transaction(async (tx) => {
       const locked = await tx

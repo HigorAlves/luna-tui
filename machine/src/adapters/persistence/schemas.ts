@@ -29,6 +29,7 @@ export const TaskEntity = new EntitySchema<TaskRow>({
     resumeTo: { name: "resume_to", type: "text", nullable: true },
     reason: { type: "text", nullable: true },
     queued: { type: "boolean", default: false },
+    queuedAt: { name: "queued_at", type: "timestamptz", nullable: true },
     createdAt: { name: "created_at", type: "timestamptz", createDate: true },
     updatedAt: { name: "updated_at", type: "timestamptz", updateDate: true },
   },

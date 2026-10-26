@@ -56,6 +56,13 @@ export interface TaskTx {
   recordEvent(input: RecordEventInput): Promise<EventRow>;
 }
 
+/** How the next queued task is picked: oldest in the queue, the repo with the fewest running
+ *  tasks first, never a repo at `maxPerRepo` (null: no cap). */
+export interface ClaimOptions {
+  running: ReadonlySet<TaskState>;
+  maxPerRepo: number | null;
+}
+
 export interface TaskStore {
   createTask(input: NewTaskRow): Promise<TaskRow>;
   listTasks(): Promise<TaskRow[]>;
@@ -67,7 +74,7 @@ export interface TaskStore {
   markRunningStageRunsAborted(): Promise<void>;
   /** Finds the longest-queued task and claims it (clearing `queued`) under a row lock, so
    *  two slots freeing at once cannot both claim the same task. Null when none is queued. */
-  claimOldestQueuedTask(): Promise<TaskRow | null>;
+  claimNextQueuedTask(options: ClaimOptions): Promise<TaskRow | null>;
 
   /** Locks the task row for the rest of `fn`, so two transitions on the same task can never
    *  interleave. Throws `TaskNotFoundError`-shaped errors are the caller's job, not the

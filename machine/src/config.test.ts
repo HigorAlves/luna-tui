@@ -26,7 +26,15 @@ describe("loadConfig", () => {
       dailyBudgetUsd: null,
       restartPolicy: "requeue",
       worktreeRetentionDays: 7,
+      maxPerRepo: null,
     });
+  });
+
+  it("caps the running tasks per repo only when told to", () => {
+    expect(loadConfig({ HOME: "/home/me" }).maxPerRepo).toBeNull();
+    expect(loadConfig({ HOME: "/home/me", MACHINE_MAX_PER_REPO: "2" }).maxPerRepo).toBe(2);
+    expect(() => loadConfig({ MACHINE_MAX_PER_REPO: "0" })).toThrow(/MACHINE_MAX_PER_REPO/);
+    expect(() => loadConfig({ MACHINE_MAX_PER_REPO: "two" })).toThrow(/MACHINE_MAX_PER_REPO/);
   });
 
   it("reads the GitHub poll settings", () => {
