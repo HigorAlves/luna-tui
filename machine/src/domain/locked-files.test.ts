@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { lockedFilesTouched } from "./locked-files.ts";
+import { lockedFilesRemoved, lockedFilesTouched } from "./locked-files.ts";
 
 describe("lockedFilesTouched", () => {
   it("flags a modified existing test file", () => {
@@ -56,5 +56,13 @@ describe("lockedFilesTouched", () => {
   it("does not flag a file that merely contains \"test\" as a substring", () => {
     const diff = "M\tsrc/contest.ts\nM\tsrc/attests.js\nM\tsrc/latency.js\n";
     expect(lockedFilesTouched(diff)).toEqual([]);
+  });
+
+  describe("lockedFilesRemoved", () => {
+    it("names only the test files that were deleted or renamed away, not the modified ones", () => {
+      const diff = "M\ttest/cart.test.js\nD\ttest/old.test.js\nR100\ttest/moved.test.js\tsrc/moved.js\nM\tsrc/cart.js\n";
+      expect(lockedFilesRemoved(diff)).toEqual(["test/old.test.js", "test/moved.test.js"]);
+      expect(lockedFilesTouched(diff)).toEqual(["test/cart.test.js", "test/old.test.js", "test/moved.test.js"]);
+    });
   });
 });
