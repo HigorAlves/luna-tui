@@ -95,7 +95,18 @@ export function createApp({ db, pipeline, bus, watcher, stubs }: AppDeps): Hono 
       throw error;
     }
     const budget = { ...pipeline.budget, spentTodayUsd: await pipeline.spentTodayUsd() };
-    return c.json(await computeMetrics(db, { since, slots: pipeline.slots, budget }));
+    const groupBy = c.req.query("groupBy");
+    if (groupBy !== undefined && groupBy !== "repo") throw new BadRequest(`groupBy must be repo, got "${groupBy}"`);
+    const repo = c.req.query("repo");
+    return c.json(
+      await computeMetrics(db, {
+        since,
+        slots: pipeline.slots,
+        budget,
+        ...(repo !== undefined ? { repo: repo === "" ? null : repo } : {}),
+        ...(groupBy === "repo" ? { groupBy } : {}),
+      }),
+    );
   });
 
   app.get("/tasks", async (c) => {

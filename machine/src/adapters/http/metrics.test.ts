@@ -140,6 +140,56 @@ describe("GET /metrics", () => {
     expect(iso.since).toBe("2026-01-01T00:00:00.000Z");
   });
 
+  it("filters by repo, and groups by repo with one slim row per checkout", async () => {
+    const a = await pipeline.createTask({ title: "a", repoPath: "/r/a" });
+    await pipeline.start(a.id);
+    for (let i = 0; i < 4; i++) await pipeline.decide(a.id, "approved");
+    stubs.plan("verifying", fail, fail, fail);
+    const b = await pipeline.createTask({ title: "b", repoPath: "/r/b" });
+    await pipeline.start(b.id);
+    await pipeline.decide(b.id, "approved");
+    await pipeline.decide(b.id, "approved");
+    await pipeline.createTask({ title: "none" });
+
+    const onlyA = await getMetrics("?repo=/r/a");
+    expect(onlyA.repo).toBe("/r/a");
+    expect(onlyA.tasks).toMatchObject({ created: 1, closed: 1, open: 0 });
+    expect(onlyA.escalations.rate).toBe(0);
+    expect(onlyA.cycleTimeMs.perStage.verifying?.runs).toBe(1);
+    const onlyB = await getMetrics("?repo=/r/b");
+    expect(onlyB.tasks).toMatchObject({ created: 1, closed: 0, open: 1, waitingOnYou: 1 });
+    expect(onlyB.escalations.rate).toBe(1);
+    expect(onlyB.retries.byLoop.verify).toBe(3);
+
+    const grouped = await getMetrics("?groupBy=repo");
+    expect(grouped.tasks.created).toBe(3);
+    expect(grouped.byRepo).toEqual([
+      {
+        repo: "/r/a",
+        tasks: { created: 1, closed: 1, open: 0, waitingOnYou: 0, running: 0, queued: 0 },
+        escalationRate: 0,
+        firstPassVerifying: 1,
+        costUsd: 0,
+      },
+      {
+        repo: "/r/b",
+        tasks: { created: 1, closed: 0, open: 1, waitingOnYou: 1, running: 0, queued: 0 },
+        escalationRate: 1,
+        firstPassVerifying: 0,
+        costUsd: 0,
+      },
+      {
+        repo: null,
+        tasks: { created: 1, closed: 0, open: 1, waitingOnYou: 0, running: 0, queued: 0 },
+        escalationRate: null,
+        firstPassVerifying: null,
+        costUsd: 0,
+      },
+    ]);
+    expect((await getMetrics()).byRepo).toBeUndefined();
+    expect((await app().request("/metrics?groupBy=stage")).status).toBe(400);
+  });
+
   it("rejects a bad since with the error shape", async () => {
     const response = await app().request("/metrics?since=bogus");
     expect(response.status).toBe(400);

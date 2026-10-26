@@ -188,9 +188,23 @@ export interface Slots {
   draining: boolean;
 }
 
+/** One repo's slice of the window, for `GET /metrics?groupBy=repo`. */
+export interface RepoMetrics {
+  /** The checkout's path; null for tasks with no repo. */
+  repo: string | null;
+  tasks: Metrics["tasks"];
+  escalationRate: number | null;
+  firstPassVerifying: number | null;
+  costUsd: number;
+}
+
 export interface Metrics {
   since: string;
   until: string;
+  /** Set when the numbers are for one repo (`?repo=<path>`). */
+  repo?: string | null;
+  /** One row per repo, when asked for with `?groupBy=repo`. */
+  byRepo?: RepoMetrics[];
   tasks: {
     created: number;
     closed: number;
