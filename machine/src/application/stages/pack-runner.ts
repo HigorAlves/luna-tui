@@ -3,7 +3,7 @@
 import type { CiContext, PackId, TaskState } from "@hardness/contracts";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import {
   type Workspace,
@@ -110,8 +110,9 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     credential: deps.credential,
     labels: { "dev.hardness.task": task.id },
     signal: context.signal,
+    // The tab's label names the repo too: five repos' Build tabs read apart.
     onStarted: (name) =>
-      void deps.watcher.follow(task.id, `#${task.id.slice(0, 8)} ${task.title}`, workspace.path, name),
+      void deps.watcher.follow(task.id, `#${task.id.slice(0, 8)} ${basename(task.repoPath!)} · ${task.title}`, workspace.path, name),
     onLine: (line) => detector.feed(line),
   });
 

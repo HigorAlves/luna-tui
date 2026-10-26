@@ -307,7 +307,22 @@ pub fn short_id(id: &str) -> &str {
     &id[..id.len().min(8)]
 }
 
+/// How many distinct colours a repo bar can take; `repo_colour_slot` picks one per repo name.
+pub const REPO_COLOUR_SLOTS: usize = 6;
+
+/// A stable slot for a repo name, so the same repo keeps its colour across restarts and
+/// machines: a small hash, nothing more.
+pub fn repo_colour_slot(name: &str) -> usize {
+    let hash = name.bytes().fold(5381u32, |h, b| h.wrapping_mul(33) ^ u32::from(b));
+    (hash as usize) % REPO_COLOUR_SLOTS
+}
+
 impl Task {
+    /// The repo's basename (`luna-tui` for `/Users/me/Developer/projects/luna-tui`), if any.
+    pub fn repo_name(&self) -> Option<&str> {
+        self.repo_path.as_deref().and_then(|p| p.trim_end_matches('/').rsplit('/').next()).filter(|n| !n.is_empty())
+    }
+
     pub fn short_id(&self) -> &str {
         short_id(&self.id)
     }
@@ -673,6 +688,19 @@ mod tests {
         let p90 = spend_p90(&tasks).unwrap();
         assert!(tasks[3].spent_usd.unwrap() > p90 && tasks[2].spent_usd.unwrap() <= p90, "p90 {p90}");
         assert_eq!(t(None).spent_usd, None);
+    }
+
+    #[test]
+    fn a_task_names_its_repo_by_basename_and_gets_a_stable_colour_slot() {
+        let mut task: Task = serde_json::from_str(&task_json("")).unwrap();
+        assert_eq!(task.repo_name(), None);
+        task.repo_path = Some("/Users/me/Developer/projects/luna-tui".into());
+        assert_eq!(task.repo_name(), Some("luna-tui"));
+        task.repo_path = Some("/r/orc/".into());
+        assert_eq!(task.repo_name(), Some("orc"));
+        assert_eq!(repo_colour_slot("luna-tui"), repo_colour_slot("luna-tui"));
+        assert_ne!(repo_colour_slot("luna-tui"), repo_colour_slot("orc"));
+        assert!(repo_colour_slot("anything") < REPO_COLOUR_SLOTS);
     }
 
     #[test]

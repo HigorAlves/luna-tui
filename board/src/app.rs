@@ -77,7 +77,7 @@ pub const HELP: [(&str, &str); 24] = [
     ("d", "delete (asks first)"),
     ("f", "focus the agent's watch tab in herdr"),
     ("o", "open the linked GitHub issue in the browser"),
-    ("/", "filter by title or #id"),
+    ("/", "filter by title, #id or repo"),
     ("!", "show only tickets that need you"),
     ("@", "show only tickets for this repo"),
     ("z", "fold: show every column, only the focused one expanded"),
@@ -432,6 +432,7 @@ impl App {
         query.is_empty()
             || task.title.to_lowercase().contains(&query)
             || format!("#{}", task.short_id()).contains(&query)
+            || task.repo_name().is_some_and(|r| r.to_lowercase().contains(&query))
     }
 
     /// Indices into `tasks` for the visible tickets in `column`, most urgent first.
@@ -1303,6 +1304,26 @@ mod tests {
             assert_eq!(program, "xdg-open");
         }
         assert_eq!(args, vec!["https://github.com/acme/app/issues/42".to_string()]);
+    }
+
+    #[test]
+    fn the_filter_matches_the_repo_name_as_well_as_title_and_id() {
+        let mut app = App::new(Machine::from_env());
+        let mut task: Task = serde_json::from_str(
+            r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
+            "repoPath":"/Developer/projects/luna-tui","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#,
+        )
+        .unwrap();
+        app.filter = "luna".into();
+        assert!(app.passes_filter(&task), "the repo basename matches");
+        app.filter = "projects".into();
+        assert!(!app.passes_filter(&task), "only the basename, not the whole path");
+        task.repo_path = None;
+        app.filter = "luna".into();
+        assert!(!app.passes_filter(&task));
     }
 
     #[test]
