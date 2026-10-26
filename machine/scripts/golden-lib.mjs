@@ -263,10 +263,11 @@ export function grade({ detail, testPassed, diffLines, ceilingUsd, expectNoRemot
 
   if (!testPassed) failures.push("fixture tests fail in the worktree");
 
-  // verifying authors the proof: a test file must be in the diff, and every scenario
-  // test_design named (each with an approach) must come back from verifying as a pass.
+  // verifying authors the proof when the repo's own tests do not already give it: a test file
+  // in the diff is reported, not required (a bug ticket whose seed carries the red test needs
+  // none). What is required: every scenario test_design named (each with an approach) comes
+  // back from verifying as a pass.
   const authored = changedFiles.some((f) => TEST_FILE.test(f));
-  if (!authored) failures.push("no test file in the diff: verifying authored nothing");
   const cases = approvals.find((a) => a.kind === "awaiting_test_check")?.requested?.cases ?? [];
   const verifyingDetail = events.filter((e) => e.kind === "stage.finished" && e.payload?.stage === "verifying").at(-1)?.payload?.detail;
   const results = Array.isArray(verifyingDetail?.results) ? verifyingDetail.results : [];
@@ -288,7 +289,8 @@ export function grade({ detail, testPassed, diffLines, ceilingUsd, expectNoRemot
   }
 
   const checks = { suite: testPassed, stages, stubFree, evidence, cost, size, authored, scenarios };
-  return { result: Object.values(checks).every(Boolean) ? "pass" : "fail", checks, failures, costUsd, verdict };
+  const { authored: _reported, ...graded } = checks;
+  return { result: Object.values(graded).every(Boolean) ? "pass" : "fail", checks, failures, costUsd, verdict };
 }
 
 // ---------- matrix ----------

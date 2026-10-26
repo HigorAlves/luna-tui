@@ -95,13 +95,13 @@ describe("grade", () => {
     expect(g.failures.join()).toMatch(/stub ran: verifying/);
   });
 
-  test("verifying must leave a test file in the diff", () => {
+  test("a run where verifying added no test file still passes when every scenario is proven", () => {
+    // The fixture's own red test already proved the bug ticket; verifying said so and committed
+    // nothing. `authored` is reported, not graded: `scenarios` is the proof that counts.
     const g = grade({ ...base, detail: shipped(), changedFiles: ["src/cart.js"] });
     expect(g.checks.authored).toBe(false);
-    expect(g.failures).toContain("no test file in the diff: verifying authored nothing");
-    for (const file of ["pkg/cart_test.go", "tests/test_cart.py", "spec/cart_spec.rb", "src/__tests__/cart.js", "a/b.spec.ts"]) {
-      expect(grade({ ...base, detail: shipped(), changedFiles: ["x.go", file] }).checks.authored, file).toBe(true);
-    }
+    expect(g.result).toBe("pass");
+    expect(g.failures).toEqual([]);
   });
 
   test("test_design's scenarios carry an approach and verifying proves each one", () => {
