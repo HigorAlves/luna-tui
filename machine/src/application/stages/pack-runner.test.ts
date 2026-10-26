@@ -366,6 +366,21 @@ describe("agent stages through orc packs", () => {
     expect(seen!.onLine!("→ Bash npm test")).toBeNull();
   });
 
+  it("records the commit a writable pass ended on, and mounts a per-task state dir for orc", async () => {
+    const run = runners(fakeSandbox(output(), (r) => {
+      writeFileSync(join(r.worktree, "a.txt"), "changed\n");
+      git(r.worktree, "add", "-A");
+      git(r.worktree, "commit", "-q", "-m", "slice");
+    }));
+    const ctx = context("implementing");
+    const result = await run.implementing!(ctx);
+    expect(result.outcome).toBe("pass");
+    expect(result.run?.outputCommit).toBe(git(seen!.worktree, "rev-parse", "HEAD"));
+    expect(result.run?.outputCommit).not.toBe(result.run?.inputCommit);
+    expect(seen!.stateMount).toBe(join(stateDir, "tasks", ctx.task.id, "orc"));
+    expect(existsSync(seen!.stateMount!)).toBe(true);
+  });
+
   it("fails a verifying pass that left uncommitted changes, resetting the worktree, same as implementing", async () => {
     const d = deps(fakeSandbox(output(), (r) => writeFileSync(join(r.worktree, "junk.txt"), "x")));
     const result = await runAgent(d, context("verifying"), "verifying");

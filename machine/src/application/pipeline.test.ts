@@ -446,6 +446,39 @@ describe("retries and escalation", () => {
   });
 });
 
+describe("test_change undoes verifying's tests", () => {
+  it("reverts the commit verifying's tests came in on before test_design re-plans, so the wrong test is not locked in", async () => {
+    const reverted: Array<[string, string]> = [];
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, revertCommit: async (worktree, sha) => void reverted.push([worktree, sha]) });
+    stubs.plan(
+      "implementing",
+      { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/x" } },
+      { outcome: "test_change", detail: { request: "the empty-cart test asserts the wrong text" } },
+    );
+    stubs.plan("verifying", { outcome: "fail", run: { inputCommit: "aaa", outputCommit: "bbb" }, detail: { findings: [] } });
+    const task = await newTask();
+    const after = await startAndApprove(task.id);
+    // Inline, the loop went straight on into test_design, which the stub answered.
+    expect(after.state).toBe("awaiting_test_check");
+    expect(reverted).toEqual([["/wt/x", "bbb"]]);
+    expect((await pipeline.events(task.id)).map((e) => e.kind)).toContain("tests.reverted");
+  });
+
+  it("escalates when the revert fails, instead of sending the task round a loop it cannot win", async () => {
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, revertCommit: async () => { throw new Error("conflict in test/cart.test.js"); } });
+    stubs.plan(
+      "implementing",
+      { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/x" } },
+      { outcome: "test_change", detail: { request: "wrong test" } },
+    );
+    stubs.plan("verifying", { outcome: "fail", run: { inputCommit: "aaa", outputCommit: "bbb" }, detail: { findings: [] } });
+    const task = await newTask();
+    const after = await startAndApprove(task.id);
+    expect(after.state).toBe("escalated");
+    expect(after.reason).toMatch(/could not revert verifying's tests bbb/);
+  });
+});
+
 describe("the stuck detector", () => {
   const same = { outcome: "fail" as const, detail: { error: "implementer left uncommitted changes: ?? .orc/x/slices.json" } };
 

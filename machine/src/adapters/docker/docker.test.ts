@@ -27,6 +27,13 @@ describe("sandboxArgs", () => {
     }
   });
 
+  it("keeps orc's state on the host when given a state mount, so a ledger survives the attempt", () => {
+    const args = sandboxArgs(run({ stateMount: "/state/tasks/t1/orc" }), "/in", "/out");
+    expect(args).toEqual(expect.arrayContaining(["-v", "/state/tasks/t1/orc:/state", "-e", "ORC_STATE_DIR=/state"]));
+    expect(args).not.toContain("ORC_STATE_DIR=/tmp/orc-state");
+    expect(sandboxArgs(run(), "/in", "/out")).toContain("ORC_STATE_DIR=/tmp/orc-state");
+  });
+
   it("caps memory, cpu and process count, so a runaway stage cannot take the machine down", () => {
     const args = sandboxArgs(run(), "/i", "/o").join(" ");
     expect(args).toContain("--memory 4g");
