@@ -785,6 +785,52 @@ describe("a repo's monthly budget and the alerts", () => {
   });
 });
 
+describe("timer-approved plans", () => {
+  const policies = (minutes: number | null) => ({ for: async () => ({ ...DEFAULT_POLICY, autoApprovePlanMinutes: minutes }) });
+  const confident = (over: Record<string, unknown> = {}): StageResult => ({
+    outcome: "pass",
+    detail: { brief: "b", confidence: "high", risk: "low", ...over },
+  });
+
+  it("approves a confident, low-risk plan by itself once the policy's minutes have passed", async () => {
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: policies(10) });
+    stubs.plan("triage", confident());
+    const task = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
+    await pipeline.start(task.id);
+    await pipeline.tick();
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_approval");
+
+    await db.query("update approvals set created_at = now() - interval '11 minutes'");
+    await pipeline.tick();
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_test_check");
+    expect((await pipeline.approvals(task.id))[0]).toMatchObject({
+      decision: "approved",
+      reason: "auto-approved after 10 min: triage reported high confidence and low risk",
+    });
+    expect((await pipeline.events(task.id)).map((e) => e.kind)).toContain("plan.auto_approved");
+  });
+
+  it("keeps waiting when confidence is not high, risk is not low, triage asked questions, or the policy is off", async () => {
+    const cases: Array<[number | null, StageResult]> = [
+      [10, confident({ confidence: "medium" })],
+      [10, confident({ risk: "medium" })],
+      [10, confident({ risk: undefined })],
+      [10, { outcome: "needs_input", needsInput: [{ question: "q", recommended: "r" }], detail: { confidence: "high", risk: "low" } }],
+      [null, confident()],
+    ];
+    for (const [minutes, result] of cases) {
+      await db.query("truncate tasks cascade");
+      pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: policies(minutes) });
+      stubs.plan("triage", result);
+      const task = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
+      const started = await pipeline.start(task.id);
+      await db.query("update approvals set created_at = now() - interval '11 minutes'");
+      await pipeline.tick();
+      expect((await pipeline.get(task.id)).state).toBe(started.state);
+    }
+  });
+});
+
 describe("aborting a running stage", () => {
   it("returns once the stage loop has wound down, so a retry or a delete never races the dying container", async () => {
     // A stage that, told to stop, takes a moment to die and clean up, the way a container does.

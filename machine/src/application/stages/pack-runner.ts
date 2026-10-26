@@ -281,6 +281,9 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
         criteria: list(answer?.criteria, task.criteria),
         assumptions: list(answer?.assumptions, []),
         slices: list(answer?.slices, []),
+        // How sure triage is and how risky the touched paths are: the timer approval reads both.
+        ...(typeof answer?.confidence === "string" ? { confidence: answer.confidence } : {}),
+        ...(typeof answer?.risk === "string" ? { risk: answer.risk } : {}),
       },
     });
   }

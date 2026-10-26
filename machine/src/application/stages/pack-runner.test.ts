@@ -152,6 +152,15 @@ describe("agent stages through orc packs", () => {
     expect(result.detail).toMatchObject({ reason: "needs a new dependency", options: ["add it", "drop it"] });
   });
 
+  it("keeps triage's confidence and risk on the plan, for the timer approval", async () => {
+    const answer = { kind: "brief", summary: "s", criteria: ["c"], confidence: "high", risk: "low" };
+    const run = runners(fakeSandbox(output({ answer })));
+    const result = await run.triage!(context("triage"));
+    expect(result.detail).toMatchObject({ brief: "s", confidence: "high", risk: "low" });
+    const bare = await runners(fakeSandbox(output({ answer: { kind: "brief", summary: "s" } }))).triage!(context("triage"));
+    expect(bare.detail).not.toHaveProperty("confidence");
+  });
+
   it("keeps the test cases test_design answered, for the test check", async () => {
     const cases = [{ title: "rejects a bad password", criterion: "works", approach: "run a.test.ts, confirm it rejects" }];
     const run = runners(fakeSandbox(output({ answer: { kind: "done", summary: "s", cases } })));

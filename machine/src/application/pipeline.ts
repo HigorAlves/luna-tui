@@ -423,7 +423,27 @@ export class Pipeline {
       );
     }
     await this.rearmPaused();
+    await this.autoApprovePlans();
     await this.fillSlots();
+  }
+
+  /** A plan that has waited the repo's `auto_approve_plan_minutes` is approved by itself when
+   *  triage reported high confidence and low risk and asked nothing. Anything less waits for you. */
+  private async autoApprovePlans(): Promise<void> {
+    for (const task of await this.store.findStuckTasks(new Set<TaskState>(["awaiting_approval"]))) {
+      const { autoApprovePlanMinutes: minutes } = await this.policies.for(task.repoPath);
+      if (minutes === null) continue;
+      const open = (await this.store.listApprovals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
+      if (!open) continue;
+      const { confidence, risk, questions } = open.requested;
+      if (confidence !== "high" || risk !== "low" || (Array.isArray(questions) && questions.length > 0)) continue;
+      if (Date.now() - open.createdAt.getTime() < minutes * 60_000) continue;
+      const reason = `auto-approved after ${minutes} min: triage reported high confidence and low risk`;
+      await this.log(task.id, "plan.auto_approved", { reason });
+      await this.decide(task.id, "approved", reason).catch((error: unknown) =>
+        console.error(`could not auto-approve the plan of task ${task.id}`, error),
+      );
+    }
   }
 
   /** The usage window has reset: re-run the stage the task paused in. */
