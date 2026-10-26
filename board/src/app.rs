@@ -22,6 +22,7 @@ use tui_textarea::TextArea;
 
 use std::collections::BTreeSet;
 
+use crate::digest;
 use crate::inbox::{self, InboxState, Split};
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
@@ -258,6 +259,8 @@ pub struct App {
     pub marked: BTreeSet<String>,
     /// The stage pool as `/health` last reported it; None until the first answer.
     pub slots: Option<Slots>,
+    /// When the board was last open (unix seconds): the Digest's since, the cards' new dot.
+    pub last_seen_secs: Option<u64>,
     /// The repo this board defaults new tickets to, for the `@` filter. `None` if it
     /// isn't inside one.
     pub home_repo: Option<String>,
@@ -294,6 +297,7 @@ impl App {
             inbox: None,
             marked: BTreeSet::new(),
             slots: None,
+            last_seen_secs: store::last_seen_secs_at(&store::state_path()),
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
             detail_scroll: Cell::new(0),
@@ -869,6 +873,11 @@ impl App {
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// True when the ticket changed since the board was last open.
+    pub fn is_new(&self, task: &Task) -> bool {
+        digest::is_new(task, self.last_seen_secs)
     }
 
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
@@ -1742,6 +1751,18 @@ mod tests {
         assert_eq!(bulk_targets(&tasks, &all, BulkAction::Worktree), vec![idle.id.clone()], "a running worktree is not killed");
         assert_eq!(bulk_targets(&tasks, &all, BulkAction::Delete), all);
         assert_eq!(paused_ids(&tasks), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_ticket_is_new_when_it_changed_after_the_board_was_last_open() {
+        let mut app = App::new(Machine::from_env());
+        let closed = ticket("aaaaaaaa0000", "closed", false, false);
+        app.last_seen_secs = None;
+        assert!(!app.is_new(&closed), "a first run has no since");
+        app.last_seen_secs = crate::model::unix_secs("2026-10-22T21:00:00Z");
+        assert!(app.is_new(&closed));
+        app.last_seen_secs = crate::model::unix_secs("2026-10-23T21:00:00Z");
+        assert!(!app.is_new(&closed));
     }
 
     #[test]

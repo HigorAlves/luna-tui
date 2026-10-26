@@ -494,7 +494,10 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
     }
 
     let p90 = spend_p90(&app.tasks);
-    let items: Vec<ListItem> = indices.iter().map(|&i| card(&app.tasks[i], p90, app.marked.contains(&app.tasks[i].id))).collect();
+    let items: Vec<ListItem> = indices
+        .iter()
+        .map(|&i| card(&app.tasks[i], p90, app.marked.contains(&app.tasks[i].id), app.is_new(&app.tasks[i])))
+        .collect();
     let list = List::new(items)
         .block(block)
         .highlight_style(selection_style())
@@ -512,10 +515,13 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
 const REPO_COLOURS: [Color; REPO_COLOUR_SLOTS] = [BLUE, GREEN, PEACH, LAVENDER, YELLOW, RED];
 
 /// The card's first line: a repo-coloured bar, the id, the repo's name, the title.
-fn card_head(task: &Task, marked: bool) -> Line<'static> {
+fn card_head(task: &Task, marked: bool, is_new: bool) -> Line<'static> {
     let mut spans = Vec::new();
     if marked {
         spans.push(Span::from("◆ ").fg(c(ACCENT)).bold());
+    }
+    if is_new {
+        spans.push(Span::from("• ").fg(c(YELLOW)).bold());
     }
     if let Some(repo) = task.repo_name() {
         let colour = REPO_COLOURS[repo_colour_slot(repo)];
@@ -530,14 +536,14 @@ fn card_head(task: &Task, marked: bool) -> Line<'static> {
     Line::from(spans)
 }
 
-fn card(task: &Task, spend_p90: Option<f64>, marked: bool) -> ListItem<'static> {
-    ListItem::new(card_lines(task, spend_p90, marked))
+fn card(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool) -> ListItem<'static> {
+    ListItem::new(card_lines(task, spend_p90, marked, is_new))
 }
 
 /// The card's three lines: head, status, and the triad (or a blank spacer without one).
-fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool) -> Vec<Line<'static>> {
+fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool) -> Vec<Line<'static>> {
     let look = task.look();
-    let head = card_head(task, marked);
+    let head = card_head(task, marked, is_new);
 
     let mut meta = vec![
         Span::raw("  "),
@@ -1495,12 +1501,12 @@ mod tests {
             "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
         let task: Task = serde_json::from_str(TASK).unwrap();
-        let head = card_head(&task, false).to_string();
+        let head = card_head(&task, false, false).to_string();
         assert!(head.contains("luna-tui"), "{head}");
         assert!(head.starts_with('▌'), "a repo bar leads the card: {head}");
         let mut bare = task.clone();
         bare.repo_path = None;
-        let head = card_head(&bare, false).to_string();
+        let head = card_head(&bare, false, false).to_string();
         assert!(!head.contains("luna-tui") && !head.starts_with('▌'), "{head}");
     }
 
@@ -1520,13 +1526,13 @@ mod tests {
             "workedMs":240000,"diff":{"added":142,"removed":18},"tests":{"passed":7,"total":9},
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
         let task: Task = serde_json::from_str(TASK).unwrap();
-        let lines: Vec<String> = card_lines(&task, None, false).iter().map(|l| l.to_string()).collect();
+        let lines: Vec<String> = card_lines(&task, None, false, false).iter().map(|l| l.to_string()).collect();
         assert!(lines[2].contains("worked 4m · +142 −18 · tests 7/9"), "{lines:?}");
         let mut bare = task.clone();
         bare.worked_ms = None;
         bare.diff = None;
         bare.tests = None;
-        let lines: Vec<String> = card_lines(&bare, None, false).iter().map(|l| l.to_string()).collect();
+        let lines: Vec<String> = card_lines(&bare, None, false, false).iter().map(|l| l.to_string()).collect();
         assert_eq!(lines[2].trim(), "", "no numbers, no line: {lines:?}");
     }
 
@@ -1569,8 +1575,8 @@ mod tests {
         )
         .unwrap();
         app.tasks.push(task.clone());
-        assert!(!card_head(&task, false).to_string().contains('◆'));
-        assert!(card_head(&task, true).to_string().contains('◆'));
+        assert!(!card_head(&task, false, false).to_string().contains('◆'));
+        assert!(card_head(&task, true, false).to_string().contains('◆'));
         app.marked.insert(task.id.clone());
         app.online = true;
         let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
@@ -1588,6 +1594,20 @@ mod tests {
         assert!(!text(&app).contains("DRAINING"));
         app.slots = Some(crate::model::Slots { max: 4, active: 3, draining: true });
         assert!(text(&app).contains("[DRAINING]"), "{}", text(&app));
+    }
+
+    #[test]
+    fn a_card_that_changed_since_the_board_was_last_open_wears_a_dot() {
+        let task: Task = serde_json::from_str(
+            r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
+            "repoPath":"/r/luna-tui","branch":null,"worktreePath":null,"state":"escalated","column":"Build",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":"deliver failed",
+            "createdAt":"2026-10-22T20:00:00.000Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#,
+        )
+        .unwrap();
+        assert!(card_head(&task, false, true).to_string().contains('•'));
+        assert!(!card_head(&task, false, false).to_string().contains('•'));
     }
 
     #[test]
