@@ -1,0 +1,88 @@
+//! What the board tells you when you are elsewhere: a herdr notification on the transitions
+//! that need you, a live count on the Board tab, a terminal BEL when herdr is not there.
+//! `HARDNESS_BOARD_QUIET=1` silences all of it.
+use crate::model::{Look, Task};
+
+/// One thing worth telling you about.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Notice {
+    pub title: String,
+    pub body: String,
+}
+
+/// The notice a task's change of look is worth, if any: into needs-you, escalated or paused
+/// from anything else. Staying in that look, or leaving it, is not news.
+pub fn notice_for(old: Option<Look>, task: &Task) -> Option<Notice> {
+    let new = task.look();
+    let (title, wants) = match new {
+        Look::NeedsYou => ("Needs you", true),
+        Look::Escalated => ("Escalated", true),
+        Look::Paused => ("Paused on a usage limit", true),
+        _ => ("", false),
+    };
+    if !wants || old == Some(new) {
+        return None;
+    }
+    let what = task.reason.clone().unwrap_or_else(|| task.status_label());
+    let repo = task.repo_name().map(|r| format!("{r} · ")).unwrap_or_default();
+    Some(Notice { title: title.to_string(), body: format!("{repo}#{} {}: {what}", task.short_id(), task.title) })
+}
+
+/// The notice for losing the machine.
+pub fn offline_notice(reason: &str) -> Notice {
+    Notice { title: "Machine offline".to_string(), body: reason.to_string() }
+}
+
+/// The Board tab's label: `Board`, or `Board !2` while two tickets need you.
+pub fn badge_label(needs_you: usize) -> String {
+    if needs_you == 0 { "Board".to_string() } else { format!("Board !{needs_you}") }
+}
+
+/// `HARDNESS_BOARD_QUIET=1` (or anything but empty/0) turns every notice off.
+pub fn quiet(value: Option<&str>) -> bool {
+    matches!(value, Some(v) if !v.is_empty() && v != "0")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn task(state: &str, waiting: bool, reason: Option<&str>) -> Task {
+        let reason = reason.map_or("null".to_string(), |r| format!("\"{r}\""));
+        serde_json::from_str(&format!(
+            r#"{{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
+            "repoPath":"/r/luna-tui","branch":null,"worktreePath":null,"state":"{state}","column":"Build",
+            "waitingOnYou":{waiting},"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":{reason},
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_transition_into_needs_you_escalated_or_paused_is_news_and_staying_there_is_not() {
+        let gate = task("awaiting_approval", true, None);
+        let notice = notice_for(Some(Look::Working), &gate).expect("into needs-you");
+        assert_eq!(notice.title, "Needs you");
+        assert_eq!(notice.body, "luna-tui · #abcdef12 Login page: approve plan");
+        assert_eq!(notice_for(Some(Look::NeedsYou), &gate), None, "already there");
+        assert_eq!(notice_for(None, &gate).map(|n| n.title), Some("Needs you".into()), "first sight counts");
+
+        let escalated = task("escalated", false, Some("deliver failed"));
+        assert_eq!(notice_for(Some(Look::Working), &escalated).map(|n| n.body), Some("luna-tui · #abcdef12 Login page: deliver failed".into()));
+        let paused = task("paused_rate_limit", false, None);
+        assert_eq!(notice_for(Some(Look::Working), &paused).map(|n| n.title), Some("Paused on a usage limit".into()));
+        assert_eq!(notice_for(Some(Look::NeedsYou), &task("implementing", false, None)), None, "leaving a gate is not news");
+    }
+
+    #[test]
+    fn the_badge_counts_and_the_kill_switch_reads_like_an_env_flag() {
+        assert_eq!(badge_label(0), "Board");
+        assert_eq!(badge_label(2), "Board !2");
+        assert!(quiet(Some("1")));
+        assert!(!quiet(Some("0")));
+        assert!(!quiet(Some("")));
+        assert!(!quiet(None));
+        assert_eq!(offline_notice("connection refused").title, "Machine offline");
+    }
+}

@@ -9,6 +9,7 @@ mod client;
 mod discover;
 mod herdr;
 mod model;
+mod notify;
 mod store;
 mod ui;
 mod vim;
@@ -30,8 +31,11 @@ use app::{App, Outcome};
 use client::Machine;
 
 fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
+    let quiet = notify::quiet(std::env::var("HARDNESS_BOARD_QUIET").ok().as_deref());
+    let mut badge = usize::MAX;
     loop {
         app.pump();
+        tell(app, quiet, &mut badge);
         app.ensure_detail();
         app.tick();
         terminal.draw(|frame| ui::draw(frame, app))?;
@@ -52,6 +56,28 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 _ => {}
             }
         }
+    }
+}
+
+/// Notices go to herdr, or ring the terminal bell without it; the tab badge follows the count.
+/// herdr calls are subprocesses, so they stay off the UI thread.
+fn tell(app: &mut App, quiet: bool, badge: &mut usize) {
+    for notice in app.take_notices() {
+        if quiet {
+            continue;
+        }
+        if herdr::available() {
+            std::thread::spawn(move || herdr::notify(&notice.title, &notice.body));
+        } else {
+            print!("\x07");
+            let _ = io::Write::flush(&mut io::stdout());
+        }
+    }
+    let count = app.needs_you_count();
+    if count != *badge {
+        *badge = count;
+        let label = notify::badge_label(count);
+        std::thread::spawn(move || herdr::badge(&label));
     }
 }
 

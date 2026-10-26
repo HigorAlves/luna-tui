@@ -146,6 +146,23 @@ pub fn name_tab_and_pane() {
     }
 }
 
+/// True when the board runs where the herdr CLI can be called.
+pub fn available() -> bool {
+    bin().is_some()
+}
+
+/// A desktop notification with herdr's "request" sound.
+pub fn notify(title: &str, body: &str) {
+    run(&["notification", "show", title, "--body", body, "--sound", "request"]);
+}
+
+/// Relabels the board's own tab (`Board`, `Board !2`), when running as a herdr plugin.
+pub fn badge(label: &str) {
+    if let Ok(tab) = env::var("HERDR_TAB_ID") {
+        run(&["tab", "rename", &tab, label]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
