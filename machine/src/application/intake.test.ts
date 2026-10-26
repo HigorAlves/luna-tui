@@ -62,6 +62,19 @@ describe("GitHubIntake.pollOnce", () => {
     expect(await pipeline.list()).toHaveLength(2);
   });
 
+  it("sets the task's repoPath from the resolver, so an imported issue needs no hand edit", async () => {
+    const gh = async () => ok(JSON.stringify([issues[0]]));
+    const asked: string[] = [];
+    const resolveRepo = async (repo: string) => {
+      asked.push(repo);
+      return repo === "o/a" ? "/repos/a" : null;
+    };
+    const intake = new GitHubIntake({ pipeline, repos: ["o/a"], label: "x", intervalMs: 1000, gh, resolveRepo });
+    await intake.pollOnce();
+    expect(asked).toEqual(["o/a"]);
+    expect((await pipeline.list())[0]!.repoPath).toBe("/repos/a");
+  });
+
   it("keeps polling other repos when one gh call fails", async () => {
     const gh = async (args: string[]) =>
       args[3] === "o/bad" ? { code: 1, stdout: "", stderr: "gh: auth required" } : ok(JSON.stringify([issues[0]]));

@@ -15,6 +15,7 @@ import { pruneOldRuns } from "./adapters/persistence/prune.ts";
 import { sweepImages, sweepRunFolders, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
+import { RepoMap } from "./application/repo-map.ts";
 import { Pipeline } from "./application/pipeline.ts";
 import { exec } from "./adapters/process/exec.ts";
 import { realDeliverRunner } from "./application/stages/deliver.ts";
@@ -155,7 +156,8 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 let intake: GitHubIntake | undefined;
 if (config.githubPoll.repos.length > 0) {
   const { repos, intervalMs, label } = config.githubPoll;
-  intake = new GitHubIntake({ pipeline, repos, label, intervalMs });
+  const repoMap = new RepoMap({ map: config.repoMap, reposDir: config.reposDir });
+  intake = new GitHubIntake({ pipeline, repos, label, intervalMs, resolveRepo: (repo) => repoMap.resolve(repo) });
   console.log(`github intake: polling ${repos.join(", ")} every ${intervalMs / 1000}s for ${label}`);
   intake.start();
 }

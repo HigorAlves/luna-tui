@@ -23,6 +23,10 @@ export interface Config {
   stateDir: string;
   /** Poll GitHub issues carrying `label` in `repos` (`owner/name`) and create tasks. No repos: off. */
   githubPoll: { repos: string[]; intervalMs: number; label: string };
+  /** `owner/name` to the checkout's path, for issues GitHub intake imports. */
+  repoMap: Record<string, string>;
+  /** Checkouts one level under here are matched to `owner/name` by their origin remote. */
+  reposDir: string;
   /** Days to keep a closed task's events/stage runs before pruning them. 0 disables pruning. */
   retentionDays: number;
   /** Days after a task closes before its worktree is removed and its merged branch deleted. 0 disables it. */
@@ -102,6 +106,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!RESTART_POLICIES.includes(restartPolicy)) {
     throw new Error(`MACHINE_RESTART_POLICY must be requeue or escalate, got "${env.MACHINE_RESTART_POLICY}"`);
   }
+  const repoMap: Record<string, string> = {};
+  for (const pair of (env.MACHINE_REPO_MAP ?? "").split(",").map((p) => p.trim()).filter(Boolean)) {
+    const match = /^([\w.-]+\/[\w.-]+)=(\/.+)$/.exec(pair);
+    if (!match) throw new Error(`MACHINE_REPO_MAP must list owner/name=/absolute/path pairs, got "${pair}"`);
+    repoMap[match[1]!] = match[2]!;
+  }
   const home = env.HOME ?? homedir();
   return {
     databaseUrl: env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
@@ -114,6 +124,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
     stateDir: env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness"),
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
+    repoMap,
+    reposDir: env.MACHINE_REPOS_DIR ?? join(home, "Developer"),
     retentionDays,
     worktreeRetentionDays,
     maxPerRepo: optionalPositiveInt(env, "MACHINE_MAX_PER_REPO"),
