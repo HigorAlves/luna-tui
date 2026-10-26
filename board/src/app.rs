@@ -66,9 +66,12 @@ pub const ACTIONS: [(char, &str); 14] = [
 ];
 
 /// Keys shown in the help overlay, as (keys, what they do).
-pub const HELP: [(&str, &str); 29] = [
+pub const HELP: &[(&str, &str)] = &[
     ("h / l", "previous / next column"),
     ("j / k", "previous / next ticket"),
+    ("gg / G", "first / last ticket in the column"),
+    ("1 … 8", "jump to that column"),
+    ("] / [", "next / previous ticket that needs you, across the board"),
     ("enter", "open details"),
     ("n", "new ticket, then edit it in place"),
     ("e", "edit title, description and criteria in place (ctrl+s saves)"),
@@ -1065,9 +1068,44 @@ impl App {
             ('g', 's') => self.group = GroupBy::Stage,
             ('g', 'r') => self.group = GroupBy::Repo,
             ('g', 'a') => self.group = GroupBy::Age,
-            _ => self.notify(format!("{prefix}{c} is not a key; zc/zo fold, zz folds all, gs/gr/ga group"), false),
+            ('g', 'g') => self.selection[self.focus] = 0,
+            _ => self.notify(format!("{prefix}{c} is not a key; zc/zo fold, zz folds all, gs/gr/ga group, gg top"), false),
         }
         self.clamp_selection();
+    }
+
+    /// `]` / `[`: the next / previous ticket that needs you, in board order (column, then row),
+    /// wrapping around. Says so when nothing does.
+    fn hop_needs_you(&mut self, forward: bool) {
+        let mut stops: Vec<(usize, usize, String)> = Vec::new();
+        for column in 0..COLUMNS.len() {
+            for (row, &i) in self.indices(column).iter().enumerate() {
+                let task = &self.tasks[i];
+                if matches!(task.look(), Look::NeedsYou | Look::Escalated) {
+                    stops.push((column, row, task.id.clone()));
+                }
+            }
+        }
+        if stops.is_empty() {
+            return self.notify("nothing needs you", false);
+        }
+        let here = (self.focus, self.selection[self.focus]);
+        let at_or_after = stops.iter().position(|(c, r, _)| (*c, *r) >= here);
+        let next = if forward {
+            match at_or_after {
+                Some(i) if (stops[i].0, stops[i].1) == here => (i + 1) % stops.len(),
+                Some(i) => i,
+                None => 0,
+            }
+        } else {
+            match at_or_after {
+                Some(i) if i > 0 => i - 1,
+                _ => stops.len() - 1,
+            }
+        };
+        let (column, row, _) = &stops[next];
+        self.focus = *column;
+        self.selection[*column] = *row;
     }
 
     /// True when the ticket changed since the board was last open.
@@ -1243,6 +1281,17 @@ impl App {
                     self.prefix = Some(c);
                 }
             }
+            KeyCode::Char('G') => {
+                self.selection[self.focus] = self.indices(self.focus).len().saturating_sub(1);
+            }
+            KeyCode::Char(d @ '1'..='8') => {
+                let column = (d as usize) - ('1' as usize);
+                if column < COLUMNS.len() {
+                    self.focus = column;
+                }
+            }
+            KeyCode::Char(']') => self.hop_needs_you(true),
+            KeyCode::Char('[') => self.hop_needs_you(false),
             KeyCode::Char('F') => {
                 self.floor = Some(FloorState::default());
                 self.refresh_floor();
@@ -2213,6 +2262,54 @@ mod tests {
         }
         app.handle_key(KeyEvent::new(KeyCode::Char('s'), ratatui::crossterm::event::KeyModifiers::CONTROL));
         assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("answer every question, keeping the `## Q:` lines"));
+    }
+
+    #[test]
+    fn gg_and_g_jump_within_the_column_and_a_digit_jumps_to_that_column() {
+        let mut app = App::new(Machine::from_env());
+        for (i, id) in ["aaaaaaaa0000", "bbbbbbbb0000", "cccccccc0000"].iter().enumerate() {
+            let mut t = ticket(id, "implementing", true, true);
+            t.created_at = format!("2026-10-2{i}T00:00:00.000Z");
+            app.tasks.push(t);
+        }
+        let build = app.tasks[0].column_index();
+        app.focus = build;
+        app.handle_key(KeyEvent::from(KeyCode::Char('G')));
+        assert_eq!(app.selection[build], 2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+        assert_eq!(app.selection[build], 0);
+        app.handle_key(KeyEvent::from(KeyCode::Char('1')));
+        assert_eq!(app.focus, 0, "1 is the first column");
+        app.handle_key(KeyEvent::from(KeyCode::Char('8')));
+        assert_eq!(app.focus, COLUMNS.len() - 1, "8 is Done");
+        app.handle_key(KeyEvent::from(KeyCode::Char('9')));
+        assert_eq!(app.focus, COLUMNS.len() - 1, "9 is no column");
+    }
+
+    #[test]
+    fn bracket_keys_hop_between_the_tickets_that_need_you_across_the_board() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        let mut plan = ticket("bbbbbbbb0000", "awaiting_approval", false, false);
+        plan.waiting_on_you = true;
+        plan.column = "Triage".to_string();
+        app.tasks.push(plan);
+        let mut escalated = ticket("cccccccc0000", "escalated", false, true);
+        escalated.column = "Verify".to_string();
+        app.tasks.push(escalated);
+        app.focus = 0;
+        app.handle_key(KeyEvent::from(KeyCode::Char(']')));
+        assert_eq!(app.selected_id().as_deref(), Some("bbbbbbbb0000"));
+        app.handle_key(KeyEvent::from(KeyCode::Char(']')));
+        assert_eq!(app.selected_id().as_deref(), Some("cccccccc0000"));
+        app.handle_key(KeyEvent::from(KeyCode::Char(']')));
+        assert_eq!(app.selected_id().as_deref(), Some("bbbbbbbb0000"), "wraps around");
+        app.handle_key(KeyEvent::from(KeyCode::Char('[')));
+        assert_eq!(app.selected_id().as_deref(), Some("cccccccc0000"));
+        app.tasks.retain(|t| !t.waiting_on_you && t.state != "escalated");
+        app.handle_key(KeyEvent::from(KeyCode::Char(']')));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("nothing needs you"));
     }
 
     #[test]
