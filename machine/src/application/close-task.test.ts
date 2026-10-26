@@ -109,7 +109,7 @@ describe("closeTask", () => {
     const removed = fakeExec();
     const second = await closeTask(task(path), { exec: removed.exec, worktreeRemove: true, orcStateBin: null });
     expect(removed.calls).toEqual([
-      { command: "git", args: ["-C", "/repo", "worktree", "remove", "--force", path], cwd: undefined },
+      { command: "git", args: ["-c", "core.hooksPath=/dev/null", "-C", "/repo", "worktree", "remove", "--force", path], cwd: undefined },
     ]);
     expect(second.worktreeRemoved).toBe(true);
   });

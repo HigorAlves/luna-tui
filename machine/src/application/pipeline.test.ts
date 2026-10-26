@@ -417,6 +417,57 @@ describe("retries and escalation", () => {
   });
 });
 
+describe("restart recovery", () => {
+  it("re-arms the resume timer of a task paused on a usage limit", async () => {
+    vi.useFakeTimers();
+    try {
+      const inOneHour = Math.floor(Date.now() / 1000) + 3600;
+      stubs.plan("implementing", { outcome: "pass", rateLimited: true, detail: { resetsAt: String(inOneHour) } });
+      const task = await newTask();
+      expect((await startAndApprove(task.id)).state).toBe("paused_rate_limit");
+
+      // A new machine over the same database: no timers survive in memory.
+      const restarted = new Pipeline(db, stubs.runnerFor, { inline: true });
+      expect(restarted.hasResumeTimer(task.id)).toBe(false);
+      await restarted.recover();
+      expect(restarted.hasResumeTimer(task.id)).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumes at once a paused task whose window already reset while the machine was down", async () => {
+    const past = Math.floor(Date.now() / 1000) - 60;
+    stubs.plan("implementing", { outcome: "pass", rateLimited: true, detail: { resetsAt: past } });
+    const task = await newTask();
+    expect((await startAndApprove(task.id)).state).toBe("paused_rate_limit");
+
+    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true });
+    await restarted.recover();
+    // inline: the resumed implementing run (now a plain pass) drives on to the ship gate.
+    expect((await restarted.get(task.id)).state).toBe("awaiting_ship");
+  });
+
+  it("escalates a task whose stage loop crashed, with the error as the reason, instead of leaving it running", async () => {
+    const task = await newTask();
+    // Fail the stage_done transition inside the loop (not the start dispatch): the shape of
+    // a DB hiccup while a stage was running.
+    const target = pipeline as unknown as { apply: (...a: unknown[]) => Promise<unknown> };
+    const original = target.apply.bind(pipeline);
+    let tripped = false;
+    vi.spyOn(target, "apply").mockImplementation(async (...args: unknown[]) => {
+      if (!tripped && (args[1] as { type: string }).type === "stage_done") {
+        tripped = true;
+        throw new Error("db down");
+      }
+      return original(...args);
+    });
+    await pipeline.start(task.id);
+    const after = await pipeline.get(task.id);
+    expect(after).toMatchObject({ state: "escalated", reason: "stage loop crashed: db down", resumeTo: "triage" });
+  });
+});
+
 describe("rate limits", () => {
   it("pauses on a usage limit and re-runs the same stage when the window resets", async () => {
     stubs.plan("implementing", { outcome: "pass", rateLimited: true });

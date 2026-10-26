@@ -44,6 +44,13 @@ describe("sandboxArgs", () => {
     expect(args).not.toContain("/g/.git:/g/.git:ro");
   });
 
+  it("keeps hooks and config read-only inside a writable git dir, so a stage cannot plant a hook", () => {
+    const args = sandboxArgs(run({ writable: true, gitDir: "/g/.git", gitReadOnly: ["hooks", "config"] }), "/i", "/o");
+    const mounts = args.filter((_, i) => args[i - 1] === "-v");
+    expect(mounts.indexOf("/g/.git:/g/.git")).toBeLessThan(mounts.indexOf("/g/.git/hooks:/g/.git/hooks:ro"));
+    expect(mounts).toContain("/g/.git/config:/g/.git/config:ro");
+  });
+
   it("commits as you, unsigned: the container has no gitconfig and no gpg key", () => {
     const args = sandboxArgs(run({ gitIdentity: { name: "Ada L", email: "ada@x.dev" } }), "/i", "/o").join(" ");
     for (const env of ["GIT_AUTHOR_NAME=Ada L", "GIT_AUTHOR_EMAIL=ada@x.dev", "GIT_COMMITTER_NAME=Ada L", "GIT_COMMITTER_EMAIL=ada@x.dev"]) {

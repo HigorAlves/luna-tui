@@ -19,6 +19,10 @@ export interface SandboxRun {
   /** The repo's git dir, mounted at the same path so git works inside: writable for a
    * writable stage, since committing writes objects, refs and the worktree's index there. */
   gitDir: string | null;
+  /** Paths under `gitDir` to keep read-only even when the rest is writable: `hooks` and
+   * `config`, so a stage cannot plant a hook (or point `core.hooksPath` at one) that the
+   * host would then run as you. */
+  gitReadOnly?: string[];
   /** Who a writable stage commits as. The container has no gitconfig of its own. */
   gitIdentity?: { name: string; email: string } | null;
   input: Record<string, unknown>;
@@ -67,7 +71,13 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     "-v", `${inDir}:/in:ro`,
     "-v", `${outDir}:/out`,
   );
-  if (run.gitDir) args.push("-v", `${run.gitDir}:${run.gitDir}${run.writable ? "" : ":ro"}`);
+  if (run.gitDir) {
+    args.push("-v", `${run.gitDir}:${run.gitDir}${run.writable ? "" : ":ro"}`);
+    // Later mounts shadow earlier ones, so these ride over the writable mount above.
+    if (run.writable) {
+      for (const sub of run.gitReadOnly ?? []) args.push("-v", `${run.gitDir}/${sub}:${run.gitDir}/${sub}:ro`);
+    }
+  }
   if (run.gitIdentity) {
     const { name, email } = run.gitIdentity;
     for (const who of ["AUTHOR", "COMMITTER"]) {

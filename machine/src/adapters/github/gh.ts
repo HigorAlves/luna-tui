@@ -1,5 +1,6 @@
 // Every call to the `gh` CLI, in one place. Delivering, shipping, CI watch and GitHub
 // intake all go through this file instead of shelling out to `gh` themselves.
+import { HOST_GIT } from "../git/worktree.ts";
 import { type ExecResult, exec } from "../process/exec.ts";
 import { approvedPlan } from "../../domain/stage-input.ts";
 import { buildPr } from "../../domain/prbody.ts";
@@ -73,7 +74,7 @@ export async function openPr(
 
 /** Pushes the task's branch from its worktree. Returns an error message on failure. */
 export async function pushBranch(deps: GitDeps, branch: string, cwd: string): Promise<string | null> {
-  const pushed = await deps.exec("git", ["-C", cwd, "push", "-u", "origin", branch]);
+  const pushed = await deps.exec("git", [...HOST_GIT, "-C", cwd, "push", "-u", "origin", branch]);
   return pushed.code === 0 ? null : `git push failed: ${describe(pushed)}`;
 }
 
