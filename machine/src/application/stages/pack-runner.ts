@@ -52,6 +52,9 @@ export interface AgentDeps {
   ) => Promise<ExecResult>;
 }
 
+/** Every branch the pipeline writes starts with this; see `workspaceFor`. */
+const TASK_BRANCH_PREFIX = "task/";
+
 /** How long the original tests may take when replayed against a changed test file. */
 const LOCKED_REPLAY_TIMEOUT_MS = 10 * 60_000;
 
@@ -75,6 +78,14 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     task.branch && task.worktreePath
       ? { branch: task.branch, path: task.worktreePath }
       : workspaceFor(task, task.repoPath, deps.worktreesDir);
+  // The branch prefix is a structural gate: whatever a task row says, a writable stage only
+  // ever commits to a branch the pipeline owns.
+  if (limits.writable && !workspace.branch.startsWith(TASK_BRANCH_PREFIX)) {
+    return {
+      outcome: "fail",
+      detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches` },
+    };
+  }
   await ensureWorktree(task.repoPath, workspace);
   // After a restart, the container the last machine started may still be running: its name and
   // the commit it started from come from the run row, and the sandbox waits on it instead.

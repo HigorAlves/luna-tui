@@ -152,6 +152,16 @@ describe("agent stages through orc packs", () => {
     expect(result.detail).toMatchObject({ reason: "needs a new dependency", options: ["add it", "drop it"] });
   });
 
+  it("refuses to write on a branch the pipeline does not own, whatever the task row says", async () => {
+    const sandbox = vi.fn(fakeSandbox(output()));
+    const tampered = { ...context("implementing"), task: { ...context("implementing").task, branch: "main", worktreePath: repo } };
+    const result = await runners(sandbox).implementing!(tampered);
+    expect(result).toMatchObject({ outcome: "fail", detail: { error: "refusing to run implementing on branch main: the pipeline only writes task/* branches" } });
+    expect(sandbox).not.toHaveBeenCalled();
+    // A read-only pack on the same branch is fine: it changes nothing.
+    await runners(fakeSandbox(output())).triage!({ ...tampered, stage: "triage" });
+  });
+
   it("gives the sandbox the repo's cache volume, so a retry or the next task of the repo installs warm", async () => {
     await runners(fakeSandbox(output())).triage!(context("triage"));
     expect(seen!.cacheVolume).toBe("hardness-cache-repo");
