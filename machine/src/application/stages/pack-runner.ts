@@ -26,6 +26,7 @@ import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
+import { PolicyStore } from "../policy.ts";
 import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
 
 export interface AgentDeps {
@@ -41,6 +42,8 @@ export interface AgentDeps {
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
   /** Finds the project's own check commands; the locked-test replay runs the test one. */
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
+  /** Each repo's PIPELINE.md; one store is shared so a bad edit warns once. */
+  policies?: PolicyStore;
   /** Runs a host command; the locked-test replay uses it for the project's test command. */
   exec?: (
     command: string,
@@ -78,6 +81,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   const container = `hardness-${task.id.slice(0, 8)}-${context.stage.replaceAll("_", "-")}-${context.attempt}`;
   const runDir = join(deps.stateDir, "runs", context.runId);
 
+  const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
@@ -86,6 +90,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
     baseCommit: await branchBase(workspace.path, task.repoPath),
     ci: extra.ci ?? null,
+    holdoutCases: policy.holdoutCases,
   });
 
   // Watches the transcript as it streams: a loop on one call is stopped before it spends the turn budget.
@@ -285,6 +290,9 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   }
   return merged(mapped);
 }
+
+/** The policy store for runners built without one (bootstrap passes the machine's). */
+const sharedPolicies = new PolicyStore();
 
 const answerOf = (answer: unknown): Record<string, unknown> | undefined =>
   answer && typeof answer === "object" ? (answer as Record<string, unknown>) : undefined;

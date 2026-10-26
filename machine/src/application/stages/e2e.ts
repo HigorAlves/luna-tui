@@ -4,6 +4,7 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { branchBase, diffNameStatus } from "../../adapters/git/worktree.ts";
+import type { Policy } from "../../domain/policy.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
 export interface E2eDeps {
@@ -14,6 +15,8 @@ export interface E2eDeps {
   webRoots?: (worktreePath: string) => Promise<string[]>;
   /** Paths the task branch changed; null when the base is unknown (then the pack runs). */
   changedFiles?: (worktreePath: string, repoPath: string | null) => Promise<string[] | null>;
+  /** The repo's PIPELINE.md: `qa: none` means this repo never gets a browser run. */
+  policy?: (repoPath: string | null) => Promise<Pick<Policy, "qa">>;
 }
 
 const WEB_SCRIPTS = ["dev", "start", "preview"];
@@ -103,6 +106,9 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
   const roots = deps.webRoots ?? webRoots;
   return async (context) => {
     const worktree = context.task.worktreePath;
+    if (deps.policy && (await deps.policy(context.task.repoPath ?? null)).qa === "none") {
+      return { outcome: "pass", detail: { step: "e2e", skipped: true, reason: "PIPELINE.md says qa: none" } };
+    }
     if (!worktree || !(await detect(worktree))) {
       return { outcome: "pass", detail: { step: "e2e", skipped: true, reason: "no web surface detected" } };
     }

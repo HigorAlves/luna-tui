@@ -156,4 +156,13 @@ describe("buildStageInput", () => {
     expect(at("e2e").context.testCases).toEqual([]);
     expect(StageInput.safeParse(at("verifying")).success).toBe(true);
   });
+
+  it("holds the cases out of implementing's input when the repo's policy says so; verifying still sees them", () => {
+    const cases = [{ title: "rejects a bad password", criterion: null, approach: "run a.test.ts" }];
+    const approvals = [approval({ kind: "awaiting_test_check", requested: { cases } })];
+    const at = (stage: "implementing" | "verifying") =>
+      buildStageInput({ task, stage, attempt: 1, approvals, priorFindings: [], holdoutCases: true });
+    expect(at("implementing").context.testCases).toEqual([]);
+    expect(at("verifying").context.testCases).toEqual(cases);
+  });
 });

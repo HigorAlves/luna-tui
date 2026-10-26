@@ -160,6 +160,19 @@ describe("agent stages through orc packs", () => {
     expect(result.detail).not.toHaveProperty("tests");
   });
 
+  it("keeps test_design's cases away from implementing when the repo's PIPELINE.md holds them out", async () => {
+    writeFileSync(join(repo, "PIPELINE.md"), "---\nholdout_cases: true\n---\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "policy");
+    const cases = [{ title: "t", criterion: null, approach: "run a.test.ts" }];
+    const approvals = [
+      { kind: "awaiting_test_check", requested: { cases }, decision: "approved", reason: null, response: null },
+    ] as never;
+    const run = runners(fakeSandbox(output()));
+    await run.implementing!({ ...context("implementing"), approvals });
+    expect((seen!.input as unknown as StageInput).context.testCases).toEqual([]);
+  });
+
   it("tells the pack where the branch forked, and hands ci_watch what the host fetched", async () => {
     const ci = { pr: null, checks: [{ name: "lint", state: "FAILURE", url: null }], logs: "boom" };
     await runAgent(deps(fakeSandbox(output())), context("ci_watch"), "ci_watch", { ci });

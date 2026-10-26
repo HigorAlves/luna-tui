@@ -111,6 +111,14 @@ describe("e2eRunner", () => {
     });
   });
 
+  it("skips, without running the pack, when the repo's policy says qa: none", async () => {
+    const runPack = packReturning(answered({}));
+    const policy = async () => ({ qa: "none" as const });
+    const result = await e2eRunner({ runPack, detectWeb: async () => true, policy })(context());
+    expect(runPack).not.toHaveBeenCalled();
+    expect(result).toEqual({ outcome: "pass", detail: { step: "e2e", skipped: true, reason: "PIPELINE.md says qa: none" } });
+  });
+
   it("runs the pack for a .ts change under the web package's src", async () => {
     const runPack = packReturning(answered({ verdict: "pass", summary: "ok", criteria: [] }));
     await e2eRunner({ runPack, detectWeb: async () => true, webRoots: async () => [""], changedFiles: async () => ["src/cart.ts"] })(context());

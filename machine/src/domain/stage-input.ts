@@ -68,6 +68,9 @@ export function buildStageInput(opts: {
   baseCommit?: string | null;
   /** For ci_watch: the PR, checks and failed-run log the host fetched. */
   ci?: CiContext | null;
+  /** The repo's PIPELINE.md holds test_design's cases out of implementing's input, so the
+   *  implementer cannot overfit to them; verifying still judges by them. */
+  holdoutCases?: boolean;
 }): StageInput {
   const { task, stage, attempt, approvals } = opts;
   const pack = stage as PackId;
@@ -100,7 +103,8 @@ export function buildStageInput(opts: {
     // The container reads docs/agents/project-context.md itself.
     context: {
       projectContext: opts.projectContext ?? null,
-      testCases: pack === "implementing" || pack === "verifying" ? checkedCases(approvals) : [],
+      testCases:
+        pack === "verifying" || (pack === "implementing" && !opts.holdoutCases) ? checkedCases(approvals) : [],
       baseCommit: opts.baseCommit ?? null,
       ci: opts.ci ?? null,
     },
