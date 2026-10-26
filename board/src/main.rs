@@ -8,6 +8,7 @@ mod app;
 mod client;
 mod discover;
 mod herdr;
+mod inbox;
 mod model;
 mod notify;
 mod store;

@@ -20,6 +20,8 @@ use ratatui::{
 };
 use tui_textarea::TextArea;
 
+use crate::inbox::{self, InboxState, Split};
+use crate::model::now_secs;
 use crate::notify::{self, Notice};
 use crate::{
     client::{Incoming, Machine},
@@ -62,7 +64,7 @@ pub const ACTIONS: [(char, &str); 10] = [
 ];
 
 /// Keys shown in the help overlay, as (keys, what they do).
-pub const HELP: [(&str, &str); 24] = [
+pub const HELP: [(&str, &str); 25] = [
     ("h / l", "previous / next column"),
     ("j / k", "previous / next ticket"),
     ("enter", "open details"),
@@ -83,6 +85,7 @@ pub const HELP: [(&str, &str); 24] = [
     ("@", "show only tickets for this repo"),
     ("z", "fold: show every column, only the focused one expanded"),
     ("F", "Floor: 7d and 30d metrics (r refreshes, esc closes)"),
+    ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
     ("x", "actions for the selected ticket"),
     ("esc", "clear the filter"),
     ("?", "this help"),
@@ -130,6 +133,8 @@ pub enum Mode {
     ConfirmDelete(String),
     ConfirmAbort(String),
     ConfirmWorktree(String),
+    /// `A` in the Inbox: approve every ticket in the split, after one yes.
+    ConfirmApproveAll(Vec<String>),
     Actions {
         cursor: usize,
     },
@@ -193,6 +198,8 @@ pub struct App {
     pub fold: bool,
     /// The full-screen Floor view, open while this is `Some`.
     pub floor: Option<FloorState>,
+    /// The Inbox view, open while this is `Some`.
+    pub inbox: Option<InboxState>,
     /// The repo this board defaults new tickets to, for the `@` filter. `None` if it
     /// isn't inside one.
     pub home_repo: Option<String>,
@@ -226,6 +233,7 @@ impl App {
             this_repo_only: false,
             fold: false,
             floor: None,
+            inbox: None,
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
             detail_scroll: Cell::new(0),
@@ -743,6 +751,9 @@ impl App {
         if self.floor.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_floor(key);
         }
+        if self.inbox.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_inbox(key);
+        }
         match &self.mode {
             Mode::Normal => self.handle_normal(key),
             Mode::Detail(id) => {
@@ -758,6 +769,7 @@ impl App {
                 let id = id.clone();
                 self.handle_confirm(key, &id)
             }
+            Mode::ConfirmApproveAll(_) => self.handle_confirm_approve_all(key),
             Mode::Actions { .. } => self.handle_actions(key),
             Mode::RepoPicker { .. } => self.handle_repo_picker(key),
             Mode::Help => {
@@ -797,6 +809,85 @@ impl App {
         Outcome::Continue
     }
 
+    /// The Inbox's keys: move, switch split, act in place, open, approve the split.
+    fn handle_inbox(&mut self, key: KeyEvent) -> Outcome {
+        let now = now_secs();
+        let Some(state) = self.inbox.clone() else {
+            return Outcome::Continue;
+        };
+        let ids: Vec<String> = inbox::items(&self.tasks, state.split, now).iter().map(|&i| self.tasks[i].id.clone()).collect();
+        let under_cursor = ids.get(state.cursor.min(ids.len().saturating_sub(1))).cloned();
+        let mut next = state.clone();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('I') | KeyCode::Char('q') => {
+                self.inbox = None;
+                return Outcome::Continue;
+            }
+            KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(ids.len().saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => next.cursor = state.cursor.saturating_sub(1),
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => {
+                next.split = state.split.next();
+                next.cursor = 0;
+            }
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => {
+                next.split = state.split.prev();
+                next.cursor = 0;
+            }
+            KeyCode::Char(d @ '1'..='5') => {
+                next.split = Split::ALL[(d as usize) - ('1' as usize)];
+                next.cursor = 0;
+            }
+            KeyCode::Enter => {
+                if let Some(id) = under_cursor {
+                    self.inbox = None;
+                    self.select(&id, true);
+                    self.detail_stale = true;
+                    self.detail_scroll.set(0);
+                    self.mode = Mode::Detail(id);
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('A') => {
+                let approve: Vec<String> = inbox::items(&self.tasks, Split::Approve, now).iter().map(|&i| self.tasks[i].id.clone()).collect();
+                if approve.is_empty() {
+                    self.notify("nothing to approve", false);
+                } else {
+                    self.mode = Mode::ConfirmApproveAll(approve);
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char(c) => {
+                if let Some(id) = under_cursor {
+                    return self.ticket_key(c, &id);
+                }
+            }
+            _ => {}
+        }
+        self.inbox = Some(next);
+        Outcome::Continue
+    }
+
+    fn handle_confirm_approve_all(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') => {
+                let Mode::ConfirmApproveAll(ids) = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                let total = ids.len();
+                let mut done = 0;
+                for id in ids {
+                    if self.machine.decide(&id, true, None).is_ok() {
+                        done += 1;
+                    }
+                }
+                self.notify(format!("approved {done} of {total}"), done < total);
+            }
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Char('q') => return Outcome::Quit,
@@ -824,6 +915,7 @@ impl App {
                 self.floor = Some(FloorState::default());
                 self.refresh_floor();
             }
+            KeyCode::Char('I') => self.inbox = Some(InboxState::default()),
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Esc => {
                 self.filter.clear();
@@ -1379,6 +1471,36 @@ mod tests {
         let notices = app.take_notices();
         assert_eq!(notices.len(), 1, "offline is told once per outage");
         assert_eq!(notices[0].title, "Machine offline");
+    }
+
+    #[test]
+    fn the_inbox_opens_with_i_moves_within_its_split_switches_splits_and_closes() {
+        let mut app = App::new(Machine::from_env());
+        for (id, state) in [("aaaaaaaa0000", "awaiting_approval"), ("bbbbbbbb0000", "awaiting_approval"), ("cccccccc0000", "escalated")] {
+            app.tasks.push(serde_json::from_str(&format!(
+                r#"{{"id":"{id}","title":"t","description":"","criteria":[],
+                "repoPath":null,"branch":null,"worktreePath":null,"state":"{state}","column":"Build",
+                "waitingOnYou":true,"running":false,"queued":false,
+                "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+                "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+            )).unwrap());
+        }
+        let press = |app: &mut App, code: KeyCode| { app.handle_key(KeyEvent::from(code)); };
+        press(&mut app, KeyCode::Char('I'));
+        assert_eq!(app.inbox.as_ref().map(|i| i.split), Some(Split::Approve));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.inbox.as_ref().map(|i| i.cursor), Some(1), "two approve tickets: the cursor stops at the last");
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.inbox.as_ref().map(|i| (i.split, i.cursor)), Some((Split::Review, 0)));
+        press(&mut app, KeyCode::Char('3'));
+        assert_eq!(app.inbox.as_ref().map(|i| i.split), Some(Split::Failed));
+        press(&mut app, KeyCode::Char('A'));
+        assert!(matches!(app.mode, Mode::ConfirmApproveAll(ref ids) if ids.len() == 2), "approve-all asks once, for the Approve split");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.inbox.is_none());
     }
 
     #[test]

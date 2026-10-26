@@ -16,6 +16,7 @@ use ratatui::{
 use serde_json::Value;
 use tui_textarea::TextArea;
 
+use crate::inbox::{self, InboxState, Split};
 use crate::{
     app::{ACTIONS, App, FloorState, HELP, Mode},
     model::{
@@ -112,6 +113,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if let Some(floor) = &app.floor {
         render_floor(frame, body, floor);
         frame.render_widget(footer_line(app), footer);
+        return;
+    }
+    if let Some(inbox) = app.inbox.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::ConfirmApproveAll(_))) {
+        render_inbox(frame, body, app, inbox);
+        frame.render_widget(footer_line(app), footer);
+        if let Mode::ConfirmApproveAll(ids) = &app.mode {
+            render_note(frame, " Approve them all? ", &format!("{} ticket(s) in Approve get a yes, each with no guidance.  y / n", ids.len()));
+        }
         return;
     }
     render_board(frame, body, app);
@@ -292,6 +301,9 @@ fn footer_line(app: &App) -> Line<'static> {
     if app.floor.is_some() && matches!(app.mode, Mode::Normal) {
         return hint(&[("r", "refresh"), ("esc", "close")]);
     }
+    if app.inbox.is_some() && matches!(app.mode, Mode::Normal) {
+        return hint(&[("j/k", "move"), ("h/l", "split"), ("a/r/e", "act"), ("A", "approve all"), ("enter", "open"), ("esc", "close")]);
+    }
 
     match &app.mode {
         Mode::Adding(buf) => Line::from(vec![
@@ -356,6 +368,7 @@ fn footer_line(app: &App) -> Line<'static> {
         }
         Mode::Actions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
         Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
+        Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
         Mode::Help => hint(&[("any key", "close")]),
         Mode::Detail(id) => {
             let shippable = app.task(id).is_some_and(|t| t.state == "awaiting_ship");
@@ -1072,6 +1085,58 @@ fn stage_rows(m: &Metrics) -> Vec<[String; 5]> {
 }
 
 /// The Floor view: 7d and 30d side by side, then a per-stage table (beside it when wide).
+/// The Inbox: a header of splits with their counts, then the split's tickets oldest first.
+fn render_inbox(frame: &mut Frame, area: Rect, app: &App, inbox: &InboxState) {
+    let now = now_secs();
+    let mut head = vec![Span::from(" Inbox ").fg(c(ACCENT)).bold()];
+    for split in Split::ALL {
+        let count = inbox::items(&app.tasks, split, now).len();
+        let label = format!(" {} {} ", split.label(), count);
+        head.push(if split == inbox.split {
+            Span::from(label).fg(c(BASE)).bg(c(ACCENT)).bold()
+        } else {
+            Span::from(label).fg(c(SUBTEXT0))
+        });
+        head.push(Span::from(" "));
+    }
+    let items = inbox::items(&app.tasks, inbox.split, now);
+    let mut lines = vec![Line::from(head), Line::default()];
+    if items.is_empty() {
+        lines.push(Line::from(Span::from("  ✓ caught up").fg(c(GREEN))));
+    }
+    for (row, &i) in items.iter().enumerate() {
+        let task = &app.tasks[i];
+        let look = task.look_at(now);
+        let selected = row == inbox.cursor.min(items.len().saturating_sub(1));
+        let bar = if selected { "▌ " } else { "  " };
+        let what = task.reason.clone().unwrap_or_else(|| task.status_label());
+        let repo = task.repo_name().map(|r| format!("{r} · ")).unwrap_or_default();
+        let mut line = vec![
+            Span::from(bar).fg(c(ACCENT)),
+            Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)),
+            Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)),
+            Span::from(repo).fg(c(SUBTEXT0)),
+            Span::from(task.title.clone()).bold(),
+            Span::from(format!("   {what}")).fg(look_color(look)),
+            Span::from(format!(" · {}", age(&task.updated_at, now))).fg(c(SUBTEXT0)),
+        ];
+        if selected {
+            line = line.into_iter().map(|s| s.bg(c(SELECTED_BG))).collect();
+        }
+        lines.push(Line::from(line));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// A small centered box with one line of text, for a yes/no that has no single ticket.
+fn render_note(frame: &mut Frame, title: &str, note: &str) {
+    let width = (note.len() as u16 + 6).min(frame.area().width.saturating_sub(4)).max(20);
+    let area = centered(frame.area(), width, 5);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered().border_type(BorderType::Rounded).title(title).padding(Padding::horizontal(1));
+    frame.render_widget(Paragraph::new(note).block(block), area);
+}
+
 fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
     let label_style = Style::new().fg(c(SUBTEXT0));
     let head_style = Style::new().fg(c(ACCENT)).bold();
@@ -1451,6 +1516,33 @@ mod tests {
         bare.tests = None;
         let lines: Vec<String> = card_lines(&bare, None).iter().map(|l| l.to_string()).collect();
         assert_eq!(lines[2].trim(), "", "no numbers, no line: {lines:?}");
+    }
+
+    #[test]
+    fn the_inbox_says_caught_up_when_empty_and_lists_the_split_s_tickets_otherwise() {
+        let mut app = App::new(crate::Machine::from_env());
+        let render = |app: &App| {
+            let mut terminal = Terminal::new(TestBackend::new(120, 12)).unwrap();
+            terminal.draw(|f| render_inbox(f, f.area(), app, app.inbox.as_ref().unwrap())).unwrap();
+            let buffer = terminal.backend().buffer().clone();
+            (0..12).map(|y| (0..120).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+        };
+        app.inbox = Some(InboxState::default());
+        assert!(render(&app).contains("caught up"));
+        let task: Task = serde_json::from_str(
+            r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
+            "repoPath":"/r/luna-tui","branch":null,"worktreePath":null,"state":"awaiting_approval","column":"Triage",
+            "waitingOnYou":true,"running":false,"queued":false,
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#,
+        )
+        .unwrap();
+        app.tasks.push(task);
+        let text = render(&app);
+        assert!(text.contains("Approve 1"), "{text}");
+        assert!(text.contains("luna-tui · Login page"), "{text}");
+        assert!(text.contains("approve plan"), "{text}");
+        assert!(!text.contains("caught up"), "{text}");
     }
 
     #[test]
