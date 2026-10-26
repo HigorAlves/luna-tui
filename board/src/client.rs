@@ -29,8 +29,11 @@ pub enum Incoming {
     Online,
     Offline(String),
     Message(StreamMessage),
+    /// A `/tasks/:id` answer, fetched off the UI thread.
+    Detail { id: String, detail: Option<TaskDetail> },
 }
 
+#[derive(Clone)]
 pub struct Machine {
     /// The machine in use. The stream thread re-picks it on every reconnect.
     base: Arc<RwLock<String>>,
