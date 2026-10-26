@@ -12,6 +12,22 @@ use serde_json::Value;
 pub const COLUMNS: [&str; 8] =
     ["Intake", "Triage", "Approved", "Build", "Verify", "Evidence", "Ship", "Done"];
 
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Diff {
+    pub added: u64,
+    pub removed: u64,
+}
+
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
+pub struct Tests {
+    pub passed: u64,
+    pub total: u64,
+}
+
+/// A running stage nobody has heard from for this long reads as stale: a dead `docker logs -f`
+/// tab should not look like progress.
+pub const STALE_SECS: u64 = 20 * 60;
+
 #[derive(Deserialize, Clone, Debug, Default)]
 pub struct Retries {
     pub verify: u32,
@@ -53,6 +69,13 @@ pub struct Task {
     /// What every stage run of this ticket has cost so far; None when unknown.
     #[serde(default)]
     pub spent_usd: Option<f64>,
+    /// Wall time its stage runs took; the branch's diff against its base; verifying's results.
+    #[serde(default)]
+    pub worked_ms: Option<f64>,
+    #[serde(default)]
+    pub diff: Option<Diff>,
+    #[serde(default)]
+    pub tests: Option<Tests>,
     pub created_at: String,
     pub updated_at: String,
     /// Absent on tasks made by hand, and from machines that predate it.
@@ -295,6 +318,7 @@ pub fn spend_p90(tasks: &[Task]) -> Option<f64> {
 pub enum Look {
     Escalated,
     NeedsYou,
+    Stale,
     Working,
     Queued,
     Paused,
@@ -343,6 +367,11 @@ impl Task {
     }
 
     pub fn look(&self) -> Look {
+        self.look_at(now_secs())
+    }
+
+    /// `look()` with the clock passed in: a running stage silent past `STALE_SECS` is stale.
+    pub fn look_at(&self, now: u64) -> Look {
         match self.state.as_str() {
             "escalated" => Look::Escalated,
             "paused_rate_limit" => Look::Paused,
@@ -350,8 +379,22 @@ impl Task {
             "closed" => Look::Done,
             _ if self.waiting_on_you => Look::NeedsYou,
             _ if self.queued => Look::Queued,
+            _ if self.running && unix_secs(&self.updated_at).is_some_and(|t| now.saturating_sub(t) > STALE_SECS) => Look::Stale,
             _ => Look::Working,
         }
+    }
+
+    /// The card's second line: `worked 4m · +142 −18 · tests 7/9`, the parts the task has.
+    pub fn triad(&self) -> Option<String> {
+        let parts: Vec<String> = [
+            self.worked_ms.map(|ms| format!("worked {}", fmt_ms(Some(ms)))),
+            self.diff.map(|d| format!("+{} −{}", d.added, d.removed)),
+            self.tests.map(|t| format!("tests {}/{}", t.passed, t.total)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if parts.is_empty() { None } else { Some(parts.join(" · ")) }
     }
 
     /// What the task is doing, in words: the gate it waits at or the stage that runs.
@@ -701,6 +744,34 @@ mod tests {
         assert_eq!(repo_colour_slot("luna-tui"), repo_colour_slot("luna-tui"));
         assert_ne!(repo_colour_slot("luna-tui"), repo_colour_slot("orc"));
         assert!(repo_colour_slot("anything") < REPO_COLOUR_SLOTS);
+    }
+
+    #[test]
+    fn the_triad_reads_worked_diff_and_tests_and_only_the_parts_the_task_has() {
+        let mut task: Task = serde_json::from_str(&task_json("")).unwrap();
+        assert_eq!(task.triad(), None);
+        task.worked_ms = Some(240_000.0);
+        task.diff = Some(Diff { added: 142, removed: 18 });
+        task.tests = Some(Tests { passed: 7, total: 9 });
+        assert_eq!(task.triad().as_deref(), Some("worked 4m · +142 −18 · tests 7/9"));
+        task.diff = None;
+        assert_eq!(task.triad().as_deref(), Some("worked 4m · tests 7/9"));
+        let full: Task = serde_json::from_str(&task_json(r#","workedMs":1500,"diff":{"added":1,"removed":0},"tests":{"passed":1,"total":1}"#)).unwrap();
+        assert_eq!(full.triad().as_deref(), Some("worked 1.5s · +1 −0 · tests 1/1"));
+    }
+
+    #[test]
+    fn a_running_task_nobody_has_touched_for_twenty_minutes_looks_stale() {
+        let mut task: Task = serde_json::from_str(&task_json("")).unwrap();
+        task.state = "implementing".into();
+        task.running = true;
+        let updated = unix_secs(&task.updated_at).unwrap();
+        assert!(matches!(task.look_at(updated + 60), Look::Working));
+        assert!(matches!(task.look_at(updated + STALE_SECS + 1), Look::Stale));
+        task.running = false;
+        task.queued = true;
+        assert!(matches!(task.look_at(updated + STALE_SECS + 1), Look::Queued), "a queued task is waiting, not stale");
+        assert!(Look::Stale < Look::Working, "stale sorts before working: it needs a look");
     }
 
     #[test]
