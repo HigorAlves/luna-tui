@@ -21,6 +21,7 @@ import type { Credential } from "../../adapters/docker/credentials.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
+import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
@@ -86,6 +87,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     ci: extra.ci ?? null,
   });
 
+  // Watches the transcript as it streams: a loop on one call is stopped before it spends the turn budget.
+  const detector = new StuckDetector();
   const sandbox = await (deps.sandbox ?? runSandbox)({
     name: container,
     image: pack === "e2e" ? deps.qaImage : deps.image,
@@ -102,6 +105,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     signal: context.signal,
     onStarted: (name) =>
       void deps.watcher.follow(task.id, `#${task.id.slice(0, 8)} ${task.title}`, workspace.path, name),
+    onLine: (line) => detector.feed(line),
   });
 
   const base: StageResult = {
@@ -119,6 +123,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
 
   if (sandbox.aborted) return failed("aborted");
   if (sandbox.timedOut) return failed(`timed out after ${limits.timeoutMs / MINUTE} minutes`);
+  if (sandbox.stuck) return failed(`stuck: ${sandbox.stuck}`);
 
   let ingested;
   try {

@@ -334,6 +334,24 @@ describe("agent stages through orc packs", () => {
     });
   });
 
+  it("fails a run the sandbox stopped as stuck, with the detector's reason", async () => {
+    const run = runners(async (r) => {
+      seen = r;
+      mkdirSync(join(r.runDir, "out"), { recursive: true });
+      return { exitCode: 137, timedOut: false, aborted: false, stuck: "the same call 4 times in a row: Bash npm test", transcriptPath: "t" };
+    });
+    const result = await run.implementing!(context("implementing"));
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ error: "stuck: the same call 4 times in a row: Bash npm test" });
+  });
+
+  it("hands the sandbox a line watcher that reads the transcript as it streams", async () => {
+    const run = runners(fakeSandbox(output()));
+    await run.implementing!(context("implementing"));
+    expect(typeof seen!.onLine).toBe("function");
+    expect(seen!.onLine!("→ Bash npm test")).toBeNull();
+  });
+
   it("fails a verifying pass that left uncommitted changes, resetting the worktree, same as implementing", async () => {
     const d = deps(fakeSandbox(output(), (r) => writeFileSync(join(r.worktree, "junk.txt"), "x")));
     const result = await runAgent(d, context("verifying"), "verifying");

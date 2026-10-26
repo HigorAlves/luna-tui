@@ -3,6 +3,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
 import type { Credential } from "./credentials.ts";
@@ -40,12 +41,16 @@ export interface SandboxRun {
   signal?: AbortSignal;
   /** Called once the container is running, e.g. to open a watch pane. */
   onStarted?: (container: string) => void;
+  /** Sees each transcript line as it streams; a returned reason stops the container as stuck. */
+  onLine?: (line: string) => string | null;
 }
 
 export interface SandboxResult {
   exitCode: number | null;
   timedOut: boolean;
   aborted: boolean;
+  /** Why `onLine` stopped the run, when it did. */
+  stuck?: string | null;
   transcriptPath: string;
 }
 
@@ -125,12 +130,15 @@ export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
   };
   run.signal?.addEventListener("abort", onAbort, { once: true });
   if (run.signal?.aborted) onAbort();
+  let stuck: string | null = null;
+  const follower = run.onLine ? followLogs(run.name, run.onLine, (reason) => { stuck = reason; kill(); }) : null;
 
   // An outer deadline: the kill above asks the container to stop; if the daemon never
   // reports it gone, this call must still return so the slot is freed.
   const waited = await exec("docker", ["wait", run.name], { timeoutMs: run.timeoutMs + WAIT_GRACE_MS });
   clearTimeout(timer);
   run.signal?.removeEventListener("abort", onAbort);
+  follower?.kill("SIGKILL");
 
   const transcriptPath = join(run.runDir, "transcript.log");
   const logs = await exec("docker", ["logs", run.name]);
@@ -138,7 +146,31 @@ export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
   await exec("docker", ["rm", "-f", run.name]);
 
   const exitCode = waited.code === 0 ? Number(waited.stdout.trim()) : null;
-  return { exitCode, timedOut, aborted, transcriptPath };
+  return { exitCode, timedOut, aborted, stuck, transcriptPath };
+}
+
+/** Streams the container's stdout line by line into `onLine`; the first reason it returns
+ *  goes to `onStuck` once. Returns the follower process, to kill when the run is over. */
+function followLogs(name: string, onLine: (line: string) => string | null, onStuck: (reason: string) => void) {
+  const child = spawn("docker", ["logs", "-f", name], { stdio: ["ignore", "pipe", "ignore"] });
+  let buffer = "";
+  let done = false;
+  child.stdout.on("data", (chunk: Buffer) => {
+    if (done) return;
+    buffer += chunk.toString();
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+    for (const line of lines) {
+      const reason = onLine(line);
+      if (reason) {
+        done = true;
+        onStuck(reason);
+        return;
+      }
+    }
+  });
+  child.on("error", () => {});
+  return child;
 }
 
 /** One command run in the stage image over a worktree: a project's own checks (verify Step
