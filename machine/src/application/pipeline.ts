@@ -94,7 +94,9 @@ export class Pipeline {
   private readonly store: TaskStore;
   private readonly onEvent: (event: EventRow) => void;
   private readonly inline: boolean;
-  private readonly maxConcurrentTasks: number;
+  private maxConcurrentTasks: number;
+  /** Taking no new work: running stages finish, the queue waits. `drain()` / `resumeClaims()`. */
+  private draining = false;
   private readonly maxPerRepo: number | null;
   private readonly revertCommit: (worktreePath: string, sha: string) => Promise<void>;
   private readonly diffStat: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
@@ -150,9 +152,32 @@ export class Pipeline {
     return this.get(task.id);
   }
 
-  /** Stage slots: how many tasks may drive a stage at once, and how many do right now. */
-  get slots(): { max: number; active: number } {
-    return { max: this.maxConcurrentTasks, active: this.loops.size };
+  /** Stage slots: how many tasks may drive a stage at once, how many do right now, and
+   *  whether the machine is draining (finishing what runs, claiming nothing new). */
+  get slots(): { max: number; active: number; draining: boolean } {
+    return { max: this.maxConcurrentTasks, active: this.loops.size, draining: this.draining };
+  }
+
+  /** "Stop picking up work, I'm leaving": running stages finish, queued tasks wait. */
+  drain(): { max: number; active: number; draining: boolean } {
+    this.draining = true;
+    return this.slots;
+  }
+
+  /** Back to normal: the queue is picked up again at once. */
+  resumeClaims(): { max: number; active: number; draining: boolean } {
+    this.draining = false;
+    void this.fillSlots().catch((error: unknown) => console.error("could not fill slots after resume", error));
+    return this.slots;
+  }
+
+  /** Resizes the pool at run time; a bigger one fills from the queue at once, a smaller one
+   *  lets running stages finish and claims nothing until the count fits. */
+  setSlots(max: number): { max: number; active: number; draining: boolean } {
+    if (!Number.isInteger(max) || max < 1) throw new Error(`slots must be at least 1, got ${max}`);
+    this.maxConcurrentTasks = max;
+    void this.fillSlots().catch((error: unknown) => console.error("could not fill slots after resize", error));
+    return this.slots;
   }
 
   activeCount(): number {
@@ -413,7 +438,7 @@ export class Pipeline {
   }
 
   private async fillSlots(): Promise<void> {
-    while (!this.stopping && this.loops.size < this.maxConcurrentTasks && this.latchedUntil === null) {
+    while (!this.stopping && !this.draining && this.loops.size < this.maxConcurrentTasks && this.latchedUntil === null) {
       if (await this.dayOver()) return;
       const claimed = await this.store.claimNextQueuedTask({ running: RUNNING, maxPerRepo: this.maxPerRepo });
       if (!claimed) return;
@@ -478,7 +503,7 @@ export class Pipeline {
    * waits for the whole run too in inline mode.
    */
   private async schedule(id: string, stage: TaskState): Promise<void> {
-    if (this.stopping || this.loops.size >= this.maxConcurrentTasks || this.latchedUntil !== null) {
+    if (this.stopping || this.draining || this.loops.size >= this.maxConcurrentTasks || this.latchedUntil !== null) {
       await this.enqueue(id);
       return;
     }

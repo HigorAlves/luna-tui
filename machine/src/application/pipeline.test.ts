@@ -884,6 +884,54 @@ describe("deleting a task", () => {
   });
 });
 
+describe("drain and slots", () => {
+  const holding: StageRunner = ({ signal }) =>
+    new Promise<StageResult>((resolve) => signal.addEventListener("abort", () => resolve({ outcome: "fail" }), { once: true }));
+  let reached = 0;
+  const runnerFor = (stage: TaskState) =>
+    stage === "triage"
+      ? (context: Parameters<StageRunner>[0]) => {
+          reached++;
+          return holding(context);
+        }
+      : stubs.runnerFor(stage);
+
+  it("draining takes no new work while running stages finish; resume picks the queue back up", async () => {
+    reached = 0;
+    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 2 });
+    const a = await newTask();
+    await pipeline.start(a.id);
+    while (reached < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(pipeline.drain()).toMatchObject({ max: 2, active: 1, draining: true });
+    const b = await newTask();
+    expect(await pipeline.start(b.id)).toMatchObject({ state: "triage", queued: true });
+    expect((await pipeline.get(a.id)).state).toBe("triage");
+    await pipeline.tick();
+    expect((await pipeline.get(b.id)).queued).toBe(true);
+
+    expect(pipeline.resumeClaims()).toMatchObject({ draining: false });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect((await pipeline.get(b.id)).queued).toBe(false);
+    expect(reached).toBe(2);
+  });
+
+  it("slots can be resized at run time; a smaller pool queues new work, a larger one fills", async () => {
+    reached = 0;
+    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 1 });
+    const a = await newTask();
+    await pipeline.start(a.id);
+    while (reached < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    const b = await newTask();
+    expect((await pipeline.start(b.id)).queued).toBe(true);
+    expect(pipeline.setSlots(2)).toMatchObject({ max: 2 });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect((await pipeline.get(b.id)).queued).toBe(false);
+    expect(() => pipeline.setSlots(0)).toThrow(/at least 1/);
+    expect(pipeline.slots).toMatchObject({ max: 2, active: 2, draining: false });
+  });
+});
+
 describe("rate limits", () => {
   it("pauses on a usage limit and re-runs the same stage when the window resets", async () => {
     stubs.plan("implementing", { outcome: "pass", rateLimited: true });
