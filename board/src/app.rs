@@ -31,7 +31,7 @@ use crate::{
     herdr,
     model::{
         COLUMNS, Look, Metrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
-        parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown,
+        parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown, Slots,
     },
     store,
     vim::Vim,
@@ -52,8 +52,11 @@ fn opener_command(url: &str) -> (&'static str, Vec<String>) {
 pub const CARD_HEIGHT: usize = 3;
 
 /// Actions in the `x` menu for the selected ticket, as the key each one is.
-pub const ACTIONS: [(char, &str); 11] = [
+pub const ACTIONS: [(char, &str); 14] = [
     ('P', "resume every ticket paused on the usage window"),
+    ('D', "drain / carry on: take no new work, or pick the queue back up"),
+    ('+', "one more slot"),
+    ('-', "one slot fewer"),
     ('a', "advance: start, approve, answer, retry, resume"),
     ('S', "ship: approve the Ship gate and open the PR"),
     ('r', "send back with a reason"),
@@ -253,6 +256,8 @@ pub struct App {
     pub inbox: Option<InboxState>,
     /// Tickets marked with `v`/`V`: `a`, `X`, `d`, `w` act on all of them.
     pub marked: BTreeSet<String>,
+    /// The stage pool as `/health` last reported it; None until the first answer.
+    pub slots: Option<Slots>,
     /// The repo this board defaults new tickets to, for the `@` filter. `None` if it
     /// isn't inside one.
     pub home_repo: Option<String>,
@@ -288,6 +293,7 @@ impl App {
             floor: None,
             inbox: None,
             marked: BTreeSet::new(),
+            slots: None,
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
             detail_scroll: Cell::new(0),
@@ -326,6 +332,7 @@ impl App {
 
     /// Fetches every ticket again, e.g. after reconnecting.
     fn reload(&mut self) {
+        self.slots = self.machine.health().ok().map(|h| h.slots);
         match self.machine.tasks() {
             Ok(tasks) => {
                 let selected = self.selected_id();
@@ -1085,6 +1092,26 @@ impl App {
         Outcome::Continue
     }
 
+    /// `x` → `D`, `+`, `-`: drain or carry on, grow or shrink the pool.
+    fn pool_key(&mut self, c: char) {
+        let draining = self.slots.as_ref().is_some_and(|s| s.draining);
+        let max = self.slots.as_ref().map_or(1, |s| s.max);
+        let result = match c {
+            'D' if draining => self.machine.resume_claims().map(|s| (s, "carrying on: the queue is picked up again")),
+            'D' => self.machine.drain().map(|s| (s, "draining: running stages finish, nothing new is claimed")),
+            '+' => self.machine.set_slots(max + 1).map(|s| (s, "one more slot")),
+            _ if max <= 1 => Err("already at one slot".to_string()),
+            _ => self.machine.set_slots(max - 1).map(|s| (s, "one slot fewer")),
+        };
+        match result {
+            Ok((slots, done)) => {
+                self.slots = Some(slots);
+                self.notify(done, false);
+            }
+            Err(error) => self.notify(error, true),
+        }
+    }
+
     /// `x` → `P`: every ticket paused on the usage window gets its stage re-run.
     fn resume_all_paused(&mut self) {
         let ids = paused_ids(&self.tasks);
@@ -1402,6 +1429,10 @@ impl App {
             self.mode = Mode::Normal;
             if c == 'P' {
                 self.resume_all_paused();
+                return Outcome::Continue;
+            }
+            if matches!(c, 'D' | '+' | '-') {
+                self.pool_key(c);
                 return Outcome::Continue;
             }
             if let Some(id) = self.selected_id() {

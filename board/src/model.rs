@@ -238,6 +238,18 @@ pub struct Cost {
 pub struct Slots {
     pub max: u64,
     pub active: u64,
+    /// Taking no new work: running stages finish, the queue waits.
+    #[serde(default)]
+    pub draining: bool,
+}
+
+/// `GET /health`: liveness, and the stage pool since the machine learned to drain.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct Health {
+    #[allow(dead_code)] // part of the contract; the board reads the pool, not the liveness bit
+    pub ok: bool,
+    #[serde(default)]
+    pub slots: Slots,
 }
 
 #[derive(Deserialize, Clone, Debug, Default)]
@@ -772,6 +784,17 @@ mod tests {
         task.queued = true;
         assert!(matches!(task.look_at(updated + STALE_SECS + 1), Look::Queued), "a queued task is waiting, not stale");
         assert!(Look::Stale < Look::Working, "stale sorts before working: it needs a look");
+    }
+
+    #[test]
+    fn health_carries_the_pool_and_an_older_machine_s_slots_still_load() {
+        let health: Health = serde_json::from_str(r#"{"ok":true,"slots":{"max":4,"active":1,"draining":true}}"#).unwrap();
+        assert!(health.ok);
+        assert_eq!((health.slots.max, health.slots.active, health.slots.draining), (4, 1, true));
+        let old: Slots = serde_json::from_str(r#"{"max":2,"active":0}"#).unwrap();
+        assert!(!old.draining);
+        let bare: Health = serde_json::from_str(r#"{"ok":true}"#).unwrap();
+        assert_eq!(bare.slots.max, 0);
     }
 
     #[test]
