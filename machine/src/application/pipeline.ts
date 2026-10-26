@@ -78,6 +78,8 @@ const RESUME_MARGIN_MS = 30_000;
 const ORPHAN_GRACE_MS = 60_000;
 /** How long abort() waits for the dying stage to let go of its slot before returning anyway. */
 const ABORT_WIND_DOWN_MS = 15_000;
+/** Identical consecutive failures of one stage before the stuck detector escalates. */
+const STUCK_REPEATS = 3;
 /** How long one rate-limit result holds every claim when it names no reset time. */
 const LATCH_FALLBACK_MS = 5 * 60_000;
 
@@ -507,13 +509,16 @@ export class Pipeline {
         const result = await this.runStage(id, stage, controller.signal);
         // An abort already moved the task on; this stage's result no longer applies.
         if (controller.signal.aborted) return;
+        const stuck = result.outcome === "fail" ? await this.stuckReason(id, stage) : null;
         const next: PipelineEvent = result.rateLimited
           ? { type: "rate_limited" }
-          : {
-              type: "stage_done",
-              outcome: result.outcome,
-              ...(typeof result.detail?.reason === "string" ? { reason: result.detail.reason } : {}),
-            };
+          : stuck
+            ? { type: "stage_done", outcome: "escalated", reason: stuck }
+            : {
+                type: "stage_done",
+                outcome: result.outcome,
+                ...(typeof result.detail?.reason === "string" ? { reason: result.detail.reason } : {}),
+              };
         const detail =
           result.needsInput?.length || result.requested?.length
             ? {
@@ -651,6 +656,25 @@ export class Pipeline {
       runId: latest.stageRunId,
       ...(detail && typeof detail === "object" ? { detail: detail as Record<string, unknown> } : {}),
     };
+  }
+
+  /** The stuck detector's attempt-level rule: a stage that just failed for the third time in a
+   *  row with the very same error is going nowhere; a human is cheaper than the rest of the
+   *  retry cap. Returns the escalation reason, or null when the failures differ. */
+  private async stuckReason(id: string, stage: TaskState): Promise<string | null> {
+    const finished = await this.store.findFinishedEvents(id);
+    const errors: string[] = [];
+    for (const event of finished) {
+      if (event.payload.stage !== stage) continue;
+      if (event.payload.status !== "failed") break;
+      const detail = event.payload.detail as { error?: unknown } | undefined;
+      const error = typeof detail?.error === "string" ? detail.error.trim() : typeof event.payload.error === "string" ? event.payload.error.trim() : "";
+      if (!error) break;
+      errors.push(error);
+      if (errors.length === STUCK_REPEATS) break;
+    }
+    if (errors.length < STUCK_REPEATS || new Set(errors).size !== 1) return null;
+    return `stuck: ${stage} failed the same way ${STUCK_REPEATS} times: ${errors[0]}`;
   }
 
   /** The findings the latest verifying, ci_watch or failed implementing run stored on its
