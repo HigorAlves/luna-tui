@@ -31,6 +31,10 @@ export interface Config {
   repoMap: Record<string, string>;
   /** Checkouts one level under here are matched to `owner/name` by their origin remote. */
   reposDir: string;
+  /** Reply in the thread a task came from (its GitHub issue; Slack when set). `MACHINE_THREAD_REPLIES=off` stops it. */
+  threadReplies: boolean;
+  /** A Slack bot token and channel: one thread per task is opened there. Both or neither. */
+  slack: { token: string; channel: string } | null;
   /** Days to keep a closed task's events/stage runs before pruning them. 0 disables pruning. */
   retentionDays: number;
   /** Days after a task closes before its worktree is removed and its merged branch deleted. 0 disables it. */
@@ -126,6 +130,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (!match) throw new Error(`MACHINE_REPO_MAP must list owner/name=/absolute/path pairs, got "${pair}"`);
     repoMap[match[1]!] = match[2]!;
   }
+  const slackToken = env.MACHINE_SLACK_TOKEN ?? "";
+  const slackChannel = env.MACHINE_SLACK_CHANNEL ?? "";
+  if ((slackToken === "") !== (slackChannel === "")) {
+    throw new Error("MACHINE_SLACK_TOKEN and MACHINE_SLACK_CHANNEL go together; set both or neither");
+  }
   const home = env.HOME ?? homedir();
   return {
     databaseUrl: env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
@@ -140,6 +149,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
     repoMap,
     reposDir: env.MACHINE_REPOS_DIR ?? join(home, "Developer"),
+    threadReplies: env.MACHINE_THREAD_REPLIES !== "off",
+    slack: slackToken === "" ? null : { token: slackToken, channel: slackChannel },
     retentionDays,
     worktreeRetentionDays,
     maxPerRepo: optionalPositiveInt(env, "MACHINE_MAX_PER_REPO"),

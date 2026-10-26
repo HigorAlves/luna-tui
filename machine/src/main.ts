@@ -16,6 +16,7 @@ import { sweepImages, sweepRunFolders, sweepTaskState, sweepWorktrees } from "./
 import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { RepoMap } from "./application/repo-map.ts";
+import { ThreadReplies } from "./application/threads.ts";
 import { Pipeline } from "./application/pipeline.ts";
 import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
@@ -124,9 +125,13 @@ function scheduleMetrics(): void {
   metricsTimer.unref();
 }
 
+/** Replies in the thread each task came from, on the moments that matter. */
+let replies: ThreadReplies;
+
 /** Streams each logged event, plus the whole task whenever its state may have changed. */
 function publish(event: EventRow): void {
   bus.publish({ type: "task.event", event: toEvent(event) });
+  void replies.handle(event);
   if (event.kind === "transition" || event.kind === "task.created") {
     pipeline.get(event.taskId).then(
       async (task) => bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id)) }),
@@ -153,6 +158,7 @@ pipeline = new Pipeline(db, runnerFor, {
     bus.publish({ type: "budget.alert", alert });
   },
 });
+replies = new ThreadReplies({ pipeline, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}) });
 const recovered = await pipeline.recover();
 if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by the last run`);
 pipeline.startSupervisor(SUPERVISOR_MS);

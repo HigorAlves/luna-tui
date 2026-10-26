@@ -286,6 +286,11 @@ export class Pipeline {
     return task;
   }
 
+  /** Logs a fact about a task from outside the engine (e.g. the thread it is reported in). */
+  record(taskId: string, kind: string, payload: Record<string, unknown>): Promise<void> {
+    return this.log(taskId, kind, payload);
+  }
+
   /** The task created from this external issue, if any. */
   findBySource(repo: string, number: number): Promise<TaskRow | null> {
     return this.store.findTaskBySource(repo, number);

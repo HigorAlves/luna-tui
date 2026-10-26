@@ -30,7 +30,15 @@ describe("loadConfig", () => {
       maxPerStage: {},
       repoMap: {},
       reposDir: "/home/me/Developer",
+      threadReplies: true,
+      slack: null,
     });
+  });
+
+  it("reads the thread-reply switch and the Slack pair, which go together", () => {
+    expect(loadConfig({ HOME: "/h", MACHINE_THREAD_REPLIES: "off" }).threadReplies).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb", MACHINE_SLACK_CHANNEL: "C1" }).slack).toEqual({ token: "xoxb", channel: "C1" });
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb" })).toThrow(/MACHINE_SLACK_CHANNEL/);
   });
 
   it("caps the running tasks per repo only when told to", () => {
