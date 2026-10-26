@@ -10,6 +10,8 @@ export interface E2eDeps {
   /** Runs the e2e pack. */
   runPack: (context: StageContext) => Promise<StageResult>;
   detectWeb?: (worktreePath: string) => Promise<boolean>;
+  /** The web package dirs, relative ("" is the root); their src/ counts as rendered surface. */
+  webRoots?: (worktreePath: string) => Promise<string[]>;
   /** Paths the task branch changed; null when the base is unknown (then the pack runs). */
   changedFiles?: (worktreePath: string, repoPath: string | null) => Promise<string[] | null>;
 }
@@ -38,35 +40,51 @@ async function webPackage(dir: string): Promise<boolean> {
   }
 }
 
-/** True when the worktree looks like something a browser can open. */
-export async function detectWeb(worktreePath: string): Promise<boolean> {
-  if (await isFile(join(worktreePath, ".orc", "targets.json"))) return true;
-  if (await webPackage(worktreePath)) return true;
-  if (await isFile(join(worktreePath, "index.html"))) return true;
+/** The dirs a browser can open, relative to the worktree: "" when the repo itself is a web
+ *  package (or carries an index.html / .orc/targets.json), plus each workspace app that is. */
+export async function webRoots(worktreePath: string): Promise<string[]> {
+  const roots: string[] = [];
+  if (
+    (await isFile(join(worktreePath, ".orc", "targets.json"))) ||
+    (await webPackage(worktreePath)) ||
+    (await isFile(join(worktreePath, "index.html")))
+  ) {
+    roots.push("");
+  }
   try {
     for (const entry of await readdir(worktreePath, { withFileTypes: true })) {
       if (!entry.isDirectory() || entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
       const dir = join(worktreePath, entry.name);
-      if (await isFile(join(dir, "index.html"))) return true;
+      if ((await isFile(join(dir, "index.html"))) && roots.length === 0) roots.push("");
       if (!WORKSPACE_DIRS.includes(entry.name)) continue;
       for (const pkg of await readdir(dir, { withFileTypes: true }).catch(() => [])) {
-        if (pkg.isDirectory() && (await webPackage(join(dir, pkg.name)))) return true;
+        if (pkg.isDirectory() && (await webPackage(join(dir, pkg.name)))) roots.push(`${entry.name}/${pkg.name}`);
       }
     }
   } catch {
     // unreadable worktree: no web surface
   }
-  return false;
+  return roots;
+}
+
+/** True when the worktree looks like something a browser can open. */
+export async function detectWeb(worktreePath: string): Promise<boolean> {
+  return (await webRoots(worktreePath)).length > 0;
 }
 
 /** True when any changed path is something on screen could depend on. */
-export function touchesRenderedSurface(files: string[]): boolean {
+export function touchesRenderedSurface(files: string[], webRootDirs: string[] = []): boolean {
   return files.some((file) => {
     const parts = file.split("/");
     const name = parts.at(-1) ?? "";
-    return name === "package.json" || RENDERED_EXT.test(name) || parts.slice(0, -1).some((dir) => RENDERED_DIRS.has(dir));
+    if (name === "package.json" || RENDERED_EXT.test(name) || parts.slice(0, -1).some((dir) => RENDERED_DIRS.has(dir))) return true;
+    // Inside a web package, any source under src/ may render the page (a .ts that builds the
+    // DOM looks like any other .ts); only tests are known not to.
+    if (TEST_PATH.test(file)) return false;
+    return webRootDirs.some((root) => file.startsWith(root === "" ? "src/" : `${root}/src/`));
   });
 }
+const TEST_PATH = /(^|\/)(__tests__|tests?|spec)\/|\.(test|spec)\.[^/]+$/i;
 
 /** What the task branch changed since it forked, from git; null when that is unknown. */
 export async function changedFilesSinceBase(worktreePath: string, repoPath: string | null): Promise<string[] | null> {
@@ -82,6 +100,7 @@ export async function changedFilesSinceBase(worktreePath: string, repoPath: stri
 export function e2eRunner(deps: E2eDeps): StageRunner {
   const detect = deps.detectWeb ?? detectWeb;
   const changed = deps.changedFiles ?? changedFilesSinceBase;
+  const roots = deps.webRoots ?? webRoots;
   return async (context) => {
     const worktree = context.task.worktreePath;
     if (!worktree || !(await detect(worktree))) {
@@ -90,7 +109,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     // A browser can only show what the change touched: a pure library or docs change on a
     // web repo has nothing to drive, and used to cost a QA run per attempt.
     const files = await changed(worktree, context.task.repoPath ?? null);
-    if (files !== null && !touchesRenderedSurface(files)) {
+    if (files !== null && !touchesRenderedSurface(files, await roots(worktree))) {
       return { outcome: "pass", detail: { step: "e2e", skipped: true, reason: "the change touches no rendered surface", files } };
     }
     const pack = await deps.runPack(context);

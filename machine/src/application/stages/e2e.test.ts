@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { detectWeb, e2eRunner, missingQaImageRunner, touchesRenderedSurface } from "./e2e.ts";
+import { detectWeb, e2eRunner, missingQaImageRunner, touchesRenderedSurface, webRoots } from "./e2e.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 
 let dir: string;
@@ -56,7 +56,29 @@ describe("detectWeb", () => {
   });
 });
 
+describe("webRoots", () => {
+  it("names the web package dirs: the root itself, or the workspace apps that are web", async () => {
+    expect(await webRoots(dir)).toEqual([]);
+    pkg({ name: "root", private: true, workspaces: ["apps/*"] });
+    mkdirSync(join(dir, "apps", "web"), { recursive: true });
+    writeFileSync(join(dir, "apps", "web", "package.json"), JSON.stringify({ name: "web", dependencies: { vite: "7" } }));
+    mkdirSync(join(dir, "apps", "api"), { recursive: true });
+    writeFileSync(join(dir, "apps", "api", "package.json"), JSON.stringify({ name: "api", scripts: { test: "vitest" } }));
+    expect(await webRoots(dir)).toEqual(["apps/web"]);
+    pkg({ name: "root", scripts: { dev: "vite" } });
+    expect(await webRoots(dir)).toEqual(["", "apps/web"]);
+  });
+});
+
 describe("touchesRenderedSurface", () => {
+  it("counts any source under a web package's src/, since a .ts file may well render the page", () => {
+    expect(touchesRenderedSurface(["src/cart.ts"], [""])).toBe(true);
+    expect(touchesRenderedSurface(["apps/web/src/cart.ts"], ["apps/web"])).toBe(true);
+    expect(touchesRenderedSurface(["apps/api/src/cart.ts"], ["apps/web"])).toBe(false);
+    expect(touchesRenderedSurface(["src/cart.test.ts", "test/cart.ts", "src/__tests__/a.ts"], [""])).toBe(false);
+    expect(touchesRenderedSurface(["src/cart.ts"])).toBe(false);
+  });
+
   it("is true for markup, styles, assets, UI folders and the package manifest", () => {
     for (const file of ["src/App.tsx", "index.html", "styles/a.css", "app/page.ts", "public/logo.svg", "package.json", "src/components/Button.ts", "web/templates/home.j2"]) {
       expect(touchesRenderedSurface([file]), file).toBe(true);
@@ -87,6 +109,12 @@ describe("e2eRunner", () => {
       outcome: "pass",
       detail: { step: "e2e", skipped: true, reason: "no web surface detected" },
     });
+  });
+
+  it("runs the pack for a .ts change under the web package's src", async () => {
+    const runPack = packReturning(answered({ verdict: "pass", summary: "ok", criteria: [] }));
+    await e2eRunner({ runPack, detectWeb: async () => true, webRoots: async () => [""], changedFiles: async () => ["src/cart.ts"] })(context());
+    expect(runPack).toHaveBeenCalledTimes(1);
   });
 
   it("skips, without running the pack, when the diff touches no rendered surface", async () => {
