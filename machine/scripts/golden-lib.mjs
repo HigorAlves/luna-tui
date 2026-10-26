@@ -272,12 +272,15 @@ export function grade({ detail, testPassed, diffLines, ceilingUsd, expectNoRemot
   const results = Array.isArray(verifyingDetail?.results) ? verifyingDetail.results : [];
   let scenarios = cases.length > 0;
   if (!scenarios) failures.push("test_design named no scenarios");
-  for (const c of cases) {
+  // One result per scenario, in order: when the counts match, a reworded title still pairs
+  // with the scenario at the same position.
+  const byIndex = results.length === cases.length;
+  for (const [i, c] of cases.entries()) {
     if (typeof c.approach !== "string" || !c.approach.trim()) {
       scenarios = false;
       failures.push(`scenario without an approach: ${c.title}`);
     }
-    const result = results.find((r) => sameTitle(r.title, c.title));
+    const result = results.find((r) => sameTitle(r.title, c.title)) ?? (byIndex ? results[i] : undefined);
     if (result?.outcome !== "pass") {
       scenarios = false;
       failures.push(`scenario not proven by verifying: ${c.title} (${result ? result.outcome : "no result"})`);

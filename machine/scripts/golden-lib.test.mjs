@@ -132,6 +132,15 @@ describe("grade", () => {
     trimmed.approvals[0].requested.cases = [{ ...cases[0], title: "Quantity multiplies the price (assumption)" }, cases[1]];
     trimmed.events[1].payload.detail.results = [{ ...results()[0], title: "quantity multiplies the price" }, results()[1]];
     expect(grade({ ...base, detail: trimmed }).checks.scenarios).toBe(true);
+
+    // Verifying answers one result per scenario, in order; when the count matches, a reworded
+    // title still pairs with the scenario at the same position.
+    const reworded = shipped();
+    reworded.events[1].payload.detail.results = [results()[0], { ...results()[1], title: "an empty cart totals nothing" }];
+    expect(grade({ ...base, detail: reworded }).checks.scenarios).toBe(true);
+    const rewordedFail = shipped();
+    rewordedFail.events[1].payload.detail.results = [results()[0], { ...results()[1], title: "an empty cart totals nothing", outcome: "fail" }];
+    expect(grade({ ...base, detail: rewordedFail }).failures).toContain("scenario not proven by verifying: empty cart is zero (fail)");
   });
 
   test("a skipped evidence verdict passes", () => {
