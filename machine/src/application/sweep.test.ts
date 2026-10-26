@@ -11,7 +11,7 @@ import { TaskEntity } from "../adapters/persistence/schemas.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { NO_RETRIES } from "../domain/transition.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { sweepImages, sweepRunFolders, sweepWorktrees } from "./sweep.ts";
+import { sweepImages, sweepRunFolders, sweepTaskState, sweepWorktrees } from "./sweep.ts";
 
 let db: DataSource;
 beforeAll(async () => {
@@ -130,5 +130,23 @@ describe("sweepImages", () => {
     expect(calls).toContainEqual(["docker", "rmi", "hardness-runner:fedcba987654"]);
     expect(calls).toContainEqual(["docker", "rmi", "hardness-runner-qa:111111111111"]);
     expect(calls.some((c) => c[1] === "rmi" && /:dev$|0123456789ab|hardness-machine/.test(c[2] ?? ""))).toBe(false);
+  });
+});
+
+describe("sweepTaskState", () => {
+  it("removes per-task orc state dirs whose task is gone, keeps the rest", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "state-"));
+    const task = await db.getRepository(TaskEntity).save({
+      title: "x", description: "", criteria: [], repoPath: null, branch: null, worktreePath: null,
+      state: "closed", retries: { ...NO_RETRIES }, resumeTo: null, reason: null,
+    });
+    mkdirSync(join(stateDir, "tasks", task.id, "orc"), { recursive: true });
+    mkdirSync(join(stateDir, "tasks", "11111111-2222-3333-4444-555555555555", "orc"), { recursive: true });
+    writeFileSync(join(stateDir, "tasks", "11111111-2222-3333-4444-555555555555", "orc", "slices.json"), "{}");
+
+    expect(await sweepTaskState(db, stateDir)).toBe(1);
+    expect(existsSync(join(stateDir, "tasks", task.id))).toBe(true);
+    expect(existsSync(join(stateDir, "tasks", "11111111-2222-3333-4444-555555555555"))).toBe(false);
+    expect(await sweepTaskState(db, join(stateDir, "nowhere"))).toBe(0);
   });
 });
