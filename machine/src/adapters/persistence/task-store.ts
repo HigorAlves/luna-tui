@@ -127,6 +127,16 @@ export class PgTaskStore implements TaskStore {
     return this.db.getRepository(StageRunEntity).find({ where: { taskId }, order: { startedAt: "ASC" } });
   }
 
+  async taskSpendUsd(taskId: string): Promise<number> {
+    const [row] = (await this.db.query("select coalesce(sum(cost_usd), 0) as usd from stage_runs where task_id = $1", [taskId])) as { usd: string }[];
+    return Number(row?.usd ?? 0);
+  }
+
+  async spendSinceUsd(since: Date): Promise<number> {
+    const [row] = (await this.db.query("select coalesce(sum(cost_usd), 0) as usd from stage_runs where started_at >= $1", [since])) as { usd: string }[];
+    return Number(row?.usd ?? 0);
+  }
+
   countStageRunAttempts(taskId: string, stage: TaskState): Promise<number> {
     return this.db.getRepository(StageRunEntity).countBy({ taskId, stage });
   }

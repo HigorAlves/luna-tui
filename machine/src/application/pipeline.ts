@@ -42,7 +42,19 @@ export interface PipelineOptions {
   maxConcurrentTasks?: number;
   /** What the close step needs once a task is approved for good. Without it, nothing is closed on the host. */
   closeDeps?: CloseDeps;
+  /** Spend ceilings in USD; either unset means no ceiling of that kind. */
+  budget?: Budget;
 }
+
+export interface Budget {
+  /** Per task, over all its stage runs. Over it, the task escalates before its next stage. */
+  taskUsd?: number | null;
+  /** Over the trailing 24 hours. Over it, nothing is claimed and running tasks park between stages. */
+  dailyUsd?: number | null;
+}
+
+const DAY_MS = 24 * 60 * 60_000;
+const usd = (value: number) => `$${value.toFixed(2)}`;
 
 interface DecisionRecord {
   decision: Decision;
@@ -70,6 +82,7 @@ export class Pipeline {
   private readonly inline: boolean;
   private readonly maxConcurrentTasks: number;
   private readonly closeDeps: CloseDeps | undefined;
+  readonly budget: Required<Budget>;
   /** The abort signal of each task currently driving a stage. Its size is the active count. */
   private readonly loops = new Map<string, AbortController>();
   private readonly resumeTimers = new Map<string, NodeJS.Timeout>();
@@ -87,6 +100,18 @@ export class Pipeline {
     this.inline = options.inline ?? false;
     this.maxConcurrentTasks = options.maxConcurrentTasks ?? 4;
     this.closeDeps = options.closeDeps;
+    this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
+  }
+
+  /** What the trailing 24 hours have cost, in USD. */
+  spentTodayUsd(): Promise<number> {
+    return this.store.spendSinceUsd(new Date(Date.now() - DAY_MS));
+  }
+
+  /** True while the day's spend sits at or over its ceiling: no new stage should start. */
+  private async dayOver(): Promise<boolean> {
+    if (this.budget.dailyUsd === null) return false;
+    return (await this.spentTodayUsd()) >= this.budget.dailyUsd;
   }
 
   async createTask(input: NewTask): Promise<TaskRow> {
@@ -316,6 +341,7 @@ export class Pipeline {
    *  empty, or a usage window is latched. The one place a slot is ever filled from the queue. */
   private async fillSlots(): Promise<void> {
     while (this.loops.size < this.maxConcurrentTasks && this.latchedUntil === null) {
+      if (await this.dayOver()) return;
       const claimed = await this.store.claimOldestQueuedTask();
       if (!claimed) return;
       const controller = this.reserveSlot(claimed.id);
@@ -383,6 +409,7 @@ export class Pipeline {
       await this.store.updateTask(id, { queued: true });
       return;
     }
+    if (await this.heldForDay(id, stage)) return;
     const controller = this.reserveSlot(id);
     try {
       // Clears a stale `queued: true` from before a restart, as well as the common case
@@ -433,6 +460,7 @@ export class Pipeline {
     try {
       let stage: TaskState | null = first;
       while (stage) {
+        if (await this.holdForBudget(id, stage)) return;
         const result = await this.runStage(id, stage, controller.signal);
         // An abort already moved the task on; this stage's result no longer applies.
         if (controller.signal.aborted) return;
@@ -471,6 +499,32 @@ export class Pipeline {
     } finally {
       if (this.loops.get(id) === controller) this.loops.delete(id);
     }
+  }
+
+  /** Before a stage starts: over the task's own ceiling escalates it; over the day's parks it
+   *  in the queue, state kept, for the supervisor to pick up once the window has moved on.
+   *  True when the stage must not run. */
+  private async holdForBudget(id: string, stage: TaskState): Promise<boolean> {
+    const { taskUsd, dailyUsd } = this.budget;
+    if (taskUsd !== null) {
+      const spent = await this.store.taskSpendUsd(id);
+      if (spent >= taskUsd) {
+        await this.apply(id, { type: "over_budget", reason: `budget: task spent ${usd(spent)} of ${usd(taskUsd)}` }, {});
+        return true;
+      }
+    }
+    return this.heldForDay(id, stage);
+  }
+
+  /** Over the day's ceiling: the task waits in the queue, state kept, and says why. */
+  private async heldForDay(id: string, stage: TaskState): Promise<boolean> {
+    const { dailyUsd } = this.budget;
+    if (dailyUsd === null) return false;
+    const spent = await this.spentTodayUsd();
+    if (spent < dailyUsd) return false;
+    await this.store.updateTask(id, { queued: true });
+    await this.log(id, "budget.held", { stage, reason: `budget: ${usd(spent)} spent today of ${usd(dailyUsd)}` });
+    return true;
   }
 
   /** True while a paused task has a resume timer armed. */

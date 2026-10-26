@@ -191,6 +191,18 @@ describe("a crashed stage loop", () => {
   });
 });
 
+describe("a task over its budget", () => {
+  it("escalates a running task with the budget line as the reason, keeping its retries", () => {
+    const retries = { ...NO_RETRIES, total: 1 };
+    const step = transition(at("implementing", { retries }), { type: "over_budget", reason: "budget: task spent $3.00 of $2.00" });
+    expect(step).toMatchObject({ state: "escalated", resumeTo: "implementing", reason: "budget: task spent $3.00 of $2.00", retries });
+  });
+
+  it("is rejected outside a running state", () => {
+    expect(() => transition(at("awaiting_ship"), { type: "over_budget", reason: "x" })).toThrow(TransitionError);
+  });
+});
+
 describe("test change requests", () => {
   it("send the implementer back to the test designer and count toward the total", () => {
     const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2 } }), {

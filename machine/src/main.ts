@@ -82,10 +82,15 @@ function scheduleMetrics(): void {
   if (metricsTimer) return;
   metricsTimer = setTimeout(() => {
     metricsTimer = undefined;
-    computeMetrics(db, { since: parseSince("7d"), slots: pipeline.slots }).then(
-      (metrics) => bus.publish({ type: "task.metrics", metrics }),
-      (error: unknown) => console.error("could not publish metrics", error),
-    );
+    pipeline
+      .spentTodayUsd()
+      .then((spentTodayUsd) =>
+        computeMetrics(db, { since: parseSince("7d"), slots: pipeline.slots, budget: { ...pipeline.budget, spentTodayUsd } }),
+      )
+      .then(
+        (metrics) => bus.publish({ type: "task.metrics", metrics }),
+        (error: unknown) => console.error("could not publish metrics", error),
+      );
   }, METRICS_DEBOUNCE_MS);
   metricsTimer.unref();
 }
@@ -108,6 +113,7 @@ const orcStateBin = (await exec("which", ["orc-state"])).stdout.trim() || null;
 pipeline = new Pipeline(db, runnerFor, {
   onEvent: publish,
   maxConcurrentTasks: config.maxConcurrentTasks,
+  budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   closeDeps: { exec, worktreeRemove: false, orcStateBin, watcher },
 });
 const recovered = await pipeline.recover();

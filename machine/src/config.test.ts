@@ -22,6 +22,8 @@ describe("loadConfig", () => {
       stateDir: "/home/me/.local/state/hardness",
       githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },
       retentionDays: DEFAULT_RETENTION_DAYS,
+      taskBudgetUsd: null,
+      dailyBudgetUsd: null,
     });
   });
 
@@ -57,6 +59,20 @@ describe("loadConfig", () => {
   it("rejects a concurrency limit that is not a positive integer", () => {
     expect(() => loadConfig({ MACHINE_MAX_CONCURRENT: "0" })).toThrow(/MACHINE_MAX_CONCURRENT/);
     expect(() => loadConfig({ MACHINE_MAX_CONCURRENT: "abc" })).toThrow(/MACHINE_MAX_CONCURRENT/);
+  });
+
+  it("has no spend ceilings unless you set them", () => {
+    const config = loadConfig({ HOME: "/home/me" });
+    expect(config.taskBudgetUsd).toBeNull();
+    expect(config.dailyBudgetUsd).toBeNull();
+    const set = loadConfig({ HOME: "/home/me", MACHINE_TASK_BUDGET_USD: "2.5", MACHINE_DAILY_BUDGET_USD: "40" });
+    expect(set.taskBudgetUsd).toBe(2.5);
+    expect(set.dailyBudgetUsd).toBe(40);
+  });
+
+  it("rejects a ceiling that is not a positive amount", () => {
+    expect(() => loadConfig({ MACHINE_TASK_BUDGET_USD: "0" })).toThrow(/MACHINE_TASK_BUDGET_USD/);
+    expect(() => loadConfig({ MACHINE_DAILY_BUDGET_USD: "lots" })).toThrow(/MACHINE_DAILY_BUDGET_USD/);
   });
 
   it("reads a custom retention window, including 0 to disable pruning", () => {
