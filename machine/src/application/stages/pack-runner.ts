@@ -14,11 +14,14 @@ import {
   headCommit,
   dirtyFiles,
   resetWorktree,
+  restoreFiles,
   workspaceFor,
 } from "../../adapters/git/worktree.ts";
 import type { Credential } from "../../adapters/docker/credentials.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
-import { lockedFilesTouched } from "../../domain/locked-files.ts";
+import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
+import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
+import { type ExecResult, exec } from "../../adapters/process/exec.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
 import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
@@ -34,7 +37,18 @@ export interface AgentDeps {
   watcher: Watcher;
   /** Replaces the docker sandbox; tests pass a fake. */
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
+  /** Finds the project's own check commands; the locked-test replay runs the test one. */
+  detect?: (worktreePath: string) => Promise<DetectedChecks>;
+  /** Runs a host command; the locked-test replay uses it for the project's test command. */
+  exec?: (
+    command: string,
+    args: string[],
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number },
+  ) => Promise<ExecResult>;
 }
+
+/** How long the original tests may take when replayed against a changed test file. */
+const LOCKED_REPLAY_TIMEOUT_MS = 10 * 60_000;
 
 const MINUTE = 60_000;
 /** Kept read-only inside a writable stage's git dir: a planted hook or a rewritten config
@@ -174,8 +188,33 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     }
     // Tests present at the start of the run are locked; implementing has a test_change
     // escape hatch, verifying has none — it may only ever add a new test file.
-    const locked = lockedFilesTouched(await diffNameStatus(workspace.path, inputCommit, "HEAD"));
+    const nameStatus = await diffNameStatus(workspace.path, inputCommit, "HEAD");
+    const locked = lockedFilesTouched(nameStatus);
+    let replayed = false;
+    let replayError: string | null = null;
     if (locked.length > 0) {
+      // A test file that existed may gain cases (the repo's idiom for a new export), but the
+      // tests that were there must still pass against the new code, unchanged. Put the
+      // originals back, run the project's test command, then restore the agent's versions.
+      // A deleted or renamed-away test file has nothing to replay and stays a hard fail.
+      const removed = lockedFilesRemoved(nameStatus);
+      const found = removed.length === 0 ? await (deps.detect ?? detectChecks)(workspace.path) : null;
+      if (found?.test) {
+        await restoreFiles(workspace.path, inputCommit, locked);
+        const [cmd, ...args] = found.test;
+        const ran = await (deps.exec ?? exec)(cmd!, args, {
+          cwd: workspace.path,
+          signal: context.signal,
+          timeoutMs: LOCKED_REPLAY_TIMEOUT_MS,
+          env: { ...process.env, HARDNESS_STAGE: pack },
+        });
+        await resetWorktree(workspace.path);
+        if (ran.code === 0) replayed = true;
+        else replayError = `changed existing test file(s) and the tests that were there no longer pass: ${locked.join(", ")}`;
+      }
+    }
+    if (replayed) mapped.detail = { ...mapped.detail, lockedFiles: locked, lockedTestsReplayed: true };
+    if (locked.length > 0 && !replayed) {
       // Undo the commit itself, so the next attempt does not start from it.
       await resetWorktree(workspace.path, inputCommit);
       const hint = pack === "implementing" ? " without a test_change request" : "";
@@ -183,7 +222,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
         ...mapped,
         outcome: "fail",
         detail: {
-          error: `modified existing test file(s)${hint}: ${locked.join(", ")}`,
+          error: replayError ?? `modified existing test file(s)${hint}: ${locked.join(", ")}`,
           lockedFiles: locked,
         },
         findings: locked.map((path) => ({

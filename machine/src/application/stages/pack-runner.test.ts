@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -240,6 +240,56 @@ describe("agent stages through orc packs", () => {
       expectLocked((cwd) => git(cwd, "rm", "-q", "test/cart.test.js")));
     it("fails and undoes a commit that renamed an existing test", () =>
       expectLocked((cwd) => git(cwd, "mv", "test/cart.test.js", "src-moved.js")));
+
+    // A test file that existed is allowed to change as long as the tests that were there
+    // still pass against the new code: the machine puts the original file back, runs the
+    // project's test command, then restores the agent's version.
+    const withTestCommand = (argv: string[], sandbox: (run: SandboxRun) => Promise<SandboxResult>) =>
+      agentRunners({ ...deps(sandbox), detect: async () => ({ manager: "npm" as const, test: argv }) });
+
+    it("accepts a change to an existing test file when the tests that were there still pass", async () => {
+      seedTests();
+      let replayedWith: string | undefined;
+      const run = withTestCommand(["sh", "-c", "cat test/cart.test.js > ../replayed.txt"], fakeSandbox(output(), (r) => {
+        writeFileSync(join(r.worktree, "test", "cart.test.js"), "old\nplus a new case\n");
+        writeFileSync(join(r.worktree, "a.txt"), "changed\n");
+        commitIn(r.worktree);
+      }));
+      const result = await run.implementing!(context("implementing"));
+      replayedWith = readFileSync(join(seen!.worktree, "..", "replayed.txt"), "utf8");
+      expect(result.outcome).toBe("pass");
+      // The original file was what ran, and the agent's version is back afterwards.
+      expect(replayedWith).toBe("old\n");
+      expect(readFileSync(join(seen!.worktree, "test", "cart.test.js"), "utf8")).toBe("old\nplus a new case\n");
+      expect(git(seen!.worktree, "status", "--porcelain")).toBe("");
+      expect(result.detail).toMatchObject({ lockedFiles: ["test/cart.test.js"], lockedTestsReplayed: true });
+    });
+
+    it("still fails and undoes the commit when the tests that were there no longer pass", async () => {
+      seedTests();
+      const before = git(repo, "rev-parse", "HEAD");
+      const run = withTestCommand(["sh", "-c", "exit 1"], fakeSandbox(output(), (r) => {
+        writeFileSync(join(r.worktree, "test", "cart.test.js"), "rewritten\n");
+        commitIn(r.worktree);
+      }));
+      const result = await run.implementing!(context("implementing"));
+      expect(result.outcome).toBe("fail");
+      expect(git(seen!.worktree, "rev-parse", "HEAD")).toBe(before);
+      expect(String((result.detail as { error: string }).error)).toMatch(/no longer pass/);
+      expect(result.findings![0]).toMatchObject({ path: "test/cart.test.js" });
+    });
+
+    it("never accepts a deleted or renamed test file, even with a green test command", async () => {
+      seedTests();
+      const before = git(repo, "rev-parse", "HEAD");
+      const run = withTestCommand(["sh", "-c", "exit 0"], fakeSandbox(output(), (r) => {
+        git(r.worktree, "rm", "-q", "test/cart.test.js");
+        commitIn(r.worktree);
+      }));
+      const result = await run.implementing!(context("implementing"));
+      expect(result.outcome).toBe("fail");
+      expect(git(seen!.worktree, "rev-parse", "HEAD")).toBe(before);
+    });
 
     it("passes a commit that adds a new test and changes source", async () => {
       seedTests();
