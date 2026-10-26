@@ -9,7 +9,7 @@ import { parseSince } from "./adapters/http/metrics.ts";
 import { toEvent, toTask } from "./adapters/http/serialize.ts";
 import { buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig } from "./config.ts";
-import { createDataSource } from "./adapters/persistence/data-source.ts";
+import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns } from "./adapters/persistence/prune.ts";
 import type { EventRow } from "./domain/task.ts";
@@ -22,7 +22,7 @@ import { StubStages } from "./application/stages/stubs.ts";
 import { verifyRunner } from "./application/stages/verify.ts";
 
 const config = loadConfig();
-const db = createDataSource(config.databaseUrl);
+const db = createDataSource(config.databaseUrl, poolSizeFor(config.maxConcurrentTasks));
 await db.initialize();
 const applied = await db.runMigrations();
 if (applied.length > 0) {
