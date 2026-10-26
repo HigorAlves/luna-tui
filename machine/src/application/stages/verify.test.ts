@@ -169,6 +169,34 @@ describe("verifying stage", () => {
     expect(result.detail).toMatchObject({ verdict: "pass", note: expect.stringContaining("question") });
   });
 
+  it("fails on a failing result even with zero findings", async () => {
+    const results = [{ title: "t", criterion: "c", approach: "a", outcome: "fail" }];
+    const { run, context } = setup({
+      pack: { outcome: "pass", detail: { answer: { verdict: "pass", summary: "fine", findings: [], results } } },
+    });
+    const { outcome, detail } = await run(context);
+    expect(outcome).toBe("fail");
+    expect(detail?.results).toEqual(results);
+  });
+
+  it("passes with passing results and no findings", async () => {
+    const results = [{ title: "t", criterion: "c", approach: "a", outcome: "pass" }];
+    const { run, context } = setup({
+      pack: { outcome: "pass", detail: { answer: { verdict: "pass", summary: "fine", findings: [], results } } },
+    });
+    const { outcome, detail } = await run(context);
+    expect(outcome).toBe("pass");
+    expect(detail?.results).toEqual(results);
+  });
+
+  it("passes through an escalated pack unchanged, never computing a verdict over it", async () => {
+    const escalated: StageResult = { outcome: "escalated", detail: { reason: "a pre-existing failure", options: [] } };
+    const { run, context } = setup({ pack: escalated });
+    const { outcome, detail } = await run(context);
+    expect(outcome).toBe("escalated");
+    expect(detail).toMatchObject({ reason: "a pre-existing failure", step: "review" });
+  });
+
   it("returns the pack's own failure with the checks attached", async () => {
     const s = setup({ pack: { outcome: "fail", detail: { error: "timed out" } } });
     const result = await s.run(s.context);

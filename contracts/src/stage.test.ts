@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ArtifactKind, PackId, StageInput, StageOutput, TaskState } from "./index.ts";
+import { ArtifactKind, PackId, StageInput, StageOutput, TaskState, TestCase, VerifyResult } from "./index.ts";
 
 // The two examples are copied verbatim from the cross-repo contract in the orc plan.
 const stageInputExample = {
@@ -42,7 +42,39 @@ const stageOutputExample = {
   resetsAt: null,
 };
 
+describe("TestCase", () => {
+  it("parses {title, criterion, approach}, criterion nullable", () => {
+    expect(TestCase.safeParse({ title: "t", criterion: "c", approach: "a" }).success).toBe(true);
+    expect(TestCase.safeParse({ title: "t", criterion: null, approach: "a" }).success).toBe(true);
+  });
+
+  it("rejects the old test field in its place", () => {
+    expect(TestCase.safeParse({ title: "t", criterion: "c", test: "a.test.ts > x" }).success).toBe(false);
+  });
+});
+
+describe("VerifyResult", () => {
+  it("extends TestCase with a pass/fail outcome", () => {
+    const parsed = VerifyResult.safeParse({ title: "t", criterion: "c", approach: "a", outcome: "fail" });
+    expect(parsed.success).toBe(true);
+    expect(VerifyResult.safeParse({ title: "t", criterion: null, approach: "a", outcome: "maybe" }).success).toBe(false);
+  });
+});
+
 describe("StageInput", () => {
+  it("reads schema 3 testCases with approach, and still reads schema 2's test field for old images", () => {
+    const base = { ...stageInputExample, schema: 3 as const };
+    const v3 = StageInput.safeParse({ ...base, context: { ...base.context, testCases: [{ title: "t", criterion: "c", approach: "a" }] } });
+    expect(v3.success).toBe(true);
+    const legacy = StageInput.safeParse({
+      ...stageInputExample,
+      schema: 2,
+      context: { ...stageInputExample.context, testCases: [{ title: "t", criterion: "c", test: "a.test.ts > x" }] },
+    });
+    expect(legacy.success).toBe(true);
+    expect(StageInput.safeParse({ ...stageInputExample, schema: 4 }).success).toBe(false);
+  });
+
   it("parses the contract example", () => {
     expect(StageInput.safeParse(stageInputExample).success).toBe(true);
   });

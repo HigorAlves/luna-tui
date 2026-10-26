@@ -133,24 +133,30 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       return { outcome: "pass", detail: { step: "checks", note: "review: skipped (agents off)", checks: reports }, run: { transcriptPath } };
     }
     const pack = await deps.runPack(context);
-    if (pack.outcome === "fail") {
+    // A plain failure or a deliberate escalation are both the pack's own answer, verbatim —
+    // neither should fall into the verdict computation below (an escalation has no real
+    // findings to compute one from, and would otherwise be miscounted as a pass).
+    if (pack.outcome === "fail" || pack.outcome === "escalated") {
       return { ...pack, detail: { ...pack.detail, step: "review", checks: reports } };
     }
     const answer = answerOf(pack.detail);
     const findings = (Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[];
+    const results = Array.isArray(answer?.results) ? answer.results : [];
     const asked = pack.outcome === "needs_input";
+    const resultsFailed = results.some((r) => (r as { outcome?: string }).outcome === "fail");
     const verdict =
       !asked && (answer?.verdict === "pass" || answer?.verdict === "fail") ? answer.verdict : verdictOf(findings);
     const summary =
       typeof answer?.summary === "string" ? answer.summary : String(pack.detail?.summary ?? "");
     return {
       ...pack,
-      outcome: asked || verdict === "pass" ? "pass" : "fail",
+      outcome: asked || (verdict === "pass" && !resultsFailed) ? "pass" : "fail",
       detail: {
         step: "review",
-        verdict: asked ? "pass" : verdict,
+        verdict: asked ? "pass" : resultsFailed ? "fail" : verdict,
         summary,
         findings,
+        results,
         checks: reports,
         ...(asked ? { note: "the reviewer asked a question; a reviewer should not, so the review counts as a pass" } : {}),
       },

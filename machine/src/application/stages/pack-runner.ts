@@ -151,21 +151,24 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   }
 
   // outcome pass
-  if (pack === "implementing") {
-    // The implementer commits inside the container; anything left over is not part of the answer.
+  if (pack === "implementing" || pack === "verifying") {
+    // Both commit inside the container; anything left over is not part of the answer.
     if (await isDirty(workspace.path)) {
-      return dirty(merged({ ...mapped, outcome: "fail", detail: { error: "implementer left uncommitted changes" } }));
+      const who = pack === "implementing" ? "implementer" : "verifying";
+      return dirty(merged({ ...mapped, outcome: "fail", detail: { error: `${who} left uncommitted changes` } }));
     }
-    // Tests present at the start of the run are locked; changing one needs a test_change answer.
+    // Tests present at the start of the run are locked; implementing has a test_change
+    // escape hatch, verifying has none — it may only ever add a new test file.
     const locked = lockedFilesTouched(await diffNameStatus(workspace.path, inputCommit, "HEAD"));
     if (locked.length > 0) {
       // Undo the commit itself, so the next attempt does not start from it.
       await resetWorktree(workspace.path, inputCommit);
+      const hint = pack === "implementing" ? " without a test_change request" : "";
       return merged({
         ...mapped,
         outcome: "fail",
         detail: {
-          error: `modified existing test file(s) without a test_change request: ${locked.join(", ")}`,
+          error: `modified existing test file(s)${hint}: ${locked.join(", ")}`,
           lockedFiles: locked,
         },
         findings: locked.map((path) => ({
@@ -174,7 +177,10 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           start_line: null,
           severity: "test",
           title: "locked test file changed",
-          body: "Tests present at the start of the run are locked; answer kind test_change instead of editing them.",
+          body:
+            pack === "implementing"
+              ? "Tests present at the start of the run are locked; answer kind test_change instead of editing them."
+              : "Tests present at the start of the run are locked; add a new test file instead of editing this one.",
           suggestion_code: null,
           confidence: 1,
         })),

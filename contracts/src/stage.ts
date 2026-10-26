@@ -80,18 +80,29 @@ export const PackId = z.enum([
 ]);
 export type PackId = z.infer<typeof PackId>;
 
-/** One behaviour test_design pins down: the plan criterion it proves, and the test that does. */
+/** One behaviour test_design names: the plan criterion it proves, and how to prove it. */
 export const TestCase = z.object({
   title: z.string(),
   criterion: z.string().nullable(),
-  /** `<path> > <test name>`. */
-  test: z.string(),
+  /** Free text: what to check, and the repo's own command when one applies. */
+  approach: z.string(),
 });
 export type TestCase = z.infer<typeof TestCase>;
 
-/** Schema 2 adds `context.testCases`. */
+/** Schema 2's shape, read for images built before the schema 3 rename. */
+const LegacyTestCase = z.object({
+  title: z.string(),
+  criterion: z.string().nullable(),
+  test: z.string(),
+});
+
+/** One scenario verifying proved (or didn't), alongside its code review. */
+export const VerifyResult = TestCase.extend({ outcome: z.enum(["pass", "fail"]) });
+export type VerifyResult = z.infer<typeof VerifyResult>;
+
+/** Schema 2 adds `context.testCases`; schema 3 renames its `test` field to `approach`. */
 export const StageInput = z.object({
-  schema: z.union([z.literal(1), z.literal(2)]),
+  schema: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   stage: z.string(),
   pack: PackId,
   attempt: z.number().int(),
@@ -126,7 +137,7 @@ export const StageInput = z.object({
     projectContext: z.string().nullable(),
     tests: z.array(z.string()),
     /** The cases approved at the test check, for implementing and verifying. */
-    testCases: z.array(TestCase).optional(),
+    testCases: z.array(z.union([TestCase, LegacyTestCase])).optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),

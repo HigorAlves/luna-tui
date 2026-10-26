@@ -79,6 +79,11 @@ describe("buildStageInput", () => {
     expect(input.env).toEqual({ ORC_FACTORY: "1" });
   });
 
+  it("keeps test_design read-only and verifying writable, matching orc's packs", () => {
+    expect(PACK_LIMITS.test_design).toMatchObject({ writable: false });
+    expect(PACK_LIMITS.verifying).toMatchObject({ writable: true, maxTurns: 60, timeoutMs: 20 * 60_000 });
+  });
+
   it("has no plan before one is approved, and covers all eight packs", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
@@ -102,15 +107,15 @@ describe("buildStageInput", () => {
 
   it("gives implementing and verifying the test cases approved at the test check (schema 2)", () => {
     const cases = [
-      { title: "rejects a bad password", criterion: "no crash", test: "src/a.test.ts > rejects" },
-      { title: "an edge case", criterion: null, test: "src/b.test.ts > edge" },
+      { title: "rejects a bad password", criterion: "no crash", approach: "run src/a.test.ts, confirm it rejects" },
+      { title: "an edge case", criterion: null, approach: "run src/b.test.ts" },
     ];
     const approvals = [
       approval({ kind: "awaiting_test_check", requested: { tests: ["src/a.test.ts"], cases: [...cases, "junk"] } }),
     ];
     const at = (stage: "implementing" | "verifying" | "e2e") =>
       buildStageInput({ task, stage, attempt: 1, approvals, priorFindings: [] });
-    expect(at("implementing").schema).toBe(2);
+    expect(at("implementing").schema).toBe(3);
     expect(at("implementing").context.testCases).toEqual(cases);
     expect(at("verifying").context.testCases).toEqual(cases);
     expect(at("e2e").context.testCases).toEqual([]);
