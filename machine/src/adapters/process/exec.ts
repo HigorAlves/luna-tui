@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 
 export interface ExecResult {
   code: number;
@@ -16,21 +16,44 @@ export function exec(
   options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
-    execFile(
-      command,
-      args,
-      {
-        env: options.env ?? process.env,
-        cwd: options.cwd,
-        maxBuffer: 64 * 1024 * 1024,
-        signal: options.signal,
-        timeout: options.timeoutMs,
-      },
-      (error, stdout, stderr) => {
-        const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
-        resolve({ code, stdout: String(stdout), stderr: String(stderr) });
-      },
-    );
+    // Its own process group, so a timeout or abort kills everything the command spawned
+    // (a test runner behind `pnpm test`, a dev server behind a script), not only the shell
+    // in front of it; a grandchild left alive would also hold our stdout pipe open forever.
+    const child = spawn(command, args, {
+      env: options.env ?? process.env,
+      cwd: options.cwd,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let killed = false;
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString()));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString()));
+    const killGroup = () => {
+      killed = true;
+      if (child.pid === undefined) return;
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        child.kill("SIGKILL");
+      }
+    };
+    const timer = options.timeoutMs === undefined ? undefined : setTimeout(killGroup, options.timeoutMs);
+    if (options.signal?.aborted) killGroup();
+    else options.signal?.addEventListener("abort", killGroup, { once: true });
+    const done = (code: number) => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", killGroup);
+      resolve({ code, stdout, stderr });
+    };
+    child.on("error", (error) => {
+      // Could not start (ENOENT and friends): report it where the caller reads failures.
+      if (!stderr) stderr = error.message;
+      done(1);
+    });
+    // A signal death has no exit code; a group we killed never counts as a success.
+    child.on("close", (code) => done(killed ? (code || 1) : (code ?? 1)));
   });
 }
 
