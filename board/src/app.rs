@@ -3,7 +3,6 @@
 
 use std::{
     cell::{Cell, RefCell},
-    env, fs, io,
     process::Command,
     sync::mpsc::{self, Receiver, Sender},
     thread,
@@ -11,11 +10,7 @@ use std::{
 };
 
 use ratatui::{
-    DefaultTerminal,
-    crossterm::{
-        event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent},
-        execute,
-    },
+    crossterm::event::{KeyCode, KeyEvent},
     layout::Rect,
 };
 use tui_textarea::TextArea;
@@ -78,7 +73,7 @@ pub const HELP: [(&str, &str); 29] = [
     ("n", "new ticket, then edit it in place"),
     ("e", "edit title, description and criteria in place (ctrl+s saves)"),
     ("R", "search for its repo under HARDNESS_REPOS_DIR / ~/Developer"),
-    ("a", "advance: move to intake, start, approve, answer, retry an escalation, resume"),
+    ("a", "advance: start, approve, answer triage in place (ctrl+s sends), retry an escalation, resume"),
     ("S", "ship: approve the Ship gate and open the PR (same as a there)"),
     ("A", "memory review: approve without applying the proposed rules"),
     ("r", "send the plan or tests back, with a reason"),
@@ -223,6 +218,13 @@ pub enum Mode {
         plan_vim: Vim,
         ticket_vim: Vim,
     },
+    /// Answering triage's questions in place: the same markdown `$EDITOR` used to get,
+    /// one `## Q:` heading per question with the recommended answer under it; ctrl+s sends.
+    Answer {
+        id: String,
+        area: TextArea<'static>,
+        vim: Vim,
+    },
     /// Typing a reason: required to send back, optional guidance for an escalation.
     Reason {
         id: String,
@@ -266,8 +268,6 @@ fn has_open_plan(task: &Task, detail: Option<&TaskDetail>) -> bool {
 pub enum Outcome {
     Continue,
     Quit,
-    /// Answer this ticket's triage questions in `$EDITOR`.
-    Answer(String),
 }
 
 pub struct Toast {
@@ -856,7 +856,7 @@ impl App {
                 self.open_repo_picker(id);
             }
             "draft" => self.act(|m| m.start(id), "started"),
-            "awaiting_answers" => return Outcome::Answer(id.to_string()),
+            "awaiting_answers" => self.open_answer_editor(id),
             "escalated" if task.repo_path.is_none() => {
                 self.notify("set a repo before continuing", true);
                 self.open_repo_picker(id);
@@ -973,6 +973,7 @@ impl App {
             }
             Mode::Adding(_) => self.handle_adding(key),
             Mode::EditTicket { .. } => self.handle_edit_ticket(key),
+            Mode::Answer { .. } => self.handle_answer(key),
             Mode::EditPlan { .. } => self.handle_edit_plan(key),
             Mode::Filter => self.handle_filter(key),
             Mode::Reason { .. } => self.handle_reason(key),
@@ -1712,60 +1713,56 @@ impl App {
         Outcome::Continue
     }
 
-    /// Opens `content` in `$EDITOR` and returns the saved text, or None if cancelled.
-    fn run_editor(&mut self, terminal: &mut DefaultTerminal, name: &str, content: &str) -> Option<String> {
-        let path = env::temp_dir().join(name);
-        if let Err(error) = fs::write(&path, content) {
-            self.notify(format!("could not write {}: {error}", path.display()), true);
-            return None;
-        }
-
-        let _ = execute!(io::stdout(), DisableMouseCapture);
-        ratatui::restore();
-        let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg(format!("{editor} \"$1\""))
-            .arg("sh")
-            .arg(&path)
-            .status();
-        *terminal = ratatui::init();
-        let _ = execute!(io::stdout(), EnableMouseCapture);
-
-        let saved = match status {
-            Ok(status) if status.success() => fs::read_to_string(&path).ok(),
-            Ok(status) => {
-                self.notify(format!("editor exited with {status}"), true);
-                None
-            }
-            Err(error) => {
-                self.notify(format!("could not start the editor: {error}"), true);
-                None
+    /// Opens triage's questions in place, each with its recommended answer ready to edit.
+    /// The questions come from the ticket's detail: the one already shown, or fetched now.
+    fn open_answer_editor(&mut self, id: &str) {
+        let detail = if self.shows_detail_of(id) {
+            self.detail.clone()
+        } else {
+            match self.machine.detail(id) {
+                Ok(detail) => Some(detail),
+                Err(error) => return self.notify(error, true),
             }
         };
-        let _ = fs::remove_file(&path);
-        saved
-    }
-
-    /// Answers triage's questions in `$EDITOR`, starting from its recommended answers.
-    pub fn answer_questions(&mut self, terminal: &mut DefaultTerminal, id: &str) {
-        let detail = match self.machine.detail(id) {
-            Ok(detail) => detail,
-            Err(error) => return self.notify(error, true),
+        let Some(detail) = detail else {
+            return;
         };
         let questions = detail.open_approval().map(questions_of).unwrap_or_default();
         if questions.is_empty() {
             return self.notify("triage left no questions to answer", true);
         }
-        let name = format!("hardness-answers-{}.md", detail.task.short_id());
-        let Some(saved) = self.run_editor(terminal, &name, &answers_markdown(&detail.task, &questions)) else {
-            return;
+        let title = format!(" answers for #{} {} ", detail.task.short_id(), detail.task.title);
+        let mut area = TextArea::new(answers_markdown(&detail.task, &questions).lines().map(str::to_string).collect());
+        area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+        area.set_block(
+            ratatui::widgets::Block::bordered()
+                .padding(ratatui::widgets::Padding::new(2, 2, 1, 1))
+                .title(title),
+        );
+        self.mode = Mode::Answer { id: id.to_string(), area, vim: Vim::new() };
+    }
+
+    /// The answer editor's keys: vim moves and edits, ctrl+s sends, esc in normal mode cancels.
+    fn handle_answer(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::Answer { id, area, vim } = &mut self.mode else {
+            return Outcome::Continue;
         };
-        let answers = parse_answers(&saved);
-        if answers.len() != questions.len() || answers.iter().any(|(_, a)| a.is_empty()) {
-            return self.notify("answer every question, keeping the `## Q:` lines", true);
+        match vim.handle(area, key) {
+            crate::vim::Outcome::Continue => {}
+            crate::vim::Outcome::Cancel => self.mode = Mode::Normal,
+            crate::vim::Outcome::Save => {
+                let id = id.clone();
+                let markdown = area.lines().join("\n");
+                self.mode = Mode::Normal;
+                let answers = parse_answers(&markdown);
+                if answers.is_empty() || answers.iter().any(|(_, a)| a.is_empty()) {
+                    self.notify("answer every question, keeping the `## Q:` lines", true);
+                    return Outcome::Continue;
+                }
+                self.act(|m| m.answer(&id, &answers), "answers sent; triage runs again");
+            }
         }
-        self.act(|m| m.answer(id, &answers), "answers sent; triage runs again");
+        Outcome::Continue
     }
 }
 
@@ -2172,6 +2169,50 @@ mod tests {
         app.tx.send(Incoming::Message(alert(100))).unwrap();
         app.pump();
         assert!(app.toast.as_ref().unwrap().error, "the ceiling itself reads as an error");
+    }
+
+    fn questions_detail(id: &str) -> TaskDetail {
+        serde_json::from_str(&format!(
+            r#"{{"task":{{"id":"{id}","title":"Login page","description":"","criteria":[],
+            "repoPath":"/r/app","branch":null,"worktreePath":null,"state":"awaiting_answers","column":"Triage",
+            "waitingOnYou":true,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}},
+            "stageRuns":[],"approvals":[{{"requested":{{"questions":[
+              {{"question":"Email or username?","recommended":"email"}},
+              {{"question":"Remember me?","recommended":"yes, 30 days"}}]}},"decision":null}}],"events":[]}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_on_a_ticket_awaiting_answers_opens_the_answers_in_place_and_ctrl_s_sends_them() {
+        let mut app = App::new(Machine::from_env());
+        let mut task = ticket("aaaaaaaa0000", "awaiting_answers", false, false);
+        task.waiting_on_you = true;
+        app.tasks.push(task);
+        app.detail = Some(questions_detail("aaaaaaaa0000"));
+        app.toast = None;
+        app.ticket_key('a', "aaaaaaaa0000");
+        let Mode::Answer { id, area, .. } = &app.mode else { panic!("expected the answer editor") };
+        assert_eq!(id, "aaaaaaaa0000");
+        let text = area.lines().join("\n");
+        assert!(text.contains("## Q: Email or username?") && text.contains("yes, 30 days"), "{text}");
+
+        // Saving as recommended sends two answers; the machine is offline here, so the toast says so.
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), ratatui::crossterm::event::KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.toast.as_ref().is_some_and(|t| t.error), "offline machine: an error toast, no panic");
+
+        // An emptied answer is refused before anything is sent.
+        app.toast = None;
+        app.ticket_key('a', "aaaaaaaa0000");
+        if let Mode::Answer { area, .. } = &mut app.mode {
+            let lines: Vec<String> = area.lines().iter().map(|l| if l == "email" { String::new() } else { l.clone() }).collect();
+            *area = TextArea::new(lines);
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), ratatui::crossterm::event::KeyModifiers::CONTROL));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("answer every question, keeping the `## Q:` lines"));
     }
 
     #[test]

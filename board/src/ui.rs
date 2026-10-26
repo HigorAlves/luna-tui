@@ -170,7 +170,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 );
             }
         }
-        Mode::EditTicket { id, area, vim } => {
+        Mode::EditTicket { id, area, vim } | Mode::Answer { id, area, vim } => {
             let rect = centered(frame.area(), frame.area().width * 9 / 10, frame.area().height * 8 / 10);
             frame.render_widget(Clear, rect);
             let (label, mode_color) = match vim.mode() {
@@ -328,16 +328,19 @@ fn footer_line(app: &App) -> Line<'static> {
             Span::from(format!("{buf}▏")),
             Span::from("   enter create and edit · esc cancel").fg(c(SUBTEXT0)),
         ]),
-        Mode::EditTicket { vim, .. } => match vim.mode() {
-            crate::vim::Mode::Normal => hint(&[
-                ("i/a/o", "insert"),
-                ("hjkl", "move"),
-                ("dd/x", "delete"),
-                ("ctrl+s", "save"),
-                ("esc", "cancel"),
-            ]),
-            crate::vim::Mode::Insert => hint(&[("esc", "normal mode"), ("ctrl+s", "save")]),
-        },
+        Mode::EditTicket { vim, .. } | Mode::Answer { vim, .. } => {
+            let save = if matches!(app.mode, Mode::Answer { .. }) { "send answers" } else { "save" };
+            match vim.mode() {
+                crate::vim::Mode::Normal => hint(&[
+                    ("i/a/o", "insert"),
+                    ("hjkl", "move"),
+                    ("dd/x", "delete"),
+                    ("ctrl+s", save),
+                    ("esc", "cancel"),
+                ]),
+                crate::vim::Mode::Insert => hint(&[("esc", "normal mode"), ("ctrl+s", save)]),
+            }
+        }
         Mode::EditPlan { focus, plan_vim, ticket_vim, .. } => {
             let vim = match focus {
                 crate::app::PlanPane::Plan => plan_vim,
