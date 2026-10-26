@@ -926,6 +926,16 @@ describe("fair claims", () => {
   });
 });
 
+/** Polls until `check` holds, for up to three seconds: a loop's end is not synchronous with
+ *  the call that caused it, and a CI runner is slower than a laptop. */
+async function until(check: () => Promise<boolean>, what: string): Promise<void> {
+  const deadline = Date.now() + 3000;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 describe("per-stage caps", () => {
   /** A stage that holds its slot until the task is aborted. */
   const holding: StageRunner = ({ signal }) =>
@@ -951,7 +961,7 @@ describe("per-stage caps", () => {
 
     // Triage's slot frees: b goes.
     await pipeline.abort(a.id);
-    await settle();
+    await until(async () => !(await pipeline.get(b.id)).queued, "b to be claimed");
     expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: false });
     await pipeline.shutdown();
   });
@@ -1007,7 +1017,9 @@ describe("ci_watch outside the pool", () => {
   const polling: StageRunner = () => new Promise<StageResult>((resolve) => { green = () => resolve({ outcome: "pass" }); });
   const holding: StageRunner = ({ signal }) =>
     new Promise<StageResult>((resolve) => signal.addEventListener("abort", () => resolve({ outcome: "fail" }), { once: true }));
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
+  beforeEach(() => {
+    green = undefined;
+  });
 
   it("gives the slot back while polling, and takes one again (or queues) for the stage after", async () => {
     const runnerFor = (stage: TaskState) => (stage === "ci_watch" ? polling : stage === "triage" ? holding : stubs.runnerFor(stage));
@@ -1015,7 +1027,7 @@ describe("ci_watch outside the pool", () => {
     const a = await newTask();
     await db.query("update tasks set state = 'ci_watch', queued = true, queued_at = now() where id = $1", [a.id]);
     await pipeline.tick();
-    await settle();
+    await until(async () => green !== undefined, "a to be polling");
     expect(await pipeline.get(a.id)).toMatchObject({ state: "ci_watch", queued: false });
     expect(pipeline.slots).toMatchObject({ max: 1, active: 0 });
 
@@ -1026,11 +1038,10 @@ describe("ci_watch outside the pool", () => {
 
     // CI goes green: a's next stage needs a slot, b holds it, so a waits in the queue.
     green!();
-    await settle();
+    await until(async () => (await pipeline.events(a.id)).some((e) => e.kind === "slot.waited"), "a to wait for a slot");
     expect(await pipeline.get(a.id)).toMatchObject({ state: "evidence", queued: true });
-    expect((await pipeline.events(a.id)).map((e) => e.kind)).toContain("slot.waited");
     await pipeline.abort(b.id);
-    await settle();
+    await until(async () => (await pipeline.get(a.id)).state === "awaiting_ship", "a to reach the ship gate");
     expect(await pipeline.get(a.id)).toMatchObject({ state: "awaiting_ship", queued: false });
     await pipeline.shutdown();
   });
