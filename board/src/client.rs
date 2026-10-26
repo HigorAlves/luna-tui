@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use ureq::{Agent, Body, http::Response};
 
-use crate::model::{Metrics, PlanEdit, StreamMessage, Task, TaskDetail, TicketText};
+use crate::model::{Metrics, PlanEdit, StreamMessage, Task, TaskDetail, TicketText, Health, Slots};
 
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -93,6 +93,26 @@ impl Machine {
 
     pub fn tasks(&self) -> Result<Vec<Task>, String> {
         Self::typed(self.agent.get(self.url("/tasks")).call())
+    }
+
+    /// The stage pool, from `/health`.
+    pub fn health(&self) -> Result<Health, String> {
+        Self::typed(self.agent.get(self.url("/health")).call())
+    }
+
+    /// Take no new work; running stages finish.
+    pub fn drain(&self) -> Result<Slots, String> {
+        Self::typed(self.agent.post(self.url("/drain")).send_json(json!({})))
+    }
+
+    /// Carry on claiming from the queue.
+    pub fn resume_claims(&self) -> Result<Slots, String> {
+        Self::typed(self.agent.post(self.url("/resume")).send_json(json!({})))
+    }
+
+    /// Resize the pool at run time.
+    pub fn set_slots(&self, max: u64) -> Result<Slots, String> {
+        Self::typed(self.agent.patch(self.url("/slots")).send_json(json!({ "max": max })))
     }
 
     /// Metrics for a window: `7d` or `30d`.

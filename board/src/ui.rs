@@ -262,7 +262,8 @@ fn header_line(app: &App) -> Line<'static> {
         let queued_part = if queued > 0 { format!(" · {queued} queued") } else { String::new() };
         spans.push(
             Span::from(format!(
-                "  {total} tickets · {running} running{queued_part} · {waiting} need you{}",
+                "  {total} tickets · {running}{} running{queued_part} · {waiting} need you{}",
+                app.slots.as_ref().map_or(String::new(), |s| format!("/{}", s.max)),
                 if app.marked.is_empty() { String::new() } else { format!(" · {} marked", app.marked.len()) }
             ))
                 .fg(c(SUBTEXT0)),
@@ -277,6 +278,9 @@ fn header_line(app: &App) -> Line<'static> {
             .fg(c(RED))
             .bold(),
         );
+    }
+    if app.slots.as_ref().is_some_and(|s| s.draining) {
+        spans.push(Span::from("  [DRAINING]").fg(c(PEACH)).bold());
     }
     if app.needs_only {
         spans.push(Span::from("  [needs you only]").fg(c(PEACH)).bold());
@@ -1571,6 +1575,19 @@ mod tests {
         app.online = true;
         let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
         assert!(text.contains("1 marked"), "{text}");
+    }
+
+    #[test]
+    fn the_header_shows_running_over_slots_and_a_draining_chip() {
+        let mut app = App::new(crate::Machine::from_env());
+        app.online = true;
+        let text = |app: &App| header_line(app).spans.iter().map(|s| s.content.to_string()).collect::<String>();
+        assert!(text(&app).contains("0 running"), "{}", text(&app));
+        app.slots = Some(crate::model::Slots { max: 4, active: 3, draining: false });
+        assert!(text(&app).contains("0/4 running"), "{}", text(&app));
+        assert!(!text(&app).contains("DRAINING"));
+        app.slots = Some(crate::model::Slots { max: 4, active: 3, draining: true });
+        assert!(text(&app).contains("[DRAINING]"), "{}", text(&app));
     }
 
     #[test]
