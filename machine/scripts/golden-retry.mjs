@@ -108,7 +108,10 @@ async function main() {
 
   log("case 1: fixture passes on the 2nd verify attempt (retry, not escalation)");
   const retry = await runToShip(2);
-  await waitFor(retry.id, ["awaiting_ship"], 20 * 60_000);
+  // The throwaway fixture has no git remote, so a task that gets past verifying ends at
+  // delivering with "deliver failed"; that is the far side of the retry path, not a failure.
+  const after = await waitFor(retry.id, ["awaiting_ship", "escalated"], 20 * 60_000);
+  if (after.state === "escalated" && after.reason !== "deliver failed") throw new Error(`task escalated: ${after.reason}`);
   const verifyRuns = (await api(`/tasks/${retry.id}`)).stageRuns.filter((r) => r.stage === "verifying");
   if (verifyRuns.length < 2) throw new Error(`expected at least 2 verify attempts, got ${verifyRuns.length}`);
   log(`passed after ${verifyRuns.length} verify attempt(s) — retry path confirmed`);

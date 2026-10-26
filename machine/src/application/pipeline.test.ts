@@ -609,6 +609,43 @@ describe("budgets", () => {
   });
 });
 
+describe("aborting a running stage", () => {
+  it("returns once the stage loop has wound down, so a retry or a delete never races the dying container", async () => {
+    // A stage that, told to stop, takes a moment to die and clean up, the way a container does.
+    let released = false;
+    const slowToDie: StageRunner = ({ signal }) =>
+      new Promise<StageResult>((resolve) =>
+        signal.addEventListener(
+          "abort",
+          () =>
+            setTimeout(() => {
+              released = true;
+              resolve({ outcome: "fail" });
+            }, 30),
+          { once: true },
+        ),
+      );
+    let reached = 0;
+    const runnerFor = (stage: TaskState) =>
+      stage === "triage"
+        ? (context: Parameters<StageRunner>[0]) => {
+            reached++;
+            return slowToDie(context);
+          }
+        : stubs.runnerFor(stage);
+    pipeline = new Pipeline(db, runnerFor);
+    const a = await newTask();
+    await pipeline.start(a.id);
+    while (reached < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const aborted = await pipeline.abort(a.id);
+
+    expect(aborted).toMatchObject({ state: "escalated", reason: "aborted" });
+    expect(released).toBe(true);
+    expect((await pipeline.stageRuns(a.id)).at(-1)).toMatchObject({ stage: "triage", status: "aborted" });
+  });
+});
+
 describe("restart policy", () => {
   /** A stage that runs until the machine stops it, the way a real container does. */
   const untilAborted: StageRunner = ({ signal }) =>
