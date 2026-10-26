@@ -259,11 +259,41 @@ pub struct QueueStats {
     pub utilisation: Option<f64>,
 }
 
+/// One repo's row of `GET /metrics?groupBy=repo`.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoMetrics {
+    /// The checkout's path; `None` for the tasks with no repo.
+    pub repo: Option<String>,
+    pub tasks: TaskCounts,
+    pub escalation_rate: Option<f64>,
+    pub first_pass_verifying: Option<f64>,
+    pub cost_usd: f64,
+}
+
+impl RepoMetrics {
+    /// The last path segment, or `(none)` for the tasks with no repo.
+    pub fn name(&self) -> &str {
+        self.repo
+            .as_deref()
+            .and_then(|p| p.trim_end_matches('/').rsplit('/').next())
+            .filter(|n| !n.is_empty())
+            .unwrap_or("(none)")
+    }
+}
+
 /// `GET /metrics?since=7d|30d`. Unknown keys are ignored so a newer machine still loads.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Metrics {
     pub since: String,
+    /// Set when the numbers are one repo's (`?repo=`).
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; the Floor keeps its own focus
+    pub repo: Option<String>,
+    /// One row per repo, when asked for with `?groupBy=repo`.
+    #[serde(default)]
+    pub by_repo: Option<Vec<RepoMetrics>>,
     #[allow(dead_code)] // part of the contract; the view only shows the start of the window
     pub until: String,
     pub tasks: TaskCounts,

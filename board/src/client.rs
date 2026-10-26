@@ -119,8 +119,16 @@ impl Machine {
     }
 
     /// Metrics for a window: `7d` or `30d`.
-    pub fn metrics(&self, since: &str) -> Result<Metrics, String> {
-        Self::typed(self.agent.get(self.url(&format!("/metrics?since={since}"))).call())
+    /// One repo's numbers (`Some(None)` is the tasks with no repo), or every repo's at once.
+    pub fn metrics_for(&self, since: &str, repo: Option<Option<&str>>, group: bool) -> Result<Metrics, String> {
+        let mut query = format!("/metrics?since={since}");
+        if let Some(repo) = repo {
+            query.push_str(&format!("&repo={}", urlencoding(repo.unwrap_or(""))));
+        }
+        if group {
+            query.push_str("&groupBy=repo");
+        }
+        Self::typed(self.agent.get(self.url(&query)).call())
     }
 
     pub fn detail(&self, id: &str) -> Result<TaskDetail, String> {
@@ -294,6 +302,18 @@ fn follow(response: Response<Body>, tx: &Sender<Incoming>) -> bool {
         }
     }
     true
+}
+
+/// Percent-encodes a query value: paths carry `/` and spaces, nothing a URL may keep bare.
+fn urlencoding(value: &str) -> String {
+    let mut out = String::new();
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(byte as char),
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
 }
 
 #[cfg(test)]

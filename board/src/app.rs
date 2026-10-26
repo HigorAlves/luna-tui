@@ -31,7 +31,7 @@ use crate::{
     discover::{discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, Look, Metrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
+        COLUMNS, Look, Metrics, RepoMetrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
         parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown, Slots,
     },
     store,
@@ -93,7 +93,7 @@ pub const HELP: [(&str, &str); 29] = [
     ("zc / zo", "fold / unfold the focused column (Done starts folded)"),
     ("zz", "fold every column but the focused one"),
     ("gs / gr / ga", "order columns by stage, by repo, by age"),
-    ("F", "Floor: 7d and 30d metrics (r refreshes, esc closes)"),
+    ("F", "Floor: 7d and 30d metrics, a row per repo (tab focuses one, r refreshes, esc closes)"),
     ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
     ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
     ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
@@ -109,6 +109,34 @@ pub const HELP: [(&str, &str); 29] = [
 pub struct FloorState {
     pub d7: Option<Metrics>,
     pub d30: Option<Metrics>,
+    /// One row per repo over 7d; the table under the numbers.
+    pub repos: Vec<RepoMetrics>,
+    /// 0 is every repo; `i` is `repos[i - 1]`, and the numbers above are that repo's.
+    pub cursor: usize,
+}
+
+impl FloorState {
+    /// `None` for every repo; `Some(repo)` for one, where the repo may itself be `None`
+    /// (the tasks with no repo).
+    pub fn focused(&self) -> Option<Option<&str>> {
+        if self.cursor == 0 {
+            return None;
+        }
+        self.repos.get(self.cursor - 1).map(|r| r.repo.as_deref())
+    }
+
+    /// The focused repo's name for the header; `None` when every repo is in.
+    pub fn focused_name(&self) -> Option<&str> {
+        if self.cursor == 0 {
+            return None;
+        }
+        self.repos.get(self.cursor - 1).map(RepoMetrics::name)
+    }
+
+    fn cycle(&mut self, by: isize) {
+        let n = self.repos.len() + 1;
+        self.cursor = (self.cursor as isize + by).rem_euclid(n as isize) as usize;
+    }
 }
 
 /// What `X`, `w` and `d` do to a marked set.
@@ -958,21 +986,42 @@ impl App {
         }
     }
 
-    /// Fetches both Floor windows. A failure shows in the footer and keeps the old numbers.
+    /// Fetches both Floor windows, for every repo or the focused one, and the per-repo
+    /// rows. A failure shows in the footer and keeps the old numbers.
     fn refresh_floor(&mut self) {
         let mut errors = Vec::new();
-        let d7 = self.machine.metrics("7d");
-        let d30 = self.machine.metrics("30d");
+        let Some(repo) = self.floor.as_ref().map(FloorState::focused) else {
+            return;
+        };
+        let focused = repo.is_some();
+        let repo = repo.map(|r| r.map(str::to_string));
+        let d7 = self.machine.metrics_for("7d", repo.as_ref().map(|r| r.as_deref()), !focused);
+        let d30 = self.machine.metrics_for("30d", repo.as_ref().map(|r| r.as_deref()), false);
+        // The rows are the 7d answer's when it covers every repo; one more call otherwise.
+        let rows = if focused { Some(self.machine.metrics_for("7d", None, true)) } else { None };
         let Some(floor) = self.floor.as_mut() else {
             return;
         };
         match d7 {
-            Ok(m) => floor.d7 = Some(m),
+            Ok(m) => {
+                if let Some(by_repo) = m.by_repo.clone() {
+                    floor.repos = by_repo;
+                }
+                floor.d7 = Some(m);
+            }
             Err(e) => errors.push(e),
         }
         match d30 {
             Ok(m) => floor.d30 = Some(m),
             Err(e) => errors.push(e),
+        }
+        match rows {
+            Some(Ok(m)) => floor.repos = m.by_repo.unwrap_or_default(),
+            Some(Err(e)) => errors.push(e),
+            None => {}
+        }
+        if floor.cursor > floor.repos.len() {
+            floor.cursor = 0;
         }
         if let Some(error) = errors.into_iter().next() {
             self.notify(format!("floor: {error}"), true);
@@ -983,6 +1032,14 @@ impl App {
         match key.code {
             KeyCode::Esc | KeyCode::Char('F') | KeyCode::Char('q') => self.floor = None,
             KeyCode::Char('r') => self.refresh_floor(),
+            KeyCode::Tab | KeyCode::BackTab => {
+                if let Some(floor) = self.floor.as_mut() {
+                    floor.cycle(if key.code == KeyCode::Tab { 1 } else { -1 });
+                }
+                if self.online {
+                    self.refresh_floor();
+                }
+            }
             _ => {}
         }
         Outcome::Continue
@@ -2065,6 +2122,29 @@ mod tests {
         app.pump();
         assert!(app.detail_pending.is_none());
         assert!(app.shows_detail_of(&task.id), "the answer landed");
+    }
+
+    #[test]
+    fn tab_in_the_floor_cycles_through_all_then_each_repo() {
+        let mut app = App::new(Machine::from_env());
+        app.floor = Some(FloorState::default());
+        let repos: Vec<crate::model::RepoMetrics> = serde_json::from_str(
+            r#"[{"repo":"/r/alpha","tasks":{"created":1,"closed":0,"open":1,"waitingOnYou":0,"running":0,"queued":0},
+                 "escalationRate":null,"firstPassVerifying":null,"costUsd":0},
+                {"repo":null,"tasks":{"created":1,"closed":0,"open":1,"waitingOnYou":0,"running":0,"queued":0},
+                 "escalationRate":null,"firstPassVerifying":null,"costUsd":0}]"#,
+        )
+        .unwrap();
+        app.floor.as_mut().unwrap().repos = repos;
+        assert_eq!(app.floor.as_ref().unwrap().focused(), None);
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.floor.as_ref().unwrap().focused(), Some(Some("/r/alpha")));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.floor.as_ref().unwrap().focused(), Some(None), "the tasks with no repo");
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.floor.as_ref().unwrap().focused(), None, "back to all");
+        app.handle_key(KeyEvent::from(KeyCode::BackTab));
+        assert_eq!(app.floor.as_ref().unwrap().focused(), Some(None));
     }
 
     #[test]

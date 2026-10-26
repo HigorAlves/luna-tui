@@ -313,7 +313,7 @@ fn footer_line(app: &App) -> Line<'static> {
     }
 
     if app.floor.is_some() && matches!(app.mode, Mode::Normal) {
-        return hint(&[("r", "refresh"), ("esc", "close")]);
+        return hint(&[("tab", "next repo"), ("r", "refresh"), ("esc", "close")]);
     }
     if app.digest.is_some() && matches!(app.mode, Mode::Normal) {
         return hint(&[("j/k", "move"), ("enter", "jump to the ticket"), ("o", "open the PR"), ("esc", "close")]);
@@ -1222,19 +1222,26 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
     let label_style = Style::new().fg(c(SUBTEXT0));
     let head_style = Style::new().fg(c(ACCENT)).bold();
     let since = |m: &Option<Metrics>| m.as_ref().map_or("…".to_string(), |m| m.since.chars().take(10).collect());
+    let scope = floor.focused_name().map_or(String::new(), |name| format!(" {name} ·"));
     let mut lines = vec![Line::from(
-        Span::from(format!(" Floor · since {} (7d) · {} (30d)", since(&floor.d7), since(&floor.d30))).style(head_style),
+        Span::from(format!(" Floor ·{scope} since {} (7d) · {} (30d)", since(&floor.d7), since(&floor.d30))).style(head_style),
     )];
     if floor.d7.is_none() && floor.d30.is_none() {
         lines.push(Line::from(Span::from(" no numbers yet; r to retry").style(label_style)));
     }
 
-    let wide = area.width >= 110;
+    // The per-repo table takes the bottom when there is more than one repo to compare.
+    let repo_height = if floor.repos.is_empty() { 0 } else { (floor.repos.len() as u16 + 3).min(area.height / 3) };
+    let [top, repo_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(repo_height)]).areas(area);
+    let wide = top.width >= 110;
     let [table_area, stage_area] = if wide {
-        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(area)
+        Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(top)
     } else {
-        Layout::vertical([Constraint::Length(lines.len() as u16 + floor_rows(floor).len() as u16 + 1), Constraint::Min(0)]).areas(area)
+        Layout::vertical([Constraint::Length(lines.len() as u16 + floor_rows(floor).len() as u16 + 1), Constraint::Min(0)]).areas(top)
     };
+    if repo_height > 0 {
+        render_floor_repos(frame, repo_area, floor, head_style, label_style);
+    }
 
     let label_w = 31usize;
     let col_w = (table_area.width as usize).saturating_sub(label_w + 1) / 2;
@@ -1276,6 +1283,44 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
         out.push(Line::from(Span::from(format!(" … +{hidden} more")).style(label_style)));
     }
     frame.render_widget(Paragraph::new(out), stage_area);
+}
+
+/// One row per repo over 7d, `all` first; `▌` marks the focus `tab` moves.
+fn render_floor_repos(frame: &mut Frame, area: Rect, floor: &FloorState, head_style: Style, label_style: Style) {
+    let row = |mark: &str, name: &str, closed: &str, open: &str, needs: &str, esc: &str, first: &str, cost: &str| {
+        format!("{mark}{:<16}{:>7}{:>6}{:>10}{:>7}{:>11}{:>9}", truncate(name, 15), closed, open, needs, esc, first, cost)
+    };
+    let mut out = vec![
+        Line::from(Span::from(row("  ", "repo · 7d", "closed", "open", "needs you", "esc", "first-pass", "cost")).style(head_style)),
+    ];
+    let room = (area.height as usize).saturating_sub(1);
+    let all = floor.d7.as_ref().filter(|_| floor.cursor == 0);
+    let all_row = row(
+        if floor.cursor == 0 { "▌ " } else { "  " },
+        "all",
+        &all.map_or("–".to_string(), |m| m.tasks.closed.to_string()),
+        &all.map_or("–".to_string(), |m| m.tasks.open.to_string()),
+        &all.map_or("–".to_string(), |m| m.tasks.waiting_on_you.to_string()),
+        &all.map_or("–".to_string(), |m| fmt_pct(m.escalations.rate)),
+        &all.map_or("–".to_string(), |m| fmt_pct(m.first_pass_rate.verifying)),
+        &all.map_or("–".to_string(), |m| fmt_usd(Some(m.cost.total_usd))),
+    );
+    out.push(Line::from(Span::from(all_row).style(if floor.cursor == 0 { Style::new().fg(c(ACCENT)).bold() } else { label_style })));
+    for (i, r) in floor.repos.iter().enumerate().take(room.saturating_sub(1)) {
+        let focused = floor.cursor == i + 1;
+        let text = row(
+            if focused { "▌ " } else { "  " },
+            r.name(),
+            &r.tasks.closed.to_string(),
+            &r.tasks.open.to_string(),
+            &r.tasks.waiting_on_you.to_string(),
+            &fmt_pct(r.escalation_rate),
+            &fmt_pct(r.first_pass_verifying),
+            &fmt_usd(Some(r.cost_usd)),
+        );
+        out.push(Line::from(Span::from(text).style(if focused { Style::new().fg(c(ACCENT)).bold() } else { Style::new() })));
+    }
+    frame.render_widget(Paragraph::new(out), area);
 }
 
 fn render_actions(frame: &mut Frame, app: &App, cursor: usize) {
@@ -1507,7 +1552,36 @@ mod tests {
           "cost":{"totalUsd":12.5,"perTaskUsd":{"median":1.234,"p90":null},"byStage":{"verifying":2.5,"shipping":0.4}},
           "queue":{"depth":2,"slots":{"max":4,"active":1},"utilisation":null}}"#;
         let m: Metrics = serde_json::from_str(json).unwrap();
-        FloorState { d7: Some(m.clone()), d30: Some(m) }
+        FloorState { d7: Some(m.clone()), d30: Some(m), ..FloorState::default() }
+    }
+
+    fn repos() -> Vec<crate::model::RepoMetrics> {
+        serde_json::from_str(
+            r#"[{"repo":"/r/alpha","tasks":{"created":4,"closed":3,"open":1,"waitingOnYou":1,"running":0,"queued":0},
+                 "escalationRate":0.6,"firstPassVerifying":0.5,"costUsd":9.5},
+                {"repo":"/r/beta","tasks":{"created":5,"closed":3,"open":2,"waitingOnYou":0,"running":1,"queued":0},
+                 "escalationRate":0,"firstPassVerifying":1,"costUsd":3},
+                {"repo":null,"tasks":{"created":0,"closed":0,"open":0,"waitingOnYou":0,"running":0,"queued":0},
+                 "escalationRate":null,"firstPassVerifying":null,"costUsd":0}]"#,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn floor_lists_every_repo_with_its_own_numbers_and_marks_the_focused_one() {
+        let mut state = floor();
+        state.repos = repos();
+        let text = render(140, 36, &state);
+        assert!(text.contains("repo"), "{text}");
+        let alpha = text.lines().find(|l| l.contains("alpha")).unwrap_or_default().to_string();
+        assert!(alpha.contains("3") && alpha.contains("60%") && alpha.contains("50%") && alpha.contains("$9.50"), "{alpha}");
+        assert!(text.lines().any(|l| l.contains("(none)")), "{text}");
+        assert!(text.contains("▌ all"), "{text}");
+
+        state.cursor = 1;
+        let text = render(140, 36, &state);
+        assert!(text.contains("▌ alpha"), "{text}");
+        assert!(text.contains("Floor · alpha ·"), "{text}");
     }
 
     fn render(width: u16, height: u16, floor: &FloorState) -> String {
