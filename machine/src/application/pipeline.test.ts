@@ -696,6 +696,66 @@ describe("aborting a running stage", () => {
   });
 });
 
+describe("fair claims", () => {
+  /** A triage that holds its slot until the task is aborted. */
+  const holding: StageRunner = ({ signal }) =>
+    new Promise<StageResult>((resolve) => signal.addEventListener("abort", () => resolve({ outcome: "fail" }), { once: true }));
+  const runnerFor = (stage: TaskState) => (stage === "triage" ? holding : stubs.runnerFor(stage));
+  /** A ticket in draft, one `start` away from running. */
+  const create = async (repoPath: string) => {
+    const task = await pipeline.createTask({ title: `t ${repoPath}`, criteria: ["c"], repoPath });
+    return pipeline.start(task.id);
+  };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
+
+  it("claims in the order tasks joined the queue, even when a queued ticket was edited meanwhile", async () => {
+    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 1 });
+    const a = await create("/r/a");
+    await pipeline.start(a.id);
+    const b = await create("/r/a");
+    const c = await create("/r/a");
+    expect((await pipeline.start(b.id)).queued).toBe(true);
+    expect((await pipeline.start(c.id)).queued).toBe(true);
+    // Editing b touches updated_at, which used to send it to the back of the queue.
+    await pipeline.update(b.id, { description: "clarified" });
+
+    await pipeline.abort(a.id);
+    await settle();
+    expect((await pipeline.get(b.id)).queued).toBe(false);
+    expect((await pipeline.get(c.id)).queued).toBe(true);
+  });
+
+  it("gives a free slot to the repo with the fewest running tasks, not the oldest ticket", async () => {
+    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 2 });
+    const a1 = await create("/r/a");
+    const b0 = await create("/r/b");
+    await pipeline.start(a1.id);
+    await pipeline.start(b0.id);
+    const a2 = await create("/r/a");
+    const b1 = await create("/r/b");
+    expect((await pipeline.start(a2.id)).queued).toBe(true);
+    expect((await pipeline.start(b1.id)).queued).toBe(true);
+
+    await pipeline.abort(b0.id);
+    await settle();
+    // a1 still runs for repo a, so repo b's b1 goes first although a2 queued earlier.
+    expect((await pipeline.get(b1.id)).queued).toBe(false);
+    expect((await pipeline.get(a2.id)).queued).toBe(true);
+  });
+
+  it("holds a repo at its cap in the queue while slots stay free for the others", async () => {
+    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 3, maxPerRepo: 1 });
+    const a1 = await create("/r/a");
+    await pipeline.start(a1.id);
+    const a2 = await create("/r/a");
+    expect((await pipeline.start(a2.id)).queued).toBe(true);
+    const b1 = await create("/r/b");
+    expect((await pipeline.start(b1.id)).queued).toBe(false);
+    await settle();
+    expect((await pipeline.get(a2.id)).queued).toBe(true);
+  });
+});
+
 describe("restart policy", () => {
   /** A stage that runs until the machine stops it, the way a real container does. */
   const untilAborted: StageRunner = ({ signal }) =>

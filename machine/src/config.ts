@@ -11,6 +11,8 @@ export interface Config {
   agents: boolean;
   /** Tasks that can be driving a stage at once, across every repo. The rest queue. */
   maxConcurrentTasks: number;
+  /** Running tasks one repo may hold at once, so it cannot take every slot; null means no cap. */
+  maxPerRepo: number | null;
   /** Docker image for stage containers, built by `runner:build`. */
   runnerImage: string;
   /** Docker image for the e2e stage, with a browser. Used by the QA slices. */
@@ -36,6 +38,14 @@ export interface Config {
 
 export type RestartPolicy = "requeue" | "escalate";
 const RESTART_POLICIES: readonly RestartPolicy[] = ["requeue", "escalate"];
+
+function optionalPositiveInt(env: NodeJS.ProcessEnv, key: string): number | null {
+  const raw = env[key];
+  if (raw === undefined || raw === "") return null;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) throw new Error(`${key} must be a positive integer, got "${raw}"`);
+  return value;
+}
 
 function optionalUsd(env: NodeJS.ProcessEnv, key: string): number | null {
   const raw = env[key];
@@ -106,6 +116,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
     retentionDays,
     worktreeRetentionDays,
+    maxPerRepo: optionalPositiveInt(env, "MACHINE_MAX_PER_REPO"),
     taskBudgetUsd: optionalUsd(env, "MACHINE_TASK_BUDGET_USD"),
     dailyBudgetUsd: optionalUsd(env, "MACHINE_DAILY_BUDGET_USD"),
     restartPolicy,

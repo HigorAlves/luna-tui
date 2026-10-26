@@ -41,6 +41,8 @@ export interface PipelineOptions {
   inline?: boolean;
   /** Tasks that can be driving a stage at once, across every repo. The rest queue. */
   maxConcurrentTasks?: number;
+  /** Running tasks one repo may hold at once; null or absent means no cap. */
+  maxPerRepo?: number | null;
   /** What the close step needs once a task is approved for good. Without it, nothing is closed on the host. */
   closeDeps?: CloseDeps;
   /** Spend ceilings in USD; either unset means no ceiling of that kind. */
@@ -88,6 +90,7 @@ export class Pipeline {
   private readonly onEvent: (event: EventRow) => void;
   private readonly inline: boolean;
   private readonly maxConcurrentTasks: number;
+  private readonly maxPerRepo: number | null;
   private readonly closeDeps: CloseDeps | undefined;
   readonly budget: Required<Budget>;
   private readonly restartPolicy: RestartPolicy;
@@ -109,6 +112,7 @@ export class Pipeline {
     this.onEvent = options.onEvent ?? (() => {});
     this.inline = options.inline ?? false;
     this.maxConcurrentTasks = options.maxConcurrentTasks ?? 4;
+    this.maxPerRepo = options.maxPerRepo ?? null;
     this.closeDeps = options.closeDeps;
     this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
     this.restartPolicy = options.restartPolicy ?? "requeue";
@@ -293,7 +297,7 @@ export class Pipeline {
   /** Back to the queue with its state kept: the stage is cut short (its run ends `aborted`, the
    *  worktree reset as any failed attempt's is) and runs again from the top on the next boot. */
   private async park(id: string): Promise<void> {
-    await this.store.updateTask(id, { queued: true });
+    await this.enqueue(id);
     await this.log(id, "task.parked", { reason: "machine shutting down; the stage re-runs on the next boot" });
     this.loops.get(id)?.abort();
   }
@@ -384,10 +388,15 @@ export class Pipeline {
 
   /** Claims queued tasks into free slots, oldest first, until the pool is full, the queue is
    *  empty, or a usage window is latched. The one place a slot is ever filled from the queue. */
+  /** Into the queue, stamped: claims go by this time, so an edit while waiting keeps the place. */
+  private enqueue(id: string): Promise<void> {
+    return this.store.updateTask(id, { queued: true, queuedAt: new Date() });
+  }
+
   private async fillSlots(): Promise<void> {
     while (!this.stopping && this.loops.size < this.maxConcurrentTasks && this.latchedUntil === null) {
       if (await this.dayOver()) return;
-      const claimed = await this.store.claimOldestQueuedTask();
+      const claimed = await this.store.claimNextQueuedTask({ running: RUNNING, maxPerRepo: this.maxPerRepo });
       if (!claimed) return;
       const controller = this.reserveSlot(claimed.id);
       const loop = this.startLoop(claimed.id, claimed.state, controller);
@@ -451,12 +460,26 @@ export class Pipeline {
    */
   private async schedule(id: string, stage: TaskState): Promise<void> {
     if (this.stopping || this.loops.size >= this.maxConcurrentTasks || this.latchedUntil !== null) {
-      await this.store.updateTask(id, { queued: true });
+      await this.enqueue(id);
       return;
     }
-    if (await this.heldForDay(id, stage)) return;
+    // The slot is reserved before any await: two schedule() calls racing past the size check
+    // above could otherwise both claim the last one. The checks that need the database come
+    // after, and give the slot back when they hold the task.
     const controller = this.reserveSlot(id);
+    const release = () => {
+      if (this.loops.get(id) === controller) this.loops.delete(id);
+    };
     try {
+      if (await this.heldForDay(id, stage)) {
+        release();
+        return;
+      }
+      if (await this.repoAtCap(id)) {
+        release();
+        await this.enqueue(id);
+        return;
+      }
       // Clears a stale `queued: true` from before a restart, as well as the common case
       // where it was already false. Awaited here — not inside runAndFillSlot — so the
       // `queued` flag is guaranteed stored before schedule() returns, per its own contract;
@@ -466,11 +489,21 @@ export class Pipeline {
     } catch (error) {
       // Release the slot reserved above, or a transient failure on this update leaks it
       // for the rest of the process.
-      if (this.loops.get(id) === controller) this.loops.delete(id);
+      release();
       throw error;
     }
     const loop = this.startLoop(id, stage, controller);
     if (this.inline) await loop;
+  }
+
+  /** True when the task's repo already holds `maxPerRepo` running tasks (the task itself not counted). */
+  private async repoAtCap(id: string): Promise<boolean> {
+    if (this.maxPerRepo === null) return false;
+    const task = await this.store.getTask(id);
+    if (!task) return false;
+    const running = await this.store.findStuckTasks(RUNNING);
+    const held = running.filter((t) => t.id !== id && !t.queued && t.repoPath === task.repoPath && this.loops.has(t.id)).length;
+    return held >= this.maxPerRepo;
   }
 
   /** Creates and registers a new AbortController for `id` in `this.loops`, synchronously —
@@ -570,7 +603,7 @@ export class Pipeline {
     if (dailyUsd === null) return false;
     const spent = await this.spentTodayUsd();
     if (spent < dailyUsd) return false;
-    await this.store.updateTask(id, { queued: true });
+    await this.enqueue(id);
     await this.log(id, "budget.held", { stage, reason: `budget: ${usd(spent)} spent today of ${usd(dailyUsd)}` });
     return true;
   }
