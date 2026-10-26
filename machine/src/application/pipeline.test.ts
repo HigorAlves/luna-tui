@@ -1,3 +1,8 @@
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import type { TaskState } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -7,6 +12,7 @@ import type { StageResult, StageRunner } from "./ports.ts";
 import { StubStages } from "./stages/stubs.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { Pipeline, TaskNotFoundError } from "./pipeline.ts";
+import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
 import type { CloseReport } from "./close-task.ts";
 
 let db: DataSource;
@@ -647,6 +653,29 @@ describe("restart policy", () => {
 
     await pipeline.shutdown();
     expect(await pipeline.get(a.id)).toMatchObject({ state: "escalated", reason: "aborted", resumeTo: "triage", queued: false });
+  });
+});
+
+describe("deleting a task", () => {
+  it("removes its worktree from disk too, so a deleted task leaves nothing behind", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "delete-")));
+    const repoPath = join(root, "repo");
+    mkdirSync(repoPath);
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repoPath, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" });
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(repoPath, "a.txt"), "a\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "init");
+    const task = await pipeline.createTask({ title: "Login page", repoPath });
+    const workspace = workspaceFor(task, repoPath, join(root, "wt"));
+    await ensureWorktree(repoPath, workspace);
+    await db.query("update tasks set branch = $2, worktree_path = $3 where id = $1", [task.id, workspace.branch, workspace.path]);
+
+    await pipeline.delete(task.id);
+
+    expect(existsSync(workspace.path)).toBe(false);
+    await expect(pipeline.get(task.id)).rejects.toBeInstanceOf(TaskNotFoundError);
   });
 });
 

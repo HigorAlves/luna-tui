@@ -23,6 +23,8 @@ export interface Config {
   githubPoll: { repos: string[]; intervalMs: number; label: string };
   /** Days to keep a closed task's events/stage runs before pruning them. 0 disables pruning. */
   retentionDays: number;
+  /** Days after a task closes before its worktree is removed and its merged branch deleted. 0 disables it. */
+  worktreeRetentionDays: number;
   /** Spend ceiling for one task (sum of its stage runs); null means none. Over it, the task escalates. */
   taskBudgetUsd: number | null;
   /** Spend ceiling over the trailing 24 hours; null means none. Over it, nothing new is claimed. */
@@ -47,6 +49,7 @@ export const DEFAULT_DATABASE_URL = "postgres://hardness:hardness@127.0.0.1:5433
 export const DEFAULT_PORT = 4317;
 export const DEFAULT_MAX_CONCURRENT_TASKS = 4;
 export const DEFAULT_RETENTION_DAYS = 90;
+export const DEFAULT_WORKTREE_RETENTION_DAYS = 7;
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const port = env.MACHINE_PORT === undefined ? DEFAULT_PORT : Number(env.MACHINE_PORT);
@@ -80,6 +83,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!Number.isInteger(retentionDays) || retentionDays < 0) {
     throw new Error(`MACHINE_RETENTION_DAYS must be a non-negative integer, got "${env.MACHINE_RETENTION_DAYS}"`);
   }
+  const worktreeRetentionDays =
+    env.MACHINE_WORKTREE_RETENTION_DAYS === undefined ? DEFAULT_WORKTREE_RETENTION_DAYS : Number(env.MACHINE_WORKTREE_RETENTION_DAYS);
+  if (!Number.isInteger(worktreeRetentionDays) || worktreeRetentionDays < 0) {
+    throw new Error(`MACHINE_WORKTREE_RETENTION_DAYS must be a non-negative integer, got "${env.MACHINE_WORKTREE_RETENTION_DAYS}"`);
+  }
   const restartPolicy = (env.MACHINE_RESTART_POLICY ?? "requeue") as RestartPolicy;
   if (!RESTART_POLICIES.includes(restartPolicy)) {
     throw new Error(`MACHINE_RESTART_POLICY must be requeue or escalate, got "${env.MACHINE_RESTART_POLICY}"`);
@@ -97,6 +105,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     stateDir: env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness"),
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
     retentionDays,
+    worktreeRetentionDays,
     taskBudgetUsd: optionalUsd(env, "MACHINE_TASK_BUDGET_USD"),
     dailyBudgetUsd: optionalUsd(env, "MACHINE_DAILY_BUDGET_USD"),
     restartPolicy,
