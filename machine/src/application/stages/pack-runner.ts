@@ -12,7 +12,7 @@ import {
   diffNameStatus,
   ensureWorktree,
   headCommit,
-  isDirty,
+  dirtyFiles,
   resetWorktree,
   workspaceFor,
 } from "../../adapters/git/worktree.ts";
@@ -166,9 +166,11 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   // outcome pass
   if (pack === "implementing" || pack === "verifying") {
     // Both commit inside the container; anything left over is not part of the answer.
-    if (await isDirty(workspace.path)) {
+    const left = await dirtyFiles(workspace.path);
+    if (left.length > 0) {
       const who = pack === "implementing" ? "implementer" : "verifying";
-      return dirty(merged({ ...mapped, outcome: "fail", detail: { error: `${who} left uncommitted changes` } }));
+      const named = left.slice(0, 10).join(", ") + (left.length > 10 ? `, and ${left.length - 10} more` : "");
+      return dirty(merged({ ...mapped, outcome: "fail", detail: { error: `${who} left uncommitted changes: ${named}` } }));
     }
     // Tests present at the start of the run are locked; implementing has a test_change
     // escape hatch, verifying has none — it may only ever add a new test file.

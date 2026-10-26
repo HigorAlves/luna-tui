@@ -288,7 +288,7 @@ describe("agent stages through orc packs", () => {
     const d = deps(fakeSandbox(output(), (r) => writeFileSync(join(r.worktree, "junk.txt"), "x")));
     const result = await runAgent(d, context("verifying"), "verifying");
     expect(result.outcome).toBe("fail");
-    expect(result.detail).toMatchObject({ error: "verifying left uncommitted changes" });
+    expect(result.detail).toMatchObject({ error: "verifying left uncommitted changes: ?? junk.txt" });
     expect(existsSync(join(seen!.worktree, "junk.txt"))).toBe(false);
   });
 
@@ -298,7 +298,7 @@ describe("agent stages through orc packs", () => {
     );
     const result = await run.implementing!(context("implementing"));
     expect(result.outcome).toBe("fail");
-    expect(result.detail).toMatchObject({ error: "implementer left uncommitted changes" });
+    expect(result.detail).toMatchObject({ error: "implementer left uncommitted changes: ?? junk.txt" });
     expect(existsSync(join(seen!.worktree, "junk.txt"))).toBe(false);
   });
 
