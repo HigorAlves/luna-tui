@@ -279,6 +279,20 @@ describe("agent stages through orc packs", () => {
       expect(result.findings![0]).toMatchObject({ path: "test/cart.test.js" });
     });
 
+    it("says what the replay saw, and tells a test command that could not run from tests that failed", async () => {
+      seedTests();
+      const run = withTestCommand(["sh", "-c", "echo 'sh: vitest: not found' >&2; exit 127"], fakeSandbox(output(), (r) => {
+        writeFileSync(join(r.worktree, "test", "cart.test.js"), "old\nplus a case\n");
+        commitIn(r.worktree);
+      }));
+      const result = await run.implementing!(context("implementing"));
+      expect(result.outcome).toBe("fail");
+      const error = String((result.detail as { error: string }).error);
+      expect(error).toMatch(/test command could not run/);
+      expect(error).toContain("sh: vitest: not found");
+      expect(result.findings![0]!.body).toContain("sh: vitest: not found");
+    });
+
     it("never accepts a deleted or renamed test file, even with a green test command", async () => {
       seedTests();
       const before = git(repo, "rev-parse", "HEAD");
