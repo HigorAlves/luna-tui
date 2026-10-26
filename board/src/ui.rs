@@ -242,6 +242,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 render_repo_picker(frame, task, query, all, *cursor);
             }
         }
+        Mode::ConfirmMany { action, ids } => render_note(frame, " Marked tickets ", &format!("{}  y / n", action.question(ids.len()))),
         Mode::Help => render_help(frame),
         _ => {}
     }
@@ -260,7 +261,10 @@ fn header_line(app: &App) -> Line<'static> {
             .count();
         let queued_part = if queued > 0 { format!(" · {queued} queued") } else { String::new() };
         spans.push(
-            Span::from(format!("  {total} tickets · {running} running{queued_part} · {waiting} need you"))
+            Span::from(format!(
+                "  {total} tickets · {running} running{queued_part} · {waiting} need you{}",
+                if app.marked.is_empty() { String::new() } else { format!(" · {} marked", app.marked.len()) }
+            ))
                 .fg(c(SUBTEXT0)),
         );
     } else {
@@ -369,6 +373,7 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::Actions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
         Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
+        Mode::ConfirmMany { .. } => hint(&[("y", "do it to all of them"), ("n", "cancel")]),
         Mode::Help => hint(&[("any key", "close")]),
         Mode::Detail(id) => {
             let shippable = app.task(id).is_some_and(|t| t.state == "awaiting_ship");
@@ -485,7 +490,7 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
     }
 
     let p90 = spend_p90(&app.tasks);
-    let items: Vec<ListItem> = indices.iter().map(|&i| card(&app.tasks[i], p90)).collect();
+    let items: Vec<ListItem> = indices.iter().map(|&i| card(&app.tasks[i], p90, app.marked.contains(&app.tasks[i].id))).collect();
     let list = List::new(items)
         .block(block)
         .highlight_style(selection_style())
@@ -503,8 +508,11 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
 const REPO_COLOURS: [Color; REPO_COLOUR_SLOTS] = [BLUE, GREEN, PEACH, LAVENDER, YELLOW, RED];
 
 /// The card's first line: a repo-coloured bar, the id, the repo's name, the title.
-fn card_head(task: &Task) -> Line<'static> {
+fn card_head(task: &Task, marked: bool) -> Line<'static> {
     let mut spans = Vec::new();
+    if marked {
+        spans.push(Span::from("◆ ").fg(c(ACCENT)).bold());
+    }
     if let Some(repo) = task.repo_name() {
         let colour = REPO_COLOURS[repo_colour_slot(repo)];
         spans.push(Span::from("▌").fg(c(colour)));
@@ -518,14 +526,14 @@ fn card_head(task: &Task) -> Line<'static> {
     Line::from(spans)
 }
 
-fn card(task: &Task, spend_p90: Option<f64>) -> ListItem<'static> {
-    ListItem::new(card_lines(task, spend_p90))
+fn card(task: &Task, spend_p90: Option<f64>, marked: bool) -> ListItem<'static> {
+    ListItem::new(card_lines(task, spend_p90, marked))
 }
 
 /// The card's three lines: head, status, and the triad (or a blank spacer without one).
-fn card_lines(task: &Task, spend_p90: Option<f64>) -> Vec<Line<'static>> {
+fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool) -> Vec<Line<'static>> {
     let look = task.look();
-    let head = card_head(task);
+    let head = card_head(task, marked);
 
     let mut meta = vec![
         Span::raw("  "),
@@ -1483,12 +1491,12 @@ mod tests {
             "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
         let task: Task = serde_json::from_str(TASK).unwrap();
-        let head = card_head(&task).to_string();
+        let head = card_head(&task, false).to_string();
         assert!(head.contains("luna-tui"), "{head}");
         assert!(head.starts_with('▌'), "a repo bar leads the card: {head}");
         let mut bare = task.clone();
         bare.repo_path = None;
-        let head = card_head(&bare).to_string();
+        let head = card_head(&bare, false).to_string();
         assert!(!head.contains("luna-tui") && !head.starts_with('▌'), "{head}");
     }
 
@@ -1508,13 +1516,13 @@ mod tests {
             "workedMs":240000,"diff":{"added":142,"removed":18},"tests":{"passed":7,"total":9},
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
         let task: Task = serde_json::from_str(TASK).unwrap();
-        let lines: Vec<String> = card_lines(&task, None).iter().map(|l| l.to_string()).collect();
+        let lines: Vec<String> = card_lines(&task, None, false).iter().map(|l| l.to_string()).collect();
         assert!(lines[2].contains("worked 4m · +142 −18 · tests 7/9"), "{lines:?}");
         let mut bare = task.clone();
         bare.worked_ms = None;
         bare.diff = None;
         bare.tests = None;
-        let lines: Vec<String> = card_lines(&bare, None).iter().map(|l| l.to_string()).collect();
+        let lines: Vec<String> = card_lines(&bare, None, false).iter().map(|l| l.to_string()).collect();
         assert_eq!(lines[2].trim(), "", "no numbers, no line: {lines:?}");
     }
 
@@ -1543,6 +1551,26 @@ mod tests {
         assert!(text.contains("luna-tui · Login page"), "{text}");
         assert!(text.contains("approve plan"), "{text}");
         assert!(!text.contains("caught up"), "{text}");
+    }
+
+    #[test]
+    fn a_marked_card_wears_a_diamond_and_the_header_counts_the_marks() {
+        let mut app = App::new(crate::Machine::from_env());
+        let task: Task = serde_json::from_str(
+            r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
+            "repoPath":"/r/app","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#,
+        )
+        .unwrap();
+        app.tasks.push(task.clone());
+        assert!(!card_head(&task, false).to_string().contains('◆'));
+        assert!(card_head(&task, true).to_string().contains('◆'));
+        app.marked.insert(task.id.clone());
+        app.online = true;
+        let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains("1 marked"), "{text}");
     }
 
     #[test]
