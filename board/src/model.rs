@@ -63,6 +63,27 @@ pub struct StageRun {
     pub stage: String,
     pub attempt: u32,
     pub status: String,
+    /// What the run cost and how many model turns it took; null while it runs or for a stub.
+    #[serde(default)]
+    pub cost_usd: Option<f64>,
+    #[serde(default)]
+    pub turns: Option<u32>,
+}
+
+impl StageRun {
+    /// `$0.42 · 18 turns`, or None when the run has no usage yet.
+    pub fn usage_label(&self) -> Option<String> {
+        match (self.cost_usd, self.turns) {
+            (None, None) => None,
+            (cost, turns) => Some(
+                [cost.map(|c| format!("${c:.2}")), turns.map(|t| format!("{t} turns"))]
+                    .into_iter()
+                    .flatten()
+                    .collect::<Vec<_>>()
+                    .join(" · "),
+            ),
+        }
+    }
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -91,6 +112,12 @@ pub struct TaskDetail {
 }
 
 impl TaskDetail {
+    /// What every run of this ticket cost so far; None when no run reported a cost.
+    pub fn spent_usd(&self) -> Option<f64> {
+        let costs: Vec<f64> = self.stage_runs.iter().filter_map(|r| r.cost_usd).collect();
+        if costs.is_empty() { None } else { Some(costs.iter().sum()) }
+    }
+
     /// The gate the task waits at, with what the stage before it produced.
     pub fn open_approval(&self) -> Option<&Approval> {
         self.approvals.iter().rev().find(|a| a.decision.is_none())
@@ -594,6 +621,25 @@ mod tests {
         assert_eq!(task.column_index(), 0);
         assert!(matches!(task.look(), Look::Draft));
         assert_eq!(task.status_label(), "intake");
+    }
+
+    #[test]
+    fn a_stage_run_carries_its_cost_and_turns_and_the_detail_sums_the_spend() {
+        let detail: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{},"stageRuns":[
+              {{"stage":"triage","attempt":1,"status":"passed","costUsd":0.42,"turns":18}},
+              {{"stage":"implementing","attempt":1,"status":"running","costUsd":null,"turns":null}},
+              {{"stage":"verifying","attempt":1,"status":"passed","costUsd":0.08,"turns":5}}],
+              "approvals":[],"events":[]}}"#,
+            task_json("")
+        ))
+        .unwrap();
+        assert_eq!(detail.stage_runs[0].cost_usd, Some(0.42));
+        assert_eq!(detail.stage_runs[0].turns, Some(18));
+        assert_eq!(detail.stage_runs[1].cost_usd, None);
+        assert_eq!(detail.spent_usd(), Some(0.5));
+        let bare: StageRun = serde_json::from_str(r#"{"stage":"triage","attempt":1,"status":"passed"}"#).unwrap();
+        assert_eq!(bare.cost_usd, None);
     }
 
     #[test]

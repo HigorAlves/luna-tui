@@ -735,10 +735,17 @@ fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&Tas
                     "running" => YELLOW,
                     _ => SUBTEXT0,
                 };
-                lines.push(Line::from(vec![
+                let mut spans = vec![
                     Span::from(format!("  {} #{} ", run.stage, run.attempt)),
                     Span::from(run.status.clone()).fg(c(color)),
-                ]));
+                ];
+                if let Some(usage) = run.usage_label() {
+                    spans.push(Span::from(format!("  {usage}")).fg(c(SUBTEXT0)));
+                }
+                lines.push(Line::from(spans));
+            }
+            if let Some(spent) = detail.spent_usd() {
+                lines.push(Line::from(Span::from(format!("  Spent: ${spent:.2}")).fg(c(SUBTEXT0))));
             }
         }
         lines.extend([Line::default(), heading("Activity".into())]);
@@ -844,10 +851,17 @@ fn render_plan_and_ticket(frame: &mut Frame, area: Rect, task: &Task, detail: Op
                     "running" => YELLOW,
                     _ => SUBTEXT0,
                 };
-                ticket_lines.push(Line::from(vec![
+                let mut spans = vec![
                     Span::from(format!("  {} #{} ", run.stage, run.attempt)),
                     Span::from(run.status.clone()).fg(c(color)),
-                ]));
+                ];
+                if let Some(usage) = run.usage_label() {
+                    spans.push(Span::from(format!("  {usage}")).fg(c(SUBTEXT0)));
+                }
+                ticket_lines.push(Line::from(spans));
+            }
+            if let Some(spent) = detail.spent_usd() {
+                ticket_lines.push(Line::from(Span::from(format!("  Spent: ${spent:.2}")).fg(c(SUBTEXT0))));
             }
         }
         ticket_lines.extend([Line::default(), heading("Activity".into())]);
@@ -1238,6 +1252,12 @@ mod tests {
         text.lines().enumerate().find_map(|(row, line)| line.find(needle).map(|col| (row, col)))
     }
 
+    const TASK_JSON_DRAFT: &str = r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
+            "repoPath":null,"branch":null,"worktreePath":null,"state":"draft","column":"Intake",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
+
     fn render_task_detail(width: u16, height: u16, task: &Task, detail: Option<&TaskDetail>) -> String {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let scroll = Cell::new(0);
@@ -1264,6 +1284,21 @@ mod tests {
         assert!(desc_col >= 70 && accept_col >= 70, "ticket content should sit in the right column: {text}");
         assert!(text.contains("exports UTF-8"), "the edited plan's criteria should show: {text}");
         assert!(text.contains("handles a/b & c"), "the ticket's own criteria should show: {text}");
+    }
+
+    #[test]
+    fn the_detail_shows_each_run_s_cost_and_turns_and_what_the_ticket_has_spent() {
+        let task: Task = serde_json::from_str(TASK_JSON_DRAFT).unwrap();
+        let detail: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{TASK_JSON_DRAFT},"stageRuns":[
+              {{"stage":"triage","attempt":1,"status":"passed","costUsd":0.42,"turns":18}},
+              {{"stage":"implementing","attempt":1,"status":"running","costUsd":null,"turns":null}}],
+              "approvals":[],"events":[]}}"#
+        ))
+        .unwrap();
+        let text = render_task_detail(100, 40, &task, Some(&detail));
+        assert!(text.contains("$0.42 · 18 turns"), "a run shows its cost and turns: {text}");
+        assert!(text.contains("Spent: $0.42"), "the ticket's spend is summed: {text}");
     }
 
     #[test]
