@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type Finding, RUNNING, type TaskSource, type TaskState } from "@hardness/contracts";
+import { type BudgetAlert, type Finding, RUNNING, type TaskSource, type TaskState } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -12,9 +12,12 @@ import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../d
 import { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
+import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import type { StageResult, StageRunner } from "./ports.ts";
+import type { Policy } from "../domain/policy.ts";
+import { PolicyStore } from "./policy.ts";
 
 export { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 
@@ -44,6 +47,12 @@ export interface PipelineOptions {
   maxConcurrentTasks?: number;
   /** Running tasks one repo may hold at once; null or absent means no cap. */
   maxPerRepo?: number | null;
+  /** Tasks that may drive one stage at once, e.g. `{ implementing: 2 }`; a stage not named has no cap. */
+  maxPerStage?: Record<string, number>;
+  /** Whether a stage container is still running at boot; tests pass a fake. */
+  containerRunning?: (name: string) => Promise<boolean>;
+  /** Stops and removes a container recover() decided not to re-attach to; tests pass a fake. */
+  removeContainer?: (name: string) => Promise<void>;
   /** Undoes one commit in a worktree; tests pass a fake. */
   revertCommit?: (worktreePath: string, sha: string) => Promise<void>;
   /** The branch's diff against its base, for the card; tests pass a fake. */
@@ -54,7 +63,15 @@ export interface PipelineOptions {
   budget?: Budget;
   /** On shutdown: `requeue` (default) parks running tasks for the next boot; `escalate` waits for you. */
   restartPolicy?: RestartPolicy;
+  /** Each repo's PIPELINE.md (its monthly budget, auto-approval, concurrency); defaults when absent. */
+  policies?: Pick<PolicyStore, "for">;
+  /** Called once per threshold a scope crosses: 80, 90 and 100% of a task's, a repo's month's or the day's ceiling. */
+  onAlert?: (alert: BudgetAlert) => void;
 }
+
+export type { BudgetAlert } from "@hardness/contracts";
+
+const ALERT_STEPS: ReadonlyArray<80 | 90 | 100> = [80, 90, 100];
 
 export interface Budget {
   /** Per task, over all its stage runs. Over it, the task escalates before its next stage. */
@@ -65,6 +82,11 @@ export interface Budget {
 
 const DAY_MS = 24 * 60 * 60_000;
 const usd = (value: number) => `$${value.toFixed(2)}`;
+/** The first instant of the current calendar month, local time. */
+const monthStart = (now = new Date()) => new Date(now.getFullYear(), now.getMonth(), 1);
+/** `2026-10`, the repo-month alert key. */
+const monthKey = (now = new Date()) => `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+const dayKey = (now = new Date()) => now.toISOString().slice(0, 10);
 
 interface DecisionRecord {
   decision: Decision;
@@ -77,6 +99,14 @@ interface Extra {
   detail?: Record<string, unknown>;
   /** Your answer to the gate the task is waiting at. */
   decision?: DecisionRecord;
+}
+
+/** A stage run a restart found still running in its container: drive it from where it is. */
+interface Resume {
+  runId: string;
+  attempt: number;
+  container: string;
+  inputCommit: string | null;
 }
 
 /** Extra wait after a usage window's reset time before trying again. */
@@ -98,11 +128,22 @@ export class Pipeline {
   /** Taking no new work: running stages finish, the queue waits. `drain()` / `resumeClaims()`. */
   private draining = false;
   private readonly maxPerRepo: number | null;
+  private readonly maxPerStage: Record<string, number>;
+  private readonly containerRunning: (name: string) => Promise<boolean>;
+  private readonly removeContainer: (name: string) => Promise<void>;
+  /** The stage each loop is driving right now, for the per-stage caps. */
+  private readonly stages = new Map<string, TaskState>();
+  /** Loops polling ci_watch: they hold no slot, so the pool is free for work that computes. */
+  private readonly offPool = new Set<string>();
   private readonly revertCommit: (worktreePath: string, sha: string) => Promise<void>;
   private readonly diffStat: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   private readonly closeDeps: CloseDeps | undefined;
   readonly budget: Required<Budget>;
   private readonly restartPolicy: RestartPolicy;
+  private readonly policies: Pick<PolicyStore, "for">;
+  private readonly onAlert: (alert: BudgetAlert) => void;
+  /** The highest threshold already raised per scope key (`task:<id>`, `repo:<path>:<month>`, `day:<date>`). */
+  private readonly alerted = new Map<string, number>();
   /** Set by shutdown(): no slot is filled and no loop started from here on. */
   private stopping = false;
   /** The abort signal of each task currently driving a stage. Its size is the active count. */
@@ -122,11 +163,38 @@ export class Pipeline {
     this.inline = options.inline ?? false;
     this.maxConcurrentTasks = options.maxConcurrentTasks ?? 4;
     this.maxPerRepo = options.maxPerRepo ?? null;
+    this.maxPerStage = options.maxPerStage ?? {};
+    this.containerRunning = options.containerRunning ?? containerRunning;
+    this.removeContainer = options.removeContainer ?? removeContainer;
     this.revertCommit = options.revertCommit ?? revertCommit;
     this.diffStat = options.diffStat ?? branchDiffStat;
     this.closeDeps = options.closeDeps;
     this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
     this.restartPolicy = options.restartPolicy ?? "requeue";
+    this.policies = options.policies ?? new PolicyStore();
+    this.onAlert = options.onAlert ?? (() => {});
+  }
+
+  /** The repo's policy, from its PIPELINE.md. */
+  policyFor(repoPath: string | null): Promise<Policy> {
+    return this.policies.for(repoPath);
+  }
+
+  /** What the repo has spent this calendar month, in USD. */
+  private repoSpentThisMonthUsd(repoPath: string): Promise<number> {
+    return this.store.repoSpendSinceUsd(repoPath, monthStart());
+  }
+
+  /** The repos that cannot start a stage right now: over their PIPELINE.md monthly ceiling.
+   *  Only repos with a queued task are looked at, so an idle repo costs no query. */
+  private async reposOverMonth(): Promise<Set<string>> {
+    const over = new Set<string>();
+    const queued = (await this.store.listTasks()).filter((t) => t.queued && t.repoPath);
+    for (const repo of new Set(queued.map((t) => t.repoPath!))) {
+      const { monthlyBudgetUsd } = await this.policies.for(repo);
+      if (monthlyBudgetUsd !== null && (await this.repoSpentThisMonthUsd(repo)) >= monthlyBudgetUsd) over.add(repo);
+    }
+    return over;
   }
 
   /** What the trailing 24 hours have cost, in USD. */
@@ -155,7 +223,21 @@ export class Pipeline {
   /** Stage slots: how many tasks may drive a stage at once, how many do right now, and
    *  whether the machine is draining (finishing what runs, claiming nothing new). */
   get slots(): { max: number; active: number; draining: boolean } {
-    return { max: this.maxConcurrentTasks, active: this.loops.size, draining: this.draining };
+    return { max: this.maxConcurrentTasks, active: this.active(), draining: this.draining };
+  }
+
+  /** Loops holding a slot: every stage loop but the ones polling ci_watch. */
+  private active(): number {
+    return this.loops.size - this.offPool.size;
+  }
+
+  /** True when `stage` already has its cap's worth of loops driving it (`id` itself not counted). */
+  private stageAtCap(stage: TaskState, id: string): boolean {
+    const cap = this.maxPerStage[stage];
+    if (cap === undefined) return false;
+    let held = 0;
+    for (const [other, s] of this.stages) if (other !== id && s === stage && this.loops.has(other)) held++;
+    return held >= cap;
   }
 
   /** "Stop picking up work, I'm leaving": running stages finish, queued tasks wait. */
@@ -181,7 +263,7 @@ export class Pipeline {
   }
 
   activeCount(): number {
-    return this.loops.size;
+    return this.active();
   }
 
   list(): Promise<TaskRow[]> {
@@ -202,6 +284,11 @@ export class Pipeline {
     const task = await this.store.getTask(id);
     if (!task) throw new TaskNotFoundError(id);
     return task;
+  }
+
+  /** Logs a fact about a task from outside the engine (e.g. the thread it is reported in). */
+  record(taskId: string, kind: string, payload: Record<string, unknown>): Promise<void> {
+    return this.log(taskId, kind, payload);
   }
 
   /** The task created from this external issue, if any. */
@@ -380,7 +467,27 @@ export class Pipeline {
       );
     }
     await this.rearmPaused();
+    await this.autoApprovePlans();
     await this.fillSlots();
+  }
+
+  /** A plan that has waited the repo's `auto_approve_plan_minutes` is approved by itself when
+   *  triage reported high confidence and low risk and asked nothing. Anything less waits for you. */
+  private async autoApprovePlans(): Promise<void> {
+    for (const task of await this.store.findStuckTasks(new Set<TaskState>(["awaiting_approval"]))) {
+      const { autoApprovePlanMinutes: minutes } = await this.policies.for(task.repoPath);
+      if (minutes === null) continue;
+      const open = (await this.store.listApprovals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
+      if (!open) continue;
+      const { confidence, risk, questions } = open.requested;
+      if (confidence !== "high" || risk !== "low" || (Array.isArray(questions) && questions.length > 0)) continue;
+      if (Date.now() - open.createdAt.getTime() < minutes * 60_000) continue;
+      const reason = `auto-approved after ${minutes} min: triage reported high confidence and low risk`;
+      await this.log(task.id, "plan.auto_approved", { reason });
+      await this.decide(task.id, "approved", reason).catch((error: unknown) =>
+        console.error(`could not auto-approve the plan of task ${task.id}`, error),
+      );
+    }
   }
 
   /** The usage window has reset: re-run the stage the task paused in. */
@@ -399,12 +506,33 @@ export class Pipeline {
    */
   async recover(): Promise<number> {
     const stuck = await this.store.findStuckTasks(RUNNING);
-    await this.store.markRunningStageRunsAborted();
+    // A stage container the last machine started may still be running: re-attach to it and
+    // ingest its result when it ends, rather than kill it and ask you whether to start over.
+    const resumable = new Map<string, StageRunRow>();
+    for (const task of stuck) {
+      if (task.queued) continue;
+      const run = (await this.store.listStageRuns(task.id)).findLast((r) => r.status === "running" && r.stage === task.state);
+      if (run?.containerId && (await this.containerRunning(run.containerId))) resumable.set(task.id, run);
+    }
+    await this.store.markRunningStageRunsAborted([...resumable.values()].map((r) => r.id));
     let escalated = 0;
     for (const task of stuck) {
+      const run = resumable.get(task.id);
       if (task.queued) {
         await this.schedule(task.id, task.state);
+      } else if (run) {
+        const controller = this.reserveSlot(task.id, task.state);
+        await this.log(task.id, "stage.reattached", { stage: task.state, container: run.containerId }, run.id);
+        const loop = this.startLoop(task.id, task.state, controller, {
+          runId: run.id,
+          attempt: run.attempt,
+          container: run.containerId!,
+          inputCommit: run.inputCommit,
+        });
+        if (this.inline) await loop;
       } else {
+        const dead = (await this.store.listStageRuns(task.id)).findLast((r) => r.stage === task.state && r.containerId);
+        if (dead?.containerId) await this.removeContainer(dead.containerId).catch(() => {});
         await this.apply(task.id, { type: "abort" }, { detail: { note: "the machine restarted mid-stage" } });
         escalated++;
       }
@@ -438,14 +566,31 @@ export class Pipeline {
   }
 
   private async fillSlots(): Promise<void> {
-    while (!this.stopping && !this.draining && this.loops.size < this.maxConcurrentTasks && this.latchedUntil === null) {
+    while (!this.stopping && !this.draining && this.active() < this.maxConcurrentTasks && this.latchedUntil === null) {
       if (await this.dayOver()) return;
-      const claimed = await this.store.claimNextQueuedTask({ running: RUNNING, maxPerRepo: this.maxPerRepo });
+      const claimed = await this.store.claimNextQueuedTask({
+        running: RUNNING,
+        maxPerRepo: this.maxPerRepo,
+        maxPerStage: this.maxPerStage,
+        repoCaps: await this.repoCaps(),
+        excludeRepos: await this.reposOverMonth(),
+      });
       if (!claimed) return;
-      const controller = this.reserveSlot(claimed.id);
+      const controller = this.reserveSlot(claimed.id, claimed.state);
       const loop = this.startLoop(claimed.id, claimed.state, controller);
       if (this.inline) await loop;
     }
+  }
+
+  /** Each queued repo's own cap from its PIPELINE.md, where it sets one. */
+  private async repoCaps(): Promise<Map<string, number>> {
+    const caps = new Map<string, number>();
+    const queued = (await this.store.listTasks()).filter((t) => t.queued && t.repoPath);
+    for (const repo of new Set(queued.map((t) => t.repoPath!))) {
+      const { maxConcurrent } = await this.policies.for(repo);
+      if (maxConcurrent !== null) caps.set(repo, maxConcurrent);
+    }
+    return caps;
   }
 
   stageRuns(id: string): Promise<StageRunRow[]> {
@@ -503,17 +648,23 @@ export class Pipeline {
    * waits for the whole run too in inline mode.
    */
   private async schedule(id: string, stage: TaskState): Promise<void> {
-    if (this.stopping || this.draining || this.loops.size >= this.maxConcurrentTasks || this.latchedUntil !== null) {
+    if (this.stopping || this.draining || this.active() >= this.maxConcurrentTasks || this.latchedUntil !== null) {
       await this.enqueue(id);
       return;
     }
     // The slot is reserved before any await: two schedule() calls racing past the size check
     // above could otherwise both claim the last one. The checks that need the database come
     // after, and give the slot back when they hold the task.
-    const controller = this.reserveSlot(id);
+    const controller = this.reserveSlot(id, stage);
     const release = () => {
       if (this.loops.get(id) === controller) this.loops.delete(id);
     };
+    if (this.stageAtCap(stage, id)) {
+      release();
+      await this.enqueue(id);
+      await this.log(id, "stage.held", { stage, reason: `${stage} is at its cap of ${this.maxPerStage[stage]}` });
+      return;
+    }
     try {
       if (await this.heldForDay(id, stage)) {
         release();
@@ -540,30 +691,33 @@ export class Pipeline {
     if (this.inline) await loop;
   }
 
-  /** True when the task's repo already holds `maxPerRepo` running tasks (the task itself not counted). */
+  /** True when the task's repo already holds its cap's worth of running tasks (the task itself
+   *  not counted): the repo's own `max_concurrent` from PIPELINE.md, else `MACHINE_MAX_PER_REPO`. */
   private async repoAtCap(id: string): Promise<boolean> {
-    if (this.maxPerRepo === null) return false;
     const task = await this.store.getTask(id);
     if (!task) return false;
+    const cap = (task.repoPath ? (await this.policies.for(task.repoPath)).maxConcurrent : null) ?? this.maxPerRepo;
+    if (cap === null) return false;
     const running = await this.store.findStuckTasks(RUNNING);
     const held = running.filter((t) => t.id !== id && !t.queued && t.repoPath === task.repoPath && this.loops.has(t.id)).length;
-    return held >= this.maxPerRepo;
+    return held >= cap;
   }
 
   /** Creates and registers a new AbortController for `id` in `this.loops`, synchronously —
    *  before any `await` — so a slot this reserves can never be double-claimed by a
    *  concurrent schedule() call racing to check `this.loops.size` in between. The only path
    *  by which `this.loops` ever gains an entry; `startLoop` below is always paired with it. */
-  private reserveSlot(id: string): AbortController {
+  private reserveSlot(id: string, stage: TaskState): AbortController {
     const controller = new AbortController();
     this.loops.set(id, controller);
+    this.stages.set(id, stage);
     return controller;
   }
 
   /** Starts id's drive-then-promote loop. Not awaited outside inline mode — `.catch` logs a
    *  failure instead of letting it become an unhandled rejection that can crash the process. */
-  private startLoop(id: string, stage: TaskState, controller: AbortController): Promise<void> {
-    return this.runAndFillSlot(id, stage, controller).catch((error: unknown) =>
+  private startLoop(id: string, stage: TaskState, controller: AbortController, resume?: Resume): Promise<void> {
+    return this.runAndFillSlot(id, stage, controller, resume).catch((error: unknown) =>
       console.error(`run loop for task ${id} failed`, error),
     );
   }
@@ -571,19 +725,40 @@ export class Pipeline {
   /** Drives the stage, then — once its slot is free again — starts the longest-queued task.
    *  `controller` is already registered in `this.loops` and the task's `queued` flag already
    *  cleared by the caller, synchronously, before any `await` — see schedule(). */
-  private async runAndFillSlot(id: string, stage: TaskState, controller: AbortController): Promise<void> {
-    await this.drive(id, stage, controller);
+  private async runAndFillSlot(id: string, stage: TaskState, controller: AbortController, resume?: Resume): Promise<void> {
+    await this.drive(id, stage, controller, resume);
     await this.fillSlots();
   }
 
   /** Runs stages one after another until the task waits on you, pauses, closes or is aborted.
    *  `controller` is already registered in `this.loops` by the caller. */
-  private async drive(id: string, first: TaskState, controller: AbortController): Promise<void> {
+  private async drive(id: string, first: TaskState, controller: AbortController, resume?: Resume): Promise<void> {
     try {
       let stage: TaskState | null = first;
       while (stage) {
+        this.stages.set(id, stage);
         if (await this.holdForBudget(id, stage)) return;
-        const result = await this.runStage(id, stage, controller.signal);
+        // Another loop is already driving this stage at its cap: back to the queue, state kept;
+        // the claim skips the stage until one of them moves on.
+        if (!resume && this.stageAtCap(stage, id)) {
+          await this.enqueue(id);
+          await this.log(id, "stage.held", { stage, reason: `${stage} is at its cap of ${this.maxPerStage[stage]}` });
+          return;
+        }
+        // ci_watch polls GitHub for up to 45 minutes and computes nothing: it gives its slot
+        // back for that long, and the queue is looked at right away.
+        const polling = stage === "ci_watch";
+        if (polling) {
+          this.offPool.add(id);
+          this.fillSlots().catch((error: unknown) => console.error("could not fill slots during ci_watch", error));
+        }
+        let result: StageResult;
+        try {
+          result = await this.runStage(id, stage, controller.signal, resume);
+        } finally {
+          this.offPool.delete(id);
+        }
+        resume = undefined;
         // An abort already moved the task on; this stage's result no longer applies.
         if (controller.signal.aborted) return;
         const stuck = result.outcome === "fail" ? await this.stuckReason(id, stage) : null;
@@ -616,6 +791,13 @@ export class Pipeline {
           this.latch = Math.max(this.latch ?? 0, at !== null ? at * 1000 + RESUME_MARGIN_MS : Date.now() + LATCH_FALLBACK_MS);
         }
         stage = step.effect.kind === "run" ? step.effect.stage : null;
+        // Back from polling with the pool now full: the next stage waits for a slot like any
+        // queued task, and gets one as soon as a loop ends.
+        if (stage && polling && this.active() > this.maxConcurrentTasks) {
+          await this.enqueue(id);
+          await this.log(id, "slot.waited", { stage, reason: "the pool filled while ci_watch was polling" });
+          return;
+        }
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -625,7 +807,10 @@ export class Pipeline {
       // quietly when the task already moved on (the crash came after its last transition).
       await this.apply(id, { type: "crash", error: message }, {}).catch(() => {});
     } finally {
-      if (this.loops.get(id) === controller) this.loops.delete(id);
+      if (this.loops.get(id) === controller) {
+        this.loops.delete(id);
+        this.stages.delete(id);
+      }
     }
   }
 
@@ -641,7 +826,44 @@ export class Pipeline {
         return true;
       }
     }
+    if (await this.heldForRepoMonth(id, stage)) return true;
     return this.heldForDay(id, stage);
+  }
+
+  /** Over the repo's monthly ceiling (its PIPELINE.md): the task waits in the queue, state
+   *  kept, and the queue skips the repo until the month moves on or the ceiling is raised. */
+  private async heldForRepoMonth(id: string, stage: TaskState): Promise<boolean> {
+    const task = await this.store.getTask(id);
+    if (!task?.repoPath) return false;
+    const { monthlyBudgetUsd } = await this.policies.for(task.repoPath);
+    if (monthlyBudgetUsd === null) return false;
+    const spent = await this.repoSpentThisMonthUsd(task.repoPath);
+    if (spent < monthlyBudgetUsd) return false;
+    await this.enqueue(id);
+    await this.log(id, "budget.held", { stage, reason: `budget: ${task.repoPath} spent ${usd(spent)} of ${usd(monthlyBudgetUsd)} this month` });
+    return true;
+  }
+
+  /** After a run with a cost: each ceiling the spend has crossed a new threshold of, once. */
+  private async raiseAlerts(id: string): Promise<void> {
+    const task = await this.store.getTask(id);
+    if (!task) return;
+    const repo = task.repoPath;
+    const raise = async (scope: BudgetAlert["scope"], key: string, limitUsd: number | null, spent: () => Promise<number>) => {
+      if (limitUsd === null) return;
+      const spentUsd = await spent();
+      const reached = ALERT_STEPS.filter((pct) => spentUsd >= (limitUsd * pct) / 100);
+      const highest = reached.at(-1);
+      if (highest === undefined || highest <= (this.alerted.get(key) ?? 0)) return;
+      this.alerted.set(key, highest);
+      this.onAlert({ scope, taskId: id, repo, pct: highest, spentUsd: Math.round(spentUsd * 100) / 100, limitUsd });
+    };
+    await raise("task", `task:${id}`, this.budget.taskUsd, () => this.store.taskSpendUsd(id));
+    if (repo) {
+      const { monthlyBudgetUsd } = await this.policies.for(repo);
+      await raise("repo", `repo:${repo}:${monthKey()}`, monthlyBudgetUsd, () => this.repoSpentThisMonthUsd(repo));
+    }
+    await raise("day", `day:${dayKey()}`, this.budget.dailyUsd, () => this.spentTodayUsd());
   }
 
   /** Over the day's ceiling: the task waits in the queue, state kept, and says why. */
@@ -809,10 +1031,11 @@ export class Pipeline {
     return Array.isArray(findings) ? (findings as Finding[]) : [];
   }
 
-  private async runStage(id: string, stage: TaskState, signal: AbortSignal): Promise<StageResult> {
-    const attempt = (await this.store.countStageRunAttempts(id, stage)) + 1;
-    const runId = await this.store.insertStageRun({ taskId: id, stage, attempt });
-    await this.log(id, "stage.started", { stage, attempt }, runId);
+  private async runStage(id: string, stage: TaskState, signal: AbortSignal, resume?: Resume): Promise<StageResult> {
+    // Re-attaching after a restart: the run row and its container already exist.
+    const attempt = resume?.attempt ?? (await this.store.countStageRunAttempts(id, stage)) + 1;
+    const runId = resume?.runId ?? (await this.store.insertStageRun({ taskId: id, stage, attempt }));
+    if (!resume) await this.log(id, "stage.started", { stage, attempt }, runId);
 
     let result: StageResult;
     let error: string | undefined;
@@ -822,7 +1045,17 @@ export class Pipeline {
         this.approvals(id),
         stage === "implementing" ? this.latestVerifyingFindings(id) : Promise.resolve([]),
       ]);
-      result = await this.runnerFor(stage)({ task, stage, attempt, runId, approvals, priorFindings, signal });
+      result = await this.runnerFor(stage)({
+        task,
+        stage,
+        attempt,
+        runId,
+        approvals,
+        priorFindings,
+        signal,
+        ...(resume ? { resume: { container: resume.container, inputCommit: resume.inputCommit } } : {}),
+        started: (facts) => this.store.markStageRunStarted(runId, { containerId: facts.container, inputCommit: facts.inputCommit }),
+      });
     } catch (thrown) {
       error = thrown instanceof Error ? thrown.message : String(thrown);
       result = { outcome: "fail" };
@@ -840,12 +1073,15 @@ export class Pipeline {
       status,
       outcome,
       ended: true,
-      containerId: result.run?.containerId ?? null,
+      // The container and input commit were stored when the stage started (`started`); a
+      // result that names them again wins, one that does not leaves them be.
+      ...(result.run?.containerId ? { containerId: result.run.containerId } : {}),
+      ...(result.run?.inputCommit ? { inputCommit: result.run.inputCommit } : {}),
       transcriptPath: result.run?.transcriptPath ?? null,
-      inputCommit: result.run?.inputCommit ?? null,
       outputCommit: result.run?.outputCommit ?? null,
       ...(result.usage ? { turns: result.usage.turns, costUsd: result.usage.costUsd?.toString() ?? null } : {}),
     });
+    if (result.usage?.costUsd) await this.raiseAlerts(id);
     for (const artifact of result.artifacts ?? []) {
       await this.store.insertArtifact({ taskId: id, stageRunId: runId, ...artifact });
     }

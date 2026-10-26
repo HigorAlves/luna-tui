@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { sandboxArgs, sandboxExecArgs, type SandboxRun } from "./docker.ts";
+import { CACHE_ENV, cacheVolumeFor, sandboxArgs, sandboxExecArgs, type SandboxRun } from "./docker.ts";
 
 function run(over: Partial<SandboxRun> = {}): SandboxRun {
   return {
@@ -75,6 +75,19 @@ describe("sandboxArgs", () => {
     expect(sandboxArgs(run(), "/i", "/o").join(" ")).not.toContain("GIT_AUTHOR_NAME");
   });
 
+  it("mounts the repo's cache volume at /cache and points every package manager's cache at it", () => {
+    const args = sandboxArgs(run({ cacheVolume: "hardness-cache-app" }), "/i", "/o");
+    expect(args).toEqual(expect.arrayContaining(["-v", "hardness-cache-app:/cache"]));
+    const joined = args.join(" ");
+    for (const env of CACHE_ENV) expect(joined).toContain(`-e ${env}`);
+    expect(sandboxArgs(run(), "/i", "/o").join(" ")).not.toContain("/cache");
+  });
+
+  it("names a repo's cache volume after the repo, safely", () => {
+    expect(cacheVolumeFor("/r/luna-tui")).toBe("hardness-cache-luna-tui");
+    expect(cacheVolumeFor("/r/My App.v2/")).toBe("hardness-cache-my-app-v2");
+  });
+
   it("passes the credential by name, never its value", () => {
     const args = sandboxArgs(run(), "/i", "/o");
     expect(args).toContain("ANTHROPIC_API_KEY");
@@ -101,6 +114,11 @@ describe("sandboxExecArgs", () => {
 
   it("is hardened like a stage: read-only root, exec tmpfs, no new privileges, the limits, HOME on the tmpfs", () => {
     expect(args).toEqual(expect.arrayContaining(["--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", "-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", "--memory", "4g"]));
+  });
+
+  it("mounts the same cache volume for a check run, so verify's install is warm too", () => {
+    const args = sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["pnpm", "test"], cacheVolume: "hardness-cache-app" });
+    expect(args).toEqual(expect.arrayContaining(["-v", "hardness-cache-app:/cache", "-e", "npm_config_cache=/cache/npm"]));
   });
 
   it("passes only the env it was given, never the host's, and no credential", () => {

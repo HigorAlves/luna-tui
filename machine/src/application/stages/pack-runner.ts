@@ -19,13 +19,14 @@ import {
   workspaceFor,
 } from "../../adapters/git/worktree.ts";
 import type { Credential } from "../../adapters/docker/credentials.ts";
-import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
+import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
 import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
+import { PolicyStore } from "../policy.ts";
 import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
 
 export interface AgentDeps {
@@ -41,6 +42,8 @@ export interface AgentDeps {
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
   /** Finds the project's own check commands; the locked-test replay runs the test one. */
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
+  /** Each repo's PIPELINE.md; one store is shared so a bad edit warns once. */
+  policies?: PolicyStore;
   /** Runs a host command; the locked-test replay uses it for the project's test command. */
   exec?: (
     command: string,
@@ -48,6 +51,9 @@ export interface AgentDeps {
     options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number },
   ) => Promise<ExecResult>;
 }
+
+/** Every branch the pipeline writes starts with this; see `workspaceFor`. */
+const TASK_BRANCH_PREFIX = "task/";
 
 /** How long the original tests may take when replayed against a changed test file. */
 const LOCKED_REPLAY_TIMEOUT_MS = 10 * 60_000;
@@ -72,12 +78,25 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     task.branch && task.worktreePath
       ? { branch: task.branch, path: task.worktreePath }
       : workspaceFor(task, task.repoPath, deps.worktreesDir);
+  // The branch prefix is a structural gate: whatever a task row says, a writable stage only
+  // ever commits to a branch the pipeline owns.
+  if (limits.writable && !workspace.branch.startsWith(TASK_BRANCH_PREFIX)) {
+    return {
+      outcome: "fail",
+      detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches` },
+    };
+  }
   await ensureWorktree(task.repoPath, workspace);
-  const inputCommit = await headCommit(workspace.path);
+  // After a restart, the container the last machine started may still be running: its name and
+  // the commit it started from come from the run row, and the sandbox waits on it instead.
+  const resume = context.resume;
+  const inputCommit = resume?.inputCommit ?? (await headCommit(workspace.path));
   const gitDir = await commonGitDir(task.repoPath);
-  const container = `hardness-${task.id.slice(0, 8)}-${context.stage.replaceAll("_", "-")}-${context.attempt}`;
+  const container = resume?.container ?? `hardness-${task.id.slice(0, 8)}-${context.stage.replaceAll("_", "-")}-${context.attempt}`;
   const runDir = join(deps.stateDir, "runs", context.runId);
+  if (!resume) await context.started?.({ container, inputCommit });
 
+  const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
@@ -86,6 +105,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
     baseCommit: await branchBase(workspace.path, task.repoPath),
     ci: extra.ci ?? null,
+    holdoutCases: policy.holdoutCases,
   });
 
   // Watches the transcript as it streams: a loop on one call is stopped before it spends the turn budget.
@@ -96,7 +116,9 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   await mkdir(stateMount, { recursive: true });
   const sandbox = await (deps.sandbox ?? runSandbox)({
     name: container,
+    attach: Boolean(resume),
     stateMount,
+    cacheVolume: cacheVolumeFor(task.repoPath),
     image: pack === "e2e" ? deps.qaImage : deps.image,
     runDir,
     worktree: workspace.path,
@@ -276,6 +298,9 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
         criteria: list(answer?.criteria, task.criteria),
         assumptions: list(answer?.assumptions, []),
         slices: list(answer?.slices, []),
+        // How sure triage is and how risky the touched paths are: the timer approval reads both.
+        ...(typeof answer?.confidence === "string" ? { confidence: answer.confidence } : {}),
+        ...(typeof answer?.risk === "string" ? { risk: answer.risk } : {}),
       },
     });
   }
@@ -285,6 +310,9 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   }
   return merged(mapped);
 }
+
+/** The policy store for runners built without one (bootstrap passes the machine's). */
+const sharedPolicies = new PolicyStore();
 
 const answerOf = (answer: unknown): Record<string, unknown> | undefined =>
   answer && typeof answer === "object" ? (answer as Record<string, unknown>) : undefined;

@@ -47,7 +47,6 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
                 Event::Key(key) if key.kind == KeyEventKind::Press => match app.handle_key(key) {
                     Outcome::Continue => {}
                     Outcome::Quit => return Ok(()),
-                    Outcome::Answer(id) => app.answer_questions(terminal, &id),
                 },
                 Event::Mouse(mouse) => match mouse.kind {
                     MouseEventKind::ScrollDown => app.scroll(1),

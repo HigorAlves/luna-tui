@@ -3,7 +3,6 @@
 
 use std::{
     cell::{Cell, RefCell},
-    env, fs, io,
     process::Command,
     sync::mpsc::{self, Receiver, Sender},
     thread,
@@ -11,11 +10,7 @@ use std::{
 };
 
 use ratatui::{
-    DefaultTerminal,
-    crossterm::{
-        event::{DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent},
-        execute,
-    },
+    crossterm::event::{KeyCode, KeyEvent},
     layout::Rect,
 };
 use tui_textarea::TextArea;
@@ -31,7 +26,7 @@ use crate::{
     discover::{discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, Look, Metrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
+        COLUMNS, Look, Metrics, RepoMetrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
         parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown, Slots,
     },
     store,
@@ -70,15 +65,102 @@ pub const ACTIONS: [(char, &str); 14] = [
     ('d', "delete"),
 ];
 
+/// Which view `?` was pressed in: the sheet shows that view's keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HelpFor {
+    Board,
+    Floor,
+    Inbox,
+    Digest,
+    Detail,
+}
+
+impl HelpFor {
+    pub fn title(self) -> &'static str {
+        match self {
+            HelpFor::Board => " Keys · any key closes ",
+            HelpFor::Floor => " Floor keys · any key closes ",
+            HelpFor::Inbox => " Inbox keys · any key closes ",
+            HelpFor::Digest => " Digest keys · any key closes ",
+            HelpFor::Detail => " Ticket keys · any key closes ",
+        }
+    }
+
+    /// The keys that work in this view, as (keys, what they do).
+    pub fn keys(self) -> &'static [(&'static str, &'static str)] {
+        match self {
+            HelpFor::Board => HELP,
+            HelpFor::Floor => FLOOR_HELP,
+            HelpFor::Inbox => INBOX_HELP,
+            HelpFor::Digest => DIGEST_HELP,
+            HelpFor::Detail => DETAIL_HELP,
+        }
+    }
+}
+
+pub const FLOOR_HELP: &[(&str, &str)] = &[
+    ("tab / shift+tab", "focus the next / previous repo; the numbers follow"),
+    ("r", "refresh"),
+    ("esc", "close"),
+];
+
+pub const INBOX_HELP: &[(&str, &str)] = &[
+    ("j / k", "previous / next ticket"),
+    ("h / l", "previous / next split (1-5 jump)"),
+    ("a", "advance: approve, answer, retry"),
+    ("r", "send back with a reason"),
+    ("e", "edit in place"),
+    ("A", "approve every ticket in the split, after one yes"),
+    ("enter", "open the ticket"),
+    ("esc", "close"),
+];
+
+pub const DIGEST_HELP: &[(&str, &str)] = &[
+    ("j / k", "previous / next entry"),
+    ("enter", "jump to the ticket"),
+    ("o", "open its PR or issue in the browser"),
+    ("esc", "close"),
+];
+
+pub const DETAIL_HELP: &[(&str, &str)] = &[
+    ("j / k", "scroll"),
+    ("a", "advance: start, approve, answer, retry, resume"),
+    ("S", "ship"),
+    ("r", "send back with a reason"),
+    ("e", "edit in place"),
+    ("X / w / d", "abort / kill the worktree / delete (each asks)"),
+    ("f", "focus its herdr tab"),
+    ("o", "open the linked issue"),
+    ("esc", "close"),
+];
+
+/// What `:` understands. Typed as `:name args`.
+pub const COMMANDS: &[(&str, &str)] = &[
+    ("q", "quit"),
+    ("new <title>", "new ticket, then edit it in place"),
+    ("filter <text>", "filter by title, #id or repo (bare: clear)"),
+    ("repo <name>", "show only that repo"),
+    ("open <#id>", "open a ticket by id prefix"),
+    ("group stage|repo|age", "order columns"),
+    ("fold / unfold", "fold / unfold the focused column"),
+    ("slots <n>", "resize the pool"),
+    ("drain / resume", "take no new work / carry on"),
+    ("floor / inbox / digest", "open that view"),
+    ("help", "this sheet"),
+];
+
 /// Keys shown in the help overlay, as (keys, what they do).
-pub const HELP: [(&str, &str); 29] = [
+pub const HELP: &[(&str, &str)] = &[
     ("h / l", "previous / next column"),
     ("j / k", "previous / next ticket"),
+    ("gg / G", "first / last ticket in the column"),
+    ("1 … 8", "jump to that column"),
+    ("] / [", "next / previous ticket that needs you, across the board"),
     ("enter", "open details"),
     ("n", "new ticket, then edit it in place"),
     ("e", "edit title, description and criteria in place (ctrl+s saves)"),
     ("R", "search for its repo under HARDNESS_REPOS_DIR / ~/Developer"),
-    ("a", "advance: move to intake, start, approve, answer, retry an escalation, resume"),
+    ("a", "advance: start, approve, answer triage in place (ctrl+s sends), retry an escalation, resume"),
     ("S", "ship: approve the Ship gate and open the PR (same as a there)"),
     ("A", "memory review: approve without applying the proposed rules"),
     ("r", "send the plan or tests back, with a reason"),
@@ -93,11 +175,12 @@ pub const HELP: [(&str, &str); 29] = [
     ("zc / zo", "fold / unfold the focused column (Done starts folded)"),
     ("zz", "fold every column but the focused one"),
     ("gs / gr / ga", "order columns by stage, by repo, by age"),
-    ("F", "Floor: 7d and 30d metrics (r refreshes, esc closes)"),
+    ("F", "Floor: 7d and 30d metrics, a row per repo (tab focuses one, r refreshes, esc closes)"),
     ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
     ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
     ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
     ("x", "actions for the selected ticket (P resumes every paused one)"),
+    (":", "command palette: q, new, filter, repo, open, group, fold, slots, drain, floor, inbox, digest"),
     ("esc", "clear the filter"),
     ("?", "this help"),
     ("q", "quit"),
@@ -109,6 +192,34 @@ pub const HELP: [(&str, &str); 29] = [
 pub struct FloorState {
     pub d7: Option<Metrics>,
     pub d30: Option<Metrics>,
+    /// One row per repo over 7d; the table under the numbers.
+    pub repos: Vec<RepoMetrics>,
+    /// 0 is every repo; `i` is `repos[i - 1]`, and the numbers above are that repo's.
+    pub cursor: usize,
+}
+
+impl FloorState {
+    /// `None` for every repo; `Some(repo)` for one, where the repo may itself be `None`
+    /// (the tasks with no repo).
+    pub fn focused(&self) -> Option<Option<&str>> {
+        if self.cursor == 0 {
+            return None;
+        }
+        self.repos.get(self.cursor - 1).map(|r| r.repo.as_deref())
+    }
+
+    /// The focused repo's name for the header; `None` when every repo is in.
+    pub fn focused_name(&self) -> Option<&str> {
+        if self.cursor == 0 {
+            return None;
+        }
+        self.repos.get(self.cursor - 1).map(RepoMetrics::name)
+    }
+
+    fn cycle(&mut self, by: isize) {
+        let n = self.repos.len() + 1;
+        self.cursor = (self.cursor as isize + by).rem_euclid(n as isize) as usize;
+    }
 }
 
 /// What `X`, `w` and `d` do to a marked set.
@@ -176,6 +287,8 @@ pub enum Mode {
     Adding(String),
     /// Typing the filter. The text lives in `App::filter`.
     Filter,
+    /// Typing a `:` command; enter runs it, esc closes.
+    Command(String),
     Detail(String),
     /// Editing a ticket's markdown in place: title, description, criteria, repo.
     EditTicket {
@@ -194,6 +307,13 @@ pub enum Mode {
         focus: PlanPane,
         plan_vim: Vim,
         ticket_vim: Vim,
+    },
+    /// Answering triage's questions in place: the same markdown `$EDITOR` used to get,
+    /// one `## Q:` heading per question with the recommended answer under it; ctrl+s sends.
+    Answer {
+        id: String,
+        area: TextArea<'static>,
+        vim: Vim,
     },
     /// Typing a reason: required to send back, optional guidance for an escalation.
     Reason {
@@ -219,7 +339,7 @@ pub enum Mode {
         all: Vec<String>,
         cursor: usize,
     },
-    Help,
+    Help(HelpFor),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -238,8 +358,6 @@ fn has_open_plan(task: &Task, detail: Option<&TaskDetail>) -> bool {
 pub enum Outcome {
     Continue,
     Quit,
-    /// Answer this ticket's triage questions in `$EDITOR`.
-    Answer(String),
 }
 
 pub struct Toast {
@@ -461,6 +579,11 @@ impl App {
                 }
                 Incoming::Message(StreamMessage::Closed { id }) => {
                     thread::spawn(move || herdr::close_task_tab(short_id(&id)));
+                }
+                Incoming::Message(StreamMessage::BudgetAlert { alert }) => {
+                    let line = alert.line();
+                    self.notices.push(Notice { title: "Budget".to_string(), body: line.clone() });
+                    self.notify(format!("budget: {line}"), alert.pct >= 100);
                 }
             }
         }
@@ -823,7 +946,7 @@ impl App {
                 self.open_repo_picker(id);
             }
             "draft" => self.act(|m| m.start(id), "started"),
-            "awaiting_answers" => return Outcome::Answer(id.to_string()),
+            "awaiting_answers" => self.open_answer_editor(id),
             "escalated" if task.repo_path.is_none() => {
                 self.notify("set a repo before continuing", true);
                 self.open_repo_picker(id);
@@ -940,8 +1063,10 @@ impl App {
             }
             Mode::Adding(_) => self.handle_adding(key),
             Mode::EditTicket { .. } => self.handle_edit_ticket(key),
+            Mode::Answer { .. } => self.handle_answer(key),
             Mode::EditPlan { .. } => self.handle_edit_plan(key),
             Mode::Filter => self.handle_filter(key),
+            Mode::Command(_) => self.handle_command(key),
             Mode::Reason { .. } => self.handle_reason(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
@@ -951,28 +1076,49 @@ impl App {
             Mode::ConfirmMany { .. } => self.handle_confirm_many(key),
             Mode::Actions { .. } => self.handle_actions(key),
             Mode::RepoPicker { .. } => self.handle_repo_picker(key),
-            Mode::Help => {
+            Mode::Help(_) => {
                 self.mode = Mode::Normal;
                 Outcome::Continue
             }
         }
     }
 
-    /// Fetches both Floor windows. A failure shows in the footer and keeps the old numbers.
+    /// Fetches both Floor windows, for every repo or the focused one, and the per-repo
+    /// rows. A failure shows in the footer and keeps the old numbers.
     fn refresh_floor(&mut self) {
         let mut errors = Vec::new();
-        let d7 = self.machine.metrics("7d");
-        let d30 = self.machine.metrics("30d");
+        let Some(repo) = self.floor.as_ref().map(FloorState::focused) else {
+            return;
+        };
+        let focused = repo.is_some();
+        let repo = repo.map(|r| r.map(str::to_string));
+        let d7 = self.machine.metrics_for("7d", repo.as_ref().map(|r| r.as_deref()), !focused);
+        let d30 = self.machine.metrics_for("30d", repo.as_ref().map(|r| r.as_deref()), false);
+        // The rows are the 7d answer's when it covers every repo; one more call otherwise.
+        let rows = if focused { Some(self.machine.metrics_for("7d", None, true)) } else { None };
         let Some(floor) = self.floor.as_mut() else {
             return;
         };
         match d7 {
-            Ok(m) => floor.d7 = Some(m),
+            Ok(m) => {
+                if let Some(by_repo) = m.by_repo.clone() {
+                    floor.repos = by_repo;
+                }
+                floor.d7 = Some(m);
+            }
             Err(e) => errors.push(e),
         }
         match d30 {
             Ok(m) => floor.d30 = Some(m),
             Err(e) => errors.push(e),
+        }
+        match rows {
+            Some(Ok(m)) => floor.repos = m.by_repo.unwrap_or_default(),
+            Some(Err(e)) => errors.push(e),
+            None => {}
+        }
+        if floor.cursor > floor.repos.len() {
+            floor.cursor = 0;
         }
         if let Some(error) = errors.into_iter().next() {
             self.notify(format!("floor: {error}"), true);
@@ -982,7 +1128,16 @@ impl App {
     fn handle_floor(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Esc | KeyCode::Char('F') | KeyCode::Char('q') => self.floor = None,
+            KeyCode::Char('?') => self.mode = Mode::Help(HelpFor::Floor),
             KeyCode::Char('r') => self.refresh_floor(),
+            KeyCode::Tab | KeyCode::BackTab => {
+                if let Some(floor) = self.floor.as_mut() {
+                    floor.cycle(if key.code == KeyCode::Tab { 1 } else { -1 });
+                }
+                if self.online {
+                    self.refresh_floor();
+                }
+            }
             _ => {}
         }
         Outcome::Continue
@@ -1002,9 +1157,44 @@ impl App {
             ('g', 's') => self.group = GroupBy::Stage,
             ('g', 'r') => self.group = GroupBy::Repo,
             ('g', 'a') => self.group = GroupBy::Age,
-            _ => self.notify(format!("{prefix}{c} is not a key; zc/zo fold, zz folds all, gs/gr/ga group"), false),
+            ('g', 'g') => self.selection[self.focus] = 0,
+            _ => self.notify(format!("{prefix}{c} is not a key; zc/zo fold, zz folds all, gs/gr/ga group, gg top"), false),
         }
         self.clamp_selection();
+    }
+
+    /// `]` / `[`: the next / previous ticket that needs you, in board order (column, then row),
+    /// wrapping around. Says so when nothing does.
+    fn hop_needs_you(&mut self, forward: bool) {
+        let mut stops: Vec<(usize, usize, String)> = Vec::new();
+        for column in 0..COLUMNS.len() {
+            for (row, &i) in self.indices(column).iter().enumerate() {
+                let task = &self.tasks[i];
+                if matches!(task.look(), Look::NeedsYou | Look::Escalated) {
+                    stops.push((column, row, task.id.clone()));
+                }
+            }
+        }
+        if stops.is_empty() {
+            return self.notify("nothing needs you", false);
+        }
+        let here = (self.focus, self.selection[self.focus]);
+        let at_or_after = stops.iter().position(|(c, r, _)| (*c, *r) >= here);
+        let next = if forward {
+            match at_or_after {
+                Some(i) if (stops[i].0, stops[i].1) == here => (i + 1) % stops.len(),
+                Some(i) => i,
+                None => 0,
+            }
+        } else {
+            match at_or_after {
+                Some(i) if i > 0 => i - 1,
+                _ => stops.len() - 1,
+            }
+        };
+        let (column, row, _) = &stops[next];
+        self.focus = *column;
+        self.selection[*column] = *row;
     }
 
     /// True when the ticket changed since the board was last open.
@@ -1023,6 +1213,10 @@ impl App {
         match key.code {
             KeyCode::Esc | KeyCode::Char('D') | KeyCode::Char('q') => {
                 self.digest = None;
+                return Outcome::Continue;
+            }
+            KeyCode::Char('?') => {
+                self.mode = Mode::Help(HelpFor::Digest);
                 return Outcome::Continue;
             }
             KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(entries.len().saturating_sub(1)),
@@ -1080,6 +1274,10 @@ impl App {
         match key.code {
             KeyCode::Esc | KeyCode::Char('I') | KeyCode::Char('q') => {
                 self.inbox = None;
+                return Outcome::Continue;
+            }
+            KeyCode::Char('?') => {
+                self.mode = Mode::Help(HelpFor::Inbox);
                 return Outcome::Continue;
             }
             KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(ids.len().saturating_sub(1)),
@@ -1180,6 +1378,17 @@ impl App {
                     self.prefix = Some(c);
                 }
             }
+            KeyCode::Char('G') => {
+                self.selection[self.focus] = self.indices(self.focus).len().saturating_sub(1);
+            }
+            KeyCode::Char(d @ '1'..='8') => {
+                let column = (d as usize) - ('1' as usize);
+                if column < COLUMNS.len() {
+                    self.focus = column;
+                }
+            }
+            KeyCode::Char(']') => self.hop_needs_you(true),
+            KeyCode::Char('[') => self.hop_needs_you(false),
             KeyCode::Char('F') => {
                 self.floor = Some(FloorState::default());
                 self.refresh_floor();
@@ -1202,7 +1411,8 @@ impl App {
                     self.marked.extend(ids);
                 }
             }
-            KeyCode::Char('?') => self.mode = Mode::Help,
+            KeyCode::Char('?') => self.mode = Mode::Help(HelpFor::Board),
+            KeyCode::Char(':') => self.mode = Mode::Command(String::new()),
             KeyCode::Esc => {
                 self.filter.clear();
                 self.needs_only = false;
@@ -1336,6 +1546,7 @@ impl App {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
             KeyCode::Char('j') | KeyCode::Down => self.scroll_detail(1),
             KeyCode::Char('k') | KeyCode::Up => self.scroll_detail(-1),
+            KeyCode::Char('?') => self.mode = Mode::Help(HelpFor::Detail),
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
         }
@@ -1524,6 +1735,104 @@ impl App {
         Outcome::Continue
     }
 
+    /// Typing a `:` command.
+    fn handle_command(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::Command(text) = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char(c) => text.push(c),
+            KeyCode::Backspace => {
+                if text.pop().is_none() {
+                    self.mode = Mode::Normal;
+                }
+            }
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let line = text.trim().to_string();
+                self.mode = Mode::Normal;
+                return self.run_command(&line);
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// Runs one palette command: `name` and whatever follows it.
+    fn run_command(&mut self, line: &str) -> Outcome {
+        let (name, rest) = line.split_once(char::is_whitespace).map_or((line, ""), |(n, r)| (n, r.trim()));
+        match name {
+            "" => {}
+            "q" | "quit" => return Outcome::Quit,
+            "new" if rest.is_empty() => self.mode = Mode::Adding(String::new()),
+            "new" => {
+                self.mode = Mode::Adding(rest.to_string());
+                return self.handle_adding(KeyEvent::from(KeyCode::Enter));
+            }
+            "filter" => {
+                self.filter = rest.to_string();
+                self.needs_only = false;
+                self.clamp_selection();
+            }
+            "repo" => {
+                self.filter = rest.to_string();
+                self.clamp_selection();
+            }
+            "open" => {
+                let wanted = rest.trim_start_matches('#');
+                match self.tasks.iter().find(|t| !wanted.is_empty() && t.id.starts_with(wanted)).map(|t| t.id.clone()) {
+                    Some(id) => {
+                        self.select(&id, true);
+                        self.detail_stale = true;
+                        self.detail_scroll.set(0);
+                        self.mode = Mode::Detail(id);
+                    }
+                    None => self.notify(format!("no ticket starts with #{wanted}"), true),
+                }
+            }
+            "group" => match rest {
+                "stage" => self.group = GroupBy::Stage,
+                "repo" => self.group = GroupBy::Repo,
+                "age" => self.group = GroupBy::Age,
+                _ => self.notify("group takes stage, repo or age", true),
+            },
+            "fold" => {
+                self.folded.insert(self.focus);
+            }
+            "unfold" => {
+                self.folded.remove(&self.focus);
+            }
+            "slots" => match rest.parse::<u64>() {
+                Ok(n) if n >= 1 => match self.machine.set_slots(n) {
+                    Ok(slots) => {
+                        self.slots = Some(slots);
+                        self.notify(format!("{n} slot(s)"), false);
+                    }
+                    Err(error) => self.notify(error, true),
+                },
+                _ => self.notify("slots takes a number, e.g. :slots 3", true),
+            },
+            "drain" => self.pool_key('D'),
+            "resume" => match self.machine.resume_claims() {
+                Ok(slots) => {
+                    self.slots = Some(slots);
+                    self.notify("carrying on: the queue is picked up again", false);
+                }
+                Err(error) => self.notify(error, true),
+            },
+            "floor" => {
+                self.floor = Some(FloorState::default());
+                self.refresh_floor();
+            }
+            "inbox" => self.inbox = Some(InboxState::default()),
+            "digest" => self.digest = Some(DigestState::default()),
+            "help" | "?" => self.mode = Mode::Help(HelpFor::Board),
+            other => self.notify(format!("unknown command: {other} (try :help)"), true),
+        }
+        self.clamp_selection();
+        Outcome::Continue
+    }
+
     fn handle_reason(&mut self, key: KeyEvent) -> Outcome {
         let Mode::Reason { id, approve, text } = &mut self.mode else {
             return Outcome::Continue;
@@ -1650,60 +1959,56 @@ impl App {
         Outcome::Continue
     }
 
-    /// Opens `content` in `$EDITOR` and returns the saved text, or None if cancelled.
-    fn run_editor(&mut self, terminal: &mut DefaultTerminal, name: &str, content: &str) -> Option<String> {
-        let path = env::temp_dir().join(name);
-        if let Err(error) = fs::write(&path, content) {
-            self.notify(format!("could not write {}: {error}", path.display()), true);
-            return None;
-        }
-
-        let _ = execute!(io::stdout(), DisableMouseCapture);
-        ratatui::restore();
-        let editor = env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-        let status = Command::new("sh")
-            .arg("-c")
-            .arg(format!("{editor} \"$1\""))
-            .arg("sh")
-            .arg(&path)
-            .status();
-        *terminal = ratatui::init();
-        let _ = execute!(io::stdout(), EnableMouseCapture);
-
-        let saved = match status {
-            Ok(status) if status.success() => fs::read_to_string(&path).ok(),
-            Ok(status) => {
-                self.notify(format!("editor exited with {status}"), true);
-                None
-            }
-            Err(error) => {
-                self.notify(format!("could not start the editor: {error}"), true);
-                None
+    /// Opens triage's questions in place, each with its recommended answer ready to edit.
+    /// The questions come from the ticket's detail: the one already shown, or fetched now.
+    fn open_answer_editor(&mut self, id: &str) {
+        let detail = if self.shows_detail_of(id) {
+            self.detail.clone()
+        } else {
+            match self.machine.detail(id) {
+                Ok(detail) => Some(detail),
+                Err(error) => return self.notify(error, true),
             }
         };
-        let _ = fs::remove_file(&path);
-        saved
-    }
-
-    /// Answers triage's questions in `$EDITOR`, starting from its recommended answers.
-    pub fn answer_questions(&mut self, terminal: &mut DefaultTerminal, id: &str) {
-        let detail = match self.machine.detail(id) {
-            Ok(detail) => detail,
-            Err(error) => return self.notify(error, true),
+        let Some(detail) = detail else {
+            return;
         };
         let questions = detail.open_approval().map(questions_of).unwrap_or_default();
         if questions.is_empty() {
             return self.notify("triage left no questions to answer", true);
         }
-        let name = format!("hardness-answers-{}.md", detail.task.short_id());
-        let Some(saved) = self.run_editor(terminal, &name, &answers_markdown(&detail.task, &questions)) else {
-            return;
+        let title = format!(" answers for #{} {} ", detail.task.short_id(), detail.task.title);
+        let mut area = TextArea::new(answers_markdown(&detail.task, &questions).lines().map(str::to_string).collect());
+        area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+        area.set_block(
+            ratatui::widgets::Block::bordered()
+                .padding(ratatui::widgets::Padding::new(2, 2, 1, 1))
+                .title(title),
+        );
+        self.mode = Mode::Answer { id: id.to_string(), area, vim: Vim::new() };
+    }
+
+    /// The answer editor's keys: vim moves and edits, ctrl+s sends, esc in normal mode cancels.
+    fn handle_answer(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::Answer { id, area, vim } = &mut self.mode else {
+            return Outcome::Continue;
         };
-        let answers = parse_answers(&saved);
-        if answers.len() != questions.len() || answers.iter().any(|(_, a)| a.is_empty()) {
-            return self.notify("answer every question, keeping the `## Q:` lines", true);
+        match vim.handle(area, key) {
+            crate::vim::Outcome::Continue => {}
+            crate::vim::Outcome::Cancel => self.mode = Mode::Normal,
+            crate::vim::Outcome::Save => {
+                let id = id.clone();
+                let markdown = area.lines().join("\n");
+                self.mode = Mode::Normal;
+                let answers = parse_answers(&markdown);
+                if answers.is_empty() || answers.iter().any(|(_, a)| a.is_empty()) {
+                    self.notify("answer every question, keeping the `## Q:` lines", true);
+                    return Outcome::Continue;
+                }
+                self.act(|m| m.answer(&id, &answers), "answers sent; triage runs again");
+            }
         }
-        self.act(|m| m.answer(id, &answers), "answers sent; triage runs again");
+        Outcome::Continue
     }
 }
 
@@ -2065,6 +2370,231 @@ mod tests {
         app.pump();
         assert!(app.detail_pending.is_none());
         assert!(app.shows_detail_of(&task.id), "the answer landed");
+    }
+
+    #[test]
+    fn tab_in_the_floor_cycles_through_all_then_each_repo() {
+        let mut app = App::new(Machine::from_env());
+        app.floor = Some(FloorState::default());
+        let repos: Vec<crate::model::RepoMetrics> = serde_json::from_str(
+            r#"[{"repo":"/r/alpha","tasks":{"created":1,"closed":0,"open":1,"waitingOnYou":0,"running":0,"queued":0},
+                 "escalationRate":null,"firstPassVerifying":null,"costUsd":0},
+                {"repo":null,"tasks":{"created":1,"closed":0,"open":1,"waitingOnYou":0,"running":0,"queued":0},
+                 "escalationRate":null,"firstPassVerifying":null,"costUsd":0}]"#,
+        )
+        .unwrap();
+        app.floor.as_mut().unwrap().repos = repos;
+        assert_eq!(app.floor.as_ref().unwrap().focused(), None);
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.floor.as_ref().unwrap().focused(), Some(Some("/r/alpha")));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.floor.as_ref().unwrap().focused(), Some(None), "the tasks with no repo");
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.floor.as_ref().unwrap().focused(), None, "back to all");
+        app.handle_key(KeyEvent::from(KeyCode::BackTab));
+        assert_eq!(app.floor.as_ref().unwrap().focused(), Some(None));
+    }
+
+    #[test]
+    fn a_budget_alert_becomes_a_notice_and_a_toast_that_turns_red_at_the_ceiling() {
+        let mut app = App::new(Machine::from_env());
+        let alert = |pct: u8| {
+            serde_json::from_str::<StreamMessage>(&format!(
+                r#"{{"type":"budget.alert","alert":{{"scope":"repo","taskId":"aaaaaaaa0000","repo":"/r/luna-tui","pct":{pct},"spentUsd":18,"limitUsd":20}}}}"#
+            ))
+            .unwrap()
+        };
+        app.tx.send(Incoming::Message(alert(90))).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].title, "Budget");
+        assert_eq!(notices[0].body, "repo luna-tui at 90%: $18.00 of $20.00 this month");
+        let toast = app.toast.as_ref().expect("a toast");
+        assert!(!toast.error);
+        app.tx.send(Incoming::Message(alert(100))).unwrap();
+        app.pump();
+        assert!(app.toast.as_ref().unwrap().error, "the ceiling itself reads as an error");
+    }
+
+    fn questions_detail(id: &str) -> TaskDetail {
+        serde_json::from_str(&format!(
+            r#"{{"task":{{"id":"{id}","title":"Login page","description":"","criteria":[],
+            "repoPath":"/r/app","branch":null,"worktreePath":null,"state":"awaiting_answers","column":"Triage",
+            "waitingOnYou":true,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}},
+            "stageRuns":[],"approvals":[{{"requested":{{"questions":[
+              {{"question":"Email or username?","recommended":"email"}},
+              {{"question":"Remember me?","recommended":"yes, 30 days"}}]}},"decision":null}}],"events":[]}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_on_a_ticket_awaiting_answers_opens_the_answers_in_place_and_ctrl_s_sends_them() {
+        let mut app = App::new(Machine::from_env());
+        let mut task = ticket("aaaaaaaa0000", "awaiting_answers", false, false);
+        task.waiting_on_you = true;
+        app.tasks.push(task);
+        app.detail = Some(questions_detail("aaaaaaaa0000"));
+        app.toast = None;
+        app.ticket_key('a', "aaaaaaaa0000");
+        let Mode::Answer { id, area, .. } = &app.mode else { panic!("expected the answer editor") };
+        assert_eq!(id, "aaaaaaaa0000");
+        let text = area.lines().join("\n");
+        assert!(text.contains("## Q: Email or username?") && text.contains("yes, 30 days"), "{text}");
+
+        // Saving as recommended sends two answers; the machine is offline here, so the toast says so.
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), ratatui::crossterm::event::KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert!(app.toast.as_ref().is_some_and(|t| t.error), "offline machine: an error toast, no panic");
+
+        // An emptied answer is refused before anything is sent.
+        app.toast = None;
+        app.ticket_key('a', "aaaaaaaa0000");
+        if let Mode::Answer { area, .. } = &mut app.mode {
+            let lines: Vec<String> = area.lines().iter().map(|l| if l == "email" { String::new() } else { l.clone() }).collect();
+            *area = TextArea::new(lines);
+        }
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), ratatui::crossterm::event::KeyModifiers::CONTROL));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("answer every question, keeping the `## Q:` lines"));
+    }
+
+    #[test]
+    fn gg_and_g_jump_within_the_column_and_a_digit_jumps_to_that_column() {
+        let mut app = App::new(Machine::from_env());
+        for (i, id) in ["aaaaaaaa0000", "bbbbbbbb0000", "cccccccc0000"].iter().enumerate() {
+            let mut t = ticket(id, "implementing", true, true);
+            t.created_at = format!("2026-10-2{i}T00:00:00.000Z");
+            app.tasks.push(t);
+        }
+        let build = app.tasks[0].column_index();
+        app.focus = build;
+        app.handle_key(KeyEvent::from(KeyCode::Char('G')));
+        assert_eq!(app.selection[build], 2);
+        app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+        assert_eq!(app.selection[build], 0);
+        app.handle_key(KeyEvent::from(KeyCode::Char('1')));
+        assert_eq!(app.focus, 0, "1 is the first column");
+        app.handle_key(KeyEvent::from(KeyCode::Char('8')));
+        assert_eq!(app.focus, COLUMNS.len() - 1, "8 is Done");
+        app.handle_key(KeyEvent::from(KeyCode::Char('9')));
+        assert_eq!(app.focus, COLUMNS.len() - 1, "9 is no column");
+    }
+
+    #[test]
+    fn bracket_keys_hop_between_the_tickets_that_need_you_across_the_board() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        let mut plan = ticket("bbbbbbbb0000", "awaiting_approval", false, false);
+        plan.waiting_on_you = true;
+        plan.column = "Triage".to_string();
+        app.tasks.push(plan);
+        let mut escalated = ticket("cccccccc0000", "escalated", false, true);
+        escalated.column = "Verify".to_string();
+        app.tasks.push(escalated);
+        app.focus = 0;
+        app.handle_key(KeyEvent::from(KeyCode::Char(']')));
+        assert_eq!(app.selected_id().as_deref(), Some("bbbbbbbb0000"));
+        app.handle_key(KeyEvent::from(KeyCode::Char(']')));
+        assert_eq!(app.selected_id().as_deref(), Some("cccccccc0000"));
+        app.handle_key(KeyEvent::from(KeyCode::Char(']')));
+        assert_eq!(app.selected_id().as_deref(), Some("bbbbbbbb0000"), "wraps around");
+        app.handle_key(KeyEvent::from(KeyCode::Char('[')));
+        assert_eq!(app.selected_id().as_deref(), Some("cccccccc0000"));
+        app.tasks.retain(|t| !t.waiting_on_you && t.state != "escalated");
+        app.handle_key(KeyEvent::from(KeyCode::Char(']')));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("nothing needs you"));
+    }
+
+    fn type_command(app: &mut App, text: &str) -> Outcome {
+        app.handle_key(KeyEvent::from(KeyCode::Char(':')));
+        assert!(matches!(app.mode, Mode::Command(_)), "colon opens the palette");
+        for ch in text.chars() {
+            app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter))
+    }
+
+    #[test]
+    fn the_colon_palette_runs_board_commands_by_name() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.tasks.push(ticket("bbbbbbbb0000", "implementing", true, true));
+        app.toast = None;
+
+        type_command(&mut app, "group repo");
+        assert_eq!(app.group, GroupBy::Repo);
+        type_command(&mut app, "filter bbbb");
+        assert_eq!(app.filter, "bbbb");
+        assert_eq!(app.indices(app.tasks[0].column_index()).len(), 1);
+        type_command(&mut app, "filter");
+        assert_eq!(app.filter, "", "bare filter clears it");
+        type_command(&mut app, "open aaaaaaaa");
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"), "open by id prefix");
+        app.mode = Mode::Normal;
+        type_command(&mut app, "fold");
+        assert!(app.folded.contains(&app.focus));
+        type_command(&mut app, "unfold");
+        assert!(!app.folded.contains(&app.focus));
+        type_command(&mut app, "inbox");
+        assert!(app.inbox.is_some());
+        app.inbox = None;
+        type_command(&mut app, "digest");
+        assert!(app.digest.is_some());
+        app.digest = None;
+        type_command(&mut app, "help");
+        assert!(matches!(app.mode, Mode::Help(_)));
+        app.mode = Mode::Normal;
+        type_command(&mut app, "slots x");
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("slots takes a number, e.g. :slots 3"));
+        type_command(&mut app, "frobnicate");
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("unknown command: frobnicate (try :help)"));
+        assert!(matches!(type_command(&mut app, "q"), Outcome::Quit));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char(':')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal), "esc closes the palette");
+    }
+
+    #[test]
+    fn question_mark_shows_the_keys_of_the_view_you_are_in() {
+        let mut app = App::new(Machine::from_env());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Board)));
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        assert!(matches!(app.mode, Mode::Normal), "any key closes it");
+
+        app.inbox = Some(InboxState::default());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Inbox)));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(app.inbox.is_some(), "closing the help keeps the view");
+        app.inbox = None;
+
+        app.digest = Some(DigestState::default());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Digest)));
+        app.mode = Mode::Normal;
+        app.digest = None;
+
+        app.floor = Some(FloorState::default());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Floor)));
+        app.mode = Mode::Normal;
+        app.floor = None;
+
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.mode = Mode::Detail("aaaaaaaa0000".to_string());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Detail)));
+        assert!(HelpFor::Inbox.keys().iter().any(|(k, _)| *k == "A"));
+        assert!(HelpFor::Floor.keys().iter().any(|(k, _)| k.starts_with("tab")));
+        assert!(HelpFor::Digest.keys().iter().any(|(k, _)| *k == "o"));
+        assert!(HelpFor::Detail.keys().iter().any(|(k, _)| *k == "j / k"));
     }
 
     #[test]

@@ -12,6 +12,8 @@ export interface GitHubIntakeOptions {
   intervalMs: number;
   /** Runs the gh CLI. Tests inject a fake. */
   gh?: Gh;
+  /** The local checkout for `owner/name`, so an imported issue needs no hand edit; null when unknown. */
+  resolveRepo?: (repo: string) => Promise<string | null>;
 }
 
 /** The items of an issue body's markdown checklist, e.g. `- [ ] text`. */
@@ -70,6 +72,10 @@ export class GitHubIntake {
       }
       throw error;
     }
+    let repoPath: string | null = null;
+    if (issues.length > 0 && this.options.resolveRepo) {
+      repoPath = await this.options.resolveRepo(repo).catch(() => null);
+    }
     for (const issue of issues) {
       if (await this.options.pipeline.findBySource(repo, issue.number)) continue;
       const body = issue.body ?? "";
@@ -77,7 +83,7 @@ export class GitHubIntake {
         title: issue.title,
         description: body,
         criteria: parseChecklist(body),
-        repoPath: null,
+        repoPath,
         source: { kind: "github", repo, number: issue.number, url: issue.url },
       });
       console.log(`github intake: ${repo}#${issue.number} -> task ${task.id}`);

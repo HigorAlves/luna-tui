@@ -15,7 +15,10 @@ import { pruneOldRuns } from "./adapters/persistence/prune.ts";
 import { sweepImages, sweepRunFolders, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
+import { RepoMap } from "./application/repo-map.ts";
+import { ThreadReplies } from "./application/threads.ts";
 import { Pipeline } from "./application/pipeline.ts";
+import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
 import { realDeliverRunner } from "./application/stages/deliver.ts";
 import { shipRunner } from "./application/stages/ship.ts";
@@ -74,8 +77,13 @@ const watcher = new StreamWatcher(bus);
 // `pipeline` is assigned below, after the real stages are built — `latestE2e` is only
 // ever called once a stage actually runs, by which point `pipeline` is set.
 let pipeline: Pipeline;
-const { real, verifyPack, checksExec } = await buildRealStages(config, watcher, (taskId) =>
-  pipeline.latestStageFinish(taskId, "e2e"),
+/** Every repo's PIPELINE.md, read on demand; shared so a bad edit warns once. */
+const policies = new PolicyStore();
+const { real, verifyPack, checksExec } = await buildRealStages(
+  config,
+  watcher,
+  (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
+  policies,
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
@@ -117,9 +125,13 @@ function scheduleMetrics(): void {
   metricsTimer.unref();
 }
 
+/** Replies in the thread each task came from, on the moments that matter. */
+let replies: ThreadReplies;
+
 /** Streams each logged event, plus the whole task whenever its state may have changed. */
 function publish(event: EventRow): void {
   bus.publish({ type: "task.event", event: toEvent(event) });
+  void replies.handle(event);
   if (event.kind === "transition" || event.kind === "task.created") {
     pipeline.get(event.taskId).then(
       async (task) => bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id)) }),
@@ -136,10 +148,17 @@ pipeline = new Pipeline(db, runnerFor, {
   onEvent: publish,
   maxConcurrentTasks: config.maxConcurrentTasks,
   maxPerRepo: config.maxPerRepo,
+  maxPerStage: config.maxPerStage,
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
   closeDeps: { exec, worktreeRemove: false, orcStateBin, watcher },
+  policies,
+  onAlert: (alert) => {
+    console.warn(`budget: ${alert.scope} at ${alert.pct}% ($${alert.spentUsd.toFixed(2)} of $${alert.limitUsd.toFixed(2)})${alert.repo ? ` · ${alert.repo}` : ""}`);
+    bus.publish({ type: "budget.alert", alert });
+  },
 });
+replies = new ThreadReplies({ pipeline, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}) });
 const recovered = await pipeline.recover();
 if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by the last run`);
 pipeline.startSupervisor(SUPERVISOR_MS);
@@ -155,7 +174,8 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 let intake: GitHubIntake | undefined;
 if (config.githubPoll.repos.length > 0) {
   const { repos, intervalMs, label } = config.githubPoll;
-  intake = new GitHubIntake({ pipeline, repos, label, intervalMs });
+  const repoMap = new RepoMap({ map: config.repoMap, reposDir: config.reposDir });
+  intake = new GitHubIntake({ pipeline, repos, label, intervalMs, resolveRepo: (repo) => repoMap.resolve(repo) });
   console.log(`github intake: polling ${repos.join(", ")} every ${intervalMs / 1000}s for ${label}`);
   intake.start();
 }

@@ -165,14 +165,27 @@ export interface TaskDetail {
  * - `stage.started`: a stage container is running; the board opens a herdr tab at `cwd`
  *   labelled `label` that follows `container`'s logs.
  * - `task.closed`: the task is done or deleted; the board closes its watch tab.
+ * - `budget.alert`: a spend crossed 80, 90 or 100% of a ceiling (a task's, a repo's month's, the day's).
  */
 export type StreamMessage =
   | { type: "task.updated"; task: Task }
+  | { type: "budget.alert"; alert: BudgetAlert }
   | { type: "task.event"; event: TaskEvent }
   | { type: "task.deleted"; id: string }
   | { type: "task.metrics"; metrics: Metrics }
   | { type: "stage.started"; taskId: string; label: string; cwd: string; container: string }
   | { type: "task.closed"; id: string };
+
+/** A spend passing a threshold of a ceiling; raised once per scope and threshold. */
+export interface BudgetAlert {
+  scope: "task" | "repo" | "day";
+  /** The task whose run crossed the line. */
+  taskId: string;
+  repo: string | null;
+  pct: 80 | 90 | 100;
+  spentUsd: number;
+  limitUsd: number;
+}
 
 /** Median and 90th percentile; null when there is no data. */
 export interface Stats {
@@ -188,9 +201,23 @@ export interface Slots {
   draining: boolean;
 }
 
+/** One repo's slice of the window, for `GET /metrics?groupBy=repo`. */
+export interface RepoMetrics {
+  /** The checkout's path; null for tasks with no repo. */
+  repo: string | null;
+  tasks: Metrics["tasks"];
+  escalationRate: number | null;
+  firstPassVerifying: number | null;
+  costUsd: number;
+}
+
 export interface Metrics {
   since: string;
   until: string;
+  /** Set when the numbers are for one repo (`?repo=<path>`). */
+  repo?: string | null;
+  /** One row per repo, when asked for with `?groupBy=repo`. */
+  byRepo?: RepoMetrics[];
   tasks: {
     created: number;
     closed: number;

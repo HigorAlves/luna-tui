@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { RUNNING, type TaskState } from "@hardness/contracts";
+
 /** Settings read from the environment. Defaults match compose.dev.yml and herdr's config. */
 export interface Config {
   databaseUrl: string;
@@ -13,6 +15,8 @@ export interface Config {
   maxConcurrentTasks: number;
   /** Running tasks one repo may hold at once, so it cannot take every slot; null means no cap. */
   maxPerRepo: number | null;
+  /** Tasks that may drive one stage at once, e.g. `{ implementing: 2, e2e: 1 }`; a stage not named has no cap. */
+  maxPerStage: Record<string, number>;
   /** Docker image for stage containers, built by `runner:build`. */
   runnerImage: string;
   /** Docker image for the e2e stage, with a browser. Used by the QA slices. */
@@ -23,6 +27,14 @@ export interface Config {
   stateDir: string;
   /** Poll GitHub issues carrying `label` in `repos` (`owner/name`) and create tasks. No repos: off. */
   githubPoll: { repos: string[]; intervalMs: number; label: string };
+  /** `owner/name` to the checkout's path, for issues GitHub intake imports. */
+  repoMap: Record<string, string>;
+  /** Checkouts one level under here are matched to `owner/name` by their origin remote. */
+  reposDir: string;
+  /** Reply in the thread a task came from (its GitHub issue; Slack when set). `MACHINE_THREAD_REPLIES=off` stops it. */
+  threadReplies: boolean;
+  /** A Slack bot token and channel: one thread per task is opened there. Both or neither. */
+  slack: { token: string; channel: string } | null;
   /** Days to keep a closed task's events/stage runs before pruning them. 0 disables pruning. */
   retentionDays: number;
   /** Days after a task closes before its worktree is removed and its merged branch deleted. 0 disables it. */
@@ -102,6 +114,27 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!RESTART_POLICIES.includes(restartPolicy)) {
     throw new Error(`MACHINE_RESTART_POLICY must be requeue or escalate, got "${env.MACHINE_RESTART_POLICY}"`);
   }
+  const maxPerStage: Record<string, number> = {};
+  for (const pair of (env.MACHINE_MAX_PER_STAGE ?? "").split(",").map((p) => p.trim()).filter(Boolean)) {
+    const match = /^([a-z0-9_]+)=(\d+)$/.exec(pair);
+    const stage = match?.[1] as TaskState | undefined;
+    const cap = Number(match?.[2]);
+    if (!stage || !RUNNING.has(stage) || !Number.isInteger(cap) || cap < 1) {
+      throw new Error(`MACHINE_MAX_PER_STAGE must list <running stage>=<positive integer> pairs, got "${pair}"`);
+    }
+    maxPerStage[stage] = cap;
+  }
+  const repoMap: Record<string, string> = {};
+  for (const pair of (env.MACHINE_REPO_MAP ?? "").split(",").map((p) => p.trim()).filter(Boolean)) {
+    const match = /^([\w.-]+\/[\w.-]+)=(\/.+)$/.exec(pair);
+    if (!match) throw new Error(`MACHINE_REPO_MAP must list owner/name=/absolute/path pairs, got "${pair}"`);
+    repoMap[match[1]!] = match[2]!;
+  }
+  const slackToken = env.MACHINE_SLACK_TOKEN ?? "";
+  const slackChannel = env.MACHINE_SLACK_CHANNEL ?? "";
+  if ((slackToken === "") !== (slackChannel === "")) {
+    throw new Error("MACHINE_SLACK_TOKEN and MACHINE_SLACK_CHANNEL go together; set both or neither");
+  }
   const home = env.HOME ?? homedir();
   return {
     databaseUrl: env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
@@ -114,9 +147,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
     stateDir: env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness"),
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
+    repoMap,
+    reposDir: env.MACHINE_REPOS_DIR ?? join(home, "Developer"),
+    threadReplies: env.MACHINE_THREAD_REPLIES !== "off",
+    slack: slackToken === "" ? null : { token: slackToken, channel: slackChannel },
     retentionDays,
     worktreeRetentionDays,
     maxPerRepo: optionalPositiveInt(env, "MACHINE_MAX_PER_REPO"),
+    maxPerStage,
     taskBudgetUsd: optionalUsd(env, "MACHINE_TASK_BUDGET_USD"),
     dailyBudgetUsd: optionalUsd(env, "MACHINE_DAILY_BUDGET_USD"),
     restartPolicy,

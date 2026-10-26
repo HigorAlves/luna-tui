@@ -152,12 +152,49 @@ describe("agent stages through orc packs", () => {
     expect(result.detail).toMatchObject({ reason: "needs a new dependency", options: ["add it", "drop it"] });
   });
 
+  it("refuses to write on a branch the pipeline does not own, whatever the task row says", async () => {
+    const sandbox = vi.fn(fakeSandbox(output()));
+    const tampered = { ...context("implementing"), task: { ...context("implementing").task, branch: "main", worktreePath: repo } };
+    const result = await runners(sandbox).implementing!(tampered);
+    expect(result).toMatchObject({ outcome: "fail", detail: { error: "refusing to run implementing on branch main: the pipeline only writes task/* branches" } });
+    expect(sandbox).not.toHaveBeenCalled();
+    // A read-only pack on the same branch is fine: it changes nothing.
+    await runners(fakeSandbox(output())).triage!({ ...tampered, stage: "triage" });
+  });
+
+  it("gives the sandbox the repo's cache volume, so a retry or the next task of the repo installs warm", async () => {
+    await runners(fakeSandbox(output())).triage!(context("triage"));
+    expect(seen!.cacheVolume).toBe("hardness-cache-repo");
+  });
+
+  it("keeps triage's confidence and risk on the plan, for the timer approval", async () => {
+    const answer = { kind: "brief", summary: "s", criteria: ["c"], confidence: "high", risk: "low" };
+    const run = runners(fakeSandbox(output({ answer })));
+    const result = await run.triage!(context("triage"));
+    expect(result.detail).toMatchObject({ brief: "s", confidence: "high", risk: "low" });
+    const bare = await runners(fakeSandbox(output({ answer: { kind: "brief", summary: "s" } }))).triage!(context("triage"));
+    expect(bare.detail).not.toHaveProperty("confidence");
+  });
+
   it("keeps the test cases test_design answered, for the test check", async () => {
     const cases = [{ title: "rejects a bad password", criterion: "works", approach: "run a.test.ts, confirm it rejects" }];
     const run = runners(fakeSandbox(output({ answer: { kind: "done", summary: "s", cases } })));
     const result = await run.test_design!(context("test_design"));
     expect(result.detail).toMatchObject({ summary: "did it", cases });
     expect(result.detail).not.toHaveProperty("tests");
+  });
+
+  it("keeps test_design's cases away from implementing when the repo's PIPELINE.md holds them out", async () => {
+    writeFileSync(join(repo, "PIPELINE.md"), "---\nholdout_cases: true\n---\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "policy");
+    const cases = [{ title: "t", criterion: null, approach: "run a.test.ts" }];
+    const approvals = [
+      { kind: "awaiting_test_check", requested: { cases }, decision: "approved", reason: null, response: null },
+    ] as never;
+    const run = runners(fakeSandbox(output()));
+    await run.implementing!({ ...context("implementing"), approvals });
+    expect((seen!.input as unknown as StageInput).context.testCases).toEqual([]);
   });
 
   it("tells the pack where the branch forked, and hands ci_watch what the host fetched", async () => {

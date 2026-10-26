@@ -8,10 +8,12 @@ import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NO_RETRIES, TransitionError } from "../domain/transition.ts";
-import type { StageResult, StageRunner } from "./ports.ts";
+import type { StageContext, StageResult, StageRunner } from "./ports.ts";
+import { loadConfig } from "../config.ts";
 import { StubStages } from "./stages/stubs.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { Pipeline, TaskNotFoundError } from "./pipeline.ts";
+import { type BudgetAlert, Pipeline, TaskNotFoundError } from "./pipeline.ts";
+import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
 import type { CloseReport } from "./close-task.ts";
 
@@ -720,6 +722,116 @@ describe("budgets", () => {
   });
 });
 
+describe("a repo's monthly budget and the alerts", () => {
+  const costly = (costUsd: number): StageResult => ({ outcome: "pass", usage: { turns: 1, costUsd } });
+  const policies = (monthly: Record<string, number | null>) => ({
+    for: async (repoPath: string | null) => ({ ...DEFAULT_POLICY, monthlyBudgetUsd: repoPath ? (monthly[repoPath] ?? null) : null }),
+  });
+
+  it("parks a task between stages once its repo spent its month, and the queue skips that repo", async () => {
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: policies({ "/r/a": 2 }) });
+    stubs.plan("triage", costly(3));
+    const a = await pipeline.createTask({ title: "a", repoPath: "/r/a" });
+    expect((await pipeline.start(a.id)).state).toBe("awaiting_approval");
+    expect(await pipeline.decide(a.id, "approved")).toMatchObject({ state: "test_design", queued: true });
+    const held = (await pipeline.events(a.id)).find((e) => e.kind === "budget.held");
+    expect(held?.payload.reason).toBe("budget: /r/a spent $3.00 of $2.00 this month");
+
+    // Another task of the same repo waits in the queue; one of another repo goes.
+    const a2 = await pipeline.createTask({ title: "a2", repoPath: "/r/a" });
+    expect(await pipeline.start(a2.id)).toMatchObject({ state: "triage", queued: true });
+    const b = await pipeline.createTask({ title: "b", repoPath: "/r/b" });
+    expect((await pipeline.start(b.id)).state).toBe("awaiting_approval");
+    await pipeline.tick();
+    expect(await pipeline.get(a.id)).toMatchObject({ state: "test_design", queued: true });
+    expect(await pipeline.get(a2.id)).toMatchObject({ state: "triage", queued: true });
+
+    // Last month's spend does not count.
+    await db.query("update stage_runs set started_at = date_trunc('month', now()) - interval '1 day'");
+    await pipeline.tick();
+    expect(await pipeline.get(a.id)).toMatchObject({ state: "awaiting_test_check", queued: false });
+    expect(await pipeline.get(a2.id)).toMatchObject({ state: "awaiting_approval", queued: false });
+  });
+
+  it("raises each threshold once per scope: task, repo-month and day", async () => {
+    const alerts: BudgetAlert[] = [];
+    pipeline = new Pipeline(db, stubs.runnerFor, {
+      inline: true,
+      budget: { taskUsd: 10, dailyUsd: 100 },
+      policies: policies({ "/r/a": 10 }),
+      onAlert: (alert) => alerts.push(alert),
+    });
+    stubs.plan("triage", costly(8.5), costly(8.5));
+    stubs.plan("test_design", costly(0.6));
+    const a = await pipeline.createTask({ title: "a", repoPath: "/r/a" });
+    await pipeline.start(a.id);
+    expect(alerts).toEqual([
+      { scope: "task", taskId: a.id, repo: "/r/a", pct: 80, spentUsd: 8.5, limitUsd: 10 },
+      { scope: "repo", taskId: a.id, repo: "/r/a", pct: 80, spentUsd: 8.5, limitUsd: 10 },
+    ]);
+    await pipeline.decide(a.id, "approved");
+    expect(alerts.slice(2)).toEqual([
+      { scope: "task", taskId: a.id, repo: "/r/a", pct: 90, spentUsd: 9.1, limitUsd: 10 },
+      { scope: "repo", taskId: a.id, repo: "/r/a", pct: 90, spentUsd: 9.1, limitUsd: 10 },
+    ]);
+    const a2 = await pipeline.createTask({ title: "a2", repoPath: "/r/a" });
+    expect(alerts).toHaveLength(4);
+    await pipeline.start(a2.id);
+    expect(alerts.slice(4)).toEqual([
+      { scope: "task", taskId: a2.id, repo: "/r/a", pct: 80, spentUsd: 8.5, limitUsd: 10 },
+      { scope: "repo", taskId: a2.id, repo: "/r/a", pct: 100, spentUsd: 17.6, limitUsd: 10 },
+    ]);
+    // The day's ceiling, far away, never fires; a repeat run past a line already raised stays quiet.
+    expect(alerts.some((a) => a.scope === "day")).toBe(false);
+  });
+});
+
+describe("timer-approved plans", () => {
+  const policies = (minutes: number | null) => ({ for: async () => ({ ...DEFAULT_POLICY, autoApprovePlanMinutes: minutes }) });
+  const confident = (over: Record<string, unknown> = {}): StageResult => ({
+    outcome: "pass",
+    detail: { brief: "b", confidence: "high", risk: "low", ...over },
+  });
+
+  it("approves a confident, low-risk plan by itself once the policy's minutes have passed", async () => {
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: policies(10) });
+    stubs.plan("triage", confident());
+    const task = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
+    await pipeline.start(task.id);
+    await pipeline.tick();
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_approval");
+
+    await db.query("update approvals set created_at = now() - interval '11 minutes'");
+    await pipeline.tick();
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_test_check");
+    expect((await pipeline.approvals(task.id))[0]).toMatchObject({
+      decision: "approved",
+      reason: "auto-approved after 10 min: triage reported high confidence and low risk",
+    });
+    expect((await pipeline.events(task.id)).map((e) => e.kind)).toContain("plan.auto_approved");
+  });
+
+  it("keeps waiting when confidence is not high, risk is not low, triage asked questions, or the policy is off", async () => {
+    const cases: Array<[number | null, StageResult]> = [
+      [10, confident({ confidence: "medium" })],
+      [10, confident({ risk: "medium" })],
+      [10, confident({ risk: undefined })],
+      [10, { outcome: "needs_input", needsInput: [{ question: "q", recommended: "r" }], detail: { confidence: "high", risk: "low" } }],
+      [null, confident()],
+    ];
+    for (const [minutes, result] of cases) {
+      await db.query("truncate tasks cascade");
+      pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: policies(minutes) });
+      stubs.plan("triage", result);
+      const task = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
+      const started = await pipeline.start(task.id);
+      await db.query("update approvals set created_at = now() - interval '11 minutes'");
+      await pipeline.tick();
+      expect((await pipeline.get(task.id)).state).toBe(started.state);
+    }
+  });
+});
+
 describe("aborting a running stage", () => {
   it("returns once the stage loop has wound down, so a retry or a delete never races the dying container", async () => {
     // A stage that, told to stop, takes a moment to die and clean up, the way a container does.
@@ -811,6 +923,183 @@ describe("fair claims", () => {
     expect((await pipeline.start(b1.id)).queued).toBe(false);
     await settle();
     expect((await pipeline.get(a2.id)).queued).toBe(true);
+  });
+});
+
+/** Polls until `check` holds, for up to three seconds: a loop's end is not synchronous with
+ *  the call that caused it, and a CI runner is slower than a laptop. */
+async function until(check: () => Promise<boolean>, what: string): Promise<void> {
+  const deadline = Date.now() + 3000;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+describe("per-stage caps", () => {
+  /** A stage that holds its slot until the task is aborted. */
+  const holding: StageRunner = ({ signal }) =>
+    new Promise<StageResult>((resolve) => signal.addEventListener("abort", () => resolve({ outcome: "fail" }), { once: true }));
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
+
+  it("holds a stage at its cap in the queue while another stage still takes the free slots", async () => {
+    const runnerFor = (stage: TaskState) => (stage === "triage" || stage === "implementing" ? holding : stubs.runnerFor(stage));
+    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 4, maxPerStage: { triage: 1 } });
+    const a = await newTask();
+    await pipeline.start(a.id);
+    const b = await newTask();
+    expect(await pipeline.start(b.id)).toMatchObject({ state: "triage", queued: true });
+    await settle();
+    expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: true });
+
+    // Another stage is not held by triage's cap: c reaches implementing (and holds there) with its own slot.
+    await db.query("update tasks set state = 'implementing', queued = true, queued_at = now() where id = $1", [(await newTask()).id]);
+    await pipeline.tick();
+    await settle();
+    expect((await pipeline.list()).filter((t) => t.state === "implementing" && !t.queued)).toHaveLength(1);
+    expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: true });
+
+    // Triage's slot frees: b goes.
+    await pipeline.abort(a.id);
+    await until(async () => !(await pipeline.get(b.id)).queued, "b to be claimed");
+    expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: false });
+    await pipeline.shutdown();
+  });
+
+  it("parks a task between stages when its next stage is at cap, and the supervisor picks it up later", async () => {
+    // The first test_design holds its slot until aborted; later ones pass.
+    let held = 0;
+    const holdOnce: StageRunner = (context) => (held++ === 0 ? holding(context) : Promise.resolve({ outcome: "pass" }));
+    const runnerFor = (stage: TaskState) => (stage === "test_design" ? holdOnce : stubs.runnerFor(stage));
+    pipeline = new Pipeline(db, runnerFor, { inline: true, maxConcurrentTasks: 4, maxPerStage: { test_design: 1 } });
+    const b = await newTask();
+    await pipeline.start(b.id);
+    // a is parked at test_design (inline, so after b's start: a loop's end fills the queue).
+    const a = await newTask();
+    await db.query("update tasks set state = 'test_design', queued = true, queued_at = now() where id = $1", [a.id]);
+    // a takes test_design's one slot (and holds); b, approved, is parked before test_design.
+    const ticked = pipeline.tick();
+    await settle();
+    expect(await pipeline.decide(b.id, "approved")).toMatchObject({ state: "test_design", queued: true });
+    expect((await pipeline.events(b.id)).map((e) => e.kind)).toContain("stage.held");
+    await pipeline.abort(a.id);
+    await ticked;
+    await pipeline.tick();
+    expect(await pipeline.get(b.id)).toMatchObject({ state: "awaiting_test_check", queued: false });
+  });
+
+  it("reads MACHINE_MAX_PER_STAGE as stage=n pairs", () => {
+    expect(loadConfig({ HOME: "/h" }).maxPerStage).toEqual({});
+    expect(loadConfig({ HOME: "/h", MACHINE_MAX_PER_STAGE: "implementing=2, e2e=1" }).maxPerStage).toEqual({ implementing: 2, e2e: 1 });
+    expect(() => loadConfig({ HOME: "/h", MACHINE_MAX_PER_STAGE: "implementing=0" })).toThrow(/MACHINE_MAX_PER_STAGE/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_MAX_PER_STAGE: "flying=1" })).toThrow(/MACHINE_MAX_PER_STAGE/);
+  });
+
+  it("lets a repo's PIPELINE.md cap its own concurrency below the machine's", async () => {
+    const runnerFor = (stage: TaskState) => (stage === "triage" ? holding : stubs.runnerFor(stage));
+    const policies = { for: async (repoPath: string | null) => ({ ...DEFAULT_POLICY, maxConcurrent: repoPath === "/r/a" ? 1 : null }) };
+    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 4, policies });
+    const a1 = await pipeline.createTask({ title: "a1", repoPath: "/r/a" });
+    await pipeline.start(a1.id);
+    const a2 = await pipeline.createTask({ title: "a2", repoPath: "/r/a" });
+    expect((await pipeline.start(a2.id)).queued).toBe(true);
+    const b1 = await pipeline.createTask({ title: "b1", repoPath: "/r/b" });
+    expect((await pipeline.start(b1.id)).queued).toBe(false);
+    await settle();
+    expect((await pipeline.get(a2.id)).queued).toBe(true);
+    await pipeline.shutdown();
+  });
+});
+
+describe("ci_watch outside the pool", () => {
+  /** A ci_watch that polls until told the checks are green. */
+  let green: (() => void) | undefined;
+  const polling: StageRunner = () => new Promise<StageResult>((resolve) => { green = () => resolve({ outcome: "pass" }); });
+  const holding: StageRunner = ({ signal }) =>
+    new Promise<StageResult>((resolve) => signal.addEventListener("abort", () => resolve({ outcome: "fail" }), { once: true }));
+  beforeEach(() => {
+    green = undefined;
+  });
+
+  it("gives the slot back while polling, and takes one again (or queues) for the stage after", async () => {
+    const runnerFor = (stage: TaskState) => (stage === "ci_watch" ? polling : stage === "triage" ? holding : stubs.runnerFor(stage));
+    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 1 });
+    const a = await newTask();
+    await db.query("update tasks set state = 'ci_watch', queued = true, queued_at = now() where id = $1", [a.id]);
+    await pipeline.tick();
+    await until(async () => green !== undefined, "a to be polling");
+    expect(await pipeline.get(a.id)).toMatchObject({ state: "ci_watch", queued: false });
+    expect(pipeline.slots).toMatchObject({ max: 1, active: 0 });
+
+    // The one slot is free for b while a polls.
+    const b = await newTask();
+    expect(await pipeline.start(b.id)).toMatchObject({ state: "triage", queued: false });
+    expect(pipeline.slots.active).toBe(1);
+
+    // CI goes green: a's next stage needs a slot, b holds it, so a waits in the queue.
+    green!();
+    await until(async () => (await pipeline.events(a.id)).some((e) => e.kind === "slot.waited"), "a to wait for a slot");
+    expect(await pipeline.get(a.id)).toMatchObject({ state: "evidence", queued: true });
+    await pipeline.abort(b.id);
+    await until(async () => (await pipeline.get(a.id)).state === "awaiting_ship", "a to reach the ship gate");
+    expect(await pipeline.get(a.id)).toMatchObject({ state: "awaiting_ship", queued: false });
+    await pipeline.shutdown();
+  });
+});
+
+describe("re-attaching to a container after a restart", () => {
+  const running = (id: string, container: string) =>
+    db
+      .query("update tasks set state = 'implementing', queued = false, updated_at = now() - interval '5 minutes' where id = $1", [id])
+      .then(() =>
+        db.query(
+          `insert into stage_runs (task_id, stage, attempt, status, container_id, input_commit, started_at)
+           values ($1, 'implementing', 1, 'running', $2, 'abc123', now() - interval '5 minutes')`,
+          [id, container],
+        ),
+      );
+
+  it("waits for a stage container still running at boot instead of killing it, and carries on from its result", async () => {
+    const task = await newTask();
+    await running(task.id, "hardness-c1");
+    let resumed: StageContext["resume"];
+    const runnerFor = (stage: TaskState): StageRunner =>
+      stage === "implementing"
+        ? async (context) => {
+            resumed = context.resume;
+            return { outcome: "pass", run: { containerId: context.resume?.container } };
+          }
+        : stubs.runnerFor(stage);
+    const restarted = new Pipeline(db, runnerFor, { inline: true, containerRunning: async (name) => name === "hardness-c1" });
+    expect(await restarted.recover()).toBe(0);
+    expect(resumed).toEqual({ container: "hardness-c1", inputCommit: "abc123" });
+    expect((await restarted.get(task.id)).state).toBe("awaiting_ship");
+    const runs = await restarted.stageRuns(task.id);
+    expect(runs.filter((r) => r.stage === "implementing")).toMatchObject([{ attempt: 1, status: "passed", containerId: "hardness-c1" }]);
+    expect((await restarted.events(task.id)).map((e) => e.kind)).toContain("stage.reattached");
+  });
+
+  it("still escalates when the container is gone", async () => {
+    const task = await newTask();
+    await running(task.id, "hardness-c1");
+    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, containerRunning: async () => false });
+    expect(await restarted.recover()).toBe(1);
+    expect(await restarted.get(task.id)).toMatchObject({ state: "escalated", resumeTo: "implementing" });
+    expect((await restarted.stageRuns(task.id))[0]).toMatchObject({ status: "aborted" });
+  });
+
+  it("records the container and the input commit when a stage starts, so a restart can find them", async () => {
+    const task = await newTask();
+    const runnerFor = (stage: TaskState): StageRunner =>
+      stage === "triage"
+        ? async (context) => {
+            await context.started?.({ container: "hardness-t1", inputCommit: "def456" });
+            return { outcome: "pass" };
+          }
+        : stubs.runnerFor(stage);
+    pipeline = new Pipeline(db, runnerFor, { inline: true });
+    await pipeline.start(task.id);
+    expect((await pipeline.stageRuns(task.id))[0]).toMatchObject({ containerId: "hardness-t1", inputCommit: "def456", status: "passed" });
   });
 });
 

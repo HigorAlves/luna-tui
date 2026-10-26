@@ -1,7 +1,7 @@
 // Runs one stage in a fresh container and deletes it afterwards. The worktree is mounted at
 // /work (read-only for read-only stages), the stage input at /in, and results come back in /out.
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -15,6 +15,34 @@ export const CONTAINER_LABEL = "dev.hardness.stage";
 export const SANDBOX_LIMITS = ["--memory", "4g", "--cpus", "2", "--pids-limit", "1024"];
 /** `docker wait` gets this long past the stage's own timeout before the container is forced down. */
 const WAIT_GRACE_MS = 60_000;
+/** Where the repo's cache volume is mounted, and what each package manager is told to keep
+ *  there: a retry, or the next task of the same repo, installs from a warm cache instead of
+ *  the network. The worktree keeps its own node_modules; this is the store behind it. */
+export const CACHE_DIR = "/cache";
+export const CACHE_ENV = [
+  `XDG_CACHE_HOME=${CACHE_DIR}`,
+  `npm_config_cache=${CACHE_DIR}/npm`,
+  `npm_config_store_dir=${CACHE_DIR}/pnpm-store`,
+  `YARN_CACHE_FOLDER=${CACHE_DIR}/yarn`,
+  `GOCACHE=${CACHE_DIR}/go-build`,
+  `GOMODCACHE=${CACHE_DIR}/go-mod`,
+  `CARGO_HOME=${CACHE_DIR}/cargo`,
+  `PIP_CACHE_DIR=${CACHE_DIR}/pip`,
+  `UV_CACHE_DIR=${CACHE_DIR}/uv`,
+];
+
+/** The docker volume holding one repo's caches: `hardness-cache-<repo>`, from the checkout's name. */
+export function cacheVolumeFor(repoPath: string): string {
+  const name = repoPath.replace(/\/+$/, "").split("/").pop() ?? "repo";
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "repo";
+  return `hardness-cache-${slug}`;
+}
+
+/** The cache mount and env, when a volume is named. */
+function cacheArgs(volume: string | undefined): string[] {
+  if (!volume) return [];
+  return ["-v", `${volume}:${CACHE_DIR}`, ...CACHE_ENV.flatMap((env) => ["-e", env])];
+}
 
 export interface SandboxRun {
   name: string;
@@ -46,6 +74,10 @@ export interface SandboxRun {
   /** Host dir mounted at /state for orc's own state (the slice ledger), so it outlives the
    *  attempt and can be read from outside; without it, state lives on the tmpfs. */
   stateMount?: string;
+  /** The repo's cache volume (`cacheVolumeFor`), mounted at /cache with the package managers pointed at it. */
+  cacheVolume?: string;
+  /** The container is already running (a restart found it): wait on it instead of starting one. */
+  attach?: boolean;
 }
 
 export interface SandboxResult {
@@ -88,6 +120,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     "-v", `${outDir}:/out`,
   );
   if (run.stateMount) args.push("-v", `${run.stateMount}:/state`);
+  args.push(...cacheArgs(run.cacheVolume));
   if (run.gitDir) {
     args.push("-v", `${run.gitDir}:${run.gitDir}${run.writable ? "" : ":ro"}`);
     // Later mounts shadow earlier ones, so these ride over the writable mount above.
@@ -108,17 +141,16 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
 }
 
 export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
-  const inDir = join(run.runDir, "in");
-  const outDir = join(run.runDir, "out");
-  await mkdir(inDir, { recursive: true });
-  await mkdir(outDir, { recursive: true });
-  await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
-
-  const args = sandboxArgs(run, inDir, outDir);
-
-  await execOrThrow("docker", args, {
-    env: { ...process.env, [run.credential.name]: run.credential.value },
-  });
+  if (!run.attach) {
+    const inDir = join(run.runDir, "in");
+    const outDir = join(run.runDir, "out");
+    await mkdir(inDir, { recursive: true });
+    await mkdir(outDir, { recursive: true });
+    await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
+    await execOrThrow("docker", sandboxArgs(run, inDir, outDir), {
+      env: { ...process.env, [run.credential.name]: run.credential.value },
+    });
+  }
   run.onStarted?.(run.name);
 
   let timedOut = false;
@@ -187,6 +219,8 @@ export interface SandboxExec {
   argv: string[];
   /** The only env the command sees besides HOME and TMPDIR; never the host's. */
   env?: Record<string, string>;
+  /** The repo's cache volume, as for a stage. */
+  cacheVolume?: string;
 }
 
 /** The `docker run` argument list for one command. Pure. */
@@ -196,6 +230,7 @@ export function sandboxExecArgs(run: SandboxExec): string[] {
   args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...SANDBOX_LIMITS);
   args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp");
   for (const [key, value] of Object.entries(run.env ?? {})) args.push("-e", `${key}=${value}`);
+  args.push(...cacheArgs(run.cacheVolume));
   // Writable: a test runner writes its cache next to the code (node_modules/.vite, go's are on the tmpfs).
   args.push("-v", `${run.worktree}:/work`, "-w", "/work", "--entrypoint", command!, run.image, ...rest);
   return args;
@@ -213,7 +248,8 @@ export async function execInSandbox(
 }
 
 /** An `exec` for the stages that run a project's checks: same signature as the host one,
- *  `cwd` is the worktree, and only HARDNESS_* env reaches the container. */
+ *  `cwd` is the worktree, and only HARDNESS_* env reaches the container. The cache volume is
+ *  the repo's: task worktrees live at `<worktreesDir>/<repo>/task-…`, so the parent names it. */
 export function sandboxExecutor(image: string) {
   return (
     command: string,
@@ -226,18 +262,38 @@ export function sandboxExecutor(image: string) {
       if (key.startsWith("HARDNESS_") && typeof value === "string") env[key] = value;
     }
     return execInSandbox(
-      { name: `hardness-check-${randomUUID().slice(0, 8)}`, image, worktree: options.cwd, argv: [command, ...args], env },
+      {
+        name: `hardness-check-${randomUUID().slice(0, 8)}`,
+        image,
+        worktree: options.cwd,
+        argv: [command, ...args],
+        env,
+        cacheVolume: cacheVolumeFor(dirname(options.cwd)),
+      },
       { signal: options.signal, timeoutMs: options.timeoutMs },
     );
   };
 }
 
-/** Removes stage containers left behind by a machine that stopped mid-stage. */
+/** Removes stage containers a previous machine left behind: the stopped ones. A container still
+ *  running is left for recover() to re-attach to, or to remove once it decides not to. */
 export async function removeLeftoverContainers(): Promise<number> {
-  const listed = await exec("docker", ["ps", "-aq", "--filter", `label=${CONTAINER_LABEL}=1`]);
+  const statuses = ["exited", "created", "dead"].flatMap((status) => ["--filter", `status=${status}`]);
+  const listed = await exec("docker", ["ps", "-aq", "--filter", `label=${CONTAINER_LABEL}=1`, ...statuses]);
   const ids = listed.stdout.split("\n").filter(Boolean);
   if (ids.length > 0) await exec("docker", ["rm", "-f", ...ids]);
   return ids.length;
+}
+
+/** True while a container of that name is running. */
+export async function containerRunning(name: string): Promise<boolean> {
+  const inspected = await exec("docker", ["inspect", "-f", "{{.State.Running}}", name]);
+  return inspected.code === 0 && inspected.stdout.trim() === "true";
+}
+
+/** Stops and removes one container by name; nothing happens when it is already gone. */
+export async function removeContainer(name: string): Promise<void> {
+  await exec("docker", ["rm", "-f", name]);
 }
 
 export async function imageExists(image: string): Promise<boolean> {

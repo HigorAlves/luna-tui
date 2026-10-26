@@ -1,6 +1,6 @@
 // Factory metrics: how the pipeline is doing over a window. Rows come from Postgres and
 // the numbers are computed here, so a window with no data gives null, never NaN.
-import { type Metrics, RUNNING, WAITING_ON_USER } from "@hardness/contracts";
+import { type Metrics, type RepoMetrics, RUNNING, WAITING_ON_USER } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import { ratio, stats } from "../http/metrics.ts";
@@ -11,6 +11,21 @@ export interface MetricsOptions {
   slots: { max: number; active: number; draining: boolean };
   /** The spend ceilings, when set, and the trailing-24h spend they apply to. */
   budget?: { taskUsd: number | null; dailyUsd: number | null; spentTodayUsd: number };
+  /** Only this repo's tasks (null: only tasks with no repo); absent means every task. */
+  repo?: string | null;
+  /** Adds one slim row per repo to the answer. */
+  groupBy?: "repo";
+}
+
+/** The window's numbers for one repo, slimmed to what a per-repo table shows. */
+function slim(repo: string | null, m: Metrics): RepoMetrics {
+  return {
+    repo,
+    tasks: m.tasks,
+    escalationRate: m.escalations.rate,
+    firstPassVerifying: m.firstPassRate.verifying,
+    costUsd: m.cost.totalUsd,
+  };
 }
 
 const FIRST_PASS_STAGES = ["verifying", "ci_watch", "implementing"] as const;
@@ -19,32 +34,40 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
   const { since, slots } = options;
   const until = options.until ?? new Date();
   const window = [since, until];
+  // Every query takes a third parameter, the repo: a path matches that repo's tasks, "" the
+  // tasks with none, and null every task. `t` is the tasks row the predicate reads.
+  const byRepo = "repo" in options;
+  const scope = byRepo ? (options.repo === null ? "" : options.repo!) : null;
+  const params = [...window, scope];
+  const inScope = "($3::text is null or ($3 = '' and t.repo_path is null) or t.repo_path = $3)";
 
-  const taskRows: { state: string; queued: boolean; created: boolean }[] = await db.query(
-    "select state, queued, (created_at >= $1 and created_at <= $2) as created from tasks",
-    window,
+  const taskRows: { state: string; queued: boolean; created: boolean; repo_path: string | null }[] = await db.query(
+    `select state, queued, (created_at >= $1 and created_at <= $2) as created, repo_path from tasks t where ${inScope}`,
+    params,
   );
   const closedRows: { ms: string }[] = await db.query(
     `select extract(epoch from (e.at - t.created_at)) * 1000 as ms
        from events e join tasks t on t.id = e.task_id
-      where e.kind = 'transition' and e.payload->>'to' = 'closed' and e.at >= $1 and e.at <= $2`,
-    window,
+      where e.kind = 'transition' and e.payload->>'to' = 'closed' and e.at >= $1 and e.at <= $2 and ${inScope}`,
+    params,
   );
   const runs: { task_id: string; stage: string; attempt: number; status: string; cost: string | null; ms: string | null }[] =
     await db.query(
-      `select task_id, stage, attempt, status, cost_usd as cost,
-              extract(epoch from (ended_at - started_at)) * 1000 as ms
-         from stage_runs where started_at >= $1 and started_at <= $2`,
-      window,
+      `select r.task_id, r.stage, r.attempt, r.status, r.cost_usd as cost,
+              extract(epoch from (r.ended_at - r.started_at)) * 1000 as ms
+         from stage_runs r join tasks t on t.id = r.task_id
+        where r.started_at >= $1 and r.started_at <= $2 and ${inScope}`,
+      params,
     );
   const escalations: { task_id: string; reason: string | null }[] = await db.query(
-    `select task_id, payload->>'reason' as reason from events
-      where kind = 'transition' and payload->>'to' = 'escalated' and at >= $1 and at <= $2`,
-    window,
+    `select e.task_id, e.payload->>'reason' as reason from events e join tasks t on t.id = e.task_id
+      where e.kind = 'transition' and e.payload->>'to' = 'escalated' and e.at >= $1 and e.at <= $2 and ${inScope}`,
+    params,
   );
   const touched: { retries: { verify: number; e2e: number; ci: number; total: number } }[] = await db.query(
-    "select retries from tasks where id in (select task_id from stage_runs where started_at >= $1 and started_at <= $2)",
-    window,
+    `select retries from tasks t where ${inScope}
+        and id in (select task_id from stage_runs where started_at >= $1 and started_at <= $2)`,
+    params,
   );
 
   // Tasks.
@@ -102,9 +125,24 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
     costByTask.set(r.task_id, (costByTask.get(r.task_id) ?? 0) + Number(r.cost));
   }
 
+  // One slim row per repo: the same numbers, computed per repo, named repos first then "none".
+  let grouped: RepoMetrics[] | undefined;
+  if (options.groupBy === "repo") {
+    const repos = [...new Set(taskRows.map((t) => t.repo_path))].sort((a, b) =>
+      a === null ? 1 : b === null ? -1 : a.localeCompare(b),
+    );
+    grouped = [];
+    for (const repo of repos) {
+      const { groupBy: _ignored, ...rest } = options;
+      grouped.push(slim(repo, await computeMetrics(db, { ...rest, until, repo })));
+    }
+  }
+
   return {
     since: since.toISOString(),
     until: until.toISOString(),
+    ...(byRepo ? { repo: options.repo ?? null } : {}),
+    ...(grouped ? { byRepo: grouped } : {}),
     tasks,
     cycleTimeMs: { task: stats(closedRows.map((r) => Number(r.ms))), perStage },
     firstPassRate,

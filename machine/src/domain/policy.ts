@@ -1,0 +1,94 @@
+// A repo's own say over the pipeline: `PIPELINE.md` at its root, a markdown file whose
+// front matter sets the knobs below. The prose after it is for people. Pure: parsing only.
+
+export interface Policy {
+  /** `web` runs the e2e stage when the change renders something; `none` never runs it. */
+  qa: "web" | "none";
+  /** Spend ceiling for this repo over the calendar month; null means none. */
+  monthlyBudgetUsd: number | null;
+  /** Approve a triage plan by itself after this many minutes, when triage reports high
+   *  confidence and no risk; null keeps every plan waiting for you. */
+  autoApprovePlanMinutes: number | null;
+  /** Running tasks this repo may hold at once; null defers to MACHINE_MAX_PER_REPO. */
+  maxConcurrent: number | null;
+  /** Keep test_design's cases away from the implementer, so it cannot overfit to them. */
+  holdoutCases: boolean;
+}
+
+export const DEFAULT_POLICY: Policy = {
+  qa: "web",
+  monthlyBudgetUsd: null,
+  autoApprovePlanMinutes: null,
+  maxConcurrent: null,
+  holdoutCases: false,
+};
+
+export class PolicyParseError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PolicyParseError";
+  }
+}
+
+const positiveInt = (key: string, raw: string): number => {
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) throw new PolicyParseError(`${key} must be a positive integer, got "${raw}"`);
+  return value;
+};
+
+const positiveUsd = (key: string, raw: string): number => {
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) throw new PolicyParseError(`${key} must be a positive amount in USD, got "${raw}"`);
+  return value;
+};
+
+const bool = (key: string, raw: string): boolean => {
+  if (raw === "true") return true;
+  if (raw === "false") return false;
+  throw new PolicyParseError(`${key} must be true or false, got "${raw}"`);
+};
+
+/** The front matter between the first two `---` lines, as (line number, key, value) rows. */
+function frontMatter(text: string): Array<{ line: number; key: string; value: string }> {
+  const lines = text.split("\n");
+  if (lines[0]?.trim() !== "---") return [];
+  const rows: Array<{ line: number; key: string; value: string }> = [];
+  for (let i = 1; i < lines.length; i++) {
+    const raw = lines[i]!;
+    const trimmed = raw.trim();
+    if (trimmed === "---") return rows;
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
+    const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/.exec(trimmed);
+    if (!match) throw new PolicyParseError(`line ${i + 1}: expected key: value, got "${trimmed}"`);
+    rows.push({ line: i + 1, key: match[1]!, value: match[2]!.trim() });
+  }
+  return rows;
+}
+
+/** The policy a PIPELINE.md declares; unknown keys are ignored, a bad value throws. */
+export function parsePolicy(text: string): Policy {
+  const policy: Policy = { ...DEFAULT_POLICY };
+  for (const { key, value } of frontMatter(text)) {
+    switch (key) {
+      case "qa":
+        if (value !== "web" && value !== "none") throw new PolicyParseError(`qa must be web or none, got "${value}"`);
+        policy.qa = value;
+        break;
+      case "monthly_budget_usd":
+        policy.monthlyBudgetUsd = positiveUsd(key, value);
+        break;
+      case "auto_approve_plan_minutes":
+        policy.autoApprovePlanMinutes = positiveInt(key, value);
+        break;
+      case "max_concurrent":
+        policy.maxConcurrent = positiveInt(key, value);
+        break;
+      case "holdout_cases":
+        policy.holdoutCases = bool(key, value);
+        break;
+      default:
+        break;
+    }
+  }
+  return policy;
+}

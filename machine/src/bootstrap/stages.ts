@@ -14,6 +14,7 @@ import type { StageContext, StageResult, StageRunner } from "../application/port
 import { shipRunner } from "../application/stages/ship.ts";
 import { loadCredential } from "../adapters/docker/credentials.ts";
 import { imageExists, removeLeftoverContainers, sandboxExecutor } from "../adapters/docker/docker.ts";
+import { PolicyStore } from "../application/policy.ts";
 import { exec } from "../adapters/process/exec.ts";
 
 export interface RealStagesResult {
@@ -30,6 +31,7 @@ export async function buildRealStages(
   config: Config,
   watcher: Watcher,
   latestE2e: EvidenceDeps["latestE2e"],
+  policies: PolicyStore = new PolicyStore(),
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -61,6 +63,7 @@ export async function buildRealStages(
     stateDir: config.stateDir,
     watcher,
     exec: checksExec,
+    policies,
   };
   const verifyPack = (context: StageContext) => runAgent(deps, context, "verifying");
   const real: Partial<Record<TaskState, StageRunner>> = {
@@ -69,7 +72,7 @@ export async function buildRealStages(
     ci_watch: ciWatchRunner({ exec, runPack: (context, ci) => runAgent(deps, context, "ci_watch", { ci }) }),
     // e2e skips repos with no web surface; without the QA image it passes with a note.
     e2e: qaImage
-      ? e2eRunner({ runPack: (context) => runAgent(deps, context, "e2e") })
+      ? e2eRunner({ runPack: (context) => runAgent(deps, context, "e2e"), policy: (repoPath) => policies.for(repoPath) })
       : missingQaImageRunner(),
     // Evidence is script-only, so it runs on the host from what e2e left in the state dir.
     evidence: evidenceRunner({ stateDir: config.stateDir, latestE2e }),

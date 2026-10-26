@@ -27,7 +27,18 @@ describe("loadConfig", () => {
       restartPolicy: "requeue",
       worktreeRetentionDays: 7,
       maxPerRepo: null,
+      maxPerStage: {},
+      repoMap: {},
+      reposDir: "/home/me/Developer",
+      threadReplies: true,
+      slack: null,
     });
+  });
+
+  it("reads the thread-reply switch and the Slack pair, which go together", () => {
+    expect(loadConfig({ HOME: "/h", MACHINE_THREAD_REPLIES: "off" }).threadReplies).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb", MACHINE_SLACK_CHANNEL: "C1" }).slack).toEqual({ token: "xoxb", channel: "C1" });
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb" })).toThrow(/MACHINE_SLACK_CHANNEL/);
   });
 
   it("caps the running tasks per repo only when told to", () => {
@@ -35,6 +46,17 @@ describe("loadConfig", () => {
     expect(loadConfig({ HOME: "/home/me", MACHINE_MAX_PER_REPO: "2" }).maxPerRepo).toBe(2);
     expect(() => loadConfig({ MACHINE_MAX_PER_REPO: "0" })).toThrow(/MACHINE_MAX_PER_REPO/);
     expect(() => loadConfig({ MACHINE_MAX_PER_REPO: "two" })).toThrow(/MACHINE_MAX_PER_REPO/);
+  });
+
+  it("maps GitHub repos to local paths from MACHINE_REPO_MAP, and scans MACHINE_REPOS_DIR otherwise", () => {
+    expect(loadConfig({ HOME: "/home/me" }).repoMap).toEqual({});
+    expect(loadConfig({ HOME: "/home/me" }).reposDir).toBe("/home/me/Developer");
+    expect(loadConfig({ HOME: "/h", MACHINE_REPO_MAP: "o/a=/r/a, o/b=/r/b", MACHINE_REPOS_DIR: "/r" })).toMatchObject({
+      repoMap: { "o/a": "/r/a", "o/b": "/r/b" },
+      reposDir: "/r",
+    });
+    expect(() => loadConfig({ MACHINE_REPO_MAP: "o/a" })).toThrow(/MACHINE_REPO_MAP/);
+    expect(() => loadConfig({ MACHINE_REPO_MAP: "oa=/r/a" })).toThrow(/MACHINE_REPO_MAP/);
   });
 
   it("reads the GitHub poll settings", () => {

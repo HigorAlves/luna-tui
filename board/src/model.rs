@@ -166,6 +166,34 @@ pub enum StreamMessage {
     /// The task is done or deleted: its watch tab can go.
     #[serde(rename = "task.closed")]
     Closed { id: String },
+    /// A spend crossed 80, 90 or 100% of a ceiling.
+    #[serde(rename = "budget.alert")]
+    BudgetAlert { alert: BudgetAlert },
+}
+
+/// `budget.alert`: a task's, a repo's month's or the day's spend passing a threshold.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct BudgetAlert {
+    pub scope: String,
+    pub task_id: String,
+    pub repo: Option<String>,
+    pub pct: u8,
+    pub spent_usd: f64,
+    pub limit_usd: f64,
+}
+
+impl BudgetAlert {
+    /// `repo luna-tui at 90%: $18.00 of $20.00 this month`.
+    pub fn line(&self) -> String {
+        let repo = self.repo.as_deref().and_then(|p| p.trim_end_matches('/').rsplit('/').next()).unwrap_or("?");
+        let (what, when) = match self.scope.as_str() {
+            "task" => (format!("task #{}", short_id(&self.task_id)), ""),
+            "repo" => (format!("repo {repo}"), " this month"),
+            _ => ("the day".to_string(), ""),
+        };
+        format!("{what} at {}%: ${:.2} of ${:.2}{when}", self.pct, self.spent_usd, self.limit_usd)
+    }
 }
 
 /// Median and 90th percentile; `None` when there is no data.
@@ -259,11 +287,41 @@ pub struct QueueStats {
     pub utilisation: Option<f64>,
 }
 
+/// One repo's row of `GET /metrics?groupBy=repo`.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct RepoMetrics {
+    /// The checkout's path; `None` for the tasks with no repo.
+    pub repo: Option<String>,
+    pub tasks: TaskCounts,
+    pub escalation_rate: Option<f64>,
+    pub first_pass_verifying: Option<f64>,
+    pub cost_usd: f64,
+}
+
+impl RepoMetrics {
+    /// The last path segment, or `(none)` for the tasks with no repo.
+    pub fn name(&self) -> &str {
+        self.repo
+            .as_deref()
+            .and_then(|p| p.trim_end_matches('/').rsplit('/').next())
+            .filter(|n| !n.is_empty())
+            .unwrap_or("(none)")
+    }
+}
+
 /// `GET /metrics?since=7d|30d`. Unknown keys are ignored so a newer machine still loads.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Metrics {
     pub since: String,
+    /// Set when the numbers are one repo's (`?repo=`).
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; the Floor keeps its own focus
+    pub repo: Option<String>,
+    /// One row per repo, when asked for with `?groupBy=repo`.
+    #[serde(default)]
+    pub by_repo: Option<Vec<RepoMetrics>>,
     #[allow(dead_code)] // part of the contract; the view only shows the start of the window
     pub until: String,
     pub tasks: TaskCounts,
