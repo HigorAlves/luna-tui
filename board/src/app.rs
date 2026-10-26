@@ -20,6 +20,8 @@ use ratatui::{
 };
 use tui_textarea::TextArea;
 
+use std::collections::BTreeSet;
+
 use crate::inbox::{self, InboxState, Split};
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
@@ -50,7 +52,8 @@ fn opener_command(url: &str) -> (&'static str, Vec<String>) {
 pub const CARD_HEIGHT: usize = 3;
 
 /// Actions in the `x` menu for the selected ticket, as the key each one is.
-pub const ACTIONS: [(char, &str); 10] = [
+pub const ACTIONS: [(char, &str); 11] = [
+    ('P', "resume every ticket paused on the usage window"),
     ('a', "advance: start, approve, answer, retry, resume"),
     ('S', "ship: approve the Ship gate and open the PR"),
     ('r', "send back with a reason"),
@@ -64,7 +67,7 @@ pub const ACTIONS: [(char, &str); 10] = [
 ];
 
 /// Keys shown in the help overlay, as (keys, what they do).
-pub const HELP: [(&str, &str); 25] = [
+pub const HELP: [(&str, &str); 26] = [
     ("h / l", "previous / next column"),
     ("j / k", "previous / next ticket"),
     ("enter", "open details"),
@@ -86,7 +89,8 @@ pub const HELP: [(&str, &str); 25] = [
     ("z", "fold: show every column, only the focused one expanded"),
     ("F", "Floor: 7d and 30d metrics (r refreshes, esc closes)"),
     ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
-    ("x", "actions for the selected ticket"),
+    ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
+    ("x", "actions for the selected ticket (P resumes every paused one)"),
     ("esc", "clear the filter"),
     ("?", "this help"),
     ("q", "quit"),
@@ -98,6 +102,51 @@ pub const HELP: [(&str, &str); 25] = [
 pub struct FloorState {
     pub d7: Option<Metrics>,
     pub d30: Option<Metrics>,
+}
+
+/// What `X`, `w` and `d` do to a marked set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BulkAction {
+    Abort,
+    Worktree,
+    Delete,
+}
+
+impl BulkAction {
+    pub fn question(self, n: usize) -> String {
+        match self {
+            BulkAction::Abort => format!("Abort the running stage on {n} ticket(s)? They then wait for you."),
+            BulkAction::Worktree => format!("Kill the worktree of {n} ticket(s)? Branches and commits stay."),
+            BulkAction::Delete => format!("Delete {n} ticket(s)? Runs and history go too."),
+        }
+    }
+    fn done(self) -> &'static str {
+        match self {
+            BulkAction::Abort => "aborted",
+            BulkAction::Worktree => "worktree removed on",
+            BulkAction::Delete => "deleted",
+        }
+    }
+}
+
+/// The marked ids `action` can apply to: `X` needs something running or paused, `w` a
+/// worktree with nothing running on it, `d` takes any.
+pub fn bulk_targets(tasks: &[Task], ids: &[String], action: BulkAction) -> Vec<String> {
+    ids.iter()
+        .filter(|id| {
+            tasks.iter().find(|t| &t.id == *id).is_some_and(|t| match action {
+                BulkAction::Abort => t.running || t.state == "paused_rate_limit",
+                BulkAction::Worktree => t.worktree_path.is_some() && !t.running,
+                BulkAction::Delete => true,
+            })
+        })
+        .cloned()
+        .collect()
+}
+
+/// Every ticket waiting on the usage window.
+pub fn paused_ids(tasks: &[Task]) -> Vec<String> {
+    tasks.iter().filter(|t| t.state == "paused_rate_limit").map(|t| t.id.clone()).collect()
 }
 
 pub enum Mode {
@@ -135,6 +184,8 @@ pub enum Mode {
     ConfirmWorktree(String),
     /// `A` in the Inbox: approve every ticket in the split, after one yes.
     ConfirmApproveAll(Vec<String>),
+    /// A destructive key over the marked set: one yes for all of them.
+    ConfirmMany { action: BulkAction, ids: Vec<String> },
     Actions {
         cursor: usize,
     },
@@ -200,6 +251,8 @@ pub struct App {
     pub floor: Option<FloorState>,
     /// The Inbox view, open while this is `Some`.
     pub inbox: Option<InboxState>,
+    /// Tickets marked with `v`/`V`: `a`, `X`, `d`, `w` act on all of them.
+    pub marked: BTreeSet<String>,
     /// The repo this board defaults new tickets to, for the `@` filter. `None` if it
     /// isn't inside one.
     pub home_repo: Option<String>,
@@ -234,6 +287,7 @@ impl App {
             fold: false,
             floor: None,
             inbox: None,
+            marked: BTreeSet::new(),
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
             detail_scroll: Cell::new(0),
@@ -770,6 +824,7 @@ impl App {
                 self.handle_confirm(key, &id)
             }
             Mode::ConfirmApproveAll(_) => self.handle_confirm_approve_all(key),
+            Mode::ConfirmMany { .. } => self.handle_confirm_many(key),
             Mode::Actions { .. } => self.handle_actions(key),
             Mode::RepoPicker { .. } => self.handle_repo_picker(key),
             Mode::Help => {
@@ -916,11 +971,28 @@ impl App {
                 self.refresh_floor();
             }
             KeyCode::Char('I') => self.inbox = Some(InboxState::default()),
+            KeyCode::Char('v') => {
+                // Toggle: remove it if it was marked, else mark it.
+                if let Some(id) = self.selected_id().filter(|id| !self.marked.remove(id)) {
+                    self.marked.insert(id);
+                }
+            }
+            KeyCode::Char('V') => {
+                let ids: Vec<String> = self.indices(self.focus).iter().map(|&i| self.tasks[i].id.clone()).collect();
+                if !ids.is_empty() && ids.iter().all(|id| self.marked.contains(id)) {
+                    for id in &ids {
+                        self.marked.remove(id);
+                    }
+                } else {
+                    self.marked.extend(ids);
+                }
+            }
             KeyCode::Char('?') => self.mode = Mode::Help,
             KeyCode::Esc => {
                 self.filter.clear();
                 self.needs_only = false;
                 self.this_repo_only = false;
+                self.marked.clear();
                 self.clamp_selection();
             }
             KeyCode::Enter => {
@@ -931,6 +1003,9 @@ impl App {
                 }
             }
             KeyCode::Char(c) => {
+                if !self.marked.is_empty() && matches!(c, 'a' | 'X' | 'd' | 'w') {
+                    return self.bulk_key(c);
+                }
                 if let Some(id) = self.selected_id() {
                     return self.ticket_key(c, &id);
                 }
@@ -938,6 +1013,87 @@ impl App {
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// `a`, `X`, `d` or `w` over the marked set. `a` goes straight to the machine for the
+    /// tickets whose next step needs no words from you; the destructive three ask once.
+    fn bulk_key(&mut self, c: char) -> Outcome {
+        let ids: Vec<String> = self.marked.iter().cloned().collect();
+        if c == 'a' {
+            let (mut done, mut skipped) = (0, 0);
+            for id in &ids {
+                let Some(task) = self.task(id).cloned() else { continue };
+                let ok = match task.state.as_str() {
+                    "draft" if task.repo_path.is_some() => self.machine.start(id).is_ok(),
+                    "paused_rate_limit" => self.machine.resume(id).is_ok(),
+                    "awaiting_answers" | "escalated" | "reviewing_memory" => {
+                        skipped += 1;
+                        continue;
+                    }
+                    _ if task.waiting_on_you => self.machine.decide(id, true, None).is_ok(),
+                    _ => {
+                        skipped += 1;
+                        continue;
+                    }
+                };
+                if ok {
+                    done += 1;
+                }
+            }
+            self.marked.clear();
+            let skip = if skipped > 0 { format!("; {skipped} need words from you or are running") } else { String::new() };
+            self.notify(format!("advanced {done} of {}{skip}", ids.len()), false);
+            return Outcome::Continue;
+        }
+        let action = match c {
+            'X' => BulkAction::Abort,
+            'w' => BulkAction::Worktree,
+            _ => BulkAction::Delete,
+        };
+        let targets = bulk_targets(&self.tasks, &ids, action);
+        if targets.is_empty() {
+            self.notify("none of the marked tickets can take that", false);
+        } else {
+            self.mode = Mode::ConfirmMany { action, ids: targets };
+        }
+        Outcome::Continue
+    }
+
+    fn handle_confirm_many(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') => {
+                let Mode::ConfirmMany { action, ids } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                let mut done = 0;
+                for id in &ids {
+                    let ok = match action {
+                        BulkAction::Abort => self.machine.abort(id).is_ok(),
+                        BulkAction::Worktree => self.machine.remove_worktree(id).is_ok(),
+                        BulkAction::Delete => self.machine.delete(id).map(|()| self.forget(id)).is_ok(),
+                    };
+                    if ok {
+                        done += 1;
+                    }
+                }
+                self.marked.clear();
+                self.notify(format!("{} {done} of {}", action.done(), ids.len()), done < ids.len());
+            }
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// `x` → `P`: every ticket paused on the usage window gets its stage re-run.
+    fn resume_all_paused(&mut self) {
+        let ids = paused_ids(&self.tasks);
+        if ids.is_empty() {
+            self.notify("nothing is paused", false);
+            return;
+        }
+        let done = ids.iter().filter(|id| self.machine.resume(id).is_ok()).count();
+        self.notify(format!("resumed {done} of {}", ids.len()), done < ids.len());
     }
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
@@ -1244,6 +1400,10 @@ impl App {
         }
         if let Some(c) = chosen {
             self.mode = Mode::Normal;
+            if c == 'P' {
+                self.resume_all_paused();
+                return Outcome::Continue;
+            }
             if let Some(id) = self.selected_id() {
                 return self.ticket_key(c, &id);
             }
@@ -1501,6 +1661,56 @@ mod tests {
         assert!(matches!(app.mode, Mode::Normal));
         press(&mut app, KeyCode::Esc);
         assert!(app.inbox.is_none());
+    }
+
+    fn ticket(id: &str, state: &str, running: bool, worktree: bool) -> Task {
+        let wt = if worktree { "\"/wt\"" } else { "null" };
+        let column = if state == "draft" { "Intake" } else { "Build" };
+        serde_json::from_str(&format!(
+            r#"{{"id":"{id}","title":"t","description":"","criteria":[],
+            "repoPath":"/r/app","branch":null,"worktreePath":{wt},"state":"{state}","column":"{column}",
+            "waitingOnYou":false,"running":{running},"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn v_marks_a_ticket_capital_v_marks_the_column_and_esc_clears_the_marks() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.tasks.push(ticket("bbbbbbbb0000", "implementing", true, true));
+        app.tasks.push(ticket("cccccccc0000", "draft", false, false));
+        app.focus = app.tasks[0].column_index();
+        let press = |app: &mut App, code: KeyCode| { app.handle_key(KeyEvent::from(code)); };
+        press(&mut app, KeyCode::Char('v'));
+        assert_eq!(app.marked.len(), 1);
+        press(&mut app, KeyCode::Char('v'));
+        assert!(app.marked.is_empty(), "v toggles");
+        press(&mut app, KeyCode::Char('V'));
+        assert_eq!(app.marked.len(), 2, "the Build column's two tickets");
+        press(&mut app, KeyCode::Char('V'));
+        assert!(app.marked.is_empty(), "V on a fully marked column unmarks it");
+        press(&mut app, KeyCode::Char('V'));
+        press(&mut app, KeyCode::Char('X'));
+        assert!(matches!(&app.mode, Mode::ConfirmMany { action: BulkAction::Abort, ids } if ids.len() == 2), "X with marks asks once for the set");
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Esc);
+        assert!(app.marked.is_empty(), "esc clears the marks");
+    }
+
+    #[test]
+    fn bulk_targets_keep_only_the_tickets_the_action_applies_to() {
+        let running = ticket("aaaaaaaa0000", "implementing", true, true);
+        let idle = ticket("bbbbbbbb0000", "awaiting_approval", false, true);
+        let bare = ticket("cccccccc0000", "draft", false, false);
+        let tasks = vec![running.clone(), idle.clone(), bare.clone()];
+        let all: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
+        assert_eq!(bulk_targets(&tasks, &all, BulkAction::Abort), vec![running.id.clone()]);
+        assert_eq!(bulk_targets(&tasks, &all, BulkAction::Worktree), vec![idle.id.clone()], "a running worktree is not killed");
+        assert_eq!(bulk_targets(&tasks, &all, BulkAction::Delete), all);
+        assert_eq!(paused_ids(&tasks), Vec::<String>::new());
     }
 
     #[test]
