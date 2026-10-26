@@ -1,12 +1,12 @@
 // The stages that run as orc packs in a sandbox: the machine writes a StageInput, the
 // container runs `orc-stage run`, and the machine ingests what the pack left in /out.
-import type { PackId, TaskState } from "@hardness/contracts";
+import type { CiContext, PackId, TaskState } from "@hardness/contracts";
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import {
   type Workspace,
+  branchBase,
   commonGitDir,
   gitIdentity,
   diffNameStatus,
@@ -41,7 +41,12 @@ const MINUTE = 60_000;
  *  would otherwise run on the host, as you, at the next git command the machine issues. */
 const GIT_READ_ONLY = ["hooks", "config"];
 
-export async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId): Promise<StageResult> {
+export interface AgentExtra {
+  /** ci_watch: what the host fetched about the PR's CI, since the sandbox has no gh credential. */
+  ci?: CiContext | null;
+}
+
+export async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}): Promise<StageResult> {
   const { task } = context;
   if (!task.repoPath) {
     throw new Error("the task has no repoPath; create it with a repo to run real stages");
@@ -63,6 +68,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     attempt: context.attempt,
     approvals: context.approvals,
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
+    baseCommit: await branchBase(workspace.path, task.repoPath),
+    ci: extra.ci ?? null,
   });
 
   const sandbox = await (deps.sandbox ?? runSandbox)({
@@ -208,43 +215,14 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     });
   }
   if (pack === "test_design") {
-    const tests = await listTests(join(runDir, "out"), output.answer, output.artifacts);
     const cases = answerOf(output.answer)?.cases;
-    return merged({
-      ...mapped,
-      detail: { ...mapped.detail, summary: output.summary, tests, cases: Array.isArray(cases) ? cases : [] },
-    });
+    return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, cases: Array.isArray(cases) ? cases : [] } });
   }
   return merged(mapped);
 }
 
 const answerOf = (answer: unknown): Record<string, unknown> | undefined =>
   answer && typeof answer === "object" ? (answer as Record<string, unknown>) : undefined;
-
-const TESTS_DIR = "files/tests/";
-
-/** The test files test_design wrote: its answer, `files/tests/manifest.json`, and the test artifacts. */
-async function listTests(
-  outDir: string,
-  answer: unknown,
-  artifacts: Array<{ kind: string; path: string }>,
-): Promise<string[]> {
-  const found = new Set<string>();
-  const add = (value: unknown) => {
-    if (Array.isArray(value)) for (const item of value) if (typeof item === "string" && item) found.add(item);
-  };
-  add(answerOf(answer)?.tests);
-  try {
-    add(JSON.parse(await readFile(join(outDir, TESTS_DIR, "manifest.json"), "utf8")).tests);
-  } catch {
-    // no manifest, or not JSON: the answer and artifacts still count
-  }
-  for (const artifact of artifacts) {
-    if (artifact.kind !== "test" || artifact.path === `${TESTS_DIR}manifest.json`) continue;
-    found.add(artifact.path.startsWith(TESTS_DIR) ? artifact.path.slice(TESTS_DIR.length) : artifact.path);
-  }
-  return [...found].sort();
-}
 
 // verifying, evidence, e2e, ci_watch and reviewing_memory are each wrapped in their own
 // stage-specific runner in bootstrap/stages.ts (around the same runAgent call), so the

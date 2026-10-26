@@ -65,7 +65,7 @@ describe("buildStageInput", () => {
       attempt: 2,
       approvals,
       priorFindings: [finding(0.9, "keep"), finding(0.79, "drop"), finding(0.8, "edge")],
-      tests: ["tests/a.test.ts"],
+      baseCommit: "9c1f0e2a",
     });
     expect(StageInput.safeParse(input).success).toBe(true);
     expect(input.pack).toBe("implementing");
@@ -78,7 +78,7 @@ describe("buildStageInput", () => {
       { at: "awaiting_approval", decision: "approved", reason: "go", answers: {} },
     ]);
     expect(input.priorFindings.map((f) => f.title)).toEqual(["keep", "edge"]);
-    expect(input.context).toEqual({ projectContext: null, tests: ["tests/a.test.ts"], testCases: [] });
+    expect(input.context).toEqual({ projectContext: null, testCases: [], baseCommit: "9c1f0e2a", ci: null });
     expect(input.limits).toEqual({ maxTurns: 80, timeoutMs: 1_800_000 });
     expect(input.env).toEqual({ ORC_FACTORY: "1" });
   });
@@ -118,17 +118,16 @@ describe("buildStageInput", () => {
     );
   });
 
-  it("gives the implementer the test files from the test check approval", () => {
-    const input = buildStageInput({
-      task,
-      stage: "implementing",
-      attempt: 1,
-      approvals: [
-        approval({ kind: "awaiting_test_check", requested: { summary: "s", tests: ["src/a.test.ts", "src/b.test.ts"] } }),
-      ],
-      priorFindings: [],
-    });
-    expect(input.context.tests).toEqual(["src/a.test.ts", "src/b.test.ts"]);
+  it("carries what the host fetched for ci_watch, and nothing test_design never wrote", () => {
+    const ci = {
+      pr: { number: 42, url: "https://x/pull/42" },
+      checks: [{ name: "machine", state: "FAILURE", url: "https://x/runs/9" }],
+      logs: "FAIL src/a.test.ts > boom",
+    };
+    const input = buildStageInput({ task, stage: "ci_watch", attempt: 1, approvals: [], priorFindings: [], ci });
+    expect(input.context).toEqual({ projectContext: null, testCases: [], baseCommit: null, ci });
+    expect(StageInput.safeParse(input).success).toBe(true);
+    expect("tests" in input.context).toBe(false);
   });
 
   it("gives implementing and verifying the test cases approved at the test check (schema 2)", () => {
@@ -137,7 +136,7 @@ describe("buildStageInput", () => {
       { title: "an edge case", criterion: null, approach: "run src/b.test.ts" },
     ];
     const approvals = [
-      approval({ kind: "awaiting_test_check", requested: { tests: ["src/a.test.ts"], cases: [...cases, "junk"] } }),
+      approval({ kind: "awaiting_test_check", requested: { cases: [...cases, "junk"] } }),
     ];
     const at = (stage: "implementing" | "verifying" | "e2e") =>
       buildStageInput({ task, stage, attempt: 1, approvals, priorFindings: [] });

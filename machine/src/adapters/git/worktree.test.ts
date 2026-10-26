@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { commitAll, ensureWorktree, workspaceFor } from "./worktree.ts";
+import { branchBase, commitAll, ensureWorktree, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -33,5 +33,27 @@ describe("host-side git", () => {
 
     expect(sha).toMatch(/^[0-9a-f]{40}$/);
     expect(existsSync(marker)).toBe(false);
+  });
+
+  it("knows where the task branch forked from the repo, even after the repo moves on", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "base-")));
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "main");
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "init");
+    const fork = git(repo, "rev-parse", "HEAD");
+
+    const workspace = workspaceFor({ id: "11111111-2222-3333-4444-555555555555", title: "Fix it" } as never, repo, join(root, "wt"));
+    await ensureWorktree(repo, workspace);
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    await commitAll(workspace.path, "feat: b");
+    writeFileSync(join(repo, "c.txt"), "c\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "main moved on");
+
+    expect(await branchBase(workspace.path, repo)).toBe(fork);
+    expect(await branchBase(join(root, "nowhere"), repo)).toBeNull();
   });
 });
