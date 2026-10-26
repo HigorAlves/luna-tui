@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { detectWeb, e2eRunner, missingQaImageRunner } from "./e2e.ts";
+import { detectWeb, e2eRunner, missingQaImageRunner, touchesRenderedSurface } from "./e2e.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 
 let dir: string;
@@ -44,6 +44,29 @@ describe("detectWeb", () => {
     writeFileSync(join(dir, ".orc", "targets.json"), "{}");
     expect(await detectWeb(dir)).toBe(true);
   });
+
+  it("looks into workspace packages, where a monorepo keeps its web app", async () => {
+    pkg({ name: "root", private: true, workspaces: ["apps/*", "packages/*"] });
+    mkdirSync(join(dir, "packages", "lib"), { recursive: true });
+    writeFileSync(join(dir, "packages", "lib", "package.json"), JSON.stringify({ name: "lib", scripts: { test: "vitest" } }));
+    expect(await detectWeb(dir)).toBe(false);
+    mkdirSync(join(dir, "apps", "web"), { recursive: true });
+    writeFileSync(join(dir, "apps", "web", "package.json"), JSON.stringify({ name: "web", dependencies: { next: "15" } }));
+    expect(await detectWeb(dir)).toBe(true);
+  });
+});
+
+describe("touchesRenderedSurface", () => {
+  it("is true for markup, styles, assets, UI folders and the package manifest", () => {
+    for (const file of ["src/App.tsx", "index.html", "styles/a.css", "app/page.ts", "public/logo.svg", "package.json", "src/components/Button.ts", "web/templates/home.j2"]) {
+      expect(touchesRenderedSurface([file]), file).toBe(true);
+    }
+  });
+
+  it("is false for a change nothing on screen depends on", () => {
+    expect(touchesRenderedSurface(["src/lib/csv.ts", "src/lib/csv.test.ts", "README.md", "server/api.go", ".github/workflows/ci.yml"])).toBe(false);
+    expect(touchesRenderedSurface([])).toBe(false);
+  });
 });
 
 const context = (): StageContext =>
@@ -64,6 +87,31 @@ describe("e2eRunner", () => {
       outcome: "pass",
       detail: { step: "e2e", skipped: true, reason: "no web surface detected" },
     });
+  });
+
+  it("skips, without running the pack, when the diff touches no rendered surface", async () => {
+    const runPack = packReturning(answered({}));
+    const run = e2eRunner({ runPack, detectWeb: async () => true, changedFiles: async () => ["src/lib/csv.ts", "docs/x.md"] });
+    const result = await run(context());
+    expect(runPack).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      outcome: "pass",
+      detail: { step: "e2e", skipped: true, reason: "the change touches no rendered surface", files: ["src/lib/csv.ts", "docs/x.md"] },
+    });
+  });
+
+  it("runs the pack when the diff touches the UI, or when the base is unknown", async () => {
+    for (const changed of [async () => ["src/App.tsx"], async () => null]) {
+      const runPack = packReturning(answered({ verdict: "pass", summary: "ok", criteria: [] }));
+      await e2eRunner({ runPack, detectWeb: async () => true, changedFiles: changed })(context());
+      expect(runPack).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("passes an escalated pack result straight through", async () => {
+    const runPack = packReturning({ outcome: "escalated", detail: { reason: "no dev server could start", options: ["add a dev script"] } });
+    const result = await e2eRunner({ runPack, detectWeb: async () => true })(context());
+    expect(result).toMatchObject({ outcome: "escalated", detail: { step: "e2e", reason: "no dev server could start" } });
   });
 
   it.each([
