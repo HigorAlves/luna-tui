@@ -76,6 +76,8 @@ interface Extra {
 const RESUME_MARGIN_MS = 30_000;
 /** A running task with no loop younger than this may be between its transition and its slot. */
 const ORPHAN_GRACE_MS = 60_000;
+/** How long abort() waits for the dying stage to let go of its slot before returning anyway. */
+const ABORT_WIND_DOWN_MS = 15_000;
 /** How long one rate-limit result holds every claim when it names no reset time. */
 const LATCH_FALLBACK_MS = 5 * 60_000;
 
@@ -248,7 +250,21 @@ export class Pipeline {
     await this.store.updateTask(id, { queued: false });
     clearTimeout(this.resumeTimers.get(id));
     this.resumeTimers.delete(id);
-    return task;
+    // The task reads "escalated" from here on, but the stage is still dying: its container
+    // being killed, its run recorded, its worktree reset. Return once that is over, so a
+    // retry or a delete that follows this call never shares the worktree with a live container.
+    if (!(await this.untilLoopEnds(id, ABORT_WIND_DOWN_MS))) return task;
+    return (await this.store.getTask(id)) ?? task;
+  }
+
+  /** True once id's stage loop has let go of its slot, false if it has not within `ms`. */
+  private async untilLoopEnds(id: string, ms: number): Promise<boolean> {
+    const deadline = Date.now() + ms;
+    while (this.loops.has(id)) {
+      if (Date.now() >= deadline) return false;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return true;
   }
 
   /** Stops every running stage (killing its container) and waits for them to wind down, so a
