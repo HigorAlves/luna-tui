@@ -145,6 +145,13 @@ export class PgTaskStore implements TaskStore {
     return Number(row?.usd ?? 0);
   }
 
+  async spendByTask(): Promise<Map<string, number>> {
+    const rows = (await this.db.query(
+      "select task_id, sum(cost_usd) as usd from stage_runs where cost_usd is not null group by task_id",
+    )) as { task_id: string; usd: string }[];
+    return new Map(rows.map((r) => [r.task_id, Number(r.usd)]));
+  }
+
   async spendSinceUsd(since: Date): Promise<number> {
     const [row] = (await this.db.query("select coalesce(sum(cost_usd), 0) as usd from stage_runs where started_at >= $1", [since])) as { usd: string }[];
     return Number(row?.usd ?? 0);

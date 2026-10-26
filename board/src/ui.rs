@@ -19,7 +19,7 @@ use tui_textarea::TextArea;
 use crate::{
     app::{ACTIONS, App, FloorState, HELP, Mode},
     model::{
-        Approval, COLUMNS, Look, Metrics, Task, TaskDetail, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd,
+        Approval, COLUMNS, Look, Metrics, Task, TaskDetail, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, spend_p90,
         now_secs, questions_of,
     },
 };
@@ -469,7 +469,8 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
         return;
     }
 
-    let items: Vec<ListItem> = indices.iter().map(|&i| card(&app.tasks[i])).collect();
+    let p90 = spend_p90(&app.tasks);
+    let items: Vec<ListItem> = indices.iter().map(|&i| card(&app.tasks[i], p90)).collect();
     let list = List::new(items)
         .block(block)
         .highlight_style(selection_style())
@@ -483,7 +484,7 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
 }
 
 /// A board card: id and title, then state, age, worktree and how many implementer runs.
-fn card(task: &Task) -> ListItem<'static> {
+fn card(task: &Task, spend_p90: Option<f64>) -> ListItem<'static> {
     let look = task.look();
     let head = Line::from(vec![
         Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)),
@@ -506,6 +507,10 @@ fn card(task: &Task) -> ListItem<'static> {
     }
     if task.repo_path.is_none() && task.state == "draft" {
         meta.push(Span::from("  no repo").fg(c(SUBTEXT0)));
+    }
+    // A dim `$` on the tickets above the p90 of spend: the expensive ones at a glance.
+    if task.spent_usd.zip(spend_p90).is_some_and(|(spent, p90)| spent > p90) {
+        meta.push(Span::from("  $").fg(c(SUBTEXT0)));
     }
 
     ListItem::new(vec![head, Line::from(meta), Line::default()])
@@ -1353,6 +1358,33 @@ mod tests {
             "Continues at: implementing · a retries it (add guidance if you like)"
         );
         assert_eq!(continues_line("paused_rate_limit", "verifying"), "Continues at: verifying");
+    }
+
+    #[test]
+    fn a_card_above_the_spend_p90_carries_a_dim_dollar_the_others_do_not() {
+        const CARD_TASK: &str = r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
+            "repoPath":"/r/app","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
+        let mut app = App::new(crate::Machine::from_env());
+        for (i, spent) in [0.1, 0.2, 0.3, 5.0].into_iter().enumerate() {
+            let mut task: Task = serde_json::from_str(&CARD_TASK.replace("Login page", &format!("Ticket {i}"))).unwrap();
+            task.spent_usd = Some(spent);
+            app.tasks.push(task);
+        }
+        let mut terminal = Terminal::new(TestBackend::new(240, 30)).unwrap();
+        terminal.draw(|f| render_board(f, f.area(), &app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let text: String = (0..30)
+            .map(|y| (0..240).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (row3, _) = find(&text, "Ticket 3").expect("the expensive ticket");
+        let (row0, _) = find(&text, "Ticket 0").expect("a cheap ticket");
+        let line_after = |row: usize| text.lines().nth(row + 1).unwrap_or("").to_string();
+        assert!(line_after(row3).contains('$'), "the expensive card is marked: {text}");
+        assert!(!line_after(row0).contains('$'), "a cheap card is not: {text}");
     }
 
     #[test]

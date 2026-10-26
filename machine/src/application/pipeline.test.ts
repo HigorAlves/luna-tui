@@ -466,6 +466,23 @@ describe("test_change undoes verifying's tests", () => {
   });
 });
 
+describe("spend per task", () => {
+  it("sums each task's stage runs, so a list can mark the expensive tickets", async () => {
+    const a = await newTask();
+    const b = await newTask();
+    for (const [id, cost] of [[a.id, "0.40"], [a.id, "0.10"], [b.id, null]] as const) {
+      await db.query(
+        "insert into stage_runs (task_id, stage, attempt, status, started_at, cost_usd) values ($1, 'triage', 1, 'passed', now(), $2)",
+        [id, cost],
+      );
+    }
+    const spend = await pipeline.spendByTask();
+    expect(spend.get(a.id)).toBeCloseTo(0.5);
+    expect(spend.get(b.id)).toBeUndefined();
+    expect(await pipeline.spentUsd(a.id)).toBeCloseTo(0.5);
+  });
+});
+
 describe("the stuck detector", () => {
   const same = { outcome: "fail" as const, detail: { error: "implementer left uncommitted changes: ?? .orc/x/slices.json" } };
 

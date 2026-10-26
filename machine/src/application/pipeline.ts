@@ -158,6 +158,16 @@ export class Pipeline {
     return this.store.listTasks();
   }
 
+  /** Spend per task for every task that has any, in one query. */
+  spendByTask(): Promise<Map<string, number>> {
+    return this.store.spendByTask();
+  }
+
+  /** What one task has spent across its stage runs. */
+  spentUsd(id: string): Promise<number> {
+    return this.store.taskSpendUsd(id);
+  }
+
   async get(id: string): Promise<TaskRow> {
     const task = await this.store.getTask(id);
     if (!task) throw new TaskNotFoundError(id);
