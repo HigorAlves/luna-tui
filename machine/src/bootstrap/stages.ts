@@ -70,6 +70,7 @@ export async function buildRealStages(
     watcher,
     exec: checksExec,
     policies,
+    history,
   };
   const verifyPack = (context: StageContext) => runAgent(deps, context, "verifying");
   const real: Partial<Record<TaskState, StageRunner>> = {

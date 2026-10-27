@@ -17,12 +17,22 @@ const decisionLine = (d: StageInput["decisions"][number]): string => {
 
 const findingLine = (f: StageInput["priorFindings"][number]): string => `- ${f.severity} ${f.path}:${f.line} ${f.title}`;
 
+/** The PR, its checks and the failed run's log tail, as ci_watch reads them. */
+const ciText = (ci: StageInput["context"]["ci"]): string => {
+  if (!ci) return NONE;
+  const pr = ci.pr ? `PR #${ci.pr.number}${ci.pr.url ? ` (${ci.pr.url})` : ""}` : "PR: (none)";
+  const checks = ci.checks.length > 0 ? ci.checks.map((c) => `- ${c.name}: ${c.state}${c.url ? ` (${c.url})` : ""}`).join("\n") : "- (no checks)";
+  const logs = ci.logs ? `Failed run log tail:\n\`\`\`\n${ci.logs}\n\`\`\`` : "(no log fetched)";
+  return `${pr}\nChecks:\n${checks}\n${logs}`;
+};
+
 /** The rules every stage runs under; appended to the system prompt and restated in the header. */
 export const FACTORY_RULES = [
   "You are running in factory mode (LUNA_FACTORY=1): no human is present. A controller wrote /in/stage.json and reads your final answer as the stage result.",
   "Never call AskUserQuestion. A question you cannot settle from the stage input ends the stage: answer with kind \"questions\" (at most three, each with a recommended answer).",
   "Never push, never open or edit pull requests, never post reviews or write to a tracker. An outward action goes in requested[] for the board to approve.",
   "Never write outside /work and /out. Never touch /work/.git directly.",
+  "Bash runs only the commands on this stage's allow-list, and a chained command (&&, ;, |) runs only when every part is allowed: one simple command per call, no cd, and Read/Glob/Grep for files. A denied command is not a finding; use an allowed one.",
   "Report progress with the mcp__luna__step tool when it is available; it is a label for the board, not a gate.",
   "Answer ONLY with the JSON object matching the stage's output schema. No text before or after.",
 ].join("\n");
@@ -62,6 +72,9 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
         return `${c.title}${c.criterion ? ` (criterion: ${c.criterion})` : ""}: ${approach}`;
       }),
     ),
+    "{{context.baseCommit}}": txt(input.context.baseCommit),
+    "{{context.ci}}": ciText(input.context.ci),
+    "{{context.qaTargets}}": bullets((input.context.qaTargets ?? []).map((t) => `${t.name}: ${t.baseUrl}${t.credential ? ` (credential: ${t.credential})` : ""}`)),
     "{{attempt}}": txt(input.attempt),
     "{{agent}}": agent,
     "{{skills}}": pack.skills.length > 0 ? pack.skills.join(", ") : NONE,

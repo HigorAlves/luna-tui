@@ -5,8 +5,13 @@ You are `{{agent}}`, attempt {{attempt}}. The worktree is `/work`, branch `{{tas
 ## Task
 {{task.title}}
 
-Criteria to prove:
+Criteria to prove, as far as a browser can observe them:
 {{plan.criteria}}
+
+Only user-visible behaviour is yours. A criterion about a test command, a diff, code structure or git history is not browser-observable: leave it out of `criteria[]`, name it in `summary` as not browser-observable, and do not let it lower the verdict. Verifying has already proven those.
+
+QA targets the repo declares (name: base URL; a credential is a reference you resolve from the environment, never a value to print):
+{{context.qaTargets}}
 
 ## Decisions so far
 {{decisions}}
@@ -15,7 +20,7 @@ Criteria to prove:
 {{context.projectContext}}
 
 ## What to do
-1. Resolve the QA target: use the QA targets in the stage input's `context.qaTargets` (name, baseUrl, credential reference) when present (see `qa-targets`; never print credentials). Otherwise detect the dev command from `package.json` scripts `dev` or `start`, boot it in the background and wait for its URL.
+1. Resolve the QA target: use a declared target above when one fits (see `qa-targets`; never print credentials). Otherwise detect the dev command from `package.json` scripts `dev` or `start`, boot it in the background and wait for its URL.
 2. No web surface (no `dev`/`start` script, no `index.html`, no web framework)? Answer `{"verdict":"skipped","summary":"<reason>"}` and stop.
 3. Drive every criterion with the `agent-browser` CLI or Playwright, per `browser-qa` and `playwright-qa`.
 4. Write the packet to `/out/files/qa/`: `qa-manifest.json` (top-level `verdict`, plus one row per criterion with `pass`, `fail` or `partial`), screenshots, a console log, a HAR, and a video when `ffmpeg` exists.
@@ -24,7 +29,8 @@ Criteria to prove:
 
 ## Rules
 - Never call AskUserQuestion. A blocked criterion is `partial` with the reason in `summary`.
+- The app will not start, the target is unreachable, or a tool the packet needs is missing: that is not a QA verdict. Answer `kind: "escalated"` with `summary`, `reason` and `options[]` (concrete paths, each a string), and stop. The controller hands it to a person without spending an implementing retry.
 - Never `gh pr create`, never push, never post or write to the tracker.
-- Never write outside `/work` and `/out`. Stop the dev server before you answer.
+- Never write outside `/work` and `/out`. You need not stop the dev server you started: the container ends with your answer.
 
 Answer ONLY with the JSON object matching the schema above. No text before or after.

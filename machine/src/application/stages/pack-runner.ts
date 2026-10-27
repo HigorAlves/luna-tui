@@ -44,6 +44,8 @@ export interface AgentDeps {
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
   /** Each repo's PIPELINE.md; one store is shared so a bad edit warns once. */
   policies?: PolicyStore;
+  /** The task's record (last implementing ledger, every run): implementing resumes its ledger from it, the retro reads it. */
+  history?: (taskId: string) => Promise<{ ledger: Ledger | null; runs: RunSummary[] }>;
   /** Runs a host command; the locked-test replay uses it for the project's test command. */
   exec?: (
     command: string,
@@ -109,7 +111,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     ci: extra.ci ?? null,
     holdoutCases: policy.holdoutCases,
     qaTargets: policy.qaTargets,
-    history: extra.history ?? null,
+    history: extra.history ?? ((pack === "implementing" || pack === "reviewing_memory") && deps.history ? await deps.history(task.id) : null),
   });
 
   // Watches the transcript as it streams: a loop on one call is stopped before it spends the turn budget.

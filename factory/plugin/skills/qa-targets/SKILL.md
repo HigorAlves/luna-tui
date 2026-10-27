@@ -45,3 +45,7 @@ Browser QA runs against a **target**: `local` (the dev server booted inside the 
 - Resolved credentials appear in no packet file: not `steps.md`, not `qa-manifest.json`, not the stage answer. Reference the user by its target name (`as admin`).
 - The Playwright `setup` project records no video and no trace so the password is never typed on camera; scenario traces contain the session cookie only — acceptable for test environments, noted in `steps.md` as `Auth: storageState from setup project (user: admin)`.
 - `op://` reads go through `op read` only; the value is never cached.
+
+## In this harness
+
+The stage prompt lists the repo's targets as `name: baseUrl (credential: env:VAR)`, from `qa_target` lines in the repo's `PIPELINE.md`. Map each to the shape above as `{ name, kind: "remote", baseUrl, healthPath: "/", guard: true, users: {}, login: null }`: a listed target is a shared environment until the repo says otherwise, so `@mutating` scenarios score `partial` there. A `credential` reference is for a target whose login the stage can drive from an `env:VAR`; there is no `users`/`login` recipe yet, so an authenticated run against a remote target is a judgment call: prefer the local dev server, and name what was not proven in `summary`. `local` is always available: `browser-qa` Step 1 boots it from `package.json`.

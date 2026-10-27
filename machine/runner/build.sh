@@ -14,12 +14,13 @@ root="$(cd "$here/../.." && pwd)"
 # Each image carries a key over everything that goes into it. An image that already has the
 # current key is left alone, so `pnpm dev` and `pnpm start` cost ~nothing when nothing
 # changed. REBUILD=1 builds anyway (Docker's layer cache still applies).
-key_of() { cat "$@" | shasum | cut -c1-16; }
+key_of() { { printf '%s\n' "$@"; cat "$@"; } | shasum | cut -c1-16; }
 current_key() { docker image inspect -f '{{index .Config.Labels "dev.hardness.build"}}' "$1" 2>/dev/null || true; }
 tree_files() { (cd "$root" && find "$@" -type f -not -path '*/node_modules/*' | LC_ALL=C sort | sed "s#^#$root/#"); }
 
 ref="$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
-mapfile -t inputs < <(tree_files factory contracts/src contracts/package.json; echo "$root/package.json"; echo "$root/pnpm-lock.yaml"; echo "$root/pnpm-workspace.yaml"; echo "$here/Dockerfile")
+inputs=()
+while IFS= read -r f; do inputs+=("$f"); done < <(tree_files factory contracts/src contracts/package.json; echo "$root/package.json"; echo "$root/pnpm-lock.yaml"; echo "$root/pnpm-workspace.yaml"; echo "$here/Dockerfile")
 key="$(key_of "${inputs[@]}")"
 if [ "${REBUILD:-}" != 1 ] && [ "$(current_key hardness-runner:dev)" = "$key" ]; then
   echo "hardness-runner:dev is up to date (factory $key)"

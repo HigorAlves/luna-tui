@@ -33,7 +33,7 @@ Not "can you tell me more about the use case?" but: "Criterion 2 says users can 
 2. Read the codebase context per `code-discovery`: `docs/agents/project-context.md`, `GLOSSARY.md`, recent ADRs, and the subsystems the change touches. When a Graphify graph exists, `graphify god-nodes --json` and `graphify affected "<entrypoint>"` show what the change couples to; verify by reading the cited spans. The graph is a lead, not proof.
 3. Map each ticket statement to a testable criterion. Note what is missing.
 4. Decide every gap with a default, recorded as an assumption; reserve questions for gaps with no reasonable default.
-5. Cut the slices. Call `mcp__luna__step` with a short label as you move through these steps.
+5. Cut the slices per `writing-plans`: vertical, independently committable, each with its touchpoints, an `est_loc` and acceptance that can fail; run its self-review checklist over the brief before answering. Grade `confidence` and `risk` honestly: the controller may approve a high-confidence, low-risk plan without a person. Call `mcp__luna__step` with a short label as you move through these steps.
 
 ## Iron rules
 

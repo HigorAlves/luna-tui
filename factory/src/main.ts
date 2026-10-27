@@ -75,13 +75,15 @@ const options = {
   systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: FACTORY_RULES },
   plugins: [{ type: "local" as const, path: join(FACTORY_ROOT, "plugin") }],
   settingSources: [] as [],
-  tools: pack.tools,
+  // `tools` takes bare names (a scoped rule such as `Bash(git add:*)` is not a name and would
+  // drop Bash); the scoped rules go to `allowedTools`, which is what dontAsk consults.
+  tools: toolNames(pack.tools),
   allowedTools: pack.tools,
   permissionMode: "dontAsk" as const,
   maxTurns: input.limits.maxTurns,
   outputFormat: { type: "json_schema" as const, schema: answerJsonSchema(pack) },
   mcpServers: { luna: luna.server },
-  hooks: { PreToolUse: preToolUseGuards({ writable: pack.writable, branch: input.task.branch || null }) },
+  hooks: { PreToolUse: preToolUseGuards({ writable: pack.writable, branch: input.task.branch || null, workRoot: WORK, outRoot: OUT }) },
   model: pack.model,
   effort: pack.effort,
   env: { ...env, LUNA_FACTORY: "1" },
@@ -156,6 +158,11 @@ if (run.ok && run.structured === null && !run.text) {
   run.error = "no structured output";
 }
 finish(OUT, pack, run, luna.state);
+
+/** The tool names behind a pack's allow-list: `Bash(git add:*)` and `Bash(npm:*)` are one `Bash`. */
+export function toolNames(allowed: string[]): string[] {
+  return [...new Set(allowed.map((t) => t.replace(/\(.*\)$/, "")))];
+}
 
 function skeleton() {
   return {

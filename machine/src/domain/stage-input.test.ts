@@ -109,7 +109,7 @@ describe("buildStageInput", () => {
       const parsed = StageInput.safeParse(input);
       expect(parsed.success, `${stage}: ${JSON.stringify(parsed.error?.issues)}`).toBe(true);
       expect(input.context.qaTargets).toEqual(stage === "e2e" ? qaTargets : undefined);
-      expect(input.context.ledger).toEqual(stage === "reviewing_memory" ? history.ledger : undefined);
+      expect(input.context.ledger).toEqual(stage === "reviewing_memory" || stage === "implementing" ? history.ledger : undefined);
       expect(input.context.runs).toEqual(stage === "reviewing_memory" ? history.runs : undefined);
     }
   });

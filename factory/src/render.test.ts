@@ -68,6 +68,19 @@ describe("renderPrompt", () => {
     expect(prompt.endsWith("\nbody")).toBe(true);
   });
 
+  it("renders the CI facts, the base commit and the QA targets for the packs that read them", () => {
+    const template = "base {{context.baseCommit}}\nci:\n{{context.ci}}\ntargets:\n{{context.qaTargets}}";
+    const ci = { pr: { number: 7, url: "https://x/pr/7" }, checks: [{ name: "test", state: "failure", url: null }], logs: "FAIL a.test.ts" };
+    const qaTargets = [{ name: "staging", baseUrl: "https://stg.example.com", credential: "env:QA_PASSWORD" }, { name: "local", baseUrl: "http://127.0.0.1:3000", credential: null }];
+    const rich = { ...input, context: { ...input.context, baseCommit: "9c1f0e2a", ci, qaTargets } };
+    const prompt = renderPrompt({ pack: PACKS.ci_watch, input: rich, template });
+    expect(prompt).toContain("base 9c1f0e2a");
+    expect(prompt).toContain("PR #7 (https://x/pr/7)\nChecks:\n- test: failure\nFailed run log tail:\n```\nFAIL a.test.ts\n```");
+    expect(prompt).toContain("- staging: https://stg.example.com (credential: env:QA_PASSWORD)\n- local: http://127.0.0.1:3000");
+    const bare = renderPrompt({ pack: PACKS.ci_watch, input, template });
+    expect(bare).toContain("base (none)\nci:\n(none)\ntargets:\n(none)");
+  });
+
   it("names a script pack's agent as script", () => {
     expect(renderPrompt({ pack: PACKS.evidence, input: { ...input, pack: "evidence", stage: "evidence" }, template: "{{agent}}" })).toMatch(/\nscript$/);
   });

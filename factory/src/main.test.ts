@@ -67,7 +67,9 @@ describe("factory main (dry run)", () => {
     expect(prompt).toContain("Keep it small.");
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     expect(options).toMatchObject({ agent: PACKS[pack].agent, agents: [PACKS[pack].agent], model: PACKS[pack].model, effort: PACKS[pack].effort, maxTurns: 5, permissionMode: "dontAsk", settingSources: [], hooks: ["PreToolUse"], mcpServers: ["luna"] });
-    expect(options.tools).toEqual(PACKS[pack].tools);
+    expect(options.allowedTools).toEqual(PACKS[pack].tools);
+    expect(options.tools).toEqual([...new Set(PACKS[pack].tools.map((t) => t.replace(/\(.*\)$/, "")))]);
+    expect(options.tools.every((t: string) => !t.includes("("))).toBe(true);
     expect(options.plugins[0].path).toMatch(/factory\/plugin$/);
     expect(options.systemPrompt).toMatchObject({ type: "preset", preset: "claude_code" });
     expect(StageOutput.safeParse(result).error).toBeUndefined();

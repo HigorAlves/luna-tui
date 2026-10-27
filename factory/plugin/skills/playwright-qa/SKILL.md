@@ -53,7 +53,7 @@ The fixtures read `LUNA_TARGET_JSON` (`{ name, baseUrl, guard, users }`) for `ba
 
 ## 5. Heal (cap 3 per test)
 
-Any failed test → dispatch `playwright-test-healer` with `#healer` when available, else debug it yourself: read `<qa-dir>/pw/results.json` and the trace, fix the locator or wait, re-run `--project=qa`. **At most 3 heal passes per test**; a test still failing maps to `result: "fail"`. When the application behaviour is wrong rather than the test, mark the test `test.fixme()` with a comment starting `APP BUG:` describing what happens instead, map the criterion to `fail` with that comment as `note`, and stop healing it. Heals may edit only files under `<dir>/tests/` — verify with `git diff --name-only` after each heal and re-run the §4 scan.
+Any failed test → debug it yourself: read `<qa-dir>/pw/results.json` and the trace, fix the locator or wait, re-run `--project=qa`. **At most 3 heal passes per test**; a test still failing maps to `result: "fail"`. When the application behaviour is wrong rather than the test, mark the test `test.fixme()` with a comment starting `APP BUG:` describing what happens instead, map the criterion to `fail` with that comment as `note`, and stop healing it. Heals may edit only files under `<dir>/tests/` — verify with `git diff --name-only` after each heal and re-run the §4 scan.
 
 ## 6. Evidence
 

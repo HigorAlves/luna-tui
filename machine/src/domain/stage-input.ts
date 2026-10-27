@@ -99,6 +99,8 @@ export function buildStageInput(opts: {
       ci: opts.ci ?? null,
       ...(pack === "e2e" && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
       ...(pack === "reviewing_memory" && opts.history ? { ledger: opts.history.ledger, runs: opts.history.runs } : {}),
+      // A retry continues the ledger the last attempt left: committed slices are not redone.
+      ...(pack === "implementing" && opts.history?.ledger ? { ledger: opts.history.ledger } : {}),
     },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },

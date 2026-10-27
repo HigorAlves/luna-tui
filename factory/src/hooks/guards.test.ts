@@ -491,3 +491,14 @@ describe("preToolUseGuards", () => {
     await expect(run(0, WRITABLE, "Bash", hostile)).resolves.toEqual(denied(/^guard failed closed: plain string$/));
   });
 });
+
+describe("guardWrite with moved roots", () => {
+  it("jails writes to the given worktree and output folder instead of /work and /out", () => {
+    const ctx = { writable: true, workRoot: "/srv/spike/work", outRoot: "/srv/spike/out" };
+    expect(guardWrite("/srv/spike/work/src/cart.js", ctx)).toBeNull();
+    expect(guardWrite("/srv/spike/out/files/qa/shot.png", ctx)).toBeNull();
+    expect(guardWrite("/srv/spike/work/.git/hooks/pre-commit", ctx)).toMatch(/never written/);
+    expect(guardWrite("/work/src/cart.js", ctx)).toMatch(/outside the writable roots/);
+    expect(guardWrite("/srv/spike/work/src/cart.js", { ...ctx, writable: false })).toMatch(/read-only stage/);
+  });
+});

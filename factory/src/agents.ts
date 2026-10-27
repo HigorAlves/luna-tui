@@ -31,7 +31,7 @@ export function agentDefinitions(pack: Pack, agentsDir: string): Record<string, 
       // so the stage's JSON answer would arrive as text instead of `structured_output`.
       model: pack.model,
       effort: pack.effort,
-      maxTurns: pack.maxTurns,
+      // No `maxTurns` either: the query's own limit is the slice-scaled budget the machine set.
       skills: pack.skills.map((skill) => `${PLUGIN_NAME}:${skill}`),
     },
   };

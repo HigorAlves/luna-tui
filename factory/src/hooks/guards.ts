@@ -17,6 +17,9 @@ export interface GuardContext {
   branchPrefix?: string;
   /** The current branch, when known, so a commit on the wrong branch is refused before git runs. */
   branch?: string | null;
+  /** Where the worktree and the run's output folder are (defaults /work and /out; a host run moves them). */
+  workRoot?: string;
+  outRoot?: string;
 }
 
 const WORK = "/work";
@@ -379,8 +382,10 @@ export function guardWrite(filePath: string, ctx: GuardContext): string | null {
   if (typeof filePath !== "string" || filePath.trim() === "") return "malformed tool input: the file path is empty";
   // A relative path is relative to the worktree; normalize resolves `..`, so a path that
   // escapes a root lands outside it and is refused by the root check below.
+  const WORK = posix.normalize(ctx.workRoot ?? "/work");
+  const OUT = posix.normalize(ctx.outRoot ?? "/out");
   const resolved = posix.normalize(filePath.startsWith("/") ? filePath : posix.join(WORK, filePath));
-  if (isUnder(resolved, WORK) && resolved.split("/").includes(".git")) {
+  if (isUnder(resolved, WORK) && resolved.slice(WORK.length).split("/").includes(".git")) {
     return `${WORK}/.git is never written by a stage: hooks and config belong to the machine`;
   }
   if (isUnder(resolved, OUT) || isUnder(resolved, TMP)) return null;

@@ -131,7 +131,9 @@ export interface Pack {
   template: string;
 }
 
-const READ_ONLY_TOOLS = ["Read", "Glob", "Grep"];
+// Every agent pack carries Skill: an explicit `tools` list hides it otherwise, and the role's skills
+// (`luna-factory:<name>`) are only reachable through it.
+const READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "Skill", ...["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse"].map((c) => `Bash(${c}:*)`)];
 const CHECK_COMMANDS = ["npm", "pnpm", "yarn", "npx", "go", "cargo", "pip", "pytest", "make"].map((c) => `Bash(${c}:*)`);
 const LEDGER_TOOLS = ["mcp__luna__step", "mcp__luna__slice_init", "mcp__luna__slice_set", "mcp__luna__slice_list", "mcp__luna__decision_get"];
 
@@ -139,7 +141,7 @@ export const PACKS: Record<PackId, Pack> = {
   triage: {
     id: "triage",
     agent: "triage-planner",
-    skills: ["code-discovery"],
+    skills: ["writing-plans", "code-discovery"],
     tools: [...READ_ONLY_TOOLS, "WebFetch", "Bash(gh issue view:*)", "mcp__luna__decision_get"],
     writable: false,
     maxTurns: 30,
@@ -178,7 +180,6 @@ export const PACKS: Record<PackId, Pack> = {
       "Bash(git diff:*)",
       "Bash(git status:*)",
       "Bash(git log:*)",
-      "Bash(git rev-parse:*)",
       ...CHECK_COMMANDS,
     ],
     writable: true,
@@ -219,12 +220,11 @@ export const PACKS: Record<PackId, Pack> = {
   e2e: {
     id: "e2e",
     agent: "qa-validator",
-    skills: ["browser-qa", "playwright-qa", "qa-targets"],
+    skills: ["browser-qa", "playwright-qa", "agent-browser", "qa-targets"],
     tools: [
       ...READ_ONLY_TOOLS,
       "Write",
       "Edit",
-      "Skill",
       "Bash(curl:*)",
       "Bash(node:*)",
       "Bash(npm:*)",
@@ -259,7 +259,7 @@ export const PACKS: Record<PackId, Pack> = {
   ci_watch: {
     id: "ci_watch",
     agent: "ci-investigator",
-    skills: ["ci-routing"],
+    skills: ["ci-routing", "review-contract"],
     tools: [
       ...READ_ONLY_TOOLS,
       "Bash(gh run:*)",
