@@ -39,11 +39,6 @@ describe("detectWeb", () => {
     writeFileSync(join(dir, "node_modules", "x", "index.html"), "<html>");
     expect(await detectWeb(dir)).toBe(false);
   });
-  it("is true with .orc/targets.json", async () => {
-    mkdirSync(join(dir, ".orc"));
-    writeFileSync(join(dir, ".orc", "targets.json"), "{}");
-    expect(await detectWeb(dir)).toBe(true);
-  });
 
   it("looks into workspace packages, where a monorepo keeps its web app", async () => {
     pkg({ name: "root", private: true, workspaces: ["apps/*", "packages/*"] });

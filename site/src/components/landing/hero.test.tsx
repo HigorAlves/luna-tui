@@ -17,7 +17,7 @@ describe("Hero", () => {
     for (const check of hero.checks) expect(screen.getByText(check)).toBeTruthy()
   })
 
-  it("draws the ticket + repo + orc = PR equation", () => {
+  it("draws the ticket + repo + factory = PR equation", () => {
     render(<Hero />)
     const figure = screen.getByRole("figure", { name: hero.figureLabel })
     for (const part of [...hero.equation, hero.result]) {

@@ -103,7 +103,7 @@ beforeEach(() => {
   git(repo, "commit", "-q", "-m", "init");
 });
 
-describe("agent stages through orc packs", () => {
+describe("agent stages through packs", () => {
   it("registers a runner for every pack dispatched unmodified; the rest are wrapped in bootstrap", () => {
     const r = runners(fakeSandbox(output()));
     expect(Object.keys(r).sort()).toEqual(["implementing", "test_design", "triage"]);
@@ -143,7 +143,7 @@ describe("agent stages through orc packs", () => {
 
   it.each([
     ["an escalated outcome (schema 2)", { schema: 2 as const, outcome: "escalated" as const }],
-    ["a pass whose answer escalated (schema 1, orc before the escalated outcome)", { outcome: "pass" as const }],
+    ["a pass whose answer escalated (schema 1, runners before the escalated outcome)", { outcome: "pass" as const }],
   ])("reports %s as escalated, with the agent's reason and options", async (_, over) => {
     const answer = { kind: "escalated", summary: "stopped", reason: "needs a new dependency", options: ["add it", "drop it"] };
     const run = runners(fakeSandbox(output({ ...over, summary: "stopped", answer })));
@@ -414,7 +414,7 @@ describe("agent stages through orc packs", () => {
     expect(seen!.onLine!("→ Bash npm test")).toBeNull();
   });
 
-  it("records the commit a writable pass ended on, and mounts a per-task state dir for orc", async () => {
+  it("records the commit a writable pass ended on, and mounts a per-task session dir", async () => {
     const run = runners(fakeSandbox(output(), (r) => {
       writeFileSync(join(r.worktree, "a.txt"), "changed\n");
       git(r.worktree, "add", "-A");
@@ -425,8 +425,8 @@ describe("agent stages through orc packs", () => {
     expect(result.outcome).toBe("pass");
     expect(result.run?.outputCommit).toBe(git(seen!.worktree, "rev-parse", "HEAD"));
     expect(result.run?.outputCommit).not.toBe(result.run?.inputCommit);
-    expect(seen!.stateMount).toBe(join(stateDir, "tasks", ctx.task.id, "orc"));
-    expect(existsSync(seen!.stateMount!)).toBe(true);
+    expect(seen!.sessionMount).toBe(join(stateDir, "tasks", ctx.task.id, "session"));
+    expect(existsSync(seen!.sessionMount!)).toBe(true);
   });
 
   it("gives the sandbox the time budget the stage input carries, not the pack's flat default", async () => {

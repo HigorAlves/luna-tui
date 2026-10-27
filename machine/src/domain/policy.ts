@@ -13,6 +13,15 @@ export interface Policy {
   maxConcurrent: number | null;
   /** Keep test_design's cases away from the implementer, so it cannot overfit to them. */
   holdoutCases: boolean;
+  /** Where the e2e stage may drive the app, besides the dev server it boots itself. */
+  qaTargets: QaTarget[];
+}
+
+/** `qa_target: <name> <base url> [credential ref]`, one line per target; the ref is `env:NAME`. */
+export interface QaTarget {
+  name: string;
+  baseUrl: string;
+  credential: string | null;
 }
 
 export const DEFAULT_POLICY: Policy = {
@@ -21,6 +30,7 @@ export const DEFAULT_POLICY: Policy = {
   autoApprovePlanMinutes: null,
   maxConcurrent: null,
   holdoutCases: false,
+  qaTargets: [],
 };
 
 export class PolicyParseError extends Error {
@@ -65,9 +75,17 @@ function frontMatter(text: string): Array<{ line: number; key: string; value: st
   return rows;
 }
 
+const qaTarget = (key: string, raw: string): QaTarget => {
+  const [name, baseUrl, credential, ...rest] = raw.split(/\s+/).filter(Boolean);
+  if (!name || !baseUrl || rest.length > 0) throw new PolicyParseError(`${key} must be "<name> <base url> [credential ref]", got "${raw}"`);
+  if (!/^https?:\/\//.test(baseUrl)) throw new PolicyParseError(`${key}: base url must start with http:// or https://, got "${baseUrl}"`);
+  if (credential && !/^env:[A-Z_][A-Z0-9_]*$/.test(credential)) throw new PolicyParseError(`${key}: credential must be a reference like env:QA_PASSWORD, never a value`);
+  return { name, baseUrl, credential: credential ?? null };
+};
+
 /** The policy a PIPELINE.md declares; unknown keys are ignored, a bad value throws. */
 export function parsePolicy(text: string): Policy {
-  const policy: Policy = { ...DEFAULT_POLICY };
+  const policy: Policy = { ...DEFAULT_POLICY, qaTargets: [] };
   for (const { key, value } of frontMatter(text)) {
     switch (key) {
       case "qa":
@@ -85,6 +103,9 @@ export function parsePolicy(text: string): Policy {
         break;
       case "holdout_cases":
         policy.holdoutCases = bool(key, value);
+        break;
+      case "qa_target":
+        policy.qaTargets.push(qaTarget(key, value));
         break;
       default:
         break;

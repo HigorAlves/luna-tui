@@ -1,5 +1,5 @@
-// The reviewing_memory stage: the retro pack reads `.orc/` and `git log` in the worktree and
-// proposes additions to `docs/agents/project-context.md`. This wrapper shapes the approval's
+// The reviewing_memory stage: the retro pack reads the task's ledger and runs from its stage
+// input and `git log` in the worktree, and proposes additions to `docs/agents/project-context.md`. This wrapper shapes the approval's
 // `requested.rules` from the pack's answer and the host copy of its `rules.md` artifact, and
 // owns the merge that the close step applies when the proposal is approved.
 import { readFile } from "node:fs/promises";

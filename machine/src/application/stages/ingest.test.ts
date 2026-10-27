@@ -72,9 +72,9 @@ describe("ingestStageOutput", () => {
     const ingested = await ingestStageOutput({ outDir, runId: "run1", stateDir });
 
     expect(ingested.output.summary).toBe("done");
-    expect(ingested.events.map((e) => e.kind)).toEqual(["tool", "orc.malformed", "note"]);
+    expect(ingested.events.map((e) => e.kind)).toEqual(["tool", "stage.malformed", "note"]);
     expect(ingested.events[1]?.payload).toEqual({ line: "not json" });
-    // orc's artifact paths are relative to /out and already start with files/; the copy
+    // Artifact paths are relative to /out and already start with files/; the copy
     // must not double it, or evidence (which reads runs/<id>/files/qa/) never finds a manifest.
     const dest = join(stateDir, "runs", "run1", "files", "r.md");
     expect(ingested.artifacts).toEqual([

@@ -8,7 +8,7 @@ import { GitHub } from "@/components/landing/github"
 import { Hero } from "@/components/landing/hero"
 import { How } from "@/components/landing/how"
 import { Moments } from "@/components/landing/moments"
-import { Orc } from "@/components/landing/orc"
+import { Factory } from "@/components/landing/factory"
 import { Pricing } from "@/components/landing/pricing"
 import { Repos } from "@/components/landing/repos"
 import { SiteFooter } from "@/components/site-footer"
@@ -37,7 +37,7 @@ export default function Home() {
           <Features />
         </Reveal>
         <Reveal>
-          <Orc />
+          <Factory />
         </Reveal>
         <Reveal>
           <Moments />

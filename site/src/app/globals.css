@@ -16,7 +16,7 @@
   --color-commit-2: var(--commit-2);
   --color-commit-3: var(--commit-3);
   --color-commit-4: var(--commit-4);
-  --color-orc: var(--orc);
+  --color-factory: var(--factory);
   --color-warning: var(--warning);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
@@ -85,7 +85,7 @@
   --commit-2: #006d32;
   --commit-3: #26a641;
   --commit-4: #39d353;
-  --orc: #4f8f2f;
+  --factory: #4f8f2f;
   --warning: #f5c451;
   --chart-1: #39d353;
   --chart-2: #26a641;

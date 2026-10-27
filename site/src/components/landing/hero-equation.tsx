@@ -20,13 +20,14 @@ const result: Variants = {
 const bar: Variants = { hidden: { scaleX: 0 }, show: { scaleX: 1, transition: { duration: 0.45, ease } } }
 const pop: Variants = { hidden: { opacity: 0, scale: 0 }, show: { opacity: 1, scale: 1, transition: { type: "spring", stiffness: 420, damping: 18, delay: 0.15 } } }
 
-/** The orc mark: a ring with two tusks. */
-function OrcMark({ className }: { className?: string }) {
+/** The factory mark: a small gear. */
+function FactoryMark({ className }: { className?: string }) {
   return (
     <svg viewBox="6 7 52 52" aria-hidden="true" className={className}>
-      <circle cx="32" cy="33" r="20" fill="none" stroke="currentColor" strokeWidth="9" />
-      <path fill="currentColor" d="M22 47C22 41 23.5 37 26.5 33C26.5 38 27.5 44 28.5 50Z" />
-      <path fill="currentColor" d="M42 47C42 41 40.5 37 37.5 33C37.5 38 36.5 44 35.5 50Z" />
+      <circle cx="32" cy="33" r="14" fill="none" stroke="currentColor" strokeWidth="8" />
+      {[0, 45, 90, 135, 180, 225, 270, 315].map((a) => (
+        <rect key={a} x="28" y="9" width="8" height="8" rx="1.5" fill="currentColor" transform={`rotate(${a} 32 33)`} />
+      ))}
     </svg>
   )
 }
@@ -34,7 +35,7 @@ function OrcMark({ className }: { className?: string }) {
 const tiles: { icon: ReactNode; halo: string }[] = [
   { icon: <CircleDotIcon className="size-8 text-foreground" />, halo: "bg-white/[0.06]" },
   { icon: <FolderGit2Icon className="size-8 text-muted-foreground" />, halo: "bg-white/[0.06]" },
-  { icon: <OrcMark className="size-8 text-orc" />, halo: "bg-orc/20" },
+  { icon: <FactoryMark className="size-8 text-factory" />, halo: "bg-factory/20" },
 ]
 
 function Tile({ index, icon, halo }: { index: number; icon: ReactNode; halo: string }) {
@@ -80,7 +81,7 @@ const Bar = ({ className, style }: { className: string; style?: React.CSSPropert
 )
 
 export function HeroEquation() {
-  const [ticket, repo, orc] = hero.equation
+  const [ticket, repo, factory] = hero.equation
   return (
     <MotionConfig reducedMotion="user">
       <motion.figure
@@ -98,7 +99,7 @@ export function HeroEquation() {
 
         <Label name={ticket!.name} tag={ticket!.tag} className="col-start-1 row-start-2" />
         <Label name={repo!.name} tag={repo!.tag} className="col-start-3 row-start-2" />
-        <Label name={orc!.name} tag={orc!.tag} className="col-start-5 row-start-2" />
+        <Label name={factory!.name} tag={factory!.tag} className="col-start-5 row-start-2" />
 
         {/* Mobile: the three tiles merge into one line down to the result. */}
         <div aria-hidden="true" className="relative col-span-5 col-start-1 row-start-3 h-[76px] w-[306px] sm:hidden">

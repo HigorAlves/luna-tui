@@ -3,6 +3,7 @@ import { z } from "zod";
 
 export * from "./api.ts";
 export * from "./stage.ts";
+export * from "./packs.ts";
 
 /** Board columns, named after the harness stages. Same order as the Rust board. */
 export const COLUMNS = [

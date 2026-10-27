@@ -5,7 +5,7 @@
 - Docker (for Postgres and the stage containers)
 - Node 24+ and pnpm
 - Rust (to build the board)
-- orc, which the stage images bake in: a checkout next to this repo or at `ORC_PATH` (otherwise its `main` is cloned). `pnpm start` and `pnpm dev` build both images first (`pnpm images`): the runner image and the QA image on top of it, which adds Playwright with Chromium, ffmpeg and agent-browser (about 2 GB more disk: 3.9 GB against 1.9 GB). The first build takes a while; later ones reuse Docker's cache.
+- Nothing else. `pnpm start` and `pnpm dev` build both stage images first (`pnpm images`) from this checkout: the runner image (the factory runner and the Agent SDK) and the QA image on top of it, which adds Playwright with Chromium, ffmpeg and agent-browser (about 2 GB more disk: 3.9 GB against 1.9 GB). The first build takes a while; later ones reuse Docker's cache.
 - [herdr](https://herdr.dev/), to run the board as a plugin
 
 ## Quick start
@@ -26,7 +26,7 @@ Both use the same database, so tasks carry over when you switch. For board usage
 ## Checks
 
 ```sh
-pnpm test             # machine and contracts
+pnpm test             # machine, contracts and factory
 pnpm typecheck
 pnpm board:test       # board
 pnpm golden           # end-to-end, needs a running machine
@@ -37,7 +37,7 @@ pnpm golden           # end-to-end, needs a running machine
 - `pnpm golden:live`: abort, retry and concurrency paths in sequence. Needs a running machine with a credential and docker; concurrency needs the machine started with `MACHINE_MAX_CONCURRENT=1`.
 - `pnpm --filter @hardness/machine smoke:sandbox`: runs the `evidence` and a dry-run `implementing` pack in the hardened container. Needs docker and `runner:build`; no machine or credential.
 - `pnpm golden --selftest`: fixtures only. No machine, credential or docker.
-- `pnpm vendor:orc`: copies orc's packs and stage schemas into `contracts/fixtures/orc/` (from `ORC_PATH`, else the sibling `../orc`). The conformance tests in `contracts` and `machine` run against that copy, so a change on either side of the seam fails a test here instead of a real task. Re-run it whenever you bump orc; the test tells you when the copy is stale.
+- `pnpm --filter @hardness/factory test`: the runner's own tests: the guards, the prompt renderer, the ledger tools, the result writer, and a dry run of every pack.
 
 `pnpm golden --matrix` runs every ticket of `fixtures/golden-task`, `golden-web` and `golden-cli` (a bug and a feature each) and grades the suite, stages, stubs, evidence verdict, cost and diff size. It exits 1 under an 80% pass rate and writes `golden-result.json`; `--only <fixture>`, `--ceiling-usd` and `--threshold` tune it. The nightly `golden` workflow runs it. `node machine/scripts/golden-task.mjs --selftest` checks the fixtures without a machine.
 

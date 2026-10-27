@@ -19,19 +19,19 @@ function run(over: Partial<SandboxRun> = {}): SandboxRun {
 }
 
 describe("sandboxArgs", () => {
-  it("hardens the container and points HOME, TMPDIR and orc state at the tmpfs", () => {
+  it("hardens the container and points HOME, TMPDIR and the SDK's config dir at the tmpfs", () => {
     const args = sandboxArgs(run(), "/state/runs/r1/in", "/state/runs/r1/out");
     expect(args).toEqual(expect.arrayContaining(["--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges"]));
-    for (const env of ["HOME=/tmp", "TMPDIR=/tmp", "ORC_STATE_DIR=/tmp/orc-state"]) {
+    for (const env of ["HOME=/tmp", "TMPDIR=/tmp", "CLAUDE_CONFIG_DIR=/tmp/claude"]) {
       expect(args.join(" ")).toContain(`-e ${env}`);
     }
   });
 
-  it("keeps orc's state on the host when given a state mount, so a ledger survives the attempt", () => {
-    const args = sandboxArgs(run({ stateMount: "/state/tasks/t1/orc" }), "/in", "/out");
-    expect(args).toEqual(expect.arrayContaining(["-v", "/state/tasks/t1/orc:/state", "-e", "ORC_STATE_DIR=/state"]));
-    expect(args).not.toContain("ORC_STATE_DIR=/tmp/orc-state");
-    expect(sandboxArgs(run(), "/in", "/out")).toContain("ORC_STATE_DIR=/tmp/orc-state");
+  it("keeps the SDK's sessions on the host when given a session mount, so a session survives the attempt", () => {
+    const args = sandboxArgs(run({ sessionMount: "/state/tasks/t1/session" }), "/in", "/out");
+    expect(args).toEqual(expect.arrayContaining(["-v", "/state/tasks/t1/session:/session", "-e", "CLAUDE_CONFIG_DIR=/session"]));
+    expect(args).not.toContain("CLAUDE_CONFIG_DIR=/tmp/claude");
+    expect(sandboxArgs(run(), "/in", "/out")).toContain("CLAUDE_CONFIG_DIR=/tmp/claude");
   });
 
   it("caps memory, cpu and process count, so a runaway stage cannot take the machine down", () => {
@@ -47,9 +47,9 @@ describe("sandboxArgs", () => {
   });
 
   it("mounts the git dir read-only and passes extraEnv", () => {
-    const args = sandboxArgs(run({ gitDir: "/g/.git", extraEnv: { ORC_STAGE_DRY_RUN: "1" } }), "/i", "/o");
+    const args = sandboxArgs(run({ gitDir: "/g/.git", extraEnv: { LUNA_STAGE_DRY_RUN: "1" } }), "/i", "/o");
     expect(args).toContain("/g/.git:/g/.git:ro");
-    expect(args.join(" ")).toContain("-e ORC_STAGE_DRY_RUN=1");
+    expect(args.join(" ")).toContain("-e LUNA_STAGE_DRY_RUN=1");
   });
 
   it("mounts the git dir writable for a writable stage, which commits", () => {

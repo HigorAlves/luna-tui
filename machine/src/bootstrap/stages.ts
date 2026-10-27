@@ -3,6 +3,8 @@
 // for real, and the stub fallback.
 import type { TaskState } from "@hardness/contracts";
 
+import type { Ledger, RunSummary } from "@hardness/contracts";
+
 import type { Config } from "../config.ts";
 import type { Watcher } from "../application/ports.ts";
 import { agentRunners, runAgent } from "../application/stages/pack-runner.ts";
@@ -27,11 +29,15 @@ export interface RealStagesResult {
 }
 
 /** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
+/** What the retro reads about a task: the last implementing ledger and every earlier run. */
+export type TaskHistory = (taskId: string) => Promise<{ ledger: Ledger | null; runs: RunSummary[] }>;
+
 export async function buildRealStages(
   config: Config,
   watcher: Watcher,
   latestE2e: EvidenceDeps["latestE2e"],
   policies: PolicyStore = new PolicyStore(),
+  history?: TaskHistory,
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -81,7 +87,7 @@ export async function buildRealStages(
     shipping: withMemoryReview(
       shipRunner,
       memoryReviewRunner({
-        runPack: (context) => runAgent(deps, context, "reviewing_memory"),
+        runPack: async (context) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null }),
         stateDir: config.stateDir,
       }),
     ),

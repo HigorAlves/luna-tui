@@ -1,0 +1,21 @@
+{
+  "name": "@hardness/factory",
+  "private": true,
+  "type": "module",
+  "description": "Runs one pipeline stage inside the stage container through the Claude Agent SDK",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "stage": "node src/main.ts"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.311",
+    "@hardness/contracts": "workspace:*",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

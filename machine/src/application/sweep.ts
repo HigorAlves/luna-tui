@@ -60,7 +60,7 @@ export async function sweepRunFolders(db: DataSource, stateDir: string): Promise
   return orphans.length;
 }
 
-/** Removes `<stateDir>/tasks/<id>` (orc's per-task state, the slice ledger) for tasks that no
+/** Removes `<stateDir>/tasks/<id>` (the per-task session dir) for tasks that no
  *  longer exist; a deleted task's dir would otherwise stay forever. Returns how many went. */
 export async function sweepTaskState(db: DataSource, stateDir: string): Promise<number> {
   const tasksDir = join(stateDir, "tasks");

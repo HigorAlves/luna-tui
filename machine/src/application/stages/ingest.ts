@@ -63,14 +63,14 @@ export async function ingestStageOutput(opts: {
         payload: item.payload && typeof item.payload === "object" ? item.payload : {},
       });
     } catch {
-      events.push({ at: new Date().toISOString(), kind: "orc.malformed", payload: { line } });
+      events.push({ at: new Date().toISOString(), kind: "stage.malformed", payload: { line } });
     }
   }
 
   const artifacts: IngestedArtifact[] = [];
   const base = join(stateDir, "runs", runId, "files");
   for (const artifact of output.artifacts) {
-    // orc's paths are relative to /out and already start with files/ (files/qa/qa-manifest.json);
+    // Artifact paths are relative to /out and already start with files/ (files/qa/qa-manifest.json);
     // mirror them under runs/<id>/files/ without doubling that prefix, which is where the
     // evidence stage (runs/<id>/files/qa/) and the board expect them.
     const dest = join(base, artifact.path.replace(/^files\//, ""));
@@ -108,6 +108,8 @@ export function toStageResult({ output, events, artifacts }: Ingested): StageRes
       commit: output.commit,
       error: output.error,
       ...(output.resetsAt !== null ? { resetsAt: output.resetsAt } : {}),
+      ...(output.ledger ? { ledger: output.ledger } : {}),
+      ...(output.sessionId ? { sessionId: output.sessionId } : {}),
     },
     usage: { turns: output.usage.turns, costUsd: output.usage.costUsd },
     needsInput: output.needsInput ?? undefined,

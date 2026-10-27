@@ -71,9 +71,10 @@ export interface SandboxRun {
   onStarted?: (container: string) => void;
   /** Sees each transcript line as it streams; a returned reason stops the container as stuck. */
   onLine?: (line: string) => string | null;
-  /** Host dir mounted at /state for orc's own state (the slice ledger), so it outlives the
-   *  attempt and can be read from outside; without it, state lives on the tmpfs. */
-  stateMount?: string;
+  /** Host dir mounted at /session for the SDK's session transcripts (`CLAUDE_CONFIG_DIR`),
+   *  so a session outlives the attempt and a later run can resume it; without it, sessions
+   *  live on the tmpfs and die with the container. */
+  sessionMount?: string;
   /** The repo's cache volume (`cacheVolumeFor`), mounted at /cache with the package managers pointed at it. */
   cacheVolume?: string;
   /** The container is already running (a restart found it): wait on it instead of starting one. */
@@ -103,9 +104,9 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     // otherwise hit the now-read-only root filesystem — point HOME at the one writable,
     // throwaway place left: the tmpfs above.
     "-e", "HOME=/tmp",
-    // Temp files live on the tmpfs; orc's state too, unless a host dir is mounted for it below.
+    // Temp files live on the tmpfs; the SDK's sessions too, unless a host dir is mounted below.
     "-e", "TMPDIR=/tmp",
-    "-e", `ORC_STATE_DIR=${run.stateMount ? "/state" : "/tmp/orc-state"}`,
+    "-e", `CLAUDE_CONFIG_DIR=${run.sessionMount ? "/session" : "/tmp/claude"}`,
     // The credential is passed by name; its value is only in docker's environment.
     "-e", run.credential.name,
     // The worktree is owned by the host user, not the container's; and there is no gpg key
@@ -119,7 +120,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     "-v", `${inDir}:/in:ro`,
     "-v", `${outDir}:/out`,
   );
-  if (run.stateMount) args.push("-v", `${run.stateMount}:/state`);
+  if (run.sessionMount) args.push("-v", `${run.sessionMount}:/session`);
   args.push(...cacheArgs(run.cacheVolume));
   if (run.gitDir) {
     args.push("-v", `${run.gitDir}:${run.gitDir}${run.writable ? "" : ":ro"}`);

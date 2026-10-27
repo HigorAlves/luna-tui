@@ -15,15 +15,15 @@ export function collectFacts(repoRoot) {
   const contracts = readFileSync(join(repoRoot, "contracts/src/index.ts"), "utf8")
   const columns = contracts.match(/COLUMNS\s*=\s*\[([^\]]*)\]/)?.[1]
   const states = contracts.match(/TaskState\s*=\s*z\.enum\(\[([^\]]*)\]/)?.[1]
-  const input = readFileSync(join(repoRoot, "machine/src/domain/stage-input.ts"), "utf8")
-  const limits = input.match(/PACK_LIMITS[^=]*=\s*\{([\s\S]*?)\n\};/)?.[1]
-  if (columns === undefined || states === undefined || limits === undefined) throw new Error("facts: could not parse contracts or PACK_LIMITS")
+  const registry = readFileSync(join(repoRoot, "contracts/src/packs.ts"), "utf8")
+  const packs = registry.match(/PACKS[^=]*=\s*\{([\s\S]*?)\n\};/)?.[1]
+  if (columns === undefined || states === undefined || packs === undefined) throw new Error("facts: could not parse contracts or PACKS")
   const machine = join(repoRoot, "machine")
   const images = readdirSync(machine, { withFileTypes: true }).filter((d) => d.isDirectory() && existsSync(join(machine, d.name, "Dockerfile"))).length
   return {
     states: quoted(states),
     columns: quoted(columns),
-    packs: [...limits.matchAll(/^\s{2}(\w+):\s*\{/gm)].length,
+    packs: [...packs.matchAll(/^\s{2}(\w+):\s*\{/gm)].length,
     images,
   }
 }

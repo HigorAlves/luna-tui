@@ -1,6 +1,6 @@
-// The stages that run as orc packs in a sandbox: the machine writes a StageInput, the
-// container runs `orc-stage run`, and the machine ingests what the pack left in /out.
-import type { CiContext, PackId, TaskState } from "@hardness/contracts";
+// The stages that run as packs in a sandbox: the machine writes a StageInput, the container
+// runs the factory runner, and the machine ingests what the pack left in /out.
+import type { CiContext, Ledger, PackId, RunSummary, TaskState } from "@hardness/contracts";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -66,6 +66,8 @@ const GIT_READ_ONLY = ["hooks", "config"];
 export interface AgentExtra {
   /** ci_watch: what the host fetched about the PR's CI, since the sandbox has no gh credential. */
   ci?: CiContext | null;
+  /** reviewing_memory: the last implementing ledger and every earlier run, from the machine's records. */
+  history?: { ledger: Ledger | null; runs: RunSummary[] } | null;
 }
 
 export async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}): Promise<StageResult> {
@@ -106,18 +108,20 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     baseCommit: await branchBase(workspace.path, task.repoPath),
     ci: extra.ci ?? null,
     holdoutCases: policy.holdoutCases,
+    qaTargets: policy.qaTargets,
+    history: extra.history ?? null,
   });
 
   // Watches the transcript as it streams: a loop on one call is stopped before it spends the turn budget.
   const detector = new StuckDetector();
-  // orc's own state (the slice ledger) lives per task on the host: it outlives the attempt
-  // and you can read it; a stage no longer re-seeds it blind.
-  const stateMount = join(deps.stateDir, "tasks", task.id, "orc");
-  await mkdir(stateMount, { recursive: true });
+  // The SDK's session transcripts live per task on the host: a session outlives the attempt,
+  // you can read it, and a later run can resume it.
+  const sessionMount = join(deps.stateDir, "tasks", task.id, "session");
+  await mkdir(sessionMount, { recursive: true });
   const sandbox = await (deps.sandbox ?? runSandbox)({
     name: container,
     attach: Boolean(resume),
-    stateMount,
+    sessionMount,
     cacheVolume: cacheVolumeFor(task.repoPath),
     image: pack === "e2e" ? deps.qaImage : deps.image,
     runDir,
@@ -203,7 +207,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     return merged({ ...mapped, detail: { request: output.summary } });
   }
 
-  // The agent stopped on purpose. orc before the `escalated` outcome reported this as a pass.
+  // The agent stopped on purpose. Runners before the `escalated` outcome reported this as a pass.
   const stopped = answerOf(output.answer);
   if (output.outcome === "escalated" || stopped?.kind === "escalated") {
     return dirty(
@@ -330,7 +334,7 @@ const answerOf = (answer: unknown): Record<string, unknown> | undefined =>
 // blanket map below only needs the packs that are dispatched unmodified.
 const AGENT_PACKS: PackId[] = ["triage", "test_design", "implementing"];
 
-/** Runners for the stages that run as orc packs. Every other stage stays a stub. */
+/** Runners for the stages that run as packs. Every other stage stays a stub. */
 export function agentRunners(deps: AgentDeps): Partial<Record<TaskState, StageRunner>> {
   return Object.fromEntries(
     AGENT_PACKS.map((pack) => [pack, (context: StageContext) => runAgent(deps, context, pack)]),

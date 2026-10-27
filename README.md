@@ -3,11 +3,11 @@
 
 # Luna TUI
 
-**A board in your terminal that runs orc as a software factory. You keep the final say.**
+**A board in your terminal that runs a software factory. You keep the final say.**
 
 </div>
 
-Luna waits on Claude in your [notch](https://github.com/HigorAlves/luna-notch); Luna TUI runs the factory in your terminal; [orc](https://github.com/HigorAlves/orc) is the engine both drive.
+Luna waits on Claude in your [notch](https://github.com/HigorAlves/luna-notch); Luna TUI runs the factory in your terminal.
 
 Luna TUI is a local dev harness for working with AI coding agents. You plan
 tickets on a board inside [herdr](https://herdr.dev/); a machine then moves each
@@ -16,7 +16,7 @@ containers, and stops at approval gates so you stay in control.
 
 ## Pipeline
 
-Every ticket moves Intake → Triage → Build → Verify → E2E/Evidence → Deliver → CI watch → Ship → Done, with an approval gate at the big steps. Triage and Build run as [orc](https://github.com/HigorAlves/orc) stage packs in a throwaway Docker container; Deliver, Ship and CI watch are plain `git`/`gh` host commands. Full stage-by-stage detail: [docs/architecture.md](docs/architecture.md).
+Every ticket moves Intake → Triage → Build → Verify → E2E/Evidence → Deliver → CI watch → Ship → Done, with an approval gate at the big steps. The agent stages run as stage packs in a throwaway Docker container through the Claude Agent SDK, with the roles, prompts, skills and guardrails that live in [`factory/`](factory/); Deliver, Ship and CI watch are plain `git`/`gh` host commands. Everything needed is in this repository: clone it, run it. Full stage-by-stage detail: [docs/architecture.md](docs/architecture.md).
 
 ## Install
 

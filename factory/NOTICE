@@ -1,0 +1,8 @@
+The contents of prompts/, agents/ and plugin/skills/ in this directory were
+copied on 2026-10-27 from https://github.com/HigorAlves/orc at commit
+9ef37bd3b1a8e11459ae2ab80ba6d3d31cb5f183 (MIT licensed) and then edited here
+for factory mode. They are maintained in this repository from now on; the
+upstream copies are not tracked.
+
+Individual skills keep their own upstream attribution in the `metadata.source`
+line of their SKILL.md frontmatter where one was present.

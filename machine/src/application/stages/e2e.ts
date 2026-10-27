@@ -44,14 +44,10 @@ async function webPackage(dir: string): Promise<boolean> {
 }
 
 /** The dirs a browser can open, relative to the worktree: "" when the repo itself is a web
- *  package (or carries an index.html / .orc/targets.json), plus each workspace app that is. */
+ *  package (or carries an index.html), plus each workspace app that is. */
 export async function webRoots(worktreePath: string): Promise<string[]> {
   const roots: string[] = [];
-  if (
-    (await isFile(join(worktreePath, ".orc", "targets.json"))) ||
-    (await webPackage(worktreePath)) ||
-    (await isFile(join(worktreePath, "index.html")))
-  ) {
+  if ((await webPackage(worktreePath)) || (await isFile(join(worktreePath, "index.html")))) {
     roots.push("");
   }
   try {
@@ -123,7 +119,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
 
     const answer = (pack.detail?.answer ?? {}) as Record<string, unknown>;
     const verdict = typeof answer.verdict === "string" ? answer.verdict : undefined;
-    // `skipped` is not a result.json outcome; orc reports it as a pass, and so do we.
+    // `skipped` is not a result.json outcome; the runner reports it as a pass, and so do we.
     const passed = verdict === "pass" || verdict === "skipped";
     const summary = typeof answer.summary === "string" ? answer.summary : String(pack.detail?.summary ?? "");
     return {

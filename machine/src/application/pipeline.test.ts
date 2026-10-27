@@ -121,7 +121,6 @@ describe("closing", () => {
       closeDeps: {
         exec: async () => ({ code: 0, stdout: "", stderr: "" }),
         worktreeRemove: false,
-        orcStateBin: null,
         watcher: { close: async (id) => void seen.push(id) },
       },
     });
@@ -132,7 +131,7 @@ describe("closing", () => {
     expect((await closing.get(created.id)).state).toBe("closed");
     const event = (await closing.events(created.id)).find((e) => e.kind === "task.closed");
     const report = event?.payload as unknown as CloseReport;
-    expect(report.steps.map((s) => s.step)).toEqual(["orc-state", "watch-tab", "worktree"]);
+    expect(report.steps.map((s) => s.step)).toEqual(["watch-tab", "worktree"]);
     expect(seen).toEqual([created.id]);
   });
 
@@ -142,7 +141,6 @@ describe("closing", () => {
       closeDeps: {
         exec: async () => ({ code: 0, stdout: "", stderr: "" }),
         worktreeRemove: false,
-        orcStateBin: null,
         watcher: { close: async () => Promise.reject(new Error("herdr down")) },
       },
     });
@@ -162,7 +160,7 @@ describe("memory review decision", () => {
   const closing = () =>
     new Pipeline(db, stubs.runnerFor, {
       inline: true,
-      closeDeps: { exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreeRemove: false, orcStateBin: null },
+      closeDeps: { exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreeRemove: false },
     });
 
   async function toMemoryGate(p: Pipeline) {
@@ -511,7 +509,7 @@ describe("spend per task", () => {
 });
 
 describe("the stuck detector", () => {
-  const same = { outcome: "fail" as const, detail: { error: "implementer left uncommitted changes: ?? .orc/x/slices.json" } };
+  const same = { outcome: "fail" as const, detail: { error: "implementer left uncommitted changes: ?? .cache/x/slices.json" } };
 
   it("escalates a stage that fails the same way three times instead of spending the whole retry cap", async () => {
     stubs.plan("implementing", same, same, same);
@@ -1237,7 +1235,7 @@ describe("rate limits", () => {
     expect(resumed.state).toBe("awaiting_ship");
   });
 
-  it("schedules the resume from a string resetsAt, the shape orc actually writes", async () => {
+  it("schedules the resume from a string resetsAt, the shape older runners wrote", async () => {
     vi.useFakeTimers();
     try {
       const inOneHour = Math.floor(Date.now() / 1000) + 3600;
@@ -1379,18 +1377,18 @@ describe("ingested stage output", () => {
     const task = await newTask();
     stubs.plan("triage", {
       outcome: "pass",
-      events: [{ at: "2026-01-01T00:00:00Z", kind: "tool", payload: { name: "Read" } }, { at: "t", kind: "orc.note", payload: {} }],
+      events: [{ at: "2026-01-01T00:00:00Z", kind: "tool", payload: { name: "Read" } }, { at: "t", kind: "stage.note", payload: {} }],
       artifacts: [{ kind: "report", path: "/tmp/r.md", label: "R", sha256: "abc" }],
       usage: { turns: 4, costUsd: 0.25 },
     });
     await pipeline.start(task.id);
 
     const kinds = (await pipeline.events(task.id)).map((e) => e.kind);
-    expect(kinds).toContain("orc.tool");
-    expect(kinds).toContain("orc.note");
-    expect(kinds).not.toContain("orc.orc.note");
+    expect(kinds).toContain("stage.tool");
+    expect(kinds).toContain("stage.note");
+    expect(kinds).not.toContain("stage.stage.note");
     const [run] = await pipeline.stageRuns(task.id);
-    const tool = (await pipeline.events(task.id)).find((e) => e.kind === "orc.tool");
+    const tool = (await pipeline.events(task.id)).find((e) => e.kind === "stage.tool");
     expect(tool).toMatchObject({ stageRunId: run?.id, payload: { name: "Read", at: "2026-01-01T00:00:00Z" } });
     expect(await pipeline.artifacts(task.id)).toMatchObject([
       { kind: "report", path: "/tmp/r.md", label: "R", sha256: "abc", stageRunId: run?.id },

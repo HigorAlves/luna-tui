@@ -1,0 +1,77 @@
+// Renders a pack's prompt: the factory header, the answer schema, then the template with
+// its {{placeholders}} filled from the stage input. Pure: the caller passes the template and
+// the project context, so a test needs no files.
+import type { Pack, StageInput } from "@hardness/contracts";
+import { answerJsonSchema } from "@hardness/contracts";
+
+const NONE = "(none)";
+
+const txt = (value: unknown): string => (value == null || value === "" ? NONE : String(value));
+const bullets = (value: unknown): string =>
+  Array.isArray(value) && value.length > 0 ? value.map((item) => `- ${String(item)}`).join("\n") : NONE;
+
+const decisionLine = (d: StageInput["decisions"][number]): string => {
+  const why = d.reason && d.reason !== "" ? d.reason : Object.keys(d.answers ?? {}).length > 0 ? JSON.stringify(d.answers) : NONE;
+  return `- ${d.decision} at ${d.at}: ${why}`;
+};
+
+const findingLine = (f: StageInput["priorFindings"][number]): string => `- ${f.severity} ${f.path}:${f.line} ${f.title}`;
+
+/** The rules every stage runs under; appended to the system prompt and restated in the header. */
+export const FACTORY_RULES = [
+  "You are running in factory mode (LUNA_FACTORY=1): no human is present. A controller wrote /in/stage.json and reads your final answer as the stage result.",
+  "Never call AskUserQuestion. A question you cannot settle from the stage input ends the stage: answer with kind \"questions\" (at most three, each with a recommended answer).",
+  "Never push, never open or edit pull requests, never post reviews or write to a tracker. An outward action goes in requested[] for the board to approve.",
+  "Never write outside /work and /out. Never touch /work/.git directly.",
+  "Report progress with the mcp__luna__step tool when it is available; it is a label for the board, not a gate.",
+  "Answer ONLY with the JSON object matching the stage's output schema. No text before or after.",
+].join("\n");
+
+export interface RenderInput {
+  pack: Pack;
+  input: StageInput;
+  template: string;
+  /** The worktree's docs/agents/project-context.md, when the input carries none. */
+  projectContext?: string | null;
+}
+
+/** The prompt the model gets. */
+export function renderPrompt({ pack, input, template, projectContext }: RenderInput): string {
+  const agent = pack.agent ?? "script";
+  const context = input.context.projectContext ?? projectContext ?? null;
+  const subs: Record<string, string> = {
+    "{{task.title}}": txt(input.task.title),
+    "{{task.description}}": txt(input.task.description),
+    "{{task.criteria}}": bullets(input.task.criteria),
+    "{{task.branch}}": txt(input.task.branch),
+    "{{plan.brief}}": txt(input.plan?.brief),
+    "{{plan.criteria}}": bullets(input.plan?.criteria),
+    "{{plan.assumptions}}": bullets(input.plan?.assumptions),
+    "{{plan.slices}}": bullets(
+      (input.plan?.slices ?? []).map((s, i) => {
+        const slice = s as { title?: string; est_loc?: number; touchpoints?: string[]; acceptance?: string[] };
+        return `${i + 1}. ${slice.title ?? "(untitled)"} (~${slice.est_loc ?? "?"} LOC; touches ${(slice.touchpoints ?? []).join(", ") || "?"}): ${(slice.acceptance ?? []).join("; ") || "(no acceptance)"}`;
+      }),
+    ),
+    "{{decisions}}": input.decisions.length > 0 ? input.decisions.map(decisionLine).join("\n") : NONE,
+    "{{priorFindings}}": input.priorFindings.length > 0 ? input.priorFindings.map(findingLine).join("\n") : NONE,
+    "{{context.projectContext}}": txt(context),
+    "{{context.testCases}}": bullets(
+      (input.context.testCases ?? []).map((c) => {
+        const approach = "approach" in c ? c.approach : c.test;
+        return `${c.title}${c.criterion ? ` (criterion: ${c.criterion})` : ""}: ${approach}`;
+      }),
+    ),
+    "{{attempt}}": txt(input.attempt),
+    "{{agent}}": agent,
+    "{{skills}}": pack.skills.length > 0 ? pack.skills.join(", ") : NONE,
+  };
+  let body = template;
+  for (const [key, value] of Object.entries(subs)) body = body.split(key).join(value);
+  const header = [
+    `You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1). ${FACTORY_RULES.split("\n")[1]} Outward actions go to requested[]. Answer with JSON matching this schema:`,
+    JSON.stringify(answerJsonSchema(pack)),
+    "",
+  ].join("\n");
+  return header + body;
+}

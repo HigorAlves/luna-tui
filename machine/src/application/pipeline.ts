@@ -21,7 +21,7 @@ import { PolicyStore } from "./policy.ts";
 
 export { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 
-/** A reset time as epoch seconds: orc writes a string (epoch or ISO), older builds a number. */
+/** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value !== "string" || value.trim() === "") return null;
@@ -1086,7 +1086,7 @@ export class Pipeline {
       await this.store.insertArtifact({ taskId: id, stageRunId: runId, ...artifact });
     }
     for (const item of result.events ?? []) {
-      const kind = item.kind.startsWith("orc.") ? item.kind : `orc.${item.kind}`;
+      const kind = item.kind.startsWith("stage.") ? item.kind : `stage.${item.kind}`;
       await this.log(id, kind, { ...item.payload, at: item.at }, runId);
     }
     if (result.workspace) {
