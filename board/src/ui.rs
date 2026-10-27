@@ -250,7 +250,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         Mode::ConfirmMany { action, ids } => render_note(frame, " Marked tickets ", &format!("{}  y / n", action.question(ids.len()))),
         Mode::Help(ctx) => {
-            render_help(frame, *ctx, 0);
+            let max = render_help(frame, *ctx, app.help_scroll.get());
+            app.help_max.set(max);
+            app.help_scroll.set(app.help_scroll.get().min(max));
         }
         _ => {}
     }
@@ -392,7 +394,7 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
         Mode::ConfirmMany { .. } => hint(&[("y", "do it to all of them"), ("n", "cancel")]),
-        Mode::Help(_) => hint(&[("any key", "close")]),
+        Mode::Help(_) => Line::from(Span::from(" j/k scroll · any key closes ").fg(c(SUBTEXT0))),
         Mode::Command(text) => Line::from(vec![
             Span::from(" :").fg(c(ACCENT)).bold(),
             Span::from(format!("{text}▏")),

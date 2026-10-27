@@ -581,6 +581,11 @@ pub struct App {
     /// How far the open ticket's detail popup is scrolled. `ui` clamps it to the content's
     /// actual height, which only it knows (it depends on the terminal width).
     pub detail_scroll: Cell<u16>,
+    /// How far the help sheet is scrolled, and the furthest `ui` found it can scroll.
+    pub help_scroll: Cell<u16>,
+    pub help_max: Cell<u16>,
+    /// The ticket whose Detail `?` was pressed in; closing the help returns to it.
+    help_return: Option<String>,
     imported: bool,
 }
 
@@ -621,6 +626,9 @@ impl App {
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
             detail_scroll: Cell::new(0),
+            help_scroll: Cell::new(0),
+            help_max: Cell::new(0),
+            help_return: None,
             imported: false,
         };
         app.reload();
@@ -1237,7 +1245,20 @@ impl App {
             Mode::Actions { .. } => self.handle_actions(key),
             Mode::RepoPicker { .. } => self.handle_repo_picker(key),
             Mode::Help(_) => {
-                self.mode = Mode::Normal;
+                let scroll = self.help_scroll.get();
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        self.help_scroll.set((scroll + 1).min(self.help_max.get()));
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => self.help_scroll.set(scroll.saturating_sub(1)),
+                    _ => {
+                        self.help_scroll.set(0);
+                        self.mode = match self.help_return.take() {
+                            Some(id) => Mode::Detail(id),
+                            None => Mode::Normal,
+                        };
+                    }
+                }
                 Outcome::Continue
             }
         }
@@ -1706,7 +1727,10 @@ impl App {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
             KeyCode::Char('j') | KeyCode::Down => self.scroll_detail(1),
             KeyCode::Char('k') | KeyCode::Up => self.scroll_detail(-1),
-            KeyCode::Char('?') => self.mode = Mode::Help(HelpFor::Detail),
+            KeyCode::Char('?') => {
+                self.help_return = Some(id.to_string());
+                self.mode = Mode::Help(HelpFor::Detail);
+            }
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
         }
@@ -2718,6 +2742,40 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Char('x')));
         app.handle_key(KeyEvent::from(KeyCode::Esc));
         assert!(matches!(app.mode, Mode::Normal), "esc closes the palette");
+    }
+
+    #[test]
+    fn closing_help_returns_to_the_ticket_detail() {
+        let mut app = App::new(Machine::from_env());
+        app.mode = Mode::Detail("aaaaaaaa0000".to_string());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Detail)));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"));
+        app.mode = Mode::Normal;
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn help_scrolls_with_j_and_k_and_clamps() {
+        let mut app = App::new(Machine::from_env());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        app.help_max.set(2);
+        for _ in 0..5 {
+            app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        }
+        assert_eq!(app.help_scroll.get(), 2);
+        assert!(matches!(app.mode, Mode::Help(_)));
+        for _ in 0..5 {
+            app.handle_key(KeyEvent::from(KeyCode::Up));
+        }
+        assert_eq!(app.help_scroll.get(), 0);
+        app.help_max.set(0);
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert_eq!(app.help_scroll.get(), 0, "nothing to scroll");
+        assert!(matches!(app.mode, Mode::Help(_)));
     }
 
     #[test]
