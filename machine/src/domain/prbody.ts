@@ -1,4 +1,4 @@
-// The PR title and body, in the orc caveman-pr shape: a one-line what, terse why bullets from
+// The PR title and body, in the caveman-pr shape: a one-line what, terse why bullets from
 // the approved plan, the acceptance criteria, and `Closes #N` when the PR lands in the source
 // repo. No attribution, no trailers beyond the close line.
 import type { TaskRow } from "./task.ts";

@@ -11,7 +11,6 @@ const script = join(__dirname, "../../scripts/facts.mjs")
 function fixtureRepo() {
   const root = mkdtempSync(join(tmpdir(), "luna-facts-"))
   mkdirSync(join(root, "contracts/src"), { recursive: true })
-  mkdirSync(join(root, "machine/src/domain"), { recursive: true })
   mkdirSync(join(root, "machine/runner"), { recursive: true })
   mkdirSync(join(root, "machine/runner-qa"), { recursive: true })
   writeFileSync(join(root, "machine/runner/Dockerfile"), "FROM x")
@@ -21,8 +20,8 @@ function fixtureRepo() {
     `export const COLUMNS = [\n  "A",\n  "B",\n  "C",\n] as const;\nexport const TaskState = z.enum([\n  "one",\n  "two",\n]);\n`,
   )
   writeFileSync(
-    join(root, "machine/src/domain/stage-input.ts"),
-    `export const PACK_LIMITS: Record<PackId, { maxTurns: number }> = {\n  triage: { maxTurns: 30 },\n  e2e: { maxTurns: 60 },\n  evidence: { maxTurns: 0 },\n  ci_watch: { maxTurns: 30 },\n};\n`,
+    join(root, "contracts/src/packs.ts"),
+    `export const PACKS: Record<PackId, Pack> = {\n  triage: {\n    id: "triage",\n  },\n  e2e: {\n    id: "e2e",\n  },\n  evidence: {\n    id: "evidence",\n  },\n  ci_watch: {\n    id: "ci_watch",\n  },\n};\n`,
   )
   return root
 }

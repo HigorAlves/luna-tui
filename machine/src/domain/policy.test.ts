@@ -15,6 +15,7 @@ describe("parsePolicy", () => {
       autoApprovePlanMinutes: 15,
       maxConcurrent: 1,
       holdoutCases: true,
+      qaTargets: [],
     });
   });
 
@@ -28,7 +29,19 @@ describe("parsePolicy", () => {
       autoApprovePlanMinutes: null,
       maxConcurrent: null,
       holdoutCases: false,
+      qaTargets: [],
     });
+  });
+
+  it("reads qa_target lines as named targets with a credential reference, never a value", () => {
+    const policy = parsePolicy(file("qa_target: local http://127.0.0.1:3000\nqa_target: staging https://stg.example.com env:QA_PASSWORD"));
+    expect(policy.qaTargets).toEqual([
+      { name: "local", baseUrl: "http://127.0.0.1:3000", credential: null },
+      { name: "staging", baseUrl: "https://stg.example.com", credential: "env:QA_PASSWORD" },
+    ]);
+    expect(() => parsePolicy(file("qa_target: staging"))).toThrow(/qa_target must be/);
+    expect(() => parsePolicy(file("qa_target: staging stg.example.com"))).toThrow(/base url must start with http/);
+    expect(() => parsePolicy(file("qa_target: staging https://stg.example.com hunter2"))).toThrow(/credential must be a reference/);
   });
 
   it("ignores comments, blank lines and keys it does not know", () => {

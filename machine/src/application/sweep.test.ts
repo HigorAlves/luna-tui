@@ -134,15 +134,15 @@ describe("sweepImages", () => {
 });
 
 describe("sweepTaskState", () => {
-  it("removes per-task orc state dirs whose task is gone, keeps the rest", async () => {
+  it("removes per-task session dirs whose task is gone, keeps the rest", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "state-"));
     const task = await db.getRepository(TaskEntity).save({
       title: "x", description: "", criteria: [], repoPath: null, branch: null, worktreePath: null,
       state: "closed", retries: { ...NO_RETRIES }, resumeTo: null, reason: null,
     });
-    mkdirSync(join(stateDir, "tasks", task.id, "orc"), { recursive: true });
-    mkdirSync(join(stateDir, "tasks", "11111111-2222-3333-4444-555555555555", "orc"), { recursive: true });
-    writeFileSync(join(stateDir, "tasks", "11111111-2222-3333-4444-555555555555", "orc", "slices.json"), "{}");
+    mkdirSync(join(stateDir, "tasks", task.id, "session"), { recursive: true });
+    mkdirSync(join(stateDir, "tasks", "11111111-2222-3333-4444-555555555555", "session"), { recursive: true });
+    writeFileSync(join(stateDir, "tasks", "11111111-2222-3333-4444-555555555555", "session", "s.jsonl"), "{}");
 
     expect(await sweepTaskState(db, stateDir)).toBe(1);
     expect(existsSync(join(stateDir, "tasks", task.id))).toBe(true);

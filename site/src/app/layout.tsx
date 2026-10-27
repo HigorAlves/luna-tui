@@ -7,7 +7,7 @@ const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"]
 
 // Set NEXT_PUBLIC_SITE_URL to the production domain; the fallback keeps local builds valid.
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"
-const description = "A software factory for one person: a board in your terminal that runs orc. You keep the final say."
+const description = "A software factory for one person: a board in your terminal that runs a software factory. You keep the final say."
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),

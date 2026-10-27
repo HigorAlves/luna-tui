@@ -1,8 +1,4 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-
-import { StageInput } from "@hardness/contracts";
-import { Ajv2020 } from "ajv/dist/2020.js";
+import { PACKS, type PackId, StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
@@ -80,13 +76,8 @@ describe("buildStageInput", () => {
     expect(input.priorFindings.map((f) => f.title)).toEqual(["keep", "edge"]);
     expect(input.context).toEqual({ projectContext: null, testCases: [], baseCommit: "9c1f0e2a", ci: null });
     expect(input.limits).toEqual({ maxTurns: 80, timeoutMs: 1_800_000 });
-    expect(input.env).toEqual({ ORC_FACTORY: "1" });
+    expect(input.env).toEqual({ LUNA_FACTORY: "1" });
   });
-
-  // orc's packs, vendored by `pnpm vendor:orc`; the two copies of these limits must agree,
-  // since the machine enforces timeoutMs on the container and writable on the mount.
-  const orcFixtures = join(import.meta.dirname, "..", "..", "..", "contracts", "fixtures", "orc");
-  const orcPacks = JSON.parse(readFileSync(join(orcFixtures, "stages.json"), "utf8")).packs as Record<string, { maxTurns: number; timeoutMs: number; writable: boolean }>;
 
   it("sizes implementing's budget to the plan: turns and time scale with the slice count, up to four times", () => {
     const sliced = (n: number) => [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices: Array.from({ length: n }, (_, i) => ({ ...slices[0]!, title: `s${i}` })) } })];
@@ -98,25 +89,28 @@ describe("buildStageInput", () => {
     expect(limitsFor("verifying", 3)).toEqual({ maxTurns: 60, timeoutMs: 1_200_000 });
   });
 
-  it("mirrors every pack's maxTurns, timeoutMs and writable from orc's stages.json", () => {
+  it("takes every pack's maxTurns, timeoutMs and writable from the contracts' pack registry", () => {
     for (const [pack, limits] of Object.entries(PACK_LIMITS)) {
-      const theirs = orcPacks[pack];
-      expect(theirs, `orc has no pack ${pack}`).toBeDefined();
-      expect(limits, pack).toEqual({ maxTurns: theirs!.maxTurns, timeoutMs: theirs!.timeoutMs, writable: theirs!.writable });
+      const theirs = PACKS[pack as PackId];
+      expect(limits, pack).toEqual({ maxTurns: theirs.maxTurns, timeoutMs: theirs.timeoutMs, writable: theirs.writable });
     }
   });
 
-  it("builds an input orc's own stage-input schema accepts", () => {
-    const ajv = new Ajv2020({ strict: false, allErrors: true });
-    const validate = ajv.compile(JSON.parse(readFileSync(join(orcFixtures, "stage-input.json"), "utf8")));
+  it("builds an input the stage-input contract accepts, with the repo's QA targets and the task's history when given", () => {
     const cases = [{ title: "t", criterion: "c", approach: "a" }];
     const approvals = [
       approval({ requested: { brief: "do it", criteria: ["c1"], assumptions: [], slices } }),
       approval({ kind: "awaiting_test_check", requested: { cases } }),
     ];
-    for (const stage of ["triage", "implementing", "verifying"] as const) {
-      const input = buildStageInput({ task, stage, attempt: 1, approvals, priorFindings: [finding(0.9, "keep")] });
-      expect(validate(input), `${stage}: ${JSON.stringify(validate.errors)}`).toBe(true);
+    const qaTargets = [{ name: "local", baseUrl: "http://127.0.0.1:3000", credential: null }];
+    const history = { ledger: { schema: 1 as const, slices: [] }, runs: [{ stage: "implementing", attempt: 1, outcome: "pass", turns: 3, costUsd: 0.1 }] };
+    for (const stage of ["triage", "implementing", "verifying", "e2e", "reviewing_memory"] as const) {
+      const input = buildStageInput({ task, stage, attempt: 1, approvals, priorFindings: [finding(0.9, "keep")], qaTargets, history });
+      const parsed = StageInput.safeParse(input);
+      expect(parsed.success, `${stage}: ${JSON.stringify(parsed.error?.issues)}`).toBe(true);
+      expect(input.context.qaTargets).toEqual(stage === "e2e" ? qaTargets : undefined);
+      expect(input.context.ledger).toEqual(stage === "reviewing_memory" || stage === "implementing" ? history.ledger : undefined);
+      expect(input.context.runs).toEqual(stage === "reviewing_memory" ? history.runs : undefined);
     }
   });
 

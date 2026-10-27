@@ -1,25 +1,11 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type CiContext, type Finding, type PackId, type StageInput, TestCase, type TaskState } from "@hardness/contracts";
+import { type CiContext, type Finding, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type RunSummary, type StageInput, TestCase, type TaskState } from "@hardness/contracts";
+
+export { PACK_LIMITS };
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
 
 const MINUTE = 60_000;
-
-/**
- * Turn and time limits, and whether the pack edits the worktree, per pack.
- * orc's factory/stages.json is the source of truth; this mirrors it so the machine does not
- * read orc's files from the host. Change both together.
- */
-export const PACK_LIMITS: Record<PackId, { maxTurns: number; timeoutMs: number; writable: boolean }> = {
-  triage: { maxTurns: 30, timeoutMs: 10 * MINUTE, writable: false },
-  test_design: { maxTurns: 40, timeoutMs: 15 * MINUTE, writable: false },
-  implementing: { maxTurns: 80, timeoutMs: 30 * MINUTE, writable: true },
-  verifying: { maxTurns: 60, timeoutMs: 20 * MINUTE, writable: true },
-  e2e: { maxTurns: 60, timeoutMs: 20 * MINUTE, writable: true },
-  evidence: { maxTurns: 0, timeoutMs: 5 * MINUTE, writable: false },
-  ci_watch: { maxTurns: 30, timeoutMs: 10 * MINUTE, writable: false },
-  reviewing_memory: { maxTurns: 30, timeoutMs: 10 * MINUTE, writable: false },
-};
 
 /** Implementing's turns and time scale with the plan's slice count, up to this many times the pack default. */
 export const BUDGET_SCALE_MAX = 4;
@@ -71,6 +57,10 @@ export function buildStageInput(opts: {
   /** The repo's PIPELINE.md holds test_design's cases out of implementing's input, so the
    *  implementer cannot overfit to them; verifying still judges by them. */
   holdoutCases?: boolean;
+  /** For e2e: the repo's QA targets from PIPELINE.md. */
+  qaTargets?: QaTarget[];
+  /** For reviewing_memory: the last implementing ledger and every earlier run of the task. */
+  history?: { ledger: Ledger | null; runs: RunSummary[] } | null;
 }): StageInput {
   const { task, stage, attempt, approvals } = opts;
   const pack = stage as PackId;
@@ -100,15 +90,19 @@ export function buildStageInput(opts: {
         answers: (a.response?.answers ?? {}) as Record<string, string>,
       })),
     priorFindings: opts.priorFindings.filter((f) => f.confidence >= PRIOR_FINDING_CONFIDENCE),
-    // The container reads docs/agents/project-context.md itself.
+    // The runner reads docs/agents/project-context.md from the worktree itself.
     context: {
       projectContext: opts.projectContext ?? null,
       testCases:
         pack === "verifying" || (pack === "implementing" && !opts.holdoutCases) ? checkedCases(approvals) : [],
       baseCommit: opts.baseCommit ?? null,
       ci: opts.ci ?? null,
+      ...(pack === "e2e" && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
+      ...(pack === "reviewing_memory" && opts.history ? { ledger: opts.history.ledger, runs: opts.history.runs } : {}),
+      // A retry continues the ledger the last attempt left: committed slices are not redone.
+      ...(pack === "implementing" && opts.history?.ledger ? { ledger: opts.history.ledger } : {}),
     },
     limits: { maxTurns, timeoutMs },
-    env: { ORC_FACTORY: "1" },
+    env: { LUNA_FACTORY: "1" },
   };
 }

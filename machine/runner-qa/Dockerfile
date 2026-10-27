@@ -1,6 +1,6 @@
 # QA stage container: the stage image plus the browsers the e2e pack drives.
 # Built by `pnpm --filter @hardness/machine runner-qa:build` (runner/build.sh --qa), which
-# builds hardness-runner:dev first so the orc vendoring has one source of truth.
+# builds hardness-runner:dev first so both images come from the same checkout.
 ARG BASE=hardness-runner:dev
 FROM ${BASE}
 

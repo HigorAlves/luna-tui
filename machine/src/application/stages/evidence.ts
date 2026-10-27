@@ -1,4 +1,4 @@
-// The evidence stage runs on the host: orc's evidence pack is script-only, so there is
+// The evidence stage runs on the host: the evidence pack is script-only, so there is
 // nothing to put in a container. It reads what the latest e2e run left under
 // `<stateDir>/runs/<runId>/files/qa/`, checks the QA manifest and lists the files, which
 // then show up in the ship approval's `requested`.

@@ -1,6 +1,6 @@
-// The stage contract between the machine and orc's stage packs: the machine writes
-// `/in/stage.json` (StageInput) and reads `/out/result.json` (StageOutput). The shapes are
-// frozen by the orc plan; orc validates the same JSON against its own schemas.
+// The stage contract between the machine and the factory runner: the machine writes
+// `/in/stage.json` (StageInput) and reads `/out/result.json` (StageOutput). Both sides of
+// the seam live in this repository; `factory-contract.test.ts` holds them together.
 import { z } from "zod";
 
 /** What a stage run decided. Lives here, not in api.ts, so the two files do not import each other in a loop. */
@@ -19,12 +19,12 @@ export type TaskSource = z.infer<typeof TaskSource>;
 /** A question the stage could not answer alone, with the answer it would pick. */
 export const NeedsInputItem = z.object({
   question: z.string(),
-  /** orc's schema allows null when the stage has no default to offer. */
+  /** Null when the stage has no default to offer. */
   recommended: z.string().nullable(),
 });
 export type NeedsInputItem = z.infer<typeof NeedsInputItem>;
 
-/** A hard-outward action orc refused to run inside the sandbox; the board approves it. */
+/** A hard-outward action the stage refused to run inside the sandbox; the board approves it. */
 export const RequestedAction = z.object({
   kind: z.enum(["tracker_write", "pr_review_post", "publish"]),
   target: z.string(),
@@ -54,11 +54,11 @@ export const StageArtifact = z.object({
 });
 export type StageArtifact = z.infer<typeof StageArtifact>;
 
-/** One review finding, as in orc:review-contract. */
+/** One review finding, as in the review-contract skill. */
 export const Finding = z.object({
   path: z.string(),
   line: z.number().int(),
-  // orc's pack schemas require path/line/severity/title/body/confidence only; the rest is
+  // The pack answers require path/line/severity/title/body/confidence only; the rest is
   // optional there, so it must be optional here or every run with a finding fails to ingest.
   start_line: z.number().int().nullable().optional(),
   side: z.string().optional(),
@@ -92,7 +92,7 @@ export const TestCase = z.object({
 });
 export type TestCase = z.infer<typeof TestCase>;
 
-/** Schema 2's shape, read for images built before the schema 3 rename. */
+/** Schema 2's shape, read for runs recorded before the schema 3 rename. */
 const LegacyTestCase = z.object({
   title: z.string(),
   criterion: z.string().nullable(),
@@ -110,6 +110,39 @@ export const CiContext = z.object({
   logs: z.string().nullable(),
 });
 export type CiContext = z.infer<typeof CiContext>;
+
+/** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
+export const LedgerSlice = z.object({
+  id: z.number().int(),
+  title: z.string(),
+  status: z.enum(["pending", "red", "green", "committed", "escalated"]),
+  commit: z.string().nullable(),
+  estLoc: z.number().int().nullable().optional(),
+  actualLoc: z.number().int().nullable().optional(),
+  note: z.string().nullable().optional(),
+});
+export type LedgerSlice = z.infer<typeof LedgerSlice>;
+
+export const Ledger = z.object({ schema: z.literal(1), slices: z.array(LedgerSlice) });
+export type Ledger = z.infer<typeof Ledger>;
+
+/** What an earlier stage run of the task came to; the retro reads these. */
+export const RunSummary = z.object({
+  stage: z.string(),
+  attempt: z.number().int(),
+  outcome: z.string(),
+  turns: z.number().int().nullable(),
+  costUsd: z.number().nullable(),
+});
+export type RunSummary = z.infer<typeof RunSummary>;
+
+/** A place the e2e stage may drive. `credential` is a reference (`env:NAME`), never a value. */
+export const QaTarget = z.object({
+  name: z.string(),
+  baseUrl: z.string(),
+  credential: z.string().nullable().optional(),
+});
+export type QaTarget = z.infer<typeof QaTarget>;
 
 /** Schema 2 adds `context.testCases`; schema 3 renames its `test` field to `approach`. */
 export const StageInput = z.object({
@@ -152,6 +185,12 @@ export const StageInput = z.object({
     baseCommit: z.string().nullable().optional(),
     /** For ci_watch: what the host fetched, since the sandbox has no gh credential. */
     ci: CiContext.nullable().optional(),
+    /** For reviewing_memory: the last implementing run's slice ledger. */
+    ledger: Ledger.nullable().optional(),
+    /** For reviewing_memory: one row per earlier stage run of this task. */
+    runs: z.array(RunSummary).optional(),
+    /** For e2e: where QA runs, from the repo's PIPELINE.md. Credentials are references, never values. */
+    qaTargets: z.array(QaTarget).optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),
@@ -161,9 +200,9 @@ export const StageInput = z.object({
 });
 export type StageInput = z.infer<typeof StageInput>;
 
-/** Schema 2 adds the `escalated` outcome; orc builds before it still write schema 1. */
+/** Schema 2 adds the `escalated` outcome; schema 3 adds the ledger and the session id. */
 export const StageOutput = z.object({
-  schema: z.union([z.literal(1), z.literal(2)]),
+  schema: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   ok: z.boolean(),
   outcome: StageOutcome,
   summary: z.string(),
@@ -181,12 +220,16 @@ export const StageOutput = z.object({
     durationMs: z.number().int(),
     model: z.string(),
   }),
-  /** orc may pass the SDK's error object through verbatim. */
+  /** The runner may pass the SDK's error object through verbatim. */
   error: z.union([z.string(), z.record(z.string(), z.unknown())]).nullable(),
   rateLimited: z.boolean(),
-  /** Epoch seconds. run.mjs writes it as a string (`String(info.resetsAt)`). */
+  /** Epoch seconds, as the SDK reports them; older runners wrote a string. */
   resetsAt: z.union([z.number(), z.string()]).nullable(),
-}).refine((output) => output.schema === 2 || output.outcome !== "escalated", {
+  /** Schema 3: the slice ledger the run left, so no host mount is needed to read it. */
+  ledger: Ledger.nullable().optional(),
+  /** Schema 3: the SDK session, resumable from the per-task session dir. */
+  sessionId: z.string().nullable().optional(),
+}).refine((output) => output.schema >= 2 || output.outcome !== "escalated", {
   message: "outcome escalated needs schema 2",
   path: ["outcome"],
 });

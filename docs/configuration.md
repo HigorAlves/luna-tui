@@ -47,13 +47,14 @@ monthly_budget_usd: 40        # this repo's tasks park once the calendar month h
 auto_approve_plan_minutes: 15 # a plan triage marked high confidence / low risk is approved by itself after this long
 max_concurrent: 1             # running tasks this repo may hold at once (over MACHINE_MAX_PER_REPO)
 holdout_cases: false          # true keeps test_design's cases away from the implementer; verifying still judges by them
+qa_target: staging https://stg.example.com env:QA_PASSWORD   # where e2e may drive the app; one line per target, the credential a reference
 ---
 
 # How this repo wants the pipeline to behave
 …
 ```
 
-Every key is optional. `auto_approve_plan_minutes` needs triage to report `confidence: high` and `risk: low` and to have asked nothing; anything less waits for you as always, and the approval it does make is logged as `plan.auto_approved` with the reason on the approval.
+Every key is optional. `qa_target` lines are `<name> <base url> [env:VARIABLE]`; the e2e stage gets them in its input and never sees a credential value. `auto_approve_plan_minutes` needs triage to report `confidence: high` and `risk: low` and to have asked nothing; anything less waits for you as always, and the approval it does make is logged as `plan.auto_approved` with the reason on the approval.
 
 ## GitHub gates
 
@@ -79,7 +80,9 @@ Every stage and check container mounts a docker volume named `hardness-cache-<re
 
 ## Runner image
 
-`pnpm --filter @hardness/machine runner:build` runs `machine/runner/build.sh`, which bakes orc into the image at `/orc`. By default it archives the committed HEAD of `ORC_PATH` (`ORC_SOURCE=path`); without `ORC_PATH` it looks for an orc checkout next to this repo, then `~/Developer/system/orc`, and with neither it clones `HigorAlves/orc` at `ORC_REF` (default `main`). `ORC_SOURCE=git ORC_REF=<tag|branch>` always clones. Each image is labelled with a key over the orc commit and its build files and skipped when that key is current, so `pnpm images` (run by `pnpm start` and `pnpm dev`) is instant when nothing changed; `REBUILD=1 pnpm images` builds anyway. The image is tagged `hardness-runner:dev` and `hardness-runner:<orc sha>`. `runner-qa:build` runs the same script with `--qa`, then builds `hardness-runner-qa:dev` from `machine/runner-qa/Dockerfile` on top of it.
+`pnpm --filter @hardness/machine runner:build` runs `machine/runner/build.sh`, which builds the image from this checkout with the repository root as the build context: `factory/` and `contracts/` are copied in and installed with the workspace lockfile, so the image runs exactly what the checkout tests. Each image is labelled with a key over those files and the Dockerfile and skipped when that key is current, so `pnpm images` (run by `pnpm start` and `pnpm dev`) is instant when nothing changed; `REBUILD=1 pnpm images` builds anyway. The image is tagged `hardness-runner:dev` and `hardness-runner:<key>`. `runner-qa:build` runs the same script with `--qa`, then builds `hardness-runner-qa:dev` from `machine/runner-qa/Dockerfile` on top of it.
+
+Inside a stage container the runner sees `/in/stage.json`, `/out`, `/work` (the worktree) and `/session` (the task's SDK session dir, `CLAUDE_CONFIG_DIR`). `LUNA_FACTORY=1` marks the run; `LUNA_STAGE_DRY_RUN=1` renders the prompt and the SDK options without a model call (the sandbox smoke uses it). A repo may keep binding rules for every stage in `docs/agents/project-context.md`; the memory review proposes additions to it.
 
 ## Board
 

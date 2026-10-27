@@ -1,5 +1,6 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
+import { Ledger } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -7,6 +8,7 @@ import { Bus } from "./adapters/http/bus.ts";
 import { StreamWatcher } from "./adapters/http/watch.ts";
 import { parseSince } from "./adapters/http/metrics.ts";
 import { toEvent, toTask } from "./adapters/http/serialize.ts";
+
 import { buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
@@ -84,6 +86,18 @@ const { real, verifyPack, checksExec } = await buildRealStages(
   watcher,
   (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
   policies,
+  // The retro reads the task's own record: the last implementing ledger and every run so far.
+  async (taskId) => {
+    const ledger = Ledger.safeParse((await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.ledger);
+    const runs = (await pipeline.stageRuns(taskId)).map((run) => ({
+      stage: run.stage,
+      attempt: run.attempt,
+      outcome: run.outcome ?? run.status,
+      turns: run.turns,
+      costUsd: run.costUsd === null ? null : Number(run.costUsd),
+    }));
+    return { ledger: ledger.success ? ledger.data : null, runs };
+  },
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
@@ -141,9 +155,6 @@ function publish(event: EventRow): void {
   if (event.kind === "transition") scheduleMetrics();
 }
 
-/** `orc-state` marks orc's session for a task's branch completed when the task closes. */
-const orcStateBin = (await exec("which", ["orc-state"])).stdout.trim() || null;
-
 pipeline = new Pipeline(db, runnerFor, {
   onEvent: publish,
   maxConcurrentTasks: config.maxConcurrentTasks,
@@ -151,7 +162,7 @@ pipeline = new Pipeline(db, runnerFor, {
   maxPerStage: config.maxPerStage,
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
-  closeDeps: { exec, worktreeRemove: false, orcStateBin, watcher },
+  closeDeps: { exec, worktreeRemove: false, watcher },
   policies,
   onAlert: (alert) => {
     console.warn(`budget: ${alert.scope} at ${alert.pct}% ($${alert.spentUsd.toFixed(2)} of $${alert.limitUsd.toFixed(2)})${alert.repo ? ` · ${alert.repo}` : ""}`);

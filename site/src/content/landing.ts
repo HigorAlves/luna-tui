@@ -6,7 +6,6 @@ export const REPO = "https://github.com/HigorAlves/luna-tui"
 export const DOCS = `${REPO}/blob/main/docs`
 export const INSTALL_DOC = `${DOCS}/install.md`
 export const LUNA = "https://luna-sigma-nine.vercel.app/"
-export const ORC = "https://orc.higoralves.dev"
 export const HERDR = "https://herdr.dev"
 
 export const nav = [
@@ -15,7 +14,7 @@ export const nav = [
   { label: "Board", href: "#board" },
   { label: "Example", href: "#example" },
   { label: "Features", href: "#features" },
-  { label: "orc", href: "#orc" },
+  { label: "Factory", href: "#factory" },
   { label: "Your setup", href: "#moments" },
   { label: "Pricing", href: "#pricing" },
   { label: "FAQ", href: "#faq" },
@@ -26,15 +25,15 @@ export const cta = { primary: "Install Luna TUI", secondary: "See it run", githu
 export const hero = {
   eyebrow: "A software factory for one person",
   title: "Turn your tickets into the PR you'd have shipped.",
-  lead: "A board in your terminal that runs orc. Agents work in sealed containers; you keep the final say.",
+  lead: "A board in your terminal that runs a software factory. Agents work in sealed containers; you keep the final say.",
   checks: ["Runs 100% local", "You keep the final say"],
   equation: [
     { name: "Ticket", tag: "issue" },
     { name: "Repo", tag: "worktree" },
-    { name: "orc", tag: "packs" },
+    { name: "Factory", tag: "packs" },
   ],
   result: { name: "PR", tag: "ready", commit: "a1f3c9e" },
-  figureLabel: "A ticket plus your repo plus orc equals a pull request",
+  figureLabel: "A ticket plus your repo plus the factory equals a pull request",
 }
 
 export const how = {
@@ -119,14 +118,14 @@ export const github = {
     },
     {
       title: "Closes #N",
-      body: "The PR body follows orc's caveman-pr shape: what changed, why, the criteria, and the issue it closes.",
+      body: "The PR body keeps one shape: what changed, why, the criteria, and the issue it closes.",
     },
   ],
 }
 
 export const board = {
   eyebrow: "Your board",
-  title: "The board says where. orc says what.",
+  title: "The board says where. The factory says what.",
   lead: "Columns follow task state, so a ticket is always where its work is. Open as many boards as you like; they all see one machine.",
   cards: [
     { title: "#43 Login error copy", stage: "Triage", detail: "needs you · plan", runs: 4 },
@@ -245,22 +244,22 @@ export const features = {
   ],
 } as const
 
-export const orc = {
-  eyebrow: "orc · inside every stage",
-  title: "orc does the work. Luna runs the floor.",
-  lead: "Each agent stage is an orc stage pack with its own prompt, tool allowlist and limits, pinned into the runner image. Luna moves the ticket; orc writes the code.",
+export const factory = {
+  eyebrow: "The factory · inside every stage",
+  title: "The factory does the work. Luna runs the floor.",
+  lead: "Each agent stage is a stage pack that runs in a sealed container through the Claude Agent SDK. Its role, prompt, skills and guardrails live in the repo's factory/ folder; nothing else to install, a fresh clone runs. Luna moves the ticket; the pack writes the code.",
   features: [
     {
       title: "Packs, not prompts",
       body: "Triage, test design, build, verify, e2e, CI watch, evidence and the retro each run a pack with a typed result.",
     },
     {
-      title: "Pinned, so it's repeatable",
-      body: "The runner image bakes one orc commit in and is tagged with its sha. Same pack, same image, same behaviour.",
+      title: "Built from the checkout, so it's repeatable",
+      body: "The stage image is built from the checkout and tagged with a key over its inputs. Same inputs, same image, same behaviour.",
     },
     {
-      title: "The orc you already use",
-      body: "Factory mode is the same engine as orc in your terminal, minus the questions: outward actions are queued for you.",
+      title: "Guardrails as code",
+      body: "In-process hooks: no push, no PR or tracker writes, commits only on task branches, no writes outside the worktree and the output folder. Outward actions are queued for you to approve on the board.",
     },
   ],
   terminal: {
@@ -268,12 +267,12 @@ export const orc = {
     lines: [
       { kind: "prompt", text: "pnpm start" },
       { kind: "head", text: "machine · 127.0.0.1:4317 · 2/4 slots" },
-      { kind: "sub", text: "#39 implementing · orc-stage run implementing (attempt 1)" },
+      { kind: "sub", text: "#39 implementing · pack implementing as implementer (attempt 1)" },
       { kind: "sub", text: "slice 1/2 committed a1f3c9e · locked tests 3/3 green" },
       { kind: "ok", text: "verifying · suite 142/142 · lint · typecheck · review pack" },
     ],
   },
-  mascot: { button: "Zug zug", replies: ["Zug zug.", "Slice committed.", "Tests stay locked.", "Back to work."] },
+  mascot: { button: "Ping", replies: ["Slice committed.", "Tests stay locked.", "Back to work."] },
   setup: {
     title: `Set it up in ${installCommands.length} commands`,
     lead: "Clone, install, link the board, then one command builds the stage images and starts Postgres and the machine in Docker. No account, no server to babysit.",
@@ -340,7 +339,7 @@ export const pricing = {
       name: "Board + agents",
       price: "$0",
       suffix: "+ your Claude",
-      body: "Real orc packs in sealed containers.",
+      body: "Real stage packs in sealed containers.",
       items: ["Triage, tests, build and verify", "Draft PRs and CI watch", "Your Claude plan or API key", "Cost tracked per stage"],
       cta: "Install",
       href: INSTALL_DOC,
@@ -409,7 +408,7 @@ export const finalCta = {
 }
 
 export const footer = {
-  tagline: "ticket + repo + orc = PR.",
+  tagline: "ticket + repo + factory = PR.",
   columns: [
     {
       title: "Project",
@@ -432,7 +431,6 @@ export const footer = {
       title: "Family",
       links: [
         { label: "Luna for the notch", href: LUNA },
-        { label: "orc", href: ORC },
         { label: "herdr", href: HERDR },
       ],
     },

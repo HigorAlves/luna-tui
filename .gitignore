@@ -1,5 +1,3 @@
-# orc session state and worktrees
-.orc/
 
 # Rust
 /board/target

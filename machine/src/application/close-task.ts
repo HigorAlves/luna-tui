@@ -1,7 +1,6 @@
 // The host-side close step, run after a task reaches `closed`. It adds no task state: the
 // pipeline stores the transition first, then calls this and logs the report. A failed step
 // is reported, never thrown, because the task is already closed.
-import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -10,7 +9,7 @@ import type { ExecResult } from "../adapters/process/exec.ts";
 import { CAP_BYTES, CAP_LINES, CONTEXT_FILE, mergeRules } from "./stages/memory.ts";
 
 export interface CloseStep {
-  step: "rules" | "orc-state" | "watch-tab" | "worktree";
+  step: "rules" | "watch-tab" | "worktree";
   ok: boolean;
   note: string;
 }
@@ -25,8 +24,6 @@ export interface CloseDeps {
   exec: (command: string, args: string[], options?: { cwd?: string }) => Promise<ExecResult>;
   /** Remove the worktree on close. Off by default: the board's `w` removes it on demand. */
   worktreeRemove: boolean;
-  /** Path to `orc-state`, or null when it is not installed. */
-  orcStateBin: string | null;
   watcher?: { close(taskId: string): Promise<void> };
 }
 
@@ -90,15 +87,6 @@ export async function closeTask(task: CloseTarget, deps: CloseDeps): Promise<Clo
     ? await attempt("rules", () => applyRules(task.worktreePath, task.rules!, deps))
     : null;
 
-  const orcState = await attempt("orc-state", async () => {
-    if (!task.worktreePath) return "skipped: the task has no worktree";
-    if (!deps.orcStateBin) return "skipped: orc-state is not installed";
-    if (!existsSync(join(task.worktreePath, ".orc"))) return "skipped: no .orc in the worktree";
-    const result = await deps.exec(deps.orcStateBin, ["close", "--merged"], { cwd: task.worktreePath });
-    if (result.code !== 0) throw new Error(`orc-state close failed: ${(result.stderr || result.stdout).trim()}`);
-    return "orc session marked completed";
-  });
-
   const watchTab = await attempt("watch-tab", async () => {
     if (!deps.watcher) return "skipped: no watcher";
     await deps.watcher.close(task.id);
@@ -114,5 +102,5 @@ export async function closeTask(task: CloseTarget, deps: CloseDeps): Promise<Clo
     return "worktree removed";
   });
 
-  return { steps: [...(rules ? [rules] : []), orcState, watchTab, worktree], worktreeRemoved };
+  return { steps: [...(rules ? [rules] : []), watchTab, worktree], worktreeRemoved };
 }

@@ -1,5 +1,5 @@
-// Runs orc packs in the hardened sandbox (read-only root, tmpfs /tmp, no-new-privileges) with
-// no machine and no model call: `evidence` is script-only, `implementing` runs with --dry-run.
+// Runs packs in the hardened sandbox (read-only root, tmpfs /tmp, no-new-privileges) with
+// no machine and no model call: `evidence` is script-only, `implementing` runs as a dry run.
 // Run through tsx: `pnpm --filter @hardness/machine smoke:sandbox`. Needs docker and hardness-runner:dev.
 import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -35,7 +35,7 @@ const stageInput = (pack) => ({
   priorFindings: [],
   context: { projectContext: null, tests: [] },
   limits: { maxTurns: 5, timeoutMs: 120000 },
-  env: { ORC_FACTORY: "1" },
+  env: { LUNA_FACTORY: "1" },
 });
 
 const readJson = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : null);
@@ -68,15 +68,15 @@ try {
   check("evidence: exit 0", a.result.exitCode === 0, `exit ${a.result.exitCode}`);
   check("evidence: result.json outcome", ["pass", "fail"].includes(resA?.outcome), `outcome ${resA?.outcome}`);
   check("evidence: events.jsonl", existsSync(join(a.out, "events.jsonl")), "");
-  // ORC_STATE_DIR is set explicitly by docker.ts, so orc's own read-only self-detection stays quiet.
   check("evidence: worktree untouched", git(repo, "status", "--porcelain") === "", "git status not clean");
 
-  const b = await sandbox("implementing", "implementing", true, { ORC_STAGE_DRY_RUN: "1" });
+  const b = await sandbox("implementing", "implementing", true, { LUNA_STAGE_DRY_RUN: "1" });
   const resB = readJson(join(b.out, "result.json"));
   check("implementing: exit 0", b.result.exitCode === 0, `exit ${b.result.exitCode}`);
   check("implementing: summary dry-run", resB?.summary === "dry-run", `summary ${resB?.summary}`);
   check("implementing: prompt.md", existsSync(join(b.out, "prompt.md")), "");
-  check("implementing: no read-only notice", !b.transcript.includes("orc-stage: cwd is read-only"), "");
+  check("implementing: ledger.json", existsSync(join(b.out, "ledger.json")) || resB?.ledger != null, "");
+  check("implementing: events.jsonl", existsSync(join(b.out, "events.jsonl")), "");
 
   if (rows.some((r) => !r.ok)) {
     for (const [l, t] of [["evidence", a.transcript], ["implementing", b.transcript]]) console.log(`--- ${l} transcript ---\n${t}`);

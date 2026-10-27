@@ -59,11 +59,47 @@ jobs:
           cache: pnpm
       - name: Install
         run: pnpm install --frozen-lockfile
-      # Includes the orc conformance test against contracts/fixtures/orc/ (pnpm vendor:orc).
+      # Includes the factory conformance test: every answer a pack may give must ingest.
       - name: Unit tests
         run: pnpm --filter @hardness/contracts test
       - name: Typecheck
         run: pnpm --filter @hardness/contracts typecheck
+
+  factory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Unit tests
+        run: pnpm --filter @hardness/factory test
+      - name: Typecheck
+        run: pnpm --filter @hardness/factory typecheck
+
+  # A fresh clone, nothing else installed: the stage image builds from this checkout alone
+  # and a dry-run stage goes through the hardened sandbox without a model call.
+  fresh-clone:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Build the runner image
+        run: bash machine/runner/build.sh
+      - name: Sandbox smoke (no model call)
+        run: pnpm --filter @hardness/machine smoke:sandbox
 
   board:
     runs-on: ubuntu-latest

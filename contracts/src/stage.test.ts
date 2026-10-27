@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { ArtifactKind, PackId, StageInput, StageOutput, TaskState, TestCase, VerifyResult } from "./index.ts";
 
-// The two examples are copied verbatim from the cross-repo contract in the orc plan.
+// The two examples are the contract's own: what the machine writes and what a runner answers.
 const stageInputExample = {
   schema: 1,
   stage: "implementing",
@@ -22,7 +22,7 @@ const stageInputExample = {
   priorFindings: [],
   context: { projectContext: null, tests: [] },
   limits: { maxTurns: 80, timeoutMs: 1800000 },
-  env: { ORC_FACTORY: "1" },
+  env: { LUNA_FACTORY: "1" },
 };
 
 const stageOutputExample = {
@@ -96,8 +96,8 @@ describe("StageInput", () => {
 });
 
 describe("StageOutput", () => {
-  // What orc actually writes (run.mjs + stages.json), not what the example happens to show.
-  it("accepts a finding exactly as orc's verifying/ci_watch schema shapes it: no start_line, no suggestion_code", () => {
+  // What a pack actually answers (the registry's schemas), not what the example happens to show.
+  it("accepts a finding exactly as the verifying/ci_watch answer schema shapes it: no start_line, no suggestion_code", () => {
     const finding = { path: "src/a.ts", line: 7, severity: "bug", title: "off by one", body: "b", confidence: 0.9 };
     expect(StageOutput.safeParse({ ...stageOutputExample, findings: [finding] }).success).toBe(true);
   });
@@ -123,11 +123,12 @@ describe("StageOutput", () => {
     expect(StageOutput.safeParse({ ...stageOutputExample, answer: "text" }).success).toBe(false);
   });
 
-  it("reads schema 2, which adds the escalated outcome, and still reads schema 1", () => {
+  it("reads schema 3 (ledger, session), 2 (escalated) and 1, and refuses anything newer", () => {
     expect(StageOutput.safeParse({ ...stageOutputExample, schema: 2, outcome: "escalated" }).success).toBe(true);
     expect(StageOutput.safeParse({ ...stageOutputExample, schema: 2 }).success).toBe(true);
     expect(StageOutput.safeParse({ ...stageOutputExample, schema: 1, outcome: "escalated" }).success).toBe(false);
-    expect(StageOutput.safeParse({ ...stageOutputExample, schema: 3 }).success).toBe(false);
+    expect(StageOutput.safeParse({ ...stageOutputExample, schema: 3 }).success).toBe(true);
+    expect(StageOutput.safeParse({ ...stageOutputExample, schema: 4 }).success).toBe(false);
   });
 
   it("rejects a broken outcome", () => {

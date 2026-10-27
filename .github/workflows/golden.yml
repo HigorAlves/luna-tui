@@ -7,10 +7,6 @@ on:
     - cron: "43 5 * * *"
   workflow_dispatch:
     inputs:
-      orc_ref:
-        description: "orc git ref to build the runner image from (default: the ORC_REF variable, else main)"
-        required: false
-        default: ""
       luna_ref:
         description: "luna-tui ref to run the matrix on (default: the branch this was dispatched from)"
         required: false
@@ -62,15 +58,9 @@ jobs:
           printf '%s' "$ANTHROPIC_API_KEY" > ~/.config/hardness/anthropic-api-key
           chmod 600 ~/.config/hardness/anthropic-api-key
       - name: Build the runner image
-        env:
-          ORC_SOURCE: git
-          ORC_REF: ${{ inputs.orc_ref || vars.ORC_REF || 'main' }}
         run: bash machine/runner/build.sh
       - name: Build the QA image
         if: hashFiles('machine/runner-qa/Dockerfile') != ''
-        env:
-          ORC_SOURCE: git
-          ORC_REF: ${{ inputs.orc_ref || vars.ORC_REF || 'main' }}
         run: bash machine/runner/build.sh --qa
       - name: Migrate and start the machine
         run: |

@@ -809,10 +809,10 @@ mod tests {
         assert_eq!(task.repo_name(), None);
         task.repo_path = Some("/Users/me/Developer/projects/luna-tui".into());
         assert_eq!(task.repo_name(), Some("luna-tui"));
-        task.repo_path = Some("/r/orc/".into());
-        assert_eq!(task.repo_name(), Some("orc"));
+        task.repo_path = Some("/r/notch/".into());
+        assert_eq!(task.repo_name(), Some("notch"));
         assert_eq!(repo_colour_slot("luna-tui"), repo_colour_slot("luna-tui"));
-        assert_ne!(repo_colour_slot("luna-tui"), repo_colour_slot("orc"));
+        assert_ne!(repo_colour_slot("luna-tui"), repo_colour_slot("notch"));
         assert!(repo_colour_slot("anything") < REPO_COLOUR_SLOTS);
     }
 
