@@ -79,6 +79,16 @@ export interface SandboxRun {
   cacheVolume?: string;
   /** The container is already running (a restart found it): wait on it instead of starting one. */
   attach?: boolean;
+  /** `uid:gid` the container runs as. The run folder, the session dir and the worktree are bind
+   *  mounts owned by the host user, so the stage must be that user to write them (the image's
+   *  `node` user is uid 1000, which is not the host user on a Linux host). Defaults to the
+   *  machine's own uid:gid; null keeps the image's user. */
+  user?: string | null;
+}
+
+/** The machine's own uid:gid, the owner of everything it mounts; undefined where the platform has none. */
+export function hostUser(): string | undefined {
+  return typeof process.getuid === "function" && typeof process.getgid === "function" ? `${process.getuid()}:${process.getgid()}` : undefined;
 }
 
 export interface SandboxResult {
@@ -99,6 +109,8 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   // The tmpfs is `exec`: Docker's default is noexec, and `go test` runs the test binary it
   // builds under TMPDIR. The worktree bind mount is executable anyway, so this hides nothing.
   args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...SANDBOX_LIMITS);
+  const user = run.user === undefined ? hostUser() : run.user;
+  if (user) args.push("--user", user);
   args.push(
     // npm/yarn/pip caches, shell history and anything else that defaults to $HOME would
     // otherwise hit the now-read-only root filesystem — point HOME at the one writable,
@@ -218,6 +230,8 @@ export interface SandboxExec {
   image: string;
   worktree: string;
   argv: string[];
+  /** As for a stage: the host user, so what the check writes into the worktree stays the host's. */
+  user?: string | null;
   /** The only env the command sees besides HOME and TMPDIR; never the host's. */
   env?: Record<string, string>;
   /** The repo's cache volume, as for a stage. */
@@ -229,6 +243,8 @@ export function sandboxExecArgs(run: SandboxExec): string[] {
   const [command, ...rest] = run.argv;
   const args = ["run", "--rm", "--name", run.name, "--label", `${CONTAINER_LABEL}=1`];
   args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...SANDBOX_LIMITS);
+  const user = run.user === undefined ? hostUser() : run.user;
+  if (user) args.push("--user", user);
   args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp");
   for (const [key, value] of Object.entries(run.env ?? {})) args.push("-e", `${key}=${value}`);
   args.push(...cacheArgs(run.cacheVolume));

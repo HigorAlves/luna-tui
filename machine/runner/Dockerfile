@@ -41,7 +41,11 @@ RUN echo "${FACTORY_REF}" > /factory-src/factory/.ref \
  && chmod -R a+rX /factory-src
 ENV LUNA_FACTORY_ROOT=/factory-src/factory
 
-# Not root: Claude Code refuses some modes as root, and the stage should not own the image.
+# The machine runs the stage as its own host uid:gid (so the mounted worktree, run folder and
+# session dir are writable). Named volumes copy the image's permissions on first use: an open
+# /cache lets that user keep package-manager caches there. The image's own user is `node`,
+# never root: Claude Code refuses some modes as root, and the stage should not own the image.
+RUN mkdir -p /cache && chmod 0777 /cache
 USER node
 WORKDIR /work
 ENTRYPOINT ["node", "/factory-src/factory/src/main.ts"]

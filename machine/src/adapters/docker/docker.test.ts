@@ -41,6 +41,17 @@ describe("sandboxArgs", () => {
     expect(args).toContain("--pids-limit 1024");
   });
 
+  it("runs the stage as the machine's own user, so the bind mounts it owns are writable; null keeps the image's user", () => {
+    const args = sandboxArgs(run(), "/i", "/o");
+    const at = args.indexOf("--user");
+    expect(at).toBeGreaterThan(0);
+    expect(args[at + 1]).toMatch(/^\d+:\d+$/);
+    expect(sandboxArgs(run({ user: null }), "/i", "/o")).not.toContain("--user");
+    expect(sandboxArgs(run({ user: "1234:1234" }), "/i", "/o")).toContain("1234:1234");
+    const check = sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["pnpm", "test"] });
+    expect(check[check.indexOf("--user") + 1]).toMatch(/^\d+:\d+$/);
+  });
+
   it("mounts the worktree read-only unless writable", () => {
     expect(sandboxArgs(run(), "/i", "/o")).toContain("/wt:/work:ro");
     expect(sandboxArgs(run({ writable: true }), "/i", "/o")).toContain("/wt:/work");
