@@ -19,7 +19,7 @@ use tui_textarea::TextArea;
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::{
-    app::{ACTIONS, App, COMMANDS, FloorState, HelpFor, Mode},
+    app::{ACTIONS, App, FloorState, HelpFor, Mode},
     model::{
         Approval, COLUMNS, Look, Metrics, REPO_COLOUR_SLOTS, Task, TaskDetail, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, repo_colour_slot, spend_p90,
         now_secs, questions_of,
@@ -249,7 +249,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
         Mode::ConfirmMany { action, ids } => render_note(frame, " Marked tickets ", &format!("{}  y / n", action.question(ids.len()))),
-        Mode::Help(ctx) => render_help(frame, *ctx),
+        Mode::Help(ctx) => {
+            render_help(frame, *ctx, 0);
+        }
         _ => {}
     }
 }
@@ -1403,35 +1405,137 @@ fn render_repo_picker(frame: &mut Frame, task: &Task, query: &str, all: &[String
 }
 
 /// The keys of the view `?` was pressed in; the board's sheet also lists the `:` commands.
-fn render_help(frame: &mut Frame, ctx: HelpFor) {
-    let keys = ctx.keys();
-    let commands: &[(&str, &str)] = if ctx == HelpFor::Board { COMMANDS } else { &[] };
-    let rows = keys.len() + if commands.is_empty() { 0 } else { commands.len() + 2 };
-    let area = centered(frame.area(), 84, (rows as u16 + 4).min(frame.area().height));
+/// Draws the sheet scrolled by `scroll` rows (clamped) and returns the furthest it can scroll.
+fn render_help(frame: &mut Frame, ctx: HelpFor, scroll: u16) -> u16 {
+    let frame_area = frame.area();
+    let wide = frame_area.width >= HELP_WIDE_FROM;
+    let box_width = frame_area.width.min(if wide { 176 } else { 84 });
+    // Two border cells and two padding cells on each side.
+    let inner_width = usize::from(box_width.saturating_sub(6));
+    let rows = help_layout(ctx, inner_width, wide);
+    let total = rows.len();
+
+    let height = u16::try_from(total + 2).unwrap_or(u16::MAX).min(frame_area.height);
+    let area = centered(frame_area, box_width, height);
     frame.render_widget(Clear, area);
 
-    let block = Block::bordered()
+    let viewport = usize::from(height.saturating_sub(2));
+    let max = total.saturating_sub(viewport);
+    let start = usize::from(scroll).min(max);
+
+    let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
         .padding(Padding::horizontal(2))
         .title(Line::from(ctx.title()).bold());
-    let width = keys.iter().chain(commands).map(|(k, _)| k.chars().count()).max().unwrap_or(8) + 2;
-    let row = |keys: &str, what: &str| {
-        Line::from(vec![
-            Span::from(format!("{keys:<width$}")).fg(c(ACCENT)).bold(),
-            Span::from(what.to_string()),
-        ])
-    };
-    let mut lines: Vec<Line> = keys.iter().map(|(k, w)| row(k, w)).collect();
-    if !commands.is_empty() {
-        lines.push(Line::default());
-        lines.push(Line::from(Span::from("Commands, typed after :").fg(c(SUBTEXT0))));
-        lines.extend(commands.iter().map(|(k, w)| row(k, w)));
+    if max > 0 {
+        let seen = (start + viewport).min(total);
+        block = block.title_bottom(Line::from(format!(" j/k scroll · {seen}/{total} ")).fg(c(SUBTEXT0)));
     }
-    frame.render_widget(
-        Paragraph::new(lines).block(block).wrap(Wrap { trim: false }),
-        area,
-    );
+    let visible: Vec<Line> = rows.into_iter().skip(start).take(viewport).collect();
+    frame.render_widget(Paragraph::new(visible).block(block), area);
+    u16::try_from(max).unwrap_or(u16::MAX)
+}
+
+/// A frame this wide or wider lays the sheet out in two columns of sections.
+const HELP_WIDE_FROM: u16 = 120;
+const HELP_COLUMN_GAP: usize = 3;
+
+/// The sheet's rows: the sections stacked, or split over two columns when `two_columns`.
+fn help_layout(ctx: HelpFor, inner_width: usize, two_columns: bool) -> Vec<Line<'static>> {
+    let sections = ctx.sections();
+    if !two_columns || sections.len() < 2 {
+        return stack_sections(sections, inner_width);
+    }
+    let col = inner_width.saturating_sub(HELP_COLUMN_GAP) / 2;
+    let rendered: Vec<Vec<Line<'static>>> = sections.iter().map(|s| help_section_lines(s, col)).collect();
+    let height = |part: &[Vec<Line<'static>>]| part.iter().map(Vec::len).sum::<usize>() + part.len().saturating_sub(1);
+    let split = (1..rendered.len())
+        .min_by_key(|k| height(&rendered[..*k]).max(height(&rendered[*k..])))
+        .unwrap_or(1);
+    let left = join_sections(&rendered[..split]);
+    let right = join_sections(&rendered[split..]);
+    (0..left.len().max(right.len()))
+        .map(|i| {
+            let mut spans = Vec::new();
+            let used = match left.get(i) {
+                Some(line) => {
+                    spans.extend(line.spans.iter().cloned());
+                    line.width()
+                }
+                None => 0,
+            };
+            if let Some(line) = right.get(i) {
+                spans.push(Span::raw(" ".repeat(col.saturating_sub(used) + HELP_COLUMN_GAP)));
+                spans.extend(line.spans.iter().cloned());
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
+fn stack_sections(sections: &[crate::app::HelpSection], width: usize) -> Vec<Line<'static>> {
+    let rendered: Vec<Vec<Line<'static>>> = sections.iter().map(|s| help_section_lines(s, width)).collect();
+    join_sections(&rendered)
+}
+
+fn join_sections(sections: &[Vec<Line<'static>>]) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    for (i, lines) in sections.iter().enumerate() {
+        if i > 0 {
+            out.push(Line::default());
+        }
+        out.extend(lines.iter().cloned());
+    }
+    out
+}
+
+/// One section: its heading, then each key with its description wrapped at a hanging indent.
+fn help_section_lines(section: &crate::app::HelpSection, width: usize) -> Vec<Line<'static>> {
+    let key_width = section.rows.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0) + 2;
+    let desc_width = width.saturating_sub(key_width).max(1);
+    let mut lines = vec![Line::from(Span::from(section.heading).fg(c(SUBTEXT0)).bold())];
+    for (keys, what) in section.rows {
+        for (i, part) in wrap_words(what, desc_width).into_iter().enumerate() {
+            let lead = if i == 0 {
+                Span::from(format!("{keys:<key_width$}")).fg(c(ACCENT)).bold()
+            } else {
+                Span::raw(" ".repeat(key_width))
+            };
+            lines.push(Line::from(vec![lead, Span::from(part)]));
+        }
+    }
+    lines
+}
+
+/// Word-wraps `text` to `width` columns; a word longer than a line is cut.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    for mut word in text.split_whitespace() {
+        loop {
+            let sep = usize::from(!cur.is_empty());
+            if cur.chars().count() + sep + word.chars().count() <= width {
+                if sep == 1 {
+                    cur.push(' ');
+                }
+                cur.push_str(word);
+                break;
+            }
+            if !cur.is_empty() {
+                lines.push(std::mem::take(&mut cur));
+                continue;
+            }
+            let cut = word.char_indices().nth(width).map_or(word.len(), |(i, _)| i);
+            lines.push(word[..cut].to_string());
+            word = &word[cut..];
+        }
+    }
+    if !cur.is_empty() || lines.is_empty() {
+        lines.push(cur);
+    }
+    lines
 }
 
 /// A `width` x `height` rectangle centred in `area`.
@@ -1456,6 +1560,101 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
+
+    fn help_rows(ctx: HelpFor, width: u16, height: u16, scroll: u16) -> (Vec<String>, u16) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut max = 0;
+        terminal.draw(|f| max = render_help(f, ctx, scroll)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows = (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
+            .collect();
+        (rows, max)
+    }
+
+    const ALL_HELP: [HelpFor; 5] = [HelpFor::Board, HelpFor::Floor, HelpFor::Inbox, HelpFor::Digest, HelpFor::Detail];
+
+    #[test]
+    fn wide_board_help_fits_in_two_columns() {
+        let (rows, max) = help_rows(HelpFor::Board, 200, 50, 0);
+        let text = rows.join("\n");
+        assert_eq!(max, 0, "nothing to scroll");
+        assert!(!text.contains("j/k scroll"));
+        for s in HelpFor::Board.sections() {
+            assert!(text.contains(s.heading), "heading {}", s.heading);
+            for (k, _) in s.rows {
+                assert!(text.contains(k), "key {k}");
+            }
+        }
+        let x_of = |h: &str| rows.iter().find_map(|r| r.find(h)).unwrap();
+        assert!(HelpFor::Board.sections().iter().any(|s| x_of(s.heading) > 100), "a heading in the right column");
+    }
+
+    #[test]
+    fn narrow_board_help_is_one_column_with_a_hanging_indent() {
+        let (rows, max) = help_rows(HelpFor::Board, 80, 24, 0);
+        assert!(max > 0);
+        let longest = HelpFor::Board
+            .sections()
+            .iter()
+            .flat_map(|s| s.rows.iter())
+            .filter(|(k, _)| *k == "a")
+            .max_by_key(|(_, d)| d.len())
+            .unwrap();
+        let first_word = longest.1.split_whitespace().next().unwrap();
+        let (y, line) = rows.iter().enumerate().find(|(_, r)| r.contains(&format!("a  {first_word}"))).expect("the a row");
+        let desc_x = line.find(first_word).unwrap();
+        let key_x = line.find("a  ").unwrap();
+        assert!(desc_x > key_x + 1);
+        let next: Vec<char> = rows[y + 1].chars().collect();
+        assert!(next[key_x..desc_x].iter().all(|ch| *ch == ' '), "blank under the key column");
+        assert_ne!(next[desc_x], ' ', "the continuation starts at the description column");
+        assert!(rows.iter().all(|r| r.matches("Move").count() <= 1));
+    }
+
+    #[test]
+    fn descriptions_share_a_column_within_a_section() {
+        let (rows, _) = help_rows(HelpFor::Detail, 80, 24, 0);
+        let section = HelpFor::Detail.sections()[0];
+        assert!(rows.join("\n").contains(section.heading));
+        let xs: Vec<usize> = section
+            .rows
+            .iter()
+            .map(|(k, d)| {
+                let first = d.split_whitespace().next().unwrap();
+                let line = rows.iter().find(|r| r.contains(k) && r.contains(first)).unwrap();
+                let key_end = line.find(k).unwrap() + k.len();
+                key_end + line[key_end..].chars().take_while(|ch| *ch == ' ').count()
+            })
+            .collect();
+        assert!(xs.windows(2).all(|w| w[0] == w[1]), "{xs:?}");
+    }
+
+    #[test]
+    fn help_scrolls_and_clamps() {
+        let (top, max) = help_rows(HelpFor::Board, 80, 24, 0);
+        let (one, _) = help_rows(HelpFor::Board, 80, 24, 1);
+        assert_eq!(one[1], top[2], "the first visible row moves down one line");
+        let (last, _) = help_rows(HelpFor::Board, 80, 24, max);
+        let (past, _) = help_rows(HelpFor::Board, 80, 24, max + 50);
+        assert_eq!(last, past);
+        assert!(top.join("\n").contains("j/k scroll"));
+        assert!(last.join("\n").contains(&format!("{0}/{0}", max + 24 - 2)));
+    }
+
+    #[test]
+    fn help_survives_any_size() {
+        for ctx in ALL_HELP {
+            for (w, h) in [(20, 6), (80, 24), (120, 40), (200, 50), (1, 1), (3, 2)] {
+                let (rows, _) = help_rows(ctx, w, h, 0);
+                assert_eq!(rows.len(), h as usize);
+                if (w, h) == (120, 40) {
+                    let text = rows.join("\n");
+                    assert!(ctx.sections().iter().all(|s| text.contains(s.heading)) || text.contains("j/k scroll"));
+                }
+            }
+        }
+    }
 
     fn awaiting_approval_task() -> Task {
         serde_json::from_str(
