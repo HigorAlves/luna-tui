@@ -27,6 +27,8 @@ export interface Config {
   stateDir: string;
   /** Poll GitHub issues carrying `label` in `repos` (`owner/name`) and create tasks. No repos: off. */
   githubPoll: { repos: string[]; intervalMs: number; label: string };
+  /** The PR inbox: poll every open PR involving you. `MACHINE_GITHUB_PRS=off` turns it off. */
+  githubPrs: { enabled: boolean; intervalMs: number };
   /** `owner/name` to the checkout's path, for issues GitHub intake imports. */
   repoMap: Record<string, string>;
   /** Checkouts one level under here are matched to `owner/name` by their origin remote. */
@@ -100,6 +102,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       `MACHINE_GITHUB_POLL_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_GITHUB_POLL_INTERVAL}"`,
     );
   }
+  const prsSeconds = env.MACHINE_GITHUB_PRS_INTERVAL === undefined ? 60 : Number(env.MACHINE_GITHUB_PRS_INTERVAL);
+  if (!Number.isInteger(prsSeconds) || prsSeconds < 1) {
+    throw new Error(
+      `MACHINE_GITHUB_PRS_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_GITHUB_PRS_INTERVAL}"`,
+    );
+  }
   const retentionDays =
     env.MACHINE_RETENTION_DAYS === undefined ? DEFAULT_RETENTION_DAYS : Number(env.MACHINE_RETENTION_DAYS);
   if (!Number.isInteger(retentionDays) || retentionDays < 0) {
@@ -147,6 +155,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
     stateDir: env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness"),
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
+    githubPrs: { enabled: env.MACHINE_GITHUB_PRS !== "off", intervalMs: prsSeconds * 1000 },
     repoMap,
     reposDir: env.MACHINE_REPOS_DIR ?? join(home, "Developer"),
     threadReplies: env.MACHINE_THREAD_REPLIES !== "off",

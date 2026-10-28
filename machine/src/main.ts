@@ -17,6 +17,7 @@ import { pruneOldRuns } from "./adapters/persistence/prune.ts";
 import { sweepImages, sweepRunFolders, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
+import { GitHubPulls } from "./application/pulls.ts";
 import { RepoMap } from "./application/repo-map.ts";
 import { ThreadReplies } from "./application/threads.ts";
 import { Pipeline } from "./application/pipeline.ts";
@@ -174,7 +175,19 @@ const recovered = await pipeline.recover();
 if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by the last run`);
 pipeline.startSupervisor(SUPERVISOR_MS);
 
-const app = createApp({ db, pipeline, bus, watcher, stubs });
+/** Where each `owner/name` lives on this machine, for GitHub intake and the PR inbox alike. */
+const repoMap = new RepoMap({ map: config.repoMap, reposDir: config.reposDir });
+const pulls = new GitHubPulls({
+  intervalMs: config.githubPrs.intervalMs,
+  resolveRepo: (repo) => repoMap.resolve(repo),
+  rememberRepo: (repo, path) => repoMap.remember(repo, path),
+  findTask: async (repo, number) => {
+    const task = await pipeline.findBySource(repo, number, "github_pr");
+    return task && task.state !== "closed" && task.route !== "feature" ? { id: task.id, state: task.state, route: task.route } : null;
+  },
+  publish: (snapshot) => bus.publish({ type: "github.prs", snapshot }),
+});
+const app = createApp({ db, pipeline, bus, watcher, stubs, pulls });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
   const agents = [...new Set([...Object.keys(real), "verifying", "delivering", "shipping"])];
   console.log(
@@ -182,10 +195,14 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
   );
 });
 
+if (config.githubPrs.enabled) {
+  console.log(`github prs: polling every open PR involving you every ${config.githubPrs.intervalMs / 1000}s`);
+  pulls.start();
+}
+
 let intake: GitHubIntake | undefined;
 if (config.githubPoll.repos.length > 0) {
   const { repos, intervalMs, label } = config.githubPoll;
-  const repoMap = new RepoMap({ map: config.repoMap, reposDir: config.reposDir });
   intake = new GitHubIntake({ pipeline, repos, label, intervalMs, resolveRepo: (repo) => repoMap.resolve(repo) });
   console.log(`github intake: polling ${repos.join(", ")} every ${intervalMs / 1000}s for ${label}`);
   intake.start();
@@ -193,6 +210,7 @@ if (config.githubPoll.repos.length > 0) {
 
 async function shutdown(): Promise<void> {
   intake?.stop();
+  pulls.stop();
   pipeline.stopSupervisor();
   server.close();
   await pipeline.shutdown();

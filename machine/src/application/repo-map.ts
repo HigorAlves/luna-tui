@@ -40,6 +40,11 @@ export class RepoMap {
     return this.found.get(key) ?? null;
   }
 
+  /** A checkout that just appeared (a clone the board asked for): resolve `repo` to it from now on. */
+  remember(repo: string, path: string): void {
+    this.found.set(repo.toLowerCase(), path);
+  }
+
   /** Every checkout under the repos dir with a GitHub origin, as (slug, path). */
   private async scan(): Promise<Array<[string, string]>> {
     let entries;

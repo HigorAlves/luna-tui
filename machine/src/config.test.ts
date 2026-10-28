@@ -21,6 +21,7 @@ describe("loadConfig", () => {
       worktreesDir: "/home/me/Developer/worktrees",
       stateDir: "/home/me/.local/state/hardness",
       githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },
+      githubPrs: { enabled: true, intervalMs: 60_000 },
       retentionDays: DEFAULT_RETENTION_DAYS,
       taskBudgetUsd: null,
       dailyBudgetUsd: null,
@@ -74,6 +75,8 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ MACHINE_GITHUB_POLL_INTERVAL: "0" })).toThrow(/MACHINE_GITHUB_POLL_INTERVAL/);
     expect(() => loadConfig({ MACHINE_GITHUB_POLL_INTERVAL: "x" })).toThrow(/MACHINE_GITHUB_POLL_INTERVAL/);
     expect(() => loadConfig({ MACHINE_GITHUB_POLL: "nope" })).toThrow(/MACHINE_GITHUB_POLL/);
+    expect(loadConfig({ HOME: "/h", MACHINE_GITHUB_PRS: "off", MACHINE_GITHUB_PRS_INTERVAL: "120" }).githubPrs).toEqual({ enabled: false, intervalMs: 120_000 });
+    expect(() => loadConfig({ MACHINE_GITHUB_PRS_INTERVAL: "0" })).toThrow(/MACHINE_GITHUB_PRS_INTERVAL/);
   });
 
   it("binds to the host in MACHINE_HOST, so a container can listen on every interface", () => {

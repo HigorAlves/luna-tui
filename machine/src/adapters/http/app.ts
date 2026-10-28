@@ -3,6 +3,7 @@
 import {
   AnswersInput,
   type ApiError,
+  CloneInput,
   DecisionInput,
   EditPlanInput,
   NewTaskInput,
@@ -21,6 +22,7 @@ import { computeMetrics } from "../persistence/metrics-query.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
 import { NoPlanToEditError, type Pipeline, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { CloneError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
 import type { StubStages } from "../../application/stages/stubs.ts";
 import type { Bus } from "./bus.ts";
 import { InvalidSince, parseSince } from "./metrics.ts";
@@ -38,6 +40,8 @@ export interface AppDeps {
   watcher?: Watcher;
   /** Enables `POST /dev/stubs` when the stub stages are in use. */
   stubs?: StubStages;
+  /** The PR inbox's poller; without it the `/github/*` routes are absent. */
+  pulls?: PullsPort;
 }
 
 class BadRequest extends Error {}
@@ -62,7 +66,18 @@ function taskId(c: Context): string {
   return id;
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs }: AppDeps): Hono {
+/** `owner`, `name` and a positive integer `number` from a `/github/prs/:owner/:name/:number/*` route. */
+function prParams(c: Context): { owner: string; name: string; number: number } {
+  const owner = c.req.param("owner") ?? "";
+  const name = c.req.param("name") ?? "";
+  const number = Number(c.req.param("number"));
+  if (!/^[\w.-]+$/.test(owner) || !/^[\w.-]+$/.test(name) || !Number.isInteger(number) || number < 1) {
+    throw new BadRequest("the PR must be /github/prs/<owner>/<name>/<number>");
+  }
+  return { owner, name, number };
+}
+
+export function createApp({ db, pipeline, bus, watcher, stubs, pulls }: AppDeps): Hono {
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -70,6 +85,8 @@ export function createApp({ db, pipeline, bus, watcher, stubs }: AppDeps): Hono 
     if (error instanceof TransitionError) return fail(c, 409, "invalid_transition", error.message);
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
+    if (error instanceof NotReadyError) return fail(c, 409, "not_ready", error.message);
+    if (error instanceof CloneError) return fail(c, 400, "invalid_request", error.message);
     if (error instanceof ZodError) return fail(c, 400, "invalid_request", z.prettifyError(error));
     if (error instanceof BadRequest) return fail(c, 400, "invalid_request", error.message);
     console.error(error);
@@ -185,6 +202,23 @@ export function createApp({ db, pipeline, bus, watcher, stubs }: AppDeps): Hono 
 
   /** Removes the task's worktree from disk; the task and its branch stay. */
   app.post("/tasks/:id/worktree/remove", async (c) => c.json(toTask(await pipeline.removeWorktree(taskId(c)))));
+
+  if (pulls) {
+    // The PR inbox: what the last poll saw, a poll on demand, a merge, and a clone for a repo
+    // the machine has no checkout of. Actions on a PR are `POST .../actions` (pr-tasks).
+    app.get("/github/prs", (c) => c.json(pulls.snapshot));
+    app.post("/github/prs/refresh", async (c) => c.json(await pulls.pollOnce()));
+    app.post("/github/prs/:owner/:name/:number/merge", async (c) => {
+      const { owner, name, number } = prParams(c);
+      await pulls.merge(`${owner}/${name}`, number);
+      return c.json({ merged: true });
+    });
+    app.post("/github/clone", async (c) => {
+      const { repo, dest } = await body(c, CloneInput);
+      await pulls.clone(repo, dest);
+      return c.json({ repo, dest, cloning: true }, 202);
+    });
+  }
 
   if (stubs) {
     app.post("/dev/stubs", async (c) => {
