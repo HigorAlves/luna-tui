@@ -20,7 +20,7 @@ use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::{
-    app::{ACTIONS, App, FloorState, HelpFor, Mode},
+    app::{ACTIONS, App, Density, FloorState, GroupBy, HelpFor, Mode},
     model::{
         COLUMNS, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, Task, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, repo_colour_slot, spend_p90,
         now_secs, unix_secs,
@@ -454,6 +454,7 @@ fn footer_line(app: &App) -> Line<'static> {
             ("a", "advance"),
             ("enter", "open"),
             ("x", "actions"),
+            ("=", "density"),
             ("/", "filter"),
             ("q", "quit"),
         ]),
@@ -544,10 +545,22 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
     }
 
     let p90 = spend_p90(&app.tasks);
-    let items: Vec<ListItem> = indices
-        .iter()
-        .map(|&i| card(&app.tasks[i], p90, app.marked.contains(&app.tasks[i].id), app.is_new(&app.tasks[i])))
-        .collect();
+    // Two cells go to the highlight symbol, one to the padding each side.
+    let width = usize::from(area.width.saturating_sub(6));
+    let by_repo = app.group == GroupBy::Repo;
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut positions = Vec::with_capacity(indices.len());
+    let mut last_repo: Option<Option<&str>> = None;
+    for &i in &indices {
+        let task = &app.tasks[i];
+        if by_repo && last_repo != Some(task.repo_name()) {
+            let count = indices.iter().filter(|&&j| app.tasks[j].repo_name() == task.repo_name()).count();
+            items.push(repo_separator(task.repo_name(), count, width));
+            last_repo = Some(task.repo_name());
+        }
+        positions.push(items.len());
+        items.push(card(task, p90, app.marked.contains(&task.id), app.is_new(task), app.density, width));
+    }
     let list = List::new(items)
         .block(block)
         .highlight_style(selection_style())
@@ -555,16 +568,26 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
 
     let mut state = ListState::default();
     if focused && !indices.is_empty() {
-        state.select(Some(app.selection[column]));
+        state.select(positions.get(app.selection[column]).copied().or(positions.last().copied()));
     }
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// A board card: id and title, then state, age, worktree and how many implementer runs.
-/// One colour per repo, so a column scans by repo: the bar and the name share it.
+/// Under `gr` ordering: `── luna-tui 3 ─────`, a line that names the group the cards below
+/// belong to, in the repo's colour.
+fn repo_separator(repo: Option<&str>, count: usize, width: usize) -> ListItem<'static> {
+    let name = repo.unwrap_or("no repo");
+    let colour = repo.map_or(SUBTEXT0, |r| REPO_COLOURS[repo_colour_slot(r)]);
+    let head = format!("── {name} {count} ");
+    let rule = "─".repeat(width.saturating_sub(head.chars().count()));
+    ListItem::new(Line::from(Span::from(format!("{head}{rule}")).fg(c(colour))))
+}
+
+/// A board card. One colour per repo, so a column scans by repo: the bar and the name share it.
 const REPO_COLOURS: [Color; REPO_COLOUR_SLOTS] = [BLUE, GREEN, PEACH, LAVENDER, YELLOW, RED];
 
-/// The card's first line: a repo-coloured bar, the id, the repo's name, the title.
+/// The card's first line: the marks, a repo-coloured bar, the issue number, the title. The
+/// title leads so a narrow column cuts the identifiers, never the words.
 fn card_head(task: &Task, marked: bool, is_new: bool) -> Line<'static> {
     let mut spans = Vec::new();
     if marked {
@@ -574,50 +597,74 @@ fn card_head(task: &Task, marked: bool, is_new: bool) -> Line<'static> {
         spans.push(Span::from("• ").fg(c(YELLOW)).bold());
     }
     if let Some(repo) = task.repo_name() {
-        let colour = REPO_COLOURS[repo_colour_slot(repo)];
-        spans.push(Span::from("▌").fg(c(colour)));
-        spans.push(Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)));
-        spans.push(Span::from(format!("{repo} ")).fg(c(colour)));
-    } else {
-        spans.push(Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)));
+        spans.push(Span::from("▌").fg(c(REPO_COLOURS[repo_colour_slot(repo)])));
+    }
+    if task.route == "setup" {
+        spans.push(Span::from("⚙ ").fg(c(SUBTEXT0)));
     }
     spans.push(Span::from(task.issue_prefix()).fg(c(SUBTEXT0)));
     spans.push(Span::from(task.title.clone()).bold());
     Line::from(spans)
 }
 
-fn card(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool) -> ListItem<'static> {
-    ListItem::new(card_lines(task, spend_p90, marked, is_new))
+fn card(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, density: Density, width: usize) -> ListItem<'static> {
+    ListItem::new(card_lines(task, spend_p90, marked, is_new, density, width))
 }
 
-/// The card's three lines: head, status, and the triad (or a blank spacer without one).
-fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool) -> Vec<Line<'static>> {
+/// The card's lines by density: the head; `#id · repo`; the status with its age and badges;
+/// and, when comfortable, the worked / diff / tests line. Compact is the head alone with the
+/// status glyph and the age.
+fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, density: Density, width: usize) -> Vec<Line<'static>> {
     let look = task.look();
+    let age = age(&task.updated_at, now_secs());
+    if density == Density::Compact {
+        let mut spans = Vec::new();
+        if marked {
+            spans.push(Span::from("◆ ").fg(c(ACCENT)).bold());
+        }
+        if is_new {
+            spans.push(Span::from("• ").fg(c(YELLOW)).bold());
+        }
+        spans.push(Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)));
+        let used: usize = spans.iter().map(Span::width).sum::<usize>() + age.chars().count() + 1;
+        spans.push(Span::from(truncate(&task.title, width.saturating_sub(used).max(4))).bold());
+        spans.push(Span::from(format!(" {age}")).fg(c(SUBTEXT0)));
+        return vec![Line::from(spans)];
+    }
     let head = card_head(task, marked, is_new);
+
+    let mut ids = format!("  #{}", task.short_id());
+    if let Some(repo) = task.repo_name() {
+        ids.push_str(&format!(" · {repo}"));
+    }
+    if let Some(source) = &task.source {
+        ids.push_str(&format!(" · gh#{}", source.number));
+    }
+    let ids = Line::from(Span::from(ids).fg(c(SUBTEXT0)));
 
     let mut meta = vec![
         Span::raw("  "),
-        Span::from(format!("{} {}", look_glyph(look), task.status_label()))
-            .fg(look_color(look))
-            .bold(),
-        Span::from(format!(" {}", age(&task.updated_at, now_secs()))).fg(c(SUBTEXT0)),
+        Span::from(format!("{} {}", look_glyph(look), task.status_label())).fg(look_color(look)).bold(),
+        Span::from(format!(" · {age}")).fg(c(SUBTEXT0)),
     ];
     if task.worktree_path.is_some() {
-        meta.push(Span::from("  ⎇").fg(c(ACCENT)));
+        meta.push(Span::from(" ⎇").fg(c(ACCENT)));
     }
     if task.retries.total > 1 {
-        meta.push(Span::from(format!("  run {}", task.retries.total)).fg(c(PEACH)));
+        meta.push(Span::from(format!(" ×{}", task.retries.total)).fg(c(PEACH)));
     }
     if task.repo_path.is_none() && task.state == "draft" {
-        meta.push(Span::from("  no repo").fg(c(SUBTEXT0)));
+        meta.push(Span::from(" no repo").fg(c(SUBTEXT0)));
     }
     // A dim `$` on the tickets above the p90 of spend: the expensive ones at a glance.
     if task.spent_usd.zip(spend_p90).is_some_and(|(spent, p90)| spent > p90) {
-        meta.push(Span::from("  $").fg(c(SUBTEXT0)));
+        meta.push(Span::from(" $").fg(c(SUBTEXT0)));
     }
-
-    let third = task.triad().map_or_else(Line::default, |t| Line::from(Span::from(format!("  {t}")).fg(c(SUBTEXT0))));
-    vec![head, Line::from(meta), third]
+    let mut lines = vec![head, ids, Line::from(meta)];
+    if density == Density::Comfortable {
+        lines.push(task.triad().map_or_else(Line::default, |t| Line::from(Span::from(format!("  {t}")).fg(c(SUBTEXT0)))));
+    }
+    lines
 }
 
 pub(crate) fn bullets(items: &[String]) -> Vec<Line<'static>> {
@@ -1689,26 +1736,35 @@ mod tests {
             .join("\n");
         let (row3, _) = find(&text, "Ticket 3").expect("the expensive ticket");
         let (row0, _) = find(&text, "Ticket 0").expect("a cheap ticket");
-        let line_after = |row: usize| text.lines().nth(row + 1).unwrap_or("").to_string();
-        assert!(line_after(row3).contains('$'), "the expensive card is marked: {text}");
-        assert!(!line_after(row0).contains('$'), "a cheap card is not: {text}");
+        let status_line = |row: usize| text.lines().nth(row + 2).unwrap_or("").to_string();
+        assert!(status_line(row3).contains('$'), "the expensive card is marked: {text}");
+        assert!(!status_line(row0).contains('$'), "a cheap card is not: {text}");
     }
 
     #[test]
-    fn a_card_shows_its_repo_name_after_the_id() {
+    fn a_card_leads_with_its_title_and_names_its_repo_on_the_second_line() {
         const TASK: &str = r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
             "repoPath":"/Developer/projects/luna-tui","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
             "waitingOnYou":false,"running":false,"queued":false,
             "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
         let task: Task = serde_json::from_str(TASK).unwrap();
-        let head = card_head(&task, false, false).to_string();
-        assert!(head.contains("luna-tui"), "{head}");
-        assert!(head.starts_with('▌'), "a repo bar leads the card: {head}");
+        let lines: Vec<String> = card_lines(&task, None, false, false, Density::Cozy, 40).iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines[0], "▌Login page", "a repo bar, then the title, nothing else in the way");
+        assert_eq!(lines[1], "  #abcdef12 · luna-tui");
+        assert!(lines[2].contains("○ intake · "), "{}", lines[2]);
+        assert_eq!(lines.len(), 3);
         let mut bare = task.clone();
         bare.repo_path = None;
-        let head = card_head(&bare, false, false).to_string();
-        assert!(!head.contains("luna-tui") && !head.starts_with('▌'), "{head}");
+        let lines: Vec<String> = card_lines(&bare, None, false, false, Density::Cozy, 40).iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines[0], "Login page");
+        assert_eq!(lines[1], "  #abcdef12");
+        assert!(lines[2].contains("no repo"), "{}", lines[2]);
+        let compact: Vec<String> = card_lines(&task, None, true, false, Density::Compact, 24).iter().map(|l| l.to_string()).collect();
+        assert_eq!(compact.len(), 1);
+        assert!(compact[0].starts_with("◆ ○ Login page "), "{}", compact[0]);
+        let long: Vec<String> = card_lines(&task, None, false, false, Density::Compact, 12).iter().map(|l| l.to_string()).collect();
+        assert!(long[0].contains('…') && long[0].chars().count() <= 12, "the title is cut to the width: {}", long[0]);
     }
 
     #[test]
@@ -1719,7 +1775,7 @@ mod tests {
     }
 
     #[test]
-    fn a_card_s_second_line_is_the_triad_when_the_task_has_one() {
+    fn a_comfortable_card_s_fourth_line_is_the_triad_when_the_task_has_one() {
         const TASK: &str = r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
             "repoPath":"/r/app","branch":null,"worktreePath":null,"state":"implementing","column":"Build",
             "waitingOnYou":false,"running":true,"queued":false,
@@ -1727,14 +1783,47 @@ mod tests {
             "workedMs":240000,"diff":{"added":142,"removed":18},"tests":{"passed":7,"total":9},
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
         let task: Task = serde_json::from_str(TASK).unwrap();
-        let lines: Vec<String> = card_lines(&task, None, false, false).iter().map(|l| l.to_string()).collect();
-        assert!(lines[2].contains("worked 4m · +142 −18 · tests 7/9"), "{lines:?}");
+        let lines: Vec<String> = card_lines(&task, None, false, false, Density::Comfortable, 60).iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines.len(), 4);
+        assert!(lines[3].contains("worked 4m · +142 −18 · tests 7/9"), "{lines:?}");
+        assert!(lines[2].contains("implementing · "), "the status line keeps the stage and age: {lines:?}");
         let mut bare = task.clone();
         bare.worked_ms = None;
         bare.diff = None;
         bare.tests = None;
-        let lines: Vec<String> = card_lines(&bare, None, false, false).iter().map(|l| l.to_string()).collect();
-        assert_eq!(lines[2].trim(), "", "no numbers, no line: {lines:?}");
+        let lines: Vec<String> = card_lines(&bare, None, false, false, Density::Comfortable, 60).iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines[3].trim(), "", "no numbers, no line: {lines:?}");
+        assert_eq!(card_lines(&task, None, false, false, Density::Cozy, 60).len(), 3, "cozy drops the triad");
+    }
+
+    #[test]
+    fn ordering_by_repo_names_each_group_and_keeps_the_selection_on_its_card() {
+        let mut app = App::new(crate::Machine::from_env());
+        for (i, repo) in ["/r/notch", "/r/luna-tui", "/r/notch"].iter().enumerate() {
+            let task: Task = serde_json::from_str(&format!(
+                r#"{{"id":"{i}{i}{i}{i}{i}{i}{i}{i}0000","title":"Ticket {i}","description":"","criteria":[],
+                "repoPath":"{repo}","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
+                "waitingOnYou":false,"running":false,"queued":false,
+                "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+                "createdAt":"2026-10-2{i}T10:00:00.000Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+            ))
+            .unwrap();
+            app.tasks.push(task);
+        }
+        app.group = GroupBy::Repo;
+        app.selection[0] = 2;
+        let mut terminal = Terminal::new(TestBackend::new(60, 24)).unwrap();
+        terminal.draw(|f| render_column(f, f.area(), &app, 0, true)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..24).map(|y| (0..60).map(|x| buffer[(x, y)].symbol().to_string()).collect()).collect();
+        let text = rows.join("\n");
+        assert!(text.contains("── luna-tui 1 ──"), "{text}");
+        assert!(text.contains("── notch 2 ──"), "{text}");
+        let luna = rows.iter().position(|r| r.contains("── luna-tui")).unwrap();
+        let notch = rows.iter().position(|r| r.contains("── notch")).unwrap();
+        assert!(luna < notch, "groups in name order: {text}");
+        let selected = rows.iter().find(|r| r.contains("▌ ")).expect("a highlighted row");
+        assert!(selected.contains("Ticket"), "the highlight sits on a card, not a separator: {selected}");
     }
 
     #[test]

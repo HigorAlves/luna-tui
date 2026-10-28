@@ -164,7 +164,8 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
             ("@", "show only tickets for this repo"),
             ("zc / zo", "fold / unfold the focused column (Done starts folded)"),
             ("zz", "fold every column but the focused one"),
-            ("gs / gr / ga", "order columns by stage, by repo, by age"),
+            ("gs / gr / ga", "order columns by stage, by repo, by age (gr names each repo group)"),
+            ("=", "card density: 3 lines, 4 with worked · diff · tests, 1"),
         ],
     ),
     section(
@@ -398,7 +399,8 @@ pub const HELP: &[(&str, &str)] = &[
     ("@", "show only tickets for this repo"),
     ("zc / zo", "fold / unfold the focused column (Done starts folded)"),
     ("zz", "fold every column but the focused one"),
-    ("gs / gr / ga", "order columns by stage, by repo, by age"),
+    ("gs / gr / ga", "order columns by stage, by repo, by age (gr names each repo group)"),
+    ("=", "card density: 3 lines, 4 with worked · diff · tests, 1"),
     ("F", "Floor: 7d and 30d metrics, a row per repo (tab focuses one, r refreshes, esc closes)"),
     ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
     ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
@@ -494,6 +496,34 @@ pub fn paused_ids(tasks: &[Task]) -> Vec<String> {
 
 /// A burst of events for the open ticket becomes one detail refetch, not one per event.
 const DETAIL_DEBOUNCE: Duration = Duration::from_millis(300);
+
+/// How tall a card is: three lines (title; id and repo; status), four with the worked / diff /
+/// tests line, or one (glyph, title, age) so a busy column shows twice the tickets.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Density {
+    #[default]
+    Cozy,
+    Comfortable,
+    Compact,
+}
+
+impl Density {
+    pub fn next(self) -> Density {
+        match self {
+            Density::Cozy => Density::Comfortable,
+            Density::Comfortable => Density::Compact,
+            Density::Compact => Density::Cozy,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Density::Cozy => "3 lines",
+            Density::Comfortable => "4 lines with worked · diff · tests",
+            Density::Compact => "1 line",
+        }
+    }
+}
 
 /// How the tickets inside a column are ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -672,6 +702,8 @@ pub struct App {
     pub folded: BTreeSet<usize>,
     /// How tickets are ordered inside a column (`gs`/`gr`/`ga`).
     pub group: GroupBy,
+    /// How tall the cards are (`=` cycles).
+    pub density: Density,
     /// A two-key sequence in flight: `z` (fold) or `g` (group).
     prefix: Option<char>,
     /// When the board was last open (unix seconds): the Digest's since, the cards' new dot.
@@ -737,6 +769,7 @@ impl App {
             digest: None,
             folded: COLUMNS.iter().position(|c| *c == "Done").into_iter().collect(),
             group: GroupBy::default(),
+            density: Density::default(),
             prefix: None,
             last_seen_secs: store::last_seen_secs_at(&store::state_path()),
             home_repo: herdr::workspace_repo(),
@@ -2039,6 +2072,10 @@ impl App {
             KeyCode::Char('n') => self.mode = Mode::Adding(String::new()),
             KeyCode::Char('x') => self.mode = Mode::Actions { cursor: 0 },
             KeyCode::Char('/') => self.mode = Mode::Filter,
+            KeyCode::Char('=') => {
+                self.density = self.density.next();
+                self.notify(format!("cards: {}", self.density.label()), false);
+            }
             KeyCode::Char('!') => {
                 self.needs_only = !self.needs_only;
                 self.clamp_selection();
