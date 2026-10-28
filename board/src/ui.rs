@@ -172,7 +172,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         match &app.mode {
             Mode::SlackSnooze { cursor, .. } => render_slack_snooze(frame, *cursor),
-            Mode::SlackReply { id, area, vim } => render_slack_reply(frame, app, id, area, vim),
+            Mode::SlackReply { id, area, vim, nudge } => render_slack_reply(frame, app, id, area, vim, *nudge),
             Mode::SlackTask { id, title, repo } => render_slack_task(frame, app, id, title, repo.as_deref()),
             Mode::SlackWatchAdd { query, cursor } => render_slack_watch_add(frame, app, query, *cursor),
             Mode::SlackActions { cursor } => render_slack_actions(frame, app, *cursor),
@@ -1520,7 +1520,7 @@ fn render_slack_actions(frame: &mut Frame, app: &App, cursor: usize) {
 
 /// The reply editor: the text on top, the thread's last messages under a `context` rule, so
 /// what you answer stays in view. ctrl+s posts it as you.
-fn render_slack_reply(frame: &mut Frame, app: &App, id: &str, area: &TextArea<'static>, vim: &crate::vim::Vim) {
+fn render_slack_reply(frame: &mut Frame, app: &App, id: &str, area: &TextArea<'static>, vim: &crate::vim::Vim, nudge: bool) {
     let rect = centered(frame.area(), frame.area().width * 9 / 10, frame.area().height * 8 / 10);
     frame.render_widget(Clear, rect);
     let item = app.slack_item(id);
@@ -1528,10 +1528,12 @@ fn render_slack_reply(frame: &mut Frame, app: &App, id: &str, area: &TextArea<'s
         crate::vim::Mode::Normal => (" NORMAL ", ACCENT),
         crate::vim::Mode::Insert => (" INSERT ", GREEN),
     };
+    let verb = if nudge { "nudge" } else { "reply" };
     let title = match item {
+        Some(item) if nudge => format!(" nudge · {} · opens with @{} ", item.channel_label(), item.author.name),
         Some(item) if item.thread_ts.is_some() => format!(" reply · {} · thread with @{} ", item.channel_label(), item.author.name),
         Some(item) => format!(" reply · {} · to @{} ", item.channel_label(), item.author.name),
-        None => " reply ".to_string(),
+        None => format!(" {verb} "),
     };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -1636,7 +1638,7 @@ fn render_slack_watch_add(frame: &mut Frame, app: &App, query: &str, cursor: usi
             lines.push(Line::from(vec![Span::from("▌ ").fg(c(ACCENT)), Span::from(text.to_string()).fg(c(ACCENT)).bold()]));
         }
     } else if matches.is_empty() {
-        lines.push(Line::from(Span::from("  no matches").fg(c(SUBTEXT0))));
+        lines.push(Line::from(Span::from(if app.slack_catalog_loading() { "  loading…" } else { "  no matches" }).fg(c(SUBTEXT0))));
     } else {
         let start = cursor.saturating_sub(VISIBLE_ROWS / 2).min(matches.len().saturating_sub(VISIBLE_ROWS));
         for (i, option) in matches.iter().enumerate().skip(start).take(VISIBLE_ROWS) {
@@ -2817,7 +2819,7 @@ mod slack_render_tests {
         assert!(text.contains("n add  e floor  d delete  space on/off  esc"), "{text}");
         app.slack.as_mut().unwrap().watches = None;
 
-        app.mode = Mode::SlackReply { id: "C0123:1730112345.0001".into(), area: TextArea::new(vec!["Approve the rollback, I'm on it.".into()]), vim: crate::vim::Vim::new() };
+        app.mode = Mode::SlackReply { id: "C0123:1730112345.0001".into(), area: TextArea::new(vec!["Approve the rollback, I'm on it.".into()]), vim: crate::vim::Vim::new(), nudge: false };
         let text = render(120, 40, &app);
         assert!(text.contains(" reply · #payments-oncall · thread with @marta "), "{text}");
         assert!(text.contains("ctrl+s send  esc back") && text.contains(" NORMAL "), "{text}");
@@ -2834,7 +2836,7 @@ mod slack_render_tests {
 
         app.mode = Mode::SlackWatchAdd { query: "@pl".into(), cursor: 0 };
         let text = render(120, 40, &app);
-        assert!(text.contains(" add a watch ") && text.contains("@pl▏") && text.contains("a user group") && text.contains("no matches"), "{text}");
+        assert!(text.contains(" add a watch ") && text.contains("@pl▏") && text.contains("a user group") && text.contains("loading…"), "{text}");
         app.mode = Mode::SlackWatchAdd { query: "luna-tui".into(), cursor: 0 };
         assert!(render(120, 40, &app).contains("a keyword"));
 

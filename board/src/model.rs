@@ -814,6 +814,9 @@ pub struct SlackSnapshot {
     /// The reply SLA in effect, seconds by priority (rules file `## SLA`); 0 or missing means none.
     #[serde(default)]
     pub sla: BTreeMap<String, u64>,
+    /// Now is inside the rules file's quiet hours: only a P0 raises a notice.
+    #[serde(default)]
+    pub quiet: bool,
 }
 
 impl SlackSnapshot {

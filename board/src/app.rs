@@ -708,11 +708,12 @@ pub enum Mode {
     /// `s` on a Slack item: pick how long it sleeps.
     SlackSnooze { id: String, cursor: usize },
     /// `r` (or `n`) on a Slack item: the reply, pre-filled with triage's draft (or a nudge);
-    /// ctrl+s posts it as you.
+    /// ctrl+s posts it as you. `nudge`: the machine prefixes a mention of the author.
     SlackReply {
         id: String,
         area: TextArea<'static>,
         vim: Vim,
+        nudge: bool,
     },
     /// `t` on a Slack item: one yes, then a Backlog ticket with `title`, in `repo` when guessed.
     SlackTask { id: String, title: String, repo: Option<String> },
@@ -802,8 +803,10 @@ pub struct App {
     pub slack_snapshot: SlackSnapshot,
     /// The Slack view, open while this is `Some`.
     pub slack: Option<SlackState>,
-    /// The watch picker's completions (user groups, channels), fetched once per session.
+    /// The watch picker's completions (user groups, channels), fetched once per session, off the UI thread.
     slack_catalog: Option<(Vec<SlackOption>, Vec<SlackOption>)>,
+    /// A catalogue fetch is in flight; the picker says "loading…" meanwhile.
+    slack_catalog_pending: bool,
     /// Tickets marked with `v`/`V`: `a`, `X`, `d`, `w` act on all of them.
     pub marked: BTreeSet<String>,
     /// The stage pool as `/health` last reported it; None until the first answer.
@@ -879,6 +882,7 @@ impl App {
             slack_snapshot: SlackSnapshot::default(),
             slack: None,
             slack_catalog: None,
+            slack_catalog_pending: false,
             marked: BTreeSet::new(),
             slots: None,
             digest: None,
@@ -1044,18 +1048,26 @@ impl App {
                 }
                 Incoming::Message(StreamMessage::Prs { snapshot }) => self.take_prs(snapshot),
                 Incoming::Message(StreamMessage::Slack { snapshot }) => self.take_slack(snapshot),
+                Incoming::SlackCatalog { groups, channels } => {
+                    self.slack_catalog = Some((groups, channels));
+                    self.slack_catalog_pending = false;
+                }
             }
         }
     }
 
     /// A fresh Slack snapshot: notices for the P0/P1 items that moved into Needs reply or
     /// Decide, for items that went past their reply SLA and for threads that came back after
-    /// you cleared them; the view's cursors kept inside their lists.
+    /// you cleared them (a P0's only, inside the rules file's quiet hours); the view's cursors
+    /// kept inside their lists.
     fn take_slack(&mut self, snapshot: SlackSnapshot) {
         let before: std::collections::HashMap<&str, (Option<SlackSplit>, Option<&str>, bool)> =
             self.slack_snapshot.items.iter().map(|i| (i.id.as_str(), (i.split_enum(), i.reopened_at.as_deref(), i.overdue))).collect();
         let mut notices = Vec::new();
         for item in &snapshot.items {
+            if notify::muted_by_quiet_hours(snapshot.quiet, item) {
+                continue;
+            }
             let old = before.get(item.id.as_str());
             if let Some(notice) = notify::slack_notice(old.and_then(|o| o.0), old.and_then(|o| o.1), old.is_some_and(|o| o.2), item) {
                 notices.push(notice);
@@ -1090,6 +1102,27 @@ impl App {
 
     fn slack_item_mut(&mut self, id: &str) -> Option<&mut SlackItem> {
         self.slack_snapshot.items.iter_mut().find(|i| i.id == id)
+    }
+
+    /// True while the watch picker's catalogue is still on its way from the machine.
+    pub fn slack_catalog_loading(&self) -> bool {
+        self.slack_catalog.is_none()
+    }
+
+    /// Fetches the user groups and channels the watch picker completes from, off the UI
+    /// thread, once per session: started when the Slack view opens so `n` finds them ready.
+    fn prefetch_slack_catalog(&mut self) {
+        if self.slack_catalog.is_some() || self.slack_catalog_pending {
+            return;
+        }
+        self.slack_catalog_pending = true;
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let groups = machine.slack_usergroups().unwrap_or_default();
+            let channels = machine.slack_channels().unwrap_or_default();
+            let _ = tx.send(Incoming::SlackCatalog { groups, channels });
+        });
     }
 
     /// The watch picker's completions for `query`: user groups for `@…`, channels for `#…`,
@@ -2240,6 +2273,7 @@ impl App {
             self.take_slack(snapshot);
         }
         self.slack = Some(SlackState::default());
+        self.prefetch_slack_catalog();
     }
 
     /// The Slack view's keys: move, switch split, open, act on the item, Watches, refresh.
@@ -2334,8 +2368,9 @@ impl App {
         let id = item.id.clone();
         match key {
             SlackKey::Open => self.open_url(&item.permalink),
-            SlackKey::Reply => self.open_slack_reply(item, item.triage.as_ref().and_then(|t| t.draft.clone()).unwrap_or_default()),
-            SlackKey::Nudge => self.open_slack_reply(item, format!("@{} gentle nudge on this one: any news?", item.author.name)),
+            SlackKey::Reply => self.open_slack_reply(item, item.triage.as_ref().and_then(|t| t.draft.clone()).unwrap_or_default(), false),
+            // The mention itself is built on the machine, by id; the editor shows the words only.
+            SlackKey::Nudge => self.open_slack_reply(item, "gentle nudge on this one: any news?".to_string(), true),
             SlackKey::Snooze => self.mode = Mode::SlackSnooze { id, cursor: 0 },
             SlackKey::Task => {
                 let title = item.summary().to_string();
@@ -2396,15 +2431,16 @@ impl App {
     }
 
     /// The reply editor over `item`, pre-filled with `text`; the same vim keys as every editor.
-    fn open_slack_reply(&mut self, item: &SlackItem, text: String) {
+    /// `nudge` asks the machine to open the message with a mention of the author.
+    fn open_slack_reply(&mut self, item: &SlackItem, text: String, nudge: bool) {
         let lines: Vec<String> = if text.is_empty() { vec![String::new()] } else { text.lines().map(str::to_string).collect() };
         let mut area = TextArea::new(lines);
         area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
-        self.mode = Mode::SlackReply { id: item.id.clone(), area, vim: Vim::new() };
+        self.mode = Mode::SlackReply { id: item.id.clone(), area, vim: Vim::new(), nudge };
     }
 
     fn handle_slack_reply(&mut self, key: KeyEvent) -> Outcome {
-        let Mode::SlackReply { id, area, vim } = &mut self.mode else {
+        let Mode::SlackReply { id, area, vim, nudge } = &mut self.mode else {
             return Outcome::Continue;
         };
         match vim.handle(area, key) {
@@ -2412,13 +2448,14 @@ impl App {
             crate::vim::Outcome::Cancel => self.mode = Mode::Normal,
             crate::vim::Outcome::Save => {
                 let id = id.clone();
+                let nudge = *nudge;
                 let text = area.lines().join("\n").trim().to_string();
                 if text.is_empty() {
                     self.notify("nothing to send", true);
                     return Outcome::Continue;
                 }
                 self.mode = Mode::Normal;
-                match self.machine.slack_reply(&id, &text) {
+                match self.machine.slack_reply(&id, &text, nudge) {
                     Ok(()) => {
                         let now = iso_of(now_secs());
                         if let Some(item) = self.slack_item_mut(&id) {
@@ -2526,11 +2563,8 @@ impl App {
             KeyCode::Char('j') | KeyCode::Down => cursor = (cursor + 1).min(count.saturating_sub(1)),
             KeyCode::Char('k') | KeyCode::Up => cursor = cursor.saturating_sub(1),
             KeyCode::Char('n') => {
-                if self.slack_catalog.is_none() {
-                    let groups = self.machine.slack_usergroups().unwrap_or_default();
-                    let channels = self.machine.slack_channels().unwrap_or_default();
-                    self.slack_catalog = Some((groups, channels));
-                }
+                // The catalogue was asked for when the view opened; the picker says "loading…" until it lands.
+                self.prefetch_slack_catalog();
                 self.mode = Mode::SlackWatchAdd { query: String::new(), cursor: 0 };
                 return Outcome::Continue;
             }
@@ -4299,6 +4333,9 @@ mod slack_tests {
                     }
                     "/tasks" => "[]".to_string(),
                     "/slack/watches" => format!("[{},{}]", watch_json("w1", "usergroup", "S04ABCD", "@platform-team", false), watch_json("w2", "broadcast", "here", "@here", true)),
+                    "/slack/usergroups" => r#"[{"id":"S04ABCD","label":"@platform-team"},{"id":"S05","label":"@data"}]"#.to_string(),
+                    "/slack/channels" => r##"[{"id":"C1","label":"#eng"}]"##.to_string(),
+                    p if p.ends_with("/reply") => format!(r#"{{"replied":{}}}"#, String::from_utf8_lossy(&body)),
                     p if p.starts_with("/slack/watches/") => watch_json("w1", "usergroup", "S04ABCD", "@platform-team", false).replace("\"enabled\":true", "\"enabled\":false"),
                     _ => "{}".to_string(),
                 };
@@ -4432,6 +4469,57 @@ mod slack_tests {
         let sent = app.slack_item("C0123:1730112345.0001").unwrap();
         assert_eq!(sent.split_enum(), Some(SlackSplit::Done));
         assert!(sent.you_replied);
+    }
+
+    #[test]
+    fn n_opens_a_nudge_the_machine_addresses_by_id_not_a_typed_at_name() {
+        let mut waiting = snapshot();
+        waiting.items.push(item("C0123:7", "waiting_on_them", Some("P1"), "2026-10-27T08:00:00Z"));
+        let mut app = app_with(waiting);
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('n'));
+        let Mode::SlackReply { area, nudge, .. } = &app.mode else { panic!("the reply editor opens: {}", toast(&app)) };
+        assert!(*nudge);
+        assert_eq!(area.lines().join("\n"), "gentle nudge on this one: any news?", "no @name typed into the text: the machine mentions the author by id");
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert_eq!(toast(&app), "sent");
+    }
+
+    #[test]
+    fn opening_the_slack_view_prefetches_the_watch_catalogue_off_the_ui_thread() {
+        let mut app = app_with(snapshot());
+        assert!(app.slack_catalog_loading());
+        press(&mut app, KeyCode::Char('S'));
+        assert!(app.slack_catalog_pending, "the fetch started when the view opened");
+        assert!(app.slack_catalog_loading(), "and has not landed yet");
+        let landed = app.stream.recv_timeout(std::time::Duration::from_secs(5)).expect("the catalogue arrives on the stream");
+        assert!(matches!(landed, Incoming::SlackCatalog { .. }));
+        app.tx.send(landed).unwrap();
+        app.pump();
+        assert!(!app.slack_catalog_loading() && !app.slack_catalog_pending);
+        assert_eq!(app.slack_watch_matches("@dat").iter().map(|o| o.id.as_str()).collect::<Vec<_>>(), vec!["S05"]);
+        assert_eq!(app.slack_watch_matches("#").len(), 1);
+    }
+
+    #[test]
+    fn quiet_hours_hold_back_every_notice_but_a_p0s() {
+        let mut quiet = snapshot();
+        quiet.quiet = true;
+        let mut app = app_with(quiet.clone());
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Needs reply"], "the P0 gets through; the overdue P2 waits");
+        let mut later = quiet.clone();
+        later.items[1].reopened_at = Some("2026-10-28T10:30:00Z".into());
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: later })).unwrap();
+        app.pump();
+        assert!(app.take_notices().is_empty(), "a P1 reopen is held during quiet hours");
+        let mut morning = quiet;
+        morning.quiet = false;
+        morning.items.push(item("C0123:9", "needs_reply", Some("P1"), "2026-10-28T10:00:00Z"));
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: morning })).unwrap();
+        app.pump();
+        assert_eq!(app.take_notices().iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Needs reply"], "outside the window a P1 entering Needs reply is news again");
     }
 
     #[test]
