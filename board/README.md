@@ -55,7 +55,8 @@ Press `?` in the board for the full list. The main ones:
 | Key | Action |
 |---|---|
 | `h` / `l`, `j` / `k` | move between columns and tickets |
-| `enter` | open the ticket in a popup over the board |
+| `enter` | open the ticket's workspace: a popup with a rail of sections (see below) |
+| `=` | card density: three lines, four with `worked · diff · tests`, or one |
 | `n` / `e` / `d` | new ticket, edit in place with vim-style keys (`i`/`a`/`o`… insert, `esc`/`q` back to normal, `ctrl+s` saves), delete (asks first) |
 | `a` | advance: move a backlog ticket to intake, start it, approve a plan or tests, answer triage's questions, retry an escalation (with optional guidance; it resumes the stage it stopped in with a fresh retry budget), resume after a usage limit |
 | `A` | memory review: approve without writing the proposed rules to `docs/agents/project-context.md` (`a` applies them) |
@@ -74,17 +75,34 @@ Press `?` in the board for the full list. The main ones:
 
 ## Tickets
 
-`enter` opens a ticket in a popup over the board: its status, the open gate's
-content (a plan to read, test cases to check, each with the criterion it proves, the PR once it's shipped), stage
-runs and recent activity. `e` edits the same ticket in place, right there in
-the board, as the same markdown `n` fills in for a new one:
+`enter` opens a ticket in a popup over the board. Inside it, a rail of eight sections on the
+left (a tab strip on a terminal under 100 columns) and one pane on the right; `h`/`l` or `1`…`8`
+switch, `j`/`k` scroll the pane or pick a row where the section lists some, `+` toggles the popup
+between most of the screen and all of it. Every section draws from everything the machine knows
+about the ticket, whether or not a gate was decided: the approved plan stays readable after `a`.
+While a gate is open, its strip sits on top of every section with the keys that answer it.
 
-While a ticket is `awaiting_approval`, the popup (and `e`) splits into two columns
-instead: triage's plan on the left (brief, criteria to build, assumptions — slices stay as
-triage wrote them), the ticket's own description and criteria on the right. `tab` moves
-between the two while editing; `ctrl+s` saves whichever side changed, so you can tighten
-the plan's criteria, add a missing assumption, or fix the ticket's own wording before you
-approve. On a terminal narrower than 110 columns the two stack instead, plan first.
+| Section | Shows | Keys inside |
+|---|---|---|
+| Overview | the status, then one row per acceptance criterion with its state in the plan, how many cases prove it and what verifying found; repo, branch, issue, why, spend; the ticket's description and criteria; a setup gate's `luna.yaml` and proof, triage's questions, the memory review's rules | `e` edits the ticket's text |
+| Plan | triage's latest plan (brief, criteria, assumptions, slices) and its history: send-backs with their reason, your edits, the approval | `e` edits brief, criteria and assumptions until Build starts; `a` / `r` at the gate |
+| Tests | test_design's cases under the criterion each proves, with ✓ ✗ – from verifying | `e` edits the cases while they wait for your check (`## criterion`, `- case`, the approach under it) |
+| Runs | every stage run with how long it took, its cost and turns; the selected run's error, per-case verdicts and files | `j`/`k` pick a run |
+| Diff | the branch against its base: files with +/−, the selected file's patch | `j`/`k` pick a file |
+| Evidence | the QA verdict and every artifact the stages produced, by kind | `j`/`k` pick a file |
+| PR | the branch's pull request as the Pulls inbox sees it: checks by name, review state, threads, the task in flight; or the URL the ship gate reported | `o` opens it, `S` ships at the gate |
+| Activity | every event | |
+
+The popup opens on the section the open gate concerns: the Plan at `approve plan`, the Tests
+at `check tests`, the Runs when escalated. `e` on the board (outside the popup) keeps its old
+meaning: the two-pane plan editor at the plan gate, the ticket's text otherwise.
+
+The plan editor splits into two columns: triage's plan on the left (brief, criteria to build,
+assumptions; slices stay as triage wrote them), the ticket's own description and criteria on the
+right. `tab` moves between the two while editing; `ctrl+s` saves whichever side changed. The plan
+may be edited through the test check too, since nothing is built yet; each edit is kept as a
+revision the Plan section's history shows. On a terminal narrower than 110 columns the two stack
+instead, plan first. `n` fills a new ticket in as the same markdown `e` edits:
 
 ```markdown
 # Login page
@@ -165,7 +183,7 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 | `R` | poll GitHub now |
 | `x` | the same actions as a menu, each saying why it is off when it is |
 
-A row reads `repo#n  title  @author  checks  review  threads  age`, with `⚙ <stage>` while a task runs for it and `no checkout` when the machine has no clone of the repo. A dispatch on such a PR opens the clone prompt: the same filter-as-you-type search `R` uses, over the folders under `HARDNESS_REPOS_DIR`; `enter` clones into `<folder>/<name>` and runs the action once it lands, `esc` leaves the row read-only. `c` and `t` are off on a fork head (nothing can push to it), `v` is off on your own PRs, and all three are off while a task already runs for the PR.
+From 100 columns the view is a list beside a detail pane. A row reads `✓ ▌repo  #n  title  age  tag` in fixed columns, the checks glyph first (`✓` green, `✗` red, `◐` running), the repo's colour bar next (the same colour its cards wear), `⚙` while a task runs for it and `⌂` when the machine has no clone of the repo; only the title is ever cut. The pane shows the selected PR: author and branches, every check by name, the review state and unresolved threads, the task in flight, and the four keys with why each is off. Under 100 columns the pane hides and `x` shows the same detail over the list. A dispatch on such a PR opens the clone prompt: the same filter-as-you-type search `R` uses, over the folders under `HARDNESS_REPOS_DIR`; `enter` clones into `<folder>/<name>` and runs the action once it lands, `esc` leaves the row read-only. `c` and `t` are off on a fork head (nothing can push to it), `v` is off on your own PRs, and all three are off while a task already runs for the PR.
 
 ## Floor
 
