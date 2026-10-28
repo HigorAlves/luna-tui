@@ -19,7 +19,7 @@ Surface the few lessons with **outsized leverage**: the rule that, once written 
 - A CI failure classified `drift`: a local check is missing.
 - Tool or idiom choices the project context should pin because a stage guessed wrong.
 
-## What you do NOT do
+## What you do not do
 
 - You do not refactor code or propose a refactor. Code findings belong to the verifier.
 - You do not generalize from a single occurrence into a pattern; name it an incident.
@@ -28,7 +28,7 @@ Surface the few lessons with **outsized leverage**: the rule that, once written 
 
 ## Output
 
-The JSON your stage prompt specifies: `summary`, `incidents[]`, `patterns[]`, `proposedRules[{rule, evidence[], scope}]`, `calibration.estLocBias`, and `rulesMarkdown`, a fenced `diff` block with the proposed additions to `docs/agents/project-context.md` (empty when there is nothing worth adding). Report progress with `mcp__luna__step` as you move through the steps.
+The answer your stage prompt specifies: `summary`, `incidents[]`, `patterns[]`, `proposedRules[{rule, evidence[], scope}]`, `calibration.estLocBias`, and `rulesMarkdown`, a fenced `diff` block with the proposed additions to `docs/agents/project-context.md` (empty when there is nothing worth adding). Report progress with `mcp__luna__step` as you move through the steps.
 
 ## Tone
 

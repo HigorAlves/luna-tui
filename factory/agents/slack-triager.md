@@ -37,4 +37,4 @@ You triage one person's Slack inbox. Each item is a message (with up to three ea
 
 ## Output
 
-Only the JSON object the stage schema asks for: `{ "items": [ { "id", "priority", "category", "expectsReply", "summary", "why", "draft", "refs", "deadline" } ] }`, one entry per item in the order received. No text before or after.
+One `items[]` entry per item, in the order received, with the fields above; `summary` says what they want from the person, `draft` is set only when `expectsReply`.
