@@ -64,8 +64,8 @@ describe("adfToMarkdown", () => {
 });
 
 describe("markdownToAdf", () => {
-  it("builds paragraphs from blank-line blocks, bullets from `- ` lines and links from bare urls", () => {
-    const doc = markdownToAdf("Picked up as task #a1b2c3d4 on the Luna board.\n\nPR opened: https://github.com/o/a/pull/7.\n\n## Criteria\n- [x] bad password shows an error\n- login works\n\nDone.");
+  it("builds paragraphs from blank-line blocks, bullets from `- ` lines, task lists from `- [ ]`, ordered lists from `1.`, bold from `**`, and links from bare urls", () => {
+    const doc = markdownToAdf("Picked up as task #a1b2c3d4 on the Luna board.\n\nPR opened: https://github.com/o/a/pull/7.\n\n## Criteria\n- [x] bad password shows an error\n- [ ] login works\n\n1. first **bold** step\n2. second\n\n- plain `code`\n\nDone.");
     expect(doc).toEqual({
       type: "doc",
       version: 1,
@@ -73,7 +73,16 @@ describe("markdownToAdf", () => {
         paragraph(text("Picked up as task #a1b2c3d4 on the Luna board.")),
         paragraph(text("PR opened: "), text("https://github.com/o/a/pull/7", [{ type: "link", attrs: { href: "https://github.com/o/a/pull/7" } }]), text(".")),
         { type: "heading", attrs: { level: 2 }, content: [text("Criteria")] },
-        { type: "bulletList", content: [{ type: "listItem", content: [paragraph(text("[x] bad password shows an error"))] }, { type: "listItem", content: [paragraph(text("login works"))] }] },
+        {
+          type: "taskList",
+          attrs: { localId: "list-1" },
+          content: [
+            { type: "taskItem", attrs: { localId: "item-1", state: "DONE" }, content: [text("bad password shows an error")] },
+            { type: "taskItem", attrs: { localId: "item-2", state: "TODO" }, content: [text("login works")] },
+          ],
+        },
+        { type: "orderedList", attrs: { order: 1 }, content: [{ type: "listItem", content: [paragraph(text("first "), text("bold", [{ type: "strong" }]), text(" step"))] }, { type: "listItem", content: [paragraph(text("second"))] }] },
+        { type: "bulletList", content: [{ type: "listItem", content: [paragraph(text("plain "), text("code", [{ type: "code" }]))] }] },
         paragraph(text("Done.")),
       ],
     });
@@ -82,6 +91,8 @@ describe("markdownToAdf", () => {
   it("round-trips through adfToMarkdown and never leaves an empty document", () => {
     const md = "First line\n\n- one\n- two https://x.y/z\n\nLast";
     expect(adfToMarkdown(markdownToAdf(md))).toBe("First line\n\n- one\n- two [https://x.y/z](https://x.y/z)\n\nLast");
+    const rich = "## Criteria\n- [ ] a wrong password shows an error\n- [x] /login renders\n\n1. read **the spec**\n2. run `pnpm test`\n\nSee **the doc** at https://wiki/x";
+    expect(adfToMarkdown(markdownToAdf(rich))).toBe("## Criteria\n\n- [ ] a wrong password shows an error\n- [x] /login renders\n\n1. read **the spec**\n2. run `pnpm test`\n\nSee **the doc** at [https://wiki/x](https://wiki/x)");
     expect(markdownToAdf("").content).toEqual([paragraph(text(""))]);
   });
 });
