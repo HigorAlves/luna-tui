@@ -16,6 +16,7 @@ export const AgentRole = z.enum([
   "qa-validator",
   "ci-investigator",
   "retro-reviewer",
+  "pr-reviewer",
 ]);
 export type AgentRole = z.infer<typeof AgentRole>;
 
@@ -108,6 +109,30 @@ export const ReviewingMemoryAnswer = z.object({
   proposedRules: z.array(z.object({ rule: z.string(), evidence: z.array(z.string()), scope: z.string() })),
   calibration: z.object({ estLocBias: z.number() }),
   rulesMarkdown: z.string().optional(),
+});
+
+/** reviewing (PR task): a comment review the host posts at once; approve / request_changes wait for you. */
+export const PrReviewAnswer = z.object({
+  kind: z.enum(["done", "escalated"]).optional(),
+  verdict: z.enum(["approve", "request_changes", "comment"]),
+  summary: z.string(),
+  findings: z.array(Finding),
+  /** Line-anchored comments the host posts as one COMMENT review. */
+  comments: z.array(
+    z.object({ path: z.string(), line: z.number().int(), side: z.enum(["RIGHT", "LEFT"]).default("RIGHT"), body: z.string() }),
+  ),
+  reason: z.string().optional(),
+  options: z.array(z.string()).optional(),
+});
+
+/** addressing (PR task): one commit per thread; the host posts each reply and resolves the threads marked. */
+export const PrAddressAnswer = z.object({
+  kind: z.enum(["done", "escalated"]),
+  summary: z.string(),
+  commit: z.string().nullable().optional(),
+  replies: z.array(z.object({ threadId: z.string(), body: z.string(), resolve: z.boolean() })),
+  reason: z.string().optional(),
+  options: z.array(z.string()).optional(),
 });
 
 export interface Pack {
@@ -289,6 +314,43 @@ export const PACKS: Record<PackId, Pack> = {
     effort: "high",
     answer: ReviewingMemoryAnswer,
     template: "reviewing_memory.md",
+  },
+  reviewing: {
+    id: "reviewing",
+    agent: "pr-reviewer",
+    skills: ["review-contract", "caveman-review", "code-discovery"],
+    tools: [...READ_ONLY_TOOLS, "Bash(git diff:*)", "Bash(git log:*)", "Bash(git merge-base:*)"],
+    writable: false,
+    maxTurns: 40,
+    timeoutMs: 15 * MINUTE,
+    model: "opus",
+    effort: "high",
+    answer: PrReviewAnswer,
+    template: "reviewing.md",
+  },
+  addressing: {
+    id: "addressing",
+    agent: "implementer",
+    skills: ["tdd", "verification-before-completion", "code-discovery"],
+    tools: [
+      ...READ_ONLY_TOOLS,
+      "Write",
+      "Edit",
+      ...LEDGER_TOOLS,
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      ...CHECK_COMMANDS,
+    ],
+    writable: true,
+    maxTurns: 60,
+    timeoutMs: 25 * MINUTE,
+    model: "sonnet",
+    effort: "medium",
+    answer: PrAddressAnswer,
+    template: "addressing.md",
   },
 };
 

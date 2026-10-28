@@ -7,14 +7,23 @@ import { z } from "zod";
 export const StageOutcome = z.enum(["pass", "fail", "needs_input", "test_change", "escalated"]);
 export type StageOutcome = z.infer<typeof StageOutcome>;
 
-/** The tracker item a task came from. */
-export const TaskSource = z.object({
-  kind: z.literal("github"),
-  repo: z.string(),
-  number: z.number().int(),
-  url: z.string(),
-});
+/** Where a task came from: a tracker issue, or an open PR acted on from the PR inbox. */
+export const TaskSource = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string() }),
+  z.object({
+    kind: z.literal("github_pr"),
+    repo: z.string(),
+    number: z.number().int(),
+    url: z.string(),
+    headRef: z.string(),
+    baseRef: z.string(),
+  }),
+]);
 export type TaskSource = z.infer<typeof TaskSource>;
+
+/** Which graph a task walks: `feature` is the full pipeline; the others are PR tasks. */
+export const TaskRoute = z.enum(["feature", "ci_fix", "review", "address"]);
+export type TaskRoute = z.infer<typeof TaskRoute>;
 
 /** A question the stage could not answer alone, with the answer it would pick. */
 export const NeedsInputItem = z.object({
@@ -80,6 +89,8 @@ export const PackId = z.enum([
   "evidence",
   "ci_watch",
   "reviewing_memory",
+  "reviewing",
+  "addressing",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -110,6 +121,43 @@ export const CiContext = z.object({
   logs: z.string().nullable(),
 });
 export type CiContext = z.infer<typeof CiContext>;
+
+const PrFacts = z.object({
+  repo: z.string(),
+  number: z.number().int(),
+  url: z.string(),
+  title: z.string(),
+  body: z.string().nullable(),
+  author: z.string(),
+  baseRef: z.string(),
+  headRef: z.string(),
+});
+
+/** For reviewing (a PR task): what the host fetched about someone's PR. */
+export const ReviewContext = z.object({
+  pr: PrFacts,
+  /** `gh pr diff` output, tail-capped by the host. */
+  diff: z.string(),
+  files: z.array(z.object({ path: z.string(), additions: z.number().int(), deletions: z.number().int() })),
+  existingComments: z.array(
+    z.object({ path: z.string().nullable(), line: z.number().int().nullable(), author: z.string(), body: z.string() }),
+  ),
+});
+export type ReviewContext = z.infer<typeof ReviewContext>;
+
+/** For addressing (a PR task): the unresolved review threads on your PR, with the ids the host resolves them by. */
+export const ThreadsContext = z.object({
+  pr: PrFacts,
+  threads: z.array(
+    z.object({
+      id: z.string(),
+      path: z.string().nullable(),
+      line: z.number().int().nullable(),
+      comments: z.array(z.object({ author: z.string(), body: z.string(), at: z.string() })),
+    }),
+  ),
+});
+export type ThreadsContext = z.infer<typeof ThreadsContext>;
 
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
@@ -191,6 +239,10 @@ export const StageInput = z.object({
     runs: z.array(RunSummary).optional(),
     /** For e2e: where QA runs, from the repo's PIPELINE.md. Credentials are references, never values. */
     qaTargets: z.array(QaTarget).optional(),
+    /** For reviewing (a PR task): the PR's diff and comments, fetched by the host. */
+    review: ReviewContext.nullable().optional(),
+    /** For addressing (a PR task): the unresolved threads, fetched by the host. */
+    threads: ThreadsContext.nullable().optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),
