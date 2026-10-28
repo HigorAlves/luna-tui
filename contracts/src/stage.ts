@@ -136,6 +136,28 @@ export const RunSummary = z.object({
 });
 export type RunSummary = z.infer<typeof RunSummary>;
 
+/** One of a repo's own checks, from its luna.yaml: a shell line run in `cwd` (the worktree
+ *  root by default). With `paths`, it runs only for a change that touches one of them. */
+export const CheckSpec = z.object({
+  name: z.string().min(1),
+  run: z.string().min(1),
+  cwd: z.string().min(1).optional(),
+  paths: z.array(z.string().min(1)).optional(),
+});
+export type CheckSpec = z.infer<typeof CheckSpec>;
+
+/** A service a repo's code needs beside it (a database, a broker), from its luna.yaml. The
+ *  machine runs it next to each stage and check container; `exports` is the env the code
+ *  gets, with the service reachable by its key as hostname; `ready` is run inside the
+ *  service until it exits 0. */
+export const ServiceSpec = z.object({
+  image: z.string().min(1),
+  env: z.record(z.string(), z.string()).optional(),
+  ready: z.string().min(1).optional(),
+  exports: z.record(z.string(), z.string()).optional(),
+});
+export type ServiceSpec = z.infer<typeof ServiceSpec>;
+
 /** A place the e2e stage may drive. `credential` is a reference (`env:NAME`), never a value. */
 export const QaTarget = z.object({
   name: z.string(),
@@ -189,7 +211,7 @@ export const StageInput = z.object({
     ledger: Ledger.nullable().optional(),
     /** For reviewing_memory: one row per earlier stage run of this task. */
     runs: z.array(RunSummary).optional(),
-    /** For e2e: where QA runs, from the repo's PIPELINE.md. Credentials are references, never values. */
+    /** For e2e: where QA runs, from the repo's luna.yaml. Credentials are references, never values. */
     qaTargets: z.array(QaTarget).optional(),
   }),
   limits: z.object({

@@ -63,7 +63,7 @@ export interface PipelineOptions {
   budget?: Budget;
   /** On shutdown: `requeue` (default) parks running tasks for the next boot; `escalate` waits for you. */
   restartPolicy?: RestartPolicy;
-  /** Each repo's PIPELINE.md (its monthly budget, auto-approval, concurrency); defaults when absent. */
+  /** Each repo's luna.yaml (its monthly budget, auto-approval, concurrency); defaults when absent. */
   policies?: Pick<PolicyStore, "for">;
   /** Called once per threshold a scope crosses: 80, 90 and 100% of a task's, a repo's month's or the day's ceiling. */
   onAlert?: (alert: BudgetAlert) => void;
@@ -175,7 +175,7 @@ export class Pipeline {
     this.onAlert = options.onAlert ?? (() => {});
   }
 
-  /** The repo's policy, from its PIPELINE.md. */
+  /** The repo's policy, from its luna.yaml. */
   policyFor(repoPath: string | null): Promise<Policy> {
     return this.policies.for(repoPath);
   }

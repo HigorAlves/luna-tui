@@ -57,7 +57,7 @@ export function buildStageInput(opts: {
   /** The repo's PIPELINE.md holds test_design's cases out of implementing's input, so the
    *  implementer cannot overfit to them; verifying still judges by them. */
   holdoutCases?: boolean;
-  /** For e2e: the repo's QA targets from PIPELINE.md. */
+  /** For e2e: the repo's QA targets from luna.yaml. */
   qaTargets?: QaTarget[];
   /** For reviewing_memory: the last implementing ledger and every earlier run of the task. */
   history?: { ledger: Ledger | null; runs: RunSummary[] } | null;

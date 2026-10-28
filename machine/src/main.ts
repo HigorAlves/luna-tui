@@ -79,7 +79,7 @@ const watcher = new StreamWatcher(bus);
 // `pipeline` is assigned below, after the real stages are built — `latestE2e` is only
 // ever called once a stage actually runs, by which point `pipeline` is set.
 let pipeline: Pipeline;
-/** Every repo's PIPELINE.md, read on demand; shared so a bad edit warns once. */
+/** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
 const policies = new PolicyStore();
 const { real, verifyPack, checksExec } = await buildRealStages(
   config,

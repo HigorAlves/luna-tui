@@ -42,7 +42,7 @@ export interface AgentDeps {
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
   /** Finds the project's own check commands; the locked-test replay runs the test one. */
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
-  /** Each repo's PIPELINE.md; one store is shared so a bad edit warns once. */
+  /** Each repo's luna.yaml; one store is shared so a bad edit warns once. */
   policies?: PolicyStore;
   /** The task's record (last implementing ledger, every run): implementing resumes its ledger from it, the retro reads it. */
   history?: (taskId: string) => Promise<{ ledger: Ledger | null; runs: RunSummary[] }>;

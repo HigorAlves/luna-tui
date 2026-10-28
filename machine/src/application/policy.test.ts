@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { DEFAULT_POLICY } from "../domain/policy.ts";
-import { POLICY_FILE, PolicyStore } from "./policy.ts";
+import { CONFIG_FILE, POLICY_FILE, PolicyStore } from "./policy.ts";
 
 const dirs: string[] = [];
 const repo = () => {
@@ -42,8 +42,9 @@ describe("PolicyStore", () => {
     writeFileSync(join(dir, POLICY_FILE), "---\nmax_concurrent: lots\n---\n");
     expect((await store.for(dir)).maxConcurrent).toBe(2);
     expect((await store.for(dir)).maxConcurrent).toBe(2);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/PIPELINE\.md.*max_concurrent must be a positive integer.*keeping the last good/);
+    // The deprecation notice, then the bad version, each once.
+    expect(warnings).toHaveLength(2);
+    expect(warnings[1]).toMatch(/PIPELINE\.md.*max_concurrent must be a positive integer.*keeping the last good/);
   });
 
   it("falls back to the defaults when the first read is already bad", async () => {
@@ -52,5 +53,41 @@ describe("PolicyStore", () => {
     writeFileSync(join(dir, POLICY_FILE), "---\nqa: mobile\n---\n");
     const store = new PolicyStore({ warn: () => {} });
     expect(await store.for(dir)).toEqual(DEFAULT_POLICY);
+  });
+
+  it("reads luna.yaml, which wins over a PIPELINE.md beside it", async () => {
+    const dir = repo();
+    writeFileSync(join(dir, POLICY_FILE), "---\nqa: none\nmax_concurrent: 2\n---\n");
+    writeFileSync(join(dir, CONFIG_FILE), "policy: { qa: web }\nchecks:\n  - name: t\n    run: make test\n");
+    const warnings: string[] = [];
+    const store = new PolicyStore({ warn: (message) => warnings.push(message) });
+    expect(await store.for(dir)).toMatchObject({ qa: "web", maxConcurrent: null, checks: [{ name: "t", run: "make test" }] });
+    expect(warnings).toEqual([]);
+  });
+
+  it("says once per repo that PIPELINE.md is deprecated, and stops once luna.yaml appears", async () => {
+    const dir = repo();
+    writeFileSync(join(dir, POLICY_FILE), "---\nqa: none\n---\n");
+    const warnings: string[] = [];
+    const store = new PolicyStore({ warn: (message) => warnings.push(message) });
+    expect((await store.for(dir)).qa).toBe("none");
+    expect((await store.for(dir)).qa).toBe("none");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/PIPELINE\.md.*deprecated.*luna\.yaml/);
+    writeFileSync(join(dir, CONFIG_FILE), "policy: { qa: web }\n");
+    expect((await store.for(dir)).qa).toBe("web");
+    expect(warnings).toHaveLength(1);
+  });
+
+  it("keeps the last good luna.yaml when an edit breaks it, naming the file", async () => {
+    const dir = repo();
+    writeFileSync(join(dir, CONFIG_FILE), "policy: { max_concurrent: 2 }\n");
+    const warnings: string[] = [];
+    const store = new PolicyStore({ warn: (message) => warnings.push(message) });
+    expect((await store.for(dir)).maxConcurrent).toBe(2);
+    writeFileSync(join(dir, CONFIG_FILE), "policy: { max_concurrent: lots }\n");
+    expect((await store.for(dir)).maxConcurrent).toBe(2);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/luna\.yaml.*policy\.max_concurrent.*keeping the last good/);
   });
 });
