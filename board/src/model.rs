@@ -101,6 +101,8 @@ pub struct CaseResult {
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StageRun {
+    #[serde(default)]
+    pub id: Option<String>,
     pub stage: String,
     pub attempt: u32,
     pub status: String,
@@ -126,20 +128,6 @@ impl StageRun {
         let end = self.ended_at.as_deref().and_then(unix_secs).unwrap_or(now);
         Some(fmt_ms(Some(end.saturating_sub(start) as f64 * 1000.0)))
     }
-
-    /// `$0.42 · 18 turns`, or None when the run has no usage yet.
-    pub fn usage_label(&self) -> Option<String> {
-        match (self.cost_usd, self.turns) {
-            (None, None) => None,
-            (cost, turns) => Some(
-                [cost.map(|c| format!("${c:.2}")), turns.map(|t| format!("{t} turns"))]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .join(" · "),
-            ),
-        }
-    }
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -153,8 +141,6 @@ pub struct Approval {
     pub decision: Option<String>,
     #[serde(default)]
     pub reason: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
     #[serde(default)]
     pub decided_at: Option<String>,
 }
@@ -412,6 +398,31 @@ pub struct PrChecks {
     pub passed: u64,
     pub total: u64,
     pub failed: Vec<PrCheck>,
+    /// Every check with its state, from machines that send them; the failed ones otherwise.
+    #[serde(default)]
+    pub all: Vec<PrCheck>,
+}
+
+/// One file of a task branch's diff against its base.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct DiffFile {
+    pub path: String,
+    /// `A`, `M`, `D` or `R`.
+    pub status: String,
+    pub added: u64,
+    pub removed: u64,
+}
+
+/// `GET /tasks/:id/diff`: the branch against its base, and one file's patch when asked for.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct TaskDiff {
+    pub base: String,
+    pub head: String,
+    pub files: Vec<DiffFile>,
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub patch: Option<String>,
 }
 
 /// The PR task in flight for a PR, if any.

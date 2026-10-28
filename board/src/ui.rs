@@ -1,7 +1,6 @@
 //! Drawing. Reads the app and never changes it.
 
 use std::{
-    cell::Cell,
     env,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -10,48 +9,47 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
-    text::{Line, Span, Text},
+    text::{Line, Span},
     widgets::{Block, BorderType, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
 };
 use serde_json::Value;
 use tui_textarea::TextArea;
 
+use crate::detail::{self, DetailView};
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::{
     app::{ACTIONS, App, FloorState, HelpFor, Mode},
     model::{
-        Approval, COLUMNS, Look, Metrics, REPO_COLOUR_SLOTS, Task, TaskDetail, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, repo_colour_slot, spend_p90,
-        now_secs, questions_of, unix_secs,
+        COLUMNS, Look, Metrics, REPO_COLOUR_SLOTS, Task, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, repo_colour_slot, spend_p90,
+        now_secs, unix_secs,
     },
 };
 
 // Catppuccin Mocha, the theme herdr is configured with.
-const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
-const SURFACE0: Color = Color::Rgb(0x31, 0x32, 0x44);
-const SURFACE1: Color = Color::Rgb(0x45, 0x47, 0x5a);
-const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
-const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
-const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
-const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
-const YELLOW: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
-const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
-const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
+pub(crate) const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
+pub(crate) const SURFACE0: Color = Color::Rgb(0x31, 0x32, 0x44);
+pub(crate) const SURFACE1: Color = Color::Rgb(0x45, 0x47, 0x5a);
+pub(crate) const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
+pub(crate) const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
+pub(crate) const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
+pub(crate) const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
+pub(crate) const YELLOW: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
+pub(crate) const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
+pub(crate) const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
 
-const ACCENT: Color = BLUE;
-const MUTED: Color = SURFACE1;
+pub(crate) const ACCENT: Color = BLUE;
+pub(crate) const MUTED: Color = SURFACE1;
 const SELECTED_BG: Color = SURFACE0;
 
 /// Narrowest a column may get before the board scrolls instead of squeezing.
 const MIN_COLUMN_WIDTH: u16 = 18;
 /// Width of a collapsed column in folded mode: wide enough for its header bar, not its cards.
 const FOLD_WIDTH: u16 = 14;
-/// Activity lines shown with a ticket.
-const ACTIVITY_LINES: usize = 10;
 
 /// Colours are dropped when `NO_COLOR` is set. States still read from their glyph and label.
-fn c(color: Color) -> Color {
+pub(crate) fn c(color: Color) -> Color {
     if env::var_os("NO_COLOR").is_some() {
         Color::Reset
     } else {
@@ -59,7 +57,7 @@ fn c(color: Color) -> Color {
     }
 }
 
-fn look_color(look: Look) -> Color {
+pub(crate) fn look_color(look: Look) -> Color {
     match look {
         Look::Escalated => c(RED),
         Look::NeedsYou => c(PEACH),
@@ -72,7 +70,7 @@ fn look_color(look: Look) -> Color {
     }
 }
 
-fn look_glyph(look: Look) -> &'static str {
+pub(crate) fn look_glyph(look: Look) -> &'static str {
     match look {
         Look::Escalated => "✗",
         Look::NeedsYou => "⏸",
@@ -160,9 +158,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
     match &app.mode {
         Mode::Detail(id) => {
             if let Some(task) = app.task(id) {
-                let area = centered(frame.area(), frame.area().width * 9 / 10, frame.area().height * 8 / 10);
-                frame.render_widget(Clear, area);
-                render_detail(frame, area, task, app.detail.as_ref(), &app.detail_scroll);
+                let view = DetailView {
+                    task,
+                    detail: app.detail.as_ref(),
+                    section: app.detail_section,
+                    cursor: app.detail_cursor,
+                    scroll: &app.detail_scroll,
+                    prs: &app.prs.prs,
+                    diff: app.diff.as_ref().filter(|d| d.0 == task.id).map(|d| &d.1),
+                };
+                detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
             }
         }
         Mode::ConfirmDelete(id) => {
@@ -436,25 +441,11 @@ fn footer_line(app: &App) -> Line<'static> {
         ]),
         Mode::Detail(id) => {
             let shippable = app.task(id).is_some_and(|t| t.state == "awaiting_ship");
+            let pick = if app.detail_section.has_cursor() { "pick" } else { "scroll" };
             if shippable {
-                hint(&[
-                    ("jk", "scroll"),
-                    ("S", "ship"),
-                    ("r", "send back"),
-                    ("e", "edit"),
-                    ("f", "focus agent"),
-                    ("esc", "back"),
-                ])
+                hint(&[("h/l 1-8", "section"), ("jk", pick), ("S", "ship"), ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
             } else {
-                hint(&[
-                    ("jk", "scroll"),
-                    ("a", "advance"),
-                    ("r", "send back"),
-                    ("e", "edit"),
-                    ("f", "focus agent"),
-                    ("X", "abort"),
-                    ("esc", "back"),
-                ])
+                hint(&[("h/l 1-8", "section"), ("jk", pick), ("a", "advance"), ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
             }
         }
         Mode::Normal => hint(&[
@@ -629,11 +620,11 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool) -
     vec![head, Line::from(meta), third]
 }
 
-fn bullets(items: &[String]) -> Vec<Line<'static>> {
+pub(crate) fn bullets(items: &[String]) -> Vec<Line<'static>> {
     items.iter().map(|item| Line::from(format!("  • {item}"))).collect()
 }
 
-fn json_list(value: &Value) -> Vec<String> {
+pub(crate) fn json_list(value: &Value) -> Vec<String> {
     value
         .as_array()
         .map(|items| items.iter().filter_map(|i| i.as_str().map(str::to_string)).collect())
@@ -641,7 +632,7 @@ fn json_list(value: &Value) -> Vec<String> {
 }
 
 /// "title (~N LOC)" per proposed slice; entries without a title are skipped.
-fn slice_lines(value: &Value) -> Vec<String> {
+pub(crate) fn slice_lines(value: &Value) -> Vec<String> {
     value
         .as_array()
         .map(|items| {
@@ -659,28 +650,8 @@ fn slice_lines(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// test_design's cases: what each proves (the plan criterion) and the test that does it.
-fn case_lines(value: &Value) -> Vec<String> {
-    value
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    let title = item["title"].as_str()?;
-                    let test = item["test"].as_str().unwrap_or("");
-                    Some(match item["criterion"].as_str() {
-                        Some(criterion) => format!("{title} — proves: {criterion} · {test}"),
-                        None => format!("{title} · {test}"),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 /// "verdict", "N artifacts" and up to three artifact paths from `requested.evidence`.
-fn evidence_lines(value: &Value) -> Vec<String> {
+pub(crate) fn evidence_lines(value: &Value) -> Vec<String> {
     let Some(verdict) = value["verdict"].as_str() else { return Vec::new() };
     let count = value["artifactCount"].as_u64().unwrap_or(0);
     let mut lines = vec![
@@ -693,7 +664,7 @@ fn evidence_lines(value: &Value) -> Vec<String> {
 
 /// Counts, calibration and the proposed rules text from `requested.rules`, at most 12 lines of
 /// it, each cut to `width` columns. Empty when the review proposed nothing.
-fn rules_lines(value: &Value, width: usize) -> Vec<String> {
+pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
     let Some(markdown) = value["markdown"].as_str().filter(|m| !m.trim().is_empty()) else {
         return Vec::new();
     };
@@ -717,7 +688,7 @@ fn rules_lines(value: &Value, width: usize) -> Vec<String> {
 
 /// One line per proved check: `✓ name: cmd` or `✗ name: cmd`, a failed one followed by the
 /// last lines of its output.
-fn proof_lines(value: &Value) -> Vec<(bool, String)> {
+pub(crate) fn proof_lines(value: &Value) -> Vec<(bool, String)> {
     const TAIL: usize = 3;
     let Some(items) = value.as_array() else { return Vec::new() };
     let mut lines = Vec::new();
@@ -736,27 +707,8 @@ fn proof_lines(value: &Value) -> Vec<(bool, String)> {
     lines
 }
 
-/// Assumptions, the proposed slices and the test cases (or, without them, the test files)
-/// an open gate asks you to judge.
-fn push_proposal_sections(lines: &mut Vec<Line<'static>>, requested: &Value) {
-    let heading = |text: &str| Line::from(Span::from(text.to_string()).fg(c(PEACH)).bold());
-    let cases = case_lines(&requested["cases"]);
-    let tests = if cases.is_empty() { json_list(&requested["tests"]) } else { Vec::new() };
-    for (title, items) in [
-        ("Assumptions", json_list(&requested["assumptions"])),
-        ("Slices", slice_lines(&requested["slices"])),
-        ("Test cases", cases),
-        ("Tests", tests),
-    ] {
-        if !items.is_empty() {
-            lines.extend([Line::default(), heading(title)]);
-            lines.extend(bullets(&items));
-        }
-    }
-}
-
 /// Where a paused or escalated ticket picks up; an escalated one also says how to retry it.
-fn continues_line(state: &str, stage: &str) -> String {
+pub(crate) fn continues_line(state: &str, stage: &str) -> String {
     if state == "escalated" {
         format!("Continues at: {stage} · a retries it (add guidance if you like)")
     } else {
@@ -764,301 +716,8 @@ fn continues_line(state: &str, stage: &str) -> String {
     }
 }
 
-/// The full ticket: state, what it waits on you for, text, stage runs and activity.
-fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&TaskDetail>, scroll: &Cell<u16>) {
-    let detail = detail.filter(|d| d.task.id == task.id);
-    if task.state == "awaiting_approval"
-        && let Some(approval) = detail.and_then(TaskDetail::open_approval) {
-            render_plan_and_ticket(frame, area, task, detail, approval, scroll);
-            return;
-        }
-
-    let heading = |text: String| Line::from(Span::from(text).fg(c(ACCENT)).bold());
-    // What the agent proposed, needing your judgment, gets its own color — distinct from the
-    // plain facts (Description, Stages, Activity...) below it.
-    let proposal_heading = |text: String| Line::from(Span::from(text).fg(c(PEACH)).bold());
-    let muted = |text: String| Line::from(Span::from(text).fg(c(SUBTEXT0)));
-    let look = task.look();
-
-    let mut lines = vec![muted(format!(
-        "Repo: {}",
-        task.repo_path.as_deref().unwrap_or("none (add one with e to run real agents)")
-    ))];
-    if let Some(source) = &task.source {
-        lines.push(muted(format!("GitHub: {}#{}  {}", source.repo, source.number, source.url)));
-    }
-    if let Some(branch) = &task.branch {
-        lines.push(muted(format!("Branch: {branch}")));
-    }
-    if let Some(stage) = &task.resume_to {
-        lines.push(muted(continues_line(&task.state, stage)));
-    }
-    if let Some(reason) = &task.reason {
-        lines.push(Line::from(format!("Why: {reason}")).fg(look_color(look)));
-    }
-    if task.retries.total > 0 {
-        let r = &task.retries;
-        lines.push(muted(format!(
-            "Implementer runs: {} · failures: verify {} · e2e {} · ci {}",
-            r.total, r.verify, r.e2e, r.ci
-        )));
-    }
-
-    if let Some(approval) = detail.and_then(TaskDetail::open_approval) {
-        lines.extend([Line::default(), Line::from(Span::from(format!("Waiting on you: {}", task.status_label())).fg(look_color(look)).bold())]);
-        let requested = &approval.requested;
-        if let Some(error) = requested["error"].as_str() {
-            lines.extend([Line::default(), Line::from(Span::from("Error").fg(c(RED)).bold())]);
-            lines.extend(error.lines().map(|l| Line::from(format!("  {l}")).fg(c(RED))));
-        }
-        if let Some(note) = requested["note"].as_str() {
-            lines.push(muted(note.to_string()));
-        }
-        if let Some(url) = requested["prUrl"].as_str() {
-            let reused = requested["reused"].as_bool().unwrap_or(false);
-            lines.push(Line::from(vec![
-                Span::from(if reused { "PR (already open): " } else { "PR opened: " }).fg(c(SUBTEXT0)),
-                Span::from(url.to_string()).fg(c(BLUE)),
-            ]));
-        }
-        if let Some(brief) = requested["brief"].as_str() {
-            lines.extend([Line::default(), proposal_heading("Plan".into())]);
-            lines.extend(brief.lines().map(|l| Line::from(format!("  {l}"))));
-        }
-        let criteria = json_list(&requested["criteria"]);
-        if !criteria.is_empty() {
-            lines.extend([Line::default(), proposal_heading("Criteria to build".into())]);
-            lines.extend(bullets(&criteria));
-        }
-        push_proposal_sections(&mut lines, requested);
-        let evidence = evidence_lines(&requested["evidence"]);
-        if !evidence.is_empty() {
-            lines.extend([Line::default(), proposal_heading("Evidence".into())]);
-            lines.extend(bullets(&evidence));
-        }
-        let rules = rules_lines(&requested["rules"], usize::from(area.width).saturating_sub(8).max(20));
-        if !rules.is_empty() {
-            lines.extend([Line::default(), proposal_heading("Proposed rules (a applies, A skips)".into())]);
-            lines.extend(rules.iter().map(|l| Line::from(format!("  {l}"))));
-        }
-        if let Some(config) = requested["config"].as_str() {
-            lines.extend([Line::default(), proposal_heading("Proposed luna.yaml (a writes it to the repo, r sends it back)".into())]);
-            lines.extend(config.lines().map(|l| Line::from(format!("  {l}"))));
-            let proof = proof_lines(&requested["proof"]);
-            if !proof.is_empty() {
-                lines.extend([Line::default(), proposal_heading("Proof (each check run once)".into())]);
-                for (ok, text) in proof {
-                    lines.push(Line::from(format!("  {text}")).fg(c(if ok { GREEN } else { RED })));
-                }
-            }
-            let notes = json_list(&requested["notes"]);
-            if !notes.is_empty() {
-                lines.extend([Line::default(), proposal_heading("Notes from setup".into())]);
-                lines.extend(bullets(&notes));
-            }
-        }
-        let questions = questions_of(approval);
-        if !questions.is_empty() {
-            lines.extend([Line::default(), proposal_heading("Questions (a to answer)".into())]);
-            for (question, recommended) in questions {
-                lines.push(Line::from(format!("  ? {question}")));
-                lines.push(muted(format!("    recommended: {recommended}")));
-            }
-        }
-    }
-
-    lines.extend([Line::default(), heading("Description".into())]);
-    if task.description.trim().is_empty() {
-        lines.push(muted("  (none yet, press e to add)".into()));
-    } else {
-        lines.extend(task.description.lines().map(|l| Line::from(format!("  {l}"))));
-    }
-    lines.extend([Line::default(), heading("Acceptance criteria".into())]);
-    if task.criteria.is_empty() {
-        lines.push(muted("  (none yet, press e to add)".into()));
-    } else {
-        lines.extend(bullets(&task.criteria));
-    }
-
-    if let Some(detail) = detail {
-        if !detail.stage_runs.is_empty() {
-            lines.extend([Line::default(), heading("Stages".into())]);
-            for run in &detail.stage_runs {
-                let color = match run.status.as_str() {
-                    "passed" => GREEN,
-                    "failed" => RED,
-                    "running" => YELLOW,
-                    _ => SUBTEXT0,
-                };
-                let mut spans = vec![
-                    Span::from(format!("  {} #{} ", run.stage, run.attempt)),
-                    Span::from(run.status.clone()).fg(c(color)),
-                ];
-                if let Some(usage) = run.usage_label() {
-                    spans.push(Span::from(format!("  {usage}")).fg(c(SUBTEXT0)));
-                }
-                lines.push(Line::from(spans));
-            }
-            if let Some(spent) = detail.spent_usd() {
-                lines.push(Line::from(Span::from(format!("  Spent: ${spent:.2}")).fg(c(SUBTEXT0))));
-            }
-        }
-        lines.extend([Line::default(), heading("Activity".into())]);
-        let start = detail.events.len().saturating_sub(ACTIVITY_LINES);
-        lines.extend(detail.events[start..].iter().map(|e| muted(format!("  {}", describe(e)))));
-    }
-
-    let block = detail_block(task, look);
-
-    // Clamp to the content's actual height, which depends on the terminal width (wrapping),
-    // so j/k can't scroll into empty space past the end.
-    let inner = block.inner(area);
-    let total_lines = Paragraph::new(Text::from(lines.clone())).wrap(Wrap { trim: false }).line_count(inner.width);
-    let offset = scroll.get().min(total_lines.saturating_sub(inner.height as usize) as u16);
-    scroll.set(offset);
-
-    frame.render_widget(
-        Paragraph::new(Text::from(lines))
-            .block(block)
-            .wrap(Wrap { trim: false })
-            .scroll((offset, 0)),
-        area,
-    );
-}
-
-/// The detail popup's border and titles: look-colored, the ticket's name, status and age.
-fn detail_block(task: &Task, look: Look) -> Block<'static> {
-    Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(c(look_color(look))))
-        .padding(Padding::new(2, 2, 1, 1))
-        .title(Line::from(format!(" #{} {} ", task.short_id(), task.title)).bold())
-        .title_bottom(
-            Line::from(vec![
-                Span::from(format!(" {} {} ", look_glyph(look), task.status_label())).bold(),
-            ])
-            .fg(c(look_color(look)))
-            .left_aligned(),
-        )
-        .title_bottom(
-            Line::from(format!(" {} · {} ago ", task.column, age(&task.updated_at, now_secs())))
-                .fg(c(SUBTEXT0))
-                .right_aligned(),
-        )
-}
-
-/// Triage's plan (left) and the ticket's own text (right), side by side at 110 columns or
-/// wider — stacked, plan first, on a narrower terminal. `e` edits both.
-fn render_plan_and_ticket(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&TaskDetail>, approval: &Approval, scroll: &Cell<u16>) {
-    let heading = |text: String| Line::from(Span::from(text).fg(c(ACCENT)).bold());
-    let proposal_heading = |text: String| Line::from(Span::from(text).fg(c(PEACH)).bold());
-    let muted = |text: String| Line::from(Span::from(text).fg(c(SUBTEXT0)));
-    let look = task.look();
-    let requested = &approval.requested;
-
-    let mut plan_lines = vec![proposal_heading("Plan".into())];
-    match requested["brief"].as_str() {
-        Some(brief) => plan_lines.extend(brief.lines().map(|l| Line::from(format!("  {l}")))),
-        None => plan_lines.push(muted("  (none)".into())),
-    }
-    plan_lines.extend([Line::default(), proposal_heading("Criteria to build".into())]);
-    let criteria = json_list(&requested["criteria"]);
-    if criteria.is_empty() {
-        plan_lines.push(muted("  (none)".into()));
-    } else {
-        plan_lines.extend(bullets(&criteria));
-    }
-    push_proposal_sections(&mut plan_lines, requested);
-
-    let mut ticket_lines = vec![muted(format!(
-        "Repo: {}",
-        task.repo_path.as_deref().unwrap_or("none (add one with e to run real agents)")
-    ))];
-    if let Some(source) = &task.source {
-        ticket_lines.push(muted(format!("GitHub: {}#{}  {}", source.repo, source.number, source.url)));
-    }
-    if let Some(branch) = &task.branch {
-        ticket_lines.push(muted(format!("Branch: {branch}")));
-    }
-    ticket_lines.extend([
-        Line::default(),
-        Line::from(Span::from(format!("Waiting on you: {}", task.status_label())).fg(look_color(look)).bold()),
-    ]);
-    ticket_lines.extend([Line::default(), heading("Description".into())]);
-    if task.description.trim().is_empty() {
-        ticket_lines.push(muted("  (none yet, press e to add)".into()));
-    } else {
-        ticket_lines.extend(task.description.lines().map(|l| Line::from(format!("  {l}"))));
-    }
-    ticket_lines.extend([Line::default(), heading("Acceptance criteria".into())]);
-    if task.criteria.is_empty() {
-        ticket_lines.push(muted("  (none yet, press e to add)".into()));
-    } else {
-        ticket_lines.extend(bullets(&task.criteria));
-    }
-    if let Some(detail) = detail {
-        if !detail.stage_runs.is_empty() {
-            ticket_lines.extend([Line::default(), heading("Stages".into())]);
-            for run in &detail.stage_runs {
-                let color = match run.status.as_str() {
-                    "passed" => GREEN,
-                    "failed" => RED,
-                    "running" => YELLOW,
-                    _ => SUBTEXT0,
-                };
-                let mut spans = vec![
-                    Span::from(format!("  {} #{} ", run.stage, run.attempt)),
-                    Span::from(run.status.clone()).fg(c(color)),
-                ];
-                if let Some(usage) = run.usage_label() {
-                    spans.push(Span::from(format!("  {usage}")).fg(c(SUBTEXT0)));
-                }
-                ticket_lines.push(Line::from(spans));
-            }
-            if let Some(spent) = detail.spent_usd() {
-                ticket_lines.push(Line::from(Span::from(format!("  Spent: ${spent:.2}")).fg(c(SUBTEXT0))));
-            }
-        }
-        ticket_lines.extend([Line::default(), heading("Activity".into())]);
-        let start = detail.events.len().saturating_sub(ACTIVITY_LINES);
-        ticket_lines.extend(detail.events[start..].iter().map(|e| muted(format!("  {}", describe(e)))));
-    }
-
-    let block = detail_block(task, look).title_bottom(Line::from(" e edits both ").fg(c(SUBTEXT0)).left_aligned());
-    let inner = block.inner(area);
-    let wide = inner.width >= 110;
-    let (plan_area, ticket_area) = if wide {
-        let [plan_area, _gap, ticket_area] =
-            Layout::horizontal([Constraint::Percentage(54), Constraint::Length(2), Constraint::Percentage(44)]).areas(inner);
-        (plan_area, ticket_area)
-    } else {
-        let plan_height = Paragraph::new(Text::from(plan_lines.clone())).wrap(Wrap { trim: false }).line_count(inner.width) as u16;
-        let [plan_area, ticket_area] =
-            Layout::vertical([Constraint::Length(plan_height.min(inner.height / 2)), Constraint::Min(0)]).areas(inner);
-        (plan_area, ticket_area)
-    };
-
-    // One shared scroll offset, clamped to whichever column is taller — the two stay in step.
-    let plan_total = Paragraph::new(Text::from(plan_lines.clone())).wrap(Wrap { trim: false }).line_count(plan_area.width);
-    let ticket_total = Paragraph::new(Text::from(ticket_lines.clone())).wrap(Wrap { trim: false }).line_count(ticket_area.width);
-    let total_lines = plan_total.max(ticket_total);
-    let offset = scroll.get().min(total_lines.saturating_sub(inner.height as usize) as u16);
-    scroll.set(offset);
-
-    frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(Text::from(plan_lines)).wrap(Wrap { trim: false }).scroll((offset, 0)),
-        plan_area,
-    );
-    frame.render_widget(
-        Paragraph::new(Text::from(ticket_lines)).wrap(Wrap { trim: false }).scroll((offset, 0)),
-        ticket_area,
-    );
-}
-
 /// One activity entry in words.
-fn describe(event: &TaskEvent) -> String {
+pub(crate) fn describe(event: &TaskEvent) -> String {
     let p = &event.payload;
     let s = |key: &str| p[key].as_str().unwrap_or("?").to_string();
     let time = event.at.get(11..19).unwrap_or("");
@@ -1110,7 +769,7 @@ fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
 
 /// The `x` menu: each action with the key it maps to.
 /// Cuts `text` to `width` characters, ending in `…` when it had to cut.
-fn truncate(text: &str, width: usize) -> String {
+pub(crate) fn truncate(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_string();
     }
@@ -1760,7 +1419,7 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
 }
 
 /// A `width` x `height` rectangle centred in `area`.
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
+pub(crate) fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let [_, middle, _] = Layout::vertical([
         Constraint::Length(area.height.saturating_sub(height) / 2),
         Constraint::Length(height),
@@ -1878,125 +1537,8 @@ mod tests {
         }
     }
 
-    fn awaiting_approval_task() -> Task {
-        serde_json::from_str(
-            r#"{"id":"abcd1234","title":"Add CSV export","description":"Users want to export their data.",
-            "criteria":["handles a/b & c"],"repoPath":"/repo","branch":null,"worktreePath":null,
-            "state":"awaiting_approval","column":"Approved","waitingOnYou":true,"running":false,"queued":false,
-            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
-            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#,
-        )
-        .unwrap()
-    }
-
-    fn task_detail_with_open_plan(task: &Task) -> TaskDetail {
-        let task_json = r#"{"id":"abcd1234","title":"Add CSV export","description":"Users want to export their data.",
-            "criteria":["handles a/b & c"],"repoPath":"/repo","branch":null,"worktreePath":null,
-            "state":"awaiting_approval","column":"Approved","waitingOnYou":true,"running":false,"queued":false,
-            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
-            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
-        let _ = task;
-        serde_json::from_str(&format!(
-            r#"{{"task":{task_json},"stageRuns":[],
-            "approvals":[{{"requested":{{"brief":"Add a CSV export endpoint.","criteria":["handles a/b & c","exports UTF-8"],"assumptions":["CSV only for now"]}},"decision":null}}],
-            "events":[]}}"#
-        ))
-        .unwrap()
-    }
-
     fn find(text: &str, needle: &str) -> Option<(usize, usize)> {
         text.lines().enumerate().find_map(|(row, line)| line.find(needle).map(|col| (row, col)))
-    }
-
-    const TASK_JSON_DRAFT: &str = r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
-            "repoPath":null,"branch":null,"worktreePath":null,"state":"draft","column":"Intake",
-            "waitingOnYou":false,"running":false,"queued":false,
-            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
-            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
-
-    fn render_task_detail(width: u16, height: u16, task: &Task, detail: Option<&TaskDetail>) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let scroll = Cell::new(0);
-        terminal.draw(|f| render_detail(f, f.area(), task, detail, &scroll)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
-            .collect::<Vec<_>>()
-            .join("
-")
-    }
-
-    #[test]
-    fn a_plan_awaiting_approval_renders_plan_and_ticket_as_two_columns() {
-        let task = awaiting_approval_task();
-        let detail = task_detail_with_open_plan(&task);
-        let text = render_task_detail(140, 40, &task, Some(&detail));
-
-        let (_, plan_col) = find(&text, "Plan").expect("a Plan heading");
-        let (_, criteria_col) = find(&text, "Criteria to build").expect("the plan's criteria");
-        let (_, desc_col) = find(&text, "Description").expect("the ticket's Description");
-        let (_, accept_col) = find(&text, "Acceptance criteria").expect("the ticket's criteria");
-        assert!(plan_col < 70 && criteria_col < 70, "plan content should sit in the left column: {text}");
-        assert!(desc_col >= 70 && accept_col >= 70, "ticket content should sit in the right column: {text}");
-        assert!(text.contains("exports UTF-8"), "the edited plan's criteria should show: {text}");
-        assert!(text.contains("handles a/b & c"), "the ticket's own criteria should show: {text}");
-    }
-
-    #[test]
-    fn the_detail_shows_each_run_s_cost_and_turns_and_what_the_ticket_has_spent() {
-        let task: Task = serde_json::from_str(TASK_JSON_DRAFT).unwrap();
-        let detail: TaskDetail = serde_json::from_str(&format!(
-            r#"{{"task":{TASK_JSON_DRAFT},"stageRuns":[
-              {{"stage":"triage","attempt":1,"status":"passed","costUsd":0.42,"turns":18}},
-              {{"stage":"implementing","attempt":1,"status":"running","costUsd":null,"turns":null}}],
-              "approvals":[],"events":[]}}"#
-        ))
-        .unwrap();
-        let text = render_task_detail(100, 40, &task, Some(&detail));
-        assert!(text.contains("$0.42 · 18 turns"), "a run shows its cost and turns: {text}");
-        assert!(text.contains("Spent: $0.42"), "the ticket's spend is summed: {text}");
-    }
-
-    #[test]
-    fn the_setup_gate_shows_the_proposed_file_the_proof_per_check_and_the_notes() {
-        let mut task: Task = serde_json::from_str(TASK_JSON_DRAFT).unwrap();
-        task.state = "awaiting_setup".to_string();
-        task.waiting_on_you = true;
-        let detail: TaskDetail = serde_json::from_str(&format!(
-            r#"{{"task":{TASK_JSON_DRAFT},"stageRuns":[],"approvals":[{{"requested":{{
-              "config":"checks:\n  - name: board tests\n    run: cargo test\n",
-              "proof":[{{"name":"board tests","cmd":"cargo test (in board)","ok":true,"tail":""}},
-                       {{"name":"lint","cmd":"pnpm lint","ok":false,"tail":"a\nb\n3 problems"}}],
-              "notes":["no e2e surface"]}},"decision":null}}],"events":[]}}"#
-        ))
-        .unwrap();
-        let text = render_task_detail(100, 40, &task, Some(&detail));
-        assert!(text.contains("Proposed luna.yaml"), "{text}");
-        assert!(text.contains("run: cargo test"), "the file is shown as is: {text}");
-        assert!(text.contains("✓ board tests: cargo test (in board)"), "{text}");
-        assert!(text.contains("✗ lint: pnpm lint"), "{text}");
-        assert!(text.contains("3 problems"), "a failed check shows its tail: {text}");
-        assert!(text.contains("no e2e surface"), "{text}");
-    }
-
-    #[test]
-    fn a_narrow_terminal_stacks_the_plan_above_the_ticket_instead() {
-        let task = awaiting_approval_task();
-        let detail = task_detail_with_open_plan(&task);
-        let text = render_task_detail(90, 50, &task, Some(&detail));
-
-        let (plan_row, _) = find(&text, "Plan").expect("a Plan heading");
-        let (desc_row, _) = find(&text, "Description").expect("the ticket's Description");
-        assert!(plan_row < desc_row, "the plan should render above the ticket when stacked: {text}");
-    }
-
-    #[test]
-    fn a_ticket_with_no_open_plan_keeps_the_single_column_view() {
-        let mut task = awaiting_approval_task();
-        task.state = "implementing".to_string();
-        let text = render_task_detail(140, 40, &task, None);
-        assert!(find(&text, "Criteria to build").is_none(), "no plan is open, so there is nothing to show: {text}");
-        assert!(find(&text, "Description").is_some());
     }
 
     fn floor() -> FloorState {
@@ -2271,23 +1813,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cases_show_what_each_proves_and_its_test() {
-        let v: Value = serde_json::json!([
-            {"title":"rejects a bad password","criterion":"Bad password shows an error","test":"src/a.test.ts > rejects"},
-            {"title":"an edge case","criterion":null,"test":"src/b.test.ts > edge"},
-            {"criterion":"no title"}, "junk"
-        ]);
-        assert_eq!(
-            case_lines(&v),
-            [
-                "rejects a bad password — proves: Bad password shows an error · src/a.test.ts > rejects",
-                "an edge case · src/b.test.ts > edge",
-            ]
-        );
-        assert!(case_lines(&Value::Null).is_empty());
-    }
-
-    #[test]
     fn slice_lines_show_title_and_size() {
         let v: Value = serde_json::json!([{"title":"Add route","est_loc":80},{"title":"No size"},{"est_loc":5},"junk"]);
         assert_eq!(slice_lines(&v), ["Add route (~80 LOC)", "No size"]);
@@ -2319,23 +1844,6 @@ mod tests {
         assert_eq!(lines[13], "… +3 more");
         assert!(rules_lines(&Value::Null, 20).is_empty());
         assert!(rules_lines(&serde_json::json!({"markdown": "  \n"}), 20).is_empty());
-    }
-
-    #[test]
-    fn test_gate_lists_tests_and_approval_lists_slices() {
-        let t: Value = serde_json::json!({"tests":["src/a.test.ts","src/b.test.ts"]});
-        assert_eq!(json_list(&t["tests"]), ["src/a.test.ts", "src/b.test.ts"]);
-        let mut lines = Vec::new();
-        push_proposal_sections(&mut lines, &t);
-        let text: String = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(text.contains("Tests"), "{text}");
-        assert!(text.contains("  • src/a.test.ts"), "{text}");
-        let p: Value = serde_json::json!({"assumptions":["x"],"slices":[{"title":"S1","est_loc":10}]});
-        let mut lines = Vec::new();
-        push_proposal_sections(&mut lines, &p);
-        let text: String = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(text.find("Assumptions").unwrap() < text.find("Slices").unwrap(), "{text}");
-        assert!(text.contains("  • S1 (~10 LOC)"), "{text}");
     }
 }
 

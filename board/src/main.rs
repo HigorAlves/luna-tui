@@ -6,6 +6,7 @@
 
 mod app;
 mod client;
+mod detail;
 mod digest;
 mod discover;
 mod herdr;

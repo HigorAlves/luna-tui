@@ -17,6 +17,7 @@ use tui_textarea::TextArea;
 
 use std::collections::BTreeSet;
 
+use crate::detail::Section;
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::model::now_secs;
@@ -27,7 +28,7 @@ use crate::{
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
+        COLUMNS, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, parse_answers,
         parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown, Slots,
     },
     store,
@@ -274,7 +275,15 @@ pub const PULLS_SECTIONS: &[HelpSection] = &[
 ];
 
 pub const DETAIL_SECTIONS: &[HelpSection] = &[
-    section("Read", &[("j / k", "scroll"), ("esc", "close")]),
+    section(
+        "Read",
+        &[
+            ("h / l, 1-8", "previous / next section: Overview, Plan, Tests, Runs, Diff, Evidence, PR, Activity"),
+            ("j / k", "scroll the section, or pick a run / file where it lists them"),
+            ("+", "toggle the popup between most of the screen and all of it"),
+            ("esc", "close"),
+        ],
+    ),
     section(
         "Act",
         &[
@@ -333,7 +342,9 @@ pub const DIGEST_HELP: &[(&str, &str)] = &[
 
 #[cfg(test)]
 pub const DETAIL_HELP: &[(&str, &str)] = &[
-    ("j / k", "scroll"),
+    ("h / l, 1-8", "previous / next section: Overview, Plan, Tests, Runs, Diff, Evidence, PR, Activity"),
+    ("j / k", "scroll the section, or pick a run / file where it lists them"),
+    ("+", "toggle the popup between most of the screen and all of it"),
     ("a", "advance: start, approve, answer, retry, resume"),
     ("S", "ship"),
     ("r", "send back with a reason"),
@@ -654,6 +665,14 @@ pub struct App {
     /// How far the open ticket's detail popup is scrolled. `ui` clamps it to the content's
     /// actual height, which only it knows (it depends on the terminal width).
     pub detail_scroll: Cell<u16>,
+    /// Which section of the workspace popup is open, and the selected row in sections that
+    /// have one (runs, files). `+` toggles the popup between most of the screen and all of it.
+    pub detail_section: Section,
+    pub detail_cursor: usize,
+    pub detail_full: bool,
+    /// The branch diff of the ticket whose popup is open, once fetched: (task id, diff).
+    pub diff: Option<(String, TaskDiff)>,
+    diff_pending: Option<(String, Option<String>)>,
     /// How far the help sheet is scrolled, and the furthest `ui` found it can scroll.
     pub help_scroll: Cell<u16>,
     pub help_max: Cell<u16>,
@@ -702,6 +721,11 @@ impl App {
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
             detail_scroll: Cell::new(0),
+            detail_section: Section::Overview,
+            detail_cursor: 0,
+            detail_full: false,
+            diff: None,
+            diff_pending: None,
             help_scroll: Cell::new(0),
             help_max: Cell::new(0),
             help_return: None,
@@ -861,6 +885,15 @@ impl App {
         let state = self.pulls.as_ref()?;
         let items = pulls::items(&self.prs.prs, state.split);
         items.get(state.cursor.min(items.len().saturating_sub(1))).map(|&i| self.prs.prs[i].clone())
+    }
+
+    /// Opens the workspace popup on `id`, on the section its open gate concerns.
+    pub fn open_detail(&mut self, id: String) {
+        self.detail_stale = true;
+        self.detail_scroll.set(0);
+        self.detail_cursor = 0;
+        self.detail_section = self.task(&id).map(Section::for_task).unwrap_or_default();
+        self.mode = Mode::Detail(id);
     }
 
     fn shows_detail_of(&self, id: &str) -> bool {
@@ -1520,9 +1553,7 @@ impl App {
                 if let Some(id) = under_cursor {
                     self.digest = None;
                     self.select(&id, true);
-                    self.detail_stale = true;
-                    self.detail_scroll.set(0);
-                    self.mode = Mode::Detail(id);
+                    self.open_detail(id);
                 }
                 return Outcome::Continue;
             }
@@ -1593,9 +1624,7 @@ impl App {
                 if let Some(id) = under_cursor {
                     self.inbox = None;
                     self.select(&id, true);
-                    self.detail_stale = true;
-                    self.detail_scroll.set(0);
-                    self.mode = Mode::Detail(id);
+                    self.open_detail(id);
                 }
                 return Outcome::Continue;
             }
@@ -1682,9 +1711,7 @@ impl App {
                         Some(id) if self.task(&id).is_some() => {
                             self.pulls = None;
                             self.select(&id, true);
-                            self.detail_stale = true;
-                            self.detail_scroll.set(0);
-                            self.mode = Mode::Detail(id);
+                            self.open_detail(id);
                         }
                         _ => self.open_url(&pr.url),
                     }
@@ -1940,9 +1967,7 @@ impl App {
             }
             KeyCode::Enter => {
                 if let Some(id) = self.selected_id() {
-                    self.detail_stale = true;
-                    self.detail_scroll.set(0);
-                    self.mode = Mode::Detail(id);
+                    self.open_detail(id);
                 }
             }
             KeyCode::Char(c) => {
@@ -2062,8 +2087,16 @@ impl App {
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
-            KeyCode::Char('j') | KeyCode::Down => self.scroll_detail(1),
-            KeyCode::Char('k') | KeyCode::Up => self.scroll_detail(-1),
+            KeyCode::Char('j') | KeyCode::Down => self.move_in_detail(1),
+            KeyCode::Char('k') | KeyCode::Up => self.move_in_detail(-1),
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => self.set_section(self.detail_section.next()),
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.set_section(self.detail_section.prev()),
+            KeyCode::Char(digit @ '1'..='8') => {
+                if let Some(section) = Section::from_digit(digit) {
+                    self.set_section(section);
+                }
+            }
+            KeyCode::Char('+') | KeyCode::Char('=') => self.detail_full = !self.detail_full,
             KeyCode::Char('?') => {
                 self.help_return = Some(id.to_string());
                 self.mode = Mode::Help(HelpFor::Detail);
@@ -2072,6 +2105,37 @@ impl App {
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// Switches the popup's section; each starts at the top with the first row selected.
+    fn set_section(&mut self, section: Section) {
+        if section != self.detail_section {
+            self.detail_section = section;
+            self.detail_scroll.set(0);
+            self.detail_cursor = 0;
+        }
+    }
+
+    /// `j`/`k` in the popup: the next row where the section has rows, else a line of scroll.
+    fn move_in_detail(&mut self, delta: i16) {
+        if self.detail_section.has_cursor() {
+            let rows = self.detail_rows();
+            let next = (self.detail_cursor as i64 + i64::from(delta)).clamp(0, rows.saturating_sub(1) as i64);
+            self.detail_cursor = next as usize;
+        } else {
+            self.scroll_detail(delta);
+        }
+    }
+
+    /// How many rows the open section's cursor can land on.
+    fn detail_rows(&self) -> usize {
+        let detail = self.detail.as_ref().filter(|d| matches!(&self.mode, Mode::Detail(id) if *id == d.task.id));
+        match self.detail_section {
+            Section::Runs => detail.map_or(0, |d| d.stage_runs.len()),
+            Section::Evidence => detail.map_or(0, |d| d.artifacts.len()),
+            Section::Diff => self.diff.as_ref().map_or(0, |(_, d)| d.files.len()),
+            _ => 0,
+        }
     }
 
     /// Scrolls the open detail popup. `ui` clamps this to the content's actual height on the
@@ -2304,9 +2368,7 @@ impl App {
                 match self.tasks.iter().find(|t| !wanted.is_empty() && t.id.starts_with(wanted)).map(|t| t.id.clone()) {
                     Some(id) => {
                         self.select(&id, true);
-                        self.detail_stale = true;
-                        self.detail_scroll.set(0);
-                        self.mode = Mode::Detail(id);
+                        self.open_detail(id);
                     }
                     None => self.notify(format!("no ticket starts with #{wanted}"), true),
                 }
