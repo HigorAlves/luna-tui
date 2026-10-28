@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { branchBase, commitAll, ensureWorktree, workspaceFor } from "./worktree.ts";
+import { branchBase, commitAll, ensurePrWorktree, ensureWorktree, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -115,5 +115,34 @@ describe("host-side git", () => {
     expect(existsSync(lock)).toBe(false);
     writeFileSync(join(workspace.path, "b.txt"), "b\n");
     expect(await commitAll(workspace.path, "feat: b")).toMatch(/^[0-9a-f]{40}$/);
+  });
+});
+
+describe("a PR task's worktree", () => {
+  it("checks the PR's head branch out from origin, and a second call only reuses it", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "pr-wt-")));
+    const upstream = join(root, "upstream");
+    mkdirSync(upstream);
+    git(upstream, "init", "-q", "-b", "main");
+    writeFileSync(join(upstream, "a.txt"), "a\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-q", "-m", "init");
+    git(upstream, "switch", "-q", "-c", "feat/export");
+    writeFileSync(join(upstream, "b.txt"), "b\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-q", "-m", "feat: export");
+    const tip = git(upstream, "rev-parse", "HEAD");
+    git(upstream, "switch", "-q", "main");
+    const repo = join(root, "repo");
+    git(root, "clone", "-q", upstream, repo);
+
+    const path = prWorktreePath(repo, join(root, "wt"), 12, "feat/export");
+    expect(path).toBe(join(root, "wt", "repo", "pr-12-feat-export"));
+    await ensurePrWorktree(repo, "feat/export", path);
+    expect(git(path, "rev-parse", "HEAD")).toBe(tip);
+    expect(git(path, "branch", "--show-current")).toBe("feat/export");
+    expect(git(path, "rev-parse", "--abbrev-ref", "@{u}")).toBe("origin/feat/export");
+    await ensurePrWorktree(repo, "feat/export", path);
+    expect(existsSync(join(path, "b.txt"))).toBe(true);
   });
 });

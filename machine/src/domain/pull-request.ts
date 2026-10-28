@@ -5,7 +5,7 @@ import type { ChecksState, PrCheck, PrSplit, PullRequest } from "@hardness/contr
 /** One GraphQL query per PR: everything the inbox needs about it. Variables: owner, name, number. */
 export const PR_QUERY = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){ pullRequest(number:$number){
-    number title url isDraft updatedAt baseRefName headRefName
+    number title body url isDraft updatedAt baseRefName headRefName
     author{login} headRepository{nameWithOwner}
     reviewDecision mergeable
     reviewRequests(first:50){nodes{requestedReviewer{__typename ... on User{login} ... on Team{slug}}}}
@@ -34,6 +34,8 @@ export interface StatusContextNode {
 export interface PrNode {
   number: number;
   title: string;
+  /** Absent from older fixtures; the review pack reads it. */
+  body?: string | null;
   url: string;
   isDraft: boolean;
   updatedAt: string;

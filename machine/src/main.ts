@@ -1,6 +1,6 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
-import { Ledger, PrAction } from "@hardness/contracts";
+import { Ledger, PrAction, type PullRequest } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -18,6 +18,9 @@ import { sweepImages, sweepRunFolders, sweepTaskState, sweepWorktrees } from "./
 import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { GitHubPulls } from "./application/pulls.ts";
+import { createPrTask } from "./application/pr-tasks.ts";
+import { prFollowUpRunner } from "./application/stages/pr-address.ts";
+import { postVerdictRunner } from "./application/stages/pr-review.ts";
 import { RepoMap } from "./application/repo-map.ts";
 import { ThreadReplies } from "./application/threads.ts";
 import { Pipeline } from "./application/pipeline.ts";
@@ -119,6 +122,15 @@ const runnerFor = buildRunnerFor({
   realVerifyRunner,
   shipRunner,
   stubRunnerFor: (stage) => stubs.runnerFor(stage),
+  pr: {
+    // A PR task runs the project's checks before pushing, never the review pack.
+    checksOnlyVerifyRunner: verifyRunner({ exec: checksExec ?? exec, runPack: null, stateDir: config.stateDir }),
+    followUpRunner: prFollowUpRunner({
+      exec,
+      latestAnswer: async (taskId) => (await pipeline.latestStageFinish(taskId, "addressing"))?.detail?.answer,
+    }),
+    postVerdictRunner: postVerdictRunner({}),
+  },
 });
 
 const METRICS_DEBOUNCE_MS = 2_000;
@@ -192,7 +204,10 @@ const pulls = new GitHubPulls({
   },
   publish: (snapshot) => bus.publish({ type: "github.prs", snapshot }),
 });
-const app = createApp({ db, pipeline, bus, watcher, stubs, pulls });
+const prTasks = {
+  dispatch: (pr: PullRequest, action: PrAction) => createPrTask({ worktreesDir: config.worktreesDir, pipeline }, pr, action),
+};
+const app = createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
   const agents = [...new Set([...Object.keys(real), "verifying", "delivering", "shipping"])];
   console.log(

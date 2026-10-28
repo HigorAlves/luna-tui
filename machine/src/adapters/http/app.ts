@@ -5,6 +5,9 @@ import {
   type ApiError,
   CloneInput,
   DecisionInput,
+  type PrAction,
+  PrActionInput,
+  type PullRequest,
   EditPlanInput,
   NewTaskInput,
   SetupRepoInput,
@@ -20,9 +23,11 @@ import { ZodError, type ZodType, z } from "zod";
 const SlotsInput = z.object({ max: z.number().int().min(1) });
 
 import { computeMetrics } from "../persistence/metrics-query.ts";
+import type { TaskRow } from "../../domain/task.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
 import { NoPlanToEditError, type Pipeline, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
 import { CloneError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
 import type { StubStages } from "../../application/stages/stubs.ts";
 import type { Bus } from "./bus.ts";
@@ -43,6 +48,8 @@ export interface AppDeps {
   stubs?: StubStages;
   /** The PR inbox's poller; without it the `/github/*` routes are absent. */
   pulls?: PullsPort;
+  /** Turns an action on a PR into a running PR task; without it `POST .../actions` is absent. */
+  prTasks?: { dispatch(pr: PullRequest, action: PrAction): Promise<TaskRow> };
 }
 
 class BadRequest extends Error {}
@@ -78,7 +85,7 @@ function prParams(c: Context): { owner: string; name: string; number: number } {
   return { owner, name, number };
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks }: AppDeps): Hono {
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -87,6 +94,10 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls }: AppDeps)
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
     if (error instanceof NotReadyError) return fail(c, 409, "not_ready", error.message);
+    if (error instanceof PrBusyError) return fail(c, 409, "pr_busy", error.message);
+    if (error instanceof NoCheckoutError) return fail(c, 409, "no_checkout", error.message);
+    if (error instanceof ForkError) return fail(c, 409, "fork", error.message);
+    if (error instanceof OwnPrError) return fail(c, 409, "own_pr", error.message);
     if (error instanceof CloneError) return fail(c, 400, "invalid_request", error.message);
     if (error instanceof ZodError) return fail(c, 400, "invalid_request", z.prettifyError(error));
     if (error instanceof BadRequest) return fail(c, 400, "invalid_request", error.message);
@@ -219,6 +230,16 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls }: AppDeps)
       await pulls.merge(`${owner}/${name}`, number);
       return c.json({ merged: true });
     });
+    if (prTasks) {
+      app.post("/github/prs/:owner/:name/:number/actions", async (c) => {
+        const { owner, name, number } = prParams(c);
+        const { action } = await body(c, PrActionInput);
+        const slug = `${owner}/${name}`.toLowerCase();
+        const pr = pulls.snapshot.prs.find((p) => p.repo.toLowerCase() === slug && p.number === number);
+        if (!pr) throw new TaskNotFoundError(`${owner}/${name}#${number}`);
+        return c.json(toTask(await prTasks.dispatch(pr, action)), 201);
+      });
+    }
     app.post("/github/clone", async (c) => {
       const { repo, dest } = await body(c, CloneInput);
       await pulls.clone(repo, dest);
