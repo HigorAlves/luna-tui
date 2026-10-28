@@ -15,6 +15,24 @@ export interface PrReviewDeps {
 
 const EVENT_OF = { approve: "APPROVE", request_changes: "REQUEST_CHANGES", comment: "COMMENT" } as const;
 
+/** inline-review's cap: more than this erodes signal, so the lowest severities stay in findings only. */
+export const MAX_INLINE_COMMENTS = 15;
+const SEVERITY_RANK: Record<string, number> = { security: 0, bug: 1, "api-surface": 2, test: 3, suggestion: 4, question: 5, nit: 6 };
+
+/** The comments to post: at most `MAX_INLINE_COMMENTS`, the gravest findings first, the pack's order otherwise. */
+export function capComments<T extends { path: string; line: number }>(comments: T[], findings: Array<{ path: string; line: number; severity: string }>): T[] {
+  if (comments.length <= MAX_INLINE_COMMENTS) return comments;
+  const rank = (c: T) => {
+    const found = findings.find((f) => f.path === c.path && f.line === c.line);
+    return SEVERITY_RANK[found?.severity ?? ""] ?? 9;
+  };
+  return comments
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => rank(a.c) - rank(b.c) || a.i - b.i)
+    .slice(0, MAX_INLINE_COMMENTS)
+    .map(({ c }) => c);
+}
+
 /** The PR a task came from, or null when the task is not a PR task. */
 export function prOf(context: StageContext): { repo: string; number: number; url: string } | null {
   const source = context.task.source;
@@ -64,7 +82,10 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     const answer = parsed.data;
 
     // The comment review goes out now; only a verdict waits for you.
-    const comments = answer.comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body }));
+    const comments = capComments(
+      answer.comments.map((c) => ({ path: c.path, line: c.line, side: c.side, body: c.body })),
+      answer.findings,
+    );
     const posted = comments.length > 0;
     if (posted) {
       const error = await postReview(gh, pr.repo, pr.number, { event: "COMMENT", body: answer.summary, comments });

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AgentRole,
   ArtifactKind,
   CloneInput,
   COLUMN_OF,
   MergeInput,
+  PACKS,
   PackId,
   PrAction,
   PrAddressAnswer,
@@ -218,6 +220,19 @@ describe("PR tasks", () => {
     expect(COLUMN_OF.addressing).toBe("Build");
     expect(RUNNING.has("reviewing")).toBe(true);
     expect(RUNNING.has("addressing")).toBe(true);
+  });
+
+  it("the PR packs run as the orc roles with their helpers: a security pass for reviewing, a reply drafter for addressing", () => {
+    expect(PACKS.reviewing).toMatchObject({ agent: "pr-reviewer", helpers: ["security-reviewer"] });
+    expect(PACKS.reviewing.skills).toEqual(expect.arrayContaining(["inline-review", "review-contract", "caveman-review"]));
+    expect(PACKS.addressing).toMatchObject({ agent: "code-fixer", helpers: ["reply-drafter"] });
+    expect(PACKS.addressing.skills).toEqual(expect.arrayContaining(["receiving-code-review", "verification-before-completion"]));
+    for (const pack of Object.values(PACKS)) {
+      expect(Array.isArray(pack.helpers), pack.id).toBe(true);
+      // A role with helpers needs the Agent tool to dispatch them; one without must not carry it.
+      expect(pack.tools.includes("Agent"), pack.id).toBe(pack.helpers.length > 0);
+    }
+    expect(AgentRole.options).toEqual(expect.arrayContaining(["security-reviewer", "reply-drafter", "code-fixer"]));
   });
 
   it("a PR splits into one of six places and the snapshot shape parses", () => {

@@ -19,12 +19,12 @@ These are the suite: run the ones scoped to what you touch before you answer.
 {{context.threads}}
 
 ## What to do
-1. Read every thread, then the code it points at. Decide per thread: a change, or an answer with no change.
-2. For a change: write the failing test when the thread names a behaviour, make it green, run the scoped checks, commit with a Conventional Commit subject (no body, no attribution). One commit per thread.
-3. For no change: say why in one or two sentences, pointing at the code or the test that settles it.
-4. Report progress with `mcp__luna__step`, one label per thread.
-5. Escalate and stop (`kind: "escalated"` with `summary`, `reason`, `options[]`) when a thread asks for something you cannot do safely: a new dependency, a change outside this PR's scope, a pre-existing failure you cannot tie to the PR, or two reviewers asking for opposite things.
-6. Answer `{kind: "done", summary, commit, replies[]}`: `commit` is `git rev-parse HEAD`; `replies[]` has one `{threadId, body, resolve}` per thread above, `threadId` copied verbatim, `body` the reply the controller posts (what changed and where, or why not), `resolve: true` only when the thread is fully settled by a commit.
+1. Read every thread, then the code it points at (the file at the line, plus or minus 20 lines). Categorize each per `receiving-code-review`: `ACTION` (a change that is right for this codebase), `QUESTION` (the answer is in the code or the plan), `NITPICK` (style; fix when cheap), `DISAGREE` (breaks something, lacks context, YAGNI, or wrong for this stack; verify with a test, a grep for callers or a doc before you say so).
+2. For each `ACTION` (and a cheap `NITPICK`): write the failing test when the thread names a behaviour, make it green, run the scoped checks, commit with a Conventional Commit subject (no body, no attribution). One commit per thread. Minimal diff, no opportunistic refactors, no new dependencies.
+3. Report progress with `mcp__luna__step`, one label per thread.
+4. Dispatch the `reply-drafter` agent once, through the Agent tool, with every thread: its id (verbatim), file and line, the comments, your category, and for each `ACTION` what changed and the commit sha (`git rev-parse --short HEAD` after that commit). It returns one reply per thread with a `resolve` flag. Replies are the user's voice: four sentences at most, no thanks, no AI attribution.
+5. Escalate and stop (`kind: "escalated"` with `summary`, `reason`, `options[]`) when a thread asks for something you cannot do safely: a new dependency, a change outside this PR's scope, a pre-existing failure you cannot tie to the PR, two reviewers asking for opposite things, or a `DISAGREE` on an architectural point the user should settle.
+6. Answer `{kind: "done", summary, commit, replies[]}`: `commit` is `git rev-parse HEAD`; `replies[]` has one `{threadId, body, resolve}` per thread above, `threadId` copied verbatim, `body` the drafter's reply, `resolve: true` only for an `ACTION` or `NITPICK` a commit fully settled (a `QUESTION` or `DISAGREE` is the reviewer's to close).
 
 ## What the controller does with it
 - Runs the project's checks; a red check sends you the failures as prior findings and you get another attempt.

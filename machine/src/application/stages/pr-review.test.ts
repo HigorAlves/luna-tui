@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Gh } from "../../adapters/github/gh.ts";
 import type { ApprovalRow, TaskRow } from "../../domain/task.ts";
 import type { StageContext, StageResult } from "../ports.ts";
-import { postVerdictRunner, prReviewRunner } from "./pr-review.ts";
+import { MAX_INLINE_COMMENTS, capComments, postVerdictRunner, prReviewRunner } from "./pr-review.ts";
 
 const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" });
 const bad = (stderr: string) => ({ code: 1, stdout: "", stderr });
@@ -131,5 +131,17 @@ describe("posting the verdict", () => {
     const { context } = setup(null);
     const result = await run({ ...context, stage: "shipping", approvals: [approval([])] });
     expect(result.outcome).toBe("fail");
+  });
+});
+
+describe("the comment cap", () => {
+  it("keeps the gravest fifteen and the pack's order among equals", () => {
+    const comments = Array.from({ length: 20 }, (_, i) => ({ path: "a.ts", line: i + 1 }));
+    const findings = comments.map((c) => ({ ...c, severity: c.line === 20 ? "security" : c.line === 19 ? "bug" : "suggestion" }));
+    const kept = capComments(comments, findings).map((c) => c.line);
+    expect(kept).toHaveLength(MAX_INLINE_COMMENTS);
+    expect(kept.slice(0, 2)).toEqual([20, 19]);
+    expect(kept.slice(2)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+    expect(capComments(comments.slice(0, 3), findings)).toHaveLength(3);
   });
 });
