@@ -1,6 +1,8 @@
-// Renders a pack's prompt: the factory header, the answer schema, then the template with
-// its {{placeholders}} filled from the stage input. Pure: the caller passes the template and
-// the project context, so a test needs no files.
+// Renders a pack's prompt: the factory header (the role, the stage and how this stage ends when
+// it cannot settle something), then the template with its {{placeholders}} filled from the
+// stage input. The answer's shape is not in the prompt: the SDK's structured output enforces it
+// (main.ts, `outputFormat`). Pure: the caller passes the template and the project context, so a
+// test needs no files.
 import type { Pack, StageInput } from "@hardness/contracts";
 import { answerJsonSchema } from "@hardness/contracts";
 import { createHash } from "node:crypto";
@@ -85,16 +87,28 @@ const jiraText = (jira: StageInput["context"]["jira"]) => {
   };
 };
 
-/** The rules every stage runs under; appended to the system prompt and restated in the header. */
+/** The rules every stage runs under, appended to the system prompt. This is the one place they
+ *  are stated: the templates and the role bodies add only what is specific to their stage. */
 export const FACTORY_RULES = [
-  "You are running in factory mode (LUNA_FACTORY=1): no human is present. A controller wrote /in/stage.json and reads your final answer as the stage result.",
-  "Never call AskUserQuestion. A question you cannot settle from the stage input ends the stage: answer with kind \"questions\" (at most three, each with a recommended answer).",
-  "Never push, never open or edit pull requests, never post reviews or write to a tracker. An outward action goes in requested[] for the board to approve.",
-  "Never write outside /work and /out. Never touch /work/.git directly.",
+  "You are running in factory mode (LUNA_FACTORY=1): no person is present. The machine wrote /in/stage.json and reads your structured answer as the stage result; it reads nothing else you write.",
+  "Never call AskUserQuestion: nobody would answer it. A question you cannot settle from the stage input ends the stage, in the shape this stage's answer allows (your prompt names it).",
+  "Never push, never open or edit pull requests, never post reviews or write to a tracker: the machine does those after a person approves. A stage whose answer has requested[] puts the outward action it needs there.",
+  "Never write outside /work and /out, and never touch /work/.git directly: everything else is mounted read-only and a hook denies the write.",
   "Bash runs only the commands on this stage's allow-list, and a chained command (&&, ;, |) runs only when every part is allowed: one simple command per call, no cd, and Read/Glob/Grep for files. A denied command is not a finding; use an allowed one.",
   "Report progress with the mcp__luna__step tool when it is available; it is a label for the board, not a gate.",
-  "Answer ONLY with the JSON object matching the stage's output schema. No text before or after.",
 ].join("\n");
+
+/** How this stage ends when it cannot settle something: the pack's own answer shape, read from
+ *  its schema, so the header never promises a `kind: "questions"` a pack cannot give. */
+export function escalationLine(pack: Pack): string {
+  const properties = (answerJsonSchema(pack).properties ?? {}) as Record<string, { enum?: unknown[] }>;
+  const kinds = properties.kind?.enum ?? [];
+  const verdicts = properties.verdict?.enum ?? [];
+  if (kinds.includes("questions")) return 'A question you cannot settle from the stage input ends the stage: answer kind "questions" (at most three, each with a recommended answer).';
+  if (kinds.includes("escalated")) return 'What you cannot settle from the stage input ends the stage: answer kind "escalated" with reason and options[].';
+  if (verdicts.includes("needs_brief")) return 'What you cannot settle from the issue ends the stage: verdict "needs_brief" with reason and questions[] (at most three, each with a recommended answer).';
+  return "This stage has no escalation: settle what the input leaves open with the rules in your prompt.";
+}
 
 export interface RenderInput {
   pack: Pack;
@@ -161,11 +175,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
   };
   let body = template;
   for (const [key, value] of Object.entries(subs)) body = body.split(key).join(value);
-  const header = [
-    `You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1). ${FACTORY_RULES.split("\n")[1]} Outward actions go to requested[]. Answer with JSON matching this schema:`,
-    JSON.stringify(answerJsonSchema(pack)),
-    "",
-  ].join("\n");
+  const header = [`You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1); no person is present. ${escalationLine(pack)}`, ""].join("\n");
   return header + body;
 }
 
