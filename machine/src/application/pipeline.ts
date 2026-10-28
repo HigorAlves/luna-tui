@@ -709,6 +709,11 @@ export class Pipeline {
     return this.store.listStageRuns(id);
   }
 
+  /** When each task's running stage run started, for every task that has one, in one query. */
+  runningStageStarts(): Promise<Map<string, Date>> {
+    return this.store.runningStageStarts();
+  }
+
   approvals(id: string): Promise<ApprovalRow[]> {
     return this.store.listApprovals(id);
   }
@@ -1030,8 +1035,22 @@ export class Pipeline {
       // Approving the plan adopts triage's criteria: the ticket's, refined and added to.
       const planned = task.state === "awaiting_approval" && event.type === "approved" ? open?.requested.criteria : undefined;
       const criteria = Array.isArray(planned) && planned.length > 0 ? planned.map(String) : undefined;
+      const logged = await tx.recordEvent({
+        taskId: id,
+        kind: "transition",
+        stageRunId: null,
+        payload: {
+          event: event.type,
+          ...(event.type === "stage_done" ? { outcome: event.outcome } : {}),
+          from: task.state,
+          to: step.state,
+          ...(step.reason ? { reason: step.reason } : {}),
+        },
+      });
+      // The row says when it entered this state, stamped like the event, so the clocks need no event scan.
       await tx.updateTask(id, {
         state: step.state,
+        stateSince: logged.at,
         retries: step.retries,
         resumeTo: step.resumeTo,
         reason: step.reason ?? null,
@@ -1052,19 +1071,6 @@ export class Pipeline {
           requested: { ...extra.detail, ...(step.reason ? { reason: step.reason } : {}) },
         });
       }
-
-      const logged = await tx.recordEvent({
-        taskId: id,
-        kind: "transition",
-        stageRunId: null,
-        payload: {
-          event: event.type,
-          ...(event.type === "stage_done" ? { outcome: event.outcome } : {}),
-          from: task.state,
-          to: step.state,
-          ...(step.reason ? { reason: step.reason } : {}),
-        },
-      });
       return { step, logged };
     });
 

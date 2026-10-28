@@ -43,6 +43,7 @@ export class PgTaskStore implements TaskStore {
       resumeTo: null,
       reason: null,
       jira: input.jira ?? null,
+      stateSince: new Date(),
     });
   }
 
@@ -170,6 +171,11 @@ export class PgTaskStore implements TaskStore {
       };
       return fn(task, tx);
     });
+  }
+
+  async runningStageStarts(): Promise<Map<string, Date>> {
+    const rows = (await this.db.query("select task_id, max(started_at) as started_at from stage_runs where status = 'running' group by task_id")) as { task_id: string; started_at: Date | string }[];
+    return new Map(rows.map((r) => [r.task_id, new Date(r.started_at)]));
   }
 
   listStageRuns(taskId: string): Promise<StageRunRow[]> {

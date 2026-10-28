@@ -73,6 +73,8 @@ export interface AppDeps {
   jira?: JiraTasksPort;
   /** The ticket's SLA clocks, computed when a task is answered or published; without it every task shows `sla: null`. */
   sla?: (task: TaskRow) => Promise<TaskSla | null>;
+  /** The same for a whole list at once (`GET /tasks`); falls back to `sla` per task. */
+  slaAll?: (tasks: TaskRow[]) => Promise<Map<string, TaskSla | null>>;
 }
 
 class BadRequest extends Error {}
@@ -108,7 +110,7 @@ function prParams(c: Context): { owner: string; name: string; number: number } {
   return { owner, name, number };
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll }: AppDeps): Hono {
   const app = new Hono();
   /** A task row as the board reads it, clocks included. */
   const serialize = async (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null) => toTask(row, usage, sla ? await sla(row) : null);
@@ -178,6 +180,10 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
 
   app.get("/tasks", async (c) => {
     const [rows, usage] = await Promise.all([pipeline.list(), pipeline.usageByTask()]);
+    if (slaAll) {
+      const clocks = await slaAll(rows);
+      return c.json(rows.map((row) => toTask(row, usage.get(row.id) ?? null, clocks.get(row.id) ?? null)));
+    }
     return c.json(await Promise.all(rows.map((row) => serialize(row, usage.get(row.id) ?? null))));
   });
 

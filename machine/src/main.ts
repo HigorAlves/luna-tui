@@ -281,6 +281,7 @@ const app = createApp({
   slack: slackInbox,
   ...(jiraTasks ? { jira: jiraTasks } : {}),
   sla: (task) => slaClocks.for(task),
+  slaAll: (tasks) => slaClocks.forAll(tasks),
   taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file),
 });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
