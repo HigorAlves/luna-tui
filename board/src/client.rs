@@ -14,8 +14,8 @@ use serde_json::{Value, json};
 use ureq::{Agent, Body, http::Response};
 
 use crate::model::{
-    Health, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots, StreamMessage, Task, TaskDetail,
-    TaskDiff, TestCase, TicketText,
+    Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
+    StreamMessage, Task, TaskDetail, TaskDiff, TestCase, TicketText,
 };
 
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
@@ -325,6 +325,35 @@ impl Machine {
     /// The channels you are in, for the watch picker's `#` completions.
     pub fn slack_channels(&self) -> Result<Vec<SlackOption>, String> {
         Self::typed(self.agent.get(self.url("/slack/channels")).call())
+    }
+
+    /// Links an existing Jira issue to the ticket; answers the task with its `jira` set.
+    pub fn link_jira(&self, id: &str, key: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/jira"), json!({ "key": key }))
+    }
+
+    /// Drops the ticket's Jira link; the issue itself is not touched.
+    pub fn unlink_jira(&self, id: &str) -> Result<Task, String> {
+        Self::typed(self.agent.delete(self.url(&format!("/tasks/{id}/jira"))).call())
+    }
+
+    /// Creates a Jira issue from the ticket, in the repo's project or `project`, and links it.
+    pub fn create_jira(&self, id: &str, project: Option<&str>) -> Result<Task, String> {
+        let body = match project {
+            Some(project) => json!({ "project": project }),
+            None => json!({}),
+        };
+        self.post(&format!("/tasks/{id}/jira/create"), body)
+    }
+
+    /// Issues matching a key or free text, your open ones first.
+    pub fn jira_search(&self, q: &str) -> Result<Vec<JiraIssueHit>, String> {
+        Self::typed(self.agent.get(self.url(&format!("/jira/search?q={}", urlencoding(q)))).call())
+    }
+
+    /// Whether Jira is configured and reachable.
+    pub fn jira_status(&self) -> Result<JiraStatus, String> {
+        Self::typed(self.agent.get(self.url("/jira/status")).call())
     }
 }
 

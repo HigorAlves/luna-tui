@@ -10,7 +10,7 @@ use std::{
 };
 
 use ratatui::{
-    crossterm::event::{KeyCode, KeyEvent},
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::Rect,
 };
 use tui_textarea::TextArea;
@@ -29,7 +29,7 @@ use crate::{
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, StreamMessage, Task,
+        COLUMNS, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, StreamMessage, Task,
         TaskDetail, TaskDiff, TicketText, answers_markdown, iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of, plan_markdown,
         priority_step, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
@@ -76,7 +76,7 @@ fn parse_offset(text: &str) -> Option<i64> {
 pub const CARD_HEIGHT: usize = 3;
 
 /// Actions in the `x` menu for the selected ticket, as the key each one is.
-pub const ACTIONS: [(char, &str); 14] = [
+pub const ACTIONS: [(char, &str); 15] = [
     ('P', "resume every ticket paused on the usage window"),
     ('D', "drain / carry on: take no new work, or pick the queue back up"),
     ('+', "one more slot"),
@@ -87,7 +87,8 @@ pub const ACTIONS: [(char, &str); 14] = [
     ('e', "edit the ticket"),
     ('R', "search for its repo"),
     ('f', "focus the agent's tab"),
-    ('o', "open the linked GitHub issue"),
+    ('o', "open the linked GitHub issue, else the Jira issue"),
+    ('J', "link a Jira issue (unlink when linked)"),
     ('X', "abort the running stage"),
     ('w', "kill its worktree"),
     ('d', "delete"),
@@ -182,7 +183,8 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
             ("w", "kill its worktree once you are done with it (asks first)"),
             ("d", "delete (asks first)"),
             ("f", "focus the agent's watch tab in herdr"),
-            ("o", "open the linked GitHub issue in the browser"),
+            ("o", "open the linked GitHub issue in the browser, else the Jira issue"),
+            ("J", "link a Jira issue: search by key or words, enter links, ctrl+n creates one; unlinks when linked"),
         ],
     ),
     section(
@@ -217,7 +219,7 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
     section(
         "App",
         &[
-            (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs, slack"),
+            (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs, slack, jira"),
             ("esc", "clear the filter"),
             ("?", "this help"),
             ("q", "quit"),
@@ -237,6 +239,7 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
             ("slots <n>", "resize the pool"),
             ("drain / resume", "take no new work / carry on"),
             ("floor / inbox / digest / prs / slack", "open that view"),
+            ("jira <KEY>", "link that Jira issue to the selected ticket (bare: the search)"),
             ("help", "this sheet"),
         ],
     ),
@@ -364,6 +367,7 @@ pub const DETAIL_SECTIONS: &[HelpSection] = &[
             ("X / w / d", "abort / kill the worktree / delete (each asks)"),
             ("f", "focus its herdr tab"),
             ("o", "open the linked issue"),
+            ("J", "link or unlink a Jira issue"),
         ],
     ),
 ];
@@ -442,6 +446,7 @@ pub const DETAIL_HELP: &[(&str, &str)] = &[
     ("X / w / d", "abort / kill the worktree / delete (each asks)"),
     ("f", "focus its herdr tab"),
     ("o", "open the linked issue"),
+    ("J", "link or unlink a Jira issue"),
     ("esc", "close"),
 ];
 
@@ -459,6 +464,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("slots <n>", "resize the pool"),
     ("drain / resume", "take no new work / carry on"),
     ("floor / inbox / digest / prs / slack", "open that view"),
+    ("jira <KEY>", "link that Jira issue to the selected ticket (bare: the search)"),
     ("help", "this sheet"),
 ];
 
@@ -481,7 +487,8 @@ pub const HELP: &[(&str, &str)] = &[
     ("w", "kill its worktree once you are done with it (asks first)"),
     ("d", "delete (asks first)"),
     ("f", "focus the agent's watch tab in herdr"),
-    ("o", "open the linked GitHub issue in the browser"),
+    ("o", "open the linked GitHub issue in the browser, else the Jira issue"),
+    ("J", "link a Jira issue: search by key or words, enter links, ctrl+n creates one; unlinks when linked"),
     ("/", "filter by title, #id or repo"),
     ("!", "show only tickets that need you"),
     ("@", "show only tickets for this repo"),
@@ -496,7 +503,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("S", "Slack: your mentions, DMs and watched handles, triaged and split by what you do; r replies, t makes a ticket"),
     ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
     ("x", "actions for the selected ticket (P resumes every paused one)"),
-    (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs, slack"),
+    (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs, slack, jira"),
     ("esc", "clear the filter"),
     ("?", "this help"),
     ("q", "quit"),
@@ -720,6 +727,17 @@ pub enum Mode {
     SlackWatchAdd { query: String, cursor: usize },
     /// `x` in the Slack view: the keys for the selected item, each with why it is off when it is.
     SlackActions { cursor: usize },
+    /// `J` on a ticket with no Jira issue: type a key or words, the machine searches from three
+    /// characters on, `hits` are what it found; row 0 creates an issue from the ticket, the
+    /// rest link one. `cursor` indexes rows, create row included.
+    JiraLink {
+        id: String,
+        query: String,
+        hits: Vec<JiraIssueHit>,
+        cursor: usize,
+    },
+    /// `J` on a linked ticket: one yes, then the link is dropped (the issue stays).
+    ConfirmJiraUnlink(String),
     Help(HelpFor),
 }
 
@@ -1028,6 +1046,9 @@ impl App {
                     if self.shows_detail_of(&event.task_id) {
                         self.detail_stale = true;
                     }
+                    if let Some(notice) = self.task(&event.task_id).and_then(|t| notify::jira_moved_notice(t, &event)) {
+                        self.notices.push(notice);
+                    }
                 }
                 Incoming::Message(StreamMessage::Deleted { id }) => self.forget(&id),
                 // herdr calls are subprocesses, so they stay off the UI thread.
@@ -1155,10 +1176,13 @@ impl App {
     /// re-sorts its column, so the next key never lands on a different ticket.
     fn upsert(&mut self, task: Task) {
         let selected = self.selected_id();
-        let before = self.tasks.iter().find(|t| t.id == task.id).map(Task::look);
+        let previous = self.tasks.iter().find(|t| t.id == task.id);
+        let before = previous.map(Task::look);
+        let sla_before = previous.and_then(|t| t.sla.clone());
         if let Some(notice) = notify::notice_for(before, &task) {
             self.notices.push(notice);
         }
+        self.notices.extend(notify::sla_notices(sla_before.as_ref(), &task));
         match self.tasks.iter_mut().find(|t| t.id == task.id) {
             Some(existing) => *existing = task,
             None => self.tasks.push(task),
@@ -1198,6 +1222,12 @@ impl App {
             })
             .count();
         tickets + prs + slack
+    }
+
+    /// Tickets past one of their SLA clocks: the header's `‼ N` and the badge's second number.
+    /// They already count above when they wait on you; this only adds the bang.
+    pub fn overdue_count(&self) -> usize {
+        self.tasks.iter().filter(|t| t.overdue()).count()
     }
 
     /// Highlights a ticket. With `follow`, the board also moves to the ticket's column.
@@ -1353,7 +1383,7 @@ impl App {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for t in &self.tasks {
-            (&t.id, &t.updated_at, &t.state, t.queued, t.running, t.waiting_on_you, &t.column, &t.repo_path, &t.created_at, &t.title).hash(&mut h);
+            (&t.id, &t.updated_at, &t.state, t.queued, t.running, t.waiting_on_you, &t.column, &t.repo_path, &t.created_at, &t.title, t.gate_overdue()).hash(&mut h);
         }
         (&self.filter, self.needs_only, self.this_repo_only, &self.home_repo, self.group as u8).hash(&mut h);
         h.finish()
@@ -1374,10 +1404,12 @@ impl App {
             if Some(column) == done {
                 return b.created_at.cmp(&a.created_at);
             }
+            // A gate past its SLA sorts first whatever the order: it has waited longest on you.
+            let (late_a, late_b) = (!a.gate_overdue(), !b.gate_overdue());
             match self.group {
-                GroupBy::Stage => (a.look(), &a.created_at).cmp(&(b.look(), &b.created_at)),
-                GroupBy::Repo => (a.repo_name(), a.look(), &a.created_at).cmp(&(b.repo_name(), b.look(), &b.created_at)),
-                GroupBy::Age => a.created_at.cmp(&b.created_at),
+                GroupBy::Stage => (late_a, a.look(), &a.created_at).cmp(&(late_b, b.look(), &b.created_at)),
+                GroupBy::Repo => (a.repo_name(), late_a, a.look(), &a.created_at).cmp(&(b.repo_name(), late_b, b.look(), &b.created_at)),
+                GroupBy::Age => (late_a, &a.created_at).cmp(&(late_b, &b.created_at)),
             }
         });
         found
@@ -1688,7 +1720,7 @@ impl App {
                     self.notify(format!("no watch tab for #{} yet; it opens when an agent runs", task.short_id()), false);
                 }
             }
-            'o' => match task.source.as_ref().and_then(|s| s.link().map(str::to_string)) {
+            'o' => match task.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| task.jira.as_ref().map(|j| j.url.clone())) {
                 Some(url) => {
                     let (program, args) = opener_command(&url);
                     // Detached: spawn and move on, never wait on the browser.
@@ -1698,6 +1730,107 @@ impl App {
                 }
                 None => self.notify("no issue linked", false),
             },
+            'J' => match task.jira_key() {
+                Some(_) => self.mode = Mode::ConfirmJiraUnlink(id.to_string()),
+                None => self.open_jira_link(id),
+            },
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The Jira search for a ticket: empty until three characters are typed. A machine with no
+    /// Jira configured says so in the footer instead.
+    fn open_jira_link(&mut self, id: &str) {
+        match self.machine.jira_status() {
+            Ok(status) if !status.configured => {
+                let why = status.error.unwrap_or_else(|| "set MACHINE_JIRA_SITE, _EMAIL and _TOKEN".to_string());
+                self.notify(format!("Jira is not configured on the machine: {why}"), true);
+                return;
+            }
+            Err(error) => self.notify(format!("jira status: {error}"), true),
+            Ok(_) => {}
+        }
+        self.mode = Mode::JiraLink { id: id.to_string(), query: String::new(), hits: Vec::new(), cursor: 0 };
+    }
+
+    /// Links `key` to the ticket; a bad key is refused here, before the machine sees it.
+    fn link_jira(&mut self, id: &str, key: &str) {
+        let key = key.trim().to_uppercase();
+        if !looks_like_jira_key(&key) {
+            self.notify(format!("{key:?} is not a Jira key like PLAT-123"), true);
+            return;
+        }
+        self.act(|m| m.link_jira(id, &key), &format!("linked {key}"));
+    }
+
+    /// Type to search, `enter` links the row (row 0 creates an issue instead), `ctrl+n` creates
+    /// one straight away, `esc` backs out. The machine is asked on every keystroke from three
+    /// characters on; a failed search shows in the footer and keeps the last hits.
+    fn handle_jira_link(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::JiraLink { id, query, hits, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        match key.code {
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.mode = Mode::Normal;
+                self.act(|m| m.create_jira(&id, None), "Jira issue created and linked");
+            }
+            KeyCode::Char(c) => {
+                query.push(c);
+                *cursor = 0;
+                if query.trim().chars().count() >= 3 {
+                    let q = query.trim().to_string();
+                    match self.machine.jira_search(&q) {
+                        Ok(found) => {
+                            if let Mode::JiraLink { hits, .. } = &mut self.mode {
+                                *hits = found;
+                            }
+                        }
+                        Err(error) => self.notify(format!("jira search: {error}"), true),
+                    }
+                } else {
+                    hits.clear();
+                }
+            }
+            KeyCode::Backspace => {
+                query.pop();
+                *cursor = 0;
+                if query.trim().chars().count() < 3 {
+                    hits.clear();
+                }
+            }
+            KeyCode::Down => *cursor = (*cursor + 1).min(hits.len()),
+            KeyCode::Up => *cursor = cursor.saturating_sub(1),
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let chosen = cursor.checked_sub(1).and_then(|i| hits.get(i)).map(|h| h.key.clone());
+                let typed = query.trim().to_uppercase();
+                self.mode = Mode::Normal;
+                match chosen {
+                    Some(key) => self.link_jira(&id, &key),
+                    // Row 0 is "create", unless what was typed is itself a key: then link that.
+                    None if looks_like_jira_key(&typed) => self.link_jira(&id, &typed),
+                    None => self.act(|m| m.create_jira(&id, None), "Jira issue created and linked"),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    fn handle_confirm_jira_unlink(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::ConfirmJiraUnlink(id) = &self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.mode = Mode::Normal;
+                self.act(|m| m.unlink_jira(&id), "Jira issue unlinked");
+            }
+            KeyCode::Char('n') | KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
             _ => {}
         }
         Outcome::Continue
@@ -1752,6 +1885,8 @@ impl App {
             Mode::SlackTask { .. } => self.handle_slack_task(key),
             Mode::SlackWatchAdd { .. } => self.handle_slack_watch_add(key),
             Mode::SlackActions { .. } => self.handle_slack_actions(key),
+            Mode::JiraLink { .. } => self.handle_jira_link(key),
+            Mode::ConfirmJiraUnlink(_) => self.handle_confirm_jira_unlink(key),
             Mode::Help(_) => {
                 let scroll = self.help_scroll.get();
                 match key.code {
@@ -1940,7 +2075,7 @@ impl App {
             .detail(id)
             .ok()
             .and_then(|d| d.approvals.iter().find_map(|a| a.requested["prUrl"].as_str().map(String::from)));
-        let issue = self.task(id).and_then(|t| t.source.as_ref().and_then(|s| s.link().map(str::to_string)));
+        let issue = self.task(id).and_then(|t| t.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| t.jira.as_ref().map(|j| j.url.clone())));
         match pr.or(issue) {
             Some(url) => {
                 let (program, args) = opener_command(&url);
@@ -3226,6 +3361,11 @@ impl App {
             "digest" => self.digest = Some(DigestState::default()),
             "prs" | "pulls" => self.open_pulls(),
             "slack" => self.open_slack(),
+            "jira" => match self.selected_id() {
+                Some(id) if rest.is_empty() => return self.ticket_key('J', &id),
+                Some(id) => self.link_jira(&id, rest),
+                None => self.notify("no ticket selected", true),
+            },
             "help" | "?" => self.mode = Mode::Help(HelpFor::Board),
             other => self.notify(format!("unknown command: {other} (try :help)"), true),
         }
@@ -3414,6 +3554,20 @@ impl App {
 
 /// The checkout `:setup <repo>` means: a path as given when it is absolute (or starts with
 /// `~`, `.`), otherwise a name under the repos root. It must exist and hold a `.git`.
+/// `PLAT-123`: letters (digits and `_` after the first) a dash and a number, as the machine's
+/// `JiraLinkInput` accepts it.
+pub fn looks_like_jira_key(text: &str) -> bool {
+    let Some((project, number)) = text.split_once('-') else {
+        return false;
+    };
+    let mut chars = project.chars();
+    chars.next().is_some_and(|c| c.is_ascii_uppercase())
+        && !project[1..].is_empty()
+        && project[1..].chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        && !number.is_empty()
+        && number.chars().all(|c| c.is_ascii_digit())
+}
+
 fn setup_repo_path(arg: &str, root: Option<std::path::PathBuf>) -> Result<std::path::PathBuf, String> {
     let arg = arg.trim();
     if arg.is_empty() {
@@ -4267,8 +4421,9 @@ mod slack_tests {
     use crate::slack::fixtures::{item, snapshot, watch_json};
 
     /// A machine that says yes to everything: `{}` for any call it does not know, the fixture
-    /// watches for `/slack/watches`, and an `/events` stream it keeps open and silent.
-    fn fake_machine() -> Machine {
+    /// watches for `/slack/watches`, Jira answers for `/jira/*` and `/tasks/:id/jira`, and an
+    /// `/events` stream it keeps open and silent.
+    pub(super) fn fake_machine() -> Machine {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
@@ -4289,9 +4444,27 @@ mod slack_tests {
                 }
                 let mut body = vec![0; length];
                 let _ = reader.read_exact(&mut body);
+                let method = request.split_whitespace().next().unwrap_or("");
                 let path = request.split_whitespace().nth(1).unwrap_or("");
                 let mut stream = reader.into_inner();
                 let answer = match path {
+                    "/jira/status" => r#"{"configured":true,"site":"https://acme.atlassian.net","tokenExpiresAt":null,"error":null}"#.to_string(),
+                    p if p.starts_with("/jira/search?q=") => {
+                        let q = p.trim_start_matches("/jira/search?q=").to_uppercase();
+                        if q.starts_with("PL") {
+                            r#"[{"key":"PLAT-123","summary":"Login page","status":"In Progress","issueType":"Story","url":"https://acme.atlassian.net/browse/PLAT-123"},
+                                {"key":"PLAT-7","summary":"Password reset","status":"To Do","issueType":"Task","url":"https://acme.atlassian.net/browse/PLAT-7"}]"#.to_string()
+                        } else {
+                            "[]".to_string()
+                        }
+                    }
+                    p if p.ends_with("/jira") && p.starts_with("/tasks/") => {
+                        let id = p.trim_start_matches("/tasks/").trim_end_matches("/jira");
+                        let key = String::from_utf8_lossy(&body);
+                        let key = key.split('"').nth(3).unwrap_or("PLAT-123").to_string();
+                        super::jira_tests::linked_task_json(id, if method == "DELETE" { None } else { Some(&key) })
+                    }
+                    p if p.ends_with("/jira/create") => super::jira_tests::linked_task_json(p.trim_start_matches("/tasks/").trim_end_matches("/jira/create"), Some("PLAT-900")),
                     "/events" => {
                         let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n");
                         streams.push(stream);
@@ -4707,5 +4880,192 @@ mod edit_route_tests {
         press(&mut app, KeyCode::Char('2'));
         press(&mut app, KeyCode::Char('e'));
         assert!(matches!(app.mode, Mode::EditTicket { .. }));
+    }
+}
+
+#[cfg(test)]
+mod jira_tests {
+    use ratatui::crossterm::event::KeyModifiers;
+
+    use super::slack_tests::fake_machine;
+    use super::*;
+
+    /// A ticket in Intake, linked to `key` when given. The fake machine answers `/tasks/:id/jira`
+    /// with this, so a link or unlink round-trips through it.
+    pub(super) fn linked_task_json(id: &str, key: Option<&str>) -> String {
+        let jira = match key {
+            Some(key) => format!(
+                r#"{{"key":"{key}","url":"https://acme.atlassian.net/browse/{key}","issueType":"Story","status":"To Do","priority":null,"dueAt":null,"syncedAt":null,"blocked":null}}"#
+            ),
+            None => "null".to_string(),
+        };
+        format!(
+            r#"{{"id":"{id}","title":"Login page","description":"","criteria":[],
+            "repoPath":"/r/luna-tui","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z","jira":{jira},"sla":null}}"#
+        )
+    }
+
+    fn app_with(tasks: &[Task]) -> App {
+        let mut app = App::new(fake_machine());
+        app.tasks = tasks.to_vec();
+        app.online = true;
+        app.toast = None;
+        app.take_notices();
+        app.clamp_selection();
+        app
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for ch in text.chars() {
+            press(app, KeyCode::Char(ch));
+        }
+    }
+
+    fn toast(app: &App) -> String {
+        app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    fn task(id: &str, key: Option<&str>) -> Task {
+        serde_json::from_str(&linked_task_json(id, key)).unwrap()
+    }
+
+    #[test]
+    fn j_searches_from_three_characters_enter_links_the_row_and_j_again_asks_before_unlinking() {
+        let mut app = app_with(&[task("abcdef123456", None)]);
+        press(&mut app, KeyCode::Char('J'));
+        assert!(matches!(&app.mode, Mode::JiraLink { id, query, hits, cursor: 0 } if id == "abcdef123456" && query.is_empty() && hits.is_empty()));
+        type_text(&mut app, "PL");
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.is_empty()), "two characters: no search yet");
+        type_text(&mut app, "A");
+        let Mode::JiraLink { hits, .. } = &app.mode else { panic!("still in the prompt") };
+        assert_eq!(hits.iter().map(|h| h.key.as_str()).collect::<Vec<_>>(), vec!["PLAT-123", "PLAT-7"]);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert!(matches!(&app.mode, Mode::JiraLink { cursor: 2, .. }), "the cursor stops on the last hit");
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(app.tasks[0].jira_key(), Some("PLAT-123"), "the machine's answer replaced the task");
+        assert_eq!(toast(&app), "linked PLAT-123");
+
+        press(&mut app, KeyCode::Char('J'));
+        assert!(matches!(&app.mode, Mode::ConfirmJiraUnlink(id) if id == "abcdef123456"));
+        press(&mut app, KeyCode::Char('n'));
+        assert!(matches!(app.mode, Mode::Normal) && app.tasks[0].jira.is_some(), "n keeps the link");
+        press(&mut app, KeyCode::Char('J'));
+        press(&mut app, KeyCode::Char('y'));
+        assert!(app.tasks[0].jira.is_none(), "y drops it");
+        assert_eq!(toast(&app), "Jira issue unlinked");
+    }
+
+    #[test]
+    fn the_create_row_ctrl_n_and_the_colon_command_link_without_a_search() {
+        let mut app = app_with(&[task("abcdef123456", None)]);
+        press(&mut app, KeyCode::Char('J'));
+        type_text(&mut app, "zzz");
+        let Mode::JiraLink { hits, .. } = &app.mode else { panic!("in the prompt") };
+        assert!(hits.is_empty(), "nothing matched");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tasks[0].jira_key(), Some("PLAT-900"), "enter on the create row makes an issue");
+        assert_eq!(toast(&app), "Jira issue created and linked");
+
+        let mut app = app_with(&[task("abcdef123456", None)]);
+        press(&mut app, KeyCode::Char('J'));
+        type_text(&mut app, "plat-7");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tasks[0].jira_key(), Some("PLAT-7"), "a typed key links as is, upper-cased, without picking a row");
+
+        let mut app = app_with(&[task("abcdef123456", None)]);
+        press(&mut app, KeyCode::Char('J'));
+        app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert_eq!(app.tasks[0].jira_key(), Some("PLAT-900"));
+
+        let mut app = app_with(&[task("abcdef123456", None)]);
+        press(&mut app, KeyCode::Char(':'));
+        type_text(&mut app, "jira PLAT-42");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tasks[0].jira_key(), Some("PLAT-42"));
+        press(&mut app, KeyCode::Char(':'));
+        type_text(&mut app, "jira");
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::ConfirmJiraUnlink(_)), "bare :jira is J");
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char(':'));
+        type_text(&mut app, "jira not-a-key");
+        press(&mut app, KeyCode::Enter);
+        assert!(toast(&app).contains("is not a Jira key"), "{}", toast(&app));
+        assert_eq!(app.tasks[0].jira_key(), Some("PLAT-42"), "refused before the machine saw it");
+    }
+
+    #[test]
+    fn a_jira_key_is_a_project_a_dash_and_a_number() {
+        for ok in ["PLAT-123", "A1-1", "MY_TEAM-9"] {
+            assert!(looks_like_jira_key(ok), "{ok}");
+        }
+        for bad in ["plat-123", "PLAT", "PLAT-", "-1", "P-1a", "1P-1", "PLAT 123", ""] {
+            assert!(!looks_like_jira_key(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_overdue_gate_sorts_first_in_its_column_and_under_the_needs_you_filter() {
+        let mut early: Task = serde_json::from_str(&linked_task_json("aaaaaaaa0000", None)).unwrap();
+        early.state = "awaiting_approval".into();
+        early.waiting_on_you = true;
+        early.created_at = "2026-10-20T00:00:00Z".into();
+        let mut late: Task = serde_json::from_str(&crate::model::tests::jira_task_json()).unwrap();
+        late.id = "bbbbbbbb0000".into();
+        late.state = "awaiting_approval".into();
+        late.waiting_on_you = true;
+        let mut running: Task = serde_json::from_str(&linked_task_json("cccccccc0000", None)).unwrap();
+        running.state = "implementing".into();
+        running.running = true;
+        running.created_at = "2026-10-19T00:00:00Z".into();
+        let app = app_with(&[running, early, late]);
+        let ids = |app: &App| app.indices(0).iter().map(|&i| app.tasks[i].id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&app), vec!["bbbbbbbb0000", "aaaaaaaa0000", "cccccccc0000"], "overdue gate, then the gate, then the stage");
+        let mut app = app;
+        press(&mut app, KeyCode::Char('!'));
+        assert_eq!(ids(&app), vec!["bbbbbbbb0000", "aaaaaaaa0000"], "the needs-you filter keeps the overdue first");
+        app.tasks[2].sla = None;
+        assert_eq!(ids(&app), vec!["aaaaaaaa0000", "bbbbbbbb0000"], "inside the SLA again, age decides and the cache saw the change");
+    }
+
+    #[test]
+    fn a_gate_going_overdue_is_news_once_and_a_jira_move_is_news_each_time() {
+        let mut app = app_with(&[]);
+        let fine: Task = serde_json::from_str(&linked_task_json("abcdef123456", Some("PLAT-123"))).unwrap();
+        app.tx.send(Incoming::Message(StreamMessage::Updated { task: fine })).unwrap();
+        app.pump();
+        assert!(app.take_notices().is_empty(), "a linked ticket inside its SLA is quiet");
+        assert_eq!((app.needs_you_count(), app.overdue_count()), (0, 0));
+
+        let late: Task = serde_json::from_str(&crate::model::tests::jira_task_json()).unwrap();
+        app.tx.send(Incoming::Message(StreamMessage::Updated { task: late.clone() })).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Gate overdue"]);
+        assert_eq!(notices[0].body, "#abcdef12 Login page: intake waited past 1h", "the fixture has no repo, so no repo prefix");
+        assert_eq!(app.overdue_count(), 1, "the header's bang counts it");
+        assert_eq!(app.needs_you_count(), 0, "a draft is not waiting on you: the badge count stays the needs-you count");
+        assert_eq!(notify::badge_label(app.needs_you_count(), app.overdue_count()), "Board ‼1");
+        app.tx.send(Incoming::Message(StreamMessage::Updated { task: late })).unwrap();
+        app.pump();
+        assert!(app.take_notices().is_empty(), "still overdue: not twice");
+
+        let moved: crate::model::TaskEvent = serde_json::from_str(r#"{"taskId":"abcdef123456","kind":"jira.moved","payload":{"status":"Done"},"at":"2026-10-28T10:30:00Z"}"#).unwrap();
+        app.tx.send(Incoming::Message(StreamMessage::Event { event: moved })).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!((notices[0].title.as_str(), notices[0].body.as_str()), ("Jira", "PLAT-123 moved to Done while #abcdef12 waits"));
     }
 }

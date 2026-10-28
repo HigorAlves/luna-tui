@@ -1,7 +1,7 @@
 //! What the board tells you when you are elsewhere: a herdr notification on the transitions
 //! that need you, a live count on the Board tab, a terminal BEL when herdr is not there.
 //! `HARDNESS_BOARD_QUIET=1` silences all of it.
-use crate::model::{Look, PullRequest, SlackItem, Task};
+use crate::model::{Look, PullRequest, SlackItem, Task, TaskEvent, TaskSla};
 use crate::pulls::PrSplit;
 use crate::slack::SlackSplit;
 
@@ -28,6 +28,41 @@ pub fn notice_for(old: Option<Look>, task: &Task) -> Option<Notice> {
     let what = task.reason.clone().unwrap_or_else(|| task.status_label());
     let repo = task.repo_name().map(|r| format!("{r} · ")).unwrap_or_default();
     Some(Notice { title: title.to_string(), body: format!("{repo}#{} {}: {what}", task.short_id(), task.title) })
+}
+
+/// The notices a ticket's SLA clocks are worth: `Gate overdue` when the gate clock flips past
+/// its target, `Stage over SLA` when the stage clock does. Staying overdue, or coming back
+/// inside, is not news; a ticket first seen overdue counts.
+pub fn sla_notices(old: Option<&TaskSla>, task: &Task) -> Vec<Notice> {
+    let Some(sla) = &task.sla else {
+        return Vec::new();
+    };
+    let repo = task.repo_name().map(|r| format!("{r} · ")).unwrap_or_default();
+    let mut notices = Vec::new();
+    if sla.gate_overdue() && !old.is_some_and(TaskSla::gate_overdue) {
+        let waited = sla.gate.as_ref().map(|g| crate::model::age_secs(g.target_secs)).unwrap_or_default();
+        notices.push(Notice {
+            title: "Gate overdue".to_string(),
+            body: format!("{repo}#{} {}: {} waited past {waited}", task.short_id(), task.title, task.status_label()),
+        });
+    }
+    if sla.stage_overdue() && !old.is_some_and(TaskSla::stage_overdue) {
+        let stage = sla.stage.as_ref().and_then(|s| s.stage.clone()).unwrap_or_else(|| task.status_label());
+        notices.push(Notice { title: "Stage over SLA".to_string(), body: format!("{repo}#{} {}: {stage} is past its target", task.short_id(), task.title) });
+    }
+    notices
+}
+
+/// The notice a `jira.moved` event is worth: someone moved the linked issue in Jira while the
+/// ticket runs. Other task events are not news here.
+pub fn jira_moved_notice(task: &Task, event: &TaskEvent) -> Option<Notice> {
+    if event.kind != "jira.moved" {
+        return None;
+    }
+    let key = event.payload["key"].as_str().or(task.jira_key()).unwrap_or("the issue");
+    let status = event.payload["status"].as_str().unwrap_or("?");
+    let doing = if task.running { "runs" } else { "waits" };
+    Some(Notice { title: "Jira".to_string(), body: format!("{key} moved to {status} while #{} {doing}", task.short_id()) })
 }
 
 /// The notice a PR's change of split is worth: into Review requested, Ready to merge, CI failed
@@ -65,9 +100,17 @@ pub fn offline_notice(reason: &str) -> Notice {
     Notice { title: "Machine offline".to_string(), body: reason.to_string() }
 }
 
-/// The Board tab's label: `Board`, or `Board !2` while two tickets need you.
-pub fn badge_label(needs_you: usize) -> String {
-    if needs_you == 0 { "Board".to_string() } else { format!("Board !{needs_you}") }
+/// The Board tab's label: `Board`, `Board !2` while two tickets need you, `Board !2 ‼1` when
+/// one of them (or any ticket) is past an SLA clock.
+pub fn badge_label(needs_you: usize, overdue: usize) -> String {
+    let mut label = "Board".to_string();
+    if needs_you > 0 {
+        label.push_str(&format!(" !{needs_you}"));
+    }
+    if overdue > 0 {
+        label.push_str(&format!(" ‼{overdue}"));
+    }
+    label
 }
 
 /// `HARDNESS_BOARD_QUIET=1` (or anything but empty/0) turns every notice off.
@@ -108,9 +151,39 @@ mod tests {
     }
 
     #[test]
+    fn a_gate_or_stage_going_past_its_sla_is_news_once_and_a_jira_move_always_is() {
+        let late: Task = serde_json::from_str(&crate::model::tests::jira_task_json()).unwrap();
+        let notices = sla_notices(None, &late);
+        assert_eq!(notices.len(), 1, "first sight overdue counts; the warning stage is not over yet: {notices:?}");
+        assert_eq!(notices[0].title, "Gate overdue");
+        assert_eq!(notices[0].body, "#abcdef12 Login page: intake waited past 1h");
+        assert!(sla_notices(late.sla.as_ref(), &late).is_empty(), "already overdue last time: not twice");
+        let mut fine = late.clone();
+        fine.sla.as_mut().unwrap().gate.as_mut().unwrap().overdue = false;
+        assert!(sla_notices(late.sla.as_ref(), &fine).is_empty(), "coming back inside is not news");
+        let mut stage = fine.clone();
+        stage.sla.as_mut().unwrap().stage.as_mut().unwrap().overdue = true;
+        let notices = sla_notices(fine.sla.as_ref(), &stage);
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Stage over SLA"]);
+        assert_eq!(notices[0].body, "#abcdef12 Login page: implementing is past its target");
+        let mut none = fine.clone();
+        none.sla = None;
+        assert!(sla_notices(fine.sla.as_ref(), &none).is_empty(), "a machine without clocks says nothing");
+
+        let moved: TaskEvent = serde_json::from_str(r#"{"taskId":"abcdef123456","kind":"jira.moved","payload":{"status":"Done"},"at":"2026-10-28T10:30:00Z"}"#).unwrap();
+        let notice = jira_moved_notice(&late, &moved).expect("a move is news");
+        assert_eq!(notice.title, "Jira");
+        assert_eq!(notice.body, "PLAT-123 moved to Done while #abcdef12 waits");
+        let other: TaskEvent = serde_json::from_str(r#"{"taskId":"abcdef123456","kind":"jira.transitioned","payload":{"from":"a","to":"b"},"at":"t"}"#).unwrap();
+        assert_eq!(jira_moved_notice(&late, &other), None, "the machine's own transitions are not news");
+    }
+
+    #[test]
     fn the_badge_counts_and_the_kill_switch_reads_like_an_env_flag() {
-        assert_eq!(badge_label(0), "Board");
-        assert_eq!(badge_label(2), "Board !2");
+        assert_eq!(badge_label(0, 0), "Board");
+        assert_eq!(badge_label(2, 0), "Board !2");
+        assert_eq!(badge_label(2, 1), "Board !2 ‼1");
+        assert_eq!(badge_label(0, 1), "Board ‼1");
         assert!(quiet(Some("1")));
         assert!(!quiet(Some("0")));
         assert!(!quiet(Some("")));
