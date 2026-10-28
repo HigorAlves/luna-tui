@@ -13,7 +13,7 @@
 ```sh
 pnpm install
 pnpm start            # builds the stage images, then Postgres + the machine on http://127.0.0.1:4318, in Docker
-pnpm board:build      # the board; then `herdr plugin link ./board` once
+pnpm board:link       # builds the board and links it into herdr once; `pnpm board:build` alone rebuilds it after that
 ```
 
 ## Two ways to run

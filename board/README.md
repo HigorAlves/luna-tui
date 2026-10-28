@@ -26,10 +26,12 @@ the two needs no restart. `HARDNESS_MACHINE_URL` pins one address instead.
 ## Install as a herdr plugin (local link)
 
 ```sh
-cargo build --release
-herdr plugin link .
+pnpm board:link      # from the repo root: builds, then `herdr plugin link ./board`
 herdr plugin action invoke hardness.board.open
 ```
+
+Linking is a one-time step: herdr runs `target/release/hardness-board` from this folder, so a
+later `pnpm board:build` is picked up the next time the pane opens.
 
 Optional keybinding in your herdr config:
 
