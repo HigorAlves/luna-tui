@@ -70,7 +70,7 @@ Tickets stay on the board; a linked Jira issue follows them. One token and one b
 
 4. Press `J` on a ticket to link an issue (a key, or a text search) or to create one from the ticket; a `PLAT-123` in a new ticket's title or description links by itself; label an issue `luna` and intake picks it up after the `jira_intake` agent has read it.
 
-The issue moves when the task enters a mapped state, gets a comment when the task is picked up, opens its PR and closes, and shows its status, priority and due date on the ticket. A transition Jira will not allow shows on the ticket as blocked; the pipeline is never held up by Jira. The token expires after at most a year; the machine warns two weeks before, from what Jira reports. A scoped token also works through `MACHINE_JIRA_CLOUD_ID`; see [configuration.md](./configuration.md).
+The issue moves when the task enters a mapped state, gets a comment when the task is picked up, opens its PR and closes, and shows its status, priority and due date on the ticket. A transition Jira will not allow shows on the ticket as blocked and is tried again every few minutes while the issue answers; the pipeline is never held up by Jira. The token expires after at most a year and Jira does not say when ahead of time: set `MACHINE_JIRA_TOKEN_EXPIRES` to the date you chose when making it and the machine warns once a day in the last two weeks. A scoped token also works through `MACHINE_JIRA_CLOUD_ID`; see [configuration.md](./configuration.md).
 
 ## Checks
 
