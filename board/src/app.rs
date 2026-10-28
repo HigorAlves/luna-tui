@@ -673,6 +673,8 @@ pub struct App {
     /// The branch diff of the ticket whose popup is open, once fetched: (task id, diff).
     pub diff: Option<(String, TaskDiff)>,
     diff_pending: Option<(String, Option<String>)>,
+    /// A diff fetch that failed for this ticket; no retry until the section is reopened.
+    diff_failed: Option<String>,
     /// How far the help sheet is scrolled, and the furthest `ui` found it can scroll.
     pub help_scroll: Cell<u16>,
     pub help_max: Cell<u16>,
@@ -726,6 +728,7 @@ impl App {
             detail_full: false,
             diff: None,
             diff_pending: None,
+            diff_failed: None,
             help_scroll: Cell::new(0),
             help_max: Cell::new(0),
             help_return: None,
@@ -829,9 +832,28 @@ impl App {
                         self.detail = detail;
                     }
                 }
+                Incoming::Diff { id, file, diff } => {
+                    if self.diff_pending.as_ref().is_some_and(|(pending, _)| *pending == id) {
+                        self.diff_pending = None;
+                    }
+                    match diff {
+                        Ok(mut diff) => {
+                            diff.file = file;
+                            self.diff = Some((id, diff));
+                        }
+                        Err(error) => {
+                            self.diff_failed = Some(id);
+                            self.notify(format!("diff: {error}"), true);
+                        }
+                    }
+                }
                 Incoming::Message(StreamMessage::Updated { task }) => {
                     if self.shows_detail_of(&task.id) {
                         self.detail_stale = true;
+                    }
+                    if self.diff.as_ref().is_some_and(|(id, _)| *id == task.id) && task.running != self.task(&task.id).is_some_and(|t| t.running) {
+                        // A stage started or ended: the branch may have moved.
+                        self.diff = None;
                     }
                     self.upsert(task);
                 }
@@ -892,6 +914,7 @@ impl App {
         self.detail_stale = true;
         self.detail_scroll.set(0);
         self.detail_cursor = 0;
+        self.diff_failed = None;
         self.detail_section = self.task(&id).map(Section::for_task).unwrap_or_default();
         self.mode = Mode::Detail(id);
     }
@@ -1005,6 +1028,38 @@ impl App {
         self.detail_pending = Some(id);
         self.detail_fetched_at = Some(Instant::now());
         self.detail_stale = false;
+    }
+
+    /// Fetches the open ticket's diff while its Diff section shows: the file list first, then
+    /// the selected file's patch, one request at a time, off the UI thread.
+    pub fn ensure_diff(&mut self) {
+        let Mode::Detail(id) = &self.mode else { return };
+        if self.detail_section != Section::Diff || !self.online || self.diff_pending.is_some() {
+            return;
+        }
+        let id = id.clone();
+        if self.diff_failed.as_deref() == Some(id.as_str()) || self.task(&id).is_none_or(|t| t.branch.is_none()) {
+            return;
+        }
+        let have = self.diff.as_ref().filter(|(for_id, _)| *for_id == id).map(|(_, d)| d);
+        let file = match have {
+            None => None,
+            Some(diff) => {
+                let wanted = diff.files.get(self.detail_cursor.min(diff.files.len().saturating_sub(1))).map(|f| f.path.clone());
+                if wanted.is_none() || (diff.file == wanted && diff.patch.is_some()) {
+                    return;
+                }
+                wanted
+            }
+        };
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        let (fetching, wanted) = (id.clone(), file.clone());
+        thread::spawn(move || {
+            let diff = machine.diff(&fetching, wanted.as_deref());
+            let _ = tx.send(Incoming::Diff { id: fetching, file: wanted, diff });
+        });
+        self.diff_pending = Some((id, file));
     }
 
     pub fn task(&self, id: &str) -> Option<&Task> {
@@ -2113,6 +2168,7 @@ impl App {
             self.detail_section = section;
             self.detail_scroll.set(0);
             self.detail_cursor = 0;
+            self.diff_failed = None;
         }
     }
 
@@ -3440,5 +3496,126 @@ mod pr_tests {
         let notices = app.take_notices();
         assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["CI failed"], "staying put is not news; a new split is");
         assert_eq!(app.needs_you_count(), 2);
+    }
+}
+
+#[cfg(test)]
+mod workspace_key_tests {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
+    use super::*;
+
+    fn task(state: &str) -> Task {
+        serde_json::from_str(&format!(
+            r#"{{"id":"abcdef123456","title":"Add CSV export","description":"","criteria":[],
+            "repoPath":"/r/app","branch":"task/abcdef12","worktreePath":"/w","state":"{state}","column":"Build",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+        ))
+        .unwrap()
+    }
+
+    fn detail_with_runs(task: &Task, runs: usize) -> TaskDetail {
+        let runs: Vec<String> = (0..runs).map(|i| format!(r#"{{"stage":"implementing","attempt":{},"status":"passed"}}"#, i + 1)).collect();
+        serde_json::from_str(&format!(
+            r#"{{"task":{},"stageRuns":[{}],"approvals":[],"events":[]}}"#,
+            serde_json::to_string(&serde_json::json!({
+                "id": task.id, "title": task.title, "description": "", "criteria": [], "repoPath": "/r/app", "branch": "task/abcdef12",
+                "worktreePath": "/w", "state": task.state, "column": "Build", "waitingOnYou": false, "running": false, "queued": false,
+                "retries": {"verify":0,"e2e":0,"ci":0,"total":0}, "resumeTo": null, "reason": null,
+                "createdAt": "2026-10-22T23:24:22.089Z", "updatedAt": "2026-10-22T23:24:22.089Z"
+            }))
+            .unwrap(),
+            runs.join(",")
+        ))
+        .unwrap()
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn open(state: &str) -> App {
+        let mut app = App::new(crate::Machine::from_env());
+        let task = task(state);
+        app.tasks.push(task.clone());
+        app.open_detail(task.id);
+        app
+    }
+
+    #[test]
+    fn enter_opens_on_the_section_the_gate_concerns_and_h_l_digits_switch() {
+        let app = open("awaiting_approval");
+        assert_eq!(app.detail_section, Section::Plan);
+        let mut app = open("implementing");
+        assert_eq!(app.detail_section, Section::Overview);
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.detail_section, Section::Plan);
+        press(&mut app, KeyCode::Char('h'));
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(app.detail_section, Section::Activity, "h wraps around");
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.detail_section, Section::Runs);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.detail_section, Section::Diff);
+        assert!(matches!(app.mode, Mode::Detail(_)), "still open");
+    }
+
+    #[test]
+    fn j_k_pick_a_run_in_runs_and_scroll_elsewhere_and_plus_toggles_the_size() {
+        let mut app = open("implementing");
+        app.detail = Some(detail_with_runs(&app.tasks[0], 3));
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.detail_cursor, 2, "the cursor stops at the last run");
+        assert_eq!(app.detail_scroll.get(), 0, "picking does not scroll");
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.detail_cursor, 1);
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(app.detail_cursor, 0, "a new section starts at its first row");
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.detail_scroll.get(), 1, "the Plan section scrolls");
+        assert!(!app.detail_full);
+        press(&mut app, KeyCode::Char('+'));
+        assert!(app.detail_full);
+        press(&mut app, KeyCode::Char('+'));
+        assert!(!app.detail_full);
+    }
+
+    #[test]
+    fn the_diff_is_fetched_only_while_its_section_shows_and_never_blocks() {
+        let mut app = open("implementing");
+        app.online = true;
+        app.ensure_diff();
+        assert!(app.diff_pending.is_none(), "Overview asks for no diff");
+        press(&mut app, KeyCode::Char('5'));
+        let before = std::time::Instant::now();
+        app.ensure_diff();
+        assert!(before.elapsed() < std::time::Duration::from_millis(100), "the fetch runs off the UI thread");
+        assert_eq!(app.diff_pending.as_ref().map(|(id, file)| (id.as_str(), file.is_none())), Some(("abcdef123456", true)));
+        app.ensure_diff();
+        assert!(app.diff_pending.is_some(), "one fetch at a time");
+        let files: TaskDiff = serde_json::from_str(r#"{"base":"b","head":"h","files":[{"path":"a.rs","status":"M","added":1,"removed":0},{"path":"b.rs","status":"A","added":2,"removed":0}]}"#).unwrap();
+        app.diff_pending = None;
+        app.diff = Some(("abcdef123456".into(), files));
+        app.ensure_diff();
+        assert_eq!(app.diff_pending.as_ref().and_then(|(_, f)| f.as_deref()), Some("a.rs"), "then the selected file's patch");
+        app.diff_pending = None;
+        let mut with_patch = app.diff.clone().unwrap().1;
+        with_patch.file = Some("a.rs".into());
+        with_patch.patch = Some("@@".into());
+        app.diff = Some(("abcdef123456".into(), with_patch));
+        app.ensure_diff();
+        assert!(app.diff_pending.is_none(), "nothing left to fetch for this file");
+        press(&mut app, KeyCode::Char('j'));
+        app.ensure_diff();
+        assert_eq!(app.diff_pending.as_ref().and_then(|(_, f)| f.as_deref()), Some("b.rs"), "moving the cursor asks for the next file");
+        let mut offline = open("implementing");
+        press(&mut offline, KeyCode::Char('5'));
+        offline.ensure_diff();
+        assert!(offline.diff_pending.is_none(), "offline: nothing to fetch from");
     }
 }

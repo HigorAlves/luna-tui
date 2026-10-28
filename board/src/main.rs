@@ -41,6 +41,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         app.pump();
         tell(app, quiet, &mut badge);
         app.ensure_detail();
+        app.ensure_diff();
         app.tick();
         terminal.draw(|frame| ui::draw(frame, app))?;
 
