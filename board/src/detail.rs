@@ -537,7 +537,7 @@ fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64)
     if !judged.is_empty() {
         summary.push_str(&format!(" · verifying {}/{}", judged.iter().filter(|ok| **ok).count(), judged.len()));
     }
-    if let Some(run) = d.stage_runs.iter().filter(|r| r.stage == "verifying" && !r.cases.is_empty()).next_back() {
+    if let Some(run) = d.stage_runs.iter().rev().find(|r| r.stage == "verifying" && !r.cases.is_empty()) {
         let (glyph, _) = run_glyph(run);
         summary.push_str(&format!(" {glyph}"));
     }
@@ -908,7 +908,7 @@ mod tests {
     }
 
     fn render(width: u16, height: u16, task: &Task, detail: Option<&TaskDetail>, section: Section, cursor: usize) -> Vec<String> {
-        render_with(width, height, task, detail, section, cursor, &[], None)
+        render_with(width, height, task, detail, section, cursor, (&[], None))
     }
 
     fn render_with(
@@ -918,8 +918,7 @@ mod tests {
         detail: Option<&TaskDetail>,
         section: Section,
         cursor: usize,
-        prs: &[PullRequest],
-        diff: Option<&TaskDiff>,
+        (prs, diff): (&[PullRequest], Option<&TaskDiff>),
     ) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let scroll = Cell::new(0);
@@ -1067,7 +1066,7 @@ mod tests {
     fn the_pr_section_finds_the_branch_s_pr_in_the_inbox_and_lists_its_checks() {
         let (task, detail) = fixture();
         let prs = [pr("task/abcdef12")];
-        let rows = render_with(120, 30, &task, Some(&detail), Section::Pr, 0, &prs, None);
+        let rows = render_with(120, 30, &task, Some(&detail), Section::Pr, 0, (&prs, None));
         let text = rows.join("\n");
         assert!(text.contains("acme/app#412  Add CSV export"), "{text}");
         assert!(text.contains("@mia · task/abcdef12 → main"), "{text}");
@@ -1076,7 +1075,7 @@ mod tests {
         assert!(text.contains("approved · 2 unresolved threads"), "{text}");
         assert!(text.contains("⚙ ci fix · ci watch · #e1f2a3b4"), "{text}");
         let other = [pr("feat/other")];
-        let text = render_with(120, 30, &task, Some(&detail), Section::Pr, 0, &other, None).join("\n");
+        let text = render_with(120, 30, &task, Some(&detail), Section::Pr, 0, (&other, None)).join("\n");
         assert!(text.contains("no PR yet"), "{text}");
     }
 
@@ -1088,14 +1087,14 @@ mod tests {
             "file":"machine/src/csv.test.ts","patch":"@@ -0,0 +1,41 @@\n+import { toCsv } from \"./csv\";\n+"}"#,
         )
         .unwrap();
-        let rows = render_with(120, 30, &task, Some(&detail), Section::Diff, 1, &[], Some(&diff));
+        let rows = render_with(120, 30, &task, Some(&detail), Section::Diff, 1, (&[], Some(&diff)));
         let text = rows.join("\n");
         assert!(text.contains("Diff · task/abcdef12 against main · 2 files · +129 −4"), "{text}");
         let selected = rows.iter().find(|r| r.contains("csv.test.ts") && r.contains("▌")).expect("the cursor on the second file");
         assert!(selected.contains("A ") && selected.contains("+41"), "{selected}");
         assert!(text.contains("─ machine/src/csv.test.ts"), "{text}");
         assert!(text.contains("+import { toCsv }"), "{text}");
-        let text = render_with(120, 30, &task, Some(&detail), Section::Diff, 0, &[], None).join("\n");
+        let text = render_with(120, 30, &task, Some(&detail), Section::Diff, 0, (&[], None)).join("\n");
         assert!(text.contains("loading task/abcdef12"), "{text}");
     }
 
