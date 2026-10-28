@@ -34,7 +34,27 @@ describe("loadConfig", () => {
       reposDir: "/home/me/Developer",
       threadReplies: true,
       slack: null,
+      slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/docs\/agents\/slack-triage\.md$/) as string, digestAt: null },
     });
+  });
+
+  it("reads the Slack inbox's tokens and knobs", () => {
+    const inbox = loadConfig({
+      HOME: "/h",
+      MACHINE_SLACK_USER_TOKEN: " xoxp-1 ",
+      MACHINE_SLACK_APP_TOKEN: "xapp-1",
+      MACHINE_SLACK_INBOX: "off",
+      MACHINE_SLACK_INBOX_INTERVAL: "30",
+      MACHINE_SLACK_MARK_READ: "on",
+      MACHINE_SLACK_RULES: "/state/slack-triage.md",
+      MACHINE_SLACK_DIGEST_AT: "08:30",
+    }).slackInbox;
+    expect(inbox).toEqual({ enabled: false, userToken: "xoxp-1", appToken: "xapp-1", intervalMs: 30_000, markRead: true, rulesPath: "/state/slack-triage.md", digestAt: { hour: 8, minute: 30 } });
+    expect(loadConfig({ HOME: "/h", MACHINE_SLACK_USER_TOKEN: "" }).slackInbox.userToken).toBeNull();
+    expect(loadConfig({ HOME: "/h", MACHINE_SLACK_DIGEST_AT: "" }).slackInbox.digestAt).toBeNull();
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_INBOX_INTERVAL: "0" })).toThrow(/MACHINE_SLACK_INBOX_INTERVAL/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_DIGEST_AT: "8am" })).toThrow(/MACHINE_SLACK_DIGEST_AT/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_DIGEST_AT: "25:00" })).toThrow(/MACHINE_SLACK_DIGEST_AT/);
   });
 
   it("reads the thread-reply switch and the Slack pair, which go together", () => {

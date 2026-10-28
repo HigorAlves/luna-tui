@@ -46,6 +46,10 @@ The board's `P` view lists every open PR involving you (the machine polls `gh se
 
 A PR task's worktree is checked out on the PR's own head branch (`<worktrees>/<repo>/pr-<n>-<branch>`), and that branch is the one its stages may commit to. Agents never hold a GitHub credential: everything they read about the PR comes in the stage input, everything that goes out is posted by the host after the stage. A PR from a fork can be reviewed but not fixed or addressed; a PR in a repo with no local checkout is read-only until the board clones it (`POST /github/clone`).
 
+## Slack inbox
+
+The board's `S` view is the Slack twin of the PR inbox. `SlackInbox` (`application/slack-inbox.ts`) polls your workspace through the `Slack` port (`application/slack.ts`, implemented over plain `fetch` in `adapters/slack/web-api.ts` with your user token from the internal app in `slack/manifest.json`): mentions through `search.messages`, DMs and a budgeted sweep of your channels through `conversations.history`, replies in threads you are in through `conversations.replies`, and reactions pushed over Socket Mode (`adapters/slack/socket-mode.ts`, Node's own WebSocket, when an app-level token is set). Several mentions in one thread fold into one item (`domain/slack-item.ts`); the rules file (`domain/slack-rules.ts`, `docs/agents/slack-triage.md`) drops your own messages and muted channels, settles app posts without the model and sets priority floors for VIPs, always-P0 keywords and watches; what is left goes to Haiku in one batched, structured-output call (`adapters/anthropic/triage.ts`). Items and the watches you save live in `slack_items` and `slack_watches`, so triage and your read state survive restarts, and every change is published as one `slack.items` snapshot. Replying posts as you with the same token; `t` turns an item into a task whose `source.kind` is `slack`; done is manual, and a thread that moves after you cleared it reopens, re-triaged. What you do feeds back into the rules file's `## Learned` section.
+
 ## Repository layout
 
 | Path | What it is |

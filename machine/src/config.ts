@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { RUNNING, type TaskState } from "@hardness/contracts";
 
@@ -39,6 +40,8 @@ export interface Config {
   threadReplies: boolean;
   /** A Slack bot token and channel: one thread per task is opened there. Both or neither. */
   slack: { token: string; channel: string } | null;
+  /** The Slack inbox: your user token, the optional app-level token for Socket Mode, and its knobs. */
+  slackInbox: SlackInboxConfig;
   /** Days to keep a closed task's events/stage runs before pruning them. 0 disables pruning. */
   retentionDays: number;
   /** Days after a task closes before its worktree is removed and its merged branch deleted. 0 disables it. */
@@ -50,6 +53,22 @@ export interface Config {
   /** What happens to a task mid-stage when the machine stops: back to the queue (its stage re-runs
    *  on boot, no approval needed) or escalated for you to resume, as before. */
   restartPolicy: RestartPolicy;
+}
+
+export interface SlackInboxConfig {
+  /** `MACHINE_SLACK_INBOX=off` stops polling; the routes still answer the empty snapshot. */
+  enabled: boolean;
+  /** The user token (`xoxp-…`) the inbox reads and posts with; null means every call says so. */
+  userToken: string | null;
+  /** The app-level token (`xapp-…`) for Socket Mode; null leaves the socket off. */
+  appToken: string | null;
+  intervalMs: number;
+  /** `MACHINE_SLACK_MARK_READ=on`: done also moves your read cursor in Slack. */
+  markRead: boolean;
+  /** The rules file; created from the template when missing. */
+  rulesPath: string;
+  /** `HH:MM` local time for the morning digest DM; null means none. */
+  digestAt: { hour: number; minute: number } | null;
 }
 
 export type RestartPolicy = "requeue" | "escalate";
@@ -70,6 +89,9 @@ function optionalUsd(env: NodeJS.ProcessEnv, key: string): number | null {
   if (!Number.isFinite(value) || value <= 0) throw new Error(`${key} must be a positive amount in USD, got "${raw}"`);
   return value;
 }
+
+/** The repository root (this file is machine/src/config.ts): where the default rules file lives. */
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 export const DEFAULT_DATABASE_URL = "postgres://hardness:hardness@127.0.0.1:5433/hardness";
 export const DEFAULT_PORT = 4317;
@@ -145,6 +167,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if ((slackToken === "") !== (slackChannel === "")) {
     throw new Error("MACHINE_SLACK_TOKEN and MACHINE_SLACK_CHANNEL go together; set both or neither");
   }
+  const inboxSeconds = env.MACHINE_SLACK_INBOX_INTERVAL === undefined ? 60 : Number(env.MACHINE_SLACK_INBOX_INTERVAL);
+  if (!Number.isInteger(inboxSeconds) || inboxSeconds < 1) {
+    throw new Error(`MACHINE_SLACK_INBOX_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_SLACK_INBOX_INTERVAL}"`);
+  }
+  let digestAt: SlackInboxConfig["digestAt"] = null;
+  if (env.MACHINE_SLACK_DIGEST_AT !== undefined && env.MACHINE_SLACK_DIGEST_AT !== "") {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(env.MACHINE_SLACK_DIGEST_AT);
+    const hour = Number(match?.[1]);
+    const minute = Number(match?.[2]);
+    if (!match || hour > 23 || minute > 59) throw new Error(`MACHINE_SLACK_DIGEST_AT must be HH:MM, got "${env.MACHINE_SLACK_DIGEST_AT}"`);
+    digestAt = { hour, minute };
+  }
   const home = env.HOME ?? homedir();
   return {
     databaseUrl: env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
@@ -163,6 +197,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     reposDir: env.MACHINE_REPOS_DIR ?? join(home, "Developer"),
     threadReplies: env.MACHINE_THREAD_REPLIES !== "off",
     slack: slackToken === "" ? null : { token: slackToken, channel: slackChannel },
+    slackInbox: {
+      enabled: env.MACHINE_SLACK_INBOX !== "off",
+      userToken: env.MACHINE_SLACK_USER_TOKEN?.trim() || null,
+      appToken: env.MACHINE_SLACK_APP_TOKEN?.trim() || null,
+      intervalMs: inboxSeconds * 1000,
+      markRead: env.MACHINE_SLACK_MARK_READ === "on",
+      rulesPath: env.MACHINE_SLACK_RULES?.trim() || resolve(REPO_ROOT, "docs", "agents", "slack-triage.md"),
+      digestAt,
+    },
     retentionDays,
     worktreeRetentionDays,
     maxPerRepo: optionalPositiveInt(env, "MACHINE_MAX_PER_REPO"),

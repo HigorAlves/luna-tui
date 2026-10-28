@@ -25,7 +25,11 @@
         "users:read",
         "usergroups:read",
         "reactions:read",
-        "chat:write"
+        "chat:write",
+        "channels:write",
+        "groups:write",
+        "im:write",
+        "mpim:write"
       ],
       "bot": ["users:read"]
     }

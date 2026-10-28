@@ -4,6 +4,7 @@
 import { EntitySchema } from "typeorm";
 
 import type { ApprovalRow, ArtifactRow, EventRow, StageRunRow, TaskRow } from "../../domain/task.ts";
+import type { SlackItemEntityRow, SlackWatchEntityRow } from "./slack-store.ts";
 
 const taskRelation = {
   type: "many-to-one",
@@ -123,4 +124,53 @@ export const ArtifactEntity = new EntitySchema<ArtifactRow & { task?: TaskRow; s
   indices: [{ columns: ["taskId"] }],
 });
 
-export const ENTITIES = [TaskEntity, StageRunEntity, EventEntity, ApprovalEntity, ArtifactEntity];
+export const SlackItemEntity = new EntitySchema<SlackItemEntityRow>({
+  name: "SlackItem",
+  tableName: "slack_items",
+  columns: {
+    id: { type: "text", primary: true },
+    kind: { type: "text" },
+    channel: { type: "jsonb" },
+    author: { type: "jsonb" },
+    text: { type: "text", default: "" },
+    threadTs: { name: "thread_ts", type: "text", nullable: true },
+    context: { type: "jsonb", default: () => "'[]'::jsonb" },
+    permalink: { type: "text", default: "" },
+    ts: { type: "timestamptz" },
+    slackTs: { name: "slack_ts", type: "text" },
+    matched: { type: "jsonb", default: () => "'[]'::jsonb" },
+    count: { type: "integer", default: 1 },
+    replies: { type: "integer", default: 0 },
+    youReplied: { name: "you_replied", type: "boolean", default: false },
+    seenAt: { name: "seen_at", type: "timestamptz", nullable: true },
+    doneAt: { name: "done_at", type: "timestamptz", nullable: true },
+    snoozedUntil: { name: "snoozed_until", type: "timestamptz", nullable: true },
+    reopenedAt: { name: "reopened_at", type: "timestamptz", nullable: true },
+    repliedAt: { name: "replied_at", type: "timestamptz", nullable: true },
+    arrivedAt: { name: "arrived_at", type: "timestamptz" },
+    triage: { type: "jsonb", nullable: true },
+    linked: { type: "jsonb" },
+    createdAt: { name: "created_at", type: "timestamptz", createDate: true },
+    updatedAt: { name: "updated_at", type: "timestamptz", updateDate: true },
+  },
+  indices: [{ columns: ["doneAt"] }, { columns: ["arrivedAt"] }],
+});
+
+export const SlackWatchEntity = new EntitySchema<SlackWatchEntityRow>({
+  name: "SlackWatch",
+  tableName: "slack_watches",
+  columns: {
+    id: { type: "uuid", primary: true, generated: "uuid" },
+    kind: { type: "text" },
+    value: { type: "text" },
+    label: { type: "text" },
+    channels: { type: "jsonb", default: () => "'[]'::jsonb" },
+    enabled: { type: "boolean", default: true },
+    builtin: { type: "boolean", default: false },
+    priority: { type: "text", nullable: true },
+    createdAt: { name: "created_at", type: "timestamptz", createDate: true },
+  },
+  uniques: [{ columns: ["kind", "value"] }],
+});
+
+export const ENTITIES = [TaskEntity, StageRunEntity, EventEntity, ApprovalEntity, ArtifactEntity, SlackItemEntity, SlackWatchEntity];

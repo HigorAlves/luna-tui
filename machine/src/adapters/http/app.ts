@@ -13,6 +13,11 @@ import {
   type TaskDiff,
   NewTaskInput,
   SetupRepoInput,
+  SlackItemPatch,
+  SlackReplyInput,
+  SlackTaskInput,
+  SlackWatchInput,
+  SlackWatchPatch,
   StubPlanInput,
   TaskState,
   UpdateTaskInput,
@@ -32,6 +37,8 @@ import { NoCasesToEditError, NoPlanToEditError, type Pipeline, TaskBusyError, Ta
 import { NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
 import { CloneError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
+import { AlreadyTaskError, BuiltinWatchError, NoItemError, NoWatchError, type SlackInboxPort } from "../../application/slack-inbox.ts";
+import { NoSlackTokenError } from "../../application/slack.ts";
 import type { StubStages } from "../../application/stages/stubs.ts";
 import type { Bus } from "./bus.ts";
 import { InvalidSince, parseSince } from "./metrics.ts";
@@ -55,6 +62,8 @@ export interface AppDeps {
   prTasks?: { dispatch(pr: PullRequest, action: PrAction): Promise<TaskRow> };
   /** The task branch's diff from its worktree; without it `GET /tasks/:id/diff` is absent. */
   taskDiff?: (worktreePath: string, repoPath: string | null, file?: string) => Promise<TaskDiff>;
+  /** The Slack inbox; without it the `/slack/*` routes are absent. */
+  slack?: SlackInboxPort;
 }
 
 class BadRequest extends Error {}
@@ -90,7 +99,7 @@ function prParams(c: Context): { owner: string; name: string; number: number } {
   return { owner, name, number };
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack }: AppDeps): Hono {
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -106,6 +115,11 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof ForkError) return fail(c, 409, "fork", error.message);
     if (error instanceof OwnPrError) return fail(c, 409, "own_pr", error.message);
     if (error instanceof CloneError) return fail(c, 400, "invalid_request", error.message);
+    if (error instanceof NoItemError) return fail(c, 404, "no_item", error.message);
+    if (error instanceof NoWatchError) return fail(c, 404, "no_watch", error.message);
+    if (error instanceof NoSlackTokenError) return fail(c, 409, "no_token", error.message);
+    if (error instanceof AlreadyTaskError) return fail(c, 409, "already_task", error.message);
+    if (error instanceof BuiltinWatchError) return fail(c, 409, "builtin", error.message);
     if (error instanceof ZodError) return fail(c, 400, "invalid_request", z.prettifyError(error));
     if (error instanceof BadRequest) return fail(c, 400, "invalid_request", error.message);
     console.error(error);
@@ -270,6 +284,38 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
       await pulls.clone(repo, dest);
       return c.json({ repo, dest, cloning: true }, 202);
     });
+  }
+
+  if (slack) {
+    // The Slack inbox: the snapshot, a poll on demand, your actions on an item, the watches,
+    // how fast you answer, and the listings the board's watch popup completes from.
+    app.get("/slack/items", (c) => c.json(slack.snapshot));
+    app.post("/slack/refresh", async (c) => c.json(await slack.pollOnce()));
+    app.patch("/slack/items/:id", async (c) => c.json(await slack.patch(c.req.param("id"), await body(c, SlackItemPatch))));
+    app.post("/slack/items/:id/reply", async (c) => {
+      const { text } = await body(c, SlackReplyInput);
+      return c.json(await slack.reply(c.req.param("id"), text));
+    });
+    app.post("/slack/items/:id/task", async (c) => c.json(toTask(await slack.toTask(c.req.param("id"), await body(c, SlackTaskInput))), 201));
+    app.get("/slack/watches", async (c) => c.json(await slack.watches()));
+    app.post("/slack/watches", async (c) => c.json(await slack.addWatch(await body(c, SlackWatchInput)), 201));
+    app.patch("/slack/watches/:id", async (c) => c.json(await slack.patchWatch(c.req.param("id"), await body(c, SlackWatchPatch))));
+    app.delete("/slack/watches/:id", async (c) => {
+      await slack.deleteWatch(c.req.param("id"));
+      return c.body(null, 204);
+    });
+    app.get("/slack/metrics", async (c) => {
+      let since: Date;
+      try {
+        since = parseSince(c.req.query("since"));
+      } catch (error) {
+        if (error instanceof InvalidSince) throw new BadRequest(error.message);
+        throw error;
+      }
+      return c.json(await slack.metrics(since));
+    });
+    app.get("/slack/usergroups", async (c) => c.json(await slack.usergroups()));
+    app.get("/slack/channels", async (c) => c.json(await slack.channels()));
   }
 
   if (stubs) {

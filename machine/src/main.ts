@@ -18,6 +18,13 @@ import { sweepImages, sweepRunFolders, sweepTaskState, sweepWorktrees } from "./
 import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { GitHubPulls } from "./application/pulls.ts";
+import { SlackInbox } from "./application/slack-inbox.ts";
+import { noTokenSlack } from "./application/slack.ts";
+import { createAnthropicTriager } from "./adapters/anthropic/triage.ts";
+import { loadCredential } from "./adapters/docker/credentials.ts";
+import { PgSlackStore } from "./adapters/persistence/slack-store.ts";
+import { SocketMode } from "./adapters/slack/socket-mode.ts";
+import { createSlack } from "./adapters/slack/web-api.ts";
 import { createPrTask } from "./application/pr-tasks.ts";
 import { prFollowUpRunner } from "./application/stages/pr-address.ts";
 import { postVerdictRunner } from "./application/stages/pr-review.ts";
@@ -217,7 +224,30 @@ const pulls = new GitHubPulls({
 const prTasks = {
   dispatch: (pr: PullRequest, action: PrAction) => createPrTask({ worktreesDir: config.worktreesDir, pipeline }, pr, action),
 };
-const app = createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file) });
+/** The Slack inbox: your user token reads and posts; Haiku triages when an API key is set. */
+const slackApi = config.slackInbox.userToken ? createSlack(config.slackInbox.userToken) : noTokenSlack();
+const credential = await loadCredential();
+const triager = credential?.name === "ANTHROPIC_API_KEY" ? createAnthropicTriager(credential.value) : null;
+const slackInbox = new SlackInbox({
+  slack: slackApi,
+  triager,
+  store: new PgSlackStore(db),
+  intervalMs: config.slackInbox.intervalMs,
+  publish: (snapshot) => bus.publish({ type: "slack.items", snapshot }),
+  findTask: (id) => pipeline.get(id).catch(() => null),
+  linkPr: (refs) => {
+    for (const ref of refs) {
+      const pr = pulls.find(ref.repo, ref.number);
+      if (pr) return { repo: pr.repo, number: pr.number, split: pr.split };
+    }
+    return null;
+  },
+  createTask: (input) => pipeline.createTask(input),
+  markRead: config.slackInbox.markRead,
+  rulesPath: config.slackInbox.rulesPath,
+  socketToken: config.slackInbox.appToken,
+});
+const app = createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, slack: slackInbox, taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file) });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
   const agents = [...new Set([...Object.keys(real), "verifying", "delivering", "shipping"])];
   console.log(
@@ -228,6 +258,39 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 if (config.githubPrs.enabled) {
   console.log(`github prs: polling every open PR involving you every ${config.githubPrs.intervalMs / 1000}s`);
   pulls.start();
+}
+
+let socket: SocketMode | undefined;
+let digestTimer: NodeJS.Timeout | undefined;
+if (config.slackInbox.enabled && config.slackInbox.userToken) {
+  const { intervalMs, appToken, digestAt } = config.slackInbox;
+  console.log(`slack inbox: polling mentions, DMs, threads and watches every ${intervalMs / 1000}s${triager ? " · triage by Haiku" : " · no API key, no triage"}${appToken ? " · Socket Mode on" : ""}`);
+  slackInbox.start();
+  if (appToken) {
+    socket = new SocketMode({
+      openSocket: () => slackApi.openSocket(appToken),
+      onEvent: (event) => slackInbox.handleSocketEvent(event),
+      onState: (state) => slackInbox.setSocketState(state),
+    });
+    void socket.start();
+  }
+  if (digestAt) {
+    /** Posts the digest to your own DM at `HH:MM` local time, every day. */
+    const scheduleDigest = () => {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(digestAt.hour, digestAt.minute, 0, 0);
+      if (next <= now) next.setDate(next.getDate() + 1);
+      digestTimer = setTimeout(() => {
+        slackInbox.postDigest().catch((error: unknown) => console.warn("slack inbox: digest failed", error));
+        scheduleDigest();
+      }, next.getTime() - now.getTime());
+      digestTimer.unref();
+    };
+    scheduleDigest();
+  }
+} else if (config.slackInbox.enabled) {
+  console.log("slack inbox: off until MACHINE_SLACK_USER_TOKEN is set");
 }
 
 let intake: GitHubIntake | undefined;
@@ -241,6 +304,9 @@ if (config.githubPoll.repos.length > 0) {
 async function shutdown(): Promise<void> {
   intake?.stop();
   pulls.stop();
+  slackInbox.stop();
+  socket?.stop();
+  if (digestTimer) clearTimeout(digestTimer);
   pipeline.stopSupervisor();
   server.close();
   await pipeline.shutdown();
