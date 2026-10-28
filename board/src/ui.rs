@@ -2473,3 +2473,82 @@ mod help_sheet_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod help_resize_tests {
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        crossterm::event::{KeyCode, KeyEvent},
+    };
+
+    use super::*;
+
+    fn screen(app: &App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect())
+            .collect()
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    #[test]
+    fn growing_the_terminal_pulls_a_scrolled_sheet_back_to_the_top() {
+        let mut app = App::new(crate::Machine::from_env());
+        press(&mut app, KeyCode::Char('?'));
+        let top = screen(&app, 80, 24);
+        for _ in 0..5 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        assert_ne!(screen(&app, 80, 24), top, "scrolled at 80x24");
+        let wide = screen(&app, 200, 50);
+        let positions = wide.iter().flat_map(|r| r.match_indices("j/k scroll · ").map(|(i, m)| r[i + m.len()..].to_string()));
+        assert!(positions.clone().count() > 0, "the status bar hint is there");
+        assert!(positions.clone().all(|rest| rest.starts_with("any key")), "no n/m footer: everything fits at 200x50");
+        assert!(HelpFor::Board.sections().iter().all(|s| wide.join("\n").contains(s.heading)));
+        assert_eq!(screen(&app, 80, 24), top, "back at 80x24 the sheet starts at the top again");
+    }
+
+    #[test]
+    fn the_whole_app_draws_every_views_help_at_tiny_sizes() {
+        for (w, h) in [(1, 1), (10, 4), (20, 6), (80, 24)] {
+            let mut app = App::new(crate::Machine::from_env());
+            press(&mut app, KeyCode::Char('?'));
+            assert_eq!(screen(&app, w, h).len(), usize::from(h));
+            press(&mut app, KeyCode::Esc);
+
+            app.floor = Some(FloorState::default());
+            press(&mut app, KeyCode::Char('?'));
+            assert!(matches!(app.mode, Mode::Help(HelpFor::Floor)));
+            for _ in 0..3 {
+                press(&mut app, KeyCode::Char('j'));
+                assert_eq!(screen(&app, w, h).len(), usize::from(h));
+            }
+            press(&mut app, KeyCode::Esc);
+            app.floor = None;
+
+            app.inbox = Some(InboxState::default());
+            press(&mut app, KeyCode::Char('?'));
+            assert_eq!(screen(&app, w, h).len(), usize::from(h));
+            press(&mut app, KeyCode::Esc);
+            app.inbox = None;
+
+            app.digest = Some(DigestState::default());
+            press(&mut app, KeyCode::Char('?'));
+            assert_eq!(screen(&app, w, h).len(), usize::from(h));
+            press(&mut app, KeyCode::Esc);
+            app.digest = None;
+
+            app.mode = Mode::Detail("aaaaaaaa0000".to_string());
+            press(&mut app, KeyCode::Char('?'));
+            assert_eq!(screen(&app, w, h).len(), usize::from(h));
+            press(&mut app, KeyCode::Esc);
+            assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"));
+        }
+    }
+}
