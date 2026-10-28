@@ -65,7 +65,7 @@ export interface SlackInboxConfig {
   intervalMs: number;
   /** `MACHINE_SLACK_MARK_READ=on`: done also moves your read cursor in Slack. */
   markRead: boolean;
-  /** The rules file; created from the template when missing. */
+  /** The rules file (`<stateDir>/slack-triage.md` unless `MACHINE_SLACK_RULES` says otherwise); created from the template when missing. */
   rulesPath: string;
   /** `HH:MM` local time for the morning digest DM; null means none. */
   digestAt: { hour: number; minute: number } | null;
@@ -90,7 +90,7 @@ function optionalUsd(env: NodeJS.ProcessEnv, key: string): number | null {
   return value;
 }
 
-/** The repository root (this file is machine/src/config.ts): where the default rules file lives. */
+/** The repository root (this file is machine/src/config.ts): a relative `MACHINE_SLACK_RULES` is taken from here. */
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 export const DEFAULT_DATABASE_URL = "postgres://hardness:hardness@127.0.0.1:5433/hardness";
@@ -180,6 +180,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     digestAt = { hour, minute };
   }
   const home = env.HOME ?? homedir();
+  const stateDir = env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness");
+  const rules = env.MACHINE_SLACK_RULES?.trim();
   return {
     databaseUrl: env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
     port,
@@ -189,7 +191,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     runnerImage: env.RUNNER_IMAGE ?? "hardness-runner:dev",
     runnerQaImage: env.RUNNER_QA_IMAGE ?? "hardness-runner-qa:dev",
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
-    stateDir: env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness"),
+    stateDir,
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
     githubPrs: { enabled: env.MACHINE_GITHUB_PRS !== "off", intervalMs: prsSeconds * 1000 },
     githubToken: env.GITHUB_TOKEN?.trim() || env.GH_TOKEN?.trim() || null,
@@ -203,7 +205,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       appToken: env.MACHINE_SLACK_APP_TOKEN?.trim() || null,
       intervalMs: inboxSeconds * 1000,
       markRead: env.MACHINE_SLACK_MARK_READ === "on",
-      rulesPath: env.MACHINE_SLACK_RULES?.trim() || resolve(REPO_ROOT, "docs", "agents", "slack-triage.md"),
+      rulesPath: rules ? resolve(REPO_ROOT, rules) : join(stateDir, "slack-triage.md"),
       digestAt,
     },
     retentionDays,

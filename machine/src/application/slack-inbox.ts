@@ -6,7 +6,7 @@
 // verdicts land. The twin of GitHubPulls: same start/stop/pollOnce,
 // same publish-only-when-changed rule, same backoff on a rate limit. Acting on an item (reply,
 // done, snooze, ticket) lives here too, since each changes what the next poll shows.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 import type {
@@ -24,7 +24,7 @@ import type {
 } from "@hardness/contracts";
 
 import type { SocketEvent, SocketState } from "../adapters/slack/socket-mode.ts";
-import { toPlainText } from "../adapters/slack/mrkdwn.ts";
+import { escapeMrkdwn, toPlainText } from "../adapters/slack/mrkdwn.ts";
 import { stats } from "../adapters/http/metrics.ts";
 import {
   type IncomingMessage,
@@ -43,7 +43,7 @@ import {
   toSlackItem,
   touch,
 } from "../domain/slack-item.ts";
-import { DEFAULT_SLA, RULES_TEMPLATE, type SlaTargets, type SlackRules, applyRules, firstLine, learn, parseRules, withFloor } from "../domain/slack-rules.ts";
+import { DEFAULT_SLA, LEARNED_TEMPLATE, RULES_TEMPLATE, type SlaTargets, type SlackRules, applyRules, firstLine, inQuietHours, learn, learnedPath, parseRules, withFloor } from "../domain/slack-rules.ts";
 import type { TaskRow } from "../domain/task.ts";
 import type { NewTask } from "./pipeline.ts";
 import { type ChannelInfo, type Conversation, type RawMessage, type Slack, type SlackMe, type Usergroup, messageOf } from "./slack.ts";
@@ -56,7 +56,8 @@ export interface SlackInboxPort {
   /** `force` polls even inside a rate-limit backoff (the board's refresh); scheduled and socket polls wait it out. */
   pollOnce(force?: boolean): Promise<SlackSnapshot>;
   patch(id: string, patch: SlackItemPatch): Promise<SlackItem>;
-  reply(id: string, text: string): Promise<SlackItem>;
+  /** Posts `text` (escaped) in the item's thread as you; `nudge` prefixes a mention of its author. */
+  reply(id: string, text: string, nudge?: boolean): Promise<SlackItem>;
   toTask(id: string, input: SlackTaskInput): Promise<TaskRow>;
   watches(): Promise<SlackWatch[]>;
   addWatch(input: SlackWatchInput): Promise<SlackWatch>;
@@ -153,13 +154,18 @@ const BUILTIN_WATCHES: Array<{ value: string; label: string }> = [
 const toSlackTs = (date: Date): string => (date.getTime() / 1000).toFixed(6);
 /** The SLA as the board sees it: 0 stands for "no SLA" on the wire. */
 const toWireSla = (sla: SlaTargets): SlackSnapshot["sla"] => ({ P0: sla.P0 ?? 0, P1: sla.P1 ?? 0, P2: sla.P2 ?? 0, P3: sla.P3 ?? 0 });
-const key = (row: SlackItemRow): string => (row.kind === "watch" || row.kind === "automated" ? `#${row.channel.name}` : `@${row.author.name}`);
+/** What a learned prior is keyed by: the channel for watch and app items, the author otherwise; the name rides along as the label. */
+const learnedKey = (row: SlackItemRow): { key: string; label: string } =>
+  row.kind === "watch" || row.kind === "automated" ? { key: row.channel.id, label: `#${row.channel.name}` } : { key: row.author.id, label: `@${row.author.name}` };
 
+/** Writes go to a temp file then rename into place: a reader (you, in an editor) never sees a half-written file. */
 const realFiles: NonNullable<SlackInboxOptions["files"]> = {
   read: (path) => readFile(path, "utf8").catch((error: NodeJS.ErrnoException) => (error.code === "ENOENT" ? null : Promise.reject(error))),
   write: async (path, text) => {
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(path, text, "utf8");
+    const tmp = `${path}.${process.pid}.tmp`;
+    await writeFile(tmp, text, "utf8");
+    await rename(tmp, path);
   },
 };
 
@@ -178,7 +184,7 @@ interface Cursors {
 }
 
 export class SlackInbox implements SlackInboxPort {
-  snapshot: SlackSnapshot = { items: [], watches: [], me: null, polledAt: null, error: null, socket: "off", sla: toWireSla(DEFAULT_SLA) };
+  snapshot: SlackSnapshot = { items: [], watches: [], me: null, polledAt: null, error: null, socket: "off", sla: toWireSla(DEFAULT_SLA), quiet: false };
   /** How long until the next poll: the interval, or the backoff after a rate limit. */
   nextDelayMs: number;
 
@@ -205,8 +211,9 @@ export class SlackInbox implements SlackInboxPort {
   private listings: { usergroups?: { at: number; value: Usergroup[] }; channels?: { at: number; value: ChannelInfo[] } } = {};
   private readonly now: () => Date;
   private readonly files: NonNullable<SlackInboxOptions["files"]>;
-  /** The SLA the last refresh read from the rules file; the minute tick recomputes with it. */
+  /** The rules the last refresh read; the minute tick recomputes due times and the quiet flag with them. */
   private sla: SlaTargets = DEFAULT_SLA;
+  private lastRules: SlackRules | null = null;
   /** Items waiting for the pack, with the floor the rules set, how often the container failed on them and when they may run again; one container runs at a time. */
   private readonly triageQueue = new Map<string, { floor: SlackPriority | null; failures: number; notBefore: number }>();
   private triaging: Promise<void> | null = null;
@@ -257,7 +264,7 @@ export class SlackInbox implements SlackInboxPort {
   tick(): void {
     const now = this.now();
     const items = this.snapshot.items.map((item) => ({ ...item, ...dueOf(item, now, this.sla), split: splitOf(item, now) }));
-    this.publishIfChanged({ ...this.snapshot, items });
+    this.publishIfChanged({ ...this.snapshot, items, quiet: this.lastRules ? inQuietHours(this.lastRules, now) : false });
   }
 
   /** One poll; a poll already running is shared rather than doubled. Inside a rate-limit backoff only a forced one runs. */
@@ -274,7 +281,10 @@ export class SlackInbox implements SlackInboxPort {
   /** A Socket Mode event: the channel is read at the next poll, which comes soon. */
   handleSocketEvent(event: SocketEvent): void {
     if (event.type === "message") {
-      this.dirty.add(event.channel);
+      // An edit or a deletion names the channel on the envelope, or on the message it carries.
+      const channel = event.channel ?? event.message?.channel ?? event.previous_message?.channel;
+      if (!channel) return;
+      this.dirty.add(channel);
     } else if (event.type === "reaction_added" && event.item.channel && event.item.ts && this.me && event.item_user === this.me.id) {
       const { channel, ts } = event.item;
       const at = slackTsToDate(event.event_ts);
@@ -369,7 +379,9 @@ export class SlackInbox implements SlackInboxPort {
   /** Rebuilds the snapshot from the store and the rules file's SLA, and publishes it when it changed. */
   private async refresh(polledAt: string | null, error: string | null): Promise<SlackSnapshot> {
     const now = this.now();
-    this.sla = (await this.rules()).sla;
+    const rules = await this.rules();
+    this.sla = rules.sla;
+    this.lastRules = rules;
     let rows = await this.options.store.items(new Date(now.getTime() - KEEP_DONE_MS));
     // An FYI nobody touched for a week is done: stamped now, so it ages out of the snapshot like one you cleared.
     const aged = rows.filter((row) => !row.doneAt && splitOf(row, now) === "done").map((row) => ({ ...row, doneAt: now.toISOString() }));
@@ -393,6 +405,7 @@ export class SlackInbox implements SlackInboxPort {
       error,
       socket: this.options.socketToken ? this.socketState : "off",
       sla: toWireSla(this.sla),
+      quiet: inQuietHours(rules, now),
     });
     return this.snapshot;
   }
@@ -405,12 +418,13 @@ export class SlackInbox implements SlackInboxPort {
       JSON.stringify(next.watches) !== JSON.stringify(this.snapshot.watches) ||
       JSON.stringify(next.sla) !== JSON.stringify(this.snapshot.sla) ||
       next.error !== this.snapshot.error ||
-      next.socket !== this.snapshot.socket;
+      next.socket !== this.snapshot.socket ||
+      next.quiet !== this.snapshot.quiet;
     this.snapshot = next;
     if (changed) this.options.publish(next);
   }
 
-  /** The rules file, created from the template when it is missing. */
+  /** The rules file (created from the template when it is missing) with the learned sibling merged in. */
   private async rules(): Promise<SlackRules> {
     let text = await this.files.read(this.options.rulesPath);
     if (text === null) {
@@ -418,7 +432,7 @@ export class SlackInbox implements SlackInboxPort {
       console.log(`slack inbox: wrote the default rules file to ${this.options.rulesPath}`);
       text = RULES_TEMPLATE;
     }
-    return parseRules(text);
+    return parseRules(text, await this.files.read(learnedPath(this.options.rulesPath)));
   }
 
   /** The watches, with the three broadcasts seeded on the first run. */
@@ -699,7 +713,7 @@ export class SlackInbox implements SlackInboxPort {
     let answers: Awaited<ReturnType<Triager["triage"]>> = new Map();
     let failed = false;
     try {
-      const learned = Object.entries(rules.learned).map(([k, v]) => `- ${k}: ${v.direction} (${v.n})`);
+      const learned = Object.entries(rules.learned).map(([k, v]) => `- ${v.label ?? k}: ${v.direction} (${v.n})`);
       answers = await triager.triage(toModel, { me: { id: me.id, name: me.name }, notes: rules.notes, learned, vips: rules.vips, watches });
     } catch (error) {
       console.warn(`slack inbox: triage failed: ${messageOf(error)}`);
@@ -798,13 +812,15 @@ export class SlackInbox implements SlackInboxPort {
     return snapshot.items.find((i) => i.id === row.id) ?? toSlackItem(row, this.now(), this.sla);
   }
 
-  /** Writes a learned line; a failure here must not fail the action. */
+  /** Writes a learned line to the machine-owned sibling of the rules file; a failure here must not fail the action. */
   private async learnFrom(row: SlackItemRow, direction: "lowered" | "raised"): Promise<void> {
+    const path = learnedPath(this.options.rulesPath);
     try {
-      const text = (await this.files.read(this.options.rulesPath)) ?? RULES_TEMPLATE;
-      await this.files.write(this.options.rulesPath, learn(text, key(row), direction));
+      const text = (await this.files.read(path)) ?? LEARNED_TEMPLATE;
+      const { key, label } = learnedKey(row);
+      await this.files.write(path, learn(text, key, direction, label));
     } catch (error) {
-      console.warn(`slack inbox: could not update ${this.options.rulesPath}: ${messageOf(error)}`);
+      console.warn(`slack inbox: could not update ${path}: ${messageOf(error)}`);
     }
   }
 
@@ -834,13 +850,14 @@ export class SlackInbox implements SlackInboxPort {
     return this.saveAndPublish(next);
   }
 
-  async reply(id: string, text: string): Promise<SlackItem> {
+  async reply(id: string, text: string, nudge = false): Promise<SlackItem> {
     const row = await this.get(id);
     // The thread is the item's own ts (the root of a collapsed thread, not its latest message);
     // a top-level DM is answered in the DM itself.
     const isDm = row.channel.kind === "dm" || row.channel.kind === "mpim";
     const threadTs = isDm && row.threadTs === null ? undefined : row.id.split(":")[1];
-    await this.options.slack.postMessage(row.channel.id, text, threadTs);
+    // What you typed is escaped so it cannot open a mention or a link; the nudge's mention is built here, by id.
+    await this.options.slack.postMessage(row.channel.id, `${nudge ? `<@${row.author.id}> ` : ""}${escapeMrkdwn(text)}`, threadTs);
     const now = this.now();
     if (now.getTime() - new Date(row.arrivedAt).getTime() < HOUR_MS) await this.learnFrom(row, "raised");
     return this.saveAndPublish({ ...row, doneAt: now.toISOString(), youReplied: true, repliedAt: now.toISOString(), snoozedUntil: null });
@@ -977,7 +994,7 @@ export class SlackInbox implements SlackInboxPort {
   async postDigest(): Promise<void> {
     const me = await this.whoAmI();
     const channel = await this.options.slack.openDm(me.id);
-    await this.options.slack.postMessage(channel, await this.digest());
+    await this.options.slack.postMessage(channel, escapeMrkdwn(await this.digest()));
   }
 
   async usergroups(): Promise<Usergroup[]> {

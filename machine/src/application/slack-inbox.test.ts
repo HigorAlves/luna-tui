@@ -264,6 +264,7 @@ describe("SlackInbox.pollOnce", () => {
     const world: World = { triager, hits: [hit({ ts: ts(10), text: "<@U1> first?" })] };
     const { inbox, published, store } = setup(world);
     await inbox.pollOnce();
+    await new Promise((r) => setTimeout(r, 0));
     expect(batches).toEqual([[`C1:${ts(10)}`]]);
     // A second poll while the container runs: persisted and published at once, triage queued.
     world.hits = [hit({ ts: ts(5), text: "<@U1> second?" })];
@@ -361,7 +362,8 @@ describe("SlackInbox actions", () => {
     let patched = await inbox.patch(item.id, { done: true });
     expect(patched).toMatchObject({ doneAt: NOW.toISOString(), split: "done" });
     expect(slack.mark).not.toHaveBeenCalled();
-    expect(files.get("/rules.md")).toContain("- @marta: lowered (1)");
+    expect(files.get("/rules.learned.md")).toContain("- U2 (@marta): lowered (1)");
+    expect(files.get("/rules.md")).toBe(RULES_TEMPLATE);
     patched = await inbox.patch(item.id, { done: false });
     expect(patched).toMatchObject({ doneAt: null, split: "needs_reply" });
     patched = await inbox.patch(item.id, { snoozedUntil: iso(-60), seen: true });
@@ -385,7 +387,7 @@ describe("SlackInbox actions", () => {
     const replied = await inbox.reply(item.id, "Approved.");
     expect(slack.postMessage).toHaveBeenCalledWith("C1", "Approved.", ts(30));
     expect(replied).toMatchObject({ doneAt: NOW.toISOString(), youReplied: true, split: "done" });
-    expect(files.get("/rules.md")).toContain("- @marta: raised (1)");
+    expect(files.get("/rules.learned.md")).toContain("- U2 (@marta): raised (1)");
     expect(published.length).toBe(before + 1);
     const metrics = await inbox.metrics(new Date(NOW.getTime() - 86_400_000));
     expect(metrics).toMatchObject({ items: { P0: 0, P1: 1, P2: 0, P3: 0 }, replied: { P1: 1 }, withinHour: 1, withinSla: { P0: 0, P1: 1, P2: 0, P3: 0 }, sla: { P1: 1800 }, timeToReply: { P1: { median: 1800, p90: 1800 } } });
@@ -477,13 +479,34 @@ describe("SlackInbox actions", () => {
     const { inbox, slack } = await seeded({ history: { C9: [msg({ ts: ts(1), text: "<@U1> via socket" })] } });
     slack.history.mockClear();
     inbox.handleSocketEvent({ type: "message", channel: "C9", ts: ts(1), user: "U2", text: "<@U1> via socket" });
+    inbox.handleSocketEvent({ type: "message", subtype: "message_changed", ts: ts(0), message: { ts: ts(1), text: "edited" }, previous_message: { channel: "CR", ts: ts(1) } });
+    inbox.handleSocketEvent({ type: "message", subtype: "message_deleted", ts: ts(0), deleted_ts: ts(2) });
     inbox.handleSocketEvent({ type: "reaction_added", user: "U3", reaction: "eyes", item_user: "U1", item: { type: "message", channel: "C1", ts: ts(5) }, event_ts: ts(0) });
     inbox.handleSocketEvent({ type: "reaction_added", user: "U3", reaction: "eyes", item_user: "U2", item: { type: "message", channel: "C1", ts: ts(4) }, event_ts: ts(0) });
     inbox.stop();
     const { items } = await poll(inbox);
     expect(slack.history).toHaveBeenCalledWith("C9", expect.any(String), 100);
+    expect(slack.history).toHaveBeenCalledWith("CR", expect.any(String), 100);
+    expect(slack.history).not.toHaveBeenCalledWith("C1", expect.any(String), 100);
     expect(items.map((i) => [i.kind, i.text])).toEqual(expect.arrayContaining([["mention", "@higor via socket"], ["reaction", ":eyes: on your message from @ana"]]));
     expect(items).toHaveLength(3);
+  });
+
+  it("reply escapes what you typed and a nudge mentions the author by id, unescaped", async () => {
+    const { inbox, item, slack, triaged } = await seeded();
+    await inbox.reply(item.id, "a < b & c > d");
+    expect(slack.postMessage).toHaveBeenLastCalledWith("C1", "a &lt; b &amp; c &gt; d", ts(30));
+    await inbox.reply(item.id, "any news?", true);
+    expect(slack.postMessage).toHaveBeenLastCalledWith("C1", "<@U2> any news?", ts(30));
+    // The learned prior reaches the model by name, not id.
+    await poll(inbox);
+    const more = await seeded({ hits: [hit({ ts: ts(3), text: "<@U1> next?" })] });
+    await more.inbox.patch(more.item.id, { done: true });
+    const again = setup({ hits: [hit({ ts: ts(2), text: "<@U1> and again?" })] });
+    again.files.set("/rules.learned.md", more.files.get("/rules.learned.md")!);
+    await poll(again.inbox);
+    expect(triaged.length).toBeGreaterThan(0);
+    expect(again.triaged.length).toBe(1);
   });
 
   it("reply threads under the item's root ts, not the latest folded message; a top-level DM gets no thread", async () => {
@@ -511,6 +534,21 @@ describe("SlackInbox actions", () => {
       [`C1:${root}:reaction`, "reaction", ":eyes: on your message from @ana"],
     ]);
     expect((await store.item(`C1:${root}`))!.matched).toEqual(["me"]);
+  });
+});
+
+describe("SlackInbox quiet hours", () => {
+  it("the snapshot says when now is inside the quiet window, and the minute tick notices the edge", async () => {
+    const clock = { now: new Date("2026-10-28T23:30:00") };
+    const { inbox, published } = setup({ rules: "## Quiet hours\n22:00-08:00\n", hits: [hit({ ts: ts(5), text: "<@U1> hi?" })], now: () => clock.now });
+    const snapshot = await poll(inbox);
+    expect(snapshot.quiet).toBe(true);
+    clock.now = new Date("2026-10-29T08:00:00");
+    inbox.tick();
+    expect(inbox.snapshot.quiet).toBe(false);
+    expect(published.at(-1)!.quiet).toBe(false);
+    const open = setup({ hits: [hit({ ts: ts(5), text: "<@U1> hi?" })] });
+    expect((await poll(open.inbox)).quiet).toBe(false);
   });
 });
 

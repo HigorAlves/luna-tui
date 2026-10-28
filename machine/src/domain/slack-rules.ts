@@ -15,6 +15,8 @@ export interface QuietHours {
 export interface LearnedPrior {
   direction: "lowered" | "raised";
   n: number;
+  /** The name the id had when it was last learned (`@marta`, `#payments`); what the model reads. */
+  label?: string;
 }
 
 export interface SlackRules {
@@ -25,7 +27,7 @@ export interface SlackRules {
   p0Keywords: string[];
   quietHours: QuietHours | null;
   notes: string;
-  /** Keyed by `@author` or `#channel`. */
+  /** Keyed by user or channel id (older lines: `@author` or `#channel`). */
   learned: Record<string, LearnedPrior>;
   /** Seconds you give yourself to reply, by priority; null when that priority has no SLA. */
   sla: SlaTargets;
@@ -81,9 +83,24 @@ Lines starting with \`<!--\` are comments.
 
 ## Learned
 
-<!-- Maintained by the inbox from what you do: "- @author: lowered (3)" after items cleared
-     without a reply, "raised" after quick replies. Edit or delete lines as you like. -->
+<!-- What the inbox learned from you lives beside this file, in slack-triage.learned.md, so
+     your edits here and its writes never collide. Lines here still count. -->
 `;
+
+/** The machine-owned sibling the learned priors are written to; `parseRules` merges it over the rules file. */
+export const LEARNED_TEMPLATE = `# Learned Slack priors
+
+Maintained by the inbox from what you do: "- U123 (@author): lowered (3)" after items cleared
+without a reply, "raised" after quick replies. Edit or delete lines as you like.
+
+## Learned
+
+`;
+
+/** `<rules>.learned.md` next to the rules file: `/state/slack-triage.md` → `/state/slack-triage.learned.md`. */
+export function learnedPath(rulesPath: string): string {
+  return `${rulesPath.replace(/\.md$/, "")}.learned.md`;
+}
 
 const SECTIONS: Record<string, keyof SlackRules | "quiet"> = {
   vips: "vips",
@@ -111,7 +128,8 @@ function parseQuietHours(body: string): QuietHours | null {
   return { start: Number(sh) * 60 + Number(sm), end: Number(eh) * 60 + Number(em) };
 }
 
-const LEARNED_LINE = /^(.+?):\s*(lowered|raised)\s*\((\d+)\)$/;
+/** `- U2 (@marta): lowered (3)`, or an older `- @marta: lowered (3)`. */
+const LEARNED_LINE = /^(.+?)(?: \(([^()]+)\))?:\s*(lowered|raised)\s*\((\d+)\)$/;
 const SLA_LINE = /^(P[0-3]):\s*(off|(\d+)\s*([mh]?))$/i;
 
 /** `- P1: 30m` lines; `off` means none, anything unreadable keeps the default. */
@@ -128,8 +146,25 @@ function parseSla(body: string): SlaTargets {
   return sla;
 }
 
-/** The rules file, section by section. Unknown sections are ignored; a missing one is empty. */
-export function parseRules(markdown: string): SlackRules {
+/**
+ * The rules file, section by section; `learned` is the machine-written sibling, whose lines
+ * win over a Learned section left in the rules file. Unknown sections are ignored; a missing
+ * one is empty.
+ */
+export function parseRules(markdown: string, learned: string | null = null): SlackRules {
+  const rules = parseSections(markdown);
+  if (learned) Object.assign(rules.learned, parseSections(learned).learned);
+  return rules;
+}
+
+function parseLearnedLine(line: string): [string, LearnedPrior] | null {
+  const match = LEARNED_LINE.exec(line);
+  if (!match) return null;
+  const [, key, label, direction, n] = match;
+  return [key!.trim(), { direction: direction as LearnedPrior["direction"], n: Number(n), ...(label ? { label } : {}) }];
+}
+
+function parseSections(markdown: string): SlackRules {
   const rules: SlackRules = { ...EMPTY_RULES, vips: [], muted: [], p0Keywords: [], learned: {}, sla: { ...DEFAULT_SLA } };
   const parts = markdown.split(/^## +/m).slice(1);
   for (const part of parts) {
@@ -146,8 +181,8 @@ export function parseRules(markdown: string): SlackRules {
     else if (section === "notes") rules.notes = stripComments(body).trim();
     else if (section === "learned") {
       for (const line of bullets(body)) {
-        const match = LEARNED_LINE.exec(line);
-        if (match) rules.learned[match[1]!.trim()] = { direction: match[2] as LearnedPrior["direction"], n: Number(match[3]) };
+        const parsed = parseLearnedLine(line);
+        if (parsed) rules.learned[parsed[0]] = parsed[1];
       }
     }
   }
@@ -239,22 +274,23 @@ export function firstLine(text: string, max = 90): string {
 }
 
 /**
- * Records what you did under `## Learned`: one line per key, the counter bumped when the
- * direction repeats and reset when it flips. Appends the section when the file lacks it.
+ * Records what you did under `## Learned`: one line per key (a user or channel id, with its
+ * current name as the label), the counter bumped when the direction repeats and reset when it
+ * flips. Appends the section when the file lacks it.
  */
-export function learn(markdown: string, key: string, direction: LearnedPrior["direction"]): string {
+export function learn(markdown: string, key: string, direction: LearnedPrior["direction"], label?: string): string {
   const current = parseRules(markdown).learned[key];
   const n = current?.direction === direction ? current.n + 1 : 1;
-  const line = `- ${key}: ${direction} (${n})`;
+  const line = `- ${key}${label ? ` (${label})` : ""}: ${direction} (${n})`;
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const existing = new RegExp(`^- ${escaped}: (lowered|raised) \\(\\d+\\)\\s*$`, "m");
+  const existing = new RegExp(`^- ${escaped}(?: \\([^()]+\\))?: (lowered|raised) \\(\\d+\\)\\s*$`, "m");
   if (existing.test(markdown)) return markdown.replace(existing, line);
   const heading = /^## +Learned[^\n]*\n/m.exec(markdown);
   if (!heading) return `${markdown.trimEnd()}\n\n## Learned\n\n${line}\n`;
-  // After the heading and any comment block that follows it.
+  // After the heading, the blank line and any comment block that follow it.
   let at = heading.index + heading[0].length;
   const rest = markdown.slice(at);
-  const comment = /^\s*<!--[\s\S]*?-->\s*\n?/.exec(rest);
-  if (comment) at += comment[0].length;
+  const lead = /^(?:\s*<!--[\s\S]*?-->\s*\n?|\n+)/.exec(rest);
+  if (lead) at += lead[0].length;
   return `${markdown.slice(0, at)}${line}\n${markdown.slice(at)}`;
 }

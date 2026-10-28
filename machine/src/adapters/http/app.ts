@@ -293,8 +293,8 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     app.post("/slack/refresh", async (c) => c.json(await slack.pollOnce(true)));
     app.patch("/slack/items/:id", async (c) => c.json(await slack.patch(c.req.param("id"), await body(c, SlackItemPatch))));
     app.post("/slack/items/:id/reply", async (c) => {
-      const { text } = await body(c, SlackReplyInput);
-      return c.json(await slack.reply(c.req.param("id"), text));
+      const { text, nudge } = await body(c, SlackReplyInput);
+      return c.json(await slack.reply(c.req.param("id"), text, nudge ?? false));
     });
     app.post("/slack/items/:id/task", async (c) => c.json(toTask(await slack.toTask(c.req.param("id"), await body(c, SlackTaskInput))), 201));
     app.get("/slack/watches", async (c) => c.json(await slack.watches()));

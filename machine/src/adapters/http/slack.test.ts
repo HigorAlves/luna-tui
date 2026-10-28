@@ -55,7 +55,7 @@ const watch = (id: string, builtin: boolean): SlackWatch => ({ id, kind: builtin
 /** A fake inbox: a fixed snapshot, and a log of what the routes asked it to do. */
 function fakeInbox(items: SlackItem[], over: { hasToken?: boolean } = {}): SlackInboxPort & { did: string[] } {
   const watches = [watch("w1", true), watch("w2", false)];
-  const snapshot: SlackSnapshot = { items, watches, me: { id: "U1", name: "higor", isBot: false }, polledAt: "2026-10-28T12:00:00Z", error: null, socket: "off", sla: { P0: 600, P1: 1800, P2: 3600, P3: 3600 } };
+  const snapshot: SlackSnapshot = { items, watches, me: { id: "U1", name: "higor", isBot: false }, polledAt: "2026-10-28T12:00:00Z", error: null, socket: "off", sla: { P0: 600, P1: 1800, P2: 3600, P3: 3600 }, quiet: false };
   const did: string[] = [];
   const find = (id: string) => {
     const found = items.find((i) => i.id === id);
@@ -76,10 +76,10 @@ function fakeInbox(items: SlackItem[], over: { hasToken?: boolean } = {}): Slack
       did.push(`patch ${id} ${JSON.stringify(patch)}`);
       return { ...found, ...(patch.done ? { doneAt: "2026-10-28T12:00:00Z", split: "done" as const } : {}) };
     },
-    async reply(id, text) {
+    async reply(id, text, nudge) {
       const found = find(id);
       if (over.hasToken === false) throw new NoSlackTokenError();
-      did.push(`reply ${id} ${text}`);
+      did.push(`reply ${id} ${text}${nudge ? " (nudge)" : ""}`);
       return { ...found, youReplied: true, split: "done" };
     },
     async toTask(id, input) {
@@ -163,6 +163,10 @@ describe("the Slack inbox over HTTP", () => {
     expect(sent.status).toBe(200);
     expect(await sent.json()).toMatchObject({ youReplied: true, split: "done" });
     expect((await app.request("/slack/items/C1:1/reply", json("POST", { text: "" }))).status).toBe(400);
+    // The board percent-encodes the id's colon; a nudge rides as a flag.
+    expect((await app.request("/slack/items/C1%3A1/reply", json("POST", { text: "any news?", nudge: true }))).status).toBe(200);
+    expect((await app.request("/slack/items/C1%3A1", json("PATCH", { seen: true }))).status).toBe(200);
+    expect(slack.did).toEqual(["reply C1:1 Approved.", "reply C1:1 any news? (nudge)", 'patch C1:1 {"seen":true}']);
     const silent = createApp({ db, pipeline, bus: new Bus(), slack: fakeInbox([item("C1:1", "needs_reply")], { hasToken: false }) });
     const refused = await silent.request("/slack/items/C1:1/reply", json("POST", { text: "hi" }));
     expect(refused.status).toBe(409);
