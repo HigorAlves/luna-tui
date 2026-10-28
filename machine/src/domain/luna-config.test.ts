@@ -135,6 +135,20 @@ sla:
     expect(parseLunaConfig("jira: {}\n").jira).toEqual({ project: null, intake: null, on: {}, comments: "milestones", fields: {}, branch: "{type}/{key}" });
   });
 
+  it("keeps the default branch pattern, with a warning, when the declared one cannot tell tasks apart or names a protected branch", () => {
+    const read = (branch: string) => {
+      const warnings: string[] = [];
+      const policy = parseLunaConfig(`jira:\n  branch: "${branch}"\n`, (m) => warnings.push(m));
+      return { branch: policy.jira?.branch, warnings };
+    };
+    expect(read("{type}/{key}-{slug}")).toEqual({ branch: "{type}/{key}-{slug}", warnings: [] });
+    expect(read("feat/{id}")).toEqual({ branch: "feat/{id}", warnings: [] });
+    expect(read("feature/work")).toEqual({ branch: "{type}/{key}", warnings: ['jira.branch: "feature/work" must contain {key} or {id}, so every task gets its own branch; using {type}/{key}'] });
+    expect(read("{type}/{slug}").warnings).toHaveLength(1);
+    expect(read("main").branch).toBe("{type}/{key}");
+    expect(read("develop/{key}").warnings).toEqual([]);
+  });
+
   it("refuses a duration it cannot read, naming the key", () => {
     expect(() => parseLunaConfig("sla:\n  gate: soon\n")).toThrow(/sla\.gate/);
     expect(() => parseLunaConfig("jira:\n  comments: loud\n")).toThrow(/jira\.comments/);

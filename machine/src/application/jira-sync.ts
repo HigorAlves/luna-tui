@@ -4,8 +4,11 @@
 // name (case does not matter), with the declared fields filled in. Already there: nothing. No
 // way there from where the issue is: a `jira.blocked` event and a mark on the link, never a
 // retry loop and never a fake status. Comments go out at the moments ThreadReplies already
-// writes about (`milestones`), at every gate too (`gates`), or never (`none`). Nothing here
-// ever throws into the pipeline; a failure is a warning and, where it fits, a blocked mark.
+// writes about (`milestones`), at every gate too (`gates`), or never (`none`). Reactions for
+// one task run one after another, in the order the events came: two quick transitions read
+// Jira in turn, so the later one lands last. A stepping stone the task has already left is
+// skipped when the newer status is reachable directly. Nothing here ever throws into the
+// pipeline; a failure is a warning and, where it fits, a blocked mark.
 import { WAITING_ON_USER, type JiraLink, type TaskState } from "@hardness/contracts";
 
 import { jiraOf } from "../domain/jira-link.ts";
@@ -45,8 +48,8 @@ const same = (a: string | null | undefined, b: string) => (a ?? "").trim().toLow
 
 export class JiraSync {
   private readonly pending = new Set<Promise<void>>();
-  /** PR urls already announced per task. */
-  private readonly announced = new Map<string, Set<string>>();
+  /** The tail of each task's chain of reactions; the next one waits for it. */
+  private readonly chains = new Map<string, Promise<void>>();
   private readonly now: () => Date;
 
   constructor(private readonly options: JiraSyncOptions) {
@@ -56,9 +59,45 @@ export class JiraSync {
   /** Reacts to one pipeline event. Never throws; failures are logged. Resolves once done. */
   handle(event: EventRow): Promise<void> {
     if (!this.options.enabled) return Promise.resolve();
-    const run = this.react(event).catch((error: unknown) => console.warn(`jira sync for task ${event.taskId} failed: ${messageOf(error)}`));
+    return this.enqueue(event.taskId, () => this.react(event));
+  }
+
+  /** Tries again the declared transition a task's link is marked blocked on (JiraWatch calls this
+   *  while the issue answers): the issue may have been moved by hand to where a route exists, or
+   *  be there already. Still no way there: the mark stays as it is, with no new event. A mark
+   *  for a state the task has left is cleared. Never throws. */
+  retry(task: TaskRow): Promise<void> {
+    if (!this.options.enabled) return Promise.resolve();
+    return this.enqueue(task.id, async () => {
+      const fresh = await this.options.pipeline.get(task.id);
+      const link = jiraOf(fresh);
+      if (!link?.blocked) return;
+      const policy = (await this.options.pipeline.policyFor(fresh.repoPath)).jira;
+      if (!policy) return;
+      const wanted = policy.on[fresh.state];
+      if (!wanted) {
+        await this.options.pipeline.setJira(fresh.id, { ...link, blocked: null });
+        return;
+      }
+      const issue = await this.options.jira.issue(link.key);
+      if (!same(issue.status, wanted)) {
+        const transitions = await this.options.jira.transitions(link.key);
+        if (!transitions.some((t) => same(t.to.name, wanted))) return;
+      }
+      await this.move(fresh, link, policy, fresh.state, wanted);
+    });
+  }
+
+  /** Runs `fn` after everything already queued for the task, so reactions never interleave. */
+  private enqueue(taskId: string, fn: () => Promise<void>): Promise<void> {
+    const previous = this.chains.get(taskId) ?? Promise.resolve();
+    const run = previous.then(fn).catch((error: unknown) => console.warn(`jira sync for task ${taskId} failed: ${messageOf(error)}`));
+    this.chains.set(taskId, run);
     this.pending.add(run);
-    void run.finally(() => this.pending.delete(run));
+    void run.finally(() => {
+      this.pending.delete(run);
+      if (this.chains.get(taskId) === run) this.chains.delete(taskId);
+    });
     return run;
   }
 
@@ -78,19 +117,19 @@ export class JiraSync {
     if (event.kind === "stage.finished") {
       const detail = event.payload.detail as { prUrl?: unknown } | undefined;
       const url = typeof detail?.prUrl === "string" ? detail.prUrl : null;
-      if (!url) return;
-      const seen = this.announced.get(task.id) ?? new Set<string>();
-      if (seen.has(url)) return;
-      seen.add(url);
-      this.announced.set(task.id, seen);
-      if (policy.comments !== "none") await this.comment(link, `PR opened: ${url}`);
+      if (!url || policy.comments === "none") return;
+      // The record, not memory, says whether this url was announced: a restart does not repeat it.
+      const events = await this.options.pipeline.events(task.id);
+      if (events.some((e) => e.kind === "jira.commented" && e.payload.url === url)) return;
+      if (await this.comment(link, `PR opened: ${url}`)) await this.options.pipeline.record(task.id, "jira.commented", { url });
       return;
     }
 
     const to = event.payload.to as TaskState;
     const from = event.payload.from as TaskState;
     if (policy.comments !== "none") {
-      if (from === "draft" && event.payload.event === "start") await this.comment(link, `Picked up as task #${task.id.slice(0, 8)} on the Luna board.`);
+      // An intake import was already told "Picked up" by JiraIntake when the ticket was made.
+      if (from === "draft" && event.payload.event === "start" && task.source?.kind !== "jira") await this.comment(link, `Picked up as task #${task.id.slice(0, 8)} on the Luna board.`);
       else if (to === "closed") await this.comment(link, await this.closing(task));
       else if (policy.comments === "gates" && WAITING_ON_USER.has(to) && to !== from) {
         await this.comment(link, to === "escalated" ? `Escalated: ${String(event.payload.reason ?? "see the board")}.` : `Needs you: ${ASKS[to] ?? to}.`);
@@ -113,6 +152,11 @@ export class JiraSync {
       const transitions = await jira.transitions(link.key);
       const match = transitions.find((t) => same(t.to.name, wanted));
       if (!match) return this.blocked(task, link, wanted, current, `no transition to "${wanted}" from "${current ?? "unknown"}"`);
+      // The task may have moved on while this reaction waited its turn: when its state now wants
+      // another status that the issue can reach directly, this one is a stepping stone nobody needs.
+      const latest = await pipeline.get(task.id);
+      const newer = policy.on[latest.state];
+      if (latest.state !== state && newer && !same(newer, wanted) && transitions.some((t) => same(t.to.name, newer))) return;
       const fields = await this.fields(task, policy.fields[state]);
       await jira.transition(link.key, match.id, fields);
       await pipeline.record(task.id, "jira.transitioned", { from: current, to: match.to.name, ...(fields ? { fields: Object.keys(fields) } : {}) });
@@ -168,11 +212,14 @@ export class JiraSync {
     return lines.join("\n");
   }
 
-  private async comment(link: JiraLink, text: string): Promise<void> {
+  /** Posts a comment; false (and a warning) when Jira refused. */
+  private async comment(link: JiraLink, text: string): Promise<boolean> {
     try {
       await this.options.jira.comment(link.key, text);
+      return true;
     } catch (error) {
       console.warn(`jira comment on ${link.key} failed: ${messageOf(error)}`);
+      return false;
     }
   }
 }

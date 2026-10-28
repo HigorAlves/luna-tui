@@ -20,3 +20,8 @@ export function toPlainText(text: string, resolve: NameResolver = () => undefine
     .replace(/&gt;/g, ">")
     .replace(/&amp;/g, "&");
 }
+
+/** Text you typed, made safe to post as mrkdwn: `&`, `<` and `>` cannot open a mention, a link or a command. */
+export function escapeMrkdwn(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}

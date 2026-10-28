@@ -1,5 +1,5 @@
 // The ticket SLAs: how long a task may wait on you at a gate, how long a stage may run,
-// created to closed, and the Jira due date. Pure: the clocks are computed from the task row,
+// created to closed, and the Jira due date (the end of that day where the Jira site lives). Pure: the clocks are computed from the task row,
 // when its wait began, when its stage started and the targets in force; nothing is stored.
 // The same `30m`/`4h`/`3d`/`off` durations luna.yaml and the env use are parsed here.
 import { RUNNING, WAITING_ON_USER, type SlaClock, type TaskSla, type TaskState } from "@hardness/contracts";
@@ -92,16 +92,45 @@ export function computeSla(input: SlaInput, now: Date): TaskSla | null {
   let jiraDue: TaskSla["jiraDue"] = null;
   const due = task.jira?.dueAt;
   if (due && state !== "closed") {
-    // Jira stores a date; the day ends at midnight UTC, which is as fair as any single zone.
-    const end = new Date(/^\d{4}-\d{2}-\d{2}$/.test(due) ? `${due}T23:59:59.999Z` : due);
-    if (!Number.isNaN(end.getTime())) {
-      const targetSecs = Math.max(0, Math.round((end.getTime() - task.createdAt.getTime()) / 1000));
+    // Jira stores a date: the day ends at 23:59:59 in the site's timezone (UTC until JiraWatch
+    // has read it). The clock counts from the ticket's creation or its link time, whichever is later.
+    const end = endOfDay(due, task.jira?.timeZone ?? null);
+    if (end) {
+      const linkedAt = task.jira?.linkedAt ? Date.parse(task.jira.linkedAt) : NaN;
+      const from = Number.isNaN(linkedAt) ? task.createdAt.getTime() : Math.max(task.createdAt.getTime(), linkedAt);
+      const targetSecs = Math.max(0, Math.round((end.getTime() - from) / 1000));
       jiraDue = { dueAt: end.toISOString(), overdue: end.getTime() < now.getTime(), targetSecs };
     }
   }
 
   if (!gate && !stage && !cycle && !jiraDue) return null;
   return { gate, stage, cycle, jiraDue };
+}
+
+/** The last instant of `YYYY-MM-DD` in an IANA timezone (UTC when none or unknown); a full timestamp is read as is; null when unreadable. */
+export function endOfDay(due: string, timeZone: string | null): Date | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(due)) {
+    const at = new Date(due);
+    return Number.isNaN(at.getTime()) ? null : at;
+  }
+  const utc = Date.parse(`${due}T23:59:59.999Z`);
+  if (!timeZone) return new Date(utc);
+  // Shift by the zone's offset at that moment, then once more in case the first guess crossed a DST change.
+  const guess = utc - offsetMs(timeZone, utc);
+  return new Date(utc - offsetMs(timeZone, guess));
+}
+
+/** The zone's UTC offset in ms at `at`, from Intl; 0 for a zone Intl does not know. */
+function offsetMs(timeZone: string, at: number): number {
+  try {
+    const part = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "longOffset" }).formatToParts(new Date(at)).find((p) => p.type === "timeZoneName")?.value ?? "GMT";
+    const match = /^GMT(?:([+-])(\d{2}):?(\d{2})?)?$/.exec(part);
+    if (!match || !match[1]) return 0;
+    const sign = match[1] === "-" ? -1 : 1;
+    return sign * (Number(match[2]) * 60 + Number(match[3] ?? 0)) * 60_000;
+  } catch {
+    return 0;
+  }
 }
 
 /** The flags a minute tick watches: any clock's `overdue`, the stage clock's `warn`. */

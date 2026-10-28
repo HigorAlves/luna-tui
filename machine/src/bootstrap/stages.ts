@@ -31,9 +31,9 @@ export interface RealStagesResult {
   verifyPack: ((context: StageContext) => Promise<StageResult>) | null;
   /** Runs a project's checks inside the runner image; null when stages are stubs. */
   checksExec: ReturnType<typeof sandboxExecutor> | null;
-  /** What any pack run outside the pipeline needs (the Slack inbox's triage): the image, the
-   *  credential and the state dir; null when agents are off or something is missing. */
-  agentDeps: { image: string; credential: Credential; stateDir: string } | null;
+  /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
+   *  the credential, the state dir and the worktrees dir; null when agents are off or something is missing. */
+  agentDeps: { image: string; credential: Credential; stateDir: string; worktreesDir: string } | null;
 }
 
 /** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
@@ -107,7 +107,7 @@ export async function buildRealStages(
       }),
     ),
   };
-  return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, credential, stateDir: config.stateDir } };
+  return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, credential, stateDir: config.stateDir, worktreesDir: config.worktreesDir } };
 }
 
 export interface RunnerForDeps {

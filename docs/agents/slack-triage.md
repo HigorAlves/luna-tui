@@ -40,5 +40,5 @@ Lines starting with `<!--` are comments.
 
 ## Learned
 
-<!-- Maintained by the inbox from what you do: "- @author: lowered (3)" after items cleared
-     without a reply, "raised" after quick replies. Edit or delete lines as you like. -->
+<!-- What the inbox learned from you lives beside this file, in slack-triage.learned.md, so
+     your edits here and its writes never collide. Lines here still count. -->

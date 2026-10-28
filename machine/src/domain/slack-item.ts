@@ -224,6 +224,33 @@ export function toSlackItem(row: SlackItemRow, now: Date, sla: SlaTargets): Slac
   return { ...item, ...dueOf(row, now, sla), split: splitOf(row, now) };
 }
 
+/**
+ * What the board shows of an item, as one string: the snapshot is republished when any
+ * item's fingerprint differs, so a poll that changed nothing visible stays quiet without
+ * serialising every context message and permalink.
+ */
+export function fingerprint(item: SlackItem): string {
+  const t = item.triage;
+  return [
+    item.id,
+    item.split,
+    item.dueAt,
+    item.overdue ? 1 : 0,
+    t ? `${t.priority}/${t.category}/${t.triagedAt}/${t.overridden ? 1 : 0}/${t.expectsReply ? 1 : 0}` : "",
+    item.doneAt,
+    item.snoozedUntil,
+    item.seenAt,
+    item.reopenedAt,
+    item.text.length,
+    item.replies,
+    item.count,
+    item.youReplied ? 1 : 0,
+    item.ts,
+    item.linked.taskId,
+    item.linked.pr ? `${item.linked.pr.repo}#${item.linked.pr.number}/${item.linked.pr.split}` : "",
+  ].join("|");
+}
+
 /** Open, or done within the last 30 days: what the snapshot shows. */
 export function inSnapshot(row: SlackItemRow, now: Date): boolean {
   if (!row.doneAt) return true;

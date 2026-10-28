@@ -34,6 +34,8 @@ export interface TaskRow {
   testsTotal: number | null;
   /** The linked Jira issue as last seen; null when the task has none. */
   jira: JiraLink | null;
+  /** When the task entered its current state (its latest transition; creation for a draft). Null only on rows older than the column. */
+  stateSince: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

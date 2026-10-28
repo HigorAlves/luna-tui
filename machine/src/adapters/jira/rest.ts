@@ -1,9 +1,10 @@
 // The Jira port over Jira Cloud's REST v3 with plain `fetch`: basic auth with your Atlassian
 // email and API token, JSON both ways, ADF converted to and from markdown at the edge. A 429
-// waits for `Retry-After` once, then gives up with a message the pollers recognise; a 401 is a
-// `JiraAuthError` saying the token was rejected or expired, with the expiry when the answer
-// names one. With `cloudId` set (a scoped token) calls go through api.atlassian.com instead
-// of the site; the site is still where issue urls point.
+// waits for `Retry-After` once, then gives up with a message the pollers recognise; a 5xx or
+// a network failure is retried twice with a growing pause; a 401 is a `JiraAuthError` saying
+// the token was rejected or expired, with the expiry when Jira's words name one. With
+// `cloudId` set (a scoped token) calls go through api.atlassian.com instead of the site; the
+// site is still where issue urls point.
 import { z } from "zod";
 
 import {
@@ -34,6 +35,8 @@ export interface JiraRestOptions {
 export const ISSUE_FIELDS = ["summary", "description", "status", "issuetype", "priority", "duedate", "labels", "updated", "comment"];
 /** The most issues one search page asks for. */
 export const SEARCH_PAGE = 50;
+/** The pauses before the second and third try of a call Jira or the network failed. */
+export const RETRY_BACKOFF_MS = [1_000, 3_000] as const;
 
 const Named = z.object({ name: z.string().optional() }).passthrough();
 const Status = z.object({ name: z.string().optional(), statusCategory: z.object({ key: z.string().optional() }).optional() }).passthrough();
@@ -59,7 +62,7 @@ const Issue = z.object({ key: z.string(), fields: Fields });
 const Transitions = z.object({ transitions: z.array(z.object({ id: z.string(), name: z.string(), to: Status.optional() })) });
 const SearchResults = z.object({ issues: z.array(Issue).default([]), nextPageToken: z.string().optional().nullable() });
 const Created = z.object({ key: z.string() });
-const Me = z.object({ accountId: z.string(), displayName: z.string().default(""), emailAddress: z.string().optional().nullable() });
+const Me = z.object({ accountId: z.string(), displayName: z.string().default(""), emailAddress: z.string().optional().nullable(), timeZone: z.string().optional().nullable() });
 const ProjectStatuses = z.array(z.object({ statuses: z.array(Status).default([]) }));
 const ErrorBody = z.object({ errorMessages: z.array(z.string()).optional(), errors: z.record(z.string(), z.string()).optional() }).partial();
 
@@ -118,7 +121,19 @@ export function createJira(options: JiraRestOptions): Jira {
         headers: { Authorization: auth, Accept: "application/json", ...(body === undefined ? {} : { "Content-Type": "application/json" }) },
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
-    let response = await request();
+    // A 5xx or a dropped connection is tried again, twice, with a pause; the last failure is the one reported.
+    let response: Response;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        response = await request();
+      } catch (error) {
+        if (attempt >= RETRY_BACKOFF_MS.length) throw new JiraError(`${method} ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        await sleep(RETRY_BACKOFF_MS[attempt]!);
+        continue;
+      }
+      if (response.status < 500 || attempt >= RETRY_BACKOFF_MS.length) break;
+      await sleep(RETRY_BACKOFF_MS[attempt]!);
+    }
     if (response.status === 429) {
       const after = Number(response.headers.get("Retry-After") ?? "1");
       await sleep((Number.isFinite(after) ? after : 1) * 1000);
@@ -127,7 +142,7 @@ export function createJira(options: JiraRestOptions): Jira {
     }
     const text = await response.text();
     if (response.status === 401) {
-      const hint = response.headers.get("X-Token-Expires-At") ?? ISO_DATE.exec(text)?.[0] ?? null;
+      const hint = ISO_DATE.exec(text)?.[0] ?? null;
       throw new JiraAuthError(`Jira rejected the token on ${method} ${path} (expired or revoked): ${describe(401, text)}`, hint);
     }
     if (response.status === 404) throw new JiraError(`${method} ${path}: ${describe(404, text)}`, 404);
@@ -152,7 +167,7 @@ export function createJira(options: JiraRestOptions): Jira {
   return {
     async me() {
       const a = await call("GET", "myself", Me);
-      return { accountId: a.accountId, displayName: a.displayName, email: a.emailAddress ?? null };
+      return { accountId: a.accountId, displayName: a.displayName, email: a.emailAddress ?? null, timeZone: a.timeZone ?? null };
     },
 
     async issue(key) {

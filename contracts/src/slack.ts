@@ -141,6 +141,8 @@ export interface SlackSnapshot {
   socket: "connected" | "disconnected" | "off";
   /** The reply SLA in effect, seconds by priority (rules file `## SLA`; defaults P0 600, P1 1800, P2 3600, P3 3600). */
   sla: Record<SlackPriority, number>;
+  /** Now is inside the rules file's `## Quiet hours`: the board raises notices for P0 only. */
+  quiet: boolean;
 }
 
 export const SlackItemPatch = z.object({
@@ -154,7 +156,8 @@ export const SlackItemPatch = z.object({
 });
 export type SlackItemPatch = z.infer<typeof SlackItemPatch>;
 
-export const SlackReplyInput = z.object({ text: z.string().min(1) });
+/** `POST /slack/items/:id/reply`: `nudge` prefixes a mention of the item's author (`<@id> `), built on the machine. */
+export const SlackReplyInput = z.object({ text: z.string().min(1), nudge: z.boolean().optional() });
 export type SlackReplyInput = z.infer<typeof SlackReplyInput>;
 
 /** `POST /slack/items/:id/task`: a Backlog ticket from the item. */

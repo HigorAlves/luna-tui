@@ -172,7 +172,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         match &app.mode {
             Mode::SlackSnooze { cursor, .. } => render_slack_snooze(frame, *cursor),
-            Mode::SlackReply { id, area, vim } => render_slack_reply(frame, app, id, area, vim),
+            Mode::SlackReply { id, area, vim, nudge } => render_slack_reply(frame, app, id, area, vim, *nudge),
             Mode::SlackTask { id, title, repo } => render_slack_task(frame, app, id, title, repo.as_deref()),
             Mode::SlackWatchAdd { query, cursor } => render_slack_watch_add(frame, app, query, *cursor),
             Mode::SlackActions { cursor } => render_slack_actions(frame, app, *cursor),
@@ -198,6 +198,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     scroll: &app.detail_scroll,
                     prs: &app.prs.prs,
                     diff: app.diff.as_ref().filter(|d| d.0 == task.id).map(|d| &d.1),
+                    viewport: &app.detail_viewport,
+                    follow: &app.detail_follow,
                 };
                 detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
             }
@@ -518,11 +520,11 @@ fn footer_line(app: &App) -> Line<'static> {
         ]),
         Mode::Detail(id) => {
             let shippable = app.task(id).is_some_and(|t| t.state == "awaiting_ship");
-            let pick = if app.detail_section.has_cursor() { "pick" } else { "scroll" };
+            let (rows, scroll) = if app.detail_section.has_cursor() { (("jk", "pick"), ("JK", "scroll")) } else { (("jk", "scroll"), ("^d/^u", "page")) };
             if shippable {
-                hint(&[("h/l 1-8", "section"), ("jk", pick), ("S", "ship"), ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
+                hint(&[("h/l 1-8", "section"), rows, scroll, ("S", "ship"), ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
             } else {
-                hint(&[("h/l 1-8", "section"), ("jk", pick), ("a", "advance"), ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
+                hint(&[("h/l 1-8", "section"), rows, scroll, ("a", "advance"), ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
             }
         }
         Mode::Normal => hint(&[
@@ -1108,7 +1110,10 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     if items.is_empty() {
         lines.push(Line::from(Span::from("  ✓ nothing here").fg(c(GREEN))));
     }
-    for (row, &i) in items.iter().enumerate() {
+    // A window of rows around the cursor, so a long split never hides the selected PR.
+    let visible = (inner.height as usize).max(1);
+    let start = selected.saturating_sub(visible / 2).min(items.len().saturating_sub(visible));
+    for (row, &i) in items.iter().enumerate().skip(start).take(visible) {
         lines.push(pr_row(&app.prs.prs[i], row == selected, inner.width as usize, now));
     }
     frame.render_widget(Paragraph::new(lines).block(list_block), list_area);
@@ -1132,7 +1137,8 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
 const PULLS_DETAIL_FROM: u16 = 100;
 const PULLS_DETAIL_WIDTH: u16 = 46;
 
-/// One PR as a row of fixed columns: the checks glyph, the repo's colour bar and name, the
+/// One PR as a row of fixed columns: the checks glyph, the repo's colour bar and name (after
+/// the owner's `/`; the whole slug when there is none), the
 /// number, the title (the only field ever cut), the age, and a tag (⚙ a task runs, ⌂ no
 /// checkout). Everything else lives in the detail pane.
 fn pr_row(pr: &PullRequest, selected: bool, width: usize, now: u64) -> Line<'static> {
@@ -1158,7 +1164,7 @@ fn pr_row(pr: &PullRequest, selected: bool, width: usize, now: u64) -> Line<'sta
         Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
         Span::from(format!("{glyph} ")).fg(c(checks_color)),
         Span::from("▌").fg(c(repo_colour)),
-        Span::from(format!("{:<10} ", truncate(&pr.repo, 10))).fg(c(repo_colour)),
+        Span::from(format!("{:<10} ", truncate(repo_name, 10))).fg(c(repo_colour)),
         Span::from(format!("{number:>5} ")).fg(c(SUBTEXT0)),
         Span::from(format!("{:<room$}", truncate(&pr.title, room))).bold(),
         Span::from(format!("  {age:>3}  ")).fg(c(SUBTEXT0)),
@@ -1572,7 +1578,7 @@ fn render_slack_actions(frame: &mut Frame, app: &App, cursor: usize) {
 
 /// The reply editor: the text on top, the thread's last messages under a `context` rule, so
 /// what you answer stays in view. ctrl+s posts it as you.
-fn render_slack_reply(frame: &mut Frame, app: &App, id: &str, area: &TextArea<'static>, vim: &crate::vim::Vim) {
+fn render_slack_reply(frame: &mut Frame, app: &App, id: &str, area: &TextArea<'static>, vim: &crate::vim::Vim, nudge: bool) {
     let rect = centered(frame.area(), frame.area().width * 9 / 10, frame.area().height * 8 / 10);
     frame.render_widget(Clear, rect);
     let item = app.slack_item(id);
@@ -1580,10 +1586,12 @@ fn render_slack_reply(frame: &mut Frame, app: &App, id: &str, area: &TextArea<'s
         crate::vim::Mode::Normal => (" NORMAL ", ACCENT),
         crate::vim::Mode::Insert => (" INSERT ", GREEN),
     };
+    let verb = if nudge { "nudge" } else { "reply" };
     let title = match item {
+        Some(item) if nudge => format!(" nudge · {} · opens with @{} ", item.channel_label(), item.author.name),
         Some(item) if item.thread_ts.is_some() => format!(" reply · {} · thread with @{} ", item.channel_label(), item.author.name),
         Some(item) => format!(" reply · {} · to @{} ", item.channel_label(), item.author.name),
-        None => " reply ".to_string(),
+        None => format!(" {verb} "),
     };
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -1688,7 +1696,7 @@ fn render_slack_watch_add(frame: &mut Frame, app: &App, query: &str, cursor: usi
             lines.push(Line::from(vec![Span::from("▌ ").fg(c(ACCENT)), Span::from(text.to_string()).fg(c(ACCENT)).bold()]));
         }
     } else if matches.is_empty() {
-        lines.push(Line::from(Span::from("  no matches").fg(c(SUBTEXT0))));
+        lines.push(Line::from(Span::from(if app.slack_catalog_loading() { "  loading…" } else { "  no matches" }).fg(c(SUBTEXT0))));
     } else {
         let start = cursor.saturating_sub(VISIBLE_ROWS / 2).min(matches.len().saturating_sub(VISIBLE_ROWS));
         for (i, option) in matches.iter().enumerate().skip(start).take(VISIBLE_ROWS) {
@@ -2782,7 +2790,7 @@ mod pr_tests {
         assert!(text.contains("Ready to merge 1"), "{text}");
         assert!(text.contains("polled"), "{text}");
         let row = text.lines().find(|l| l.contains("#12") && l.contains("Export CSV")).unwrap_or_default().to_string();
-        assert!(row.starts_with("│▌ ✗ ▌acme/app"), "selected, red checks, the repo bar then the name: {row}");
+        assert!(row.starts_with("│▌ ✗ ▌app "), "selected, red checks, the repo bar then the repo's name without its owner: {row}");
         assert!(!row.contains("@them") && !row.contains("lint"), "author and check names leave the row: {row}");
         let second = text.lines().find(|l| l.contains("#13")).unwrap_or_default().to_string();
         let col = |line: &str, needle: &str| line.find(needle).map(|i| line[..i].chars().count());
@@ -2806,6 +2814,19 @@ mod pr_tests {
         let row = text.lines().find(|l| l.contains("#12")).unwrap_or_default().to_string();
         assert!(row.contains("Export CSV") && row.contains("✗"), "{row}");
         assert!(!text.contains("\u{2588}"), "nothing overflows: {text}");
+    }
+
+    #[test]
+    fn the_list_scrolls_to_keep_the_selected_pr_in_view() {
+        let prs: Vec<PullRequest> = (1..=40).map(|n| pr(n, &format!("Pull {n}"), "review_requested", "success", true, false)).collect();
+        let mut app = app_with(prs);
+        app.pulls = Some(PullsState { split: PrSplit::ReviewRequested, cursor: 30 });
+        let text = render(80, 14, &app);
+        assert!(text.contains("#31") && text.contains("Pull 31"), "the selected row shows: {text}");
+        assert!(!text.contains("#1 ") && !text.contains("#40"), "a window around the cursor, not the top: {text}");
+        let mut owner_less = app_with(vec![pr(7, "Bare", "review_requested", "success", true, false)]);
+        owner_less.prs.prs[0].repo = "app".into();
+        assert!(render(80, 14, &owner_less).contains("▌app "), "a repo without an owner prints whole");
     }
 
     #[test]
@@ -2965,7 +2986,7 @@ mod slack_render_tests {
         assert!(text.contains("n add  e floor  d delete  space on/off  esc"), "{text}");
         app.slack.as_mut().unwrap().watches = None;
 
-        app.mode = Mode::SlackReply { id: "C0123:1730112345.0001".into(), area: TextArea::new(vec!["Approve the rollback, I'm on it.".into()]), vim: crate::vim::Vim::new() };
+        app.mode = Mode::SlackReply { id: "C0123:1730112345.0001".into(), area: TextArea::new(vec!["Approve the rollback, I'm on it.".into()]), vim: crate::vim::Vim::new(), nudge: false };
         let text = render(120, 40, &app);
         assert!(text.contains(" reply · #payments-oncall · thread with @marta "), "{text}");
         assert!(text.contains("ctrl+s send  esc back") && text.contains(" NORMAL "), "{text}");
@@ -2982,7 +3003,7 @@ mod slack_render_tests {
 
         app.mode = Mode::SlackWatchAdd { query: "@pl".into(), cursor: 0 };
         let text = render(120, 40, &app);
-        assert!(text.contains(" add a watch ") && text.contains("@pl▏") && text.contains("a user group") && text.contains("no matches"), "{text}");
+        assert!(text.contains(" add a watch ") && text.contains("@pl▏") && text.contains("a user group") && text.contains("loading…"), "{text}");
         app.mode = Mode::SlackWatchAdd { query: "luna-tui".into(), cursor: 0 };
         assert!(render(120, 40, &app).contains("a keyword"));
 

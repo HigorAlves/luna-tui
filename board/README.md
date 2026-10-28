@@ -67,7 +67,7 @@ Press `?` in the board for the full list. The main ones:
 | `w` | kill the ticket's worktree once you are done with it (asks first); its branch and commits stay |
 | `R` | search for a repo to set on the ticket, instead of typing a path |
 | `f` | focus the agent's watch tab in herdr |
-| `o` | open the linked GitHub issue in the browser, else the linked Jira issue |
+| `o` | open the linked GitHub issue in the browser, else the linked Jira issue (inside the popup it follows the section: the selected file in Diff or Evidence, the PR in PR) |
 | `J` | link a Jira issue to the ticket (search by key or words, `ctrl+n` creates one); on a linked ticket, unlink it after one `y` (see Jira below) |
 | `/` / `!` / `@` | filter by title or `#id`; show only tickets that need you; show only this repo's tickets |
 | `z` | fold: show every column at once, collapsing all but the focused one to its header bar |
@@ -81,8 +81,9 @@ Press `?` in the board for the full list. The main ones:
 
 `enter` opens a ticket in a popup over the board. Inside it, a rail of eight sections on the
 left (a tab strip on a terminal under 100 columns) and one pane on the right; `h`/`l` or `1`…`8`
-switch, `j`/`k` scroll the pane or pick a row where the section lists some, `+` toggles the popup
-between most of the screen and all of it. Every section draws from everything the machine knows
+switch, `j`/`k` scroll the pane or pick a row where the section lists some (`J`/`K` scroll a line
+there, `ctrl+d`/`ctrl+u` and PgDn/PgUp half a page anywhere; picking a row brings it into view),
+`+` toggles the popup between most of the screen and all of it. Every section draws from everything the machine knows
 about the ticket, whether or not a gate was decided: the approved plan stays readable after `a`.
 While a gate is open, its strip sits on top of every section with the keys that answer it.
 
@@ -91,9 +92,9 @@ While a gate is open, its strip sits on top of every section with the keys that 
 | Overview | the status, then one row per acceptance criterion with its state in the plan, how many cases prove it and what verifying found; repo, branch, issue, the Jira link and the SLA clocks, why, spend; the ticket's description and criteria; a setup gate's `luna.yaml` and proof, triage's questions, the memory review's rules | `e` edits the ticket's text, `J` links or unlinks the Jira issue |
 | Plan | triage's latest plan (brief, criteria, assumptions, slices) and its history: send-backs with their reason, your edits, the approval | `e` edits brief, criteria and assumptions until Build starts; `a` / `r` at the gate |
 | Tests | test_design's cases under the criterion each proves, with ✓ ✗ – from verifying | `e` edits the cases while they wait for your check (`## criterion`, `- case`, the approach under it) |
-| Runs | every stage run with how long it took, its cost and turns; the selected run's error, per-case verdicts and files | `j`/`k` pick a run |
-| Diff | the branch against its base: files with +/−, the selected file's patch | `j`/`k` pick a file |
-| Evidence | the QA verdict and every artifact the stages produced, by kind | `j`/`k` pick a file |
+| Runs | every stage run with how long it took, its cost and turns; the selected run's error, per-case verdicts and files; opens on the latest run | `j`/`k` pick a run, `J`/`K` scroll |
+| Diff | the branch against its base: files with +/−, the selected file's patch (the machine sends at most 512 KB of it and the pane says when it cut) | `j`/`k` pick a file, `J`/`K` scroll the patch, `o` opens the file from the worktree |
+| Evidence | the QA verdict and every artifact the stages produced, by kind; opens on the latest | `j`/`k` pick a file, `J`/`K` scroll, `o` opens it |
 | PR | the branch's pull request as the Pulls inbox sees it: checks by name, review state, threads, the task in flight; or the URL the ship gate reported | `o` opens it, `S` ships at the gate |
 | Activity | every event | |
 
@@ -187,7 +188,7 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 | `R` | poll GitHub now |
 | `x` | the same actions as a menu, each saying why it is off when it is |
 
-From 100 columns the view is a list beside a detail pane. A row reads `✓ ▌repo  #n  title  age  tag` in fixed columns, the checks glyph first (`✓` green, `✗` red, `◐` running), the repo's colour bar next (the same colour its cards wear), `⚙` while a task runs for it and `⌂` when the machine has no clone of the repo; only the title is ever cut. The pane shows the selected PR: author and branches, every check by name, the review state and unresolved threads, the task in flight, and the four keys with why each is off. Under 100 columns the pane hides and `x` shows the same detail over the list. A dispatch on such a PR opens the clone prompt: the same filter-as-you-type search `R` uses, over the folders under `HARDNESS_REPOS_DIR`; `enter` clones into `<folder>/<name>` and runs the action once it lands, `esc` leaves the row read-only. `c` and `t` are off on a fork head (nothing can push to it), `v` is off on your own PRs, and all three are off while a task already runs for the PR.
+From 100 columns the view is a list beside a detail pane. A row reads `✓ ▌repo  #n  title  age  tag` in fixed columns, the checks glyph first (`✓` green, `✗` red, `◐` running), the repo's colour bar and name next (the name after the owner's `/`, the same colour its cards wear), `⚙` while a task runs for it and `⌂` when the machine has no clone of the repo; only the title is ever cut; the list scrolls to keep the selected row in view. The pane shows the selected PR: author and branches, every check by name, the review state and unresolved threads, the task in flight, and the four keys with why each is off. Under 100 columns the pane hides and `x` shows the same detail over the list. A dispatch on such a PR opens the clone prompt: the same filter-as-you-type search `R` uses, over the folders under `HARDNESS_REPOS_DIR`; `enter` clones into `<folder>/<name>` and runs the action once it lands, `esc` leaves the row read-only. `c` and `t` are off on a fork head (nothing can push to it), `v` is off on your own PRs, and all three are off while a task already runs for the PR.
 
 ## Slack
 

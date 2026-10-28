@@ -1,7 +1,7 @@
 // The retention sweep, nightly and at boot: what a long-running machine leaves on disk
 // otherwise. Closed tasks keep their row; their checkout, their merged branch, run folders
 // nobody owns and runner images nobody runs go.
-import { readdir, rm } from "node:fs/promises";
+import { readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { DataSource } from "typeorm";
@@ -9,6 +9,7 @@ import type { DataSource } from "typeorm";
 import { HOST_GIT } from "../adapters/git/worktree.ts";
 import { TaskEntity } from "../adapters/persistence/schemas.ts";
 import { type ExecResult, exec } from "../adapters/process/exec.ts";
+import { SLACK_TRIAGE_DIR } from "./stages/slack-triage-runner.ts";
 
 export interface WorktreeSweep {
   worktrees: number;
@@ -58,6 +59,33 @@ export async function sweepRunFolders(db: DataSource, stateDir: string): Promise
   const orphans = names.filter((name) => !owned.has(name));
   await Promise.all(orphans.map((name) => rm(join(runsDir, name), { recursive: true, force: true })));
   return orphans.length;
+}
+
+/** A slack_triage run folder is named by its start time (`2026-10-28T12-00-00-000Z`, `-2` for a second batch). */
+const RUN_STAMP = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/;
+
+/** Removes `<stateDir>/slack-triage/<stamp>` folders older than `days`: a run that answered
+ *  removes its own folder, so these are the failed runs' transcripts, kept as long as the
+ *  stage runs' history. 0 disables it. Returns how many went. */
+export async function sweepSlackTriageRuns(stateDir: string, days: number, now: Date = new Date()): Promise<number> {
+  if (days <= 0) return 0;
+  const dir = join(stateDir, SLACK_TRIAGE_DIR);
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch {
+    return 0;
+  }
+  const cutoff = now.getTime() - days * 86_400_000;
+  let removed = 0;
+  for (const name of names) {
+    const match = RUN_STAMP.exec(name);
+    const startedAt = match ? Date.parse(`${match[1]}T${match[2]}:${match[3]}:${match[4]}.${match[5]}Z`) : (await stat(join(dir, name)).catch(() => null))?.mtimeMs;
+    if (startedAt === undefined || startedAt === null || Number.isNaN(startedAt) || startedAt >= cutoff) continue;
+    await rm(join(dir, name), { recursive: true, force: true });
+    removed++;
+  }
+  return removed;
 }
 
 /** Removes `<stateDir>/tasks/<id>` (the per-task session dir) for tasks that no

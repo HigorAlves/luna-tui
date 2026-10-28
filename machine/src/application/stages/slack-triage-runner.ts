@@ -2,16 +2,17 @@
 // runner in the stage container, like every stage, with the same image and credential. There is
 // no task and no worktree: /work is an empty folder under the run dir, the batch rides in
 // `context.slack`, and the structured answer comes back in /out/result.json. One row per run
-// goes to slack_triage_runs so the Floor can show what triage costs.
+// goes to slack_triage_runs so the Floor can show what triage costs. A run that answered has
+// its folder removed at once; a failed one keeps it for the retention sweep (sweepSlackTriageRuns).
 import { PACKS, SlackTriageAnswer, type SlackTriageContext, StageOutput } from "@hardness/contracts";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { Credential } from "../../adapters/docker/credentials.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
 import { buildSlackTriageInput } from "../../domain/stage-input.ts";
 import type { SlackStore } from "../slack-store.ts";
-import { TRIAGE_BATCH, type TriageAnswer, type TriageContext, type TriageItem, type Triager } from "../slack-triage.ts";
+import { TRIAGE_BATCH, type TriageAnswer, type TriageContext, type TriageItem, TriageRunError, type Triager } from "../slack-triage.ts";
 
 export interface SlackTriageDeps {
   /** The base stage image; the same one the packs run in. */
@@ -75,7 +76,7 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
   const log = deps.log ?? ((line: string) => console.log(line));
   const sandbox = deps.sandbox ?? runSandbox;
 
-  async function runBatch(batch: TriageItem[], context: TriageContext, ordinal: number): Promise<Map<string, TriageAnswer>> {
+  async function runBatch(batch: TriageItem[], context: TriageContext, ordinal: number): Promise<{ answers: Map<string, TriageAnswer>; error: string | null }> {
     const startedAt = now();
     const stamp = startedAt.toISOString().replace(/[:.]/g, "-") + (ordinal > 0 ? `-${ordinal + 1}` : "");
     const runDir = join(deps.stateDir, SLACK_TRIAGE_DIR, stamp);
@@ -135,14 +136,18 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
     } catch (thrown) {
       console.warn(`slack triage: could not record the run: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
     }
-    return answers;
+    // A run that answered leaves nothing worth keeping; a failed one keeps its folder (the transcript says why) for the retention sweep.
+    if (ok) await rm(runDir, { recursive: true, force: true }).catch(() => {});
+    return { answers, error: ok ? null : error };
   }
 
   return {
     async triage(items, context) {
       const answers = new Map<string, TriageAnswer>();
       for (let at = 0; at < items.length; at += TRIAGE_BATCH) {
-        for (const [id, verdict] of await runBatch(items.slice(at, at + TRIAGE_BATCH), context, at / TRIAGE_BATCH)) answers.set(id, verdict);
+        const batch = await runBatch(items.slice(at, at + TRIAGE_BATCH), context, at / TRIAGE_BATCH);
+        for (const [id, verdict] of batch.answers) answers.set(id, verdict);
+        if (batch.error !== null) throw new TriageRunError(batch.error, answers);
       }
       return answers;
     },

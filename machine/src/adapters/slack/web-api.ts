@@ -1,7 +1,7 @@
 // The Slack port over the Web API with plain `fetch`: one POST per method against
 // slack.com/api, your user token as a Bearer, form-encoded arguments (JSON where Slack
 // prefers it). `ok: false` throws Slack's own `error` word; a 429 waits for `Retry-After`
-// once, then throws a message the poller recognises as a rate limit. Users and channels are
+// once when it is short (5s at most), else throws a message the poller recognises as a rate limit. Users and channels are
 // cached for the process's life: names do not change by the minute.
 import { z } from "zod";
 
@@ -28,6 +28,8 @@ const API = "https://slack.com/api";
 const PAGE = 200;
 /** How many pages one listing call walks before giving up on a huge workspace. */
 const MAX_PAGES = 20;
+/** The longest `Retry-After` waited out inline; past it the call fails as a rate limit and the poller backs off. */
+const MAX_RETRY_WAIT_MS = 5_000;
 
 const Ok = z.object({ ok: z.literal(true) }).passthrough();
 const Failed = z.object({ ok: z.literal(false), error: z.string().optional() });
@@ -100,7 +102,9 @@ export function createSlack(token: string, options: WebApiOptions = {}): Slack {
     let response = await request();
     if (response.status === 429) {
       const after = Number(response.headers.get("Retry-After") ?? "1");
-      await sleep((Number.isFinite(after) ? after : 1) * 1000);
+      const waitMs = (Number.isFinite(after) ? after : 1) * 1000;
+      if (waitMs > MAX_RETRY_WAIT_MS) throw new SlackError(`Slack rate limit on ${method}: retry after ${after}s`);
+      await sleep(waitMs);
       response = await request();
       if (response.status === 429) throw new SlackError(`Slack rate limit on ${method}: retry after ${after}s`);
     }

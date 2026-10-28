@@ -35,7 +35,13 @@ pub enum Incoming {
     /// A `/tasks/:id` answer, fetched off the UI thread.
     Detail { id: String, detail: Option<TaskDetail> },
     /// A `/tasks/:id/diff` answer: the files, and `file`'s patch when one was asked for.
-    Diff { id: String, file: Option<String>, diff: Result<TaskDiff, String> },
+    /// `generation` is the app's diff generation when the fetch left; an answer from an
+    /// older one is stale (the branch moved meanwhile) and is dropped.
+    Diff { id: String, file: Option<String>, diff: Result<TaskDiff, String>, generation: u64 },
+    /// The watch picker's completions (user groups, channels), fetched off the UI thread when the Slack view opens.
+    SlackCatalog { groups: Vec<SlackOption>, channels: Vec<SlackOption> },
+    /// A `/jira/search` answer for `query`, fetched off the UI thread; dropped when the prompt has moved on.
+    JiraHits { query: String, hits: Result<Vec<JiraIssueHit>, String> },
 }
 
 #[derive(Clone)]
@@ -285,8 +291,9 @@ impl Machine {
     }
 
     /// Posts `text` as you, in the item's thread (or channel). Nothing is added to it.
-    pub fn slack_reply(&self, id: &str, text: &str) -> Result<(), String> {
-        Self::json(self.agent.post(self.url(&slack_item_path(id, "/reply"))).send_json(json!({ "text": text }))).map(|_| ())
+    /// Posts `text` in the item's thread as you; `nudge` has the machine prefix a mention of the item's author.
+    pub fn slack_reply(&self, id: &str, text: &str, nudge: bool) -> Result<(), String> {
+        Self::json(self.agent.post(self.url(&slack_item_path(id, "/reply"))).send_json(json!({ "text": text, "nudge": nudge }))).map(|_| ())
     }
 
     /// A Backlog ticket from the item; `repo_path` None leaves the repo to set later.

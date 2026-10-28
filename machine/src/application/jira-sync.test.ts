@@ -80,6 +80,7 @@ describe("JiraSync", () => {
     const events = await kinds(pipeline, task.id);
     expect(events).toEqual([
       ["jira.transitioned", { from: "To Do", to: "In Progress" }],
+      ["jira.commented", { url: "https://github.com/o/a/pull/7" }],
       ["jira.transitioned", { from: "In Progress", to: "In Review" }],
       ["jira.transitioned", { from: "In Review", to: "Done" }],
     ]);
@@ -142,7 +143,10 @@ describe("JiraSync", () => {
     await sync.idle();
     const write = jira.writes.find((w) => w[0] === "transition")!;
     expect(write[3]).toEqual({ customfield_10045: "https://github.com/o/a/pull/9", customfield_10046: `task ${task.id} on  via http://board.local` });
-    expect(await kinds(pipeline, task.id)).toEqual([["jira.transitioned", { from: "In Progress", to: "In Review", fields: ["customfield_10045", "customfield_10046"] }]]);
+    expect(await kinds(pipeline, task.id)).toEqual([
+      ["jira.commented", { url: "https://github.com/o/a/pull/9" }],
+      ["jira.transitioned", { from: "In Progress", to: "In Review", fields: ["customfield_10045", "customfield_10046"] }],
+    ]);
   });
 
   it("comments every gate with `gates`, nothing with `none`, and ignores tasks with no link or repos with no jira block", async () => {
@@ -189,6 +193,86 @@ describe("JiraSync", () => {
     const statuses = jira.writes.filter((w) => w[0] === "transition").map((w) => w[2]);
     expect(statuses).toEqual(["11", "22", "31", "21"]);
     expect((await kinds(pipeline, task.id)).map((e) => (e[1] as { to: string }).to)).toEqual(["In Progress", "Blocked", "In Progress", "In Review"]);
+  });
+
+  it("serializes reactions per task, so two quick transitions land in order and the later status wins", async () => {
+    const { pipeline, jira, sync } = wire(jiraPolicy({ on: { implementing: "In Progress", awaiting_ship: "In Review" } }));
+    // A slow Jira: every reaction in flight at once would read the transitions from "To Do" and the later one would find no way to In Review.
+    const read = jira.transitions.bind(jira);
+    jira.transitions = async (key) => {
+      const found = await read(key);
+      await new Promise((r) => setTimeout(r, 50));
+      return found;
+    };
+    const task = await pipeline.createTask({ title: "PLAT-123", repoPath: "/r/a" });
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved");
+    await pipeline.decide(task.id, "approved");
+    await sync.idle();
+    expect(jira.issues.get("PLAT-123")!.status).toBe("In Review");
+    expect(jira.writes.filter((w) => w[0] === "transition").map((w) => w[2])).toEqual(["11", "21"]);
+    expect((await kinds(pipeline, task.id)).map((e) => e[0])).toEqual(["jira.transitioned", "jira.transitioned"]);
+  });
+
+  it("skips a stepping stone when the task has already moved on and the later status is reachable directly", async () => {
+    const direct = { ...WORKFLOW, "To Do": [...WORKFLOW["To Do"]!, { id: "12", name: "Review now", to: { name: "In Review", categoryKey: "indeterminate" } }] };
+    const { pipeline, jira, sync } = wire(jiraPolicy({ on: { implementing: "In Progress", awaiting_ship: "In Review" } }), { transitions: direct });
+    const read = jira.transitions.bind(jira);
+    jira.transitions = async (key) => {
+      const found = await read(key);
+      await new Promise((r) => setTimeout(r, 50));
+      return found;
+    };
+    const task = await pipeline.createTask({ title: "PLAT-123", repoPath: "/r/a" });
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved");
+    await pipeline.decide(task.id, "approved");
+    await sync.idle();
+    expect(jira.issues.get("PLAT-123")!.status).toBe("In Review");
+    expect(jira.writes.filter((w) => w[0] === "transition").map((w) => w[2])).toEqual(["12"]);
+  });
+
+  it("comments PR opened once per url, remembered as a jira.commented event, and leaves Picked up to intake for an imported issue", async () => {
+    const { pipeline, jira, sync } = wire();
+    stubs.plan("delivering", { outcome: "pass", detail: { prUrl: "https://github.com/o/a/pull/7", prNumber: 7 } });
+    const task = await pipeline.createTask({ title: "Login", repoPath: "/r/a", source: { kind: "jira", key: "PLAT-123", url: `${SITE}/browse/PLAT-123`, issueType: "Bug" } });
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved");
+    await pipeline.decide(task.id, "approved");
+    await sync.idle();
+    expect(jira.comments["PLAT-123"]).toEqual(["PR opened: https://github.com/o/a/pull/7"]);
+    const events = await pipeline.events(task.id);
+    expect(events.filter((e) => e.kind === "jira.commented").map((e) => e.payload)).toEqual([{ url: "https://github.com/o/a/pull/7" }]);
+    // A fresh sync (a restart) sees the same finish again: the record, not memory, stops the repeat.
+    const again = new JiraSync({ pipeline, jira, enabled: true });
+    await again.handle(events.find((e) => e.kind === "stage.finished" && (e.payload.detail as { prUrl?: string })?.prUrl)!);
+    expect(jira.comments["PLAT-123"]).toEqual(["PR opened: https://github.com/o/a/pull/7"]);
+  });
+
+  it("retries a blocked transition on request: lands it once a route exists, stays quiet while none does, and drops a mark the task has outgrown", async () => {
+    const { pipeline, jira, sync } = wire(jiraPolicy({ on: { implementing: "In Progress", awaiting_ship: "Done" } }));
+    jira.issues.get("PLAT-123")!.status = "In Progress";
+    const task = await pipeline.createTask({ title: "Fix PLAT-123", repoPath: "/r/a" });
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved");
+    await pipeline.decide(task.id, "approved");
+    await sync.idle();
+    expect((await pipeline.get(task.id)).jira?.blocked).toMatchObject({ wanted: "Done", current: "In Progress" });
+    // Still no way from In Progress to Done: nothing happens, and no second jira.blocked.
+    await sync.retry(await pipeline.get(task.id));
+    expect((await kinds(pipeline, task.id)).map((e) => e[0])).toEqual(["jira.blocked"]);
+    // Someone moved the issue along in Jira: the retry finds the route and clears the mark.
+    jira.issues.get("PLAT-123")!.status = "In Review";
+    await sync.retry(await pipeline.get(task.id));
+    expect(jira.issues.get("PLAT-123")!.status).toBe("Done");
+    expect((await pipeline.get(task.id)).jira).toMatchObject({ status: "Done", blocked: null });
+    expect((await kinds(pipeline, task.id)).map((e) => e[0])).toEqual(["jira.blocked", "jira.transitioned"]);
+    // A mark for a state the task has since left is stale: it goes without a move.
+    const stale = await pipeline.setJira(task.id, { ...(await pipeline.get(task.id)).jira!, blocked: { wanted: "Nowhere", current: "Done", why: "x", at: "2026-10-28T12:00:00.000Z" } });
+    await pipeline.decide(task.id, "approved"); // → reviewing_memory, which maps to nothing
+    await sync.idle();
+    await sync.retry(stale);
+    expect((await pipeline.get(task.id)).jira?.blocked).toBeNull();
   });
 
   it("links a ticket whose text names a key only when Jira is configured, and an intake import always", async () => {

@@ -108,6 +108,8 @@ export interface TaskStore {
   withTaskLock<T>(id: string, fn: (task: TaskRow, tx: TaskTx) => Promise<T>): Promise<T>;
 
   listStageRuns(taskId: string): Promise<StageRunRow[]>;
+  /** When the stage run still `running` started, per task that has one; one query for a whole list. */
+  runningStageStarts(): Promise<Map<string, Date>>;
   /** What the task's stage runs have cost so far, in USD. */
   taskSpendUsd(taskId: string): Promise<number>;
   /** Spend and worked time per task, for the tasks that have any run; one query for a whole list. */

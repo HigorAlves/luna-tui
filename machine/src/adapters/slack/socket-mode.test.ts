@@ -70,13 +70,21 @@ describe("SocketMode", () => {
       envelope_id: "e2",
       payload: { event: { type: "reaction_added", user: "U2", reaction: "eyes", item_user: "U1", item: { type: "message", channel: "C1", ts: "0.9" }, event_ts: "1.1" } },
     });
+    socket.message({
+      type: "events_api",
+      envelope_id: "e2b",
+      payload: { event: { type: "message", subtype: "message_changed", channel: "C1", ts: "1.2", message: { ts: "1.0", text: "hi <@U1> (edited)", user: "U2" }, previous_message: { ts: "1.0", text: "hi <@U1>" } } },
+    });
+    socket.message({ type: "events_api", envelope_id: "e2c", payload: { event: { type: "message", subtype: "message_deleted", ts: "1.3", deleted_ts: "1.0", previous_message: { channel: "C1", ts: "1.0" } } } });
     socket.message({ type: "events_api", envelope_id: "e3", payload: { event: { type: "app_home_opened", user: "U1" } } });
     socket.message({ type: "slash_commands", envelope_id: "e4", payload: {} });
     socket.fire("message", "not json");
-    expect(socket.sent).toEqual(['{"envelope_id":"e1"}', '{"envelope_id":"e2"}', '{"envelope_id":"e3"}', '{"envelope_id":"e4"}']);
+    expect(socket.sent).toEqual(['{"envelope_id":"e1"}', '{"envelope_id":"e2"}', '{"envelope_id":"e2b"}', '{"envelope_id":"e2c"}', '{"envelope_id":"e3"}', '{"envelope_id":"e4"}']);
     expect(events).toEqual([
       { type: "message", channel: "C1", ts: "1.0", user: "U2", text: "hi <@U1>", thread_ts: "0.5" },
       { type: "reaction_added", user: "U2", reaction: "eyes", item_user: "U1", item: { type: "message", channel: "C1", ts: "0.9" }, event_ts: "1.1" },
+      { type: "message", subtype: "message_changed", channel: "C1", ts: "1.2", message: { ts: "1.0", text: "hi <@U1> (edited)", user: "U2" }, previous_message: { ts: "1.0", text: "hi <@U1>" } },
+      { type: "message", subtype: "message_deleted", ts: "1.3", deleted_ts: "1.0", previous_message: { channel: "C1", ts: "1.0" } },
     ]);
     expect(states).toEqual(["connected"]);
   });

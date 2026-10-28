@@ -1,8 +1,9 @@
 // Atlassian Document Format, both ways. Jira stores descriptions and comments as ADF (a JSON
 // tree); the machine thinks in markdown. Reading: paragraphs, headings, lists, code blocks,
 // links and cards, bold and code marks; anything else is reduced to its text. Writing: what
-// the machine says in a comment, paragraphs separated by blank lines, `- ` bullets, and bare
-// urls as links. Pure.
+// the machine says in a comment or an issue it creates: paragraphs separated by blank lines,
+// `- ` bullets, `- [ ]` task lists, `1.` ordered lists, `#` headings, `**bold**`, `` `code` ``
+// and bare urls as links. Pure.
 
 export interface AdfNode {
   type: string;
@@ -99,31 +100,61 @@ export function adfToMarkdown(doc: unknown): string {
 }
 
 const URL = /https?:\/\/[^\s<>()]+[^\s<>().,;:!?'"]/g;
+/** `**bold**` and `` `code` `` spans; everything between is plain text with bare urls as links. */
+const SPANS = /(\*\*[^*]+\*\*|`[^`]+`)/;
 
-/** Text with bare urls as link marks. */
-function inlineNodes(line: string): AdfNode[] {
+/** Text with bare urls as link marks, plus `marks` on every node. */
+function linkedNodes(line: string, marks: AdfNode["marks"] = []): AdfNode[] {
   const nodes: AdfNode[] = [];
+  const node = (value: string, extra: NonNullable<AdfNode["marks"]> = []): AdfNode => {
+    const all = [...(marks ?? []), ...extra];
+    return all.length > 0 ? { type: "text", text: value, marks: all } : { type: "text", text: value };
+  };
   let at = 0;
   for (const match of line.matchAll(URL)) {
     const start = match.index;
-    if (start > at) nodes.push({ type: "text", text: line.slice(at, start) });
-    nodes.push({ type: "text", text: match[0], marks: [{ type: "link", attrs: { href: match[0] } }] });
+    if (start > at) nodes.push(node(line.slice(at, start)));
+    nodes.push(node(match[0], [{ type: "link", attrs: { href: match[0] } }]));
     at = start + match[0].length;
   }
-  if (at < line.length) nodes.push({ type: "text", text: line.slice(at) });
+  if (at < line.length) nodes.push(node(line.slice(at)));
+  return nodes;
+}
+
+/** One line as inline nodes: `**bold**` carries a strong mark, `` `code` `` a code mark, bare urls link. */
+function inlineNodes(line: string): AdfNode[] {
+  const nodes: AdfNode[] = [];
+  for (const part of line.split(SPANS)) {
+    if (part === "") continue;
+    if (part.startsWith("**") && part.endsWith("**")) nodes.push(...linkedNodes(part.slice(2, -2), [{ type: "strong" }]));
+    else if (part.startsWith("`") && part.endsWith("`")) nodes.push({ type: "text", text: part.slice(1, -1), marks: [{ type: "code" }] });
+    else nodes.push(...linkedNodes(part));
+  }
   return nodes.length > 0 ? nodes : [{ type: "text", text: "" }];
 }
 
 const paragraph = (line: string): AdfNode => ({ type: "paragraph", content: inlineNodes(line) });
 
-/** The document for a plain text: blank lines split paragraphs, consecutive `- ` lines form a bullet list, bare urls link. */
+/**
+ * The document for a plain text: blank lines split paragraphs, consecutive `- ` lines form a
+ * bullet list, `- [ ]` / `- [x]` lines a task list (so Jira shows checkboxes), `1.` lines an
+ * ordered list, `#` lines headings; `**bold**`, `` `code` `` and bare urls are marked inline.
+ */
 export function markdownToAdf(text: string): AdfDoc {
   const content: AdfNode[] = [];
+  let lists = 0;
+  let items = 0;
   let bullets: AdfNode[] = [];
+  let tasks: AdfNode[] = [];
+  let ordered: AdfNode[] = [];
   let lines: string[] = [];
-  const flushBullets = () => {
+  const flushLists = () => {
     if (bullets.length > 0) content.push({ type: "bulletList", content: bullets });
+    if (tasks.length > 0) content.push({ type: "taskList", attrs: { localId: `list-${++lists}` }, content: tasks });
+    if (ordered.length > 0) content.push({ type: "orderedList", attrs: { order: 1 }, content: ordered });
     bullets = [];
+    tasks = [];
+    ordered = [];
   };
   const flushLines = () => {
     if (lines.length > 0) content.push(paragraph(lines.join(" ")));
@@ -131,24 +162,35 @@ export function markdownToAdf(text: string): AdfDoc {
   };
   for (const raw of text.split("\n")) {
     const line = raw.trimEnd();
+    const task = /^\s*[-*]\s+\[( |x|X)\]\s+(.*)$/.exec(line);
     const bullet = /^\s*[-*]\s+(.*)$/.exec(line);
+    const numbered = /^\s*\d+[.)]\s+(.*)$/.exec(line);
     const heading = /^(#{1,6})\s+(.*)$/.exec(line);
-    if (bullet) {
+    if (task) {
       flushLines();
+      if (bullets.length > 0 || ordered.length > 0) flushLists();
+      tasks.push({ type: "taskItem", attrs: { localId: `item-${++items}`, state: task[1] === " " ? "TODO" : "DONE" }, content: inlineNodes(task[2]!) });
+    } else if (bullet) {
+      flushLines();
+      if (tasks.length > 0 || ordered.length > 0) flushLists();
       bullets.push({ type: "listItem", content: [paragraph(bullet[1]!)] });
+    } else if (numbered) {
+      flushLines();
+      if (tasks.length > 0 || bullets.length > 0) flushLists();
+      ordered.push({ type: "listItem", content: [paragraph(numbered[1]!)] });
     } else if (line.trim() === "") {
       flushLines();
-      flushBullets();
+      flushLists();
     } else if (heading) {
       flushLines();
-      flushBullets();
+      flushLists();
       content.push({ type: "heading", attrs: { level: heading[1]!.length }, content: inlineNodes(heading[2]!) });
     } else {
-      flushBullets();
+      flushLists();
       lines.push(line.trim());
     }
   }
   flushLines();
-  flushBullets();
+  flushLists();
   return { type: "doc", version: 1, content: content.length > 0 ? content : [paragraph("")] };
 }

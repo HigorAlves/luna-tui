@@ -72,6 +72,15 @@ fn parse_offset(text: &str) -> Option<i64> {
     Some(sign * (hours * 3600 + minutes * 60))
 }
 
+/// Where a section's cursor starts: Runs and Evidence on their latest row (`usize::MAX`
+/// resolves to the last once the rows are known), everything else on the first.
+fn start_cursor(section: Section) -> usize {
+    match section {
+        Section::Runs | Section::Evidence => usize::MAX,
+        _ => 0,
+    }
+}
+
 /// Rows one card takes on the board, including its spacer line.
 pub const CARD_HEIGHT: usize = 3;
 
@@ -353,6 +362,7 @@ pub const DETAIL_SECTIONS: &[HelpSection] = &[
         &[
             ("h / l, 1-8", "previous / next section: Overview, Plan, Tests, Runs, Diff, Evidence, PR, Activity"),
             ("j / k", "scroll the section, or pick a run / file where it lists them"),
+            ("J / K, ctrl+d / ctrl+u", "scroll the section where j / k pick a row (a line, half a page)"),
             ("+", "toggle the popup between most of the screen and all of it"),
             ("esc", "close"),
         ],
@@ -366,7 +376,7 @@ pub const DETAIL_SECTIONS: &[HelpSection] = &[
             ("e", "edit in place"),
             ("X / w / d", "abort / kill the worktree / delete (each asks)"),
             ("f", "focus its herdr tab"),
-            ("o", "open the linked issue"),
+            ("o", "open the selected file (Diff, Evidence), the PR (PR), else the linked issue"),
             ("J", "link or unlink a Jira issue"),
         ],
     ),
@@ -438,6 +448,7 @@ pub const DIGEST_HELP: &[(&str, &str)] = &[
 pub const DETAIL_HELP: &[(&str, &str)] = &[
     ("h / l, 1-8", "previous / next section: Overview, Plan, Tests, Runs, Diff, Evidence, PR, Activity"),
     ("j / k", "scroll the section, or pick a run / file where it lists them"),
+    ("J / K, ctrl+d / ctrl+u", "scroll the section where j / k pick a row (a line, half a page)"),
     ("+", "toggle the popup between most of the screen and all of it"),
     ("a", "advance: start, approve, answer, retry, resume"),
     ("S", "ship"),
@@ -445,7 +456,7 @@ pub const DETAIL_HELP: &[(&str, &str)] = &[
     ("e", "edit in place"),
     ("X / w / d", "abort / kill the worktree / delete (each asks)"),
     ("f", "focus its herdr tab"),
-    ("o", "open the linked issue"),
+    ("o", "open the selected file (Diff, Evidence), the PR (PR), else the linked issue"),
     ("J", "link or unlink a Jira issue"),
     ("esc", "close"),
 ];
@@ -594,6 +605,8 @@ pub fn paused_ids(tasks: &[Task]) -> Vec<String> {
 
 /// A burst of events for the open ticket becomes one detail refetch, not one per event.
 const DETAIL_DEBOUNCE: Duration = Duration::from_millis(300);
+/// How long the `J` prompt waits after a keystroke before asking the machine to search.
+const JIRA_SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
 
 /// How tall a card is: three lines (title; id and repo; status), four with the worked / diff /
 /// tests line, or one (glyph, title, age) so a busy column shows twice the tickets.
@@ -715,11 +728,12 @@ pub enum Mode {
     /// `s` on a Slack item: pick how long it sleeps.
     SlackSnooze { id: String, cursor: usize },
     /// `r` (or `n`) on a Slack item: the reply, pre-filled with triage's draft (or a nudge);
-    /// ctrl+s posts it as you.
+    /// ctrl+s posts it as you. `nudge`: the machine prefixes a mention of the author.
     SlackReply {
         id: String,
         area: TextArea<'static>,
         vim: Vim,
+        nudge: bool,
     },
     /// `t` on a Slack item: one yes, then a Backlog ticket with `title`, in `repo` when guessed.
     SlackTask { id: String, title: String, repo: Option<String> },
@@ -820,8 +834,10 @@ pub struct App {
     pub slack_snapshot: SlackSnapshot,
     /// The Slack view, open while this is `Some`.
     pub slack: Option<SlackState>,
-    /// The watch picker's completions (user groups, channels), fetched once per session.
+    /// The watch picker's completions (user groups, channels), fetched once per session, off the UI thread.
     slack_catalog: Option<(Vec<SlackOption>, Vec<SlackOption>)>,
+    /// A catalogue fetch is in flight; the picker says "loading…" meanwhile.
+    slack_catalog_pending: bool,
     /// Tickets marked with `v`/`V`: `a`, `X`, `d`, `w` act on all of them.
     pub marked: BTreeSet<String>,
     /// The stage pool as `/health` last reported it; None until the first answer.
@@ -846,16 +862,26 @@ pub struct App {
     /// How far the open ticket's detail popup is scrolled. `ui` clamps it to the content's
     /// actual height, which only it knows (it depends on the terminal width).
     pub detail_scroll: Cell<u16>,
+    /// The pane's height on the last frame, for the page keys; and whether the next frame
+    /// should bring the selected row into view (set when the cursor moves, cleared by `ui`).
+    pub detail_viewport: Cell<u16>,
+    pub detail_follow: Cell<bool>,
     /// Which section of the workspace popup is open, and the selected row in sections that
-    /// have one (runs, files). `+` toggles the popup between most of the screen and all of it.
+    /// have one (runs, files). `usize::MAX` means the last row, resolved against the rows
+    /// once they are known (`detail_row`). `+` toggles the popup between most of the screen
+    /// and all of it.
     pub detail_section: Section,
     pub detail_cursor: usize,
     pub detail_full: bool,
     /// The branch diff of the ticket whose popup is open, once fetched: (task id, diff).
     pub diff: Option<(String, TaskDiff)>,
     diff_pending: Option<(String, Option<String>)>,
+    /// Bumped whenever `diff` is reset; an answer tagged with an older one is dropped.
+    pub diff_generation: u64,
     /// A diff fetch that failed for this ticket; no retry until the section is reopened.
     diff_failed: Option<String>,
+    /// The `J` prompt's query waiting to be searched, and when it was typed; see `ensure_jira_search`.
+    jira_search_due: Option<(String, Instant)>,
     /// How far the help sheet is scrolled, and the furthest `ui` found it can scroll.
     pub help_scroll: Cell<u16>,
     pub help_max: Cell<u16>,
@@ -897,6 +923,7 @@ impl App {
             slack_snapshot: SlackSnapshot::default(),
             slack: None,
             slack_catalog: None,
+            slack_catalog_pending: false,
             marked: BTreeSet::new(),
             slots: None,
             digest: None,
@@ -908,12 +935,16 @@ impl App {
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
             detail_scroll: Cell::new(0),
+            detail_viewport: Cell::new(0),
+            detail_follow: Cell::new(false),
             detail_section: Section::Overview,
             detail_cursor: 0,
             detail_full: false,
             diff: None,
             diff_pending: None,
+            diff_generation: 0,
             diff_failed: None,
+            jira_search_due: None,
             help_scroll: Cell::new(0),
             help_max: Cell::new(0),
             help_return: None,
@@ -999,6 +1030,13 @@ impl App {
     /// Applies everything the stream thread reported since the last frame.
     pub fn pump(&mut self) {
         while let Ok(incoming) = self.stream.try_recv() {
+            self.take_incoming(incoming);
+        }
+    }
+
+    /// Applies one message from the stream thread or a background fetch.
+    fn take_incoming(&mut self, incoming: Incoming) {
+        {
             match incoming {
                 Incoming::Online => {
                     self.reload();
@@ -1017,7 +1055,11 @@ impl App {
                         self.detail = detail;
                     }
                 }
-                Incoming::Diff { id, file, diff } => {
+                Incoming::Diff { id, file, diff, generation } => {
+                    if generation != self.diff_generation {
+                        // The branch moved while this was in flight; the next frame asks again.
+                        return;
+                    }
                     if self.diff_pending.as_ref().is_some_and(|(pending, _)| *pending == id) {
                         self.diff_pending = None;
                     }
@@ -1032,13 +1074,28 @@ impl App {
                         }
                     }
                 }
+                Incoming::JiraHits { query, hits } => {
+                    // An answer for what the prompt still says; anything typed since makes it stale.
+                    let Mode::JiraLink { query: current, hits: shown, cursor, .. } = &mut self.mode else { return };
+                    if current.trim() != query {
+                        return;
+                    }
+                    match hits {
+                        Ok(found) => {
+                            *cursor = (*cursor).min(found.len());
+                            *shown = found;
+                        }
+                        Err(error) => self.notify(format!("jira search: {error}"), true),
+                    }
+                }
                 Incoming::Message(StreamMessage::Updated { task }) => {
                     if self.shows_detail_of(&task.id) {
                         self.detail_stale = true;
                     }
-                    if self.diff.as_ref().is_some_and(|(id, _)| *id == task.id) && task.running != self.task(&task.id).is_some_and(|t| t.running) {
+                    let diff_of_it = self.diff.as_ref().is_some_and(|(id, _)| *id == task.id) || self.diff_pending.as_ref().is_some_and(|(id, _)| *id == task.id);
+                    if diff_of_it && task.running != self.task(&task.id).is_some_and(|t| t.running) {
                         // A stage started or ended: the branch may have moved.
-                        self.diff = None;
+                        self.reset_diff();
                     }
                     self.upsert(task);
                 }
@@ -1065,18 +1122,26 @@ impl App {
                 }
                 Incoming::Message(StreamMessage::Prs { snapshot }) => self.take_prs(snapshot),
                 Incoming::Message(StreamMessage::Slack { snapshot }) => self.take_slack(snapshot),
+                Incoming::SlackCatalog { groups, channels } => {
+                    self.slack_catalog = Some((groups, channels));
+                    self.slack_catalog_pending = false;
+                }
             }
         }
     }
 
     /// A fresh Slack snapshot: notices for the P0/P1 items that moved into Needs reply or
     /// Decide, for items that went past their reply SLA and for threads that came back after
-    /// you cleared them; the view's cursors kept inside their lists.
+    /// you cleared them (a P0's only, inside the rules file's quiet hours); the view's cursors
+    /// kept inside their lists.
     fn take_slack(&mut self, snapshot: SlackSnapshot) {
         let before: std::collections::HashMap<&str, (Option<SlackSplit>, Option<&str>, bool)> =
             self.slack_snapshot.items.iter().map(|i| (i.id.as_str(), (i.split_enum(), i.reopened_at.as_deref(), i.overdue))).collect();
         let mut notices = Vec::new();
         for item in &snapshot.items {
+            if notify::muted_by_quiet_hours(snapshot.quiet, item) {
+                continue;
+            }
             let old = before.get(item.id.as_str());
             if let Some(notice) = notify::slack_notice(old.and_then(|o| o.0), old.and_then(|o| o.1), old.is_some_and(|o| o.2), item) {
                 notices.push(notice);
@@ -1111,6 +1176,27 @@ impl App {
 
     fn slack_item_mut(&mut self, id: &str) -> Option<&mut SlackItem> {
         self.slack_snapshot.items.iter_mut().find(|i| i.id == id)
+    }
+
+    /// True while the watch picker's catalogue is still on its way from the machine.
+    pub fn slack_catalog_loading(&self) -> bool {
+        self.slack_catalog.is_none()
+    }
+
+    /// Fetches the user groups and channels the watch picker completes from, off the UI
+    /// thread, once per session: started when the Slack view opens so `n` finds them ready.
+    fn prefetch_slack_catalog(&mut self) {
+        if self.slack_catalog.is_some() || self.slack_catalog_pending {
+            return;
+        }
+        self.slack_catalog_pending = true;
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let groups = machine.slack_usergroups().unwrap_or_default();
+            let channels = machine.slack_channels().unwrap_or_default();
+            let _ = tx.send(Incoming::SlackCatalog { groups, channels });
+        });
     }
 
     /// The watch picker's completions for `query`: user groups for `@…`, channels for `#…`,
@@ -1162,10 +1248,18 @@ impl App {
     pub fn open_detail(&mut self, id: String) {
         self.detail_stale = true;
         self.detail_scroll.set(0);
-        self.detail_cursor = 0;
         self.diff_failed = None;
         self.detail_section = self.task(&id).map(Section::for_task).unwrap_or_default();
+        self.detail_cursor = start_cursor(self.detail_section);
+        self.detail_follow.set(true);
         self.mode = Mode::Detail(id);
+    }
+
+    /// Forgets the open ticket's diff and any fetch in flight; a late answer is then stale.
+    fn reset_diff(&mut self) {
+        self.diff = None;
+        self.diff_pending = None;
+        self.diff_generation += 1;
     }
 
     fn shows_detail_of(&self, id: &str) -> bool {
@@ -1313,7 +1407,7 @@ impl App {
         let file = match have {
             None => None,
             Some(diff) => {
-                let wanted = diff.files.get(self.detail_cursor.min(diff.files.len().saturating_sub(1))).map(|f| f.path.clone());
+                let wanted = diff.files.get(self.detail_row()).map(|f| f.path.clone());
                 if wanted.is_none() || (diff.file == wanted && diff.patch.is_some()) {
                     return;
                 }
@@ -1322,10 +1416,10 @@ impl App {
         };
         let machine = self.machine.clone();
         let tx = self.tx.clone();
-        let (fetching, wanted) = (id.clone(), file.clone());
+        let (fetching, wanted, generation) = (id.clone(), file.clone(), self.diff_generation);
         thread::spawn(move || {
             let diff = machine.diff(&fetching, wanted.as_deref());
-            let _ = tx.send(Incoming::Diff { id: fetching, file: wanted, diff });
+            let _ = tx.send(Incoming::Diff { id: fetching, file: wanted, diff, generation });
         });
         self.diff_pending = Some((id, file));
     }
@@ -1588,12 +1682,10 @@ impl App {
                 let id = id.clone();
                 let markdown = area.lines().join("\n");
                 self.mode = Mode::Detail(id.clone());
-                let before: Vec<crate::model::TestCase> = self
-                    .detail
-                    .as_ref()
-                    .filter(|d| d.task.id == id)
-                    .map(|d| d.cases().into_iter().map(|c| crate::model::TestCase { result: None, ..c }).collect())
-                    .unwrap_or_default();
+                // The baseline is what the editor opened with, read back the same way, so
+                // whitespace the markdown never carried does not count as a change.
+                let before: Vec<crate::model::TestCase> =
+                    self.detail.as_ref().filter(|d| d.task.id == id).map(|d| parse_cases(&cases_markdown(&d.cases()))).unwrap_or_default();
                 let edited = parse_cases(&markdown);
                 if edited.is_empty() {
                     self.notify("keep at least one case; r sends the whole set back instead", true);
@@ -1765,8 +1857,9 @@ impl App {
     }
 
     /// Type to search, `enter` links the row (row 0 creates an issue instead), `ctrl+n` creates
-    /// one straight away, `esc` backs out. The machine is asked on every keystroke from three
-    /// characters on; a failed search shows in the footer and keeps the last hits.
+    /// one straight away, `esc` backs out. From three characters on the machine is asked, off the
+    /// UI thread and a quarter second after the last keystroke (`ensure_jira_search`); a failed
+    /// search shows in the footer and keeps the last hits.
     fn handle_jira_link(&mut self, key: KeyEvent) -> Outcome {
         let Mode::JiraLink { id, query, hits, cursor } = &mut self.mode else {
             return Outcome::Continue;
@@ -1775,39 +1868,35 @@ impl App {
         match key.code {
             KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.mode = Mode::Normal;
+                self.jira_search_due = None;
                 self.act(|m| m.create_jira(&id, None), "Jira issue created and linked");
             }
-            KeyCode::Char(c) => {
-                query.push(c);
+            KeyCode::Char(_) | KeyCode::Backspace => {
+                match key.code {
+                    KeyCode::Char(c) => query.push(c),
+                    _ => {
+                        query.pop();
+                    }
+                }
                 *cursor = 0;
                 if query.trim().chars().count() >= 3 {
-                    let q = query.trim().to_string();
-                    match self.machine.jira_search(&q) {
-                        Ok(found) => {
-                            if let Mode::JiraLink { hits, .. } = &mut self.mode {
-                                *hits = found;
-                            }
-                        }
-                        Err(error) => self.notify(format!("jira search: {error}"), true),
-                    }
+                    self.jira_search_due = Some((query.trim().to_string(), Instant::now()));
                 } else {
                     hits.clear();
-                }
-            }
-            KeyCode::Backspace => {
-                query.pop();
-                *cursor = 0;
-                if query.trim().chars().count() < 3 {
-                    hits.clear();
+                    self.jira_search_due = None;
                 }
             }
             KeyCode::Down => *cursor = (*cursor + 1).min(hits.len()),
             KeyCode::Up => *cursor = cursor.saturating_sub(1),
-            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                self.jira_search_due = None;
+            }
             KeyCode::Enter => {
                 let chosen = cursor.checked_sub(1).and_then(|i| hits.get(i)).map(|h| h.key.clone());
                 let typed = query.trim().to_uppercase();
                 self.mode = Mode::Normal;
+                self.jira_search_due = None;
                 match chosen {
                     Some(key) => self.link_jira(&id, &key),
                     // Row 0 is "create", unless what was typed is itself a key: then link that.
@@ -1818,6 +1907,45 @@ impl App {
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// Runs the `J` prompt's search once the typing has paused, on a background thread; the
+    /// answer comes back through the stream as `Incoming::JiraHits` and is dropped if the
+    /// query has changed by then. Called every frame.
+    pub fn ensure_jira_search(&mut self) {
+        if !matches!(self.mode, Mode::JiraLink { .. }) {
+            self.jira_search_due = None;
+            return;
+        }
+        let Some((query, at)) = self.jira_search_due.as_ref() else { return };
+        if at.elapsed() < JIRA_SEARCH_DEBOUNCE {
+            return;
+        }
+        let query = query.clone();
+        self.jira_search_due = None;
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let hits = machine.jira_search(&query);
+            let _ = tx.send(Incoming::JiraHits { query, hits });
+        });
+    }
+
+    /// Tests: runs a due search now and waits for its answer.
+    #[cfg(test)]
+    fn settle_jira_search(&mut self) {
+        if let Some((query, _)) = self.jira_search_due.take() {
+            self.jira_search_due = Some((query, Instant::now() - JIRA_SEARCH_DEBOUNCE));
+        }
+        self.ensure_jira_search();
+        loop {
+            let incoming = self.stream.recv_timeout(Duration::from_secs(5)).expect("the search answers");
+            let done = matches!(incoming, Incoming::JiraHits { .. });
+            self.take_incoming(incoming);
+            if done {
+                return;
+            }
+        }
     }
 
     fn handle_confirm_jira_unlink(&mut self, key: KeyEvent) -> Outcome {
@@ -2375,6 +2503,7 @@ impl App {
             self.take_slack(snapshot);
         }
         self.slack = Some(SlackState::default());
+        self.prefetch_slack_catalog();
     }
 
     /// The Slack view's keys: move, switch split, open, act on the item, Watches, refresh.
@@ -2469,8 +2598,9 @@ impl App {
         let id = item.id.clone();
         match key {
             SlackKey::Open => self.open_url(&item.permalink),
-            SlackKey::Reply => self.open_slack_reply(item, item.triage.as_ref().and_then(|t| t.draft.clone()).unwrap_or_default()),
-            SlackKey::Nudge => self.open_slack_reply(item, format!("@{} gentle nudge on this one: any news?", item.author.name)),
+            SlackKey::Reply => self.open_slack_reply(item, item.triage.as_ref().and_then(|t| t.draft.clone()).unwrap_or_default(), false),
+            // The mention itself is built on the machine, by id; the editor shows the words only.
+            SlackKey::Nudge => self.open_slack_reply(item, "gentle nudge on this one: any news?".to_string(), true),
             SlackKey::Snooze => self.mode = Mode::SlackSnooze { id, cursor: 0 },
             SlackKey::Task => {
                 let title = item.summary().to_string();
@@ -2531,15 +2661,16 @@ impl App {
     }
 
     /// The reply editor over `item`, pre-filled with `text`; the same vim keys as every editor.
-    fn open_slack_reply(&mut self, item: &SlackItem, text: String) {
+    /// `nudge` asks the machine to open the message with a mention of the author.
+    fn open_slack_reply(&mut self, item: &SlackItem, text: String, nudge: bool) {
         let lines: Vec<String> = if text.is_empty() { vec![String::new()] } else { text.lines().map(str::to_string).collect() };
         let mut area = TextArea::new(lines);
         area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
-        self.mode = Mode::SlackReply { id: item.id.clone(), area, vim: Vim::new() };
+        self.mode = Mode::SlackReply { id: item.id.clone(), area, vim: Vim::new(), nudge };
     }
 
     fn handle_slack_reply(&mut self, key: KeyEvent) -> Outcome {
-        let Mode::SlackReply { id, area, vim } = &mut self.mode else {
+        let Mode::SlackReply { id, area, vim, nudge } = &mut self.mode else {
             return Outcome::Continue;
         };
         match vim.handle(area, key) {
@@ -2547,13 +2678,14 @@ impl App {
             crate::vim::Outcome::Cancel => self.mode = Mode::Normal,
             crate::vim::Outcome::Save => {
                 let id = id.clone();
+                let nudge = *nudge;
                 let text = area.lines().join("\n").trim().to_string();
                 if text.is_empty() {
                     self.notify("nothing to send", true);
                     return Outcome::Continue;
                 }
                 self.mode = Mode::Normal;
-                match self.machine.slack_reply(&id, &text) {
+                match self.machine.slack_reply(&id, &text, nudge) {
                     Ok(()) => {
                         let now = iso_of(now_secs());
                         if let Some(item) = self.slack_item_mut(&id) {
@@ -2661,11 +2793,8 @@ impl App {
             KeyCode::Char('j') | KeyCode::Down => cursor = (cursor + 1).min(count.saturating_sub(1)),
             KeyCode::Char('k') | KeyCode::Up => cursor = cursor.saturating_sub(1),
             KeyCode::Char('n') => {
-                if self.slack_catalog.is_none() {
-                    let groups = self.machine.slack_usergroups().unwrap_or_default();
-                    let channels = self.machine.slack_channels().unwrap_or_default();
-                    self.slack_catalog = Some((groups, channels));
-                }
+                // The catalogue was asked for when the view opened; the picker says "loading…" until it lands.
+                self.prefetch_slack_catalog();
                 self.mode = Mode::SlackWatchAdd { query: String::new(), cursor: 0 };
                 return Outcome::Continue;
             }
@@ -3027,10 +3156,23 @@ impl App {
     }
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
+        let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('d') => self.scroll_detail(half_page),
+                KeyCode::Char('u') => self.scroll_detail(-half_page),
+                _ => {}
+            }
+            return Outcome::Continue;
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
             KeyCode::Char('j') | KeyCode::Down => self.move_in_detail(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_in_detail(-1),
+            KeyCode::Char('J') => self.scroll_detail(1),
+            KeyCode::Char('K') => self.scroll_detail(-1),
+            KeyCode::PageDown => self.scroll_detail(half_page),
+            KeyCode::PageUp => self.scroll_detail(-half_page),
             KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => self.set_section(self.detail_section.next()),
             KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.set_section(self.detail_section.prev()),
             KeyCode::Char(digit @ '1'..='8') => {
@@ -3038,23 +3180,30 @@ impl App {
                     self.set_section(section);
                 }
             }
-            KeyCode::Char('+') | KeyCode::Char('=') => self.detail_full = !self.detail_full,
+            KeyCode::Char('+') => self.detail_full = !self.detail_full,
             KeyCode::Char('?') => {
                 self.help_return = Some(id.to_string());
                 self.mode = Mode::Help(HelpFor::Detail);
             }
+            KeyCode::Char('o') => match self.detail_open_target() {
+                Some(target) => self.open_url(&target),
+                None if self.detail_section.has_cursor() => self.notify("nothing to open here", false),
+                None => return self.ticket_key('o', id),
+            },
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
         }
         Outcome::Continue
     }
 
-    /// Switches the popup's section; each starts at the top with the first row selected.
+    /// Switches the popup's section; each starts at the top, Runs and Evidence on their
+    /// latest row, the others on their first.
     fn set_section(&mut self, section: Section) {
         if section != self.detail_section {
             self.detail_section = section;
             self.detail_scroll.set(0);
-            self.detail_cursor = 0;
+            self.detail_cursor = start_cursor(section);
+            self.detail_follow.set(true);
             self.diff_failed = None;
         }
     }
@@ -3063,21 +3212,53 @@ impl App {
     fn move_in_detail(&mut self, delta: i16) {
         if self.detail_section.has_cursor() {
             let rows = self.detail_rows();
-            let next = (self.detail_cursor as i64 + i64::from(delta)).clamp(0, rows.saturating_sub(1) as i64);
+            let next = (self.detail_row() as i64 + i64::from(delta)).clamp(0, rows.saturating_sub(1) as i64);
             self.detail_cursor = next as usize;
+            self.detail_follow.set(true);
         } else {
             self.scroll_detail(delta);
         }
     }
 
+    /// The selected row of the open section, inside its rows (`usize::MAX` is the last).
+    pub fn detail_row(&self) -> usize {
+        self.detail_cursor.min(self.detail_rows().saturating_sub(1))
+    }
+
+    /// The open ticket's detail, when it is the one loaded.
+    fn open_detail_of(&self) -> Option<&TaskDetail> {
+        self.detail.as_ref().filter(|d| matches!(&self.mode, Mode::Detail(id) if *id == d.task.id))
+    }
+
     /// How many rows the open section's cursor can land on.
     fn detail_rows(&self) -> usize {
-        let detail = self.detail.as_ref().filter(|d| matches!(&self.mode, Mode::Detail(id) if *id == d.task.id));
+        let detail = self.open_detail_of();
         match self.detail_section {
             Section::Runs => detail.map_or(0, |d| d.stage_runs.len()),
             Section::Evidence => detail.map_or(0, |d| d.artifacts.len()),
-            Section::Diff => self.diff.as_ref().map_or(0, |(_, d)| d.files.len()),
+            Section::Diff => self.diff.as_ref().filter(|(id, _)| matches!(&self.mode, Mode::Detail(open) if open == id)).map_or(0, |(_, d)| d.files.len()),
             _ => 0,
+        }
+    }
+
+    /// What `o` opens in the popup, by section: the selected file inside the worktree (Diff),
+    /// the selected artifact (Evidence), the PR's URL from the inbox or the ship gate (PR).
+    /// `None` elsewhere: `o` then means what it means on the board, the linked issue.
+    pub fn detail_open_target(&self) -> Option<String> {
+        let Mode::Detail(id) = &self.mode else { return None };
+        let task = self.task(id)?;
+        match self.detail_section {
+            Section::Diff => {
+                let (_, diff) = self.diff.as_ref().filter(|(for_id, _)| for_id == id)?;
+                let file = diff.files.get(self.detail_row())?;
+                let root = task.worktree_path.as_deref()?;
+                Some(format!("{}/{}", root.trim_end_matches('/'), file.path))
+            }
+            Section::Evidence => self.open_detail_of()?.artifacts.get(self.detail_row()).map(|a| a.path.clone()),
+            Section::Pr => crate::detail::pr_for(task, &self.prs.prs)
+                .map(|pr| pr.url.clone())
+                .or_else(|| self.open_detail_of().and_then(|d| d.latest_approval("awaiting_ship")).and_then(|a| a.requested["prUrl"].as_str().map(str::to_string))),
+            _ => None,
         }
     }
 
@@ -4472,6 +4653,9 @@ mod slack_tests {
                     }
                     "/tasks" => "[]".to_string(),
                     "/slack/watches" => format!("[{},{}]", watch_json("w1", "usergroup", "S04ABCD", "@platform-team", false), watch_json("w2", "broadcast", "here", "@here", true)),
+                    "/slack/usergroups" => r#"[{"id":"S04ABCD","label":"@platform-team"},{"id":"S05","label":"@data"}]"#.to_string(),
+                    "/slack/channels" => r##"[{"id":"C1","label":"#eng"}]"##.to_string(),
+                    p if p.ends_with("/reply") => format!(r#"{{"replied":{}}}"#, String::from_utf8_lossy(&body)),
                     p if p.starts_with("/slack/watches/") => watch_json("w1", "usergroup", "S04ABCD", "@platform-team", false).replace("\"enabled\":true", "\"enabled\":false"),
                     _ => "{}".to_string(),
                 };
@@ -4608,6 +4792,57 @@ mod slack_tests {
     }
 
     #[test]
+    fn n_opens_a_nudge_the_machine_addresses_by_id_not_a_typed_at_name() {
+        let mut waiting = snapshot();
+        waiting.items.push(item("C0123:7", "waiting_on_them", Some("P1"), "2026-10-27T08:00:00Z"));
+        let mut app = app_with(waiting);
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('n'));
+        let Mode::SlackReply { area, nudge, .. } = &app.mode else { panic!("the reply editor opens: {}", toast(&app)) };
+        assert!(*nudge);
+        assert_eq!(area.lines().join("\n"), "gentle nudge on this one: any news?", "no @name typed into the text: the machine mentions the author by id");
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert_eq!(toast(&app), "sent");
+    }
+
+    #[test]
+    fn opening_the_slack_view_prefetches_the_watch_catalogue_off_the_ui_thread() {
+        let mut app = app_with(snapshot());
+        assert!(app.slack_catalog_loading());
+        press(&mut app, KeyCode::Char('S'));
+        assert!(app.slack_catalog_pending, "the fetch started when the view opened");
+        assert!(app.slack_catalog_loading(), "and has not landed yet");
+        let landed = app.stream.recv_timeout(std::time::Duration::from_secs(5)).expect("the catalogue arrives on the stream");
+        assert!(matches!(landed, Incoming::SlackCatalog { .. }));
+        app.tx.send(landed).unwrap();
+        app.pump();
+        assert!(!app.slack_catalog_loading() && !app.slack_catalog_pending);
+        assert_eq!(app.slack_watch_matches("@dat").iter().map(|o| o.id.as_str()).collect::<Vec<_>>(), vec!["S05"]);
+        assert_eq!(app.slack_watch_matches("#").len(), 1);
+    }
+
+    #[test]
+    fn quiet_hours_hold_back_every_notice_but_a_p0s() {
+        let mut quiet = snapshot();
+        quiet.quiet = true;
+        let mut app = app_with(quiet.clone());
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Needs reply"], "the P0 gets through; the overdue P2 waits");
+        let mut later = quiet.clone();
+        later.items[1].reopened_at = Some("2026-10-28T10:30:00Z".into());
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: later })).unwrap();
+        app.pump();
+        assert!(app.take_notices().is_empty(), "a P1 reopen is held during quiet hours");
+        let mut morning = quiet;
+        morning.quiet = false;
+        morning.items.push(item("C0123:9", "needs_reply", Some("P1"), "2026-10-28T10:00:00Z"));
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: morning })).unwrap();
+        app.pump();
+        assert_eq!(app.take_notices().iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Needs reply"], "outside the window a P1 entering Needs reply is news again");
+    }
+
+    #[test]
     fn t_asks_first_with_the_title_it_will_use_and_w_runs_the_watches() {
         let mut app = app_with(snapshot());
         press(&mut app, KeyCode::Char('S'));
@@ -4687,7 +4922,7 @@ mod slack_tests {
 
 #[cfg(test)]
 mod workspace_key_tests {
-    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use super::*;
 
@@ -4803,6 +5038,126 @@ mod workspace_key_tests {
         press(&mut offline, KeyCode::Char('5'));
         offline.ensure_diff();
         assert!(offline.diff_pending.is_none(), "offline: nothing to fetch from");
+    }
+
+    fn files() -> TaskDiff {
+        serde_json::from_str(r#"{"base":"b","head":"h","files":[{"path":"a.rs","status":"M","added":1,"removed":0},{"path":"b.rs","status":"A","added":2,"removed":0}]}"#).unwrap()
+    }
+
+    #[test]
+    fn a_diff_that_arrives_after_the_branch_moved_is_dropped() {
+        let mut app = open("implementing");
+        app.online = true;
+        press(&mut app, KeyCode::Char('5'));
+        app.ensure_diff();
+        let generation = app.diff_generation;
+        assert!(app.diff_pending.is_some());
+        // A stage starts while the fetch is in flight: the branch may move, so the answer is stale.
+        let mut moved = task("implementing");
+        moved.running = true;
+        app.tx.send(Incoming::Message(StreamMessage::Updated { task: moved })).unwrap();
+        app.pump();
+        assert!(app.diff_pending.is_none(), "the reset forgets the fetch in flight");
+        assert_ne!(app.diff_generation, generation);
+        app.tx.send(Incoming::Diff { id: "abcdef123456".into(), file: None, diff: Ok(files()), generation }).unwrap();
+        app.pump();
+        assert!(app.diff.is_none(), "the late answer is ignored");
+        app.tx.send(Incoming::Diff { id: "abcdef123456".into(), file: None, diff: Ok(files()), generation: app.diff_generation }).unwrap();
+        app.pump();
+        assert!(app.diff.is_some(), "a fresh answer lands");
+    }
+
+    #[test]
+    fn capital_j_k_and_the_page_keys_scroll_a_cursor_section_and_equals_is_not_size() {
+        let mut app = open("implementing");
+        app.detail = Some(detail_with_runs(&app.tasks[0], 3));
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('j'));
+        let cursor = app.detail_row();
+        press(&mut app, KeyCode::Char('J'));
+        assert_eq!(app.detail_scroll.get(), 1, "J scrolls the pane");
+        assert_eq!(app.detail_row(), cursor, "without moving the cursor");
+        press(&mut app, KeyCode::Char('K'));
+        assert_eq!(app.detail_scroll.get(), 0);
+        app.detail_viewport.set(20);
+        press(&mut app, KeyCode::PageDown);
+        assert_eq!(app.detail_scroll.get(), 10, "a page key scrolls half the pane");
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert_eq!(app.detail_scroll.get(), 20);
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        press(&mut app, KeyCode::PageUp);
+        assert_eq!(app.detail_scroll.get(), 0);
+        press(&mut app, KeyCode::Char('='));
+        assert!(!app.detail_full, "= is the board's density key, not the popup's size");
+    }
+
+    #[test]
+    fn runs_and_evidence_open_on_their_latest_row() {
+        let mut app = open("escalated");
+        assert_eq!(app.detail_section, Section::Runs);
+        app.detail = Some(detail_with_runs(&app.tasks[0], 3));
+        assert_eq!(app.detail_row(), 2, "the latest run, not the oldest");
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.detail_row(), 1);
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('5'));
+        assert_eq!(app.detail_row(), 0, "the Diff starts on the first file");
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.detail_row(), 2, "coming back to Runs lands on the latest run again");
+    }
+
+    #[test]
+    fn the_diff_rows_belong_to_the_open_ticket_only() {
+        let mut app = open("implementing");
+        press(&mut app, KeyCode::Char('5'));
+        app.diff = Some(("someone-else".into(), files()));
+        assert_eq!(app.detail_rows(), 0);
+        app.diff = Some(("abcdef123456".into(), files()));
+        assert_eq!(app.detail_rows(), 2);
+    }
+
+    #[test]
+    fn o_targets_the_selected_file_the_artifact_or_the_pr_by_section() {
+        let mut app = open("implementing");
+        assert_eq!(app.detail_open_target(), None, "Overview falls through to the linked issue");
+        press(&mut app, KeyCode::Char('5'));
+        app.diff = Some(("abcdef123456".into(), files()));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.detail_open_target().as_deref(), Some("/w/b.rs"), "the selected file inside the worktree");
+        press(&mut app, KeyCode::Char('6'));
+        let mut detail = detail_with_runs(&app.tasks[0], 1);
+        detail.artifacts = serde_json::from_str(r#"[{"id":"a1","stageRunId":"r1","kind":"log","path":"/out/files/verify.log","label":"verify","sha256":"x","createdAt":"2026-10-22T10:11:00Z"}]"#).unwrap();
+        detail.approvals = serde_json::from_str(r#"[{"id":"s1","kind":"awaiting_ship","requested":{"prUrl":"https://github.com/acme/app/pull/9"},"decision":null,"reason":null,"createdAt":"2026-10-22T10:11:00Z","decidedAt":null}]"#).unwrap();
+        app.detail = Some(detail);
+        assert_eq!(app.detail_open_target().as_deref(), Some("/out/files/verify.log"));
+        press(&mut app, KeyCode::Char('7'));
+        assert_eq!(app.detail_open_target().as_deref(), Some("https://github.com/acme/app/pull/9"), "the ship gate's URL when the inbox has no row");
+        let mut pr: PullRequest = serde_json::from_str(
+            r#"{"repo":"acme/app","number":412,"title":"t","url":"https://github.com/acme/app/pull/412","author":"me","mine":true,"reviewRequested":false,
+            "isDraft":false,"headRef":"task/abcdef12","baseRef":"main","fromFork":false,"reviewDecision":null,"mergeable":"MERGEABLE",
+            "checks":{"state":"none","passed":0,"total":0,"failed":[]},"unresolvedThreads":0,"split":"mine","localPath":null,"task":null,"updatedAt":"2026-10-27T09:00:00Z"}"#,
+        )
+        .unwrap();
+        pr.head_ref = "task/abcdef12".into();
+        app.prs.prs.push(pr);
+        assert_eq!(app.detail_open_target().as_deref(), Some("https://github.com/acme/app/pull/412"), "the inbox's PR first");
+    }
+
+    #[test]
+    fn saving_the_cases_editor_unchanged_patches_nothing_and_keeps_multi_line_approaches() {
+        let mut app = open("awaiting_test_check");
+        let mut detail = detail_with_runs(&app.tasks[0], 1);
+        detail.approvals = serde_json::from_str(
+            r#"[{"id":"t1","kind":"awaiting_test_check","requested":{"cases":[{"title":"rejects a bad password","criterion":"c1","approach":"run the suite\n\n  then read the log  "}]},
+            "decision":null,"reason":null,"createdAt":"2026-10-22T10:00:00Z","decidedAt":null}]"#,
+        )
+        .unwrap();
+        app.detail = Some(detail);
+        app.open_cases_editor("abcdef123456");
+        assert!(matches!(app.mode, Mode::EditCases { .. }));
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Detail(_)));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("nothing changed"), "an untouched editor sends no PATCH");
     }
 }
 
@@ -4944,6 +5299,10 @@ mod jira_tests {
         type_text(&mut app, "PL");
         assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.is_empty()), "two characters: no search yet");
         type_text(&mut app, "A");
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.is_empty()), "the search waits for the typing to pause");
+        app.ensure_jira_search();
+        assert!(app.jira_search_due.is_some(), "a quarter second has not passed: nothing asked yet");
+        app.settle_jira_search();
         let Mode::JiraLink { hits, .. } = &app.mode else { panic!("still in the prompt") };
         assert_eq!(hits.iter().map(|h| h.key.as_str()).collect::<Vec<_>>(), vec!["PLAT-123", "PLAT-7"]);
         press(&mut app, KeyCode::Down);
@@ -4967,10 +5326,35 @@ mod jira_tests {
     }
 
     #[test]
+    fn a_search_answer_for_an_older_query_is_dropped_and_a_failed_one_shows_in_the_footer() {
+        let mut app = app_with(&[task("abcdef123456", None)]);
+        press(&mut app, KeyCode::Char('J'));
+        type_text(&mut app, "PLAT");
+        let hit = |key: &str| JiraIssueHit { key: key.to_string(), summary: String::new(), status: None, issue_type: None, url: String::new() };
+        // The answer to "PLA" lands after "PLAT" was typed: stale, dropped.
+        app.tx.send(Incoming::JiraHits { query: "PLA".into(), hits: Ok(vec![hit("PLAT-1")]) }).unwrap();
+        app.pump();
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.is_empty()));
+        app.tx.send(Incoming::JiraHits { query: "PLAT".into(), hits: Ok(vec![hit("PLAT-1"), hit("PLAT-2")]) }).unwrap();
+        app.pump();
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.len() == 2));
+        app.tx.send(Incoming::JiraHits { query: "PLAT".into(), hits: Err("boom".into()) }).unwrap();
+        app.pump();
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.len() == 2), "a failed search keeps the last hits");
+        assert_eq!(toast(&app), "jira search: boom");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.jira_search_due.is_none());
+        app.tx.send(Incoming::JiraHits { query: "PLAT".into(), hits: Ok(vec![hit("PLAT-9")]) }).unwrap();
+        app.pump();
+        assert!(matches!(app.mode, Mode::Normal), "an answer after the prompt closed changes nothing");
+    }
+
+    #[test]
     fn the_create_row_ctrl_n_and_the_colon_command_link_without_a_search() {
         let mut app = app_with(&[task("abcdef123456", None)]);
         press(&mut app, KeyCode::Char('J'));
         type_text(&mut app, "zzz");
+        app.settle_jira_search();
         let Mode::JiraLink { hits, .. } = &app.mode else { panic!("in the prompt") };
         assert!(hits.is_empty(), "nothing matched");
         press(&mut app, KeyCode::Enter);

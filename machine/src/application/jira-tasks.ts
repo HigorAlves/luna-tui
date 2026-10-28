@@ -25,6 +25,22 @@ export class AlreadyLinkedError extends Error {
   }
 }
 
+/** `POST /tasks/:id/jira` named an issue another open task already holds: 409 `already_linked_elsewhere`. */
+export class AlreadyLinkedElsewhereError extends Error {
+  constructor(key: string, otherTaskId: string) {
+    super(`${key} is already linked to the open task #${otherTaskId.slice(0, 8)}; close or unlink that one first`);
+    this.name = "AlreadyLinkedElsewhereError";
+  }
+}
+
+/** Unlinking or relinking a ticket that already works on a branch: 409 `has_worktree`. The branch was named from the link. */
+export class HasWorktreeError extends Error {
+  constructor(taskId: string, branch: string, key: string) {
+    super(`task ${taskId} already works on ${branch} for ${key}; its Jira link cannot change until the task closes`);
+    this.name = "HasWorktreeError";
+  }
+}
+
 /** Creating an issue with no project named by the request or the repo's luna.yaml: 409 `no_project`. */
 export class NoProjectError extends Error {
   constructor() {
@@ -42,9 +58,15 @@ export interface JiraTasksPort {
   create(taskId: string, input: JiraCreateInput): Promise<TaskRow>;
 }
 
-/** Remembers the token expiry Jira last named on a 401, for `GET /jira/status` and the daily warning. */
+/** When the token expires, for `GET /jira/status` and JiraWatch's daily warning: what you set in
+ *  `MACHINE_JIRA_TOKEN_EXPIRES` (Jira never tells the machine ahead of time), overridden by the
+ *  date a 401 names once the token has actually gone. */
 export class TokenExpiry {
-  at: string | null = null;
+  at: string | null;
+
+  constructor(configured: string | null = null) {
+    this.at = configured;
+  }
 
   /** Notes the expiry from an auth error, when it carries one. */
   note(error: unknown): void {
@@ -61,6 +83,8 @@ export interface JiraTasksOptions {
     setJira(id: string, link: JiraLink | null): Promise<TaskRow>;
     record(id: string, kind: string, payload: Record<string, unknown>): Promise<void>;
     policyFor(repoPath: string | null): Promise<Policy>;
+    /** The latest task on an issue, if any; an open one keeps a second task off the same key. */
+    findByJiraKey(key: string): Promise<TaskRow | null>;
   };
   expiry?: TokenExpiry;
   now?: () => Date;
@@ -70,9 +94,9 @@ export interface JiraTasksOptions {
 export const SEARCH_MAX = 15;
 const DEFAULT_ISSUE_TYPE = "Task";
 
-/** The link for an issue as Jira shows it now. */
+/** The link for an issue as Jira shows it now, linked at `now`. */
 export function linkOf(issue: JiraIssue, now: Date): JiraLink {
-  return { ...bareLink(issue.key, issue.url, issue.issueType), status: issue.status, priority: issue.priority, dueAt: issue.dueAt, syncedAt: now.toISOString() };
+  return { ...bareLink(issue.key, issue.url, issue.issueType, now.toISOString()), status: issue.status, priority: issue.priority, dueAt: issue.dueAt, syncedAt: now.toISOString() };
 }
 
 const hit = (issue: JiraIssue): JiraIssueHit => ({ key: issue.key, summary: issue.summary, status: issue.status, issueType: issue.issueType, url: issue.url });
@@ -127,7 +151,12 @@ export class JiraTasks implements JiraTasksPort {
   }
 
   async link(taskId: string, key: string): Promise<TaskRow> {
-    await this.options.pipeline.get(taskId);
+    const before = await this.options.pipeline.get(taskId);
+    const current = jiraOf(before);
+    // A ticket already on its branch keeps the issue the branch was named from; the same key again only refreshes.
+    if (before.worktreePath && before.branch && current && current.key !== key) throw new HasWorktreeError(taskId, before.branch, current.key);
+    const holder = await this.options.pipeline.findByJiraKey(key);
+    if (holder && holder.id !== taskId && holder.state !== "closed") throw new AlreadyLinkedElsewhereError(key, holder.id);
     let issue: JiraIssue;
     try {
       issue = await this.options.jira.issue(key);
@@ -142,8 +171,10 @@ export class JiraTasks implements JiraTasksPort {
 
   async unlink(taskId: string): Promise<TaskRow> {
     const before = await this.options.pipeline.get(taskId);
+    const current = jiraOf(before);
+    if (before.worktreePath && before.branch && current) throw new HasWorktreeError(taskId, before.branch, current.key);
     const task = await this.options.pipeline.setJira(taskId, null);
-    const key = jiraOf(before)?.key;
+    const key = current?.key;
     if (key) await this.options.pipeline.record(taskId, "jira.unlinked", { key });
     return task;
   }
@@ -157,7 +188,8 @@ export class JiraTasks implements JiraTasksPort {
     if (!project) throw new NoProjectError();
     const issueType = input.issueType ?? DEFAULT_ISSUE_TYPE;
     const created = await this.options.jira.createIssue(project, issueType, task.title, issueDescription(task));
-    const after = await this.options.pipeline.setJira(taskId, { ...bareLink(created.key, created.url, issueType), syncedAt: this.now().toISOString() });
+    const now = this.now().toISOString();
+    const after = await this.options.pipeline.setJira(taskId, { ...bareLink(created.key, created.url, issueType, now), syncedAt: now });
     await this.options.pipeline.record(taskId, "jira.linked", { key: created.key, url: created.url, created: true });
     return after;
   }

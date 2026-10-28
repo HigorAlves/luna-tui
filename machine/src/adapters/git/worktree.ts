@@ -3,7 +3,8 @@
 import { existsSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 
-import { jiraBranch, slug } from "../../domain/jira-link.ts";
+import { jiraBranch, jiraOf, slug } from "../../domain/jira-link.ts";
+import { DEFAULT_JIRA_BRANCH } from "../../domain/policy.ts";
 import { exec, execOrThrow } from "../process/exec.ts";
 
 export { slug };
@@ -32,6 +33,33 @@ export function workspaceFor(
   return { branch, path: join(worktreesDir, basename(repoPath), branch.replaceAll("/", "-")) };
 }
 
+/**
+ * The workspace the pipeline owns for a task that has none yet: `workspaceFor`, except that a
+ * linked task whose pattern names a branch the repo already has (an older task on the same
+ * issue, or a person's) gets the task id appended, so no two tasks ever share a branch. A
+ * pattern with `{id}` or `{slug}` already tells tasks apart and is left alone.
+ */
+export async function ownedWorkspace(task: Parameters<typeof workspaceFor>[0], repoPath: string, worktreesDir: string, jiraPattern: string = DEFAULT_JIRA_BRANCH): Promise<Workspace> {
+  const plain = workspaceFor(task, repoPath, worktreesDir, jiraPattern);
+  const linked = jiraOf({ jira: task.jira ?? null, source: task.source ?? null }) !== null;
+  if (!linked || jiraPattern.includes("{id}") || jiraPattern.includes("{slug}")) return plain;
+  if (!(await branchExists(repoPath, plain.branch))) return plain;
+  return workspaceFor(task, repoPath, worktreesDir, `${jiraPattern}-{id}`);
+}
+
+/** The repo's default branch: what `origin/HEAD` points at, else the branch the checkout is on; null when neither is known. */
+export async function defaultBranch(repoPath: string): Promise<string | null> {
+  const head = await exec("git", [...HOST_GIT, "-C", repoPath, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
+  if (head.code === 0) return head.stdout.trim().replace(/^refs\/remotes\/origin\//, "") || null;
+  const current = await exec("git", [...HOST_GIT, "-C", repoPath, "symbolic-ref", "--quiet", "--short", "HEAD"]);
+  return current.code === 0 ? current.stdout.trim() || null : null;
+}
+
+/** Whether `refs/heads/<branch>` exists in the repo. */
+export async function branchExists(repoPath: string, branch: string): Promise<boolean> {
+  return (await exec("git", [...HOST_GIT, "-C", repoPath, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;
+}
+
 /** A lock older than this was left by a git that died, not one that is running. */
 const STALE_LOCK_MS = 60_000;
 const FETCH_TIMEOUT_MS = 60_000;
@@ -55,6 +83,31 @@ export async function ensureWorktree(repoPath: string, workspace: Workspace): Pr
     ? ["worktree", "add", workspace.path, workspace.branch]
     : ["worktree", "add", "-b", workspace.branch, workspace.path, await startPoint(repoPath)];
   await execOrThrow("git", [...HOST_GIT, "-C", repoPath, ...args]);
+}
+
+/** The read-only checkout the jira_intake pack reads a repo through: `<dir>/<repo>/jira-intake`. */
+export const INTAKE_CHECKOUT = "jira-intake";
+export function intakeCheckoutPath(repoPath: string, worktreesDir: string): string {
+  return join(worktreesDir, basename(repoPath), INTAKE_CHECKOUT);
+}
+
+/**
+ * A clean, detached checkout of the default branch at `path`, fresh for every run: created from
+ * `origin/<default>` after a fetch (the repo's own HEAD without an origin) when missing, else
+ * fetched and reset hard to it with untracked files removed. Whatever sits half-edited in the
+ * live checkout never reaches a pack that reads through this. Answers `path`.
+ */
+export async function ensureCleanCheckout(repoPath: string, path: string): Promise<string> {
+  const ref = await startPoint(repoPath);
+  const sha = await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", ref]);
+  if (!existsSync(join(path, ".git"))) {
+    await exec("git", [...HOST_GIT, "-C", repoPath, "worktree", "prune"]);
+    await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "add", "--detach", path, sha]);
+    return path;
+  }
+  await clearStaleLock(path);
+  await resetWorktree(path, sha);
+  return path;
 }
 
 /** `origin/<default>` freshly fetched when the repo has an origin; HEAD otherwise. */

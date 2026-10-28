@@ -43,6 +43,7 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
         tell(app, quiet, &mut badge);
         app.ensure_detail();
         app.ensure_diff();
+        app.ensure_jira_search();
         app.tick();
         terminal.draw(|frame| ui::draw(frame, app))?;
 
