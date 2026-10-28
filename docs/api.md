@@ -22,7 +22,12 @@ The machine's HTTP API, read straight from `machine/src/adapters/http/app.ts`. S
 | POST | `/tasks/:id/abort` | Stop a running or queued stage; the task then waits for you. |
 | POST | `/tasks/:id/resume` | Re-run the stage a task paused in after a usage limit. |
 | POST | `/tasks/:id/worktree/remove` | Remove the task's worktree from disk. The task, its branch and commits stay. |
-| GET | `/events` | SSE: `task.updated` (the whole task), `task.event` (one activity entry), `task.deleted`, `task.metrics`, `stage.started` (a stage container is running: task id, tab label, worktree, container name), `task.closed` (its watch tab can go), `budget.alert` (a spend passed 80, 90 or 100% of a task's, a repo's month's or the day's ceiling), plus `ready` and a `ping` every 15s. |
+| GET | `/github/prs` | The PR inbox: every open PR involving you, as the machine last polled it: `{ prs, polledAt, error }`. Each PR carries its `split` (`review_requested`, `ready_to_merge`, `ci_failed`, `ci_running`, `changes_requested`, `mine`), `localPath` (the checkout the machine would act in; null until cloned) and `task` (the PR task in flight, if any). |
+| POST | `/github/prs/refresh` | Poll GitHub now; answers the fresh snapshot. |
+| POST | `/github/prs/:owner/:name/:number/actions` | `{ "action": "ci_fix" \| "review" \| "address" }`: creates and starts a PR task on the PR's own head branch; answers the task (201). 409 `pr_busy` while a task runs for that PR, `no_checkout` without a clone, `fork` for a fix or an address on a fork head, `own_pr` for a review of your own PR. |
+| POST | `/github/prs/:owner/:name/:number/merge` | Squash-merges the PR and deletes its branch; 409 `not_ready` unless its split is `ready_to_merge`. Answers `{ "merged": true }`. |
+| POST | `/github/clone` | `{ "repo": "owner/name", "dest": "/abs/path" }`: clones in the background (202); the next `github.prs` event shows the checkout. 400 for a relative `dest`, a missing parent or an existing target. |
+| GET | `/events` | SSE: `task.updated` (the whole task), `task.event` (one activity entry), `task.deleted`, `task.metrics`, `stage.started` (a stage container is running: task id, tab label, worktree, container name), `task.closed` (its watch tab can go), `budget.alert` (a spend passed 80, 90 or 100% of a task's, a repo's month's or the day's ceiling), `github.prs` (the PR inbox changed; the whole snapshot), plus `ready` and a `ping` every 15s. |
 | POST | `/dev/stubs` | Dev only, when stub stages are in use: queue results for a stage, e.g. three `fail`s for `verifying`. |
 
 Errors use `{ "error", "message" }`: 400 for invalid input, 404 for an unknown task, 409 for an action that does not fit the task's state, 500 otherwise.

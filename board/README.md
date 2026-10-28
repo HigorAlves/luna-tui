@@ -68,6 +68,7 @@ Press `?` in the board for the full list. The main ones:
 | `/` / `!` / `@` | filter by title or `#id`; show only tickets that need you; show only this repo's tickets |
 | `z` | fold: show every column at once, collapsing all but the focused one to its header bar |
 | `F` | Floor: the machine's 7d and 30d metrics full screen (`r` refreshes, `esc` or `F` closes) |
+| `P` | Pulls: every open PR involving you, split by what you do about it (see below) |
 | `x` | actions menu for the selected ticket |
 | `q` | quit (closes a popup instead, if one is open) |
 
@@ -138,6 +139,33 @@ Most of the board's logic only shows up when it is actually talking to a
 running machine, so unit tests here are light (markdown parsing, timestamp
 math). The real check is running it against the machine — see the repo root
 `README.md`.
+
+## Pulls
+
+`P` opens the PR inbox: every open pull request on GitHub where your review is requested or that you authored, as the machine polls it every minute (`:prs` opens it too). Six splits, `h`/`l` or `1`–`6` between them, `j`/`k` down the rows, oldest first:
+
+| Split | A PR lands here when |
+|---|---|
+| Review requested | a teammate's PR asks for your review |
+| Ready to merge | yours, approved, every check green, mergeable, no unresolved threads |
+| CI failed | yours, a check failed |
+| CI running | yours, a check still running |
+| Changes requested | yours, changes requested or review threads still open |
+| Mine | everything else you authored, drafts included |
+
+Review requested, Ready to merge, CI failed and Changes requested count on the Board tab's badge and raise a herdr notice when a PR moves into them.
+
+| Key | Does |
+|---|---|
+| `m` | merge: squash and delete the branch, after one `y` (Ready to merge only) |
+| `c` | CI fix: an agent diagnoses the red run; a fixable one is fixed, checked and pushed to the PR's branch |
+| `v` | review: an agent reads the diff and posts line comments under your name right away; an approve or request-changes verdict waits at the Ship gate for `a` |
+| `t` | threads: an agent answers every unresolved review thread on your PR, pushes, posts the replies and resolves the threads it settled |
+| `o` / `enter` | open the PR in the browser / jump to its task on the board when one is running |
+| `R` | poll GitHub now |
+| `x` | the same actions as a menu, each saying why it is off when it is |
+
+A row reads `repo#n  title  @author  checks  review  threads  age`, with `⚙ <stage>` while a task runs for it and `no checkout` when the machine has no clone of the repo. A dispatch on such a PR opens the clone prompt: the same filter-as-you-type search `R` uses, over the folders under `HARDNESS_REPOS_DIR`; `enter` clones into `<folder>/<name>` and runs the action once it lands, `esc` leaves the row read-only. `c` and `t` are off on a fork head (nothing can push to it), `v` is off on your own PRs, and all three are off while a task already runs for the PR.
 
 ## Floor
 

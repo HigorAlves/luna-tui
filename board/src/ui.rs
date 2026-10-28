@@ -18,11 +18,12 @@ use tui_textarea::TextArea;
 
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
+use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::{
     app::{ACTIONS, App, COMMANDS, FloorState, HelpFor, Mode},
     model::{
         Approval, COLUMNS, Look, Metrics, REPO_COLOUR_SLOTS, Task, TaskDetail, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, repo_colour_slot, spend_p90,
-        now_secs, questions_of,
+        now_secs, questions_of, unix_secs,
     },
 };
 
@@ -126,6 +127,22 @@ pub fn draw(frame: &mut Frame, app: &App) {
         frame.render_widget(footer_line(app), footer);
         if let Mode::ConfirmApproveAll(ids) = &app.mode {
             render_note(frame, " Approve them all? ", &format!("{} ticket(s) in Approve get a yes, each with no guidance.  y / n", ids.len()));
+        }
+        return;
+    }
+    if let Some(state) = app.pulls.as_ref().filter(|_| {
+        matches!(app.mode, Mode::Normal | Mode::ConfirmMerge { .. } | Mode::ClonePrompt { .. } | Mode::PrActions { .. } | Mode::Help(_))
+    }) {
+        render_pulls(frame, body, app, state);
+        frame.render_widget(footer_line(app), footer);
+        match &app.mode {
+            Mode::ConfirmMerge { repo, number } => {
+                render_note(frame, " Merge? ", &format!("{repo}#{number} is squash-merged and its branch deleted.  y / n"));
+            }
+            Mode::ClonePrompt { repo, query, all, cursor, .. } => render_clone_prompt(frame, repo, query, all, *cursor),
+            Mode::PrActions { cursor } => render_pr_actions(frame, app, *cursor),
+            Mode::Help(ctx) => render_help(frame, *ctx),
+            _ => {}
         }
         return;
     }
@@ -300,6 +317,9 @@ fn header_line(app: &App) -> Line<'static> {
     if app.floor.is_some() {
         spans.push(Span::from("  [floor]").fg(c(BLUE)).bold());
     }
+    if app.pulls.is_some() {
+        spans.push(Span::from("  [pulls]").fg(c(BLUE)).bold());
+    }
     if app.fold {
         spans.push(Span::from("  [folded]").fg(c(BLUE)).bold());
     }
@@ -320,6 +340,9 @@ fn footer_line(app: &App) -> Line<'static> {
     }
     if app.inbox.is_some() && matches!(app.mode, Mode::Normal) {
         return hint(&[("j/k", "move"), ("h/l", "split"), ("a/r/e", "act"), ("A", "approve all"), ("enter", "open"), ("esc", "close")]);
+    }
+    if app.pulls.is_some() && matches!(app.mode, Mode::Normal) {
+        return hint(&[("j/k", "move"), ("h/l", "split"), ("m", "merge"), ("c/v/t", "CI fix / review / threads"), ("o", "open"), ("R", "poll"), ("x", "menu"), ("esc", "close")]);
     }
 
     match &app.mode {
@@ -388,6 +411,9 @@ fn footer_line(app: &App) -> Line<'static> {
         }
         Mode::Actions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
         Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
+        Mode::ConfirmMerge { .. } => hint(&[("y", "merge"), ("n", "cancel")]),
+        Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
+        Mode::PrActions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
         Mode::ConfirmMany { .. } => hint(&[("y", "do it to all of them"), ("n", "cancel")]),
         Mode::Help(_) => hint(&[("any key", "close")]),
@@ -1204,6 +1230,154 @@ fn render_inbox(frame: &mut Frame, area: Rect, app: &App, inbox: &InboxState) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+/// The PR view: a header of splits with their counts and when GitHub was last polled, then
+/// the split's PRs oldest first. Under 100 columns the author and thread columns drop.
+fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
+    let now = now_secs();
+    let counts = pulls::counts(&app.prs.prs);
+    let mut head = vec![Span::from(" Pulls ").fg(c(ACCENT)).bold()];
+    for (i, split) in PrSplit::ALL.iter().enumerate() {
+        let label = format!(" {} {} ", split.label(), counts[i]);
+        head.push(if *split == state.split {
+            Span::from(label).fg(c(BASE)).bg(c(ACCENT)).bold()
+        } else {
+            Span::from(label).fg(c(SUBTEXT0))
+        });
+        head.push(Span::from(" "));
+    }
+    let polled = match app.prs.polled_at.as_deref().and_then(unix_secs) {
+        Some(at) => format!("polled {} ago", age_secs(now.saturating_sub(at))),
+        None => "not polled yet".to_string(),
+    };
+    head.push(Span::from(format!(" · {polled}")).fg(c(SUBTEXT0)));
+    let mut lines = vec![Line::from(head)];
+    if let Some(error) = &app.prs.error {
+        lines.push(Line::from(Span::from(format!(" ⚠ {error}")).fg(c(RED))));
+    }
+    lines.push(Line::default());
+    let items = pulls::items(&app.prs.prs, state.split);
+    if items.is_empty() {
+        lines.push(Line::from(Span::from("  ✓ nothing here").fg(c(GREEN))));
+    }
+    let wide = area.width >= 100;
+    for (row, &i) in items.iter().enumerate() {
+        let pr = &app.prs.prs[i];
+        let selected = row == state.cursor.min(items.len().saturating_sub(1));
+        let bar = if selected { "▌ " } else { "  " };
+        let checks = pr.checks_label();
+        let checks_color = match pr.checks.state.as_str() {
+            "failure" => RED,
+            "pending" => YELLOW,
+            "success" => GREEN,
+            _ => SUBTEXT0,
+        };
+        let tag = match (&pr.task, pr.local_path.is_some()) {
+            (Some(task), _) => format!("  ⚙ {}", task.state.replace('_', " ")),
+            (None, false) => "  no checkout".to_string(),
+            _ => String::new(),
+        };
+        let threads = if wide && pr.unresolved_threads > 0 { format!("  {} thread(s)", pr.unresolved_threads) } else { String::new() };
+        let author = if wide { format!("  @{}", pr.author) } else { String::new() };
+        let tail = format!("  {checks}  {}{threads}{tag}  {}", pr.review_label(), age(&pr.updated_at, now));
+        let head_text = format!("{bar}{}#{}  ", pr.repo, pr.number);
+        let used = head_text.chars().count() + author.chars().count() + tail.chars().count();
+        let room = (area.width as usize).saturating_sub(used).max(8);
+        let title: String = if pr.title.chars().count() > room {
+            pr.title.chars().take(room.saturating_sub(1)).collect::<String>() + "…"
+        } else {
+            pr.title.clone()
+        };
+        let mut line = vec![
+            Span::from(head_text).fg(c(SUBTEXT0)),
+            Span::from(title).bold(),
+            Span::from(author).fg(c(SUBTEXT0)),
+            Span::from(format!("  {checks}")).fg(c(checks_color)),
+            Span::from(format!("  {}", pr.review_label())).fg(c(LAVENDER)),
+            Span::from(threads).fg(c(PEACH)),
+            Span::from(tag).fg(c(YELLOW)),
+            Span::from(format!("  {}", age(&pr.updated_at, now))).fg(c(SUBTEXT0)),
+        ];
+        if selected {
+            line = line.into_iter().map(|s| s.bg(c(SELECTED_BG))).collect();
+        }
+        lines.push(Line::from(line));
+    }
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Where to clone a repo the machine has no checkout of: the folders under the repos root.
+fn render_clone_prompt(frame: &mut Frame, repo: &str, query: &str, all: &[String], cursor: usize) {
+    const VISIBLE_ROWS: usize = 10;
+    let area = centered(frame.area(), 90, VISIBLE_ROWS as u16 + 7);
+    frame.render_widget(Clear, area);
+    let name = repo.rsplit('/').next().unwrap_or(repo);
+    let matches = App::matching_repos(all, query);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" clone {repo} into … ")).bold());
+    let mut lines = vec![
+        Line::from(Span::from(format!("No checkout of {repo}. Pick a folder; it lands at <folder>/{name}. esc keeps it read-only.")).fg(c(SUBTEXT0))),
+        Line::from(vec![Span::from(" search: ").fg(c(ACCENT)).bold(), Span::from(format!("{query}▏"))]),
+        Line::default(),
+    ];
+    if matches.is_empty() {
+        lines.push(Line::from(Span::from("  no matches").fg(c(SUBTEXT0))));
+    } else {
+        let start = cursor.saturating_sub(VISIBLE_ROWS / 2).min(matches.len().saturating_sub(VISIBLE_ROWS));
+        for (i, folder) in matches.iter().enumerate().skip(start).take(VISIBLE_ROWS) {
+            let selected = i == cursor;
+            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            lines.push(Line::from(vec![
+                Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+                Span::from(format!("{folder}/{name}")).style(style),
+            ]));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `x` in the PR view: the four keys for the PR under the cursor; an off key says why under it.
+fn render_pr_actions(frame: &mut Frame, app: &App, cursor: usize) {
+    let Some(pr) = app.pr_under_cursor() else { return };
+    let blockers: Vec<Option<&str>> = PrKey::ALL.iter().map(|k| pulls::blocker(&pr, *k)).collect();
+    let longest = PrKey::ALL
+        .iter()
+        .map(|k| k.label().chars().count())
+        .chain(blockers.iter().flatten().map(|w| w.chars().count() + 4))
+        .max()
+        .unwrap_or(40);
+    let rows = PrKey::ALL.len() + blockers.iter().flatten().count();
+    let width = (longest as u16 + 12).min(frame.area().width.saturating_sub(2));
+    let area = centered(frame.area(), width, (rows as u16 + 4).min(frame.area().height));
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" {} {} · {} ", pr.key(), pr.title, pr.head_ref)).bold());
+    let mut lines: Vec<Line> = Vec::new();
+    for (i, key) in PrKey::ALL.iter().enumerate() {
+        let selected = i == cursor;
+        let blocked = blockers[i];
+        let style = match (selected, blocked) {
+            (_, Some(_)) => Style::new().fg(c(MUTED)),
+            (true, None) => Style::new().fg(c(ACCENT)).bold(),
+            (false, None) => Style::new(),
+        };
+        lines.push(Line::from(vec![
+            Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+            Span::from(format!("{:<4}", key.key())).fg(c(SUBTEXT0)),
+            Span::from(key.label()).style(style),
+        ]));
+        if let Some(why) = blocked {
+            lines.push(Line::from(Span::from(format!("      ↳ {why}")).fg(c(MUTED))));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 /// The Digest: what changed since the board was last open, by group, newest first.
 fn render_digest(frame: &mut Frame, area: Rect, app: &App, digest: &DigestState) {
     let now = now_secs();
@@ -1952,5 +2126,85 @@ mod tests {
         let text: String = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
         assert!(text.find("Assumptions").unwrap() < text.find("Slices").unwrap(), "{text}");
         assert!(text.contains("  • S1 (~10 LOC)"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod pr_tests {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    use super::*;
+    use crate::client::Machine;
+    use crate::model::{PrSnapshot, PullRequest};
+
+    fn pr(number: u64, title: &str, split: &str, checks: &str, local: bool, task: bool) -> PullRequest {
+        let local = if local { "\"/r/app\"" } else { "null" };
+        let task = if task { r#"{"id":"t1","state":"ci_watch","route":"ci_fix"}"# } else { "null" };
+        let failed = if checks == "failure" { r#"[{"name":"lint","state":"FAILURE","url":null}]"# } else { "[]" };
+        serde_json::from_str(&format!(
+            r#"{{"repo":"acme/app","number":{number},"title":"{title}","url":"u","author":"them","mine":false,"reviewRequested":true,
+            "isDraft":false,"headRef":"h","baseRef":"main","fromFork":false,"reviewDecision":"APPROVED","mergeable":"MERGEABLE",
+            "checks":{{"state":"{checks}","passed":2,"total":3,"failed":{failed}}},"unresolvedThreads":2,"split":"{split}",
+            "localPath":{local},"task":{task},"updatedAt":"2026-10-27T09:00:00Z"}}"#
+        ))
+        .unwrap()
+    }
+
+    fn app_with(prs: Vec<PullRequest>) -> App {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.clear();
+        app.prs = PrSnapshot { prs, polled_at: Some("2026-10-27T10:00:00Z".to_string()), error: None };
+        app.pulls = Some(PullsState::default());
+        app.online = true;
+        app.toast = None;
+        app
+    }
+
+    fn render(width: u16, height: u16, app: &App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_header_counts_every_split_and_a_row_shows_checks_review_threads_and_its_tag() {
+        let app = app_with(vec![
+            pr(12, "Export CSV", "review_requested", "failure", true, false),
+            pr(13, "A very long pull request title that will not fit in a narrow terminal at all", "review_requested", "pending", false, false),
+            pr(14, "Ready one", "ready_to_merge", "success", true, true),
+        ]);
+        let text = render(120, 12, &app);
+        assert!(text.contains("Review requested 2"), "{text}");
+        assert!(text.contains("Ready to merge 1"), "{text}");
+        assert!(text.contains("polled"), "{text}");
+        let row = text.lines().find(|l| l.contains("acme/app#12")).unwrap_or_default().to_string();
+        assert!(row.contains("Export CSV") && row.contains("@them") && row.contains("✗ lint") && row.contains("approved") && row.contains("2 thread(s)"), "{row}");
+        let narrow = text.lines().find(|l| l.contains("acme/app#13")).unwrap_or_default().to_string();
+        assert!(narrow.contains("no checkout") && narrow.contains("…"), "{narrow}");
+        assert!(text.contains("[pulls]"), "{text}");
+
+        let text = render(80, 12, &app);
+        let row = text.lines().find(|l| l.contains("acme/app#12")).unwrap_or_default().to_string();
+        assert!(!row.contains("@them") && row.contains("✗ lint"), "author drops under 100 columns: {row}");
+        assert!(!text.contains("\u{2588}"), "nothing overflows: {text}");
+    }
+
+    #[test]
+    fn the_merge_confirm_the_clone_prompt_and_the_actions_menu_draw_over_the_view() {
+        let mut app = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, false)]);
+        app.pulls = Some(PullsState { split: PrSplit::ReadyToMerge, cursor: 0 });
+        app.mode = Mode::ConfirmMerge { repo: "acme/app".into(), number: 14 };
+        assert!(render(100, 14, &app).contains("acme/app#14 is squash-merged"));
+        app.mode = Mode::ClonePrompt { repo: "acme/app".into(), query: "proj".into(), all: vec!["/r".into(), "/r/projects".into()], cursor: 0, then: crate::model::PrAction::Review };
+        let text = render(100, 20, &app);
+        assert!(text.contains("clone acme/app into") && text.contains("/r/projects/app") && !text.contains("▌ /r/app"), "{text}");
+        app.mode = Mode::PrActions { cursor: 0 };
+        let text = render(100, 14, &app);
+        assert!(text.contains("merge (squash") && !text.contains("review is for other people's PRs"), "{text}");
+        assert!(text.contains("↳ threads are answered on your own PRs"), "{text}");
     }
 }

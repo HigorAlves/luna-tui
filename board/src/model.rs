@@ -239,11 +239,6 @@ impl PullRequest {
         crate::pulls::PrSplit::from_wire(&self.split)
     }
 
-    /// The repo's name without its owner.
-    pub fn repo_name(&self) -> &str {
-        self.repo.rsplit('/').next().unwrap_or(&self.repo)
-    }
-
     /// `✓ 3/3`, `◐ 2/3`, `✗ lint`, or `no checks`.
     pub fn checks_label(&self) -> String {
         match self.checks.state.as_str() {
@@ -612,6 +607,7 @@ impl Task {
             "awaiting_answers" => "answer questions".to_string(),
             "awaiting_approval" => "approve plan".to_string(),
             "awaiting_test_check" => "check tests".to_string(),
+            "awaiting_ship" if self.route == "review" => "post the verdict".to_string(),
             "awaiting_ship" => "choose ship".to_string(),
             "shipping" => "opening PR".to_string(),
             "reviewing_memory" => "review memory".to_string(),
@@ -1161,7 +1157,6 @@ mod pr_tests {
         assert_eq!(pr.task.as_ref().map(|t| t.route.as_str()), Some("review"));
         assert_eq!(pr.checks_label(), "✗ lint");
         assert_eq!(pr.review_label(), "approved");
-        assert_eq!(pr.repo_name(), "a");
     }
 
     #[test]

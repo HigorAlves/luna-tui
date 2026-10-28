@@ -148,11 +148,6 @@ pub fn blocker(pr: &PullRequest, key: PrKey) -> Option<&'static str> {
     }
 }
 
-/// The keys that work on this PR.
-pub fn actions_for(pr: &PullRequest) -> Vec<PrKey> {
-    PrKey::ALL.iter().copied().filter(|k| blocker(pr, *k).is_none()).collect()
-}
-
 /// The open PR view: which split, and where the cursor is in it.
 #[derive(Clone, Debug, Default)]
 pub struct PullsState {
@@ -197,7 +192,7 @@ mod tests {
 
     #[test]
     fn the_keys_that_work_follow_the_machine_s_own_refusals() {
-        let keys = |p: &PullRequest| actions_for(p).iter().map(|k| k.key()).collect::<String>();
+        let keys = |p: &PullRequest| PrKey::ALL.iter().filter(|k| blocker(p, **k).is_none()).map(|k| k.key()).collect::<String>();
         assert_eq!(keys(&pr(1, "ready_to_merge", "t")), "mct", "mine, ready: merge, CI fix, threads; no self-review");
         let theirs = PullRequest { mine: false, author: "them".into(), ..pr(2, "review_requested", "t") };
         assert_eq!(keys(&theirs), "cv", "a teammate's PR: CI fix and review, no threads");
