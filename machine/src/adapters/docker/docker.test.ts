@@ -99,6 +99,12 @@ describe("sandboxArgs", () => {
     expect(cacheVolumeFor("/r/My App.v2/")).toBe("hardness-cache-my-app-v2");
   });
 
+  it("joins the run's service network and gets what the services export, so the code finds its database by hostname", () => {
+    const args = sandboxArgs(run({ network: "hardness-net-r1", serviceEnv: { DATABASE_URL: "postgres://app@postgres:5432/app" } }), "/i", "/o");
+    expect(args).toEqual(expect.arrayContaining(["--network", "hardness-net-r1", "-e", "DATABASE_URL=postgres://app@postgres:5432/app"]));
+    expect(sandboxArgs(run(), "/i", "/o")).not.toContain("--network");
+  });
+
   it("passes the credential by name, never its value", () => {
     const args = sandboxArgs(run(), "/i", "/o");
     expect(args).toContain("ANTHROPIC_API_KEY");
@@ -145,6 +151,11 @@ describe("sandboxExecArgs", () => {
       "HARDNESS_STAGE=verifying",
     ]);
     expect(args.join(" ")).not.toMatch(/ANTHROPIC|CLAUDE/);
+  });
+
+  it("joins the run's service network for a check too, with the exported env", () => {
+    const args = sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["pnpm", "test"], network: "hardness-net-c", serviceEnv: { DATABASE_URL: "x" } });
+    expect(args).toEqual(expect.arrayContaining(["--network", "hardness-net-c", "-e", "DATABASE_URL=x"]));
   });
 
   it("commits as you inside a check too: a suite that makes commits needs an identity, and the container has no gitconfig", () => {

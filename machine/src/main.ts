@@ -106,7 +106,10 @@ const realVerifyRunner = verifyRunner({
   exec: checksExec ?? exec,
   runPack: verifyPack,
   stateDir: config.stateDir,
-  checks: async (repoPath) => (await policies.for(repoPath)).checks,
+  policy: async (repoPath) => {
+    const { checks, services } = await policies.for(repoPath);
+    return { checks, services };
+  },
 });
 /** Delivering and shipping need only git and gh, not a Claude credential, so they always run for real. */
 const runnerFor = buildRunnerFor({

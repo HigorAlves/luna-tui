@@ -30,10 +30,11 @@ function setup(opts: {
   /** The repo's own checks from luna.yaml; undefined means none declared. */
   lunaChecks?: Array<{ name: string; run: string; cwd?: string; paths?: string[] }>;
   changed?: string[] | null;
+  services?: Record<string, { image: string; exports?: Record<string, string> }>;
 }) {
   const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
   const calls: string[][] = [];
-  const exec = vi.fn(async (command: string, args: string[], _options?: { env?: NodeJS.ProcessEnv }) => {
+  const exec = vi.fn(async (command: string, args: string[], _options?: { env?: NodeJS.ProcessEnv; services?: unknown }) => {
     calls.push([command, ...args]);
     return opts.checks?.[[command, ...args].join(" ")] ?? { code: 0, stdout: "ok\n", stderr: "" };
   });
@@ -44,7 +45,7 @@ function setup(opts: {
     stateDir,
     detect: async () => (opts.detected ?? { manager: "pnpm", test: ["pnpm", "run", "test"], lint: ["pnpm", "run", "lint"] }) as never,
     gitIdentity: async () => ("identity" in opts ? opts.identity! : { name: "Ada L", email: "ada@x.dev" }),
-    checks: async () => opts.lunaChecks ?? null,
+    policy: async () => ({ checks: opts.lunaChecks ?? null, services: opts.services ?? {} }),
     changedPaths: async () => ("changed" in opts ? opts.changed! : null),
   });
   const controller = opts.controller ?? new AbortController();
@@ -148,6 +149,13 @@ describe("verifying stage", () => {
     expect(result.detail).toMatchObject({ summary: "board tests failed", error: expect.stringContaining("cargo test (in board)") });
     expect(result.findings).toEqual([expect.objectContaining({ severity: "test", title: "board tests failed", body: "test x ... FAILED" })]);
     expect(runPack).not.toHaveBeenCalled();
+  });
+
+  it("asks for the repo's services beside every check, so a suite that needs a database gets one", async () => {
+    const services = { postgres: { image: "postgres:16", exports: { DATABASE_URL: "postgres://app@postgres:5432/app" } } };
+    const { run, context, exec } = setup({ services });
+    await run(context);
+    expect(exec.mock.calls[0]![2]).toMatchObject({ services });
   });
 
   it("runs the review pack when checks pass and fails on its fail verdict", async () => {

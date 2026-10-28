@@ -206,6 +206,14 @@ describe("agent stages through packs", () => {
     expect((seen!.input as unknown as StageInput).context.checks).toEqual([{ name: "board tests", run: "cargo test", cwd: "board" }]);
   });
 
+  it("runs the repo's services from its luna.yaml beside the stage container", async () => {
+    writeFileSync(join(repo, "luna.yaml"), "services:\n  postgres:\n    image: postgres:16\n    exports: { DATABASE_URL: x }\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "config");
+    await runners(fakeSandbox(output())).implementing!(context("implementing"));
+    expect(seen!.services).toEqual({ postgres: { image: "postgres:16", exports: { DATABASE_URL: "x" } } });
+  });
+
   it("tells the pack where the branch forked, and hands ci_watch what the host fetched", async () => {
     const ci = { pr: null, checks: [{ name: "lint", state: "FAILURE", url: null }], logs: "boom" };
     await runAgent(deps(fakeSandbox(output())), context("ci_watch"), "ci_watch", { ci });

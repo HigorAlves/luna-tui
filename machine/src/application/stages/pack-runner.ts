@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import type { CiContext, Ledger, PackId, RunSummary, TaskState } from "@hardness/contracts";
+import type { CiContext, Ledger, PackId, RunSummary, ServiceSpec, TaskState } from "@hardness/contracts";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -50,7 +50,7 @@ export interface AgentDeps {
   exec?: (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number },
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> },
   ) => Promise<ExecResult>;
 }
 
@@ -133,6 +133,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     gitDir,
     gitReadOnly: GIT_READ_ONLY.filter((sub) => existsSync(join(gitDir, sub))),
     gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
+    // The repo's services run beside every stage that runs its code; a read-only stage only reads.
+    services: limits.writable ? policy.services : {},
     input: input as unknown as Record<string, unknown>,
     // The input's budget, which implementing scales with the plan's slice count.
     timeoutMs: input.limits.timeoutMs,
@@ -257,6 +259,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           signal: context.signal,
           timeoutMs: LOCKED_REPLAY_TIMEOUT_MS,
           env: { ...process.env, HARDNESS_STAGE: pack },
+          services: policy.services,
         });
         await resetWorktree(workspace.path);
         if (ran.code === 0) replayed = true;

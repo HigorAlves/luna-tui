@@ -1,7 +1,7 @@
 // The verifying stage: run the project's own checks in the task worktree, and only when they
 // are green hand the change to the verifying review pack. A red check fails the stage with
 // its output as findings, so the next implementing attempt sees what broke.
-import type { CheckSpec, Finding } from "@hardness/contracts";
+import type { CheckSpec, Finding, ServiceSpec } from "@hardness/contracts";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -20,7 +20,7 @@ export interface VerifyDeps {
   exec: (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number },
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> },
   ) => Promise<ExecResult>;
   /** Runs the verifying review pack; null when agents are off, which skips the review. */
   runPack: ((context: StageContext) => Promise<StageResult>) | null;
@@ -28,8 +28,9 @@ export interface VerifyDeps {
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
   /** Who a check commits as: the identity git resolves for the repo. Null escalates. */
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
-  /** The repo's own checks from its luna.yaml; null means detect them from the tree. */
-  checks?: (repoPath: string | null) => Promise<CheckSpec[] | null>;
+  /** The repo's luna.yaml: its own checks (null means detect them from the tree) and the
+   *  services to run beside each one. */
+  policy?: (repoPath: string | null) => Promise<{ checks: CheckSpec[] | null; services: Record<string, ServiceSpec> }>;
   /** The files the branch changed, worktree-relative; null when unknown (then every check runs). */
   changedPaths?: (worktreePath: string, repoPath: string) => Promise<string[] | null>;
 }
@@ -59,7 +60,7 @@ const answerOf = (detail: Record<string, unknown> | undefined): Record<string, u
 export function verifyRunner(deps: VerifyDeps): StageRunner {
   const detect = deps.detect ?? detectChecks;
   const resolveIdentity = deps.gitIdentity ?? hostGitIdentity;
-  const repoChecks = deps.checks ?? (async () => null);
+  const repoPolicy = deps.policy ?? (async () => ({ checks: null, services: {} }));
   const changed = deps.changedPaths ?? hostChangedPaths;
   return async (context) => {
     const { task, signal } = context;
@@ -90,7 +91,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     };
     // Step A: the project's own checks: the luna.yaml list when the repo has one (those the
     // change calls for), else what the tree says.
-    const declared = await repoChecks(task.repoPath ?? null);
+    const { checks: declared, services } = await repoPolicy(task.repoPath ?? null);
     const reports: CheckReport[] = [];
     let commands: Array<{ name: string; cmd: string; argv: string[] }>;
     let noTests: boolean;
@@ -120,6 +121,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
           signal,
           timeoutMs: remaining,
           env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
+          services,
         });
         timedOut = result.code !== 0 && Date.now() >= deadline;
       }
