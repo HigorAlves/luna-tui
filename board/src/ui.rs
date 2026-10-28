@@ -19,7 +19,7 @@ use tui_textarea::TextArea;
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::{
-    app::{ACTIONS, App, COMMANDS, FloorState, HelpFor, Mode},
+    app::{ACTIONS, App, FloorState, HelpFor, Mode},
     model::{
         Approval, COLUMNS, Look, Metrics, REPO_COLOUR_SLOTS, Task, TaskDetail, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, repo_colour_slot, spend_p90,
         now_secs, questions_of,
@@ -114,6 +114,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if let Some(floor) = &app.floor {
         render_floor(frame, body, floor);
         frame.render_widget(footer_line(app), footer);
+        if let Mode::Help(ctx) = &app.mode {
+            let max = render_help(frame, *ctx, app.help_scroll.get());
+            app.help_max.set(max);
+            app.help_scroll.set(app.help_scroll.get().min(max));
+        }
         return;
     }
     if let Some(digest) = app.digest.as_ref().filter(|_| matches!(app.mode, Mode::Normal)) {
@@ -249,7 +254,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
         Mode::ConfirmMany { action, ids } => render_note(frame, " Marked tickets ", &format!("{}  y / n", action.question(ids.len()))),
-        Mode::Help(ctx) => render_help(frame, *ctx),
+        Mode::Help(ctx) => {
+            let max = render_help(frame, *ctx, app.help_scroll.get());
+            app.help_max.set(max);
+            app.help_scroll.set(app.help_scroll.get().min(max));
+        }
         _ => {}
     }
 }
@@ -390,7 +399,7 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
         Mode::ConfirmMany { .. } => hint(&[("y", "do it to all of them"), ("n", "cancel")]),
-        Mode::Help(_) => hint(&[("any key", "close")]),
+        Mode::Help(_) => Line::from(Span::from(" j/k scroll · any key closes ").fg(c(SUBTEXT0))),
         Mode::Command(text) => Line::from(vec![
             Span::from(" :").fg(c(ACCENT)).bold(),
             Span::from(format!("{text}▏")),
@@ -1440,35 +1449,137 @@ fn render_repo_picker(frame: &mut Frame, task: &Task, query: &str, all: &[String
 }
 
 /// The keys of the view `?` was pressed in; the board's sheet also lists the `:` commands.
-fn render_help(frame: &mut Frame, ctx: HelpFor) {
-    let keys = ctx.keys();
-    let commands: &[(&str, &str)] = if ctx == HelpFor::Board { COMMANDS } else { &[] };
-    let rows = keys.len() + if commands.is_empty() { 0 } else { commands.len() + 2 };
-    let area = centered(frame.area(), 84, (rows as u16 + 4).min(frame.area().height));
+/// Draws the sheet scrolled by `scroll` rows (clamped) and returns the furthest it can scroll.
+fn render_help(frame: &mut Frame, ctx: HelpFor, scroll: u16) -> u16 {
+    let frame_area = frame.area();
+    let wide = frame_area.width >= HELP_WIDE_FROM;
+    let box_width = frame_area.width.min(if wide { 176 } else { 84 });
+    // Two border cells and two padding cells on each side.
+    let inner_width = usize::from(box_width.saturating_sub(6));
+    let rows = help_layout(ctx, inner_width, wide);
+    let total = rows.len();
+
+    let height = u16::try_from(total + 2).unwrap_or(u16::MAX).min(frame_area.height);
+    let area = centered(frame_area, box_width, height);
     frame.render_widget(Clear, area);
 
-    let block = Block::bordered()
+    let viewport = usize::from(height.saturating_sub(2));
+    let max = total.saturating_sub(viewport);
+    let start = usize::from(scroll).min(max);
+
+    let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
         .padding(Padding::horizontal(2))
         .title(Line::from(ctx.title()).bold());
-    let width = keys.iter().chain(commands).map(|(k, _)| k.chars().count()).max().unwrap_or(8) + 2;
-    let row = |keys: &str, what: &str| {
-        Line::from(vec![
-            Span::from(format!("{keys:<width$}")).fg(c(ACCENT)).bold(),
-            Span::from(what.to_string()),
-        ])
-    };
-    let mut lines: Vec<Line> = keys.iter().map(|(k, w)| row(k, w)).collect();
-    if !commands.is_empty() {
-        lines.push(Line::default());
-        lines.push(Line::from(Span::from("Commands, typed after :").fg(c(SUBTEXT0))));
-        lines.extend(commands.iter().map(|(k, w)| row(k, w)));
+    if max > 0 {
+        let seen = (start + viewport).min(total);
+        block = block.title_bottom(Line::from(format!(" j/k scroll · {seen}/{total} ")).fg(c(SUBTEXT0)));
     }
-    frame.render_widget(
-        Paragraph::new(lines).block(block).wrap(Wrap { trim: false }),
-        area,
-    );
+    let visible: Vec<Line> = rows.into_iter().skip(start).take(viewport).collect();
+    frame.render_widget(Paragraph::new(visible).block(block), area);
+    u16::try_from(max).unwrap_or(u16::MAX)
+}
+
+/// A frame this wide or wider lays the sheet out in two columns of sections.
+const HELP_WIDE_FROM: u16 = 120;
+const HELP_COLUMN_GAP: usize = 3;
+
+/// The sheet's rows: the sections stacked, or split over two columns when `two_columns`.
+fn help_layout(ctx: HelpFor, inner_width: usize, two_columns: bool) -> Vec<Line<'static>> {
+    let sections = ctx.sections();
+    if !two_columns || sections.len() < 2 {
+        return stack_sections(sections, inner_width);
+    }
+    let col = inner_width.saturating_sub(HELP_COLUMN_GAP) / 2;
+    let rendered: Vec<Vec<Line<'static>>> = sections.iter().map(|s| help_section_lines(s, col)).collect();
+    let height = |part: &[Vec<Line<'static>>]| part.iter().map(Vec::len).sum::<usize>() + part.len().saturating_sub(1);
+    let split = (1..rendered.len())
+        .min_by_key(|k| height(&rendered[..*k]).max(height(&rendered[*k..])))
+        .unwrap_or(1);
+    let left = join_sections(&rendered[..split]);
+    let right = join_sections(&rendered[split..]);
+    (0..left.len().max(right.len()))
+        .map(|i| {
+            let mut spans = Vec::new();
+            let used = match left.get(i) {
+                Some(line) => {
+                    spans.extend(line.spans.iter().cloned());
+                    line.width()
+                }
+                None => 0,
+            };
+            if let Some(line) = right.get(i) {
+                spans.push(Span::raw(" ".repeat(col.saturating_sub(used) + HELP_COLUMN_GAP)));
+                spans.extend(line.spans.iter().cloned());
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
+fn stack_sections(sections: &[crate::app::HelpSection], width: usize) -> Vec<Line<'static>> {
+    let rendered: Vec<Vec<Line<'static>>> = sections.iter().map(|s| help_section_lines(s, width)).collect();
+    join_sections(&rendered)
+}
+
+fn join_sections(sections: &[Vec<Line<'static>>]) -> Vec<Line<'static>> {
+    let mut out = Vec::new();
+    for (i, lines) in sections.iter().enumerate() {
+        if i > 0 {
+            out.push(Line::default());
+        }
+        out.extend(lines.iter().cloned());
+    }
+    out
+}
+
+/// One section: its heading, then each key with its description wrapped at a hanging indent.
+fn help_section_lines(section: &crate::app::HelpSection, width: usize) -> Vec<Line<'static>> {
+    let key_width = section.rows.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0) + 2;
+    let desc_width = width.saturating_sub(key_width).max(1);
+    let mut lines = vec![Line::from(Span::from(section.heading).fg(c(SUBTEXT0)).bold())];
+    for (keys, what) in section.rows {
+        for (i, part) in wrap_words(what, desc_width).into_iter().enumerate() {
+            let lead = if i == 0 {
+                Span::from(format!("{keys:<key_width$}")).fg(c(ACCENT)).bold()
+            } else {
+                Span::raw(" ".repeat(key_width))
+            };
+            lines.push(Line::from(vec![lead, Span::from(part)]));
+        }
+    }
+    lines
+}
+
+/// Word-wraps `text` to `width` columns; a word longer than a line is cut.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    for mut word in text.split_whitespace() {
+        loop {
+            let sep = usize::from(!cur.is_empty());
+            if cur.chars().count() + sep + word.chars().count() <= width {
+                if sep == 1 {
+                    cur.push(' ');
+                }
+                cur.push_str(word);
+                break;
+            }
+            if !cur.is_empty() {
+                lines.push(std::mem::take(&mut cur));
+                continue;
+            }
+            let cut = word.char_indices().nth(width).map_or(word.len(), |(i, _)| i);
+            lines.push(word[..cut].to_string());
+            word = &word[cut..];
+        }
+    }
+    if !cur.is_empty() || lines.is_empty() {
+        lines.push(cur);
+    }
+    lines
 }
 
 /// A `width` x `height` rectangle centred in `area`.
@@ -1493,6 +1604,102 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
+
+    fn help_rows(ctx: HelpFor, width: u16, height: u16, scroll: u16) -> (Vec<String>, u16) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut max = 0;
+        terminal.draw(|f| max = render_help(f, ctx, scroll)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows = (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
+            .collect();
+        (rows, max)
+    }
+
+    const ALL_HELP: [HelpFor; 5] = [HelpFor::Board, HelpFor::Floor, HelpFor::Inbox, HelpFor::Digest, HelpFor::Detail];
+
+    #[test]
+    fn wide_board_help_fits_in_two_columns() {
+        let (rows, max) = help_rows(HelpFor::Board, 200, 50, 0);
+        let text = rows.join("\n");
+        assert_eq!(max, 0, "nothing to scroll");
+        assert!(!text.contains("j/k scroll"));
+        for s in HelpFor::Board.sections() {
+            assert!(text.contains(s.heading), "heading {}", s.heading);
+            for (k, _) in s.rows {
+                assert!(text.contains(k), "key {k}");
+            }
+        }
+        let x_of = |h: &str| rows.iter().find_map(|r| r.find(h)).unwrap();
+        assert!(HelpFor::Board.sections().iter().any(|s| x_of(s.heading) > 100), "a heading in the right column");
+    }
+
+    #[test]
+    fn narrow_board_help_is_one_column_with_a_hanging_indent() {
+        let (rows, max) = help_rows(HelpFor::Board, 80, 24, 0);
+        assert!(max > 0);
+        let longest = HelpFor::Board
+            .sections()
+            .iter()
+            .flat_map(|s| s.rows.iter())
+            .filter(|(k, _)| *k == "a")
+            .max_by_key(|(_, d)| d.len())
+            .unwrap();
+        let first_word = longest.1.split_whitespace().next().unwrap();
+        let (y, line) = rows.iter().enumerate().find(|(_, r)| r.contains(&format!("a  {first_word}"))).expect("the a row");
+        let col = |needle: &str| line[..line.find(needle).unwrap()].chars().count();
+        let desc_x = col(first_word);
+        let key_x = col("a  ");
+        assert!(desc_x > key_x + 1);
+        let next: Vec<char> = rows[y + 1].chars().collect();
+        assert!(next[key_x..desc_x].iter().all(|ch| *ch == ' '), "blank under the key column");
+        assert_ne!(next[desc_x], ' ', "the continuation starts at the description column");
+        assert!(rows.iter().all(|r| r.matches("Move").count() <= 1));
+    }
+
+    #[test]
+    fn descriptions_share_a_column_within_a_section() {
+        let (rows, _) = help_rows(HelpFor::Detail, 80, 24, 0);
+        let section = HelpFor::Detail.sections()[0];
+        assert!(rows.join("\n").contains(section.heading));
+        let xs: Vec<usize> = section
+            .rows
+            .iter()
+            .map(|(k, d)| {
+                let first = d.split_whitespace().next().unwrap();
+                let line = rows.iter().find(|r| r.contains(k) && r.contains(first)).unwrap();
+                let key_end = line.find(k).unwrap() + k.len();
+                key_end + line[key_end..].chars().take_while(|ch| *ch == ' ').count()
+            })
+            .collect();
+        assert!(xs.windows(2).all(|w| w[0] == w[1]), "{xs:?}");
+    }
+
+    #[test]
+    fn help_scrolls_and_clamps() {
+        let (top, max) = help_rows(HelpFor::Board, 80, 24, 0);
+        let (one, _) = help_rows(HelpFor::Board, 80, 24, 1);
+        assert_eq!(one[1], top[2], "the first visible row moves down one line");
+        let (last, _) = help_rows(HelpFor::Board, 80, 24, max);
+        let (past, _) = help_rows(HelpFor::Board, 80, 24, max + 50);
+        assert_eq!(last, past);
+        assert!(top.join("\n").contains("j/k scroll"));
+        assert!(last.join("\n").contains(&format!("{0}/{0}", max + 24 - 2)));
+    }
+
+    #[test]
+    fn help_survives_any_size() {
+        for ctx in ALL_HELP {
+            for (w, h) in [(20, 6), (80, 24), (120, 40), (200, 50), (1, 1), (3, 2)] {
+                let (rows, _) = help_rows(ctx, w, h, 0);
+                assert_eq!(rows.len(), h as usize);
+                if (w, h) == (120, 40) {
+                    let text = rows.join("\n");
+                    assert!(ctx.sections().iter().all(|s| text.contains(s.heading)) || text.contains("j/k scroll"));
+                }
+            }
+        }
+    }
 
     fn awaiting_approval_task() -> Task {
         serde_json::from_str(
@@ -1952,5 +2159,455 @@ mod tests {
         let text: String = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
         assert!(text.find("Assumptions").unwrap() < text.find("Slices").unwrap(), "{text}");
         assert!(text.contains("  • S1 (~10 LOC)"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod help_sheet_tests {
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        crossterm::event::{KeyCode, KeyEvent},
+    };
+
+    use super::*;
+
+    const VIEWS: [HelpFor; 5] = [HelpFor::Board, HelpFor::Floor, HelpFor::Inbox, HelpFor::Digest, HelpFor::Detail];
+
+    fn cells(terminal: &Terminal<TestBackend>) -> Vec<Vec<char>> {
+        let buffer = terminal.backend().buffer().clone();
+        let area = buffer.area;
+        (0..area.height)
+            .map(|y| (0..area.width).map(|x| buffer[(x, y)].symbol().chars().next().unwrap_or(' ')).collect())
+            .collect()
+    }
+
+    /// Just the help overlay, scrolled by `scroll`, plus the furthest it can scroll.
+    fn sheet(ctx: HelpFor, width: u16, height: u16, scroll: u16) -> (Vec<Vec<char>>, u16) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        let mut max = 0;
+        terminal.draw(|f| max = render_help(f, ctx, scroll)).unwrap();
+        (cells(&terminal), max)
+    }
+
+    /// The whole app, as the user sees it.
+    fn screen(app: &App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        cells(&terminal).into_iter().map(|r| r.into_iter().collect()).collect()
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    /// The first few words of a description: short enough never to wrap.
+    fn opening(description: &str) -> String {
+        description.split_whitespace().take(3).collect::<Vec<_>>().join(" ")
+    }
+
+    fn text(rows: &[Vec<char>]) -> String {
+        rows.iter().map(|r| r.iter().collect::<String>()).collect::<Vec<_>>().join("\n")
+    }
+
+    fn starts_with_at(row: &[char], x: usize, needle: &str) -> bool {
+        let n: Vec<char> = needle.chars().collect();
+        row.len() >= x + n.len() && row[x..x + n.len()] == n[..]
+    }
+
+    /// Every content row of the sheet at this size, gathered by scrolling one line at a time.
+    fn whole_sheet(ctx: HelpFor, width: u16, height: u16) -> Vec<Vec<char>> {
+        let (first, max) = sheet(ctx, width, height, 0);
+        let top = first.iter().position(|r| r.contains(&'╭')).unwrap();
+        let bottom = first.iter().rposition(|r| r.contains(&'╰')).unwrap();
+        let mut rows: Vec<Vec<char>> = first[top + 1..bottom].to_vec();
+        for s in 1..=max {
+            let (page, _) = sheet(ctx, width, height, s);
+            rows.push(page[bottom - 1].clone());
+        }
+        rows
+    }
+
+    /// The x where a heading sits at the start of a column: not part of a longer run of text.
+    fn heading_at(rows: &[Vec<char>], heading: &str) -> Option<(usize, usize)> {
+        let len = heading.chars().count();
+        rows.iter().enumerate().find_map(|(y, r)| {
+            (2..r.len()).find(|&x| {
+                starts_with_at(r, x, heading)
+                    && r[x - 1] == ' '
+                    && r[x - 2] == ' '
+                    && r.get(x + len).is_none_or(|ch| *ch == ' ' || *ch == '│')
+            })
+            .map(|x| (y, x))
+        })
+    }
+
+    /// For each section, the x of every description line (first lines and continuations).
+    fn description_columns(ctx: HelpFor, rows: &[Vec<char>]) -> Vec<Vec<usize>> {
+        ctx.sections()
+            .iter()
+            .map(|section| {
+                let (hy, x0) = heading_at(rows, section.heading).unwrap_or_else(|| panic!("heading {}", section.heading));
+                let mut xs = Vec::new();
+                let mut found = 0;
+                let mut desc_x = None;
+                for row in &rows[hy + 1..] {
+                    if let Some((k, d)) = section.rows.get(found)
+                        && starts_with_at(row, x0, k)
+                        && row.get(x0 + k.chars().count()) == Some(&' ')
+                    {
+                        let after = x0 + k.chars().count();
+                        let x = (after..row.len()).find(|&x| row[x] != ' ').unwrap();
+                        assert!(starts_with_at(row, x, d.split_whitespace().next().unwrap()), "{k}: {d}");
+                        xs.push(x);
+                        desc_x = Some(x);
+                        found += 1;
+                    } else if let Some(x) = desc_x
+                        && row[x0..x].iter().all(|ch| *ch == ' ')
+                        && row[x] != ' '
+                    {
+                        xs.push(x);
+                    } else {
+                        break;
+                    }
+                }
+                assert_eq!(found, section.rows.len(), "every row of {} is drawn", section.heading);
+                xs
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_view_draws_its_section_headings_and_rows() {
+        for ctx in VIEWS {
+            let (rows, _) = sheet(ctx, 200, 50, 0);
+            let t = text(&rows);
+            for s in ctx.sections() {
+                assert!(heading_at(&rows, s.heading).is_some(), "{ctx:?} heading {}: {t}", s.heading);
+                assert!(t.contains(&opening(s.rows[0].1)), "{ctx:?}: {t}");
+            }
+        }
+        let (rows, _) = sheet(HelpFor::Board, 200, 50, 0);
+        assert!(heading_at(&rows, "Commands (type after :)").is_some());
+    }
+
+    #[test]
+    fn question_mark_in_board_inbox_digest_and_detail_draws_the_sectioned_sheet() {
+        let mut app = App::new(crate::Machine::from_env());
+        let check = |app: &App, ctx: HelpFor| {
+            assert!(matches!(app.mode, Mode::Help(c) if c == ctx), "{ctx:?}");
+            let t = screen(app, 200, 50).join("\n");
+            for s in ctx.sections() {
+                assert!(t.contains(s.heading), "{ctx:?} heading {}: {t}", s.heading);
+                assert!(t.contains(&opening(s.rows[0].1)), "{ctx:?} row {}: {t}", s.rows[0].1);
+            }
+        };
+        press(&mut app, KeyCode::Char('?'));
+        check(&app, HelpFor::Board);
+        press(&mut app, KeyCode::Esc);
+
+        app.inbox = Some(InboxState::default());
+        press(&mut app, KeyCode::Char('?'));
+        check(&app, HelpFor::Inbox);
+        press(&mut app, KeyCode::Esc);
+        app.inbox = None;
+
+        app.digest = Some(DigestState::default());
+        press(&mut app, KeyCode::Char('?'));
+        check(&app, HelpFor::Digest);
+        press(&mut app, KeyCode::Esc);
+        app.digest = None;
+
+        app.mode = Mode::Detail("aaaaaaaa0000".to_string());
+        press(&mut app, KeyCode::Char('?'));
+        check(&app, HelpFor::Detail);
+    }
+
+    #[test]
+    fn each_source_pair_sits_in_exactly_one_section() {
+        for ctx in VIEWS {
+            for s in ctx.sections() {
+                let mut pairs: Vec<_> = s.rows.to_vec();
+                pairs.sort();
+                pairs.dedup();
+                assert_eq!(pairs.len(), s.rows.len(), "{ctx:?} {} repeats a pair", s.heading);
+            }
+        }
+        // Across the board's sections a pair repeats only as often as the old tables held it.
+        let mut source: Vec<_> = crate::app::HELP.iter().chain(crate::app::COMMANDS).copied().collect();
+        source.sort();
+        for pair in &source {
+            let in_source = source.iter().filter(|p| *p == pair).count();
+            let in_sections = HelpFor::Board.sections().iter().filter(|s| s.rows.contains(pair)).count();
+            assert_eq!(in_sections, in_source, "{pair:?}");
+        }
+    }
+
+    #[test]
+    fn board_descriptions_share_a_column_per_section_at_80x24_and_200x50() {
+        for rows in [whole_sheet(HelpFor::Board, 80, 24), sheet(HelpFor::Board, 200, 50, 0).0] {
+            for xs in description_columns(HelpFor::Board, &rows) {
+                assert!(xs.len() > 1);
+                assert!(xs.windows(2).all(|w| w[0] == w[1]), "{xs:?}\n{}", text(&rows));
+            }
+        }
+    }
+
+    #[test]
+    fn the_long_a_row_wraps_under_its_description_at_80x24() {
+        let rows = whole_sheet(HelpFor::Board, 80, 24);
+        let (hy, x0) = heading_at(&rows, "Ticket").unwrap();
+        let y = (hy + 1..rows.len()).find(|&y| starts_with_at(&rows[y], x0, "a  advance:")).expect("the a row");
+        let desc_x = x0 + 3;
+        let next = &rows[y + 1];
+        assert!(next[x0..desc_x].iter().all(|ch| *ch == ' '), "blank under the key");
+        assert_ne!(next[desc_x], ' ', "continues at the description column");
+        let continued: String = next[desc_x..].iter().collect();
+        assert!(continued.trim_end().trim_end_matches('│').trim_end().len() > 3);
+        assert!(!rows[y].iter().collect::<String>().contains("resume"), "the row wrapped");
+    }
+
+    #[test]
+    fn narrow_board_sheet_is_one_column_with_a_position_footer() {
+        let (rows, max) = sheet(HelpFor::Board, 80, 24, 0);
+        assert!(max > 0);
+        let all = whole_sheet(HelpFor::Board, 80, 24);
+        let ys: Vec<usize> = HelpFor::Board.sections().iter().map(|s| heading_at(&all, s.heading).unwrap().0).collect();
+        let mut unique = ys.clone();
+        unique.dedup();
+        assert_eq!(unique.len(), ys.len(), "no two headings on one row: {ys:?}");
+        let xs: Vec<usize> = HelpFor::Board.sections().iter().map(|s| heading_at(&all, s.heading).unwrap().1).collect();
+        assert!(xs.windows(2).all(|w| w[0] == w[1]), "one column: {xs:?}");
+        let bottom: String = rows[23].iter().collect();
+        let at = bottom.find("j/k scroll · ").expect("scroll footer") + "j/k scroll · ".len();
+        let pos: String = bottom[at..].chars().take_while(|ch| ch.is_ascii_digit() || *ch == '/').collect();
+        let (n, m) = pos.split_once('/').expect("n/m");
+        let (n, m): (usize, usize) = (n.parse().unwrap(), m.parse().unwrap());
+        assert_eq!(n, 22);
+        assert_eq!(m, all.len());
+    }
+
+    #[test]
+    fn wide_board_sheet_puts_a_heading_past_the_middle() {
+        let (rows, max) = sheet(HelpFor::Board, 200, 50, 0);
+        assert_eq!(max, 0);
+        let left = rows.iter().find_map(|r| r.iter().position(|ch| *ch == '╭')).unwrap();
+        let right = rows.iter().find_map(|r| r.iter().position(|ch| *ch == '╮')).unwrap();
+        let middle = (left + right) / 2;
+        assert!(HelpFor::Board.sections().iter().any(|s| heading_at(&rows, s.heading).unwrap().1 > middle));
+        assert!(!text(&rows).contains("j/k scroll"));
+    }
+
+    #[test]
+    fn j_and_down_scroll_the_drawn_sheet_by_one_line() {
+        for code in [KeyCode::Char('j'), KeyCode::Down] {
+            let mut app = App::new(crate::Machine::from_env());
+            press(&mut app, KeyCode::Char('?'));
+            let before = screen(&app, 80, 24);
+            press(&mut app, code);
+            let after = screen(&app, 80, 24);
+            assert!(matches!(app.mode, Mode::Help(HelpFor::Board)));
+            assert_eq!(after[1], before[2], "{code:?}");
+            assert_ne!(after[1], before[1]);
+            assert_ne!(after[23], before[23], "the position moves");
+        }
+    }
+
+    #[test]
+    fn k_and_up_at_the_top_change_nothing() {
+        let mut app = App::new(crate::Machine::from_env());
+        press(&mut app, KeyCode::Char('?'));
+        let before = screen(&app, 80, 24);
+        for _ in 0..3 {
+            press(&mut app, KeyCode::Char('k'));
+            press(&mut app, KeyCode::Up);
+        }
+        assert_eq!(screen(&app, 80, 24), before);
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Board)));
+    }
+
+    #[test]
+    fn j_past_the_end_stops_on_the_last_page() {
+        let mut app = App::new(crate::Machine::from_env());
+        press(&mut app, KeyCode::Char('?'));
+        let first = screen(&app, 80, 24);
+        for _ in 0..500 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        let last = screen(&app, 80, 24);
+        let total = whole_sheet(HelpFor::Board, 80, 24).len();
+        assert!(last[23].contains(&format!("{total}/{total}")), "{}", last[23]);
+        assert!(last.join("\n").contains("this sheet"), "the last row shows");
+        assert_ne!(last, first);
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(screen(&app, 80, 24), last);
+        assert!(matches!(app.mode, Mode::Help(_)));
+    }
+
+    #[test]
+    fn scrolling_a_sheet_that_fits_is_a_no_op() {
+        let mut app = App::new(crate::Machine::from_env());
+        press(&mut app, KeyCode::Char('?'));
+        let before = screen(&app, 200, 50);
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(screen(&app, 200, 50), before);
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Board)));
+    }
+
+    #[test]
+    fn esc_q_question_mark_x_and_enter_close_the_sheet() {
+        for code in [KeyCode::Esc, KeyCode::Char('q'), KeyCode::Char('?'), KeyCode::Char('x'), KeyCode::Enter] {
+            let mut app = App::new(crate::Machine::from_env());
+            press(&mut app, KeyCode::Char('?'));
+            assert!(matches!(app.mode, Mode::Help(_)));
+            press(&mut app, code);
+            assert!(matches!(app.mode, Mode::Normal), "{code:?} closes");
+        }
+    }
+
+    #[test]
+    fn the_status_bar_says_scroll_and_any_key_closes() {
+        let mut app = App::new(crate::Machine::from_env());
+        press(&mut app, KeyCode::Char('?'));
+        let line: String = footer_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(line.contains("j/k scroll"), "{line}");
+        assert!(line.contains("any key closes"), "{line}");
+        assert!(!line.contains("any key  close"), "{line}");
+    }
+
+    #[test]
+    fn closing_help_after_scrolling_returns_to_detail_and_resets() {
+        let mut app = App::new(crate::Machine::from_env());
+        app.mode = Mode::Detail("aaaaaaaa0000".to_string());
+        press(&mut app, KeyCode::Char('?'));
+        screen(&app, 80, 24);
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('q'));
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"));
+        app.mode = Mode::Normal;
+        press(&mut app, KeyCode::Char('?'));
+        assert_eq!(app.help_scroll.get(), 0, "a reopened sheet starts at the top");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal), "the board's help closes to the board");
+    }
+
+    #[test]
+    fn floor_and_digest_stay_open_after_closing_help() {
+        let mut app = App::new(crate::Machine::from_env());
+        app.floor = Some(FloorState::default());
+        press(&mut app, KeyCode::Char('?'));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Floor)));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.floor.is_some() && matches!(app.mode, Mode::Normal));
+        app.floor = None;
+
+        app.digest = Some(DigestState::default());
+        press(&mut app, KeyCode::Char('?'));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Digest)));
+        press(&mut app, KeyCode::Esc);
+        assert!(app.digest.is_some() && matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn floor_help_is_drawn_over_the_floor() {
+        let mut app = App::new(crate::Machine::from_env());
+        app.floor = Some(FloorState::default());
+        press(&mut app, KeyCode::Char('?'));
+        let text = screen(&app, 200, 50).join("\n");
+        for s in HelpFor::Floor.sections() {
+            assert!(text.contains(s.heading), "heading {}", s.heading);
+        }
+    }
+
+    #[test]
+    fn every_view_draws_at_any_size_without_panicking() {
+        for ctx in VIEWS {
+            for (w, h) in [(1, 1), (6, 3), (20, 6), (80, 24), (120, 40), (200, 50)] {
+                let (rows, _) = sheet(ctx, w, h, u16::MAX);
+                assert_eq!(rows.len(), usize::from(h));
+                assert!(rows.iter().all(|r| r.len() == usize::from(w)));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod help_resize_tests {
+    use ratatui::{
+        Terminal,
+        backend::TestBackend,
+        crossterm::event::{KeyCode, KeyEvent},
+    };
+
+    use super::*;
+
+    fn screen(app: &App, width: u16, height: u16) -> Vec<String> {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect())
+            .collect()
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    #[test]
+    fn growing_the_terminal_pulls_a_scrolled_sheet_back_to_the_top() {
+        let mut app = App::new(crate::Machine::from_env());
+        press(&mut app, KeyCode::Char('?'));
+        let top = screen(&app, 80, 24);
+        for _ in 0..5 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        assert_ne!(screen(&app, 80, 24), top, "scrolled at 80x24");
+        let wide = screen(&app, 200, 50);
+        let positions = wide.iter().flat_map(|r| r.match_indices("j/k scroll · ").map(|(i, m)| r[i + m.len()..].to_string()));
+        assert!(positions.clone().count() > 0, "the status bar hint is there");
+        assert!(positions.clone().all(|rest| rest.starts_with("any key")), "no n/m footer: everything fits at 200x50");
+        assert!(HelpFor::Board.sections().iter().all(|s| wide.join("\n").contains(s.heading)));
+        assert_eq!(screen(&app, 80, 24), top, "back at 80x24 the sheet starts at the top again");
+    }
+
+    #[test]
+    fn the_whole_app_draws_every_views_help_at_tiny_sizes() {
+        for (w, h) in [(1, 1), (10, 4), (20, 6), (80, 24)] {
+            let mut app = App::new(crate::Machine::from_env());
+            press(&mut app, KeyCode::Char('?'));
+            assert_eq!(screen(&app, w, h).len(), usize::from(h));
+            press(&mut app, KeyCode::Esc);
+
+            app.floor = Some(FloorState::default());
+            press(&mut app, KeyCode::Char('?'));
+            assert!(matches!(app.mode, Mode::Help(HelpFor::Floor)));
+            for _ in 0..3 {
+                press(&mut app, KeyCode::Char('j'));
+                assert_eq!(screen(&app, w, h).len(), usize::from(h));
+            }
+            press(&mut app, KeyCode::Esc);
+            app.floor = None;
+
+            app.inbox = Some(InboxState::default());
+            press(&mut app, KeyCode::Char('?'));
+            assert_eq!(screen(&app, w, h).len(), usize::from(h));
+            press(&mut app, KeyCode::Esc);
+            app.inbox = None;
+
+            app.digest = Some(DigestState::default());
+            press(&mut app, KeyCode::Char('?'));
+            assert_eq!(screen(&app, w, h).len(), usize::from(h));
+            press(&mut app, KeyCode::Esc);
+            app.digest = None;
+
+            app.mode = Mode::Detail("aaaaaaaa0000".to_string());
+            press(&mut app, KeyCode::Char('?'));
+            assert_eq!(screen(&app, w, h).len(), usize::from(h));
+            press(&mut app, KeyCode::Esc);
+            assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"));
+        }
     }
 }
