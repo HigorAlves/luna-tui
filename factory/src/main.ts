@@ -88,7 +88,7 @@ const options = {
       writable: pack.writable,
       branch: input.task.branch || null,
       // A PR task commits on the PR's own branch, not a task/ branch.
-      branchPrefix: branchPrefixFor({ branch: input.task.branch || null, source: input.task.source }),
+      branchPrefix: branchPrefixFor(input.task),
       workRoot: WORK,
       outRoot: OUT,
     }),
