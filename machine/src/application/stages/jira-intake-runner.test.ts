@@ -21,6 +21,7 @@ const output = (over: Partial<StageOutput> = {}): StageOutput => ({
 let stateDir: string;
 let seen: SandboxRun[];
 let logs: string[];
+let checkouts: string[];
 
 function fakeSandbox(body: StageOutput | null, result: Partial<SandboxResult> = {}): (run: SandboxRun) => Promise<SandboxResult> {
   return async (run) => {
@@ -36,18 +37,30 @@ beforeEach(() => {
   stateDir = mkdtempSync(join(tmpdir(), "jira-intake-"));
   seen = [];
   logs = [];
+  checkouts = [];
 });
 
-const deps = (sandbox: (run: SandboxRun) => Promise<SandboxResult>) => ({ image: "hardness-runner:dev", credential: { kind: "token" as const, value: "x" } as never, stateDir, sandbox, now: () => NOW, log: (l: string) => logs.push(l) });
+const deps = (sandbox: (run: SandboxRun) => Promise<SandboxResult>, checkout?: (repoPath: string) => Promise<string>) => ({
+  image: "hardness-runner:dev",
+  credential: { kind: "token" as const, value: "x" } as never,
+  stateDir,
+  worktreesDir: "/wt",
+  sandbox,
+  checkout: checkout ?? (async (repoPath: string) => (checkouts.push(repoPath), `/wt/${repoPath.split("/").pop()}/jira-intake`)),
+  now: () => NOW,
+  log: (l: string) => logs.push(l),
+});
 
 describe("createJiraTriager", () => {
-  it("runs the jira_intake pack over the repo checkout read-only with the issue in context.jira, and answers the verdict", async () => {
+  it("runs the jira_intake pack over a clean checkout of the repo, read-only, never the live one, with the issue in context.jira, and answers the verdict", async () => {
     const triager = createJiraTriager(deps(fakeSandbox(output())));
     const verdict = await triager.triage(issue, "/r/a");
     expect(verdict).toEqual(answer);
+    expect(checkouts).toEqual(["/r/a"]);
     expect(seen).toHaveLength(1);
     const run = seen[0]!;
-    expect(run).toMatchObject({ name: "hardness-jira-intake-plat-123-2026-10-28t12-00-00-000z", image: "hardness-runner:dev", worktree: "/r/a", writable: false, gitDir: null, labels: { luna: "jira-intake" }, timeoutMs: 300_000 });
+    expect(run).toMatchObject({ name: "hardness-jira-intake-plat-123-2026-10-28t12-00-00-000z", image: "hardness-runner:dev", worktree: "/wt/a/jira-intake", writable: false, gitDir: null, labels: { luna: "jira-intake" }, timeoutMs: 300_000 });
+    expect(run.worktree).not.toBe("/r/a");
     expect(run.runDir).toBe(join(stateDir, "jira-intake", "PLAT-123-2026-10-28T12-00-00-000Z"));
     const input = StageInput.parse(run.input);
     expect(input.pack).toBe("jira_intake");
@@ -59,9 +72,17 @@ describe("createJiraTriager", () => {
   it("uses an empty folder under the run dir when the repo is unknown", async () => {
     const triager = createJiraTriager(deps(fakeSandbox(output())));
     await triager.triage(issue, null);
+    expect(checkouts).toEqual([]);
     expect(seen[0]!.worktree).toBe(join(stateDir, "jira-intake", "PLAT-123-2026-10-28T12-00-00-000Z", "work"));
     expect(existsSync(seen[0]!.worktree)).toBe(true);
     expect(StageInput.parse(seen[0]!.input).task.repoPath).toBe("");
+  });
+
+  it("answers null without running when the clean checkout cannot be prepared", async () => {
+    const triager = createJiraTriager(deps(fakeSandbox(output()), async () => { throw new Error("git fetch failed"); }));
+    expect(await triager.triage(issue, "/r/a")).toBeNull();
+    expect(seen).toEqual([]);
+    expect(logs).toEqual(["jira intake: PLAT-123 failed: could not prepare the checkout of /r/a: git fetch failed"]);
   });
 
   it("answers null and logs why when the run times out, leaves no result, fails, or answers off-schema", async () => {

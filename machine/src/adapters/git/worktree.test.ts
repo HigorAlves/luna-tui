@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { branchBase, commitAll, ensurePrWorktree, ensureWorktree, prWorktreePath, workspaceFor } from "./worktree.ts";
+import { branchBase, commitAll, ensureCleanCheckout, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -76,6 +76,44 @@ describe("host-side git", () => {
     const workspace = workspaceFor({ id: "11111111-2222-3333-4444-555555555555", title: "Fix it" } as never, repo, join(root, "wt"));
     await ensureWorktree(repo, workspace);
     expect(git(workspace.path, "rev-parse", "HEAD")).toBe(tip);
+    expect(git(repo, "rev-parse", "HEAD")).not.toBe(tip);
+  });
+
+  it("keeps a clean detached checkout of origin's default branch for intake, reset to the tip on every call", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "intake-")));
+    const upstream = join(root, "upstream");
+    mkdirSync(upstream);
+    git(upstream, "init", "-q", "-b", "main");
+    writeFileSync(join(upstream, "a.txt"), "a\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-q", "-m", "init");
+    const repo = join(root, "repo");
+    git(root, "clone", "-q", upstream, repo);
+    // Your live checkout is dirty and behind; neither must show in what the pack reads.
+    writeFileSync(join(repo, "secret.env"), "TOKEN=x\n");
+    writeFileSync(join(upstream, "b.txt"), "b\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-q", "-m", "upstream moved on");
+    const tip = git(upstream, "rev-parse", "HEAD");
+
+    const path = intakeCheckoutPath(repo, join(root, "wt"));
+    expect(path).toBe(join(root, "wt", "repo", "jira-intake"));
+    expect(await ensureCleanCheckout(repo, path)).toBe(path);
+    expect(git(path, "rev-parse", "HEAD")).toBe(tip);
+    expect(git(path, "branch", "--show-current")).toBe("");
+    expect(existsSync(join(path, "secret.env"))).toBe(false);
+    expect(existsSync(join(path, "b.txt"))).toBe(true);
+
+    // A later run: whatever was left there goes, and the upstream's new tip is checked out.
+    writeFileSync(join(path, "left-over.txt"), "x\n");
+    writeFileSync(join(path, "a.txt"), "edited\n");
+    writeFileSync(join(upstream, "c.txt"), "c\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-q", "-m", "and again");
+    await ensureCleanCheckout(repo, path);
+    expect(git(path, "rev-parse", "HEAD")).toBe(git(upstream, "rev-parse", "HEAD"));
+    expect(existsSync(join(path, "left-over.txt"))).toBe(false);
+    expect(existsSync(join(path, "c.txt"))).toBe(true);
     expect(git(repo, "rev-parse", "HEAD")).not.toBe(tip);
   });
 

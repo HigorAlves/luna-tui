@@ -57,6 +57,31 @@ export async function ensureWorktree(repoPath: string, workspace: Workspace): Pr
   await execOrThrow("git", [...HOST_GIT, "-C", repoPath, ...args]);
 }
 
+/** The read-only checkout the jira_intake pack reads a repo through: `<dir>/<repo>/jira-intake`. */
+export const INTAKE_CHECKOUT = "jira-intake";
+export function intakeCheckoutPath(repoPath: string, worktreesDir: string): string {
+  return join(worktreesDir, basename(repoPath), INTAKE_CHECKOUT);
+}
+
+/**
+ * A clean, detached checkout of the default branch at `path`, fresh for every run: created from
+ * `origin/<default>` after a fetch (the repo's own HEAD without an origin) when missing, else
+ * fetched and reset hard to it with untracked files removed. Whatever sits half-edited in the
+ * live checkout never reaches a pack that reads through this. Answers `path`.
+ */
+export async function ensureCleanCheckout(repoPath: string, path: string): Promise<string> {
+  const ref = await startPoint(repoPath);
+  const sha = await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", ref]);
+  if (!existsSync(join(path, ".git"))) {
+    await exec("git", [...HOST_GIT, "-C", repoPath, "worktree", "prune"]);
+    await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "add", "--detach", path, sha]);
+    return path;
+  }
+  await clearStaleLock(path);
+  await resetWorktree(path, sha);
+  return path;
+}
+
 /** `origin/<default>` freshly fetched when the repo has an origin; HEAD otherwise. */
 async function startPoint(repoPath: string): Promise<string> {
   const head = await exec("git", [...HOST_GIT, "-C", repoPath, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);

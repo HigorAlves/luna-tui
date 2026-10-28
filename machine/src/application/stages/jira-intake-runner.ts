@@ -1,7 +1,9 @@
 // The jira_intake pack as a runner: one Jira issue goes through the factory runner in the stage
 // container, like every stage, with the same image and credential, before any ticket exists.
-// /work is the repo's checkout, mounted read-only (the pack has Read, Glob and Grep, so it can
-// check the ask against the code); with no checkout, an empty folder. The issue rides in
+// /work is a clean checkout of the repo's default branch (`<worktrees>/<repo>/jira-intake`,
+// fetched and reset before every run; never your live checkout, with whatever sits uncommitted
+// in it), mounted read-only (the pack has Read, Glob and Grep, so it can check the ask against
+// the code); with no repo, an empty folder. The issue rides in
 // `context.jira`, the verdict comes back in /out/result.json. There is no row to record: the
 // ticket it makes (or does not) is the record, and the line logged says the rest.
 import { JiraIntakeAnswer, type JiraIntakeContext, PACKS, StageOutput } from "@hardness/contracts";
@@ -10,6 +12,7 @@ import { join } from "node:path";
 
 import type { Credential } from "../../adapters/docker/credentials.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
+import { ensureCleanCheckout, intakeCheckoutPath } from "../../adapters/git/worktree.ts";
 import { buildJiraIntakeInput } from "../../domain/stage-input.ts";
 import type { JiraIssue } from "../jira.ts";
 
@@ -18,8 +21,12 @@ export interface JiraIntakeDeps {
   image: string;
   credential: Credential;
   stateDir: string;
+  /** Where the intake checkouts live, beside the task worktrees. */
+  worktreesDir: string;
   /** Replaces the docker sandbox; tests pass a fake. */
   sandbox?: (run: SandboxRun) => Promise<SandboxResult>;
+  /** Prepares the clean checkout of a repo and answers its path; tests pass a fake. */
+  checkout?: (repoPath: string) => Promise<string>;
   now?: () => Date;
   /** One line per run; defaults to console.log. */
   log?: (line: string) => void;
@@ -57,24 +64,31 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
   const now = deps.now ?? (() => new Date());
   const log = deps.log ?? ((line: string) => console.log(line));
   const sandbox = deps.sandbox ?? runSandbox;
+  const checkout = deps.checkout ?? ((repoPath: string) => ensureCleanCheckout(repoPath, intakeCheckoutPath(repoPath, deps.worktreesDir)));
 
   return {
     async triage(issue, repoPath) {
       const startedAt = now();
       const stamp = `${issue.key}-${startedAt.toISOString().replace(/[:.]/g, "-")}`;
       const runDir = join(deps.stateDir, JIRA_INTAKE_DIR, stamp);
-      let work = repoPath;
-      if (!work) {
-        work = join(runDir, "work");
-        await mkdir(work, { recursive: true });
-      } else {
-        await mkdir(runDir, { recursive: true });
-      }
+      await mkdir(runDir, { recursive: true });
       const input = buildJiraIntakeInput(jiraContext(issue, repoPath));
       let answer: JiraIntakeAnswer | null = null;
       let error: string | null = null;
       let usage: { model: string; turns: number; costUsd: number | null } = { model: pack.model, turns: 0, costUsd: null };
       try {
+        // The pack reads the repo through its own clean checkout, never the live one.
+        let work: string;
+        if (repoPath) {
+          try {
+            work = await checkout(repoPath);
+          } catch (thrown) {
+            throw new Error(`could not prepare the checkout of ${repoPath}: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
+          }
+        } else {
+          work = join(runDir, "work");
+          await mkdir(work, { recursive: true });
+        }
         const result = await sandbox({
           name: `hardness-jira-intake-${stamp.toLowerCase()}`,
           image: deps.image,
