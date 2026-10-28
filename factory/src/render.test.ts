@@ -81,6 +81,14 @@ describe("renderPrompt", () => {
     expect(bare).toContain("base (none)\nci:\n(none)\ntargets:\n(none)");
   });
 
+  it("lists the repo's checks for the packs that run them, as the line to type and where", () => {
+    const template = "checks:\n{{context.checks}}";
+    const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }, { name: "lint", run: "pnpm lint" }];
+    const rich = { ...input, context: { ...input.context, checks } };
+    expect(renderPrompt({ pack: PACKS.implementing, input: rich, template })).toContain("checks:\n- board tests: `cargo test` in board/ (for changes under board/**)\n- lint: `pnpm lint`");
+    expect(renderPrompt({ pack: PACKS.implementing, input, template })).toContain("checks:\n(none declared; detect the suite from the tree)");
+  });
+
   it("names a script pack's agent as script", () => {
     expect(renderPrompt({ pack: PACKS.evidence, input: { ...input, pack: "evidence", stage: "evidence" }, template: "{{agent}}" })).toMatch(/\nscript$/);
   });

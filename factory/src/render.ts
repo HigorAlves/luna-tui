@@ -74,6 +74,15 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     ),
     "{{context.baseCommit}}": txt(input.context.baseCommit),
     "{{context.ci}}": ciText(input.context.ci),
+    "{{context.checks}}": input.context.checks
+      ? bullets(
+          input.context.checks.map((c) => {
+            const where = c.cwd && c.cwd !== "." ? ` in ${c.cwd.replace(/\/$/, "")}/` : "";
+            const scope = c.paths && c.paths.length > 0 ? ` (for changes under ${c.paths.join(", ")})` : "";
+            return `${c.name}: \`${c.run}\`${where}${scope}`;
+          }),
+        )
+      : "(none declared; detect the suite from the tree)",
     "{{context.qaTargets}}": bullets((input.context.qaTargets ?? []).map((t) => `${t.name}: ${t.baseUrl}${t.credential ? ` (credential: ${t.credential})` : ""}`)),
     "{{attempt}}": txt(input.attempt),
     "{{agent}}": agent,

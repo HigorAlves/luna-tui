@@ -197,6 +197,15 @@ describe("agent stages through packs", () => {
     expect((seen!.input as unknown as StageInput).context.testCases).toEqual([]);
   });
 
+  it("hands implementing the repo's checks from its luna.yaml", async () => {
+    writeFileSync(join(repo, "luna.yaml"), "checks:\n  - name: board tests\n    run: cargo test\n    cwd: board\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "config");
+    const run = runners(fakeSandbox(output()));
+    await run.implementing!(context("implementing"));
+    expect((seen!.input as unknown as StageInput).context.checks).toEqual([{ name: "board tests", run: "cargo test", cwd: "board" }]);
+  });
+
   it("tells the pack where the branch forked, and hands ci_watch what the host fetched", async () => {
     const ci = { pr: null, checks: [{ name: "lint", state: "FAILURE", url: null }], logs: "boom" };
     await runAgent(deps(fakeSandbox(output())), context("ci_watch"), "ci_watch", { ci });

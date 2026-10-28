@@ -213,6 +213,8 @@ export const StageInput = z.object({
     runs: z.array(RunSummary).optional(),
     /** For e2e: where QA runs, from the repo's luna.yaml. Credentials are references, never values. */
     qaTargets: z.array(QaTarget).optional(),
+    /** For implementing and verifying: the repo's own checks from its luna.yaml; absent means detect them. */
+    checks: z.array(CheckSpec).optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),

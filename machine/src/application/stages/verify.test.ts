@@ -27,6 +27,9 @@ function setup(opts: {
   controller?: AbortController;
   noPack?: boolean;
   identity?: { name: string; email: string } | null;
+  /** The repo's own checks from luna.yaml; undefined means none declared. */
+  lunaChecks?: Array<{ name: string; run: string; cwd?: string; paths?: string[] }>;
+  changed?: string[] | null;
 }) {
   const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
   const calls: string[][] = [];
@@ -41,6 +44,8 @@ function setup(opts: {
     stateDir,
     detect: async () => (opts.detected ?? { manager: "pnpm", test: ["pnpm", "run", "test"], lint: ["pnpm", "run", "lint"] }) as never,
     gitIdentity: async () => ("identity" in opts ? opts.identity! : { name: "Ada L", email: "ada@x.dev" }),
+    checks: async () => opts.lunaChecks ?? null,
+    changedPaths: async () => ("changed" in opts ? opts.changed! : null),
   });
   const controller = opts.controller ?? new AbortController();
   const context: StageContext = {
@@ -100,6 +105,48 @@ describe("verifying stage", () => {
     expect(result.outcome).toBe("escalated");
     expect(result.detail).toMatchObject({ step: "checks", reason: expect.stringMatching(/user\.name.*user\.email/) });
     expect(exec).not.toHaveBeenCalled();
+    expect(runPack).not.toHaveBeenCalled();
+  });
+
+  it("runs the repo's own checks from luna.yaml, each through sh in its cwd, instead of detecting them", async () => {
+    const { run, context, calls, runPack } = setup({
+      lunaChecks: [
+        { name: "board tests", run: "cargo test", cwd: "board" },
+        { name: "lint", run: "pnpm lint" },
+      ],
+    });
+    const result = await run(context);
+    expect(calls).toEqual([
+      ["sh", "-c", "cd 'board' && cargo test"],
+      ["sh", "-c", "pnpm lint"],
+    ]);
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ checks: [{ name: "board tests", cmd: "cargo test (in board)", ok: true }, { name: "lint", ok: true }] });
+    expect(runPack).toHaveBeenCalledOnce();
+  });
+
+  it("runs only the checks whose paths the branch touches, and says which were skipped", async () => {
+    const { run, context, calls } = setup({
+      lunaChecks: [
+        { name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] },
+        { name: "machine tests", run: "pnpm test", cwd: "machine", paths: ["machine/**"] },
+      ],
+      changed: ["board/src/ui.rs"],
+    });
+    const result = await run(context);
+    expect(calls).toEqual([["sh", "-c", "cd 'board' && cargo test"]]);
+    expect(result.detail).toMatchObject({ checks: [{ name: "board tests", ok: true }, { name: "machine tests", skipped: "no change under machine/**" }] });
+  });
+
+  it("names a failed luna.yaml check by its own name, with its tail, so the finding reads like the file", async () => {
+    const { run, context, runPack } = setup({
+      lunaChecks: [{ name: "board tests", run: "cargo test", cwd: "board" }],
+      checks: { "sh -c cd 'board' && cargo test": { code: 101, stdout: "test x ... FAILED", stderr: "" } },
+    });
+    const result = await run(context);
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ summary: "board tests failed", error: expect.stringContaining("cargo test (in board)") });
+    expect(result.findings).toEqual([expect.objectContaining({ severity: "test", title: "board tests failed", body: "test x ... FAILED" })]);
     expect(runPack).not.toHaveBeenCalled();
   });
 

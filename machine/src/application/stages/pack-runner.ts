@@ -111,6 +111,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     ci: extra.ci ?? null,
     holdoutCases: policy.holdoutCases,
     qaTargets: policy.qaTargets,
+    checks: policy.checks,
     history: extra.history ?? ((pack === "implementing" || pack === "reviewing_memory") && deps.history ? await deps.history(task.id) : null),
   });
 

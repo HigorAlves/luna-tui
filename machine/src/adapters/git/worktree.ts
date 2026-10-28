@@ -128,6 +128,16 @@ export async function branchBase(worktreePath: string, repoPath: string): Promis
   return base.code === 0 ? base.stdout.trim() || null : null;
 }
 
+/** The files the branch changed since it forked from the repo, worktree-relative; null when
+ *  the base is unknown, so a caller runs every check rather than none. */
+export async function changedPaths(worktreePath: string, repoPath: string): Promise<string[] | null> {
+  const base = await branchBase(worktreePath, repoPath);
+  if (!base) return null;
+  const out = await exec("git", [...HOST_GIT, "-C", worktreePath, "diff", "--name-only", `${base}..HEAD`]);
+  if (out.code !== 0) return null;
+  return out.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+}
+
 /** Lines added and removed on the branch since `base`, from `git diff --shortstat`. */
 export async function diffShortstat(path: string, base: string): Promise<{ added: number; removed: number }> {
   const out = await execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--shortstat", `${base}..HEAD`]);
