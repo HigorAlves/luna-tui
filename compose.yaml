@@ -58,6 +58,15 @@ services:
       MACHINE_DAILY_BUDGET_USD: ${MACHINE_DAILY_BUDGET_USD:-}
       MACHINE_GITHUB_POLL: ${MACHINE_GITHUB_POLL:-}
       MACHINE_GITHUB_LABEL: ${MACHINE_GITHUB_LABEL:-ready-for-agent}
+      # The Slack inbox (board `S`): your own app's user token, and its app-level token for the
+      # live socket. Both come from a root .env or the shell; see docs/install.md "Slack inbox".
+      MACHINE_SLACK_USER_TOKEN: ${MACHINE_SLACK_USER_TOKEN:-}
+      MACHINE_SLACK_APP_TOKEN: ${MACHINE_SLACK_APP_TOKEN:-}
+      MACHINE_SLACK_INBOX: ${MACHINE_SLACK_INBOX:-on}
+      MACHINE_SLACK_MARK_READ: ${MACHINE_SLACK_MARK_READ:-off}
+      MACHINE_SLACK_DIGEST_AT: ${MACHINE_SLACK_DIGEST_AT:-}
+      # The triage rules you edit; on the mounted state dir so the container sees your changes.
+      MACHINE_SLACK_RULES: ${MACHINE_SLACK_RULES:-${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}/slack-triage.md}
       RUNNER_IMAGE: ${RUNNER_IMAGE:-hardness-runner:dev}
       RUNNER_QA_IMAGE: ${RUNNER_QA_IMAGE:-hardness-runner-qa:dev}
       # gh and git push to GitHub over https with this token (`pnpm start` passes `gh auth token`).

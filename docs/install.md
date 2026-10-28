@@ -23,6 +23,24 @@ pnpm board:link       # builds the board and links it into herdr once; `pnpm boa
 
 Both use the same database, so tasks carry over when you switch. For board usage and keys, see [`board/README.md`](../board/README.md).
 
+## Slack inbox
+
+`S` on the board is your Slack Activity tab, triaged. It needs a small Slack app of your own, installed only in your workspace, created once from the manifest in this repo:
+
+1. Open <https://api.slack.com/apps> → **Create New App** → **From a manifest** → pick your workspace → paste [`slack/manifest.json`](../slack/manifest.json) → **Create**.
+2. **Install to Workspace** and allow it. On the app's **OAuth & Permissions** page copy the **User OAuth Token** (`xoxp-…`).
+3. On **Basic Information → App-Level Tokens**, generate one with the `connections:write` scope and copy it (`xapp-…`). It feeds the live socket that brings reactions and replies in as they happen; without it the inbox polls once a minute and shows no reactions.
+4. Put both where the machine reads them: `machine/.env` for `pnpm dev`, a root `.env` (or the shell) for `pnpm start`:
+
+   ```sh
+   MACHINE_SLACK_USER_TOKEN=xoxp-...
+   MACHINE_SLACK_APP_TOKEN=xapp-...
+   ```
+
+5. Start the machine, press `S` on the board, then `W` to add the team handles (`@platform-team`), keywords or channels it should treat as addressed to you.
+
+The token is yours, so replies sent from the board post as you. Nothing is posted without `ctrl+s` in the reply editor. `d` clears an item on the board only; `MACHINE_SLACK_MARK_READ=on` also marks it read in Slack. Priorities and drafts come from a short Haiku call per batch of new messages, which needs the same `ANTHROPIC_API_KEY` the stages use; without one the inbox still fills, sorted by time, with no priorities. The rules the triage follows (VIPs, muted channels, quiet hours, always-P0 keywords, your notes) live in [`docs/agents/slack-triage.md`](./agents/slack-triage.md) (`pnpm start` keeps its copy in the state dir, where the container can read your edits; the machine writes the template there on first run). Every variable is in [configuration.md](./configuration.md).
+
 ## Checks
 
 ```sh
