@@ -18,6 +18,7 @@ export const ROLE_DESCRIPTION: Record<AgentRole, string> = {
   "ci-investigator": "Diagnoses a red CI run from its logs and classifies it: fixable, flake, infra, needs_debug or green.",
   "retro-reviewer": "Looks back at a finished task and proposes rules for the project context from incidents and patterns.",
   "pr-reviewer": "Reviews someone else's open pull request from its diff and returns line-anchored comments and a mechanical verdict; never posts, never edits.",
+  "slack-triager": "Triages a batch of the person's Slack inbox items: priority, category, whether a reply is expected, a one-line summary and a draft; no tools, no worktree.",
   "security-reviewer": "Reviews a diff for exploitable security issues and returns review-contract findings with a concrete exploit each; never edits.",
   "reply-drafter": "Drafts one short reply per review thread from the thread, the code and what changed; text only, never edits.",
   "code-fixer": "Applies a decided list of code changes to answer review threads, runs the project's checks and reports the diff.",

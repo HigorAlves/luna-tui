@@ -16,7 +16,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `MACHINE_MAX_CONCURRENT` | `4` | tasks driving a stage at once, across every repo |
 | `MACHINE_MAX_PER_REPO` | unset | running tasks one repo may hold at once, so it cannot take every slot; unset means no cap. Claims go oldest-queued first, the repo with the fewest running tasks first. A repo's own `PIPELINE.md` (`max_concurrent`) overrides it for that repo |
 | `MACHINE_MAX_PER_STAGE` | unset | `stage=n` pairs, e.g. `implementing=2,e2e=1`: tasks that may drive one stage at once. A task whose next stage is at cap waits in the queue, state kept (`stage.held`). `ci_watch` never holds a slot: it polls GitHub outside the pool and takes a slot again (or queues) for the stage after |
-| `MACHINE_AGENTS` | on | set to `off` to make every stage a stub (no credential or Docker needed) |
+| `MACHINE_AGENTS` | on | set to `off` to make every stage a stub (no credential or Docker needed); the Slack inbox's triage is a pack too (`slack_triage`), so it is off with them and items show no priority |
 | `MACHINE_GITHUB_POLL` | empty, off | comma-separated `owner/name` repos whose open issues labelled `MACHINE_GITHUB_LABEL` land in Intake as tasks; needs `GITHUB_TOKEN` |
 | `MACHINE_GITHUB_POLL_INTERVAL` | `300` | seconds between GitHub polls |
 | `MACHINE_GITHUB_LABEL` | `ready-for-agent` | the issue label GitHub intake looks for |
@@ -31,7 +31,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `MACHINE_SLACK_INBOX` | on | `off` stops the inbox from polling Slack; the board's `S` view then shows nothing |
 | `MACHINE_SLACK_INBOX_INTERVAL` | `60` | seconds between inbox polls; a rate-limited answer backs the next poll off to five minutes |
 | `MACHINE_SLACK_MARK_READ` | off | `on` makes `d` (done) also move your read cursor in Slack (`conversations.mark`, needs the `channels:write`, `groups:write`, `im:write`, `mpim:write` user scopes) |
-| `MACHINE_SLACK_RULES` | `docs/agents/slack-triage.md` in the repo | the triage rules file (VIPs, muted channels, always-P0 keywords, quiet hours, notes for the model, learned priors). A missing file is created from the template; compose points it at `MACHINE_STATE_DIR/slack-triage.md` |
+| `MACHINE_SLACK_RULES` | `docs/agents/slack-triage.md` in the repo | the triage rules file (VIPs, muted channels, always-P0 keywords, quiet hours, notes for the model, learned priors). A missing file is created from the template; compose points it at `MACHINE_STATE_DIR/slack-triage.md`. Triage itself runs as the `slack_triage` pack in the stage container, with the same credential and Docker image as the stages; nothing else to set |
 | `MACHINE_SLACK_DIGEST_AT` | unset | `HH:MM` local time: the machine DMs you a ten-line digest (open P0/P1, what waits on others, yesterday's response time) every day at that time |
 | `RUNNER_IMAGE` | `hardness-runner:dev` | the stage container image |
 | `RUNNER_QA_IMAGE` | `hardness-runner-qa:dev` | the QA stage image; without it e2e is skipped |

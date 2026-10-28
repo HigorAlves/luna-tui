@@ -4,7 +4,7 @@
 import { EntitySchema } from "typeorm";
 
 import type { ApprovalRow, ArtifactRow, EventRow, StageRunRow, TaskRow } from "../../domain/task.ts";
-import type { SlackItemEntityRow, SlackWatchEntityRow } from "./slack-store.ts";
+import type { SlackItemEntityRow, SlackTriageRunEntityRow, SlackWatchEntityRow } from "./slack-store.ts";
 
 const taskRelation = {
   type: "many-to-one",
@@ -173,4 +173,22 @@ export const SlackWatchEntity = new EntitySchema<SlackWatchEntityRow>({
   uniques: [{ columns: ["kind", "value"] }],
 });
 
-export const ENTITIES = [TaskEntity, StageRunEntity, EventEntity, ApprovalEntity, ArtifactEntity, SlackItemEntity, SlackWatchEntity];
+/** One run of the slack_triage pack: what a batch cost, for the Floor. */
+export const SlackTriageRunEntity = new EntitySchema<SlackTriageRunEntityRow>({
+  name: "SlackTriageRun",
+  tableName: "slack_triage_runs",
+  columns: {
+    id: { type: "uuid", primary: true, generated: "uuid" },
+    startedAt: { name: "started_at", type: "timestamptz" },
+    endedAt: { name: "ended_at", type: "timestamptz" },
+    items: { type: "integer", default: 0 },
+    model: { type: "text", default: "" },
+    turns: { type: "integer", default: 0 },
+    costUsd: { name: "cost_usd", type: "numeric", precision: 10, scale: 4, nullable: true },
+    ok: { type: "boolean", default: false },
+    error: { type: "text", nullable: true },
+  },
+  indices: [{ columns: ["startedAt"] }],
+});
+
+export const ENTITIES = [TaskEntity, StageRunEntity, EventEntity, ApprovalEntity, ArtifactEntity, SlackItemEntity, SlackWatchEntity, SlackTriageRunEntity];

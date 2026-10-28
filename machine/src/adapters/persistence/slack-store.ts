@@ -1,13 +1,14 @@
-// Postgres implementation of the SlackStore port: the slack_items and slack_watches tables.
+// Postgres implementation of the SlackStore port: the slack_items, slack_watches and
+// slack_triage_runs tables.
 // Timestamps are timestamptz in the database and ISO strings in the rows the inbox handles;
 // this file does the conversion and nothing else.
-import type { SlackItem, SlackPriority, SlackTriage, SlackWatch, SlackWatchInput, SlackWatchPatch } from "@hardness/contracts";
+import type { SlackItem, SlackPriority, SlackTriage, SlackTriageRun, SlackWatch, SlackWatchInput, SlackWatchPatch } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { IsNull, MoreThanOrEqual } from "typeorm";
 
-import type { SlackMetricRow, SlackStore } from "../../application/slack-store.ts";
+import type { SlackMetricRow, SlackStore, SlackTriageRunInput } from "../../application/slack-store.ts";
 import type { SlackItemRow } from "../../domain/slack-item.ts";
-import { SlackItemEntity, SlackWatchEntity } from "./schemas.ts";
+import { SlackItemEntity, SlackTriageRunEntity, SlackWatchEntity } from "./schemas.ts";
 
 /** The slack_items row as TypeORM reads it. */
 export interface SlackItemEntityRow {
@@ -47,6 +48,19 @@ export interface SlackWatchEntityRow {
   builtin: boolean;
   priority: SlackPriority | null;
   createdAt: Date;
+}
+
+export interface SlackTriageRunEntityRow {
+  id: string;
+  startedAt: Date;
+  endedAt: Date;
+  items: number;
+  model: string;
+  turns: number;
+  /** numeric comes back from pg as a string. */
+  costUsd: string | number | null;
+  ok: boolean;
+  error: string | null;
 }
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
@@ -93,6 +107,18 @@ function toEntity(r: SlackItemRow): Omit<SlackItemEntityRow, "createdAt" | "upda
 }
 
 const toWatch = (w: SlackWatchEntityRow): SlackWatch => ({ ...w, createdAt: w.createdAt.toISOString() });
+
+const toRun = (r: SlackTriageRunEntityRow): SlackTriageRun => ({
+  id: r.id,
+  startedAt: r.startedAt.toISOString(),
+  endedAt: r.endedAt.toISOString(),
+  items: r.items,
+  model: r.model,
+  turns: r.turns,
+  costUsd: r.costUsd === null ? null : Number(r.costUsd),
+  ok: r.ok,
+  error: r.error,
+});
 
 export class PgSlackStore implements SlackStore {
   constructor(private readonly db: DataSource) {}
@@ -170,5 +196,24 @@ export class PgSlackStore implements SlackStore {
 
   async deleteWatch(id: string): Promise<void> {
     await this.db.getRepository(SlackWatchEntity).delete({ id });
+  }
+
+  async recordTriageRun(run: SlackTriageRunInput): Promise<SlackTriageRun> {
+    const saved = await this.db.getRepository(SlackTriageRunEntity).save({
+      startedAt: new Date(run.startedAt),
+      endedAt: new Date(run.endedAt),
+      items: run.items,
+      model: run.model,
+      turns: run.turns,
+      costUsd: run.costUsd,
+      ok: run.ok,
+      error: run.error,
+    });
+    return toRun(saved);
+  }
+
+  async triageRuns(since: Date): Promise<SlackTriageRun[]> {
+    const rows = await this.db.getRepository(SlackTriageRunEntity).find({ where: { startedAt: MoreThanOrEqual(since) }, order: { startedAt: "DESC" } });
+    return rows.map(toRun);
   }
 }

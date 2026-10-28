@@ -1,7 +1,9 @@
 // The Slack inbox's poller: everything your Activity tab shows (mentions, DMs, thread replies,
 // reactions, broadcasts, watched handles), folded into items, run through the rules file and
-// a batched Haiku triage, kept in Postgres and published as one snapshot the board reads over
-// HTTP and follows on the event stream. The twin of GitHubPulls: same start/stop/pollOnce,
+// the slack_triage pack in batches, kept in Postgres and published as one snapshot the board
+// reads over HTTP and follows on the event stream. A poll persists and publishes what it found
+// at once; the pack runs afterwards, one container at a time, and publishes again when its
+// verdicts land. The twin of GitHubPulls: same start/stop/pollOnce,
 // same publish-only-when-changed rule, same backoff on a rate limit. Acting on an item (reply,
 // done, snooze, ticket) lives here too, since each changes what the next poll shows.
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -15,6 +17,7 @@ import type {
   SlackSnapshot,
   SlackTaskInput,
   SlackTriage,
+  SlackTriageRuns,
   SlackWatch,
   SlackWatchInput,
   SlackWatchPatch,
@@ -57,6 +60,7 @@ export interface SlackInboxPort {
   patchWatch(id: string, patch: SlackWatchPatch): Promise<SlackWatch>;
   deleteWatch(id: string): Promise<void>;
   metrics(since: Date): Promise<SlackMetrics>;
+  triageRuns(since: Date): Promise<SlackTriageRuns>;
   digest(): Promise<string>;
   /** For the board's autocomplete; cached ten minutes. */
   usergroups(): Promise<Usergroup[]>;
@@ -93,7 +97,7 @@ export class AlreadyTaskError extends Error {
 
 export interface SlackInboxOptions {
   slack: Slack;
-  /** null: no API key; items stay `triage: null`. */
+  /** null: agents off, or no credential or runner image; items stay `triage: null`. */
   triager: Triager | null;
   store: SlackStore;
   intervalMs: number;
@@ -179,6 +183,9 @@ export class SlackInbox implements SlackInboxPort {
   private listings: { usergroups?: { at: number; value: Usergroup[] }; channels?: { at: number; value: ChannelInfo[] } } = {};
   private readonly now: () => Date;
   private readonly files: NonNullable<SlackInboxOptions["files"]>;
+  /** Items waiting for the pack, with the floor the rules set; one container runs at a time. */
+  private readonly triageQueue = new Map<string, SlackPriority | null>();
+  private triaging: Promise<void> | null = null;
 
   constructor(private readonly options: SlackInboxOptions) {
     this.now = options.now ?? (() => new Date());
@@ -279,7 +286,15 @@ export class SlackInbox implements SlackInboxPort {
         console.warn(`slack inbox: ${error}`);
       }
     }
-    return this.refresh(polledAt, error);
+    const snapshot = await this.refresh(polledAt, error);
+    // The pack runs after the poll has published: a container never holds the snapshot back.
+    this.kickTriage();
+    return snapshot;
+  }
+
+  /** Resolves once no triage is in flight or queued. Tests wait on it; the poll never does. */
+  async idle(): Promise<void> {
+    while (this.triaging) await this.triaging;
   }
 
   /** Rebuilds the snapshot from the store and publishes it when it changed. */
@@ -483,14 +498,74 @@ export class SlackInbox implements SlackInboxPort {
       if (moved.item !== row) gathered.changed.set(row.id, moved.item);
     }
 
-    // 6. Triage what is new or changed, in batches; 7. persist.
-    await this.triage(gathered, watches, rules, now);
+    // 6. Settle what the rules decided and queue the rest for the pack; 7. persist. The pack's
+    //    verdicts land in a later publish, so a poll never waits on the container.
+    this.settle(gathered);
     const rows = [...gathered.changed.values()].map((row) => ({ ...row, linked: { ...row.linked, pr: this.options.linkPr(prUrlsIn(row.text)) ?? row.linked.pr } }));
     await store.save(rows);
   }
 
-  private async triage(gathered: Gathered, watches: SlackWatch[], rules: SlackRules, now: Date): Promise<void> {
-    const at = now.toISOString();
+  /** Rules-settled items get their triage now; the others wait for the pack, floor remembered. */
+  private settle(gathered: Gathered): void {
+    for (const [id, { floor, settled }] of gathered.pending) {
+      const row = gathered.changed.get(id);
+      if (!row) continue;
+      if (settled) {
+        gathered.changed.set(id, { ...row, triage: this.keepOverride(row.triage, settled) });
+        continue;
+      }
+      if (!this.options.triager) {
+        if (!this.warnedNoTriager) console.warn("slack inbox: no triager (agents off, or no credential or runner image): items are listed without triage");
+        this.warnedNoTriager = true;
+        continue;
+      }
+      this.triageQueue.set(id, floor);
+    }
+  }
+
+  /** Starts a triage run when items wait and none is in flight; the next one starts when it ends. */
+  private kickTriage(): void {
+    if (this.triaging || this.triageQueue.size === 0 || this.stopped) return;
+    this.triaging = this.drainTriage()
+      .catch((error: unknown) => console.warn(`slack inbox: triage failed: ${messageOf(error)}`))
+      .finally(() => {
+        this.triaging = null;
+        this.kickTriage();
+      });
+  }
+
+  /** One pack run over everything queued. */
+  private async drainTriage(): Promise<void> {
+    const { triager, store } = this.options;
+    const queued = new Map(this.triageQueue);
+    this.triageQueue.clear();
+    if (!triager || queued.size === 0) return;
+    const rows = new Map<string, SlackItemRow>();
+    for (const id of queued.keys()) {
+      const row = await store.item(id);
+      if (row) rows.set(id, row);
+    }
+    if (rows.size === 0) return;
+    const [me, watches, rules] = await Promise.all([this.whoAmI(), store.watches(), this.rules()]);
+    const toModel: TriageItem[] = [...rows.values()].map((row) => ({
+      id: row.id,
+      channel: row.channel.kind === "dm" ? `dm with @${row.channel.name}` : `#${row.channel.name}`,
+      author: `@${row.author.name}${row.author.isBot ? " (app)" : ""}`,
+      text: row.text,
+      context: row.context.map((m) => `@${m.user.name}: ${m.text}`),
+      matched: row.matched,
+      isBot: row.author.isBot,
+      threadReplies: row.replies,
+    }));
+    let answers: Awaited<ReturnType<Triager["triage"]>>;
+    try {
+      const learned = Object.entries(rules.learned).map(([k, v]) => `- ${k}: ${v.direction} (${v.n})`);
+      answers = await triager.triage(toModel, { me: { id: me.id, name: me.name }, notes: rules.notes, learned, vips: rules.vips, watches });
+    } catch (error) {
+      console.warn(`slack inbox: triage failed: ${messageOf(error)}`);
+      answers = new Map();
+    }
+    const at = this.now().toISOString();
     const fallback = (row: SlackItemRow, why: string): SlackTriage => ({
       priority: "P2",
       category: "fyi",
@@ -504,44 +579,17 @@ export class SlackInbox implements SlackInboxPort {
       triagedAt: at,
       overridden: false,
     });
-    const toModel: TriageItem[] = [];
-    for (const [id, { settled }] of gathered.pending) {
-      const row = gathered.changed.get(id);
+    // The container took a while: re-read each row so the verdict lands on what you did meanwhile.
+    const saved: SlackItemRow[] = [];
+    for (const id of rows.keys()) {
+      const row = await store.item(id);
       if (!row) continue;
-      if (settled) {
-        gathered.changed.set(id, { ...row, triage: this.keepOverride(row.triage, settled) });
-        continue;
-      }
-      toModel.push({
-        id,
-        channel: row.channel.kind === "dm" ? `dm with @${row.channel.name}` : `#${row.channel.name}`,
-        author: `@${row.author.name}${row.author.isBot ? " (app)" : ""}`,
-        text: row.text,
-        context: row.context.map((m) => `@${m.user.name}: ${m.text}`),
-        matched: row.matched,
-      });
-    }
-    if (toModel.length === 0) return;
-    if (!this.options.triager) {
-      if (!this.warnedNoTriager) console.warn("slack inbox: no ANTHROPIC_API_KEY: items are listed without triage");
-      this.warnedNoTriager = true;
-      return;
-    }
-    let answers: Awaited<ReturnType<Triager["triage"]>>;
-    try {
-      const learned = Object.entries(rules.learned).map(([k, v]) => `- ${k}: ${v.direction} (${v.n})`);
-      answers = await this.options.triager.triage(toModel, { notes: rules.notes, learned, watches });
-    } catch (error) {
-      console.warn(`slack inbox: triage failed: ${messageOf(error)}`);
-      answers = new Map();
-    }
-    for (const item of toModel) {
-      const row = gathered.changed.get(item.id)!;
-      const floor = gathered.pending.get(item.id)?.floor ?? null;
-      const answer = answers.get(item.id);
+      const answer = answers.get(id);
       const triage = answer ? { ...answer, by: "model" as const, triagedAt: at, overridden: false } : fallback(row, answers.size === 0 ? "triage did not run" : "the model skipped it");
-      gathered.changed.set(item.id, { ...row, triage: withFloor(this.keepOverride(row.triage, triage), floor) });
+      saved.push({ ...row, triage: withFloor(this.keepOverride(row.triage, triage), queued.get(id) ?? null) });
     }
+    await store.save(saved);
+    await this.refresh(this.snapshot.polledAt, this.snapshot.error);
   }
 
   /** A hand-set priority outlives a re-triage. */
@@ -727,6 +775,14 @@ export class SlackInbox implements SlackInboxPort {
   }
 
   /** The ten-line morning text: open P0/P1, what waits on others, yesterday's response time. */
+  /** `GET /slack/triage-runs`: the pack's runs since `since`, with the items and cost summed. */
+  async triageRuns(since: Date): Promise<SlackTriageRuns> {
+    const runs = await this.options.store.triageRuns(since);
+    const items = runs.reduce((sum, run) => sum + run.items, 0);
+    const costUsd = Math.round(runs.reduce((sum, run) => sum + (run.costUsd ?? 0), 0) * 10_000) / 10_000;
+    return { since: since.toISOString(), runs, items, costUsd };
+  }
+
   async digest(): Promise<string> {
     const now = this.now();
     const rows = (await this.options.store.items(new Date(now.getTime() - KEEP_DONE_MS))).map((row) => ({ row, split: splitOf(row, now) }));

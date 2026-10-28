@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type CheckSpec, type CiContext, type Finding, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type CheckSpec, type CiContext, type Finding, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -117,6 +117,28 @@ export function buildStageInput(opts: {
       // A retry continues the ledger the last attempt left: committed slices are not redone.
       ...(pack === "implementing" && opts.history?.ledger ? { ledger: opts.history.ledger } : {}),
     },
+    limits: { maxTurns, timeoutMs },
+    env: { LUNA_FACTORY: "1" },
+  };
+}
+
+/** The id of the synthetic task every slack_triage input carries: the pack is not a task stage. */
+export const SLACK_TRIAGE_TASK_ID = "slack-triage";
+
+/** The /in/stage.json the slack_triage pack reads: no task of its own, no plan, no worktree;
+ *  the inbox batch rides in `context.slack` and the answer goes back to the inbox. */
+export function buildSlackTriageInput(slack: SlackTriageContext): StageInput {
+  const { maxTurns, timeoutMs } = PACK_LIMITS.slack_triage;
+  return {
+    schema: 3,
+    stage: "slack_triage",
+    pack: "slack_triage",
+    attempt: 1,
+    task: { id: SLACK_TRIAGE_TASK_ID, title: "Slack triage", description: "", criteria: [], repoPath: "", branch: "", source: null },
+    plan: null,
+    decisions: [],
+    priorFindings: [],
+    context: { projectContext: null, slack },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

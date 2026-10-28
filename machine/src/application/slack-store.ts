@@ -1,7 +1,8 @@
 // The persistence port the Slack inbox depends on: items with their triage and your read
-// state (they must survive a restart), and the watches you save. Postgres implements it in
+// state (they must survive a restart), the watches you save, and one row per triage run so
+// the Floor can show what triage costs. Postgres implements it in
 // adapters/persistence/slack-store.ts; the poller's tests use an in-memory one.
-import type { SlackPriority, SlackWatch, SlackWatchInput, SlackWatchPatch } from "@hardness/contracts";
+import type { SlackPriority, SlackTriageRun, SlackWatch, SlackWatchInput, SlackWatchPatch } from "@hardness/contracts";
 
 import type { SlackItemRow } from "../domain/slack-item.ts";
 
@@ -15,6 +16,9 @@ export interface SlackMetricRow {
   priority: SlackPriority | null;
   expectsReply: boolean;
 }
+
+/** One slack_triage run as recorded; the store assigns the id. */
+export type SlackTriageRunInput = Omit<SlackTriageRun, "id">;
 
 export interface SlackStore {
   /** Every open item, plus the ones done after `doneSince`. */
@@ -30,4 +34,8 @@ export interface SlackStore {
   addWatch(input: SlackWatchInput & { label: string; builtin?: boolean }): Promise<SlackWatch>;
   patchWatch(id: string, patch: SlackWatchPatch): Promise<SlackWatch | null>;
   deleteWatch(id: string): Promise<void>;
+
+  recordTriageRun(run: SlackTriageRunInput): Promise<SlackTriageRun>;
+  /** Runs started at or after `since`, newest first. */
+  triageRuns(since: Date): Promise<SlackTriageRun[]>;
 }

@@ -1,5 +1,6 @@
-// The triage port: a batch of inbox items in, one verdict per item out. The Anthropic adapter
-// asks Haiku; tests pass a fake; without an API key the inbox runs with no triager at all and
+// The triage port: a batch of inbox items in, one verdict per item out. The slack_triage pack
+// (application/stages/slack-triage-runner.ts) runs it in the stage container; tests pass a
+// fake; with agents off, no credential or no image the inbox runs with no triager at all and
 // items show `triage: null`.
 import type { SlackTriage, SlackWatch } from "@hardness/contracts";
 
@@ -13,13 +14,20 @@ export interface TriageItem {
   context: string[];
   /** Why it is in the inbox: `me`, `usergroup:S…`, `broadcast:here`, `keyword:…`, `channel:C…`, `dm`. */
   matched: string[];
+  isBot: boolean;
+  /** Replies in the thread since the item's first message. */
+  threadReplies: number;
 }
 
 export interface TriageContext {
+  /** Who the inbox belongs to; the model triages for this person. */
+  me: { id: string; name: string };
   /** The rules file's Notes section. */
   notes: string;
   /** The Learned lines, as written. */
   learned: string[];
+  /** The VIPs section, as written: each is at least P1. */
+  vips: string[];
   watches: SlackWatch[];
 }
 

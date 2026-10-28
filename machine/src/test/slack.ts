@@ -1,10 +1,10 @@
 // A fake Slack port and an in-memory SlackStore for tests: every Slack method rejects as
 // "unexpected" unless the test gives it an answer, and every call is recorded.
-import type { SlackWatch, SlackWatchInput, SlackWatchPatch } from "@hardness/contracts";
+import type { SlackTriageRun, SlackWatch, SlackWatchInput, SlackWatchPatch } from "@hardness/contracts";
 import { vi } from "vitest";
 
 import { type Slack, SlackError } from "../application/slack.ts";
-import type { SlackMetricRow, SlackStore } from "../application/slack-store.ts";
+import type { SlackMetricRow, SlackStore, SlackTriageRunInput } from "../application/slack-store.ts";
 import type { SlackItemRow } from "../domain/slack-item.ts";
 
 type Methods = { [K in keyof Slack]: Slack[K] };
@@ -97,5 +97,14 @@ export class MemorySlackStore implements SlackStore {
   async deleteWatch(id: string): Promise<void> {
     const at = this.watchRows.findIndex((w) => w.id === id);
     if (at !== -1) this.watchRows.splice(at, 1);
+  }
+  readonly runs: SlackTriageRun[] = [];
+  async recordTriageRun(run: SlackTriageRunInput): Promise<SlackTriageRun> {
+    const saved = { id: `run-${this.runs.length + 1}`, ...run };
+    this.runs.push(saved);
+    return structuredClone(saved);
+  }
+  async triageRuns(since: Date): Promise<SlackTriageRun[]> {
+    return this.runs.filter((r) => new Date(r.startedAt) >= since).sort((a, b) => b.startedAt.localeCompare(a.startedAt)).map((r) => structuredClone(r));
   }
 }

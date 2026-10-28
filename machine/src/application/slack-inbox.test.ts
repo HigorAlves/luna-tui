@@ -12,6 +12,12 @@ const NOW = new Date("2026-10-28T12:00:00Z");
 /** A Slack ts `minutes` before NOW. */
 const ts = (minutes: number): string => ((NOW.getTime() - minutes * 60_000) / 1000).toFixed(6);
 const iso = (minutes: number): string => new Date(NOW.getTime() - minutes * 60_000).toISOString();
+/** A poll and the triage it queued: the snapshot once the verdicts have landed. */
+const poll = async (inbox: SlackInbox): Promise<SlackSnapshot> => {
+  await inbox.pollOnce();
+  await inbox.idle();
+  return inbox.snapshot;
+};
 
 const USERS: Record<string, { name: string; isBot: boolean }> = { U1: { name: "higor", isBot: false }, U2: { name: "marta", isBot: false }, U3: { name: "ana", isBot: false }, UB: { name: "deploybot", isBot: true } };
 const CHANNELS: Record<string, { name: string; kind: "channel" | "group" | "dm" | "mpim" }> = { C1: { name: "eng", kind: "channel" }, C9: { name: "payments-oncall", kind: "channel" }, CR: { name: "random", kind: "channel" }, D1: { name: "U2", kind: "dm" } };
@@ -105,9 +111,14 @@ function setup(world: World = {}) {
 }
 
 describe("SlackInbox.pollOnce", () => {
-  it("turns mentions into triaged items with the builtin watches, publishes once, then only on change", async () => {
+  it("turns mentions into triaged items with the builtin watches, publishes the poll and then the verdicts, then only on change", async () => {
     const { inbox, published, triaged, slack } = setup({ hits: [hit({ ts: ts(10), text: "<@U1> can you review https://github.com/o/a/pull/212?" })], linkPr: { repo: "o/a", number: 212, split: "review_requested" } });
-    const snapshot = await inbox.pollOnce();
+    // The poll publishes at once, before the pack runs; the verdicts are a second publish.
+    const polled = await inbox.pollOnce();
+    expect(polled.items[0]!.triage).toBeNull();
+    expect(published).toHaveLength(1);
+    await inbox.idle();
+    const snapshot = inbox.snapshot;
     expect(snapshot.error).toBeNull();
     expect(snapshot.me).toEqual({ id: "U1", name: "higor", isBot: false });
     expect(snapshot.socket).toBe("off");
@@ -126,10 +137,10 @@ describe("SlackInbox.pollOnce", () => {
       triage: { priority: "P1", expectsReply: true, by: "model", draft: "On it.", overridden: false },
       linked: { pr: { repo: "o/a", number: 212 }, taskId: null },
     });
-    expect(triaged[0]![0]).toMatchObject({ id: item.id, channel: "#eng", author: "@marta", matched: ["me"] });
-    expect(published).toHaveLength(1);
-    await inbox.pollOnce();
-    expect(published).toHaveLength(1);
+    expect(triaged[0]![0]).toMatchObject({ id: item.id, channel: "#eng", author: "@marta", matched: ["me"], isBot: false, threadReplies: 0 });
+    expect(published).toHaveLength(2);
+    await poll(inbox);
+    expect(published).toHaveLength(2);
     // The second poll searches since the newest hit.
     const searches = slack.calls.filter((c) => c[0] === "searchMentions");
     expect(searches[1]![2]).toBe(ts(10));
@@ -148,7 +159,7 @@ describe("SlackInbox.pollOnce", () => {
       history: { C1: [msg({ ts: ts(5), user: "UB", text: "<!here> deploy done" })] },
       answer: (item) => ({ ...answerAll(item), priority: "P3" }),
     });
-    const { items } = await inbox.pollOnce();
+    const { items } = await poll(inbox);
     expect(items.map((i) => [i.author.name, i.triage?.priority, i.triage?.by, i.triage?.category])).toEqual([
       ["deploybot", "P3", "rules", "automated"],
       ["marta", "P0", "model", "question"],
@@ -167,7 +178,7 @@ describe("SlackInbox.pollOnce", () => {
     });
     await store.addWatch({ kind: "keyword", value: "luna", label: "luna", channels: ["C9"], priority: "P2" });
     await store.addWatch({ kind: "keyword", value: "nothing", label: "nothing", channels: ["C1"], priority: null });
-    const { items } = await inbox.pollOnce();
+    const { items } = await poll(inbox);
     // Newest first.
     expect(items.map((i) => [i.kind, i.channel.name, i.matched, i.triage?.priority])).toEqual([
       ["watch", "payments-oncall", ["keyword:luna"], "P1"],
@@ -188,28 +199,28 @@ describe("SlackInbox.pollOnce", () => {
       replies: { [`C1:${root}`]: [msg({ ts: ts(55), user: "U3", text: "I think so" }), msg({ ts: ts(50), text: "<@U1> second ask" })] },
     };
     const { inbox, store } = setup(world);
-    let { items } = await inbox.pollOnce();
+    let { items } = await poll(inbox);
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ id: `C1:${root}`, count: 2, text: "@higor second ask", replies: 2, youReplied: false, threadTs: null });
     expect(items[0]!.context.map((m) => m.text)).toEqual(["I think so"]);
 
     // You answer in Slack itself: youReplied, no re-triage; then someone replies again: reopened ask.
     world.replies![`C1:${root}`]!.push(msg({ ts: ts(40), user: "U1", text: "done" }));
-    ({ items } = await inbox.pollOnce());
+    ({ items } = await poll(inbox));
     expect(items[0]).toMatchObject({ replies: 3, youReplied: true, split: "fyi" });
     await inbox.patch(items[0]!.id, { done: true });
     world.replies![`C1:${root}`]!.push(msg({ ts: ts(30), user: "U3", text: "<@U1> one more?" }));
-    ({ items } = await inbox.pollOnce());
+    ({ items } = await poll(inbox));
     expect(items[0]).toMatchObject({ replies: 4, youReplied: false, doneAt: null, reopenedAt: NOW.toISOString(), count: 3, text: "@higor one more?", split: "needs_reply" });
     expect(store.rows.size).toBe(1);
   });
 
   it("reports an error, keeps the items, and backs off on a rate limit", async () => {
     const { inbox, published } = setup({ hits: [hit({ ts: ts(1) })] });
-    await inbox.pollOnce();
+    await poll(inbox);
     const world = { searchError: "Slack rate limit on search.messages: retry after 30s" };
     const limited = setup(world);
-    const snapshot = await limited.inbox.pollOnce();
+    const snapshot = await poll(limited.inbox);
     expect(snapshot.error).toMatch(/rate limit/);
     expect(limited.inbox.nextDelayMs).toBe(5 * 60_000);
     expect(inbox.nextDelayMs).toBe(60_000);
@@ -221,12 +232,12 @@ describe("SlackInbox.pollOnce", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       const { inbox, files } = setup({ rules: null, triager: null, hits: [hit({ ts: ts(2) })] });
-      const { items } = await inbox.pollOnce();
+      const { items } = await poll(inbox);
       expect(files.get("/rules.md")).toBe(RULES_TEMPLATE);
       expect(log).toHaveBeenCalledWith(expect.stringContaining("wrote the default rules file to /rules.md"));
       expect(items[0]!.triage).toBeNull();
       expect(items[0]!.split).toBe("fyi");
-      await inbox.pollOnce();
+      await poll(inbox);
       expect(warn.mock.calls.filter((c) => String(c[0]).includes("without triage"))).toHaveLength(1);
     } finally {
       warn.mockRestore();
@@ -234,9 +245,51 @@ describe("SlackInbox.pollOnce", () => {
     }
   });
 
+  it("runs one triage at a time: a poll while the pack runs queues its items for the next run, and a verdict lands on the row as it is now", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const batches: string[][] = [];
+    const triager: Triager = {
+      triage: async (items) => {
+        batches.push(items.map((i) => i.id));
+        if (batches.length === 1) await gate;
+        return new Map(items.map((i) => [i.id, answerAll(i)]));
+      },
+    };
+    const world: World = { triager, hits: [hit({ ts: ts(10), text: "<@U1> first?" })] };
+    const { inbox, published, store } = setup(world);
+    await inbox.pollOnce();
+    expect(batches).toEqual([[`C1:${ts(10)}`]]);
+    // A second poll while the container runs: persisted and published at once, triage queued.
+    world.hits = [hit({ ts: ts(5), text: "<@U1> second?" })];
+    await inbox.pollOnce();
+    expect(inbox.snapshot.items.map((i) => i.triage)).toEqual([null, null]);
+    expect(batches).toHaveLength(1);
+    // You set a priority by hand meanwhile; the verdict keeps it.
+    await inbox.patch(`C1:${ts(10)}`, { priority: "P0" });
+    release();
+    await inbox.idle();
+    expect(batches).toEqual([[`C1:${ts(10)}`], [`C1:${ts(5)}`]]);
+    expect((await store.item(`C1:${ts(10)}`))!.triage).toMatchObject({ priority: "P0", overridden: true, by: "model", draft: "On it." });
+    expect((await store.item(`C1:${ts(5)}`))!.triage).toMatchObject({ priority: "P1", by: "model" });
+    expect(published.at(-1)!.items.every((i) => i.triage !== null)).toBe(true);
+  });
+
+  it("sums the pack's runs for the Floor", async () => {
+    const { inbox, store } = setup();
+    const run = { endedAt: iso(0), items: 4, model: "claude-haiku-5-5", turns: 1, costUsd: 0.01, ok: true, error: null };
+    await store.recordTriageRun({ ...run, startedAt: iso(60) });
+    await store.recordTriageRun({ ...run, startedAt: iso(30), items: 2, costUsd: 0.0052 });
+    await store.recordTriageRun({ ...run, startedAt: iso(10 * 24 * 60), items: 9 });
+    const since = new Date(NOW.getTime() - 7 * 86_400_000);
+    const summary = await inbox.triageRuns(since);
+    expect(summary).toMatchObject({ since: since.toISOString(), items: 6, costUsd: 0.0152 });
+    expect(summary.runs.map((r) => r.startedAt)).toEqual([iso(30), iso(60)]);
+  });
+
   it("gives an item the model skipped a rules fallback", async () => {
     const { inbox } = setup({ hits: [hit({ ts: ts(2), text: "<@U1> fyi" })], answer: () => null });
-    const { items } = await inbox.pollOnce();
+    const { items } = await poll(inbox);
     expect(items[0]!.triage).toMatchObject({ priority: "P2", category: "fyi", by: "rules", summary: "@higor fyi" });
   });
 });
@@ -244,7 +297,7 @@ describe("SlackInbox.pollOnce", () => {
 describe("SlackInbox actions", () => {
   async function seeded(world: World = {}) {
     const w = setup({ hits: [hit({ ts: ts(30), text: "<@U1> can you approve?" })], ...world });
-    const { items } = await w.inbox.pollOnce();
+    const { items } = await poll(w.inbox);
     return { ...w, item: items[0]! };
   }
 
@@ -262,7 +315,7 @@ describe("SlackInbox actions", () => {
     expect(patched.triage).toMatchObject({ priority: "P0", overridden: true });
     expect(patched.split).toBe("needs_reply");
     // A re-triage keeps the override.
-    await inbox.pollOnce();
+    await poll(inbox);
     expect(inbox.snapshot.items[0]!.triage).toMatchObject({ priority: "P0", overridden: true });
     await expect(inbox.patch("C1:nope", { done: true })).rejects.toThrow(NoItemError);
 
@@ -293,7 +346,7 @@ describe("SlackInbox actions", () => {
     expect(slack.postMessage).toHaveBeenCalledWith("C1", "yes", root);
     const silent = new SlackInbox({ slack: noTokenSlack(), triager: null, store, intervalMs: 1, publish: () => {}, findTask: async () => null, linkPr: () => null, createTask: async () => ({}) as TaskRow, markRead: false, rulesPath: "/r", socketToken: null, now: () => NOW, files: { read: async () => "", write: async () => {} } });
     await expect(silent.reply(item.id, "x")).rejects.toThrow(NoSlackTokenError);
-    const snapshot = await silent.pollOnce();
+    const snapshot = await poll(silent);
     expect(snapshot.error).toMatch(/MACHINE_SLACK_USER_TOKEN/);
   });
 
@@ -356,7 +409,7 @@ describe("SlackInbox actions", () => {
     inbox.handleSocketEvent({ type: "reaction_added", user: "U3", reaction: "eyes", item_user: "U1", item: { type: "message", channel: "C1", ts: ts(5) }, event_ts: ts(0) });
     inbox.handleSocketEvent({ type: "reaction_added", user: "U3", reaction: "eyes", item_user: "U2", item: { type: "message", channel: "C1", ts: ts(4) }, event_ts: ts(0) });
     inbox.stop();
-    const { items } = await inbox.pollOnce();
+    const { items } = await poll(inbox);
     expect(slack.history).toHaveBeenCalledWith("C9", expect.any(String), 100);
     expect(items.map((i) => [i.kind, i.text])).toEqual(expect.arrayContaining([["mention", "@higor via socket"], ["reaction", ":eyes: on your message from @ana"]]));
     expect(items).toHaveLength(3);

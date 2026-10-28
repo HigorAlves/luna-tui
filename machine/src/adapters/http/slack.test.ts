@@ -1,4 +1,4 @@
-import type { SlackItem, SlackMetrics, SlackSnapshot, SlackWatch } from "@hardness/contracts";
+import type { SlackItem, SlackMetrics, SlackSnapshot, SlackTriageRuns, SlackWatch } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -111,6 +111,11 @@ function fakeInbox(items: SlackItem[], over: { hasToken?: boolean } = {}): Slack
       const none = { median: null, p90: null };
       return { since: since.toISOString(), items: zero, replied: zero, withinHour: 0, timeToReply: { P0: none, P1: none, P2: none, P3: none }, byDay: [] } satisfies SlackMetrics;
     },
+    async triageRuns(since) {
+      did.push(`triage-runs ${since.toISOString()}`);
+      const run = { id: "r1", startedAt: "2026-10-28T11:00:00Z", endedAt: "2026-10-28T11:00:20Z", items: 3, model: "claude-haiku-5-5", turns: 1, costUsd: 0.0042, ok: true, error: null };
+      return { since: since.toISOString(), runs: [run], items: 3, costUsd: 0.0042 } satisfies SlackTriageRuns;
+    },
     async digest() {
       return "digest";
     },
@@ -199,6 +204,11 @@ describe("the Slack inbox over HTTP", () => {
     expect(metrics.status).toBe(200);
     expect(await metrics.json()).toMatchObject({ items: { P0: 0 }, byDay: [] });
     expect((await app.request("/slack/metrics?since=soon")).status).toBe(400);
+    const runs = await app.request("/slack/triage-runs?since=30d");
+    expect(runs.status).toBe(200);
+    expect(await runs.json()).toMatchObject({ items: 3, costUsd: 0.0042, runs: [{ id: "r1", model: "claude-haiku-5-5", ok: true }] });
+    expect(slack.did.filter((d) => d.startsWith("triage-runs"))).toHaveLength(1);
+    expect((await app.request("/slack/triage-runs?since=soon")).status).toBe(400);
     expect(await (await app.request("/slack/usergroups")).json()).toEqual([{ id: "S1", handle: "platform-team", name: "Platform" }]);
     expect(await (await app.request("/slack/channels")).json()).toEqual([{ id: "C1", name: "eng", kind: "channel" }]);
   });

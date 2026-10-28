@@ -58,7 +58,7 @@ export const SlackWatchPatch = z.object({
 });
 export type SlackWatchPatch = z.infer<typeof SlackWatchPatch>;
 
-/** What Haiku (or a rule) decided about an item. */
+/** What the `slack_triage` pack (or a rule) decided about an item. */
 export interface SlackTriage {
   priority: SlackPriority;
   category: SlackCategory;
@@ -157,6 +157,29 @@ export const SlackTaskInput = z.object({
   repoPath: z.string().nullable().optional(),
 });
 export type SlackTaskInput = z.infer<typeof SlackTaskInput>;
+
+/** One run of the `slack_triage` pack: a batch of items through the stage container. */
+export interface SlackTriageRun {
+  id: string;
+  startedAt: string;
+  endedAt: string;
+  /** Items in the batch. */
+  items: number;
+  model: string;
+  turns: number;
+  costUsd: number | null;
+  ok: boolean;
+  error: string | null;
+}
+
+/** `GET /slack/triage-runs?since=7d|30d`: what triage cost, for the Floor. */
+export interface SlackTriageRuns {
+  since: string;
+  runs: SlackTriageRun[];
+  /** Items triaged across the runs. */
+  items: number;
+  costUsd: number;
+}
 
 /** `GET /slack/metrics?since=7d|30d`: how fast you answer. */
 export interface SlackMetrics {

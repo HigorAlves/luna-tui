@@ -20,8 +20,7 @@ import { GitHubIntake } from "./application/intake.ts";
 import { GitHubPulls } from "./application/pulls.ts";
 import { SlackInbox } from "./application/slack-inbox.ts";
 import { noTokenSlack } from "./application/slack.ts";
-import { createAnthropicTriager } from "./adapters/anthropic/triage.ts";
-import { loadCredential } from "./adapters/docker/credentials.ts";
+import { createSlackTriager } from "./application/stages/slack-triage-runner.ts";
 import { PgSlackStore } from "./adapters/persistence/slack-store.ts";
 import { SocketMode } from "./adapters/slack/socket-mode.ts";
 import { createSlack } from "./adapters/slack/web-api.ts";
@@ -99,7 +98,7 @@ const watcher = new StreamWatcher(bus);
 let pipeline: Pipeline;
 /** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
 const policies = new PolicyStore();
-const { real, verifyPack, checksExec } = await buildRealStages(
+const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   config,
   watcher,
   (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
@@ -224,14 +223,15 @@ const pulls = new GitHubPulls({
 const prTasks = {
   dispatch: (pr: PullRequest, action: PrAction) => createPrTask({ worktreesDir: config.worktreesDir, pipeline }, pr, action),
 };
-/** The Slack inbox: your user token reads and posts; Haiku triages when an API key is set. */
+/** The Slack inbox: your user token reads and posts; the slack_triage pack triages in the stage
+ *  container with the same image and credential as the stages, so it is off when they are. */
 const slackApi = config.slackInbox.userToken ? createSlack(config.slackInbox.userToken) : noTokenSlack();
-const credential = await loadCredential();
-const triager = credential?.name === "ANTHROPIC_API_KEY" ? createAnthropicTriager(credential.value) : null;
+const slackStore = new PgSlackStore(db);
+const triager = agentDeps ? createSlackTriager({ ...agentDeps, store: slackStore }) : null;
 const slackInbox = new SlackInbox({
   slack: slackApi,
   triager,
-  store: new PgSlackStore(db),
+  store: slackStore,
   intervalMs: config.slackInbox.intervalMs,
   publish: (snapshot) => bus.publish({ type: "slack.items", snapshot }),
   findTask: (id) => pipeline.get(id).catch(() => null),
@@ -264,7 +264,7 @@ let socket: SocketMode | undefined;
 let digestTimer: NodeJS.Timeout | undefined;
 if (config.slackInbox.enabled && config.slackInbox.userToken) {
   const { intervalMs, appToken, digestAt } = config.slackInbox;
-  console.log(`slack inbox: polling mentions, DMs, threads and watches every ${intervalMs / 1000}s${triager ? " · triage by Haiku" : " · no API key, no triage"}${appToken ? " · Socket Mode on" : ""}`);
+  console.log(`slack inbox: polling mentions, DMs, threads and watches every ${intervalMs / 1000}s${triager ? " · triage by the slack_triage pack (haiku)" : " · agents off, no triage"}${appToken ? " · Socket Mode on" : ""}`);
   slackInbox.start();
   if (appToken) {
     socket = new SocketMode({

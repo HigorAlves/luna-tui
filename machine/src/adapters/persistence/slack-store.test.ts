@@ -16,7 +16,7 @@ afterAll(async () => {
   await db.destroy();
 });
 beforeEach(async () => {
-  await db.query("truncate slack_items, slack_watches");
+  await db.query("truncate slack_items, slack_watches, slack_triage_runs");
 });
 
 const now = new Date("2026-10-28T12:00:00Z");
@@ -95,5 +95,21 @@ describe("PgSlackStore watches", () => {
     expect((await store.watches()).map((w) => w.value)).toEqual(["here", "luna"]);
     await store.deleteWatch(word.id);
     expect((await store.watches()).map((w) => w.value)).toEqual(["here"]);
+  });
+});
+
+describe("PgSlackStore triage runs", () => {
+  it("records a run with its cost and lists the ones in a window, newest first", async () => {
+    const base = { endedAt: daysAgo(0), items: 3, model: "claude-haiku", turns: 1, costUsd: 0.0123, ok: true, error: null };
+    const saved = await store.recordTriageRun({ ...base, startedAt: daysAgo(1) });
+    await store.recordTriageRun({ ...base, startedAt: daysAgo(10), ok: false, costUsd: null, error: "timed out" });
+    await store.recordTriageRun({ ...base, startedAt: daysAgo(0) });
+    expect(saved).toMatchObject({ id: expect.any(String), startedAt: daysAgo(1), items: 3, costUsd: 0.0123, ok: true, error: null });
+    const week = await store.triageRuns(new Date(now.getTime() - 7 * 86_400_000));
+    expect(week.map((r) => r.startedAt)).toEqual([daysAgo(0), daysAgo(1)]);
+    expect(week[0]!.costUsd).toBe(0.0123);
+    const all = await store.triageRuns(new Date(0));
+    expect(all).toHaveLength(3);
+    expect(all[2]).toMatchObject({ ok: false, costUsd: null, error: "timed out" });
   });
 });

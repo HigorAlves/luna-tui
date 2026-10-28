@@ -304,16 +304,17 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
       await slack.deleteWatch(c.req.param("id"));
       return c.body(null, 204);
     });
-    app.get("/slack/metrics", async (c) => {
-      let since: Date;
+    const sinceOf = (value: string | undefined): Date => {
       try {
-        since = parseSince(c.req.query("since"));
+        return parseSince(value);
       } catch (error) {
         if (error instanceof InvalidSince) throw new BadRequest(error.message);
         throw error;
       }
-      return c.json(await slack.metrics(since));
-    });
+    };
+    app.get("/slack/metrics", async (c) => c.json(await slack.metrics(sinceOf(c.req.query("since")))));
+    // What the slack_triage pack cost: one row per container run, items and dollars summed.
+    app.get("/slack/triage-runs", async (c) => c.json(await slack.triageRuns(sinceOf(c.req.query("since")))));
     app.get("/slack/usergroups", async (c) => c.json(await slack.usergroups()));
     app.get("/slack/channels", async (c) => c.json(await slack.channels()));
   }

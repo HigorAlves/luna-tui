@@ -25,15 +25,25 @@ const stageInput = (pack: PackId, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-function run(input: unknown, env: Record<string, string> = {}, files: Record<string, string> = {}) {
+const slack = {
+  me: { id: "U1", name: "higor" },
+  watches: [{ label: "@platform-team", kind: "usergroup" }],
+  rules: "## Notes\n- short replies\n",
+  items: [{ id: "C1:1", channel: "#eng", author: "@marta", isBot: false, text: "can you review?", context: [], matched: ["me"], threadReplies: 0 }],
+};
+
+function run(input: unknown, env: Record<string, string> = {}, files: Record<string, string> = {}, { emptyWork = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "factory-main-"));
   const inDir = join(root, "in");
   const out = join(root, "out");
   const work = join(root, "work");
   mkdirSync(inDir);
   mkdirSync(out);
-  mkdirSync(join(work, "docs", "agents"), { recursive: true });
-  writeFileSync(join(work, "docs", "agents", "project-context.md"), "# Project context\n\n- Keep it small.\n");
+  mkdirSync(work);
+  if (!emptyWork) {
+    mkdirSync(join(work, "docs", "agents"), { recursive: true });
+    writeFileSync(join(work, "docs", "agents", "project-context.md"), "# Project context\n\n- Keep it small.\n");
+  }
   writeFileSync(join(inDir, "stage.json"), JSON.stringify(input));
   for (const [rel, body] of Object.entries(files)) {
     mkdirSync(join(out, rel, ".."), { recursive: true });
@@ -55,7 +65,8 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
   return { code, stdout, out, result };
 }
 
-const agentPacks = Object.values(PACKS).filter((p) => p.agent !== null).map((p) => p.id);
+// slack_triage has no worktree and reads no project context; its dry run is below.
+const agentPacks = Object.values(PACKS).filter((p) => p.agent !== null && p.id !== "slack_triage").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -75,6 +86,22 @@ describe("factory main (dry run)", () => {
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run", ledger: { schema: 1, slices: [] } });
     expect(readFileSync(join(out, "events.jsonl"), "utf8")).toContain('"stage_end"');
+  });
+
+  it("slack_triage: runs over an empty /work with no tools, renders the batch and leaves a valid result", () => {
+    const task = { id: "slack-triage", title: "Slack triage", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const { code, stdout, out, result } = run(stageInput("slack_triage", { task, plan: null, context: { projectContext: null, slack } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`slack-triager` role running the `slack_triage` stage");
+    expect(prompt).toContain("higor (U1)");
+    expect(prompt).toContain("- @platform-team (usergroup)");
+    expect(prompt).toContain("id C1:1 · #eng · @marta · matched me");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "slack-triager", agents: ["slack-triager"], model: "haiku", effort: "low", maxTurns: 5, tools: [], allowedTools: [] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
   it("takes a structured answer through the test seam and maps its kind to the outcome", () => {
