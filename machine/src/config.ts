@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 
 import { RUNNING, type TaskState } from "@hardness/contracts";
 
+import { DEFAULT_GATE_SECS, parseDuration } from "./domain/sla.ts";
+
 /** Settings read from the environment. Defaults match compose.dev.yml and herdr's config. */
 export interface Config {
   databaseUrl: string;
@@ -42,6 +44,10 @@ export interface Config {
   slack: { token: string; channel: string } | null;
   /** The Slack inbox: your user token, the optional app-level token for Socket Mode, and its knobs. */
   slackInbox: SlackInboxConfig;
+  /** Jira Cloud: the site, your Atlassian email and API token. Null means Jira is off (unset, or `MACHINE_JIRA=off`). */
+  jira: JiraConfig | null;
+  /** The ticket SLAs a repo's luna.yaml does not set: the gate target (`MACHINE_SLA_GATE`, 1h) and the cycle target (`MACHINE_SLA_CYCLE`, none), in seconds. */
+  sla: { gateSecs: number | null; cycleSecs: number | null };
   /** Days to keep a closed task's events/stage runs before pruning them. 0 disables pruning. */
   retentionDays: number;
   /** Days after a task closes before its worktree is removed and its merged branch deleted. 0 disables it. */
@@ -69,6 +75,15 @@ export interface SlackInboxConfig {
   rulesPath: string;
   /** `HH:MM` local time for the morning digest DM; null means none. */
   digestAt: { hour: number; minute: number } | null;
+}
+
+export interface JiraConfig {
+  /** `https://acme.atlassian.net`, where issue urls point. */
+  site: string;
+  email: string;
+  token: string;
+  /** Set for a scoped API token: calls go through `https://api.atlassian.com/ex/jira/<cloudId>`. */
+  cloudId: string | null;
 }
 
 export type RestartPolicy = "requeue" | "escalate";
@@ -179,6 +194,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (!match || hour > 23 || minute > 59) throw new Error(`MACHINE_SLACK_DIGEST_AT must be HH:MM, got "${env.MACHINE_SLACK_DIGEST_AT}"`);
     digestAt = { hour, minute };
   }
+  let jira: JiraConfig | null = null;
+  if (env.MACHINE_JIRA !== "off") {
+    const site = env.MACHINE_JIRA_SITE?.trim().replace(/\/+$/, "") ?? "";
+    const email = env.MACHINE_JIRA_EMAIL?.trim() ?? "";
+    const token = env.MACHINE_JIRA_TOKEN?.trim() ?? "";
+    const set = [site, email, token].filter((v) => v !== "").length;
+    if (set > 0 && set < 3) throw new Error("MACHINE_JIRA_SITE, MACHINE_JIRA_EMAIL and MACHINE_JIRA_TOKEN go together; set all three or none");
+    if (set === 3) {
+      if (!/^https:\/\/[^/\s]+$/.test(site)) throw new Error(`MACHINE_JIRA_SITE must be the site's https url, like https://acme.atlassian.net, got "${env.MACHINE_JIRA_SITE}"`);
+      jira = { site, email, token, cloudId: env.MACHINE_JIRA_CLOUD_ID?.trim() || null };
+    }
+  }
+  const sla = {
+    gateSecs: env.MACHINE_SLA_GATE === undefined || env.MACHINE_SLA_GATE === "" ? DEFAULT_GATE_SECS : parseDuration(env.MACHINE_SLA_GATE, "MACHINE_SLA_GATE"),
+    cycleSecs: env.MACHINE_SLA_CYCLE === undefined || env.MACHINE_SLA_CYCLE === "" ? null : parseDuration(env.MACHINE_SLA_CYCLE, "MACHINE_SLA_CYCLE"),
+  };
   const home = env.HOME ?? homedir();
   return {
     databaseUrl: env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
@@ -206,6 +237,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       rulesPath: env.MACHINE_SLACK_RULES?.trim() || resolve(REPO_ROOT, "docs", "agents", "slack-triage.md"),
       digestAt,
     },
+    jira,
+    sla,
     retentionDays,
     worktreeRetentionDays,
     maxPerRepo: optionalPositiveInt(env, "MACHINE_MAX_PER_REPO"),

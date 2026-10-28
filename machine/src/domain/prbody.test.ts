@@ -38,3 +38,19 @@ describe("buildPr", () => {
     expect(pr.body).toContain("- desc");
   });
 });
+
+describe("buildPr for a Jira-linked task", () => {
+  it("opens the title with the key, keeps it inside the limit, and ends the body with the issue's url", () => {
+    const task = {
+      id: "t1", title: "Login page with email and password and a long tail that gets cut", description: "Users sign in.", criteria: ["errors show"],
+      source: null, jira: { key: "PLAT-123", url: "https://acme.atlassian.net/browse/PLAT-123", issueType: "Bug", status: null, priority: null, dueAt: null, syncedAt: null, blocked: null },
+    } as unknown as TaskRow;
+    const pr = buildPr({ task, plan: null, repoSlug: "o/a" });
+    expect(pr.title).toBe("PLAT-123: Login page with email and password and a long tail");
+    expect(pr.title.length).toBeLessThanOrEqual(60);
+    expect(pr.body.endsWith("Jira: https://acme.atlassian.net/browse/PLAT-123")).toBe(true);
+    const imported = buildPr({ task: { ...task, jira: null, source: { kind: "jira", key: "PLAT-9", url: "https://acme.atlassian.net/browse/PLAT-9", issueType: null } } as unknown as TaskRow, plan: null, repoSlug: "o/a" });
+    expect(imported.title.startsWith("PLAT-9: ")).toBe(true);
+    expect(imported.body).not.toContain("Closes #");
+  });
+});

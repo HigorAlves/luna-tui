@@ -28,9 +28,13 @@ const OUT = "/out";
 const TMP = "/tmp";
 const DEFAULT_BRANCH_PREFIX = "task/";
 
-/** The branches a stage may commit to: a PR task owns the PR's own head branch; every other task a `task/` branch. */
+/** The branches a stage may commit to: a PR task owns the PR's own head branch; a task the
+ *  machine gave a branch outside `task/` (a Jira-linked one, `bug/PLAT-123` by its repo's
+ *  pattern) owns exactly that branch; every other task a `task/` branch. */
 export function branchPrefixFor(task: Pick<StageInput["task"], "branch" | "source">): string {
-  return task.source?.kind === "github_pr" && task.source.headRef ? task.source.headRef : DEFAULT_BRANCH_PREFIX;
+  if (task.source?.kind === "github_pr" && task.source.headRef) return task.source.headRef;
+  if (task.branch && !task.branch.startsWith(DEFAULT_BRANCH_PREFIX)) return task.branch;
+  return DEFAULT_BRANCH_PREFIX;
 }
 
 // ---------------------------------------------------------------------------------------

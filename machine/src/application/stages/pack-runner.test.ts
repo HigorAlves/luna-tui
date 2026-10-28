@@ -156,7 +156,7 @@ describe("agent stages through packs", () => {
     const sandbox = vi.fn(fakeSandbox(output()));
     const tampered = { ...context("implementing"), task: { ...context("implementing").task, branch: "main", worktreePath: repo } };
     const result = await runners(sandbox).implementing!(tampered);
-    expect(result).toMatchObject({ outcome: "fail", detail: { error: "refusing to run implementing on branch main: the pipeline only writes task/* branches" } });
+    expect(result).toMatchObject({ outcome: "fail", detail: { error: "refusing to run implementing on branch main: the pipeline only writes task/* branches (or the branch it named for a Jira-linked task)" } });
     expect(sandbox).not.toHaveBeenCalled();
     // A read-only pack on the same branch is fine: it changes nothing.
     await runners(fakeSandbox(output())).triage!({ ...tampered, stage: "triage" });

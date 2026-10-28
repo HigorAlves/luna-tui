@@ -33,6 +33,11 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `MACHINE_SLACK_MARK_READ` | off | `on` makes `d` (done) also move your read cursor in Slack (`conversations.mark`, needs the `channels:write`, `groups:write`, `im:write`, `mpim:write` user scopes) |
 | `MACHINE_SLACK_RULES` | `docs/agents/slack-triage.md` in the repo | the triage rules file (VIPs, muted channels, always-P0 keywords, quiet hours, notes for the model, learned priors). A missing file is created from the template; compose points it at `MACHINE_STATE_DIR/slack-triage.md`. Triage itself runs as the `slack_triage` pack in the stage container, with the same credential and Docker image as the stages; nothing else to set |
 | `MACHINE_SLACK_DIGEST_AT` | unset | `HH:MM` local time: the machine DMs you a ten-line digest (open P0/P1, what waits on others, yesterday's response time) every day at that time |
+| `MACHINE_JIRA_SITE` / `MACHINE_JIRA_EMAIL` / `MACHINE_JIRA_TOKEN` | unset | Jira Cloud: the site (`https://acme.atlassian.net`), your Atlassian account's email and an API token from [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens) (basic auth, up to a year). All three or none. Set, tickets link to issues (a `PLAT-123` in a new ticket's text, `J` on the board, intake), the linked issue follows the task per the repo's `luna.yaml` `jira` block, and the `/jira/*` routes exist. Unset: every Jira call says so and repos with a `jira` block still run |
+| `MACHINE_JIRA_CLOUD_ID` | unset | for a *scoped* API token only: calls go through `https://api.atlassian.com/ex/jira/<cloud id>` instead of the site (the site is still where issue urls point). Find the id at `https://<site>/_edge/tenant_info`. An unscoped token needs nothing here |
+| `MACHINE_JIRA` | on | `off` turns everything Jira off even when the three variables are set |
+| `MACHINE_SLA_GATE` | `1h` | how long a task may wait on you at a gate (plan, test check, answers, ship, memory review, escalated) before its clock turns red, where the repo's `luna.yaml` `sla.gate` says nothing. `30m`, `4h`, `3d` or `off`. A Jira priority of Highest or High halves it, Lowest doubles it |
+| `MACHINE_SLA_CYCLE` | unset | created-to-closed target for every ticket, where the repo's `sla.cycle` says nothing; same durations |
 | `RUNNER_IMAGE` | `hardness-runner:dev` | the stage container image |
 | `RUNNER_QA_IMAGE` | `hardness-runner-qa:dev` | the QA stage image; without it e2e is skipped |
 | `WORKTREES_DIR` | `~/Developer/worktrees` | where task worktrees are created, as `<worktreesDir>/<repo>/<branch>` |
@@ -74,9 +79,31 @@ policy:
   holdout_cases: false                    # true keeps test_design's cases away from the implementer; verifying still judges by them
 qa_targets:                               # where e2e may drive the app; the credential is a reference, never a value
   - { name: staging, url: https://stg.example.com, credential: env:QA_PASSWORD }
+jira:                                     # how this repo's tasks talk to Jira (needs MACHINE_JIRA_SITE/EMAIL/TOKEN)
+  project: PLAT                           # where `J` creates issues; also the default for intake
+  intake:
+    jql: 'project = PLAT AND labels = luna AND status = Ready'
+    every: 5m                             # the poll; each new issue goes through the jira_intake pack first
+  on:                                     # task state → Jira status name, resolved to a transition when the task enters it
+    triage:        In Refinement
+    implementing:  In Progress
+    awaiting_ship: In Review
+    closed:        Done
+    escalated:     Blocked                # optional; states left out are never touched
+  comments: milestones                    # none | milestones (picked up, PR opened, closed) | gates (every "needs you" too)
+  branch: "{type}/{key}"                  # a linked task's branch; {type} is the issue type lowercased: bug/PLAT-123, story/PLAT-124
+  fields:                                 # optional: Jira fields set with the transition into a state
+    awaiting_ship:
+      customfield_10045: "{pr_url}"       # also {task_id}, {branch}, {board_url}
+sla:                                      # ticket clocks; the machine's env defaults apply where a key is missing
+  gate: 1h                                # any gate waiting on you (MACHINE_SLA_GATE)
+  stage:                                  # per running stage; yellow from 80%, red past it; the stage is not aborted
+    implementing: 4h
+    verifying: 1h
+  cycle: 3d                               # created → closed (MACHINE_SLA_CYCLE)
 ```
 
-Every key is optional and unknown keys are ignored. `auto_approve_plan_minutes` needs triage to report `confidence: high` and `risk: low` and to have asked nothing; anything less waits for you as always, and the approval it does make is logged as `plan.auto_approved` with the reason on the approval.
+Every key is optional and unknown keys are ignored. Under `jira.on`, `jira.fields` and `sla.stage` the keys must be task states (`sla.stage`: running ones); an unknown one is dropped with one warning per version of the file, the rest applies. Durations are `30m`, `4h`, `3d` or `off`. `jira.on` works by status *name*, matched without regard to case against the transitions Jira offers from the issue's current status: already there, nothing happens; no transition leads there, the task gets a `jira.blocked` event (with Jira's own words when it refused), the board shows it, and the pipeline goes on. Comments are posted as Atlassian Document Format built from plain text (paragraphs, `- ` bullets, bare urls as links). `branch` also takes `{slug}`, `{route}` and `{id}`; an unknown issue type renders `{type}` as `task`; unlinked tasks keep `task/<id>-<slug>`. `auto_approve_plan_minutes` needs triage to report `confidence: high` and `risk: low` and to have asked nothing; anything less waits for you as always, and the approval it does make is logged as `plan.auto_approved` with the reason on the approval.
 
 Each `services` entry runs as its own container beside every stage that runs the repo's code (implementing, verifying, e2e) and every check run, on a private docker network for that run, reachable by its key as hostname; the `exports` become env in the stage or check container. They are torn down with it, so two tasks of one repo never share a database. A service whose `ready` line does not exit 0 within a minute escalates the stage with the service's log tail.
 

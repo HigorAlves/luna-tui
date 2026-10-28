@@ -48,6 +48,7 @@ import type { NewTask } from "./pipeline.ts";
 import { type ChannelInfo, type Conversation, type RawMessage, type Slack, type SlackMe, type Usergroup, messageOf } from "./slack.ts";
 import type { SlackStore } from "./slack-store.ts";
 import type { TriageItem, Triager } from "./slack-triage.ts";
+import { Ticker } from "./ticker.ts";
 
 /** What the HTTP routes need from the inbox; the real class and a test fake both fit. */
 export interface SlackInboxPort {
@@ -169,7 +170,8 @@ export class SlackInbox implements SlackInboxPort {
   nextDelayMs: number;
 
   private timer: NodeJS.Timeout | undefined;
-  private clock: NodeJS.Timeout | undefined;
+  /** The minute tick that recomputes what is overdue. */
+  private readonly clock = new Ticker(() => this.tick(), TICK_MS);
   private soon: NodeJS.Timeout | undefined;
   private stopped = false;
   private polling: Promise<SlackSnapshot> | null = null;
@@ -215,17 +217,15 @@ export class SlackInbox implements SlackInboxPort {
         });
     };
     poll();
-    this.clock = setInterval(() => this.tick(), TICK_MS);
-    this.clock.unref();
+    this.clock.start();
   }
 
   stop(): void {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
-    if (this.clock) clearInterval(this.clock);
+    this.clock.stop();
     if (this.soon) clearTimeout(this.soon);
     this.timer = undefined;
-    this.clock = undefined;
   }
 
   /**

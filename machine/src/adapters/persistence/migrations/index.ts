@@ -10,6 +10,7 @@ import { RenameKindToRoute1793400000000 } from "./1793400000000-RenameKindToRout
 import { AddStageRunCases1793500000000 } from "./1793500000000-AddStageRunCases.ts";
 import { AddSlackInbox1793600000000 } from "./1793600000000-AddSlackInbox.ts";
 import { AddSlackTriageRuns1793700000000 } from "./1793700000000-AddSlackTriageRuns.ts";
+import { AddTaskJira1793800000000 } from "./1793800000000-AddTaskJira.ts";
 
 export const MIGRATIONS: Function[] = [
   Init1792712166445,
@@ -23,4 +24,5 @@ export const MIGRATIONS: Function[] = [
   AddStageRunCases1793500000000,
   AddSlackInbox1793600000000,
   AddSlackTriageRuns1793700000000,
+  AddTaskJira1793800000000,
 ];

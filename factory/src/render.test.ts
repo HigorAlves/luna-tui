@@ -126,6 +126,21 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.slack_triage, input, template })).toContain("me (none)\nwatches:\n(none)\nrules:\n(none)\nitems:\n(none)");
   });
 
+  it("renders the issue for jira_intake: the facts line, the description, the comments and the repo", () => {
+    const template = "issue:\n{{context.jira.issue}}\ndescription:\n{{context.jira.description}}\ncomments:\n{{context.jira.comments}}\nrepo: {{context.jira.repoPath}}";
+    const jira = { key: "PLAT-123", url: "https://acme.atlassian.net/browse/PLAT-123", summary: "Login page", description: "Users sign in.\n\n- bad password errors", issueType: "Story", priority: "High", labels: ["luna"], dueAt: "2026-10-31", comments: ["Marta: please", "Lee: by Friday"], repoPath: "/work" };
+    const prompt = renderPrompt({ pack: PACKS.jira_intake, input: { ...input, pack: "jira_intake", stage: "jira_intake", context: { projectContext: null, jira } }, template });
+    expect(prompt).toContain("issue:\nLogin page\nPLAT-123 · Story · priority High · labels luna · due 2026-10-31\nhttps://acme.atlassian.net/browse/PLAT-123");
+    expect(prompt).toContain("description:\nUsers sign in.\n\n- bad password errors");
+    expect(prompt).toContain("comments:\n- Marta: please\n- Lee: by Friday");
+    expect(prompt).toContain("repo: /work");
+    expect(prompt).toContain("`jira-triager` role running the `jira_intake` stage");
+    const bare = renderPrompt({ pack: PACKS.jira_intake, input: { ...input, pack: "jira_intake", stage: "jira_intake", context: { projectContext: null, jira: { ...jira, labels: [], dueAt: null, description: "", comments: [], repoPath: null } } }, template });
+    expect(bare).toContain("PLAT-123 · Story · priority High\nhttps");
+    expect(bare).toContain("description:\n(none)\ncomments:\n(none)\nrepo: (unknown: /work is empty)");
+    expect(renderPrompt({ pack: PACKS.jira_intake, input, template })).toContain("issue:\n(none)\ndescription:\n(none)");
+  });
+
   it("names a script pack's agent as script", () => {
     expect(renderPrompt({ pack: PACKS.evidence, input: { ...input, pack: "evidence", stage: "evidence" }, template: "{{agent}}" })).toMatch(/\nscript$/);
   });

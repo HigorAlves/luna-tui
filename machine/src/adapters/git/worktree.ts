@@ -3,7 +3,10 @@
 import { existsSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 
+import { jiraBranch, slug } from "../../domain/jira-link.ts";
 import { exec, execOrThrow } from "../process/exec.ts";
+
+export { slug };
 
 /** Every git command the machine runs on the host carries this: a stage can write into
  *  the shared .git dir, and a hook it left there must never execute as you. */
@@ -14,28 +17,19 @@ export interface Workspace {
   path: string;
 }
 
-/** Lowercase ascii words joined by `-`. Never empty. */
-export function slug(text: string): string {
-  const words = text
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 40)
-    .replace(/-+$/, "");
-  return words || "task";
-}
-
-/** Branch and checkout path for a task, following herdr's `<dir>/<repo>/<branch>` layout. */
+/** Branch and checkout path for a task, following herdr's `<dir>/<repo>/<branch>` layout. A
+ *  Jira-linked task takes the repo's `jira.branch` pattern (`{type}/{key}` by default, so
+ *  `bug/PLAT-123`); every other task `task/<id8>-<slug>`. The checkout folder is the branch
+ *  with `/` as `-`, so `bug/PLAT-123` lives in `<repo>/bug-PLAT-123`. */
 export function workspaceFor(
-  task: { id: string; title: string },
+  task: { id: string; title: string; route?: string; jira?: import("@hardness/contracts").JiraLink | null; source?: import("@hardness/contracts").TaskSource | null },
   repoPath: string,
   worktreesDir: string,
+  jiraPattern?: string,
 ): Workspace {
-  const name = `${task.id.slice(0, 8)}-${slug(task.title)}`;
-  return {
-    branch: `task/${name}`,
-    path: join(worktreesDir, basename(repoPath), `task-${name}`),
-  };
+  const linked = jiraBranch({ id: task.id, title: task.title, route: task.route ?? "feature", jira: task.jira ?? null, source: task.source ?? null }, jiraPattern);
+  const branch = linked ?? `task/${task.id.slice(0, 8)}-${slug(task.title)}`;
+  return { branch, path: join(worktreesDir, basename(repoPath), branch.replaceAll("/", "-")) };
 }
 
 /** A lock older than this was left by a git that died, not one that is running. */

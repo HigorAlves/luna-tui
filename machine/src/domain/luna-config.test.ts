@@ -54,6 +54,8 @@ describe("parseLunaConfig", () => {
         },
       },
       toolchains: { node: "24", rust: "stable" },
+      jira: null,
+      sla: {},
     });
   });
 
@@ -79,5 +81,63 @@ describe("parseLunaConfig", () => {
 
   it("ignores keys it does not know, so a newer file still loads on an older machine", () => {
     expect(parseLunaConfig("future: 1\npolicy: { qa: web, later: 2 }\n")).toEqual(DEFAULT_POLICY);
+  });
+});
+
+describe("parseLunaConfig: jira and sla", () => {
+  const block = `
+jira:
+  project: PLAT
+  intake:
+    jql: 'project = PLAT AND labels = luna AND status = Ready'
+    every: 10m
+  on:
+    implementing: In Progress
+    awaiting_ship: In Review
+    closed: Done
+    escalated: Blocked
+    shipping_it: Nope
+  comments: gates
+  branch: "task/{key}-{slug}"
+  fields:
+    awaiting_ship:
+      customfield_10045: "{pr_url}"
+    nowhere:
+      x: y
+sla:
+  gate: 30m
+  stage:
+    implementing: 4h
+    verifying: 1h
+    awaiting_ship: 2h
+  cycle: 3d
+`;
+
+  it("reads the jira block into the policy, dropping unknown task states with a warning", () => {
+    const warnings: string[] = [];
+    const policy = parseLunaConfig(block, (m) => warnings.push(m));
+    expect(policy.jira).toEqual({
+      project: "PLAT",
+      intake: { jql: "project = PLAT AND labels = luna AND status = Ready", everySecs: 600 },
+      on: { implementing: "In Progress", awaiting_ship: "In Review", closed: "Done", escalated: "Blocked" },
+      comments: "gates",
+      fields: { awaiting_ship: { customfield_10045: "{pr_url}" } },
+      branch: "task/{key}-{slug}",
+    });
+    expect(policy.sla).toEqual({ gate: 1800, stage: { implementing: 14_400, verifying: 3600 }, cycle: 259_200 });
+    expect(warnings).toEqual(["jira.on.shipping_it: not a task state; dropped", "jira.fields.nowhere: not a task state; dropped", "sla.stage.awaiting_ship: not a running stage; dropped"]);
+  });
+
+  it("defaults comments to milestones, the branch to {type}/{key}, intake to every 5m, and reads off as no clock", () => {
+    const policy = parseLunaConfig("jira:\n  intake: { jql: 'labels = luna' }\n  on: { closed: Done }\nsla:\n  gate: off\n");
+    expect(policy.jira).toEqual({ project: null, intake: { jql: "labels = luna", everySecs: 300 }, on: { closed: "Done" }, comments: "milestones", fields: {}, branch: "{type}/{key}" });
+    expect(policy.sla).toEqual({ gate: null });
+    expect(parseLunaConfig("jira: {}\n").jira).toEqual({ project: null, intake: null, on: {}, comments: "milestones", fields: {}, branch: "{type}/{key}" });
+  });
+
+  it("refuses a duration it cannot read, naming the key", () => {
+    expect(() => parseLunaConfig("sla:\n  gate: soon\n")).toThrow(/sla\.gate/);
+    expect(() => parseLunaConfig("jira:\n  comments: loud\n")).toThrow(/jira\.comments/);
+    expect(() => parseLunaConfig("jira:\n  intake: { jql: 'x', every: 5 }\n")).toThrow(/jira\.intake\.every/);
   });
 });

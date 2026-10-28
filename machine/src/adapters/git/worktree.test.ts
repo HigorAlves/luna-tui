@@ -146,3 +146,18 @@ describe("a PR task's worktree", () => {
     expect(existsSync(join(path, "b.txt"))).toBe(true);
   });
 });
+
+describe("workspaceFor", () => {
+  const task = { id: "a1b2c3d4-0000-0000-0000-000000000000", title: "Login page!", route: "feature" };
+  const link = { key: "PLAT-123", url: "u", issueType: "Bug", status: null, priority: null, dueAt: null, syncedAt: null, blocked: null };
+
+  it("names task/<id8>-<slug> for an unlinked task and the repo's jira.branch pattern for a linked one, the folder being the branch with / as -", () => {
+    expect(workspaceFor(task, "/repos/app", "/wt")).toEqual({ branch: "task/a1b2c3d4-login-page", path: "/wt/app/task-a1b2c3d4-login-page" });
+    expect(workspaceFor({ ...task, jira: link }, "/repos/app", "/wt")).toEqual({ branch: "bug/PLAT-123", path: "/wt/app/bug-PLAT-123" });
+    expect(workspaceFor({ ...task, jira: { ...link, issueType: "Tech Debt" } }, "/repos/app", "/wt").branch).toBe("tech-debt/PLAT-123");
+    expect(workspaceFor({ ...task, jira: { ...link, issueType: null } }, "/repos/app", "/wt").branch).toBe("task/PLAT-123");
+    expect(workspaceFor({ ...task, jira: link }, "/repos/app", "/wt", "task/{key}-{slug}-{route}-{id}").branch).toBe("task/PLAT-123-login-page-feature-a1b2c3d4");
+    // An intake import links through its source before JiraWatch fills the column.
+    expect(workspaceFor({ ...task, source: { kind: "jira", key: "PLAT-9", url: "u", issueType: "Story" } }, "/repos/app", "/wt").branch).toBe("story/PLAT-9");
+  });
+});

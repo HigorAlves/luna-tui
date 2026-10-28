@@ -508,6 +508,12 @@ describe("branchPrefixFor", () => {
     expect(branchPrefixFor({ branch: "feat/export", source: { kind: "github_pr", repo: "o/a", number: 1, url: "u", headRef: "feat/export", baseRef: "main" } })).toBe("feat/export");
     expect(branchPrefixFor({ branch: "task/t1-fix", source: null })).toBe("task/");
     expect(branchPrefixFor({ branch: "task/t1-fix", source: { kind: "github", repo: "o/a", number: 1, url: "u" } })).toBe("task/");
+    // A Jira-linked task works on the branch its repo's pattern named; the guard accepts exactly that branch.
+    expect(branchPrefixFor({ branch: "bug/PLAT-123", source: null })).toBe("bug/PLAT-123");
+    expect(branchPrefixFor({ branch: "bug/PLAT-123", source: { kind: "jira", key: "PLAT-123", url: "u", issueType: "Bug" } })).toBe("bug/PLAT-123");
+    expect(guardBash('git commit -m "fix: login"', { writable: true, branch: "bug/PLAT-123", branchPrefix: branchPrefixFor({ branch: "bug/PLAT-123", source: null }) })).toBeNull();
+    expect(guardBash('git commit -m "fix: login"', { writable: true, branch: "main", branchPrefix: branchPrefixFor({ branch: "bug/PLAT-123", source: null }) })).toMatch(/commits must go on a "bug\/PLAT-123" branch/);
+    expect(branchPrefixFor({ branch: "", source: null })).toBe("task/");
     expect(guardBash('git commit -m "fix: lint"', { writable: true, branch: "feat/export", branchPrefix: branchPrefixFor({ branch: "feat/export", source: { kind: "github_pr", repo: "o/a", number: 1, url: "u", headRef: "feat/export", baseRef: "main" } }) })).toBeNull();
   });
 });

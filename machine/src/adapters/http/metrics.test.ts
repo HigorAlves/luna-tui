@@ -74,7 +74,25 @@ describe("GET /metrics", () => {
     expect(m.firstPassRate).toEqual({ verifying: null, ci_watch: null, implementing: null });
     expect(m.escalations).toEqual({ rate: null, topReasons: [] });
     expect(m.cost.totalUsd).toBe(0);
+    expect(m.gates).toEqual({ withinSla: null, answered: 0, waitMs: {} });
     expect(m.queue).toEqual({ depth: 0, slots: { max: 2, active: 0, draining: false }, utilisation: 0 });
+  });
+
+  it("counts the gates answered in the window, the share inside the gate SLA and the median wait per gate", async () => {
+    const { closed, escalated } = await seed();
+    const m = await getMetrics();
+    // The closed task passed four gates (plan, test check, ship, memory); the escalated one answered two and still waits at escalated.
+    expect(m.gates.answered).toBe(6);
+    expect(m.gates.withinSla).toBe(1);
+    expect(Object.keys(m.gates.waitMs).sort()).toEqual(["awaiting_approval", "awaiting_ship", "awaiting_test_check", "reviewing_memory"]);
+    expect(m.gates.waitMs.awaiting_approval!.median).toBeGreaterThanOrEqual(0);
+    // An answer older than the SLA counts against it: push the closed task's plan approval back in time.
+    await db.query("update events set at = at - interval '3 hours' where task_id = $1 and payload->>'to' = 'awaiting_approval'", [closed.id]);
+    const late = await getMetrics();
+    expect(late.gates.answered).toBe(6);
+    expect(late.gates.withinSla).toBeCloseTo(5 / 6);
+    expect(late.gates.waitMs.awaiting_approval!.p90).toBeGreaterThan(2.5 * 3600 * 1000);
+    expect(escalated.id).toBeTruthy();
   });
 
   it("counts tasks, cycle time, first pass, escalations and retries from a seeded pipeline", async () => {

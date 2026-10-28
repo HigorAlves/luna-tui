@@ -85,18 +85,23 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   }
   const limits = PACK_LIMITS[pack];
   if (extra.checkout && limits.writable) throw new Error(`${pack} is writable; a checkout run must be read-only`);
+  const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
+  // The branch the pipeline would give this task today: `task/<id>-<slug>`, or the repo's
+  // `jira.branch` pattern for a linked task.
+  const owned = workspaceFor(task, task.repoPath, deps.worktreesDir, policy.jira?.branch);
   const workspace: Workspace = extra.checkout
     ? { branch: "", path: task.repoPath }
     : task.branch && task.worktreePath
       ? { branch: task.branch, path: task.worktreePath }
-      : workspaceFor(task, task.repoPath, deps.worktreesDir);
-  // The branch prefix is a structural gate: whatever a task row says, a writable stage only
-  // ever commits to a branch the pipeline owns. A PR task owns the PR's own head branch.
+      : owned;
+  // The branch is a structural gate: whatever a task row says, a writable stage only ever
+  // commits to a branch the pipeline owns: a `task/` branch, the one it named for a linked
+  // task, or, for a PR task, the PR's own head branch.
   const prBranch = task.source?.kind === "github_pr" ? task.source.headRef : null;
-  if (limits.writable && !workspace.branch.startsWith(TASK_BRANCH_PREFIX) && workspace.branch !== prBranch) {
+  if (limits.writable && !workspace.branch.startsWith(TASK_BRANCH_PREFIX) && workspace.branch !== prBranch && workspace.branch !== owned.branch) {
     return {
       outcome: "fail",
-      detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches` },
+      detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches (or the branch it named for a Jira-linked task)` },
     };
   }
   if (!extra.checkout) await ensureWorktree(task.repoPath, workspace);
@@ -109,7 +114,6 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   const runDir = join(deps.stateDir, "runs", context.runId);
   if (!resume) await context.started?.({ container, inputCommit });
 
-  const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,

@@ -2,7 +2,7 @@ import { PACKS, type PackId, StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
-import { PACK_LIMITS, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
+import { PACK_LIMITS, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
 
 const task = {
   id: "t1",
@@ -114,12 +114,13 @@ describe("buildStageInput", () => {
     }
   });
 
-  it("has no plan before one is approved, and covers all eleven stage packs plus slack_triage", () => {
+  it("has no plan before one is approved, and covers all eleven stage packs plus slack_triage and jira_intake", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["addressing", "ci_watch", "e2e", "evidence", "implementing", "reviewing", "reviewing_memory", "setup", "slack_triage", "test_design", "triage", "verifying"],
+      ["addressing", "ci_watch", "e2e", "evidence", "implementing", "jira_intake", "reviewing", "reviewing_memory", "setup", "slack_triage", "test_design", "triage", "verifying"],
     );
+    expect(Object.keys(PACK_LIMITS)).toHaveLength(13);
   });
 
   it("builds slack_triage's input around a synthetic task: the batch in context.slack, no plan, no branch, the pack's limits", () => {
@@ -135,6 +136,28 @@ describe("buildStageInput", () => {
     expect(input).toMatchObject({ pack: "slack_triage", stage: "slack_triage", attempt: 1, plan: null, task: { id: "slack-triage", title: "Slack triage", branch: "", repoPath: "", source: null } });
     expect(input.context).toEqual({ projectContext: null, slack });
     expect(input.limits).toEqual({ maxTurns: 3, timeoutMs: 180_000 });
+  });
+
+  it("builds jira_intake's input around the issue: the summary as the title, the repo as the (read-only) worktree, the issue in context.jira", () => {
+    const jira = {
+      key: "PLAT-123",
+      url: "https://acme.atlassian.net/browse/PLAT-123",
+      summary: "Login page",
+      description: "Users sign in.\n\n- bad password errors",
+      issueType: "Story",
+      priority: "High",
+      labels: ["luna"],
+      dueAt: "2026-10-31",
+      comments: ["Marta: please"],
+      repoPath: "/r/a",
+    };
+    const input = buildJiraIntakeInput(jira);
+    const parsed = StageInput.safeParse(input);
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    expect(input).toMatchObject({ pack: "jira_intake", stage: "jira_intake", attempt: 1, plan: null, task: { id: "jira-intake", title: "Login page", description: jira.description, criteria: [], repoPath: "/r/a", branch: "", source: null } });
+    expect(input.context).toEqual({ projectContext: null, jira });
+    expect(input.limits).toEqual({ maxTurns: 8, timeoutMs: 300_000 });
+    expect(buildJiraIntakeInput({ ...jira, repoPath: null }).task.repoPath).toBe("");
   });
 
   it("carries what the host fetched for ci_watch, and nothing test_design never wrote", () => {
@@ -170,7 +193,7 @@ describe("buildStageInput", () => {
 
   it("hands implementing and verifying the repo's checks from luna.yaml, and no other pack", () => {
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }];
-    const build = (stage: Exclude<PackId, "slack_triage">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
+    const build = (stage: Exclude<PackId, "slack_triage" | "jira_intake">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
     expect(build("implementing").context.checks).toEqual(checks);
     expect(build("verifying").context.checks).toEqual(checks);
     expect(build("triage").context.checks).toBeUndefined();

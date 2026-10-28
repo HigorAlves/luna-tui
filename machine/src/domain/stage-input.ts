@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type CheckSpec, type CiContext, type Finding, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type CheckSpec, type CiContext, type Finding, type JiraIntakeContext, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -139,6 +139,28 @@ export function buildSlackTriageInput(slack: SlackTriageContext): StageInput {
     decisions: [],
     priorFindings: [],
     context: { projectContext: null, slack },
+    limits: { maxTurns, timeoutMs },
+    env: { LUNA_FACTORY: "1" },
+  };
+}
+
+/** The id of the synthetic task every jira_intake input carries: the pack runs before a ticket exists. */
+export const JIRA_INTAKE_TASK_ID = "jira-intake";
+
+/** The /in/stage.json the jira_intake pack reads: the issue in `context.jira`, the repo it would
+ *  land in as the (read-only) worktree, no plan, no branch; the answer decides whether a ticket is made. */
+export function buildJiraIntakeInput(jira: JiraIntakeContext): StageInput {
+  const { maxTurns, timeoutMs } = PACK_LIMITS.jira_intake;
+  return {
+    schema: 3,
+    stage: "jira_intake",
+    pack: "jira_intake",
+    attempt: 1,
+    task: { id: JIRA_INTAKE_TASK_ID, title: jira.summary, description: jira.description, criteria: [], repoPath: jira.repoPath ?? "", branch: "", source: null },
+    plan: null,
+    decisions: [],
+    priorFindings: [],
+    context: { projectContext: null, jira },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };
