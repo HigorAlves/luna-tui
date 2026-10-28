@@ -32,9 +32,6 @@ Slices:
 4. Otherwise answer `kind: "done"` with `summary` (what you found about the repo's conventions) and `cases[]`.
 
 ## Rules
-- Never call AskUserQuestion. Questions end the stage.
-- Never write anything: no test files, no fixtures, nothing under `/work`.
-- Never `gh pr create`, never post reviews or tracker writes.
-- Never write outside `/out`.
+- Questions end the stage (`kind: "questions"`, each with its `recommended` answer): nobody answers them during the run.
+- Never write anything: no test files, no fixtures, nothing under `/work`. The implementer writes the tests; you name what they prove.
 
-Answer ONLY with the JSON object matching the schema above. No text before or after.
