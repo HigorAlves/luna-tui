@@ -290,7 +290,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     // The Slack inbox: the snapshot, a poll on demand, your actions on an item, the watches,
     // how fast you answer, and the listings the board's watch popup completes from.
     app.get("/slack/items", (c) => c.json(slack.snapshot));
-    app.post("/slack/refresh", async (c) => c.json(await slack.pollOnce()));
+    app.post("/slack/refresh", async (c) => c.json(await slack.pollOnce(true)));
     app.patch("/slack/items/:id", async (c) => c.json(await slack.patch(c.req.param("id"), await body(c, SlackItemPatch))));
     app.post("/slack/items/:id/reply", async (c) => {
       const { text } = await body(c, SlackReplyInput);

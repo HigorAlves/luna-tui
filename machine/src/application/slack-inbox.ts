@@ -32,6 +32,7 @@ import {
   type SlackItemRow,
   compareTs,
   dueOf,
+  fingerprint,
   fold,
   inSnapshot,
   matchWatches,
@@ -52,7 +53,8 @@ import type { TriageItem, Triager } from "./slack-triage.ts";
 /** What the HTTP routes need from the inbox; the real class and a test fake both fit. */
 export interface SlackInboxPort {
   readonly snapshot: SlackSnapshot;
-  pollOnce(): Promise<SlackSnapshot>;
+  /** `force` polls even inside a rate-limit backoff (the board's refresh); scheduled and socket polls wait it out. */
+  pollOnce(force?: boolean): Promise<SlackSnapshot>;
   patch(id: string, patch: SlackItemPatch): Promise<SlackItem>;
   reply(id: string, text: string): Promise<SlackItem>;
   toTask(id: string, input: SlackTaskInput): Promise<TaskRow>;
@@ -157,10 +159,18 @@ const realFiles: NonNullable<SlackInboxOptions["files"]> = {
   },
 };
 
-/** What one poll gathered before it is written: changed rows and which of them need triage. */
+/** What one poll gathered before it is written: changed rows, the rows they started from, and which of them need triage. */
 interface Gathered {
   changed: Map<string, SlackItemRow>;
+  /** Each changed row as the store held it when the poll first read it (null: new); an action meanwhile shows as a difference. */
+  base: Map<string, SlackItemRow | null>;
   pending: Map<string, { floor: SlackPriority | null; settled: SlackTriage | null }>;
+}
+
+/** Where the poll's reads got to, applied to the inbox only once the rows are saved. */
+interface Cursors {
+  sinceTs: string;
+  channels: Map<string, string>;
 }
 
 export class SlackInbox implements SlackInboxPort {
@@ -175,6 +185,8 @@ export class SlackInbox implements SlackInboxPort {
   private polling: Promise<SlackSnapshot> | null = null;
   private me: SlackMe | null = null;
   private sinceTs: string | null = null;
+  /** After a rate limit: no scheduled or socket poll before this time; a forced refresh still runs. */
+  private backoffUntil = 0;
   private polls = 0;
   private warnedNoTriager = false;
   private warnedAuth = false;
@@ -239,8 +251,9 @@ export class SlackInbox implements SlackInboxPort {
     this.publishIfChanged({ ...this.snapshot, items });
   }
 
-  /** One poll; a poll already running is shared rather than doubled. */
-  pollOnce(): Promise<SlackSnapshot> {
+  /** One poll; a poll already running is shared rather than doubled. Inside a rate-limit backoff only a forced one runs. */
+  pollOnce(force = false): Promise<SlackSnapshot> {
+    if (!force && !this.polling && this.now().getTime() < this.backoffUntil) return Promise.resolve(this.snapshot);
     if (!this.polling) {
       this.polling = this.poll().finally(() => {
         this.polling = null;
@@ -256,8 +269,9 @@ export class SlackInbox implements SlackInboxPort {
     } else if (event.type === "reaction_added" && event.item.channel && event.item.ts && this.me && event.item_user === this.me.id) {
       const { channel, ts } = event.item;
       const at = slackTsToDate(event.event_ts);
+      // Its own id: a reaction on the root of a thread you are in must not replace that thread's item.
       this.queued.push({
-        id: `${channel}:${ts}`,
+        id: `${channel}:${ts}:reaction`,
         kind: "reaction",
         channel: { id: channel, name: channel, kind: "channel" },
         author: { id: event.user, name: event.user, isBot: false },
@@ -301,7 +315,10 @@ export class SlackInbox implements SlackInboxPort {
       this.nextDelayMs = this.options.intervalMs;
     } catch (thrown) {
       error = messageOf(thrown);
-      if (/rate ?limit/i.test(error)) this.nextDelayMs = RATE_LIMIT_BACKOFF_MS;
+      if (/rate ?limit/i.test(error)) {
+        this.nextDelayMs = RATE_LIMIT_BACKOFF_MS;
+        this.backoffUntil = this.now().getTime() + RATE_LIMIT_BACKOFF_MS;
+      }
       if (/auth|token|401/i.test(error)) {
         if (!this.warnedAuth) console.warn(`slack inbox: ${error}`);
         this.warnedAuth = true;
@@ -346,8 +363,9 @@ export class SlackInbox implements SlackInboxPort {
 
   /** The one place the snapshot is replaced: the board hears about it only when something it shows changed. */
   private publishIfChanged(next: SlackSnapshot): void {
+    const prints = (items: SlackItem[]) => items.map(fingerprint).join("\n");
     const changed =
-      JSON.stringify(next.items) !== JSON.stringify(this.snapshot.items) ||
+      prints(next.items) !== prints(this.snapshot.items) ||
       JSON.stringify(next.watches) !== JSON.stringify(this.snapshot.watches) ||
       JSON.stringify(next.sla) !== JSON.stringify(this.snapshot.sla) ||
       next.error !== this.snapshot.error ||
@@ -381,8 +399,13 @@ export class SlackInbox implements SlackInboxPort {
     const watches = await this.ensureWatches();
     const rules = await this.rules();
     const now = this.now();
-    const gathered: Gathered = { changed: new Map(), pending: new Map() };
+    const gathered: Gathered = { changed: new Map(), base: new Map(), pending: new Map() };
     this.polls++;
+    /** Nothing moves on the inbox until the rows are saved: a throw midway leaves the next poll to re-find the same messages. */
+    const moved: Cursors = { sinceTs: this.sinceTs ?? (await store.latestTs()) ?? toSlackTs(new Date(now.getTime() - FIRST_LOOKBACK_MS)), channels: new Map() };
+    const cursorOf = (id: string) => moved.channels.get(id) ?? this.cursors.get(id);
+    const flagged = [...this.dirty];
+    const reactions = this.queued.slice();
 
     const ingest = async (incoming: IncomingMessage, raw: { text: string; author: SlackItem["author"] }) => {
       const verdict = applyRules(
@@ -399,20 +422,23 @@ export class SlackInbox implements SlackInboxPort {
         now,
       );
       if (verdict.drop) return;
-      const existing = gathered.changed.get(incoming.id) ?? (await store.item(incoming.id));
-      const { item, retriage } = fold(existing, incoming, now);
+      let existing = gathered.changed.get(incoming.id);
+      if (!existing) {
+        existing = (await store.item(incoming.id)) ?? undefined;
+        if (!gathered.base.has(incoming.id)) gathered.base.set(incoming.id, existing ?? null);
+      }
+      const { item, retriage } = fold(existing ?? null, incoming, now);
       if (retriage) gathered.pending.set(incoming.id, { floor: verdict.floor, settled: verdict.triage });
       if (retriage || item !== existing) gathered.changed.set(incoming.id, item);
     };
 
     // 1. Mentions, through search, since the last poll's newest hit.
-    const since = this.sinceTs ?? (await store.latestTs()) ?? toSlackTs(new Date(now.getTime() - FIRST_LOOKBACK_MS));
+    const since = moved.sinceTs;
     let cursor: string | undefined;
-    let newest = since;
     for (let page = 0; page < SEARCH_PAGES; page++) {
       const found = await slack.searchMentions(me.id, since, cursor);
       for (const hit of found.hits) {
-        if (compareTs(hit.ts, newest) > 0) newest = hit.ts;
+        if (compareTs(hit.ts, moved.sinceTs) > 0) moved.sinceTs = hit.ts;
         const channel = await this.channelOf(hit.channel.id, hit.channel.name);
         if (rules.muted.includes(channel.id.toLowerCase()) || rules.muted.includes(channel.name.toLowerCase())) continue;
         const threadTs = /[?&]thread_ts=(\d+\.\d+)/.exec(hit.permalink)?.[1] ?? null;
@@ -437,15 +463,14 @@ export class SlackInbox implements SlackInboxPort {
       if (!found.nextCursor) break;
       cursor = found.nextCursor;
     }
-    this.sinceTs = newest;
 
     // 2. DMs, every poll; 3. channels the socket flagged, plus a rotating slice of the rest.
     const sweep = async (conv: Conversation) => {
-      const oldest = this.cursors.get(conv.id) ?? toSlackTs(new Date(now.getTime() - FIRST_LOOKBACK_MS));
+      const oldest = cursorOf(conv.id) ?? toSlackTs(new Date(now.getTime() - FIRST_LOOKBACK_MS));
       const messages = await slack.history(conv.id, oldest, 100);
       this.sweptAt.set(conv.id, now.getTime());
       for (const m of messages) {
-        if (compareTs(m.ts, this.cursors.get(conv.id) ?? oldest) > 0) this.cursors.set(conv.id, m.ts);
+        if (compareTs(m.ts, cursorOf(conv.id) ?? oldest) > 0) moved.channels.set(conv.id, m.ts);
         if (!MESSAGE_SUBTYPES.has(m.subtype)) continue;
         if (m.threadTs && m.threadTs !== m.ts && m.subtype !== "thread_broadcast") continue;
         const isDm = conv.kind === "dm" || conv.kind === "mpim";
@@ -478,8 +503,7 @@ export class SlackInbox implements SlackInboxPort {
     };
     for (const dm of await slack.conversations(["im", "mpim"])) await sweep(dm);
     const channels = await this.channels();
-    const due = channels.filter((c) => this.dirty.has(c.id));
-    this.dirty.clear();
+    const due = channels.filter((c) => flagged.includes(c.id));
     if (this.polls % SWEEP_EVERY === 1) {
       const rest = channels.filter((c) => !due.includes(c)).sort((a, b) => (this.sweptAt.get(a.id) ?? 0) - (this.sweptAt.get(b.id) ?? 0));
       due.push(...rest.slice(0, Math.max(0, SWEEP_BUDGET - due.length)));
@@ -487,7 +511,7 @@ export class SlackInbox implements SlackInboxPort {
     for (const channel of due) await sweep({ id: channel.id, name: channel.name, kind: channel.kind });
 
     // 4. Reactions the socket queued.
-    for (const reaction of this.queued.splice(0)) {
+    for (const reaction of reactions) {
       const channel = await this.channelOf(reaction.channel.id, reaction.channel.name);
       const author = await this.authorOf(reaction.author.id, null);
       const permalink = await slack.permalink(channel.id, reaction.id.split(":")[1]!).catch(() => "");
@@ -500,6 +524,7 @@ export class SlackInbox implements SlackInboxPort {
       .filter((row) => row.kind !== "reaction" && now.getTime() - new Date(row.ts).getTime() <= THREAD_WINDOW_MS)
       .sort((a, b) => compareTs(b.slackTs, a.slackTs))
       .slice(0, TRACKED_THREADS);
+    for (const row of stored) if (!gathered.base.has(row.id)) gathered.base.set(row.id, row);
     for (const row of tracked) {
       const threadTs = row.threadTs ?? row.id.split(":")[1]!;
       let replies: RawMessage[];
@@ -531,8 +556,41 @@ export class SlackInbox implements SlackInboxPort {
     // 6. Settle what the rules decided and queue the rest for the pack; 7. persist. The pack's
     //    verdicts land in a later publish, so a poll never waits on the container.
     this.settle(gathered);
-    const rows = [...gathered.changed.values()].map((row) => ({ ...row, linked: { ...row.linked, pr: this.options.linkPr(prUrlsIn(row.text)) ?? row.linked.pr } }));
+    const rows: SlackItemRow[] = [];
+    for (const row of gathered.changed.values()) {
+      // The poll took a while: what you did to the row meanwhile (done, snooze, a priority) outlives it.
+      const merged = await this.mergeActions(row, gathered.base.get(row.id) ?? null);
+      rows.push({ ...merged, linked: { ...merged.linked, pr: this.options.linkPr(prUrlsIn(merged.text)) ?? merged.linked.pr } });
+    }
     await store.save(rows);
+    this.sinceTs = moved.sinceTs;
+    for (const [id, ts] of moved.channels) this.cursors.set(id, ts);
+    for (const id of flagged) this.dirty.delete(id);
+    this.queued.splice(0, reactions.length);
+  }
+
+  /**
+   * The row as the poll wants it, with your actions since the poll read it kept: when the
+   * store's row differs from `base`, only what the poll owns (text, times, replies, context,
+   * match reasons, triage) lands on it; a hand-set priority stays on top of a new triage.
+   */
+  private async mergeActions(polled: SlackItemRow, base: SlackItemRow | null): Promise<SlackItemRow> {
+    const fresh = await this.options.store.item(polled.id);
+    if (!fresh || JSON.stringify(fresh) === JSON.stringify(base)) return polled;
+    return {
+      ...fresh,
+      text: polled.text,
+      author: polled.author,
+      ts: polled.ts,
+      slackTs: polled.slackTs,
+      permalink: polled.permalink,
+      context: polled.context,
+      matched: polled.matched,
+      count: polled.count,
+      replies: polled.replies,
+      youReplied: fresh.youReplied || polled.youReplied,
+      triage: polled.triage ? this.keepOverride(fresh.triage, polled.triage) : fresh.triage,
+    };
   }
 
   /** Rules-settled items get their triage now; the others wait for the pack, floor remembered. */
@@ -711,7 +769,11 @@ export class SlackInbox implements SlackInboxPort {
 
   async reply(id: string, text: string): Promise<SlackItem> {
     const row = await this.get(id);
-    await this.options.slack.postMessage(row.channel.id, text, row.threadTs ?? row.slackTs);
+    // The thread is the item's own ts (the root of a collapsed thread, not its latest message);
+    // a top-level DM is answered in the DM itself.
+    const isDm = row.channel.kind === "dm" || row.channel.kind === "mpim";
+    const threadTs = isDm && row.threadTs === null ? undefined : row.id.split(":")[1];
+    await this.options.slack.postMessage(row.channel.id, text, threadTs);
     const now = this.now();
     if (now.getTime() - new Date(row.arrivedAt).getTime() < HOUR_MS) await this.learnFrom(row, "raised");
     return this.saveAndPublish({ ...row, doneAt: now.toISOString(), youReplied: true, repliedAt: now.toISOString(), snoozedUntil: null });

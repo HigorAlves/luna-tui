@@ -482,4 +482,83 @@ describe("SlackInbox actions", () => {
     expect(items.map((i) => [i.kind, i.text])).toEqual(expect.arrayContaining([["mention", "@higor via socket"], ["reaction", ":eyes: on your message from @ana"]]));
     expect(items).toHaveLength(3);
   });
+
+  it("reply threads under the item's root ts, not the latest folded message; a top-level DM gets no thread", async () => {
+    const root = ts(60);
+    const { inbox, slack, store } = await seeded({
+      hits: [hit({ ts: root, text: "<@U1> first ask?" }), hit({ ts: ts(50), text: "<@U1> second ask", permalink: `https://x.slack.com/archives/C1/p1?thread_ts=${root}&cid=C1` })],
+      history: { D1: [msg({ ts: ts(20), text: "standup at 10?" })] },
+    });
+    const thread = (await store.item(`C1:${root}`))!;
+    expect(thread.slackTs).toBe(ts(50));
+    await inbox.reply(thread.id, "yes");
+    expect(slack.postMessage).toHaveBeenLastCalledWith("C1", "yes", root);
+    await inbox.reply(`D1:${ts(20)}`, "10 works");
+    expect(slack.postMessage).toHaveBeenLastCalledWith("D1", "10 works", undefined);
+  });
+
+  it("a reaction on the root of a thread you are in is its own item, not the thread's text", async () => {
+    const root = ts(5);
+    const { inbox, store } = await seeded({ hits: [hit({ ts: root, text: "<@U1> ship it?" })] });
+    inbox.handleSocketEvent({ type: "reaction_added", user: "U3", reaction: "eyes", item_user: "U1", item: { type: "message", channel: "C1", ts: root }, event_ts: ts(0) });
+    inbox.stop();
+    const { items } = await poll(inbox);
+    expect(items.map((i) => [i.id, i.kind, i.text]).sort()).toEqual([
+      [`C1:${root}`, "mention", "@higor ship it?"],
+      [`C1:${root}:reaction`, "reaction", ":eyes: on your message from @ana"],
+    ]);
+    expect((await store.item(`C1:${root}`))!.matched).toEqual(["me"]);
+  });
+});
+
+describe("SlackInbox resilience", () => {
+  it("a poll that fails midway moves no cursor: the next poll re-finds the same messages", async () => {
+    const world: World = { hits: [hit({ ts: ts(10), text: "<@U1> hi?" })] };
+    const { inbox, slack, store } = setup(world);
+    slack.history.mockRejectedValueOnce(new Error("internal_error"));
+    const failed = await inbox.pollOnce();
+    expect(failed.error).toBe("internal_error");
+    expect(store.rows.size).toBe(0);
+    await poll(inbox);
+    const searches = slack.searchMentions.mock.calls;
+    expect(searches).toHaveLength(2);
+    expect(searches[1]![1]).toBe(searches[0]![1]);
+    expect(inbox.snapshot.items).toHaveLength(1);
+    await poll(inbox);
+    expect(slack.searchMentions.mock.calls[2]![1]).toBe(ts(10));
+  });
+
+  it("an action during a long poll survives it: the poll merges only what it owns", async () => {
+    const root = ts(30);
+    const world: World = { hits: [hit({ ts: root, text: "<@U1> approve?" })] };
+    const { inbox, slack, store } = setup(world);
+    await poll(inbox);
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    world.replies = { [`C1:${root}`]: [msg({ ts: ts(20), user: "U3", text: "bump" })] };
+    slack.replies.mockImplementationOnce(async (channel, threadTs) => {
+      await gate;
+      return world.replies![`${channel}:${threadTs}`] ?? [];
+    });
+    const polling = inbox.pollOnce();
+    await new Promise((r) => setTimeout(r, 0));
+    await inbox.patch(`C1:${root}`, { done: true, priority: "P0" });
+    release();
+    await polling;
+    await inbox.idle();
+    const row = (await store.item(`C1:${root}`))!;
+    expect(row.replies).toBe(1);
+    expect(row.doneAt).toBe(NOW.toISOString());
+    expect(row.triage).toMatchObject({ priority: "P0", overridden: true });
+  });
+
+  it("after a rate limit, socket-triggered polls wait out the backoff; a refresh still forces one", async () => {
+    const { inbox, slack } = setup({ searchError: "Slack rate limit on search.messages: retry after 30s" });
+    await inbox.pollOnce();
+    expect(slack.searchMentions).toHaveBeenCalledTimes(1);
+    await inbox.pollOnce();
+    expect(slack.searchMentions).toHaveBeenCalledTimes(1);
+    await inbox.pollOnce(true);
+    expect(slack.searchMentions).toHaveBeenCalledTimes(2);
+  });
 });
