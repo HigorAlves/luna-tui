@@ -121,6 +121,10 @@ export interface SlackItem {
   snoozedUntil: string | null;
   /** The thread moved after you cleared it; the pane says "new since you cleared it". */
   reopenedAt: string | null;
+  /** When a reply is due under the SLA for its priority; null when none is expected or the item is cleared. */
+  dueAt: string | null;
+  /** `dueAt` has passed with no reply from you. */
+  overdue: boolean;
   triage: SlackTriage | null;
   split: SlackSplit;
   linked: { pr: { repo: string; number: number; split: string } | null; taskId: string | null };
@@ -135,6 +139,8 @@ export interface SlackSnapshot {
   error: string | null;
   /** The Socket Mode websocket: `off` without an app token. */
   socket: "connected" | "disconnected" | "off";
+  /** The reply SLA in effect, seconds by priority (rules file `## SLA`; defaults P0 600, P1 1800, P2 3600, P3 3600). */
+  sla: Record<SlackPriority, number>;
 }
 
 export const SlackItemPatch = z.object({
@@ -190,6 +196,10 @@ export interface SlackMetrics {
   replied: Record<SlackPriority, number>;
   /** Of those replied, how many within an hour. */
   withinHour: number;
+  /** Of those replied, how many inside their priority's SLA, by priority. */
+  withinSla: Record<SlackPriority, number>;
+  /** The SLA in effect, seconds by priority, as the rules file sets it. */
+  sla: Record<SlackPriority, number>;
   /** Seconds from the message to your reply, by priority. */
   timeToReply: Record<SlackPriority, Stats>;
   byDay: { day: string; items: number; replied: number }[];
