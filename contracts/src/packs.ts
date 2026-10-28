@@ -21,6 +21,8 @@ export const AgentRole = z.enum([
   "pr-reviewer",
   // The Slack inbox's triage: no tools, no worktree, a batch of messages in and verdicts out.
   "slack-triager",
+  // Jira intake: reads an issue (and, read-only, the repo) before it becomes a ticket.
+  "jira-triager",
   // Helpers a PR task's role dispatches through the Agent tool; never a pack's own role.
   "security-reviewer",
   "reply-drafter",
@@ -55,6 +57,20 @@ export const SetupAnswer = z.object({
   reason: z.string().optional(),
   options: z.array(z.string()).optional(),
 });
+
+/** The jira_intake pack's verdict on one issue. */
+export const JiraIntakeAnswer = z.object({
+  verdict: z.enum(["ready", "needs_brief", "not_for_agent"]),
+  /** One line for the board and the Jira comment. */
+  reason: z.string(),
+  /** The ticket as it should read; set for `ready` and `needs_brief`. */
+  title: z.string().optional(),
+  description: z.string().optional(),
+  criteria: z.array(z.string()).optional(),
+  /** What is missing, for `needs_brief`: asked back on the issue as a comment, with the answer the agent would pick. */
+  questions: z.array(Question).optional(),
+});
+export type JiraIntakeAnswer = z.infer<typeof JiraIntakeAnswer>;
 
 export const TriageAnswer = z.object({
   kind: z.enum(["brief", "questions"]),
@@ -426,6 +442,23 @@ export const PACKS: Record<PackId, Pack> = {
     effort: "medium",
     answer: PrAddressAnswer,
     template: "addressing.md",
+  },
+  jira_intake: {
+    id: "jira_intake",
+    // Reads one Jira issue before intake turns it into a ticket: ready, needs a brief, or not
+    // for an agent; with the title, description and criteria the ticket should carry. It may
+    // read the repo to check the ask against the code, nothing more.
+    agent: "jira-triager",
+    helpers: [],
+    skills: [],
+    tools: ["Read", "Glob", "Grep"],
+    writable: false,
+    maxTurns: 8,
+    timeoutMs: 5 * MINUTE,
+    model: "sonnet",
+    effort: "low",
+    answer: JiraIntakeAnswer,
+    template: "jira_intake.md",
   },
   slack_triage: {
     id: "slack_triage",
