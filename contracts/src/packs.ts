@@ -5,10 +5,11 @@
 // may give is one the machine ingests.
 import { z } from "zod";
 
-import { Finding, PackId, TestCase, VerifyResult } from "./stage.ts";
+import { Finding, LunaConfig, PackId, TestCase, VerifyResult } from "./stage.ts";
 
-/** The seven agent roles. A pack names one; the runner looks its definition up by this. */
+/** The eight agent roles. A pack names one; the runner looks its definition up by this. */
 export const AgentRole = z.enum([
+  "setup-planner",
   "triage-planner",
   "test-designer",
   "implementer",
@@ -35,6 +36,17 @@ export type Slice = z.infer<typeof Slice>;
 
 /** The hard-outward action a stage may ask for; the board approves it. */
 const Requested = z.object({ kind: z.enum(["publish"]), target: z.string(), payload: z.record(z.string(), z.unknown()) });
+
+/** The setup pack's proposal: a luna.yaml as data, with the reasoning you read before approving. */
+export const SetupAnswer = z.object({
+  kind: z.enum(["proposal", "escalated"]),
+  summary: z.string(),
+  config: LunaConfig.optional(),
+  /** What the agent could not settle from the tree, for you to check: one line each. */
+  notes: z.array(z.string()).optional(),
+  reason: z.string().optional(),
+  options: z.array(z.string()).optional(),
+});
 
 export const TriageAnswer = z.object({
   kind: z.enum(["brief", "questions"]),
@@ -137,7 +149,25 @@ const READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "Skill", ...["cat", "ls", "head
 const CHECK_COMMANDS = ["npm", "pnpm", "yarn", "npx", "go", "cargo", "pip", "pytest", "make"].map((c) => `Bash(${c}:*)`);
 const LEDGER_TOOLS = ["mcp__luna__step", "mcp__luna__slice_init", "mcp__luna__slice_set", "mcp__luna__slice_list", "mcp__luna__decision_get"];
 
+/** What the setup planner may run to learn a repo: version prints and listings, nothing that builds. */
+const PROBE_COMMANDS = ["which", "command -v", "find", "node", "npm", "pnpm", "yarn", "go", "cargo", "rustc", "python", "python3", "pip", "make", "docker", "git log", "git ls-files"].map((c) => `Bash(${c}:*)`);
+
 export const PACKS: Record<PackId, Pack> = {
+  setup: {
+    id: "setup",
+    agent: "setup-planner",
+    skills: ["code-discovery"],
+    // Read-only over the repo checkout itself (not a worktree), with network: it may fetch a
+    // tool's docs. It proposes; the machine proves the checks and writes the file on approval.
+    tools: [...READ_ONLY_TOOLS, "WebFetch", ...PROBE_COMMANDS],
+    writable: false,
+    maxTurns: 40,
+    timeoutMs: 15 * MINUTE,
+    model: "opus",
+    effort: "high",
+    answer: SetupAnswer,
+    template: "setup.md",
+  },
   triage: {
     id: "triage",
     agent: "triage-planner",

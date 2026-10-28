@@ -6,6 +6,7 @@ import {
   DecisionInput,
   EditPlanInput,
   NewTaskInput,
+  SetupRepoInput,
   StubPlanInput,
   TaskState,
   UpdateTaskInput,
@@ -163,6 +164,11 @@ export function createApp({ db, pipeline, bus, watcher, stubs }: AppDeps): Hono 
   });
 
   app.post("/tasks/:id/start", async (c) => c.json(toTask(await pipeline.start(taskId(c)))));
+
+  app.post("/repos/setup", async (c) => {
+    const { repoPath } = await body(c, SetupRepoInput);
+    return c.json(toTask(await pipeline.setupRepo(repoPath)), 201);
+  });
 
   app.post("/tasks/:id/answers", async (c) => {
     const id = taskId(c);

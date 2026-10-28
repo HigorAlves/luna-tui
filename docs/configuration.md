@@ -36,25 +36,42 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 
 Every ceiling (a task's, a repo's month's from its `PIPELINE.md`, the day's) raises a `budget.alert` on `/events` the first time a run takes the spend past 80, 90 and 100% of it; the board shows each as a notice. Nothing runs while a task waits on you, so idle time costs nothing: a stage container lives only for its stage.
 
-## Per-repo policy: `PIPELINE.md`
+## Per-repo config: `luna.yaml`
 
-A repo can set its own knobs in a `PIPELINE.md` at its root. The front matter between two `---` lines holds `key: value` pairs; the prose after it is for people. The machine reads the file at every stage, so an edit takes effect without a restart; a version that does not parse is reported once and the last good one stays in force.
+Everything the machine needs to run one repo lives in a `luna.yaml` at that repo's root: how to check it, what runs beside it, and how the pipeline should behave. The board's `:setup <repo>` command has an agent read the repo and propose the file, proves every proposed check once and writes the file after you approve it; you can also write it by hand. The machine reads it from the checkout (not the task worktree) at every stage, so an edit takes effect without a restart and an uncommitted file already counts; a version that does not parse is reported once and the last good one stays in force.
 
-```markdown
----
-qa: web                       # web (default) runs e2e when the change renders; none never does
-monthly_budget_usd: 40        # this repo's tasks park once the calendar month has cost this much
-auto_approve_plan_minutes: 15 # a plan triage marked high confidence / low risk is approved by itself after this long
-max_concurrent: 1             # running tasks this repo may hold at once (over MACHINE_MAX_PER_REPO)
-holdout_cases: false          # true keeps test_design's cases away from the implementer; verifying still judges by them
-qa_target: staging https://stg.example.com env:QA_PASSWORD   # where e2e may drive the app; one line per target, the credential a reference
----
-
-# How this repo wants the pipeline to behave
-…
+```yaml
+checks:                                   # the repo's own checks; without this key they are detected from the tree
+  - name: board tests
+    run: cargo test                       # a shell line, run in cwd (default: the worktree root)
+    cwd: board
+    paths: ["board/**"]                   # only for a change touching one of these; no paths means always
+  - name: machine tests
+    run: pnpm test
+    cwd: machine
+    paths: ["machine/**", "contracts/**"]
+services:                                 # run beside every stage and check container, reachable by key as hostname
+  postgres:
+    image: postgres:16
+    env: { POSTGRES_USER: app, POSTGRES_PASSWORD: app, POSTGRES_DB: app }
+    ready: pg_isready -U app              # run inside the service until it exits 0
+    exports: { DATABASE_URL: "postgres://app:app@postgres:5432/app" }   # env the repo's code gets
+toolchains: { node: "24", rust: "1.99" }  # what the repo builds with; recorded by setup
+policy:
+  qa: web                                 # web (default) runs e2e when the change renders; none never does
+  monthly_budget_usd: 40                  # this repo's tasks park once the calendar month has cost this much
+  auto_approve_plan_minutes: 15           # a plan triage marked high confidence / low risk is approved by itself after this long
+  max_concurrent: 1                       # running tasks this repo may hold at once (over MACHINE_MAX_PER_REPO)
+  holdout_cases: false                    # true keeps test_design's cases away from the implementer; verifying still judges by them
+qa_targets:                               # where e2e may drive the app; the credential is a reference, never a value
+  - { name: staging, url: https://stg.example.com, credential: env:QA_PASSWORD }
 ```
 
-Every key is optional. `qa_target` lines are `<name> <base url> [env:VARIABLE]`; the e2e stage gets them in its input and never sees a credential value. `auto_approve_plan_minutes` needs triage to report `confidence: high` and `risk: low` and to have asked nothing; anything less waits for you as always, and the approval it does make is logged as `plan.auto_approved` with the reason on the approval.
+Every key is optional and unknown keys are ignored. `auto_approve_plan_minutes` needs triage to report `confidence: high` and `risk: low` and to have asked nothing; anything less waits for you as always, and the approval it does make is logged as `plan.auto_approved` with the reason on the approval.
+
+Each `services` entry runs as its own container beside every stage that runs the repo's code (implementing, verifying, e2e) and every check run, on a private docker network for that run, reachable by its key as hostname; the `exports` become env in the stage or check container. They are torn down with it, so two tasks of one repo never share a database. A service whose `ready` line does not exit 0 within a minute escalates the stage with the service's log tail.
+
+`PIPELINE.md` (the earlier per-repo file, front matter with the `policy` keys and `qa_target` lines) still works when there is no `luna.yaml`, with a deprecation notice once per repo; `luna.yaml` wins when both exist.
 
 ## GitHub gates
 
@@ -79,6 +96,8 @@ Every stage and check container mounts a docker volume named `hardness-cache-<re
 `~/.config/hardness` is mounted read-only for the Claude credential. The other variables in the table above pass through to the container as well.
 
 ## Runner image
+
+The image carries Node 24, Go and a pinned Rust toolchain (`RUST_VERSION` in `machine/runner/Dockerfile`, with clippy and rustfmt), so a repo whose suite is `cargo test` runs as is. Every check container also gets your git identity, the `user.name` and `user.email` git resolves for the repo, so a suite that commits in a scratch repo runs as you; a repo with no identity escalates the verifying stage instead of committing as nobody.
 
 `pnpm --filter @hardness/machine runner:build` runs `machine/runner/build.sh`, which builds the image from this checkout with the repository root as the build context: `factory/` and `contracts/` are copied in and installed with the workspace lockfile, so the image runs exactly what the checkout tests. Each image is labelled with a key over those files and the Dockerfile and skipped when that key is current, so `pnpm images` (run by `pnpm start` and `pnpm dev`) is instant when nothing changed; `REBUILD=1 pnpm images` builds anyway. The image is tagged `hardness-runner:dev` and `hardness-runner:<key>`. `runner-qa:build` runs the same script with `--qa`, then builds `hardness-runner-qa:dev` from `machine/runner-qa/Dockerfile` on top of it.
 

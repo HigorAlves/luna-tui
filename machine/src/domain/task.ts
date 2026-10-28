@@ -12,6 +12,8 @@ export interface TaskRow {
   repoPath: string | null;
   /** The tracker item the task came from. */
   source: TaskSource | null;
+  /** A ticket, or a one-off that proposes the repo's luna.yaml and closes. */
+  kind: "feature" | "setup";
   branch: string | null;
   worktreePath: string | null;
   state: TaskState;

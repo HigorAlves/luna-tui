@@ -677,6 +677,27 @@ fn rules_lines(value: &Value, width: usize) -> Vec<String> {
     lines
 }
 
+/// One line per proved check: `✓ name: cmd` or `✗ name: cmd`, a failed one followed by the
+/// last lines of its output.
+fn proof_lines(value: &Value) -> Vec<(bool, String)> {
+    const TAIL: usize = 3;
+    let Some(items) = value.as_array() else { return Vec::new() };
+    let mut lines = Vec::new();
+    for item in items {
+        let ok = item["ok"].as_bool().unwrap_or(false);
+        let name = item["name"].as_str().unwrap_or("check");
+        let cmd = item["cmd"].as_str().unwrap_or("");
+        lines.push((ok, format!("{} {name}: {cmd}", if ok { "✓" } else { "✗" })));
+        if !ok && let Some(tail) = item["tail"].as_str() {
+            let shown: Vec<&str> = tail.lines().filter(|l| !l.trim().is_empty()).collect();
+            for line in shown.iter().rev().take(TAIL).rev() {
+                lines.push((ok, format!("    {line}")));
+            }
+        }
+    }
+    lines
+}
+
 /// Assumptions, the proposed slices and the test cases (or, without them, the test files)
 /// an open gate asks you to judge.
 fn push_proposal_sections(lines: &mut Vec<Line<'static>>, requested: &Value) {
@@ -781,6 +802,22 @@ fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&Tas
         if !rules.is_empty() {
             lines.extend([Line::default(), proposal_heading("Proposed rules (a applies, A skips)".into())]);
             lines.extend(rules.iter().map(|l| Line::from(format!("  {l}"))));
+        }
+        if let Some(config) = requested["config"].as_str() {
+            lines.extend([Line::default(), proposal_heading("Proposed luna.yaml (a writes it to the repo, r sends it back)".into())]);
+            lines.extend(config.lines().map(|l| Line::from(format!("  {l}"))));
+            let proof = proof_lines(&requested["proof"]);
+            if !proof.is_empty() {
+                lines.extend([Line::default(), proposal_heading("Proof (each check run once)".into())]);
+                for (ok, text) in proof {
+                    lines.push(Line::from(format!("  {text}")).fg(c(if ok { GREEN } else { RED })));
+                }
+            }
+            let notes = json_list(&requested["notes"]);
+            if !notes.is_empty() {
+                lines.extend([Line::default(), proposal_heading("Notes from setup".into())]);
+                lines.extend(bullets(&notes));
+            }
         }
         let questions = questions_of(approval);
         if !questions.is_empty() {
@@ -1534,6 +1571,28 @@ mod tests {
         let text = render_task_detail(100, 40, &task, Some(&detail));
         assert!(text.contains("$0.42 · 18 turns"), "a run shows its cost and turns: {text}");
         assert!(text.contains("Spent: $0.42"), "the ticket's spend is summed: {text}");
+    }
+
+    #[test]
+    fn the_setup_gate_shows_the_proposed_file_the_proof_per_check_and_the_notes() {
+        let mut task: Task = serde_json::from_str(TASK_JSON_DRAFT).unwrap();
+        task.state = "awaiting_setup".to_string();
+        task.waiting_on_you = true;
+        let detail: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{TASK_JSON_DRAFT},"stageRuns":[],"approvals":[{{"requested":{{
+              "config":"checks:\n  - name: board tests\n    run: cargo test\n",
+              "proof":[{{"name":"board tests","cmd":"cargo test (in board)","ok":true,"tail":""}},
+                       {{"name":"lint","cmd":"pnpm lint","ok":false,"tail":"a\nb\n3 problems"}}],
+              "notes":["no e2e surface"]}},"decision":null}}],"events":[]}}"#
+        ))
+        .unwrap();
+        let text = render_task_detail(100, 40, &task, Some(&detail));
+        assert!(text.contains("Proposed luna.yaml"), "{text}");
+        assert!(text.contains("run: cargo test"), "the file is shown as is: {text}");
+        assert!(text.contains("✓ board tests: cargo test (in board)"), "{text}");
+        assert!(text.contains("✗ lint: pnpm lint"), "{text}");
+        assert!(text.contains("3 problems"), "a failed check shows its tail: {text}");
+        assert!(text.contains("no e2e surface"), "{text}");
     }
 
     #[test]

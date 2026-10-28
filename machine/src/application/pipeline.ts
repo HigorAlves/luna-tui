@@ -16,8 +16,12 @@ import { containerRunning, removeContainer } from "../adapters/docker/docker.ts"
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import type { StageResult, StageRunner } from "./ports.ts";
+import { existsSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
+
 import type { Policy } from "../domain/policy.ts";
-import { PolicyStore } from "./policy.ts";
+import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 
 export { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 
@@ -36,11 +40,16 @@ export interface NewTask {
   criteria?: string[];
   repoPath?: string | null;
   source?: TaskSource | null;
+  kind?: TaskRow["kind"];
 }
 
 export interface PipelineOptions {
   /** Called after each event is stored; the API streams these to the board. */
   onEvent?: (event: EventRow) => void;
+  /** Whether the repo already has a luna.yaml; a task on one without runs setup first. Tests pass a fake. */
+  hasConfig?: (repoPath: string) => boolean;
+  /** Writes the approved luna.yaml into the checkout. Tests pass a fake. */
+  writeConfig?: (repoPath: string, text: string) => Promise<void>;
   /** Run stages inside the request instead of in the background. Tests use this. */
   inline?: boolean;
   /** Tasks that can be driving a stage at once, across every repo. The rest queue. */
@@ -63,7 +72,7 @@ export interface PipelineOptions {
   budget?: Budget;
   /** On shutdown: `requeue` (default) parks running tasks for the next boot; `escalate` waits for you. */
   restartPolicy?: RestartPolicy;
-  /** Each repo's PIPELINE.md (its monthly budget, auto-approval, concurrency); defaults when absent. */
+  /** Each repo's luna.yaml (its monthly budget, auto-approval, concurrency); defaults when absent. */
   policies?: Pick<PolicyStore, "for">;
   /** Called once per threshold a scope crosses: 80, 90 and 100% of a task's, a repo's month's or the day's ceiling. */
   onAlert?: (alert: BudgetAlert) => void;
@@ -123,6 +132,8 @@ const LATCH_FALLBACK_MS = 5 * 60_000;
 export class Pipeline {
   private readonly store: TaskStore;
   private readonly onEvent: (event: EventRow) => void;
+  private readonly hasConfig: (repoPath: string) => boolean;
+  private readonly writeConfig: (repoPath: string, text: string) => Promise<void>;
   private readonly inline: boolean;
   private maxConcurrentTasks: number;
   /** Taking no new work: running stages finish, the queue waits. `drain()` / `resumeClaims()`. */
@@ -160,6 +171,8 @@ export class Pipeline {
   ) {
     this.store = new PgTaskStore(db);
     this.onEvent = options.onEvent ?? (() => {});
+    this.hasConfig = options.hasConfig ?? ((repoPath) => existsSync(join(repoPath, CONFIG_FILE)));
+    this.writeConfig = options.writeConfig ?? ((repoPath, text) => writeFile(join(repoPath, CONFIG_FILE), text));
     this.inline = options.inline ?? false;
     this.maxConcurrentTasks = options.maxConcurrentTasks ?? 4;
     this.maxPerRepo = options.maxPerRepo ?? null;
@@ -175,7 +188,7 @@ export class Pipeline {
     this.onAlert = options.onAlert ?? (() => {});
   }
 
-  /** The repo's policy, from its PIPELINE.md. */
+  /** The repo's policy, from its luna.yaml. */
   policyFor(repoPath: string | null): Promise<Policy> {
     return this.policies.for(repoPath);
   }
@@ -215,9 +228,22 @@ export class Pipeline {
       criteria: input.criteria ?? [],
       repoPath: input.repoPath ?? null,
       source: input.source ?? null,
+      kind: input.kind ?? "feature",
     });
     await this.log(task.id, "task.created", { title: task.title });
     return this.get(task.id);
+  }
+
+  /** `:setup <repo>`: a setup-only task for the checkout, started at once. Its one gate is the
+   *  proposed luna.yaml; approving writes the file and closes the task. */
+  async setupRepo(repoPath: string): Promise<TaskRow> {
+    const task = await this.createTask({
+      title: `Set up ${basename(repoPath)}`,
+      description: `Propose the ${CONFIG_FILE} for ${repoPath}: its checks, the services its code needs, its toolchains and policy.`,
+      repoPath,
+      kind: "setup",
+    });
+    return this.dispatch(task.id, { type: "start", setup: true });
   }
 
   /** Stage slots: how many tasks may drive a stage at once, how many do right now, and
@@ -356,8 +382,11 @@ export class Pipeline {
     return this.get(id);
   }
 
-  start(id: string): Promise<TaskRow> {
-    return this.dispatch(id, { type: "start" });
+  /** Starts the pipeline; a repo with no luna.yaml yet gets the setup gate before triage. */
+  async start(id: string): Promise<TaskRow> {
+    const task = await this.get(id);
+    const setup = task.kind === "setup" || (task.repoPath !== null && !this.hasConfig(task.repoPath));
+    return this.dispatch(id, { type: "start", setup });
   }
 
   answer(id: string, answers: Record<string, string>): Promise<TaskRow> {
@@ -611,12 +640,24 @@ export class Pipeline {
 
   /** Applies an event and, if it starts a stage, runs it now or queues it for a free slot. */
   private async dispatch(id: string, event: PipelineEvent, extra: Extra = {}): Promise<TaskRow> {
+    const before = await this.get(id);
+    // Approving the setup gate writes the file first: if that fails the task stays at the gate.
+    if (before.state === "awaiting_setup" && event.type === "approved") await this.writeApprovedConfig(before);
     const step = await this.apply(id, event, extra);
     if (step.effect.kind === "run") {
       await this.schedule(id, step.effect.stage);
     }
     if (step.effect.kind === "done") await this.close(id);
     return this.get(id);
+  }
+
+  /** The luna.yaml the open setup gate proposes, into the checkout, logged. */
+  private async writeApprovedConfig(task: TaskRow): Promise<void> {
+    const open = (await this.approvals(task.id)).find((a) => a.kind === "awaiting_setup" && a.decision === null);
+    const text = open?.requested.config;
+    if (!task.repoPath || typeof text !== "string") throw new Error("no proposed luna.yaml to write");
+    await this.writeConfig(task.repoPath, text);
+    await this.log(task.id, "config.written", { path: join(task.repoPath, CONFIG_FILE), bytes: text.length });
   }
 
   /** The memory review's proposal and whether the approval kept it, if the gate carried one. */

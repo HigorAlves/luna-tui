@@ -22,6 +22,11 @@ Scenarios test_design named (each needs a test or a direct check):
 ## Project context
 {{context.projectContext}}
 
+## Repo checks (from luna.yaml)
+{{context.checks}}
+
+The controller has already run these and they passed; a new test you add runs through the same line.
+
 ## What to do
 1. Find the change. The branch started at `{{context.baseCommit}}`: `git diff {{context.baseCommit}}..HEAD` (also `git log`; `gh pr diff` if a PR exists). When the base is unknown, `git log --oneline` shows where the branch began; `mcp__luna__slice_list` names the slice commits and touchpoints.
 2. For each scenario, follow its `approach`.

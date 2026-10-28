@@ -6,7 +6,10 @@ import { dirname, join } from "node:path";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 
+import type { ServiceSpec } from "@hardness/contracts";
+
 import type { Credential } from "./credentials.ts";
+import { startServices } from "./services.ts";
 import { type ExecResult, exec, execOrThrow } from "../process/exec.ts";
 
 /** Label on every stage container, so leftovers can be found and removed. */
@@ -27,6 +30,7 @@ export const CACHE_ENV = [
   `GOCACHE=${CACHE_DIR}/go-build`,
   `GOMODCACHE=${CACHE_DIR}/go-mod`,
   `CARGO_HOME=${CACHE_DIR}/cargo`,
+  `CARGO_TARGET_DIR=${CACHE_DIR}/cargo-target`,
   `PIP_CACHE_DIR=${CACHE_DIR}/pip`,
   `UV_CACHE_DIR=${CACHE_DIR}/uv`,
 ];
@@ -79,6 +83,11 @@ export interface SandboxRun {
   cacheVolume?: string;
   /** The container is already running (a restart found it): wait on it instead of starting one. */
   attach?: boolean;
+  /** The repo's services (luna.yaml), started beside the container on its own network. */
+  services?: Record<string, ServiceSpec>;
+  /** Set by `runSandbox` once the services are up: the network to join and what they export. */
+  network?: string | null;
+  serviceEnv?: Record<string, string>;
   /** `uid:gid` the container runs as. The run folder, the session dir and the worktree are bind
    *  mounts owned by the host user, so the stage must be that user to write them (the image's
    *  `node` user is uid 1000, which is not the host user on a Linux host). Defaults to the
@@ -123,11 +132,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     "-e", run.credential.name,
     // The worktree is owned by the host user, not the container's; and there is no gpg key
     // in here, so a commit must not try to sign.
-    "-e", "GIT_CONFIG_COUNT=2",
-    "-e", "GIT_CONFIG_KEY_0=safe.directory",
-    "-e", "GIT_CONFIG_VALUE_0=*",
-    "-e", "GIT_CONFIG_KEY_1=commit.gpgsign",
-    "-e", "GIT_CONFIG_VALUE_1=false",
+    ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]),
     "-v", `${run.worktree}:/work${run.writable ? "" : ":ro"}`,
     "-v", `${inDir}:/in:ro`,
     "-v", `${outDir}:/out`,
@@ -141,29 +146,43 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
       for (const sub of run.gitReadOnly ?? []) args.push("-v", `${run.gitDir}/${sub}:${run.gitDir}/${sub}:ro`);
     }
   }
-  if (run.gitIdentity) {
-    const { name, email } = run.gitIdentity;
-    for (const who of ["AUTHOR", "COMMITTER"]) {
-      args.push("-e", `GIT_${who}_NAME=${name}`, "-e", `GIT_${who}_EMAIL=${email}`);
-    }
-  }
+  args.push(...identityEnv(run.gitIdentity));
   for (const [key, value] of Object.entries(run.extraEnv ?? {})) args.push("-e", `${key}=${value}`);
+  args.push(...networkArgs(run.network, run.serviceEnv));
   args.push(run.image);
 
   return args;
 }
 
+/** The service network to join and what the services export, when a run has any. */
+function networkArgs(network: string | null | undefined, serviceEnv: Record<string, string> | undefined): string[] {
+  if (!network) return [];
+  return ["--network", network, ...Object.entries(serviceEnv ?? {}).flatMap(([key, value]) => ["-e", `${key}=${value}`])];
+}
+
 export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
-  if (!run.attach) {
-    const inDir = join(run.runDir, "in");
-    const outDir = join(run.runDir, "out");
-    await mkdir(inDir, { recursive: true });
-    await mkdir(outDir, { recursive: true });
-    await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
-    await execOrThrow("docker", sandboxArgs(run, inDir, outDir), {
-      env: { ...process.env, [run.credential.name]: run.credential.value },
-    });
+  // A re-attached run's services are still up from before; they are torn down with it below.
+  const services = run.attach
+    ? { network: null, env: {}, teardown: () => startServices(run.name, run.services ?? {}).then((s) => s.teardown(), () => {}) }
+    : await startServices(run.name, run.services ?? {});
+  try {
+    if (!run.attach) {
+      const inDir = join(run.runDir, "in");
+      const outDir = join(run.runDir, "out");
+      await mkdir(inDir, { recursive: true });
+      await mkdir(outDir, { recursive: true });
+      await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
+      await execOrThrow("docker", sandboxArgs({ ...run, network: services.network, serviceEnv: services.env }, inDir, outDir), {
+        env: { ...process.env, [run.credential.name]: run.credential.value },
+      });
+    }
+    return await waitSandbox(run);
+  } finally {
+    await services.teardown();
   }
+}
+
+async function waitSandbox(run: SandboxRun): Promise<SandboxResult> {
   run.onStarted?.(run.name);
 
   let timedOut = false;
@@ -236,7 +255,29 @@ export interface SandboxExec {
   env?: Record<string, string>;
   /** The repo's cache volume, as for a stage. */
   cacheVolume?: string;
+  /** Who a commit the check makes is by: a suite that commits in a scratch repo needs one,
+   *  and the container has no gitconfig. */
+  gitIdentity?: { name: string; email: string } | null;
+  /** The repo's services, started beside the check; `network` and `serviceEnv` once they are up. */
+  services?: Record<string, ServiceSpec>;
+  network?: string | null;
+  serviceEnv?: Record<string, string>;
 }
+
+/** Git config every container gets by env: the mounted worktree is another user's to git,
+ *  and there is no key to sign with. */
+const GIT_CONFIG_ENV = [
+  "GIT_CONFIG_COUNT=2",
+  "GIT_CONFIG_KEY_0=safe.directory",
+  "GIT_CONFIG_VALUE_0=*",
+  "GIT_CONFIG_KEY_1=commit.gpgsign",
+  "GIT_CONFIG_VALUE_1=false",
+];
+
+const identityEnv = (identity: { name: string; email: string } | null | undefined): string[] =>
+  identity
+    ? ["AUTHOR", "COMMITTER"].flatMap((who) => ["-e", `GIT_${who}_NAME=${identity.name}`, "-e", `GIT_${who}_EMAIL=${identity.email}`])
+    : [];
 
 /** The `docker run` argument list for one command. Pure. */
 export function sandboxExecArgs(run: SandboxExec): string[] {
@@ -245,9 +286,10 @@ export function sandboxExecArgs(run: SandboxExec): string[] {
   args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...SANDBOX_LIMITS);
   const user = run.user === undefined ? hostUser() : run.user;
   if (user) args.push("--user", user);
-  args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp");
+  args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]), ...identityEnv(run.gitIdentity));
   for (const [key, value] of Object.entries(run.env ?? {})) args.push("-e", `${key}=${value}`);
   args.push(...cacheArgs(run.cacheVolume));
+  args.push(...networkArgs(run.network, run.serviceEnv));
   // Writable: a test runner writes its cache next to the code (node_modules/.vite, go's are on the tmpfs).
   args.push("-v", `${run.worktree}:/work`, "-w", "/work", "--entrypoint", command!, run.image, ...rest);
   return args;
@@ -259,25 +301,36 @@ export async function execInSandbox(
   run: SandboxExec,
   options: { signal?: AbortSignal; timeoutMs?: number } = {},
 ): Promise<ExecResult> {
-  const result = await exec("docker", sandboxExecArgs(run), options);
-  await exec("docker", ["rm", "-f", run.name]);
-  return result;
+  const services = await startServices(run.name, run.services ?? {});
+  try {
+    const result = await exec("docker", sandboxExecArgs({ ...run, network: services.network, serviceEnv: services.env }), options);
+    await exec("docker", ["rm", "-f", run.name]);
+    return result;
+  } finally {
+    await services.teardown();
+  }
 }
 
 /** An `exec` for the stages that run a project's checks: same signature as the host one,
- *  `cwd` is the worktree, and only HARDNESS_* env reaches the container. The cache volume is
- *  the repo's: task worktrees live at `<worktreesDir>/<repo>/task-…`, so the parent names it. */
+ *  `cwd` is the worktree, and only HARDNESS_* env and the git identity (GIT_AUTHOR_*,
+ *  GIT_COMMITTER_*) reach the container. The cache volume is the repo's: task worktrees live
+ *  at `<worktreesDir>/<repo>/task-…`, so the parent names it. */
 export function sandboxExecutor(image: string) {
   return (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number } = {},
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> } = {},
   ): Promise<ExecResult> => {
     if (!options.cwd) throw new Error("sandboxExecutor needs cwd: the worktree to mount");
     const env: Record<string, string> = {};
+    const identity: Record<string, string> = {};
     for (const [key, value] of Object.entries(options.env ?? {})) {
-      if (key.startsWith("HARDNESS_") && typeof value === "string") env[key] = value;
+      if (typeof value !== "string") continue;
+      if (key.startsWith("HARDNESS_")) env[key] = value;
+      if (key.startsWith("GIT_AUTHOR_") || key.startsWith("GIT_COMMITTER_")) identity[key] = value;
     }
+    const gitIdentity =
+      identity.GIT_AUTHOR_NAME && identity.GIT_AUTHOR_EMAIL ? { name: identity.GIT_AUTHOR_NAME, email: identity.GIT_AUTHOR_EMAIL } : null;
     return execInSandbox(
       {
         name: `hardness-check-${randomUUID().slice(0, 8)}`,
@@ -285,6 +338,8 @@ export function sandboxExecutor(image: string) {
         worktree: options.cwd,
         argv: [command, ...args],
         env,
+        gitIdentity,
+        services: options.services,
         cacheVolume: cacheVolumeFor(dirname(options.cwd)),
       },
       { signal: options.signal, timeoutMs: options.timeoutMs },

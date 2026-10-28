@@ -20,7 +20,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.query("truncate tasks cascade");
   stubs.reset();
-  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, maxConcurrentTasks: 2 });
+  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, maxConcurrentTasks: 2 });
 });
 
 const app = () => createApp({ db, pipeline, bus: new Bus() });

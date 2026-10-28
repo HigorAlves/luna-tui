@@ -114,11 +114,11 @@ describe("buildStageInput", () => {
     }
   });
 
-  it("has no plan before one is approved, and covers all eight packs", () => {
+  it("has no plan before one is approved, and covers all nine packs", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["ci_watch", "e2e", "evidence", "implementing", "reviewing_memory", "test_design", "triage", "verifying"],
+      ["ci_watch", "e2e", "evidence", "implementing", "reviewing_memory", "setup", "test_design", "triage", "verifying"],
     );
   });
 
@@ -149,6 +149,15 @@ describe("buildStageInput", () => {
     expect(at("verifying").context.testCases).toEqual(cases);
     expect(at("e2e").context.testCases).toEqual([]);
     expect(StageInput.safeParse(at("verifying")).success).toBe(true);
+  });
+
+  it("hands implementing and verifying the repo's checks from luna.yaml, and no other pack", () => {
+    const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }];
+    const build = (stage: PackId) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
+    expect(build("implementing").context.checks).toEqual(checks);
+    expect(build("verifying").context.checks).toEqual(checks);
+    expect(build("triage").context.checks).toBeUndefined();
+    expect(StageInput.safeParse(build("implementing")).success).toBe(true);
   });
 
   it("holds the cases out of implementing's input when the repo's policy says so; verifying still sees them", () => {

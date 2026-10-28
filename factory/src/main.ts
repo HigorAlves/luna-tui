@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url";
 import { agentDefinitions } from "./agents.ts";
 import { preToolUseGuards } from "./hooks/guards.ts";
 import { EMPTY_RUN, type RunOutcome, finish } from "./output.ts";
-import { FACTORY_RULES, renderPrompt } from "./render.ts";
+import { FACTORY_RULES, callLine, renderPrompt } from "./render.ts";
 import { lunaTools } from "./tools/luna.ts";
 
 const env = process.env;
@@ -114,11 +114,7 @@ try {
     } else if (msg.type === "assistant") {
       for (const block of msg.message?.content ?? []) {
         if (block.type === "text" && block.text) out(block.text);
-        else if (block.type === "tool_use") {
-          const i = (block.input ?? {}) as Record<string, unknown>;
-          const target = i.file_path ?? i.path ?? i.command ?? i.pattern ?? i.url ?? i.label ?? "";
-          out(`→ ${block.name} ${String(target).split("\n")[0]!.slice(0, 160)}`.trimEnd());
-        }
+        else if (block.type === "tool_use") out(callLine(block.name, (block.input ?? {}) as Record<string, unknown>));
       }
     } else if (msg.type === "rate_limit_event") {
       const info = msg.rate_limit_info;

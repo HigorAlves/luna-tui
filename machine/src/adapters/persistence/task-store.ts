@@ -35,6 +35,7 @@ export class PgTaskStore implements TaskStore {
       criteria: input.criteria,
       repoPath: input.repoPath,
       source: input.source,
+      kind: input.kind ?? "feature",
       branch: null,
       worktreePath: null,
       state: "draft",

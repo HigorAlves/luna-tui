@@ -25,12 +25,15 @@ export interface Snapshot {
   retries: Retries;
   /** Where a paused or escalated task goes when it continues. */
   resumeTo: TaskState | null;
+  /** A setup-only task closes once its config is approved; a feature goes on to triage. */
+  kind?: "feature" | "setup";
 }
 
 export type StageOutcome = "pass" | "fail" | "needs_input" | "test_change" | "escalated";
 
 export type PipelineEvent =
-  | { type: "start" }
+  /** `setup` when the repo has no luna.yaml yet: the setup gate runs before triage. */
+  | { type: "start"; setup?: boolean }
   | { type: "stage_done"; outcome: StageOutcome; reason?: string }
   | { type: "answered" }
   | { type: "approved" }
@@ -147,7 +150,7 @@ export function transition(task: Snapshot, event: PipelineEvent): Step {
       if (state === "paused_rate_limit" && task.resumeTo) return run(task.resumeTo, retries);
       break;
     case "start":
-      if (state === "draft") return run("triage", retries);
+      if (state === "draft") return run(event.setup ? "setup" : "triage", retries);
       break;
     case "answered":
       if (state === "awaiting_answers") return run("triage", retries);
@@ -155,6 +158,7 @@ export function transition(task: Snapshot, event: PipelineEvent): Step {
     case "approved":
       return approved(task, event);
     case "sent_back":
+      if (state === "awaiting_setup") return run("setup", retries);
       if (state === "awaiting_approval") return run("triage", retries);
       if (state === "awaiting_test_check") return run("test_design", retries);
       break;
@@ -167,6 +171,9 @@ export function transition(task: Snapshot, event: PipelineEvent): Step {
 function approved(task: Snapshot, event: PipelineEvent): Step {
   const { state, retries } = task;
   switch (state) {
+    case "awaiting_setup":
+      if (task.kind === "setup") return { state: "closed", retries, resumeTo: null, effect: { kind: "done" } };
+      return run("triage", retries);
     case "awaiting_approval":
       return run("test_design", retries);
     case "awaiting_test_check":
@@ -192,6 +199,10 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
   }
 
   switch (state) {
+    case "setup":
+      if (outcome === "pass") return wait("awaiting_setup", retries);
+      if (outcome === "fail") return escalate("setup failed", "setup", retries);
+      break;
     case "triage":
       if (outcome === "pass") return wait("awaiting_approval", retries);
       if (outcome === "needs_input") return wait("awaiting_answers", retries);
