@@ -106,6 +106,10 @@ pub struct DetailView<'a> {
     pub prs: &'a [PullRequest],
     /// The branch's diff once fetched, for the Diff section.
     pub diff: Option<&'a TaskDiff>,
+    /// The pane's height, written back each frame for the page keys.
+    pub viewport: &'a Cell<u16>,
+    /// Bring the selected row into view this frame (the cursor moved); cleared once done.
+    pub follow: &'a Cell<bool>,
 }
 
 /// A terminal this wide or wider lays the rail beside the pane; narrower, the rail becomes a
@@ -126,7 +130,12 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         .padding(Padding::new(1, 1, 0, 0))
         .title(Line::from(format!(" #{} {} ", task.short_id(), task.title)).bold())
         .title_bottom(
-            Line::from(format!(" {} {} · h/l sections · + size · ? help ", look_glyph(look), task.status_label()))
+            Line::from(format!(
+                " {} {} · h/l sections · {} · + size · ? help ",
+                look_glyph(look),
+                task.status_label(),
+                if view.section.has_cursor() { "j/k pick · J/K scroll" } else { "j/k scroll" }
+            ))
                 .fg(c(look_color(look)))
                 .left_aligned(),
         )
@@ -151,26 +160,81 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         pane_area
     };
 
-    let mut lines = match view.section {
-        Section::Overview => overview_lines(task, detail, pane_area.width as usize, now),
-        Section::Plan => plan_lines(task, detail, now),
-        Section::Tests => tests_lines(task, detail, pane_area.width as usize, now),
-        Section::Runs => runs_lines(task, detail, view.cursor, pane_area.width as usize, now),
-        Section::Diff => diff_lines(task, view.diff, view.cursor, pane_area.width as usize),
-        Section::Evidence => evidence_section_lines(detail, view.cursor),
-        Section::Pr => pr_lines(task, detail, view.prs, now),
-        Section::Activity => activity_lines(detail),
-    };
-    if let Some(strip) = gate_strip(task, detail) {
-        lines.insert(0, strip);
-        lines.insert(1, Line::default());
+    let height = pane_area.height as usize;
+    let width = pane_area.width as usize;
+    view.viewport.set(pane_area.height);
+    let mut lines: Vec<Line> = gate_strip(task, detail).map(|strip| vec![strip, Line::default()]).unwrap_or_default();
+    let above = lines.len();
+    let follow = view.follow.replace(false);
+
+    if view.section == Section::Diff {
+        // Patches run to 512 KB: only the lines in view become widgets, and nothing wraps, so
+        // a row of scroll is a line of the patch.
+        let head = diff_head(task, view.diff, view.cursor, width);
+        let body_len = head.patch.map_or(1, |p| p.lines().count());
+        let total = above + head.lines.len() + body_len + head.tail.len();
+        let mut offset = view.scroll.get() as usize;
+        if follow && let Some(row) = head.cursor_row {
+            offset = keep_visible(offset, above + row, height);
+        }
+        let offset = offset.min(total.saturating_sub(height));
+        view.scroll.set(offset as u16);
+        let body_from = offset.saturating_sub(above + head.lines.len()).min(body_len);
+        lines.extend(head.lines);
+        match head.patch {
+            Some(patch) => lines.extend(patch.lines().skip(body_from).take(height).map(patch_line)),
+            None => lines.push(muted("  loading the patch…".into())),
+        }
+        lines.extend(head.tail);
+        frame.render_widget(Paragraph::new(Text::from(lines)).scroll(((offset - body_from) as u16, 0)), pane_area);
+        return;
     }
 
-    // Clamp to the content's height at this width, so j/k never scroll past the end.
-    let total = Paragraph::new(Text::from(lines.clone())).wrap(Wrap { trim: false }).line_count(pane_area.width);
-    let offset = view.scroll.get().min(total.saturating_sub(pane_area.height as usize) as u16);
-    view.scroll.set(offset);
-    frame.render_widget(Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false }).scroll((offset, 0)), pane_area);
+    let (section_lines, cursor_row) = match view.section {
+        Section::Overview => (overview_lines(task, detail, width, now), None),
+        Section::Plan => (plan_lines(task, detail, now), None),
+        Section::Tests => (tests_lines(task, detail, width, now), None),
+        Section::Runs => runs_lines(task, detail, view.cursor, width, now),
+        Section::Diff => unreachable!("drawn above"),
+        Section::Evidence => evidence_section_lines(detail, view.cursor),
+        Section::Pr => (pr_lines(task, detail, view.prs, now), None),
+        Section::Activity => (activity_lines(detail), None),
+    };
+    lines.extend(section_lines);
+
+    // One paragraph: counted at this width, then clamped so j/k never scroll past the end.
+    let paragraph = Paragraph::new(Text::from(lines)).wrap(Wrap { trim: false });
+    let total = paragraph.line_count(pane_area.width);
+    let mut offset = view.scroll.get() as usize;
+    if follow && let Some(row) = cursor_row {
+        offset = keep_visible(offset, above + row, height);
+    }
+    let offset = offset.min(total.saturating_sub(height));
+    view.scroll.set(offset as u16);
+    frame.render_widget(paragraph.scroll((offset as u16, 0)), pane_area);
+}
+
+/// The scroll offset that keeps `row` inside a window of `height` rows, moving as little as
+/// possible from `offset`.
+fn keep_visible(offset: usize, row: usize, height: usize) -> usize {
+    if row < offset {
+        row
+    } else if row >= offset + height.max(1) {
+        row + 1 - height.max(1)
+    } else {
+        offset
+    }
+}
+
+/// One line of a patch, coloured by what it does.
+fn patch_line(line: &str) -> Line<'static> {
+    let color = match line.chars().next() {
+        Some('+') if !line.starts_with("+++") => GREEN,
+        Some('-') if !line.starts_with("---") => RED,
+        Some('@') => ACCENT,
+        _ => SUBTEXT0,
+    };
+    Line::from(Span::from(line.to_string()).fg(c(color)))
 }
 
 /// The rail: one row per section, the active one marked, its status glyph right-aligned.
@@ -618,10 +682,11 @@ fn case_line(case: &TestCase, title_w: usize) -> Line<'static> {
     ])
 }
 
-/// Runs: a table of stage runs, then the selected run's error and files.
-fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: usize, now: u64) -> Vec<Line<'static>> {
+/// Runs: a table of stage runs, then the selected run's error and files. With the index of
+/// the selected row, so the pane can keep it in view.
+fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: usize, now: u64) -> (Vec<Line<'static>>, Option<usize>) {
     let Some(d) = detail else {
-        return vec![heading("Runs"), Line::default(), muted("  loading…".into())];
+        return (vec![heading("Runs"), Line::default(), muted("  loading…".into())], None);
     };
     let mut head = vec![Span::from("Runs").fg(c(ACCENT)).bold(), Span::from(format!(" · {}", d.stage_runs.len())).fg(c(SUBTEXT0))];
     if let Some(spent) = d.spent_usd() {
@@ -633,10 +698,11 @@ fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: us
     let mut lines = vec![Line::from(head), Line::default()];
     if d.stage_runs.is_empty() {
         lines.push(muted("  nothing has run yet".into()));
-        return lines;
+        return (lines, None);
     }
     lines.push(muted(format!("    {:<14} {:>2}  {:<8} {:>6}  {:>7}  {:>5}", "stage", "#", "status", "took", "cost", "turns")));
     let selected = cursor.min(d.stage_runs.len() - 1);
+    let cursor_row = lines.len() + selected;
     for (i, run) in d.stage_runs.iter().enumerate() {
         let (_, color) = run_glyph(run);
         let on = i == selected;
@@ -678,8 +744,8 @@ fn runs_lines(task: &Task, detail: Option<&TaskDetail>, cursor: usize, width: us
         lines.extend(files.iter().map(|a| muted(format!("    {} {}", a.kind, a.path))));
     }
     lines.push(Line::default());
-    lines.push(muted("j/k pick a run · f follows the running one in herdr".into()));
-    lines
+    lines.push(muted("j/k pick a run · J/K scroll · f follows the running one in herdr".into()));
+    (lines, Some(cursor_row))
 }
 
 /// The error a run finished with, as the activity log recorded it.
@@ -692,13 +758,24 @@ fn run_error(detail: &TaskDetail, run: &StageRun) -> Option<String> {
     })
 }
 
+/// The Diff section before and after its patch: the heading and file list (`lines`), the
+/// selected file's patch as text (materialised by the caller, only where it shows), and the
+/// lines under it. `cursor_row` indexes the selected file inside `lines`.
+struct DiffHead<'a> {
+    lines: Vec<Line<'static>>,
+    cursor_row: Option<usize>,
+    patch: Option<&'a str>,
+    tail: Vec<Line<'static>>,
+}
+
 /// Diff: the branch's files with their counts, then the selected file's patch.
-fn diff_lines(task: &Task, diff: Option<&TaskDiff>, cursor: usize, width: usize) -> Vec<Line<'static>> {
+fn diff_head<'a>(task: &Task, diff: Option<&'a TaskDiff>, cursor: usize, width: usize) -> DiffHead<'a> {
+    let none = |lines| DiffHead { lines, cursor_row: None, patch: Some(""), tail: Vec::new() };
     let Some(branch) = &task.branch else {
-        return vec![heading("Diff"), Line::default(), muted("  no branch yet: Build creates one".into())];
+        return none(vec![heading("Diff"), Line::default(), muted("  no branch yet: Build creates one".into())]);
     };
     let Some(diff) = diff else {
-        return vec![heading("Diff"), Line::default(), muted(format!("  loading {branch}…"))];
+        return none(vec![heading("Diff"), Line::default(), muted(format!("  loading {branch}…"))]);
     };
     let added: u64 = diff.files.iter().map(|f| f.added).sum();
     let removed: u64 = diff.files.iter().map(|f| f.removed).sum();
@@ -712,9 +789,10 @@ fn diff_lines(task: &Task, diff: Option<&TaskDiff>, cursor: usize, width: usize)
     lines.push(Line::default());
     if diff.files.is_empty() {
         lines.push(muted("  no changes yet".into()));
-        return lines;
+        return none(lines);
     }
     let selected = cursor.min(diff.files.len() - 1);
+    let cursor_row = lines.len() + selected;
     let path_w = diff.files.iter().map(|f| f.path.chars().count()).max().unwrap_or(10).clamp(10, width.saturating_sub(22).max(10));
     for (i, file) in diff.files.iter().enumerate() {
         let on = i == selected;
@@ -736,29 +814,21 @@ fn diff_lines(task: &Task, diff: Option<&TaskDiff>, cursor: usize, width: usize)
         Span::from(format!("─ {} ", file.path)).fg(c(ACCENT)).bold(),
         Span::from("─".repeat(width.saturating_sub(file.path.chars().count() + 4))).fg(c(MUTED)),
     ]));
-    match diff.patch.as_deref().filter(|_| diff.file.as_deref() == Some(file.path.as_str())) {
-        Some(patch) => {
-            for line in patch.lines() {
-                let color = match line.chars().next() {
-                    Some('+') if !line.starts_with("+++") => GREEN,
-                    Some('-') if !line.starts_with("---") => RED,
-                    Some('@') => ACCENT,
-                    _ => SUBTEXT0,
-                };
-                lines.push(Line::from(Span::from(line.to_string()).fg(c(color))));
-            }
-        }
-        None => lines.push(muted("  loading the patch…".into())),
+    let patch = diff.patch.as_deref().filter(|_| diff.file.as_deref() == Some(file.path.as_str()));
+    let mut tail = Vec::new();
+    if patch.is_some() && diff.truncated {
+        tail.push(muted("  … truncated: the machine sends at most 512 KB of a patch".into()));
     }
-    lines.push(Line::default());
-    lines.push(muted("j/k pick a file · o opens it in $EDITOR".into()));
-    lines
+    tail.push(Line::default());
+    tail.push(muted("j/k pick a file · J/K scroll · o opens it".into()));
+    DiffHead { lines, cursor_row: Some(cursor_row), patch, tail }
 }
 
-/// Evidence: the QA verdict from the ship gate and every artifact the stages produced.
-fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> Vec<Line<'static>> {
+/// Evidence: the QA verdict from the ship gate and every artifact the stages produced. With
+/// the index of the selected row, so the pane can keep it in view.
+fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
     let Some(d) = detail else {
-        return vec![heading("Evidence"), Line::default(), muted("  loading…".into())];
+        return (vec![heading("Evidence"), Line::default(), muted("  loading…".into())], None);
     };
     let mut lines = vec![heading("Evidence")];
     let verdict = d.latest_approval("awaiting_ship").map(|a| evidence_lines(&a.requested["evidence"])).unwrap_or_default();
@@ -769,11 +839,10 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> Vec<Lin
     lines.push(Line::default());
     if d.artifacts.is_empty() {
         lines.push(muted("  nothing yet: E2E and Evidence write screenshots, a recording and the manifest here".into()));
-        return lines;
+        return (lines, None);
     }
     let selected = cursor.min(d.artifacts.len() - 1);
-    let mut kinds: Vec<&str> = d.artifacts.iter().map(|a| a.kind.as_str()).collect();
-    kinds.dedup();
+    let mut cursor_row = None;
     let mut last_kind = "";
     for (i, artifact) in d.artifacts.iter().enumerate() {
         if artifact.kind != last_kind {
@@ -782,6 +851,9 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> Vec<Lin
             lines.push(Line::from(vec![Span::from(artifact.kind.clone()).fg(c(ACCENT)).bold(), Span::from(format!("   {count}")).fg(c(SUBTEXT0))]));
         }
         let on = i == selected;
+        if on {
+            cursor_row = Some(lines.len());
+        }
         let label = if artifact.label.is_empty() { String::new() } else { format!("{}  ", artifact.label) };
         lines.push(Line::from(vec![
             Span::from(if on { "  ▌ " } else { "    " }).fg(c(ACCENT)),
@@ -790,8 +862,8 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> Vec<Lin
         ]));
     }
     lines.push(Line::default());
-    lines.push(muted("j/k pick a file · o opens it".into()));
-    lines
+    lines.push(muted("j/k pick a file · J/K scroll · o opens it".into()));
+    (lines, cursor_row)
 }
 
 /// The PR for this ticket's branch, if the inbox has it.
@@ -809,7 +881,11 @@ fn pr_url(detail: &TaskDetail) -> Option<String> {
 fn pr_lines(task: &Task, detail: Option<&TaskDetail>, prs: &[PullRequest], now: u64) -> Vec<Line<'static>> {
     let mut lines = vec![heading("PR"), Line::default()];
     match pr_for(task, prs) {
-        Some(pr) => lines.extend(pr_widget(pr, now)),
+        Some(pr) => {
+            lines.extend(pr_widget(pr, now));
+            lines.push(Line::default());
+            lines.push(muted("o opens it in the browser".into()));
+        }
         None => match detail.and_then(pr_url) {
             Some(url) => {
                 let reused = detail
@@ -958,7 +1034,7 @@ mod tests {
     ) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let scroll = Cell::new(0);
-        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff };
+        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false) };
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect()
@@ -1073,6 +1149,7 @@ mod tests {
         assert!(text.contains("2 tests failed: csv.test.ts"), "{text}");
         assert!(text.contains("✗ escapes a quoted comma"), "{text}");
         assert!(text.contains("log /out/files/verify.log"), "{text}");
+        assert!(text.contains("j/k pick a run · J/K scroll · f follows"), "{text}");
     }
 
     #[test]
@@ -1081,6 +1158,7 @@ mod tests {
         let text = render(120, 30, &task, Some(&detail), Section::Evidence, 0).join("\n");
         assert!(text.contains("log   1"), "{text}");
         assert!(text.contains("verify  /out/files/verify.log"), "{text}");
+        assert!(text.contains("j/k pick a file · J/K scroll · o opens it"), "{text}");
         let mut bare = detail.clone();
         bare.artifacts.clear();
         let text = render(120, 30, &task, Some(&bare), Section::Evidence, 0).join("\n");
@@ -1110,6 +1188,7 @@ mod tests {
         assert!(text.contains("✗ lint") && text.contains("✓ build"), "{text}");
         assert!(text.contains("approved · 2 unresolved threads"), "{text}");
         assert!(text.contains("⚙ ci fix · ci watch · #e1f2a3b4"), "{text}");
+        assert!(text.contains("o opens it in the browser"), "{text}");
         let other = [pr("feat/other")];
         let text = render_with(120, 30, &task, Some(&detail), Section::Pr, 0, (&other, None)).join("\n");
         assert!(text.contains("no PR yet"), "{text}");
@@ -1130,8 +1209,37 @@ mod tests {
         assert!(selected.contains("A ") && selected.contains("+41"), "{selected}");
         assert!(text.contains("─ machine/src/csv.test.ts"), "{text}");
         assert!(text.contains("+import { toCsv }"), "{text}");
+        assert!(text.contains("j/k pick a file · J/K scroll · o opens it"), "{text}");
+        assert!(!text.contains("truncated"), "{text}");
         let text = render_with(120, 30, &task, Some(&detail), Section::Diff, 0, (&[], None)).join("\n");
         assert!(text.contains("loading task/abcdef12"), "{text}");
+    }
+
+    #[test]
+    fn a_long_patch_scrolls_in_a_window_and_says_when_the_machine_cut_it() {
+        let (task, detail) = fixture();
+        let body: String = (1..=400).map(|i| format!("+line {i}\n")).collect();
+        let diff: TaskDiff = serde_json::from_str(&format!(
+            r#"{{"base":"main","head":"task/abcdef12","files":[{{"path":"big.ts","status":"A","added":400,"removed":0}}],"file":"big.ts","patch":{},"truncated":true}}"#,
+            serde_json::to_string(&body).unwrap()
+        ))
+        .unwrap();
+        let (width, height) = (120, 20);
+        let scroll = Cell::new(300);
+        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false) };
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let text: String = (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>() + "\n").collect();
+        assert!(text.contains("+line 300"), "scrolled into the patch: {text}");
+        assert!(!text.contains("+line 100"), "{text}");
+        assert_eq!(scroll.get(), 300, "well inside the content, nothing to clamp");
+        scroll.set(10_000);
+        terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let text: String = (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>() + "\n").collect();
+        assert!(text.contains("+line 400") && text.contains("… truncated"), "clamped to the end, which says the machine cut the patch: {text}");
+        assert!(scroll.get() < 10_000, "the offset is clamped to the content");
     }
 
     #[test]

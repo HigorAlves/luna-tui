@@ -95,6 +95,11 @@ pub fn slack_notice(old_split: Option<SlackSplit>, old_reopened_at: Option<&str>
     Some(Notice { title: new.label().to_string(), body })
 }
 
+/// Inside the rules file's quiet hours (the snapshot's `quiet`) every notice but a P0's is held back.
+pub fn muted_by_quiet_hours(quiet: bool, item: &SlackItem) -> bool {
+    quiet && item.priority() != Some("P0")
+}
+
 /// The notice for losing the machine.
 pub fn offline_notice(reason: &str) -> Notice {
     Notice { title: "Machine offline".to_string(), body: reason.to_string() }
@@ -245,6 +250,17 @@ mod slack_tests {
         assert_eq!(slack_notice(Some(SlackSplit::Done), None, false, &back).map(|n| n.title), Some("Reopened".into()), "whatever the priority");
         assert_eq!(slack_notice(Some(SlackSplit::Fyi), Some("2026-10-28T10:00:00Z"), false, &back), None, "an old reopen is not news twice");
         assert_eq!(slack_notice(Some(SlackSplit::Fyi), Some("2026-10-27T10:00:00Z"), false, &back).map(|n| n.title), Some("Reopened".into()), "a fresh one is");
+    }
+
+    #[test]
+    fn quiet_hours_hold_back_everything_but_a_p0() {
+        let p0 = item("a", "needs_reply", Some("P0"), "t");
+        let p1 = item("b", "needs_reply", Some("P1"), "t");
+        let untriaged = item("c", "needs_reply", None, "t");
+        assert!(!muted_by_quiet_hours(true, &p0), "a P0 gets through");
+        assert!(muted_by_quiet_hours(true, &p1));
+        assert!(muted_by_quiet_hours(true, &untriaged), "a reopen of an untriaged item waits too");
+        assert!(!muted_by_quiet_hours(false, &p1), "outside the window nothing is held");
     }
 
     #[test]

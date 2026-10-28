@@ -56,6 +56,12 @@ describe("createSlack", () => {
     await expect(createSlack("t", { fetch: twice.fetch, sleep }).usergroups()).rejects.toThrow(/rate limit/);
     const word = fakeSlack({ "usergroups.list": { ok: false, error: "ratelimited" } });
     await expect(createSlack("t", { fetch: word.fetch, sleep }).usergroups()).rejects.toThrow(/rate limit/);
+    // A long Retry-After is not waited out inline: the poller's backoff takes over.
+    slept.length = 0;
+    const long = fakeSlack({ "usergroups.list": [new Response("{}", { status: 429, headers: { "Retry-After": "30" } })] });
+    await expect(createSlack("t", { fetch: long.fetch, sleep }).usergroups()).rejects.toThrow(/rate limit on usergroups.list: retry after 30s/);
+    expect(slept).toEqual([]);
+    expect(long.calls).toHaveLength(1);
   });
 
   it("searches mentions since a ts, oldest first, and filters the day's older hits", async () => {

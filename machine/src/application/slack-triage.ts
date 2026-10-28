@@ -35,8 +35,23 @@ export interface TriageContext {
 export type TriageAnswer = Omit<SlackTriage, "by" | "triagedAt" | "overridden">;
 
 export interface Triager {
-  /** Verdicts by item id; an item the model skipped is simply absent. */
+  /**
+   * Verdicts by item id; an item the model skipped is simply absent. A run that produced no
+   * result at all (no container, a timeout, an unreadable answer) rejects, with a
+   * `TriageRunError` when earlier batches of the same call already have verdicts.
+   */
   triage(items: TriageItem[], context: TriageContext): Promise<Map<string, TriageAnswer>>;
+}
+
+/** A batch failed to run; `answers` holds what the batches before it settled. */
+export class TriageRunError extends Error {
+  constructor(
+    message: string,
+    readonly answers: Map<string, TriageAnswer>,
+  ) {
+    super(message);
+    this.name = "TriageRunError";
+  }
 }
 
 /** The most items one call carries. */

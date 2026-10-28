@@ -1,7 +1,7 @@
 import type { SlackWatch } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_SLA, RULES_TEMPLATE, type RuleInput, applyRules, firstLine, inQuietHours, learn, parseRules, withFloor } from "./slack-rules.ts";
+import { DEFAULT_SLA, LEARNED_TEMPLATE, RULES_TEMPLATE, type RuleInput, applyRules, firstLine, inQuietHours, learn, learnedPath, parseRules, withFloor } from "./slack-rules.ts";
 
 const now = new Date("2026-10-28T12:00:00Z");
 
@@ -165,6 +165,28 @@ describe("learn", () => {
     const learned = learn("# rules\n\n## VIPs\n- @a\n", "@b", "raised");
     expect(learned).toBe("# rules\n\n## VIPs\n- @a\n\n## Learned\n\n- @b: raised (1)\n");
     expect(parseRules(learned).vips).toEqual(["a"]);
+  });
+
+  it("keys by id with the name as a label, so a renamed person keeps their prior", () => {
+    const once = learn(LEARNED_TEMPLATE, "U2", "lowered", "@marta");
+    expect(once.endsWith("- U2 (@marta): lowered (1)\n")).toBe(true);
+    expect(parseRules("", once).learned).toEqual({ U2: { direction: "lowered", n: 1, label: "@marta" } });
+    const renamed = learn(once, "U2", "lowered", "@marta.s");
+    expect(parseRules("", renamed).learned).toEqual({ U2: { direction: "lowered", n: 2, label: "@marta.s" } });
+    expect(renamed.match(/U2/g)).toHaveLength(1);
+  });
+
+  it("merges the learned file over a Learned section left in the rules file", () => {
+    const rules = parseRules(FILE, "## Learned\n- C9 (#payments): lowered (2)\n- U7 (@bot-ci): raised (1)\n");
+    expect(rules.learned).toEqual({
+      "@bot-ci": { direction: "lowered", n: 3 },
+      "#payments": { direction: "raised", n: 1 },
+      C9: { direction: "lowered", n: 2, label: "#payments" },
+      U7: { direction: "raised", n: 1, label: "@bot-ci" },
+    });
+    expect(rules.vips).toEqual(["cto", "u0vip"]);
+    expect(learnedPath("/state/slack-triage.md")).toBe("/state/slack-triage.learned.md");
+    expect(learnedPath("/state/rules")).toBe("/state/rules.learned.md");
   });
 });
 

@@ -65,7 +65,7 @@ services:
       MACHINE_SLACK_INBOX: ${MACHINE_SLACK_INBOX:-on}
       MACHINE_SLACK_MARK_READ: ${MACHINE_SLACK_MARK_READ:-off}
       MACHINE_SLACK_DIGEST_AT: ${MACHINE_SLACK_DIGEST_AT:-}
-      # The triage rules you edit; on the mounted state dir so the container sees your changes.
+      # The triage rules you edit; the machine's own default, spelled out so a host MACHINE_STATE_DIR carries over.
       MACHINE_SLACK_RULES: ${MACHINE_SLACK_RULES:-${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}/slack-triage.md}
       RUNNER_IMAGE: ${RUNNER_IMAGE:-hardness-runner:dev}
       RUNNER_QA_IMAGE: ${RUNNER_QA_IMAGE:-hardness-runner-qa:dev}

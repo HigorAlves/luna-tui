@@ -34,7 +34,7 @@ describe("loadConfig", () => {
       reposDir: "/home/me/Developer",
       threadReplies: true,
       slack: null,
-      slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/docs\/agents\/slack-triage\.md$/) as string, digestAt: null },
+      slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null },
       jira: null,
       sla: { gateSecs: 3600, cycleSecs: null },
     });
@@ -53,6 +53,9 @@ describe("loadConfig", () => {
     }).slackInbox;
     expect(inbox).toEqual({ enabled: false, userToken: "xoxp-1", appToken: "xapp-1", intervalMs: 30_000, markRead: true, rulesPath: "/state/slack-triage.md", digestAt: { hour: 8, minute: 30 } });
     expect(loadConfig({ HOME: "/h", MACHINE_SLACK_USER_TOKEN: "" }).slackInbox.userToken).toBeNull();
+    // The default follows the state dir; a relative path is taken from the repo root.
+    expect(loadConfig({ HOME: "/h", MACHINE_STATE_DIR: "/var/hardness" }).slackInbox.rulesPath).toBe("/var/hardness/slack-triage.md");
+    expect(loadConfig({ HOME: "/h", MACHINE_SLACK_RULES: "docs/agents/slack-triage.md" }).slackInbox.rulesPath).toMatch(/^\/.*\/docs\/agents\/slack-triage\.md$/);
     expect(loadConfig({ HOME: "/h", MACHINE_SLACK_DIGEST_AT: "" }).slackInbox.digestAt).toBeNull();
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_INBOX_INTERVAL: "0" })).toThrow(/MACHINE_SLACK_INBOX_INTERVAL/);
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_DIGEST_AT: "8am" })).toThrow(/MACHINE_SLACK_DIGEST_AT/);

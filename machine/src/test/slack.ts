@@ -63,6 +63,25 @@ export class MemorySlackStore implements SlackStore {
     const all = [...this.rows.values()].map((r) => r.slackTs);
     return all.length === 0 ? null : all.sort((a, b) => Number(a) - Number(b)).at(-1)!;
   }
+  async prune(doneBefore: Date, runsBefore: Date | null): Promise<{ items: number; runs: number }> {
+    let items = 0;
+    for (const [id, row] of this.rows) {
+      if (row.doneAt && new Date(row.doneAt) < doneBefore) {
+        this.rows.delete(id);
+        items++;
+      }
+    }
+    let runs = 0;
+    if (runsBefore) {
+      for (let i = this.runs.length - 1; i >= 0; i--) {
+        if (new Date(this.runs[i]!.startedAt) < runsBefore) {
+          this.runs.splice(i, 1);
+          runs++;
+        }
+      }
+    }
+    return { items, runs };
+  }
   async metricRows(since: Date): Promise<SlackMetricRow[]> {
     return [...this.rows.values()]
       .filter((r) => new Date(r.arrivedAt) >= since)

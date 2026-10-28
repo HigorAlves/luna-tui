@@ -6,15 +6,20 @@ import { z } from "zod";
 
 /** The events the inbox acts on; anything else is dropped. */
 export const SocketEvent = z.discriminatedUnion("type", [
+  // `message_changed` / `message_deleted` envelopes carry the message under `message` /
+  // `previous_message`; `channel` is usually on the envelope but not always.
   z.object({
     type: z.literal("message"),
-    channel: z.string(),
+    channel: z.string().optional(),
     ts: z.string(),
     user: z.string().optional(),
     bot_id: z.string().optional(),
     text: z.string().optional(),
     subtype: z.string().optional(),
     thread_ts: z.string().optional(),
+    deleted_ts: z.string().optional(),
+    message: z.object({ channel: z.string().optional(), ts: z.string().optional(), text: z.string().optional(), user: z.string().optional() }).optional(),
+    previous_message: z.object({ channel: z.string().optional(), ts: z.string().optional(), text: z.string().optional(), user: z.string().optional() }).optional(),
   }),
   z.object({
     type: z.enum(["reaction_added", "reaction_removed"]),

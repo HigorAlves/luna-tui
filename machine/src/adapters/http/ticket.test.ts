@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { Pipeline } from "../../application/pipeline.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
-import { NoWorktreeError } from "../git/diff.ts";
+import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { freshTestDatabase } from "../../test/database.ts";
 import { createApp } from "./app.ts";
 import { Bus } from "./bus.ts";
@@ -31,6 +31,8 @@ beforeEach(async () => {
 const taskDiff = async (worktreePath: string, repoPath: string | null, file?: string): Promise<TaskDiff> => {
   diffs.push({ worktreePath, repoPath, file });
   if (worktreePath.endsWith("gone")) throw new NoWorktreeError(worktreePath);
+  if (worktreePath.endsWith("broken")) throw new Error("git diff failed: fatal: bad object");
+  if (file !== undefined && file !== "a.ts") throw new NoFileError(file);
   return { base: "b", head: "h", files: [{ path: "a.ts", status: "M", added: 1, removed: 0 }], ...(file ? { patch: `patch of ${file}` } : {}) };
 };
 const app = () => createApp({ db, pipeline, bus: new Bus(), taskDiff });
@@ -96,6 +98,26 @@ describe("GET /tasks/:id/diff", () => {
       { worktreePath: "/wt/x", repoPath: null, file: undefined },
       { worktreePath: "/wt/x", repoPath: null, file: "a.ts" },
     ]);
+  });
+
+  it("is 404 no_file when ?file= names a path the diff does not have", async () => {
+    stubs.plan("implementing", { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/x" } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved");
+    await pipeline.decide(task.id, "approved");
+    for (const file of ["b.ts", "..", "*"]) {
+      expect(await call(`/tasks/${task.id}/diff?file=${encodeURIComponent(file)}`)).toMatchObject({ status: 404, body: { error: "no_file" } });
+    }
+  });
+
+  it("is 500 internal when git itself fails", async () => {
+    stubs.plan("implementing", { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/broken" } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved");
+    await pipeline.decide(task.id, "approved");
+    expect(await call(`/tasks/${task.id}/diff`)).toMatchObject({ status: 500, body: { error: "internal" } });
   });
 
   it("is 404 no_worktree for a task with no worktree, or whose worktree is gone", async () => {

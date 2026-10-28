@@ -14,7 +14,7 @@ import { loadConfig } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns } from "./adapters/persistence/prune.ts";
-import { sweepImages, sweepRunFolders, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
+import { sweepImages, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { GitHubPulls } from "./application/pulls.ts";
@@ -86,6 +86,10 @@ async function sweep(): Promise<void> {
   await step("task state", async () => {
     const removed = await sweepTaskState(db, config.stateDir);
     return removed > 0 ? `removed ${removed} per-task state dir(s) whose task is gone` : null;
+  });
+  await step("slack triage runs", async () => {
+    const removed = await sweepSlackTriageRuns(config.stateDir, config.retentionDays);
+    return removed > 0 ? `removed ${removed} failed slack triage run folder(s)` : null;
   });
   await step("images", async () => {
     const removed = await sweepImages();
@@ -268,6 +272,7 @@ const slackInbox = new SlackInbox({
   markRead: config.slackInbox.markRead,
   rulesPath: config.slackInbox.rulesPath,
   socketToken: config.slackInbox.appToken,
+  retentionDays: config.retentionDays,
 });
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 const app = createApp({

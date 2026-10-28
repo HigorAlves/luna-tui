@@ -37,7 +37,7 @@ import type { TaskRow } from "../../domain/task.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
 import { NoCasesToEditError, NoPlanToEditError, type Pipeline, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
-import { NoWorktreeError } from "../git/diff.ts";
+import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
 import { CloneError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
 import { AlreadyTaskError, BuiltinWatchError, NoItemError, NoWatchError, type SlackInboxPort } from "../../application/slack-inbox.ts";
@@ -122,6 +122,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
     if (error instanceof NoCasesToEditError) return fail(c, 409, "no_cases", error.message);
     if (error instanceof NoWorktreeError) return fail(c, 404, "no_worktree", error.message);
+    if (error instanceof NoFileError) return fail(c, 404, "no_file", error.message);
     if (error instanceof NotReadyError) return fail(c, 409, "not_ready", error.message);
     if (error instanceof PrBusyError) return fail(c, 409, "pr_busy", error.message);
     if (error instanceof NoCheckoutError) return fail(c, 409, "no_checkout", error.message);
@@ -236,7 +237,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   });
 
   if (taskDiff) {
-    /** The branch against its base, one row per file; `?file=<path>` adds that file's patch. */
+    /** The branch against its base, one row per file; `?file=<path>` adds that file's patch (404 no_file unless the path is one of the rows). */
     app.get("/tasks/:id/diff", async (c) => {
       const task = await pipeline.get(taskId(c));
       if (!task.worktreePath) throw new NoWorktreeError(null);
@@ -313,11 +314,11 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     // The Slack inbox: the snapshot, a poll on demand, your actions on an item, the watches,
     // how fast you answer, and the listings the board's watch popup completes from.
     app.get("/slack/items", (c) => c.json(slack.snapshot));
-    app.post("/slack/refresh", async (c) => c.json(await slack.pollOnce()));
+    app.post("/slack/refresh", async (c) => c.json(await slack.pollOnce(true)));
     app.patch("/slack/items/:id", async (c) => c.json(await slack.patch(c.req.param("id"), await body(c, SlackItemPatch))));
     app.post("/slack/items/:id/reply", async (c) => {
-      const { text } = await body(c, SlackReplyInput);
-      return c.json(await slack.reply(c.req.param("id"), text));
+      const { text, nudge } = await body(c, SlackReplyInput);
+      return c.json(await slack.reply(c.req.param("id"), text, nudge ?? false));
     });
     app.post("/slack/items/:id/task", async (c) => c.json(await serialize(await slack.toTask(c.req.param("id"), await body(c, SlackTaskInput))), 201));
     app.get("/slack/watches", async (c) => c.json(await slack.watches()));

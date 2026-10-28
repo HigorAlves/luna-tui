@@ -1,7 +1,7 @@
-import type { SlackTriage, SlackWatch } from "@hardness/contracts";
+import type { SlackItem, SlackTriage, SlackWatch } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { type IncomingMessage, type SlackItemRow, dueOf, fold, higher, inSnapshot, matchWatches, mentionsUser, prUrlsIn, splitOf, toSlackItem, touch, watchFloor } from "./slack-item.ts";
+import { type IncomingMessage, type SlackItemRow, dueOf, fingerprint, fold, higher, inSnapshot, matchWatches, mentionsUser, prUrlsIn, splitOf, toSlackItem, touch, watchFloor } from "./slack-item.ts";
 import { DEFAULT_SLA } from "./slack-rules.ts";
 
 const now = new Date("2026-10-28T12:00:00Z");
@@ -236,5 +236,38 @@ describe("dueOf and toSlackItem", () => {
     expect(item).not.toHaveProperty("slackTs");
     expect(item).not.toHaveProperty("arrivedAt");
     expect(item).not.toHaveProperty("repliedAt");
+  });
+});
+
+describe("fingerprint", () => {
+  it("changes with what the board shows and ignores the rest of the payload", () => {
+    const base: SlackItem = {
+      id: "C1:1",
+      kind: "mention",
+      channel: { id: "C1", name: "eng", kind: "channel" },
+      author: { id: "U2", name: "marta", isBot: false },
+      text: "hi?",
+      threadTs: null,
+      context: [],
+      permalink: "p",
+      ts: "2026-10-28T10:00:00.000Z",
+      matched: ["me"],
+      count: 1,
+      replies: 0,
+      youReplied: false,
+      seenAt: null,
+      doneAt: null,
+      snoozedUntil: null,
+      reopenedAt: null,
+      dueAt: null,
+      overdue: false,
+      triage: null,
+      split: "fyi",
+      linked: { pr: null, taskId: null },
+    };
+    expect(fingerprint(base)).toBe(fingerprint({ ...base, permalink: "other", context: [{ ts: "0.5", user: base.author, text: "x" }] }));
+    for (const changed of [{ split: "needs_reply" as const }, { overdue: true }, { replies: 2 }, { text: "hi there?" }, { doneAt: "2026-10-28T11:00:00.000Z" }, { linked: { pr: null, taskId: "t1" } }]) {
+      expect(fingerprint({ ...base, ...changed })).not.toBe(fingerprint(base));
+    }
   });
 });

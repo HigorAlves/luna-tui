@@ -680,6 +680,9 @@ pub struct TaskDiff {
     pub file: Option<String>,
     #[serde(default)]
     pub patch: Option<String>,
+    /// The machine cut `patch` at its cap (512 KB).
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// The PR task in flight for a PR, if any.
@@ -1042,6 +1045,9 @@ pub struct SlackSnapshot {
     /// The reply SLA in effect, seconds by priority (rules file `## SLA`); 0 or missing means none.
     #[serde(default)]
     pub sla: BTreeMap<String, u64>,
+    /// Now is inside the rules file's quiet hours: only a P0 raises a notice.
+    #[serde(default)]
+    pub quiet: bool,
 }
 
 impl SlackSnapshot {
@@ -1653,7 +1659,7 @@ pub fn parse_cases(markdown: &str) -> Vec<TestCase> {
             let text = line.trim();
             if !text.is_empty() {
                 if !case.approach.is_empty() {
-                    case.approach.push(' ');
+                    case.approach.push('\n');
                 }
                 case.approach.push_str(text);
             }
@@ -2225,7 +2231,9 @@ pub(crate) mod tests {
         assert!(markdown.contains("\n## (no criterion)\n\n- an orphan\n"), "{markdown}");
         let expected: Vec<TestCase> = cases.iter().cloned().map(|c| TestCase { result: None, ..c }).collect();
         assert_eq!(parse_cases(&markdown), expected);
-        assert_eq!(parse_cases("## c\n- t\n  line one\n  line two\n")[0].approach, "line one line two");
+        assert_eq!(parse_cases("## c\n- t\n  line one\n  line two\n")[0].approach, "line one\nline two", "a multi-line approach keeps its lines");
+        let steps = vec![TestCase { title: "t".into(), criterion: None, approach: "step one\nstep two".into(), result: None }];
+        assert_eq!(parse_cases(&cases_markdown(&steps)), steps, "and round-trips");
         assert!(parse_cases("# nothing\n").is_empty());
     }
 
