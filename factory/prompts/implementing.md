@@ -21,6 +21,8 @@ Assumptions:
 Slices (in order; seed the ledger from these):
 {{plan.slices}}
 
+No plan above (a PR task fixing CI or a review thread): the ticket and the prior findings are the plan. Seed the ledger with one slice per prior finding, in order, and stay on the current branch, which is the PR's own.
+
 ## Decisions so far
 {{decisions}}
 

@@ -17,6 +17,7 @@ export const ROLE_DESCRIPTION: Record<AgentRole, string> = {
   "qa-validator": "Drives the running app in a browser to prove each plan criterion and writes the evidence packet.",
   "ci-investigator": "Diagnoses a red CI run from its logs and classifies it: fixable, flake, infra, needs_debug or green.",
   "retro-reviewer": "Looks back at a finished task and proposes rules for the project context from incidents and patterns.",
+  "pr-reviewer": "Reviews someone else's open pull request from its diff and returns line-anchored comments and a mechanical verdict; never posts, never edits.",
 };
 
 /** The one definition a pack runs as, keyed by its role name. */

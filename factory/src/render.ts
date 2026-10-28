@@ -27,6 +27,32 @@ const ciText = (ci: StageInput["context"]["ci"]): string => {
   return `${pr}\nChecks:\n${checks}\n${logs}`;
 };
 
+const prLine = (pr: NonNullable<StageInput["context"]["review"]>["pr"]): string =>
+  `PR #${pr.number} ${pr.title} by @${pr.author}: ${pr.headRef} into ${pr.baseRef} (${pr.url})`;
+
+/** The PR, its files, the comments already on it and the diff, as reviewing reads them. */
+const reviewText = (review: StageInput["context"]["review"]): string => {
+  if (!review) return NONE;
+  const body = review.pr.body && review.pr.body.trim() !== "" ? review.pr.body.trim() : "(no description)";
+  const files = review.files.length > 0 ? review.files.map((f) => `- ${f.path} (+${f.additions} -${f.deletions})`).join("\n") : "- (none)";
+  const comments =
+    review.existingComments.length > 0
+      ? review.existingComments.map((c) => `- ${c.path ?? "(general)"}${c.line !== null ? `:${c.line}` : ""} @${c.author}: ${c.body}`).join("\n")
+      : "- (none)";
+  return `${prLine(review.pr)}\n\n${body}\n\nFiles:\n${files}\n\nComments already on the PR:\n${comments}\n\nDiff:\n\`\`\`diff\n${review.diff}\n\`\`\``;
+};
+
+/** The unresolved threads, each under its GraphQL id, as addressing reads them. */
+const threadsText = (threads: StageInput["context"]["threads"]): string => {
+  if (!threads) return NONE;
+  const list = threads.threads.map((t) => {
+    const where = t.path ? `${t.path}${t.line !== null ? `:${t.line}` : ""}` : "the PR as a whole";
+    const comments = t.comments.map((c) => `- @${c.author} (${c.at}): ${c.body}`).join("\n");
+    return `### Thread ${t.id} at ${where}\n${comments}`;
+  });
+  return `${prLine(threads.pr)}\n\n${list.join("\n\n") || "(no unresolved threads)"}`;
+};
+
 /** The rules every stage runs under; appended to the system prompt and restated in the header. */
 export const FACTORY_RULES = [
   "You are running in factory mode (LUNA_FACTORY=1): no human is present. A controller wrote /in/stage.json and reads your final answer as the stage result.",
@@ -75,6 +101,8 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     ),
     "{{context.baseCommit}}": txt(input.context.baseCommit),
     "{{context.ci}}": ciText(input.context.ci),
+    "{{context.review}}": reviewText(input.context.review),
+    "{{context.threads}}": threadsText(input.context.threads),
     "{{context.checks}}": input.context.checks
       ? bullets(
           input.context.checks.map((c) => {

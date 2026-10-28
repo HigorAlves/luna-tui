@@ -11,7 +11,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { agentDefinitions } from "./agents.ts";
-import { preToolUseGuards } from "./hooks/guards.ts";
+import { branchPrefixFor, preToolUseGuards } from "./hooks/guards.ts";
 import { EMPTY_RUN, type RunOutcome, finish } from "./output.ts";
 import { FACTORY_RULES, callLine, renderPrompt } from "./render.ts";
 import { lunaTools } from "./tools/luna.ts";
@@ -83,7 +83,16 @@ const options = {
   maxTurns: input.limits.maxTurns,
   outputFormat: { type: "json_schema" as const, schema: answerJsonSchema(pack) },
   mcpServers: { luna: luna.server },
-  hooks: { PreToolUse: preToolUseGuards({ writable: pack.writable, branch: input.task.branch || null, workRoot: WORK, outRoot: OUT }) },
+  hooks: {
+    PreToolUse: preToolUseGuards({
+      writable: pack.writable,
+      branch: input.task.branch || null,
+      // A PR task commits on the PR's own branch, not a task/ branch.
+      branchPrefix: branchPrefixFor({ branch: input.task.branch || null, source: input.task.source }),
+      workRoot: WORK,
+      outRoot: OUT,
+    }),
+  },
   model: pack.model,
   effort: pack.effort,
   env: { ...env, LUNA_FACTORY: "1" },
