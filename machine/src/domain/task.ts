@@ -1,6 +1,6 @@
 // Plain domain types for a task and everything attached to it. No TypeORM here — see
 // ../adapters/persistence/schemas.ts for the persistence mapping of these same shapes.
-import type { ArtifactKind, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
+import type { ArtifactKind, StageRunCase, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
 
 import type { Retries } from "./transition.ts";
 
@@ -52,6 +52,8 @@ export interface StageRunRow {
   inputCommit: string | null;
   outputCommit: string | null;
   transcriptPath: string | null;
+  /** Verifying only: one verdict per approved case, when the run reported them. */
+  cases: StageRunCase[] | null;
   startedAt: Date;
   endedAt: Date | null;
 }
@@ -109,10 +111,18 @@ export class TaskBusyError extends Error {
   }
 }
 
-/** No open `awaiting_approval` gate to edit, so there is no plan on the ticket right now. */
+/** No plan to edit: the ticket is neither awaiting the plan's approval nor at the test check. */
 export class NoPlanToEditError extends Error {
   constructor(id: string) {
     super(`task ${id} has no plan awaiting approval`);
     this.name = "NoPlanToEditError";
+  }
+}
+
+/** No open `awaiting_test_check` gate, so there are no test cases to edit right now. */
+export class NoCasesToEditError extends Error {
+  constructor(id: string) {
+    super(`task ${id} has no test cases awaiting your check`);
+    this.name = "NoCasesToEditError";
   }
 }

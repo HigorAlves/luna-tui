@@ -38,7 +38,8 @@ export interface PullRequest {
   fromFork: boolean;
   reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
-  checks: { state: ChecksState; passed: number; total: number; failed: PrCheck[] };
+  /** `failed` is the red subset of `all`, which lists every check in the order GitHub reports them. */
+  checks: { state: ChecksState; passed: number; total: number; failed: PrCheck[]; all: PrCheck[] };
   unresolvedThreads: number;
   split: PrSplit;
   /** The checkout the machine would act in; null means read-only until cloned. */

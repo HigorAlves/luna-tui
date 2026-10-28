@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { DecisionInput, EditPlanInput } from "./api.ts";
+import { DecisionInput, EditCasesInput, EditPlanInput } from "./api.ts";
 import { COLUMNS, COLUMN_OF, RUNNING, TaskState, WAITING_ON_USER } from "./index.ts";
 
 describe("task states", () => {
@@ -46,6 +46,17 @@ describe("edit plan input", () => {
   });
   it("rejects an empty edit", () => {
     expect(EditPlanInput.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("edit cases input", () => {
+  it("accepts a list of cases with title, criterion and approach", () => {
+    const cases = [{ title: "t", criterion: "c", approach: "a" }];
+    expect(EditCasesInput.parse({ cases })).toEqual({ cases });
+  });
+  it("rejects a case missing its approach, and a body with no cases", () => {
+    expect(EditCasesInput.safeParse({ cases: [{ title: "t", criterion: "c" }] }).success).toBe(false);
+    expect(EditCasesInput.safeParse({}).success).toBe(false);
   });
 });
 

@@ -80,14 +80,16 @@ export function summarizeChecks(nodes: Array<CheckRunNode | StatusContextNode>):
   let passed = 0;
   let pending = 0;
   const failed: PrCheck[] = [];
+  const all: PrCheck[] = [];
   for (const node of nodes) {
     const { check, verdict } = verdictOf(node);
+    all.push(check);
     if (verdict === "passed") passed++;
     else if (verdict === "failed") failed.push(check);
     else pending++;
   }
   const state: ChecksState = nodes.length === 0 ? "none" : failed.length > 0 ? "failure" : pending > 0 ? "pending" : "success";
-  return { state, passed, total: nodes.length, failed };
+  return { state, passed, total: nodes.length, failed, all };
 }
 
 /** Maps the node `PR_QUERY` answered for `repo` (`owner/name`) to the inbox's facts about it. */

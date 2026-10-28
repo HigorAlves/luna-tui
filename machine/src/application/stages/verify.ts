@@ -195,6 +195,13 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     const answer = answerOf(pack.detail);
     const findings = (Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[];
     const results = Array.isArray(answer?.results) ? answer.results : [];
+    // One verdict per case, by the title the pack copied verbatim from the approved case. The
+    // cases are matched by title only: a reworded title is an unproven case, as the prompt says,
+    // and the project's own test names are not mapped to cases at all.
+    const cases = results.flatMap((r) => {
+      const row = r as { title?: unknown; outcome?: unknown };
+      return typeof row.title === "string" ? [{ title: row.title, ok: row.outcome === "pass" }] : [];
+    });
     const asked = pack.outcome === "needs_input";
     const resultsFailed = results.some((r) => (r as { outcome?: string }).outcome === "fail");
     const verdict =
@@ -210,6 +217,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         summary,
         findings,
         results,
+        ...(cases.length > 0 ? { cases } : {}),
         checks: reports,
         ...noTestsNote,
         ...(asked ? { note: "the reviewer asked a question; a reviewer should not, so the review counts as a pass" } : {}),

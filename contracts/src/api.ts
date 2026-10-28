@@ -4,7 +4,7 @@ import { z } from "zod";
 
 import type { Column, TaskState } from "./index.ts";
 import type { PrSnapshot } from "./github.ts";
-import { type ArtifactKind, StageOutcome, type TaskRoute, TaskSource } from "./stage.ts";
+import { type ArtifactKind, StageOutcome, type TaskRoute, TaskSource, TestCase } from "./stage.ts";
 
 export const NewTaskInput = z.object({
   title: z.string().trim().min(1),
@@ -29,8 +29,10 @@ export const UpdateTaskInput = z.object({
 });
 export type UpdateTaskInput = z.infer<typeof UpdateTaskInput>;
 
-/** `PATCH /tasks/:id/plan`: edits triage's proposed plan before you approve it. Every
- * field is optional, but at least one must be given — the slices stay untouched either way. */
+/** `PATCH /tasks/:id/plan`: edits triage's plan while it awaits your approval, or later at
+ * the test check (nothing is built yet, so the approved plan may still move). Every field is
+ * optional, but at least one must be given — the slices stay untouched either way. Each edit
+ * appends a `PlanRevision` to the approval's `requested.revisions` instead of overwriting silently. */
 export const EditPlanInput = z
   .object({
     brief: z.string().optional(),
@@ -39,6 +41,36 @@ export const EditPlanInput = z
   })
   .refine((input) => Object.keys(input).length > 0, { message: "give at least one field to edit" });
 export type EditPlanInput = z.infer<typeof EditPlanInput>;
+
+/** One plan edit, kept on the approval's `requested.revisions`: only the fields that changed. */
+export interface PlanRevision {
+  at: string;
+  before: EditPlanInput;
+  after: EditPlanInput;
+}
+
+/** `PATCH /tasks/:id/cases`: replaces test_design's cases while the test check is open. */
+export const EditCasesInput = z.object({
+  cases: z.array(TestCase).min(1),
+});
+export type EditCasesInput = z.infer<typeof EditCasesInput>;
+
+/** `GET /tasks/:id/diff`: the task branch against its base, one row per file; `patch` only with `?file=`. */
+export interface TaskDiff {
+  /** The merge base the branch is diffed against. */
+  base: string;
+  /** The worktree's HEAD. */
+  head: string;
+  files: TaskDiffFile[];
+  patch?: string;
+}
+
+export interface TaskDiffFile {
+  path: string;
+  status: "A" | "M" | "D" | "R";
+  added: number;
+  removed: number;
+}
 
 export const DecisionInput = z.object({
   decision: z.enum(["approved", "sent_back"]),
@@ -120,8 +152,15 @@ export interface StageRun {
   /** Null until a stage run reports usage. */
   costUsd: number | null;
   turns: number | null;
+  /** Verifying only: one verdict per approved case, when the run reported them; null otherwise. */
+  cases: StageRunCase[] | null;
   startedAt: string;
   endedAt: string | null;
+}
+
+export interface StageRunCase {
+  title: string;
+  ok: boolean;
 }
 
 /** A file a stage run produced, e.g. a screenshot or the QA manifest. */

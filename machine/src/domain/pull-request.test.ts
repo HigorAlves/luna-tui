@@ -48,10 +48,15 @@ describe("fromGraphQl", () => {
       passed: 1,
       total: 3,
       failed: [{ name: "lint", state: "FAILURE", url: null }],
+      all: [
+        { name: "build", state: "SUCCESS", url: "https://github.com/o/a/actions/runs/1/job/build" },
+        { name: "lint", state: "FAILURE", url: null },
+        { name: "e2e", state: "QUEUED", url: "https://github.com/o/a/actions/runs/1/job/e2e" },
+      ],
     });
     expect(facts({ contexts: green }).checks.state).toBe("success");
     expect(facts({ contexts: running }).checks.state).toBe("pending");
-    expect(facts({}).checks).toEqual({ state: "none", passed: 0, total: 0, failed: [] });
+    expect(facts({}).checks).toEqual({ state: "none", passed: 0, total: 0, failed: [], all: [] });
     expect(facts({ contexts: [checkRun("docs", "COMPLETED", "SKIPPED")] }).checks.state).toBe("success");
   });
 

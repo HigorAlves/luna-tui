@@ -37,7 +37,7 @@ const pr = (number: number, split: PullRequest["split"]): PullRequest => ({
   fromFork: false,
   reviewDecision: "APPROVED",
   mergeable: "MERGEABLE",
-  checks: { state: "success", passed: 1, total: 1, failed: [] },
+  checks: { state: "success", passed: 1, total: 1, failed: [], all: [{ name: "build", state: "SUCCESS", url: null }] },
   unresolvedThreads: 0,
   split,
   localPath: "/r/a",

@@ -8,7 +8,9 @@ import {
   type PrAction,
   PrActionInput,
   type PullRequest,
+  EditCasesInput,
   EditPlanInput,
+  type TaskDiff,
   NewTaskInput,
   SetupRepoInput,
   StubPlanInput,
@@ -26,7 +28,8 @@ import { computeMetrics } from "../persistence/metrics-query.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { NoPlanToEditError, type Pipeline, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { NoCasesToEditError, NoPlanToEditError, type Pipeline, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
 import { CloneError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
 import type { StubStages } from "../../application/stages/stubs.ts";
@@ -50,6 +53,8 @@ export interface AppDeps {
   pulls?: PullsPort;
   /** Turns an action on a PR into a running PR task; without it `POST .../actions` is absent. */
   prTasks?: { dispatch(pr: PullRequest, action: PrAction): Promise<TaskRow> };
+  /** The task branch's diff from its worktree; without it `GET /tasks/:id/diff` is absent. */
+  taskDiff?: (worktreePath: string, repoPath: string | null, file?: string) => Promise<TaskDiff>;
 }
 
 class BadRequest extends Error {}
@@ -85,7 +90,7 @@ function prParams(c: Context): { owner: string; name: string; number: number } {
   return { owner, name, number };
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff }: AppDeps): Hono {
   const app = new Hono();
 
   app.onError((error, c) => {
@@ -93,6 +98,8 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks }:
     if (error instanceof TransitionError) return fail(c, 409, "invalid_transition", error.message);
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
+    if (error instanceof NoCasesToEditError) return fail(c, 409, "no_cases", error.message);
+    if (error instanceof NoWorktreeError) return fail(c, 404, "no_worktree", error.message);
     if (error instanceof NotReadyError) return fail(c, 409, "not_ready", error.message);
     if (error instanceof PrBusyError) return fail(c, 409, "pr_busy", error.message);
     if (error instanceof NoCheckoutError) return fail(c, 409, "no_checkout", error.message);
@@ -182,6 +189,24 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks }:
     bus.publish({ type: "task.updated", task });
     return c.json(task);
   });
+
+  app.patch("/tasks/:id/cases", async (c) => {
+    const id = taskId(c);
+    const { cases } = await body(c, EditCasesInput);
+    const task = toTask(await pipeline.editCases(id, cases));
+    bus.publish({ type: "task.updated", task });
+    return c.json(task);
+  });
+
+  if (taskDiff) {
+    /** The branch against its base, one row per file; `?file=<path>` adds that file's patch. */
+    app.get("/tasks/:id/diff", async (c) => {
+      const task = await pipeline.get(taskId(c));
+      if (!task.worktreePath) throw new NoWorktreeError(null);
+      const file = c.req.query("file");
+      return c.json(await taskDiff(task.worktreePath, task.repoPath, file === undefined || file === "" ? undefined : file));
+    });
+  }
 
   app.delete("/tasks/:id", async (c) => {
     const id = taskId(c);

@@ -27,6 +27,7 @@ import { Pipeline } from "./application/pipeline.ts";
 import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
 import { createGitHub } from "./adapters/github/octokit.ts";
+import { taskDiff } from "./adapters/git/diff.ts";
 import { noTokenGitHub } from "./application/github.ts";
 import { realDeliverRunner } from "./application/stages/deliver.ts";
 import { shipRunner } from "./application/stages/ship.ts";
@@ -216,7 +217,7 @@ const pulls = new GitHubPulls({
 const prTasks = {
   dispatch: (pr: PullRequest, action: PrAction) => createPrTask({ worktreesDir: config.worktreesDir, pipeline }, pr, action),
 };
-const app = createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks });
+const app = createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file) });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
   const agents = [...new Set([...Object.keys(real), "verifying", "delivering", "shipping"])];
   console.log(
