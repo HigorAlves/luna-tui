@@ -36,6 +36,8 @@ pub enum Incoming {
     Detail { id: String, detail: Option<TaskDetail> },
     /// A `/tasks/:id/diff` answer: the files, and `file`'s patch when one was asked for.
     Diff { id: String, file: Option<String>, diff: Result<TaskDiff, String> },
+    /// A `/jira/search` answer for `query`, fetched off the UI thread; dropped when the prompt has moved on.
+    JiraHits { query: String, hits: Result<Vec<JiraIssueHit>, String> },
 }
 
 #[derive(Clone)]

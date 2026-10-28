@@ -594,6 +594,8 @@ pub fn paused_ids(tasks: &[Task]) -> Vec<String> {
 
 /// A burst of events for the open ticket becomes one detail refetch, not one per event.
 const DETAIL_DEBOUNCE: Duration = Duration::from_millis(300);
+/// How long the `J` prompt waits after a keystroke before asking the machine to search.
+const JIRA_SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
 
 /// How tall a card is: three lines (title; id and repo; status), four with the worked / diff /
 /// tests line, or one (glyph, title, age) so a busy column shows twice the tickets.
@@ -856,6 +858,8 @@ pub struct App {
     diff_pending: Option<(String, Option<String>)>,
     /// A diff fetch that failed for this ticket; no retry until the section is reopened.
     diff_failed: Option<String>,
+    /// The `J` prompt's query waiting to be searched, and when it was typed; see `ensure_jira_search`.
+    jira_search_due: Option<(String, Instant)>,
     /// How far the help sheet is scrolled, and the furthest `ui` found it can scroll.
     pub help_scroll: Cell<u16>,
     pub help_max: Cell<u16>,
@@ -914,6 +918,7 @@ impl App {
             diff: None,
             diff_pending: None,
             diff_failed: None,
+            jira_search_due: None,
             help_scroll: Cell::new(0),
             help_max: Cell::new(0),
             help_return: None,
@@ -999,6 +1004,13 @@ impl App {
     /// Applies everything the stream thread reported since the last frame.
     pub fn pump(&mut self) {
         while let Ok(incoming) = self.stream.try_recv() {
+            self.take_incoming(incoming);
+        }
+    }
+
+    /// Applies one message from the stream thread or a background fetch.
+    fn take_incoming(&mut self, incoming: Incoming) {
+        {
             match incoming {
                 Incoming::Online => {
                     self.reload();
@@ -1030,6 +1042,20 @@ impl App {
                             self.diff_failed = Some(id);
                             self.notify(format!("diff: {error}"), true);
                         }
+                    }
+                }
+                Incoming::JiraHits { query, hits } => {
+                    // An answer for what the prompt still says; anything typed since makes it stale.
+                    let Mode::JiraLink { query: current, hits: shown, cursor, .. } = &mut self.mode else { return };
+                    if current.trim() != query {
+                        return;
+                    }
+                    match hits {
+                        Ok(found) => {
+                            *cursor = (*cursor).min(found.len());
+                            *shown = found;
+                        }
+                        Err(error) => self.notify(format!("jira search: {error}"), true),
                     }
                 }
                 Incoming::Message(StreamMessage::Updated { task }) => {
@@ -1765,8 +1791,9 @@ impl App {
     }
 
     /// Type to search, `enter` links the row (row 0 creates an issue instead), `ctrl+n` creates
-    /// one straight away, `esc` backs out. The machine is asked on every keystroke from three
-    /// characters on; a failed search shows in the footer and keeps the last hits.
+    /// one straight away, `esc` backs out. From three characters on the machine is asked, off the
+    /// UI thread and a quarter second after the last keystroke (`ensure_jira_search`); a failed
+    /// search shows in the footer and keeps the last hits.
     fn handle_jira_link(&mut self, key: KeyEvent) -> Outcome {
         let Mode::JiraLink { id, query, hits, cursor } = &mut self.mode else {
             return Outcome::Continue;
@@ -1775,39 +1802,35 @@ impl App {
         match key.code {
             KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.mode = Mode::Normal;
+                self.jira_search_due = None;
                 self.act(|m| m.create_jira(&id, None), "Jira issue created and linked");
             }
-            KeyCode::Char(c) => {
-                query.push(c);
+            KeyCode::Char(_) | KeyCode::Backspace => {
+                match key.code {
+                    KeyCode::Char(c) => query.push(c),
+                    _ => {
+                        query.pop();
+                    }
+                }
                 *cursor = 0;
                 if query.trim().chars().count() >= 3 {
-                    let q = query.trim().to_string();
-                    match self.machine.jira_search(&q) {
-                        Ok(found) => {
-                            if let Mode::JiraLink { hits, .. } = &mut self.mode {
-                                *hits = found;
-                            }
-                        }
-                        Err(error) => self.notify(format!("jira search: {error}"), true),
-                    }
+                    self.jira_search_due = Some((query.trim().to_string(), Instant::now()));
                 } else {
                     hits.clear();
-                }
-            }
-            KeyCode::Backspace => {
-                query.pop();
-                *cursor = 0;
-                if query.trim().chars().count() < 3 {
-                    hits.clear();
+                    self.jira_search_due = None;
                 }
             }
             KeyCode::Down => *cursor = (*cursor + 1).min(hits.len()),
             KeyCode::Up => *cursor = cursor.saturating_sub(1),
-            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                self.jira_search_due = None;
+            }
             KeyCode::Enter => {
                 let chosen = cursor.checked_sub(1).and_then(|i| hits.get(i)).map(|h| h.key.clone());
                 let typed = query.trim().to_uppercase();
                 self.mode = Mode::Normal;
+                self.jira_search_due = None;
                 match chosen {
                     Some(key) => self.link_jira(&id, &key),
                     // Row 0 is "create", unless what was typed is itself a key: then link that.
@@ -1818,6 +1841,45 @@ impl App {
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// Runs the `J` prompt's search once the typing has paused, on a background thread; the
+    /// answer comes back through the stream as `Incoming::JiraHits` and is dropped if the
+    /// query has changed by then. Called every frame.
+    pub fn ensure_jira_search(&mut self) {
+        if !matches!(self.mode, Mode::JiraLink { .. }) {
+            self.jira_search_due = None;
+            return;
+        }
+        let Some((query, at)) = self.jira_search_due.as_ref() else { return };
+        if at.elapsed() < JIRA_SEARCH_DEBOUNCE {
+            return;
+        }
+        let query = query.clone();
+        self.jira_search_due = None;
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let hits = machine.jira_search(&query);
+            let _ = tx.send(Incoming::JiraHits { query, hits });
+        });
+    }
+
+    /// Tests: runs a due search now and waits for its answer.
+    #[cfg(test)]
+    fn settle_jira_search(&mut self) {
+        if let Some((query, _)) = self.jira_search_due.take() {
+            self.jira_search_due = Some((query, Instant::now() - JIRA_SEARCH_DEBOUNCE));
+        }
+        self.ensure_jira_search();
+        loop {
+            let incoming = self.stream.recv_timeout(Duration::from_secs(5)).expect("the search answers");
+            let done = matches!(incoming, Incoming::JiraHits { .. });
+            self.take_incoming(incoming);
+            if done {
+                return;
+            }
+        }
     }
 
     fn handle_confirm_jira_unlink(&mut self, key: KeyEvent) -> Outcome {
@@ -4944,6 +5006,10 @@ mod jira_tests {
         type_text(&mut app, "PL");
         assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.is_empty()), "two characters: no search yet");
         type_text(&mut app, "A");
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.is_empty()), "the search waits for the typing to pause");
+        app.ensure_jira_search();
+        assert!(app.jira_search_due.is_some(), "a quarter second has not passed: nothing asked yet");
+        app.settle_jira_search();
         let Mode::JiraLink { hits, .. } = &app.mode else { panic!("still in the prompt") };
         assert_eq!(hits.iter().map(|h| h.key.as_str()).collect::<Vec<_>>(), vec!["PLAT-123", "PLAT-7"]);
         press(&mut app, KeyCode::Down);
@@ -4967,10 +5033,35 @@ mod jira_tests {
     }
 
     #[test]
+    fn a_search_answer_for_an_older_query_is_dropped_and_a_failed_one_shows_in_the_footer() {
+        let mut app = app_with(&[task("abcdef123456", None)]);
+        press(&mut app, KeyCode::Char('J'));
+        type_text(&mut app, "PLAT");
+        let hit = |key: &str| JiraIssueHit { key: key.to_string(), summary: String::new(), status: None, issue_type: None, url: String::new() };
+        // The answer to "PLA" lands after "PLAT" was typed: stale, dropped.
+        app.tx.send(Incoming::JiraHits { query: "PLA".into(), hits: Ok(vec![hit("PLAT-1")]) }).unwrap();
+        app.pump();
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.is_empty()));
+        app.tx.send(Incoming::JiraHits { query: "PLAT".into(), hits: Ok(vec![hit("PLAT-1"), hit("PLAT-2")]) }).unwrap();
+        app.pump();
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.len() == 2));
+        app.tx.send(Incoming::JiraHits { query: "PLAT".into(), hits: Err("boom".into()) }).unwrap();
+        app.pump();
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.len() == 2), "a failed search keeps the last hits");
+        assert_eq!(toast(&app), "jira search: boom");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.jira_search_due.is_none());
+        app.tx.send(Incoming::JiraHits { query: "PLAT".into(), hits: Ok(vec![hit("PLAT-9")]) }).unwrap();
+        app.pump();
+        assert!(matches!(app.mode, Mode::Normal), "an answer after the prompt closed changes nothing");
+    }
+
+    #[test]
     fn the_create_row_ctrl_n_and_the_colon_command_link_without_a_search() {
         let mut app = app_with(&[task("abcdef123456", None)]);
         press(&mut app, KeyCode::Char('J'));
         type_text(&mut app, "zzz");
+        app.settle_jira_search();
         let Mode::JiraLink { hits, .. } = &app.mode else { panic!("in the prompt") };
         assert!(hits.is_empty(), "nothing matched");
         press(&mut app, KeyCode::Enter);
