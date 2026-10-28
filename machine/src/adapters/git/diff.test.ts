@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ExecResult } from "../process/exec.ts";
-import { NoWorktreeError, parseNumstat, taskDiff } from "./diff.ts";
+import { NoFileError, NoWorktreeError, PATCH_CAP, parseNumstat, taskDiff } from "./diff.ts";
 
 const ok = (stdout: string): ExecResult => ({ code: 0, stdout, stderr: "" });
 const failed: ExecResult = { code: 128, stdout: "", stderr: "fatal: not a git repository" };
@@ -78,7 +78,42 @@ describe("taskDiff", () => {
       [`diff -M --name-status ${base} HEAD`]: ok("M\tsrc/a.ts\n"),
       [`diff -M ${base} HEAD -- src/a.ts`]: ok(patch),
     });
-    expect(await taskDiff(git.exec, "/wt", "/repo", "src/a.ts")).toMatchObject({ files: [{ path: "src/a.ts" }], patch });
+    const diff = await taskDiff(git.exec, "/wt", "/repo", "src/a.ts");
+    expect(diff).toMatchObject({ files: [{ path: "src/a.ts" }], patch });
+    expect(diff).not.toHaveProperty("truncated");
+  });
+
+  it("refuses a ?file= that is not one of the diff's paths, before running git diff on it", async () => {
+    const answers = {
+      "rev-parse HEAD": ok(head),
+      "symbolic-ref --quiet refs/remotes/origin/HEAD": ok("refs/remotes/origin/main"),
+      "merge-base HEAD origin/main": ok(base),
+      [`diff -M --numstat ${base} HEAD`]: ok("1\t1\tsrc/a.ts\n"),
+      [`diff -M --name-status ${base} HEAD`]: ok("M\tsrc/a.ts\n"),
+    };
+    for (const file of ["src/other.ts", "..", "*", "src/a.ts/", "SRC/A.TS", ""]) {
+      const git = fakeGit(answers);
+      await expect(taskDiff(git.exec, "/wt", "/repo", file)).rejects.toThrow(NoFileError);
+      expect(git.calls.some((c) => c.includes(" -- "))).toBe(false);
+    }
+  });
+
+  it("caps a huge patch and says so", async () => {
+    const line = "+".padEnd(99, "x") + "\n";
+    const patch = line.repeat(Math.ceil((PATCH_CAP * 2) / line.length));
+    const git = fakeGit({
+      "rev-parse HEAD": ok(head),
+      "symbolic-ref --quiet refs/remotes/origin/HEAD": ok("refs/remotes/origin/main"),
+      "merge-base HEAD origin/main": ok(base),
+      [`diff -M --numstat ${base} HEAD`]: ok("1\t1\tsrc/a.ts\n"),
+      [`diff -M --name-status ${base} HEAD`]: ok("M\tsrc/a.ts\n"),
+      [`diff -M ${base} HEAD -- src/a.ts`]: ok(patch),
+    });
+    const diff = await taskDiff(git.exec, "/wt", "/repo", "src/a.ts");
+    expect(diff.truncated).toBe(true);
+    expect(diff.patch!.length).toBeLessThanOrEqual(PATCH_CAP);
+    expect(diff.patch!.endsWith("\n")).toBe(true);
+    expect(diff.patch!.length).toBeGreaterThan(PATCH_CAP - line.length - 1);
   });
 
   it("says there is no worktree when the path is not a checkout anymore", async () => {

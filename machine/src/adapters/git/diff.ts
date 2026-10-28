@@ -15,6 +15,17 @@ export class NoWorktreeError extends Error {
   }
 }
 
+/** `?file=` named a path the diff has no row for (a typo, a glob, a path outside the branch's change). */
+export class NoFileError extends Error {
+  constructor(file: string) {
+    super(`${JSON.stringify(file)} is not a file of this diff`);
+    this.name = "NoFileError";
+  }
+}
+
+/** The most of a single file's patch the answer carries; past it `truncated` is set. */
+export const PATCH_CAP = 512 * 1024;
+
 /** `git diff --numstat` rows; a binary file counts as zero lines, a rename goes by its new path. */
 export function parseNumstat(text: string): Array<{ path: string; added: number; removed: number }> {
   return text
@@ -62,7 +73,9 @@ async function baseRef(exec: GitExec, worktreePath: string, repoPath: string | n
 
 /**
  * The branch in `worktreePath` against its merge base with the base branch. With `file`, the
- * answer also carries that one file's patch. Throws NoWorktreeError when the path has no HEAD.
+ * answer also carries that one file's patch, cut at PATCH_CAP characters (on a line) with
+ * `truncated: true`. Throws NoWorktreeError when the path has no HEAD, NoFileError when `file`
+ * is not exactly one of the diff's paths: git never sees a path it did not report itself.
  */
 export async function taskDiff(exec: GitExec, worktreePath: string, repoPath: string | null, file?: string): Promise<TaskDiff> {
   const git = async (...args: string[]) => {
@@ -84,6 +97,16 @@ export async function taskDiff(exec: GitExec, worktreePath: string, repoPath: st
     removed: counts.get(path)?.removed ?? 0,
   }));
   const diff: TaskDiff = { base, head: head.stdout.trim(), files };
-  if (file !== undefined) diff.patch = await git("diff", "-M", base, "HEAD", "--", file);
+  if (file !== undefined) {
+    if (!files.some((f) => f.path === file)) throw new NoFileError(file);
+    const patch = await git("diff", "-M", base, "HEAD", "--", file);
+    if (patch.length > PATCH_CAP) {
+      const cut = patch.lastIndexOf("\n", PATCH_CAP - 1);
+      diff.patch = patch.slice(0, cut > 0 ? cut + 1 : PATCH_CAP);
+      diff.truncated = true;
+    } else {
+      diff.patch = patch;
+    }
+  }
   return diff;
 }
