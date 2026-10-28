@@ -90,6 +90,7 @@ impl HelpFor {
     }
 
     /// The keys that work in this view, as (keys, what they do).
+    #[cfg(test)]
     pub fn keys(self) -> &'static [(&'static str, &'static str)] {
         match self {
             HelpFor::Board => HELP,
@@ -100,14 +101,202 @@ impl HelpFor {
             HelpFor::Pulls => PULLS_HELP,
         }
     }
+
+    /// The same keys as `keys()` (the board's also holds the `:` commands), grouped under headings.
+    pub fn sections(self) -> &'static [HelpSection] {
+        match self {
+            HelpFor::Board => BOARD_SECTIONS,
+            HelpFor::Floor => FLOOR_SECTIONS,
+            HelpFor::Inbox => INBOX_SECTIONS,
+            HelpFor::Digest => DIGEST_SECTIONS,
+            HelpFor::Detail => DETAIL_SECTIONS,
+            HelpFor::Pulls => PULLS_SECTIONS,
+        }
+    }
 }
 
+/// A heading and the (keys, what they do) rows under it.
+#[derive(Clone, Copy, Debug)]
+pub struct HelpSection {
+    pub heading: &'static str,
+    pub rows: &'static [(&'static str, &'static str)],
+}
+
+const fn section(heading: &'static str, rows: &'static [(&'static str, &'static str)]) -> HelpSection {
+    HelpSection { heading, rows }
+}
+
+pub const BOARD_SECTIONS: &[HelpSection] = &[
+    section(
+        "Move",
+        &[
+            ("h / l", "previous / next column"),
+            ("j / k", "previous / next ticket"),
+            ("gg / G", "first / last ticket in the column"),
+            ("1 … 8", "jump to that column"),
+            ("] / [", "next / previous ticket that needs you, across the board"),
+            ("enter", "open details"),
+        ],
+    ),
+    section(
+        "Ticket",
+        &[
+            ("n", "new ticket, then edit it in place"),
+            ("e", "edit title, description and criteria in place (ctrl+s saves)"),
+            ("R", "search for its repo under HARDNESS_REPOS_DIR / ~/Developer"),
+            ("a", "advance: start, approve, answer triage in place (ctrl+s sends), retry an escalation, resume"),
+            ("S", "ship: approve the Ship gate and open the PR (same as a there)"),
+            ("A", "memory review: approve without applying the proposed rules"),
+            ("r", "send the plan or tests back, with a reason"),
+            ("X", "abort the running stage (asks first)"),
+            ("w", "kill its worktree once you are done with it (asks first)"),
+            ("d", "delete (asks first)"),
+            ("f", "focus the agent's watch tab in herdr"),
+            ("o", "open the linked GitHub issue in the browser"),
+        ],
+    ),
+    section(
+        "Filter & order",
+        &[
+            ("/", "filter by title, #id or repo"),
+            ("!", "show only tickets that need you"),
+            ("@", "show only tickets for this repo"),
+            ("zc / zo", "fold / unfold the focused column (Done starts folded)"),
+            ("zz", "fold every column but the focused one"),
+            ("gs / gr / ga", "order columns by stage, by repo, by age"),
+        ],
+    ),
+    section(
+        "Views",
+        &[
+            ("F", "Floor: 7d and 30d metrics, a row per repo (tab focuses one, r refreshes, esc closes)"),
+            ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
+            ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
+            ("P", "Pulls: every open PR involving you, split by what you do; m merges, c/v/t dispatch an agent"),
+        ],
+    ),
+    section(
+        "Marks & bulk",
+        &[
+            ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
+            ("x", "actions for the selected ticket (P resumes every paused one)"),
+        ],
+    ),
+    section(
+        "App",
+        &[
+            (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs"),
+            ("esc", "clear the filter"),
+            ("?", "this help"),
+            ("q", "quit"),
+        ],
+    ),
+    section(
+        "Commands (type after :)",
+        &[
+            ("q", "quit"),
+            ("new <title>", "new ticket, then edit it in place"),
+            ("filter <text>", "filter by title, #id or repo (bare: clear)"),
+            ("repo <name>", "show only that repo"),
+            ("open <#id>", "open a ticket by id prefix"),
+            ("group stage|repo|age", "order columns"),
+            ("fold / unfold", "fold / unfold the focused column"),
+            ("setup <repo>", "propose the repo's luna.yaml (a name under HARDNESS_REPOS_DIR, or a path)"),
+            ("slots <n>", "resize the pool"),
+            ("drain / resume", "take no new work / carry on"),
+            ("floor / inbox / digest / prs", "open that view"),
+            ("help", "this sheet"),
+        ],
+    ),
+];
+
+pub const FLOOR_SECTIONS: &[HelpSection] = &[section(
+    "Floor",
+    &[
+        ("tab / shift+tab", "focus the next / previous repo; the numbers follow"),
+        ("r", "refresh"),
+        ("esc", "close"),
+    ],
+)];
+
+pub const INBOX_SECTIONS: &[HelpSection] = &[
+    section(
+        "Navigate",
+        &[
+            ("j / k", "previous / next ticket"),
+            ("h / l", "previous / next split (1-5 jump)"),
+            ("enter", "open the ticket"),
+            ("esc", "close"),
+        ],
+    ),
+    section(
+        "Act",
+        &[
+            ("a", "advance: approve, answer, retry"),
+            ("r", "send back with a reason"),
+            ("e", "edit in place"),
+            ("A", "approve every ticket in the split, after one yes"),
+        ],
+    ),
+];
+
+pub const DIGEST_SECTIONS: &[HelpSection] = &[section(
+    "Digest",
+    &[
+        ("j / k", "previous / next entry"),
+        ("enter", "jump to the ticket"),
+        ("o", "open its PR or issue in the browser"),
+        ("esc", "close"),
+    ],
+)];
+
+pub const PULLS_SECTIONS: &[HelpSection] = &[
+    section(
+        "Move",
+        &[
+            ("j / k", "previous / next PR"),
+            ("h / l", "previous / next split (1-6 jump)"),
+            ("enter", "jump to its task on the board, else open the PR"),
+            ("o", "open the PR in the browser"),
+        ],
+    ),
+    section(
+        "Act",
+        &[
+            ("m", "merge: squash and delete the branch, after a yes (Ready to merge only)"),
+            ("c", "CI fix: an agent diagnoses the red run and pushes a fix"),
+            ("v", "review: an agent posts line comments; approve / request changes waits for you"),
+            ("t", "threads: an agent answers every unresolved review thread on your PR"),
+            ("x", "the same actions as a menu, with why a key is off"),
+        ],
+    ),
+    section("Other", &[("R", "poll GitHub now"), ("esc", "close")]),
+];
+
+pub const DETAIL_SECTIONS: &[HelpSection] = &[
+    section("Read", &[("j / k", "scroll"), ("esc", "close")]),
+    section(
+        "Act",
+        &[
+            ("a", "advance: start, approve, answer, retry, resume"),
+            ("S", "ship"),
+            ("r", "send back with a reason"),
+            ("e", "edit in place"),
+            ("X / w / d", "abort / kill the worktree / delete (each asks)"),
+            ("f", "focus its herdr tab"),
+            ("o", "open the linked issue"),
+        ],
+    ),
+];
+
+#[cfg(test)]
 pub const FLOOR_HELP: &[(&str, &str)] = &[
     ("tab / shift+tab", "focus the next / previous repo; the numbers follow"),
     ("r", "refresh"),
     ("esc", "close"),
 ];
 
+#[cfg(test)]
 pub const INBOX_HELP: &[(&str, &str)] = &[
     ("j / k", "previous / next ticket"),
     ("h / l", "previous / next split (1-5 jump)"),
@@ -119,6 +308,7 @@ pub const INBOX_HELP: &[(&str, &str)] = &[
     ("esc", "close"),
 ];
 
+#[cfg(test)]
 pub const PULLS_HELP: &[(&str, &str)] = &[
     ("j / k", "previous / next PR"),
     ("h / l", "previous / next split (1-6 jump)"),
@@ -133,6 +323,7 @@ pub const PULLS_HELP: &[(&str, &str)] = &[
     ("esc", "close"),
 ];
 
+#[cfg(test)]
 pub const DIGEST_HELP: &[(&str, &str)] = &[
     ("j / k", "previous / next entry"),
     ("enter", "jump to the ticket"),
@@ -140,6 +331,7 @@ pub const DIGEST_HELP: &[(&str, &str)] = &[
     ("esc", "close"),
 ];
 
+#[cfg(test)]
 pub const DETAIL_HELP: &[(&str, &str)] = &[
     ("j / k", "scroll"),
     ("a", "advance: start, approve, answer, retry, resume"),
@@ -153,6 +345,7 @@ pub const DETAIL_HELP: &[(&str, &str)] = &[
 ];
 
 /// What `:` understands. Typed as `:name args`.
+#[cfg(test)]
 pub const COMMANDS: &[(&str, &str)] = &[
     ("q", "quit"),
     ("new <title>", "new ticket, then edit it in place"),
@@ -169,6 +362,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
 ];
 
 /// Keys shown in the help overlay, as (keys, what they do).
+#[cfg(test)]
 pub const HELP: &[(&str, &str)] = &[
     ("h / l", "previous / next column"),
     ("j / k", "previous / next ticket"),
@@ -200,7 +394,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("P", "Pulls: every open PR involving you, split by what you do; m merges, c/v/t dispatch an agent"),
     ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
     ("x", "actions for the selected ticket (P resumes every paused one)"),
-    (":", "command palette: q, new, filter, repo, open, group, fold, slots, drain, floor, inbox, digest, prs"),
+    (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs"),
     ("esc", "clear the filter"),
     ("?", "this help"),
     ("q", "quit"),
@@ -460,6 +654,11 @@ pub struct App {
     /// How far the open ticket's detail popup is scrolled. `ui` clamps it to the content's
     /// actual height, which only it knows (it depends on the terminal width).
     pub detail_scroll: Cell<u16>,
+    /// How far the help sheet is scrolled, and the furthest `ui` found it can scroll.
+    pub help_scroll: Cell<u16>,
+    pub help_max: Cell<u16>,
+    /// The ticket whose Detail `?` was pressed in; closing the help returns to it.
+    help_return: Option<String>,
     imported: bool,
 }
 
@@ -503,6 +702,9 @@ impl App {
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
             detail_scroll: Cell::new(0),
+            help_scroll: Cell::new(0),
+            help_max: Cell::new(0),
+            help_return: None,
             imported: false,
         };
         app.reload();
@@ -1157,7 +1359,20 @@ impl App {
             Mode::ClonePrompt { .. } => self.handle_clone_prompt(key),
             Mode::PrActions { .. } => self.handle_pr_actions(key),
             Mode::Help(_) => {
-                self.mode = Mode::Normal;
+                let scroll = self.help_scroll.get();
+                match key.code {
+                    KeyCode::Char('j') | KeyCode::Down => {
+                        self.help_scroll.set((scroll + 1).min(self.help_max.get()));
+                    }
+                    KeyCode::Char('k') | KeyCode::Up => self.help_scroll.set(scroll.saturating_sub(1)),
+                    _ => {
+                        self.help_scroll.set(0);
+                        self.mode = match self.help_return.take() {
+                            Some(id) => Mode::Detail(id),
+                            None => Mode::Normal,
+                        };
+                    }
+                }
                 Outcome::Continue
             }
         }
@@ -1849,7 +2064,10 @@ impl App {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
             KeyCode::Char('j') | KeyCode::Down => self.scroll_detail(1),
             KeyCode::Char('k') | KeyCode::Up => self.scroll_detail(-1),
-            KeyCode::Char('?') => self.mode = Mode::Help(HelpFor::Detail),
+            KeyCode::Char('?') => {
+                self.help_return = Some(id.to_string());
+                self.mode = Mode::Help(HelpFor::Detail);
+            }
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
         }
@@ -2918,6 +3136,40 @@ mod tests {
     }
 
     #[test]
+    fn closing_help_returns_to_the_ticket_detail() {
+        let mut app = App::new(Machine::from_env());
+        app.mode = Mode::Detail("aaaaaaaa0000".to_string());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Detail)));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"));
+        app.mode = Mode::Normal;
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn help_scrolls_with_j_and_k_and_clamps() {
+        let mut app = App::new(Machine::from_env());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        app.help_max.set(2);
+        for _ in 0..5 {
+            app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        }
+        assert_eq!(app.help_scroll.get(), 2);
+        assert!(matches!(app.mode, Mode::Help(_)));
+        for _ in 0..5 {
+            app.handle_key(KeyEvent::from(KeyCode::Up));
+        }
+        assert_eq!(app.help_scroll.get(), 0);
+        app.help_max.set(0);
+        app.handle_key(KeyEvent::from(KeyCode::Down));
+        assert_eq!(app.help_scroll.get(), 0, "nothing to scroll");
+        assert!(matches!(app.mode, Mode::Help(_)));
+    }
+
+    #[test]
     fn question_mark_shows_the_keys_of_the_view_you_are_in() {
         let mut app = App::new(Machine::from_env());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
@@ -2952,6 +3204,40 @@ mod tests {
         assert!(HelpFor::Floor.keys().iter().any(|(k, _)| k.starts_with("tab")));
         assert!(HelpFor::Digest.keys().iter().any(|(k, _)| *k == "o"));
         assert!(HelpFor::Detail.keys().iter().any(|(k, _)| *k == "j / k"));
+    }
+
+    fn flattened(ctx: HelpFor) -> Vec<(&'static str, &'static str)> {
+        let mut v: Vec<_> = ctx.sections().iter().flat_map(|s| s.rows.iter().copied()).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn help_sections_hold_exactly_the_legacy_pairs() {
+        let sorted = |tables: &[&[(&'static str, &'static str)]]| {
+            let mut v: Vec<_> = tables.iter().flat_map(|t| t.iter().copied()).collect();
+            v.sort();
+            v
+        };
+        assert_eq!(flattened(HelpFor::Board), sorted(&[HELP, COMMANDS]));
+        assert_eq!(flattened(HelpFor::Floor), sorted(&[FLOOR_HELP]));
+        assert_eq!(flattened(HelpFor::Inbox), sorted(&[INBOX_HELP]));
+        assert_eq!(flattened(HelpFor::Digest), sorted(&[DIGEST_HELP]));
+        assert_eq!(flattened(HelpFor::Detail), sorted(&[DETAIL_HELP]));
+        assert_eq!(flattened(HelpFor::Pulls), sorted(&[PULLS_HELP]));
+    }
+
+    #[test]
+    fn help_sections_are_named_and_not_empty() {
+        for ctx in [HelpFor::Board, HelpFor::Floor, HelpFor::Inbox, HelpFor::Digest, HelpFor::Detail, HelpFor::Pulls] {
+            assert!(!ctx.sections().is_empty());
+            assert!(ctx.sections().iter().all(|s| !s.heading.is_empty() && !s.rows.is_empty()));
+        }
+        assert!(HelpFor::Board.sections().len() >= 4);
+        let commands: Vec<_> =
+            HelpFor::Board.sections().iter().filter(|s| s.heading == "Commands (type after :)").collect();
+        assert_eq!(commands.len(), 1);
+        assert_eq!(commands[0].rows, COMMANDS);
     }
 
     #[test]
