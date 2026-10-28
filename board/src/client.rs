@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use ureq::{Agent, Body, http::Response};
 
-use crate::model::{Health, Metrics, PlanEdit, PrAction, PrSnapshot, Slots, StreamMessage, Task, TaskDetail, TicketText, TaskDiff};
+use crate::model::{Health, Metrics, PlanEdit, PrAction, PrSnapshot, Slots, StreamMessage, Task, TaskDetail, TicketText, TaskDiff, TestCase};
 
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -170,6 +170,15 @@ impl Machine {
     pub fn edit_plan(&self, id: &str, edit: &PlanEdit) -> Result<Task, String> {
         let body = json!({ "brief": edit.brief, "criteria": edit.criteria, "assumptions": edit.assumptions });
         Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/plan"))).send_json(body))
+    }
+
+    /// Replaces test_design's cases while they wait for your check.
+    pub fn edit_cases(&self, id: &str, cases: &[TestCase]) -> Result<Task, String> {
+        let cases: Vec<Value> = cases
+            .iter()
+            .map(|c| json!({ "title": c.title, "criterion": c.criterion, "approach": c.approach }))
+            .collect();
+        Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/cases"))).send_json(json!({ "cases": cases })))
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {

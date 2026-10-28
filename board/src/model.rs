@@ -946,6 +946,59 @@ pub fn parse_plan(markdown: &str) -> PlanEdit {
     edit
 }
 
+/// test_design's cases as markdown you can edit: one `##` heading per criterion, one bullet
+/// per case, its approach indented under it. Cases that prove no criterion sit under
+/// `## (no criterion)`.
+pub fn cases_markdown(cases: &[TestCase]) -> String {
+    let mut out = String::from("# Test cases\n");
+    let mut groups: Vec<(Option<&str>, Vec<&TestCase>)> = Vec::new();
+    for case in cases {
+        match groups.iter_mut().find(|(c, _)| *c == case.criterion.as_deref()) {
+            Some((_, cases)) => cases.push(case),
+            None => groups.push((case.criterion.as_deref(), vec![case])),
+        }
+    }
+    for (criterion, cases) in groups {
+        out.push_str(&format!("\n## {}\n\n", criterion.unwrap_or("(no criterion)")));
+        for case in cases {
+            out.push_str(&format!("- {}\n", case.title));
+            for line in case.approach.lines().filter(|l| !l.trim().is_empty()) {
+                out.push_str(&format!("  {}\n", line.trim()));
+            }
+        }
+    }
+    out
+}
+
+/// Parses `cases_markdown`. Verdicts are not part of the text, so every case comes back
+/// without one.
+pub fn parse_cases(markdown: &str) -> Vec<TestCase> {
+    let mut cases: Vec<TestCase> = Vec::new();
+    let mut criterion: Option<String> = None;
+    for line in markdown.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            let heading = heading.trim();
+            criterion = (!heading.is_empty() && heading != "(no criterion)").then(|| heading.to_string());
+        } else if line.starts_with("# ") {
+            continue;
+        } else if let Some(title) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+            let title = title.trim();
+            if !title.is_empty() {
+                cases.push(TestCase { title: title.to_string(), criterion: criterion.clone(), approach: String::new(), result: None });
+            }
+        } else if let Some(case) = cases.last_mut() {
+            let text = line.trim();
+            if !text.is_empty() {
+                if !case.approach.is_empty() {
+                    case.approach.push(' ');
+                }
+                case.approach.push_str(text);
+            }
+        }
+    }
+    cases
+}
+
 /// A ticket's editable text, as shown in `$EDITOR`.
 #[derive(Debug, Default, PartialEq)]
 pub struct TicketText {
@@ -1301,6 +1354,23 @@ mod tests {
     fn plan_edit_with_no_assumptions_round_trips() {
         let edit = PlanEdit { brief: "b".into(), criteria: vec!["c".into()], assumptions: vec![] };
         assert_eq!(parse_plan(&plan_markdown(&edit)), edit);
+    }
+
+    #[test]
+    fn cases_round_trip_through_their_markdown_grouped_by_criterion() {
+        let cases = vec![
+            TestCase { title: "rejects a bad password".into(), criterion: Some("handles a/b & c".into()), approach: "run the suite".into(), result: Some(true) },
+            TestCase { title: "escapes a quoted comma".into(), criterion: Some("handles a/b & c".into()), approach: "read the output; \"a,b\" stays one cell".into(), result: None },
+            TestCase { title: "writes EF BB BF first".into(), criterion: Some("exports UTF-8".into()), approach: "hexdump the first 3 bytes".into(), result: None },
+            TestCase { title: "an orphan".into(), criterion: None, approach: String::new(), result: None },
+        ];
+        let markdown = cases_markdown(&cases);
+        assert!(markdown.starts_with("# Test cases\n\n## handles a/b & c\n\n- rejects a bad password\n  run the suite\n- escapes a quoted comma\n"), "{markdown}");
+        assert!(markdown.contains("\n## (no criterion)\n\n- an orphan\n"), "{markdown}");
+        let expected: Vec<TestCase> = cases.iter().cloned().map(|c| TestCase { result: None, ..c }).collect();
+        assert_eq!(parse_cases(&markdown), expected);
+        assert_eq!(parse_cases("## c\n- t\n  line one\n  line two\n")[0].approach, "line one line two");
+        assert!(parse_cases("# nothing\n").is_empty());
     }
 
     #[test]

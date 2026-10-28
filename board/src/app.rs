@@ -29,7 +29,7 @@ use crate::{
     herdr,
     model::{
         COLUMNS, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, parse_answers,
-        parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown, Slots,
+        parse_cases, parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
     store,
     vim::Vim,
@@ -533,6 +533,13 @@ pub enum Mode {
         plan_vim: Vim,
         ticket_vim: Vim,
     },
+    /// Editing test_design's cases in place while they wait for your check, as the markdown
+    /// `cases_markdown` writes; ctrl+s saves.
+    EditCases {
+        id: String,
+        area: TextArea<'static>,
+        vim: Vim,
+    },
     /// Answering triage's questions in place: the same markdown `$EDITOR` used to get,
     /// one `## Q:` heading per question with the recommended answer under it; ctrl+s sends.
     Answer {
@@ -590,6 +597,18 @@ pub enum PlanPane {
 /// opens the two-pane plan editor instead of the plain ticket editor.
 fn has_open_plan(task: &Task, detail: Option<&TaskDetail>) -> bool {
     task.state == "awaiting_approval" && detail.is_some_and(|d| d.task.id == task.id && d.open_approval().is_some())
+}
+
+/// Whether the plan may still be edited: at its own gate, or at the test check, before anything
+/// is built. The machine refuses the edit after that.
+fn plan_editable(task: &Task, detail: Option<&TaskDetail>) -> bool {
+    matches!(task.state.as_str(), "awaiting_approval" | "awaiting_test_check")
+        && detail.is_some_and(|d| d.task.id == task.id && d.latest_approval("awaiting_approval").is_some())
+}
+
+/// Whether the cases may be edited: only while they wait for your check.
+fn cases_editable(task: &Task, detail: Option<&TaskDetail>) -> bool {
+    task.state == "awaiting_test_check" && detail.is_some_and(|d| d.task.id == task.id && !d.cases().is_empty())
 }
 
 /// What the event loop must do after a key press.
@@ -1252,7 +1271,7 @@ impl App {
         let Some(task) = self.task(id).cloned() else {
             return;
         };
-        let Some(requested) = self.detail.as_ref().and_then(TaskDetail::open_approval).map(|a| a.requested.clone()) else {
+        let Some(requested) = self.detail.as_ref().and_then(|d| d.latest_approval("awaiting_approval")).map(|a| a.requested.clone()) else {
             return;
         };
         let plan_edit = plan_edit_of(&requested);
@@ -1287,6 +1306,61 @@ impl App {
             plan_vim: Vim::new(),
             ticket_vim: Vim::new(),
         };
+    }
+
+    /// Opens test_design's cases for editing, as markdown grouped by the criterion each proves.
+    fn open_cases_editor(&mut self, id: &str) {
+        let Some(task) = self.task(id) else {
+            return;
+        };
+        let Some(cases) = self.detail.as_ref().filter(|d| d.task.id == id).map(TaskDetail::cases) else {
+            return;
+        };
+        let mut area = TextArea::new(cases_markdown(&cases).lines().map(str::to_string).collect());
+        area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+        area.set_block(
+            ratatui::widgets::Block::bordered()
+                .padding(ratatui::widgets::Padding::new(2, 2, 1, 1))
+                .title(format!(" cases for #{} {} — ## criterion, - case, its approach under it ", task.short_id(), task.title)),
+        );
+        self.mode = Mode::EditCases { id: id.to_string(), area, vim: Vim::new() };
+    }
+
+    fn handle_edit_cases(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::EditCases { id, area, vim } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match vim.handle(area, key) {
+            crate::vim::Outcome::Continue => {}
+            crate::vim::Outcome::Cancel => self.mode = Mode::Detail(id.clone()),
+            crate::vim::Outcome::Save => {
+                let id = id.clone();
+                let markdown = area.lines().join("\n");
+                self.mode = Mode::Detail(id.clone());
+                let before: Vec<crate::model::TestCase> = self
+                    .detail
+                    .as_ref()
+                    .filter(|d| d.task.id == id)
+                    .map(|d| d.cases().into_iter().map(|c| crate::model::TestCase { result: None, ..c }).collect())
+                    .unwrap_or_default();
+                let edited = parse_cases(&markdown);
+                if edited.is_empty() {
+                    self.notify("keep at least one case; r sends the whole set back instead", true);
+                } else if edited != before {
+                    match self.machine.edit_cases(&id, &edited) {
+                        Ok(task) => {
+                            self.upsert(task);
+                            self.detail_stale = true;
+                            self.notify("cases saved", false);
+                        }
+                        Err(error) => self.notify(error, true),
+                    }
+                } else {
+                    self.notify("nothing changed", false);
+                }
+            }
+        }
+        Outcome::Continue
     }
 
     /// Opens the repo search for `id`: type to filter, enter to set it on the ticket.
@@ -1351,7 +1425,11 @@ impl App {
                 self.notify("nothing waiting to ship on this ticket", false);
             }
             'e' => {
-                if has_open_plan(&task, self.detail.as_ref()) {
+                let in_popup = matches!(&self.mode, Mode::Detail(open) if open == id);
+                let section = self.detail_section;
+                if in_popup && section == Section::Tests && cases_editable(&task, self.detail.as_ref()) {
+                    self.open_cases_editor(id);
+                } else if (in_popup && section == Section::Plan && plan_editable(&task, self.detail.as_ref())) || has_open_plan(&task, self.detail.as_ref()) {
                     self.open_plan_editor(id);
                 } else {
                     self.open_ticket_editor(id);
@@ -1430,6 +1508,7 @@ impl App {
             }
             Mode::Adding(_) => self.handle_adding(key),
             Mode::EditTicket { .. } => self.handle_edit_ticket(key),
+            Mode::EditCases { .. } => self.handle_edit_cases(key),
             Mode::Answer { .. } => self.handle_answer(key),
             Mode::EditPlan { .. } => self.handle_edit_plan(key),
             Mode::Filter => self.handle_filter(key),
@@ -2250,7 +2329,7 @@ impl App {
         let before_plan = self
             .detail
             .as_ref()
-            .and_then(TaskDetail::open_approval)
+            .and_then(|d| d.latest_approval("awaiting_approval"))
             .map(|a| plan_edit_of(&a.requested))
             .unwrap_or_default();
         let edited_plan = parse_plan(&plan_markdown_text);
@@ -3617,5 +3696,82 @@ mod workspace_key_tests {
         press(&mut offline, KeyCode::Char('5'));
         offline.ensure_diff();
         assert!(offline.diff_pending.is_none(), "offline: nothing to fetch from");
+    }
+}
+
+#[cfg(test)]
+mod edit_route_tests {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
+    use super::*;
+
+    fn task(state: &str) -> Task {
+        serde_json::from_str(&format!(
+            r#"{{"id":"abcdef123456","title":"Add CSV export","description":"","criteria":["c1"],
+            "repoPath":"/r/app","branch":"task/abcdef12","worktreePath":"/w","state":"{state}","column":"Approved",
+            "waitingOnYou":true,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+        ))
+        .unwrap()
+    }
+
+    fn detail(state: &str) -> TaskDetail {
+        let task = serde_json::to_string(&serde_json::json!({
+            "id":"abcdef123456","title":"Add CSV export","description":"","criteria":["c1"],"repoPath":"/r/app","branch":"task/abcdef12",
+            "worktreePath":"/w","state":state,"column":"Approved","waitingOnYou":true,"running":false,"queued":false,
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"
+        }))
+        .unwrap();
+        serde_json::from_str(&format!(
+            r#"{{"task":{task},"stageRuns":[],"approvals":[
+              {{"kind":"awaiting_approval","requested":{{"brief":"b","criteria":["c1"]}},"decision":"approved","decidedAt":"2026-10-22T09:58:00Z"}},
+              {{"kind":"awaiting_test_check","requested":{{"cases":[{{"title":"t1","criterion":"c1","approach":"run it"}}]}},"decision":null}}],
+              "events":[]}}"#
+        ))
+        .unwrap()
+    }
+
+    fn open(state: &str) -> App {
+        let mut app = App::new(crate::Machine::from_env());
+        let task = task(state);
+        app.tasks.push(task.clone());
+        app.detail = Some(detail(state));
+        app.open_detail(task.id);
+        app
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    #[test]
+    fn e_at_the_test_check_edits_the_cases_from_tests_and_the_plan_from_plan() {
+        let mut app = open("awaiting_test_check");
+        assert_eq!(app.detail_section, Section::Tests);
+        press(&mut app, KeyCode::Char('e'));
+        let Mode::EditCases { area, .. } = &app.mode else { panic!("the cases editor opens: {:?}", std::mem::discriminant(&app.mode)) };
+        let text = area.lines().join("\n");
+        assert!(text.contains("## c1") && text.contains("- t1") && text.contains("  run it"), "{text}");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "abcdef123456"), "esc returns to the popup");
+
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('e'));
+        assert!(matches!(app.mode, Mode::EditPlan { .. }), "the approved plan is still editable before Build");
+
+        app.mode = Mode::Detail("abcdef123456".into());
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Char('e'));
+        assert!(matches!(app.mode, Mode::EditTicket { .. }), "Overview edits the ticket's own text");
+    }
+
+    #[test]
+    fn once_build_started_e_in_plan_falls_back_to_the_ticket_editor() {
+        let mut app = open("implementing");
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('e'));
+        assert!(matches!(app.mode, Mode::EditTicket { .. }));
     }
 }

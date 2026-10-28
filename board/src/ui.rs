@@ -200,7 +200,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 );
             }
         }
-        Mode::EditTicket { id, area, vim } | Mode::Answer { id, area, vim } => {
+        Mode::EditTicket { id, area, vim } | Mode::Answer { id, area, vim } | Mode::EditCases { id, area, vim } => {
             let rect = centered(frame.area(), frame.area().width * 9 / 10, frame.area().height * 8 / 10);
             frame.render_widget(Clear, rect);
             let (label, mode_color) = match vim.mode() {
@@ -368,7 +368,7 @@ fn footer_line(app: &App) -> Line<'static> {
             Span::from(format!("{buf}▏")),
             Span::from("   enter create and edit · esc cancel").fg(c(SUBTEXT0)),
         ]),
-        Mode::EditTicket { vim, .. } | Mode::Answer { vim, .. } => {
+        Mode::EditTicket { vim, .. } | Mode::Answer { vim, .. } | Mode::EditCases { vim, .. } => {
             let save = if matches!(app.mode, Mode::Answer { .. }) { "send answers" } else { "save" };
             match vim.mode() {
                 crate::vim::Mode::Normal => hint(&[
