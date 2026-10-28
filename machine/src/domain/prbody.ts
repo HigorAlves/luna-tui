@@ -28,7 +28,7 @@ export function buildPr({ task, plan, repoSlug }: PrBodyInput): { title: string;
   if (why.length > 0) sections.push(`## Why\n${why.join("\n")}`);
   if (criteria.length > 0) sections.push(`## Criteria\n${criteria.map((c) => `- [ ] ${c}`).join("\n")}`);
   const source = task.source;
-  if (source && repoSlug && source.repo.toLowerCase() === repoSlug.toLowerCase()) {
+  if (source && source.kind !== "slack" && repoSlug && source.repo.toLowerCase() === repoSlug.toLowerCase()) {
     sections.push(`Closes #${source.number}`);
   }
   return { title, body: sections.join("\n\n") };

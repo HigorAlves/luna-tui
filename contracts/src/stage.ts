@@ -18,6 +18,8 @@ export const TaskSource = z.discriminatedUnion("kind", [
     headRef: z.string(),
     baseRef: z.string(),
   }),
+  /** A ticket made from a Slack message (`t` in the board's Slack inbox). */
+  z.object({ kind: z.literal("slack"), channel: z.string(), ts: z.string(), permalink: z.string() }),
 ]);
 export type TaskSource = z.infer<typeof TaskSource>;
 
