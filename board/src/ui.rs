@@ -1605,8 +1605,9 @@ mod tests {
             .unwrap();
         let first_word = longest.1.split_whitespace().next().unwrap();
         let (y, line) = rows.iter().enumerate().find(|(_, r)| r.contains(&format!("a  {first_word}"))).expect("the a row");
-        let desc_x = line.find(first_word).unwrap();
-        let key_x = line.find("a  ").unwrap();
+        let col = |needle: &str| line[..line.find(needle).unwrap()].chars().count();
+        let desc_x = col(first_word);
+        let key_x = col("a  ");
         assert!(desc_x > key_x + 1);
         let next: Vec<char> = rows[y + 1].chars().collect();
         assert!(next[key_x..desc_x].iter().all(|ch| *ch == ' '), "blank under the key column");

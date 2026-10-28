@@ -87,6 +87,7 @@ impl HelpFor {
     }
 
     /// The keys that work in this view, as (keys, what they do).
+    #[cfg(test)]
     pub fn keys(self) -> &'static [(&'static str, &'static str)] {
         match self {
             HelpFor::Board => HELP,
@@ -258,12 +259,14 @@ pub const DETAIL_SECTIONS: &[HelpSection] = &[
     ),
 ];
 
+#[cfg(test)]
 pub const FLOOR_HELP: &[(&str, &str)] = &[
     ("tab / shift+tab", "focus the next / previous repo; the numbers follow"),
     ("r", "refresh"),
     ("esc", "close"),
 ];
 
+#[cfg(test)]
 pub const INBOX_HELP: &[(&str, &str)] = &[
     ("j / k", "previous / next ticket"),
     ("h / l", "previous / next split (1-5 jump)"),
@@ -275,6 +278,7 @@ pub const INBOX_HELP: &[(&str, &str)] = &[
     ("esc", "close"),
 ];
 
+#[cfg(test)]
 pub const DIGEST_HELP: &[(&str, &str)] = &[
     ("j / k", "previous / next entry"),
     ("enter", "jump to the ticket"),
@@ -282,6 +286,7 @@ pub const DIGEST_HELP: &[(&str, &str)] = &[
     ("esc", "close"),
 ];
 
+#[cfg(test)]
 pub const DETAIL_HELP: &[(&str, &str)] = &[
     ("j / k", "scroll"),
     ("a", "advance: start, approve, answer, retry, resume"),
@@ -295,6 +300,7 @@ pub const DETAIL_HELP: &[(&str, &str)] = &[
 ];
 
 /// What `:` understands. Typed as `:name args`.
+#[cfg(test)]
 pub const COMMANDS: &[(&str, &str)] = &[
     ("q", "quit"),
     ("new <title>", "new ticket, then edit it in place"),
@@ -310,6 +316,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
 ];
 
 /// Keys shown in the help overlay, as (keys, what they do).
+#[cfg(test)]
 pub const HELP: &[(&str, &str)] = &[
     ("h / l", "previous / next column"),
     ("j / k", "previous / next ticket"),
