@@ -1,6 +1,6 @@
 // The rules pre-pass over Slack messages: the user-editable markdown file (VIPs, muted
-// channels, always-P0 keywords, quiet hours, notes for the model, learned priors) parsed
-// once per poll and applied before the model sees anything. Deterministic and free; what it
+// channels, always-P0 keywords, quiet hours, the reply SLA, notes for the model, learned
+// priors) parsed once per poll and applied before the model sees anything. Deterministic and free; what it
 // settles never reaches the model, what it floors the model cannot lower.
 import type { SlackPriority, SlackTriage, SlackWatch } from "@hardness/contracts";
 
@@ -27,9 +27,16 @@ export interface SlackRules {
   notes: string;
   /** Keyed by `@author` or `#channel`. */
   learned: Record<string, LearnedPrior>;
+  /** Seconds you give yourself to reply, by priority; null when that priority has no SLA. */
+  sla: SlaTargets;
 }
 
-export const EMPTY_RULES: SlackRules = { vips: [], muted: [], p0Keywords: [], quietHours: null, notes: "", learned: {} };
+export type SlaTargets = Record<SlackPriority, number | null>;
+
+/** The reply SLA when the file says nothing: 10m, 30m, 1h, 1h. */
+export const DEFAULT_SLA: SlaTargets = { P0: 600, P1: 1800, P2: 3600, P3: 3600 };
+
+export const EMPTY_RULES: SlackRules = { vips: [], muted: [], p0Keywords: [], quietHours: null, notes: "", learned: {}, sla: DEFAULT_SLA };
 
 /** The file a fresh install starts from (also docs/agents/slack-triage.md). */
 export const RULES_TEMPLATE = `# Slack triage rules
@@ -58,6 +65,15 @@ Lines starting with \`<!--\` are comments.
 <!-- HH:MM-HH:MM local time; only P0 raises a notice in this window. Leave empty for none. -->
 <!-- 22:00-08:00 -->
 
+## SLA
+
+<!-- How long you give yourself to reply, by priority: Nm, Nh, N (seconds) or off. An item
+     past its target turns red on the board. Missing lines fall back to these values. -->
+- P0: 10m
+- P1: 30m
+- P2: 1h
+- P3: 1h
+
 ## Notes
 
 <!-- Free text the model reads: tone, context, who is who. -->
@@ -74,6 +90,7 @@ const SECTIONS: Record<string, keyof SlackRules | "quiet"> = {
   "muted channels": "muted",
   "always p0 keywords": "p0Keywords",
   "quiet hours": "quiet",
+  sla: "sla",
   notes: "notes",
   learned: "learned",
 };
@@ -95,10 +112,25 @@ function parseQuietHours(body: string): QuietHours | null {
 }
 
 const LEARNED_LINE = /^(.+?):\s*(lowered|raised)\s*\((\d+)\)$/;
+const SLA_LINE = /^(P[0-3]):\s*(off|(\d+)\s*([mh]?))$/i;
+
+/** `- P1: 30m` lines; `off` means none, anything unreadable keeps the default. */
+function parseSla(body: string): SlaTargets {
+  const sla: SlaTargets = { ...DEFAULT_SLA };
+  for (const line of bullets(body)) {
+    const match = SLA_LINE.exec(line);
+    if (!match) continue;
+    const [, priority, value, n, unit] = match;
+    const key = priority!.toUpperCase() as SlackPriority;
+    if (value!.toLowerCase() === "off") sla[key] = null;
+    else sla[key] = Number(n) * (unit!.toLowerCase() === "h" ? 3600 : unit!.toLowerCase() === "m" ? 60 : 1);
+  }
+  return sla;
+}
 
 /** The rules file, section by section. Unknown sections are ignored; a missing one is empty. */
 export function parseRules(markdown: string): SlackRules {
-  const rules: SlackRules = { ...EMPTY_RULES, vips: [], muted: [], p0Keywords: [], learned: {} };
+  const rules: SlackRules = { ...EMPTY_RULES, vips: [], muted: [], p0Keywords: [], learned: {}, sla: { ...DEFAULT_SLA } };
   const parts = markdown.split(/^## +/m).slice(1);
   for (const part of parts) {
     const newline = part.indexOf("\n");
@@ -110,6 +142,7 @@ export function parseRules(markdown: string): SlackRules {
     else if (section === "muted") rules.muted = bullets(body).map((v) => v.replace(/^#/, "").toLowerCase());
     else if (section === "p0Keywords") rules.p0Keywords = bullets(body).map((v) => v.toLowerCase());
     else if (section === "quiet") rules.quietHours = parseQuietHours(body);
+    else if (section === "sla") rules.sla = parseSla(body);
     else if (section === "notes") rules.notes = stripComments(body).trim();
     else if (section === "learned") {
       for (const line of bullets(body)) {

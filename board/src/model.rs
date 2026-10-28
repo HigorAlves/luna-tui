@@ -673,6 +673,13 @@ pub struct SlackItem {
     /// The thread moved after you cleared it.
     #[serde(default)]
     pub reopened_at: Option<String>,
+    /// When a reply is due under the SLA for its priority, ISO; None when none is expected
+    /// or the item is cleared. The machine computes it; the board only shows it.
+    #[serde(default)]
+    pub due_at: Option<String>,
+    /// `due_at` has passed with no reply from you.
+    #[serde(default)]
+    pub overdue: bool,
     #[serde(default)]
     pub triage: Option<SlackTriage>,
     /// The machine's split name; `split_enum` reads it.
@@ -723,6 +730,27 @@ impl SlackItem {
 
     pub fn age(&self, now: u64) -> String {
         age(&self.ts, now)
+    }
+
+    /// Seconds until the reply is due; negative once it is past. None without a `due_at`.
+    pub fn due_in(&self, now: u64) -> Option<i64> {
+        let due = unix_secs(self.due_at.as_deref()?)?;
+        Some(due as i64 - now as i64)
+    }
+
+    /// `due in 12m` or `overdue 40m`, for the pane; None without a `due_at`.
+    pub fn due_label(&self, now: u64) -> Option<String> {
+        let left = self.due_in(now)?;
+        Some(if self.overdue || left < 0 {
+            format!("overdue {}", age_secs(left.unsigned_abs()))
+        } else {
+            format!("due in {}", age_secs(left as u64))
+        })
+    }
+
+    /// Due within five minutes and not yet overdue: the row's age turns yellow.
+    pub fn due_soon(&self, now: u64) -> bool {
+        !self.overdue && self.due_in(now).is_some_and(|left| (0..=300).contains(&left))
     }
 
     /// The ticket made from this item, if any.
@@ -783,6 +811,28 @@ pub struct SlackSnapshot {
     /// The Socket Mode websocket: `connected`, `disconnected`, or `off` without an app token.
     #[serde(default = "socket_off")]
     pub socket: String,
+    /// The reply SLA in effect, seconds by priority (rules file `## SLA`); 0 or missing means none.
+    #[serde(default)]
+    pub sla: BTreeMap<String, u64>,
+}
+
+impl SlackSnapshot {
+    /// The SLA for a priority in seconds; 0 when there is none (or no priority yet).
+    pub fn sla_for(&self, priority: Option<&str>) -> u64 {
+        priority.and_then(|p| self.sla.get(p).copied()).unwrap_or(0)
+    }
+}
+
+/// The SLA targets in priority order, `10m/30m/1h/1h`; `–` for a priority without one.
+pub fn sla_targets(sla: &BTreeMap<String, u64>) -> String {
+    SLACK_PRIORITIES
+        .iter()
+        .map(|p| match sla.get(*p).copied().unwrap_or(0) {
+            0 => NONE.to_string(),
+            secs => age_secs(secs),
+        })
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// `GET /slack/usergroups` and `GET /slack/channels`: one choice for the watch picker.
@@ -815,6 +865,12 @@ pub struct SlackMetrics {
     pub replied: BTreeMap<String, u64>,
     #[serde(default)]
     pub within_hour: u64,
+    /// Of those replied, how many inside their priority's SLA, by priority.
+    #[serde(default)]
+    pub within_sla: BTreeMap<String, u64>,
+    /// The SLA in effect, seconds by priority, as the rules file sets it.
+    #[serde(default)]
+    pub sla: BTreeMap<String, u64>,
     /// Seconds from the message to your reply, by priority.
     #[serde(default)]
     pub time_to_reply: BTreeMap<String, Stats>,
@@ -836,6 +892,14 @@ impl SlackMetrics {
     pub fn within_hour_rate(&self) -> Option<f64> {
         let replied = self.total_replied();
         (replied > 0).then(|| self.within_hour as f64 / replied as f64)
+    }
+
+    /// For one priority: how many replies came inside its SLA, and that as a share of the
+    /// replies; the share is None with nothing replied.
+    pub fn within_sla_of(&self, priority: &str) -> (u64, Option<f64>) {
+        let within = self.within_sla.get(priority).copied().unwrap_or(0);
+        let replied = self.replied.get(priority).copied().unwrap_or(0);
+        (within, (replied > 0).then(|| within as f64 / replied as f64))
     }
 }
 
@@ -1506,12 +1570,16 @@ pub fn age(iso: &str, now: u64) -> String {
     let Some(since) = unix_secs(iso) else {
         return String::new();
     };
-    let s = now.saturating_sub(since);
-    match s {
-        0..=59 => format!("{s}s"),
-        60..=3599 => format!("{}m", s / 60),
-        3600..=86_399 => format!("{}h", s / 3600),
-        _ => format!("{}d", s / 86_400),
+    age_secs(now.saturating_sub(since))
+}
+
+/// A span of seconds, compact: `45s`, `12m`, `3h`, `2d`.
+pub fn age_secs(secs: u64) -> String {
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}m", secs / 60),
+        3600..=86_399 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86_400),
     }
 }
 
@@ -1697,9 +1765,13 @@ mod tests {
     #[test]
     fn a_slack_snapshot_deserialises_with_every_field_and_its_nulls() {
         let snapshot: SlackSnapshot = crate::slack::fixtures::snapshot();
-        assert_eq!(snapshot.items.len(), 2);
+        assert_eq!(snapshot.items.len(), 3);
         assert_eq!(snapshot.watches.len(), 2);
         assert_eq!(snapshot.socket, "connected");
+        assert_eq!((snapshot.sla_for(Some("P0")), snapshot.sla_for(Some("P2")), snapshot.sla_for(Some("P9")), snapshot.sla_for(None)), (600, 3600, 0, 0));
+        assert_eq!(sla_targets(&snapshot.sla), "10m/30m/1h/1h");
+        assert_eq!(snapshot.items[0].due_at.as_deref(), Some("2026-10-28T09:58:00.000Z"));
+        assert!(!snapshot.items[0].overdue && snapshot.items[2].overdue && snapshot.items[1].due_at.is_none());
         assert_eq!(snapshot.me.as_ref().map(|m| m.name.as_str()), Some("higor"));
         assert_eq!(snapshot.polled_at.as_deref(), Some("2026-10-28T10:00:00.000Z"));
         let item = &snapshot.items[0];
@@ -1734,9 +1806,12 @@ mod tests {
         let sparse: SlackSnapshot = serde_json::from_str(r#"{"items":[],"watches":[],"me":null,"polledAt":null,"error":"no token","socket":"off"}"#).unwrap();
         assert_eq!(sparse.error.as_deref(), Some("no token"));
         assert_eq!(sparse.socket, "off");
+        assert!(sparse.sla.is_empty(), "a machine from before the SLA sends none");
+        assert_eq!(sla_targets(&sparse.sla), "–/–/–/–");
         let metrics: SlackMetrics = serde_json::from_str(
             r#"{"since":"2026-10-21T00:00:00.000Z","items":{"P0":1,"P1":4,"P2":10,"P3":20},"replied":{"P0":1,"P1":3,"P2":2,"P3":0},
-            "withinHour":3,"timeToReply":{"P0":{"median":600,"p90":600},"P1":{"median":3600,"p90":7200},"P2":{"median":null,"p90":null},"P3":{"median":null,"p90":null}},
+            "withinHour":3,"withinSla":{"P0":1,"P1":2,"P2":0,"P3":0},"sla":{"P0":600,"P1":1800,"P2":3600,"P3":3600},
+            "timeToReply":{"P0":{"median":600,"p90":600},"P1":{"median":3600,"p90":7200},"P2":{"median":null,"p90":null},"P3":{"median":null,"p90":null}},
             "byDay":[{"day":"2026-10-27","items":5,"replied":2}]}"#,
         )
         .unwrap();
@@ -1744,6 +1819,10 @@ mod tests {
         assert_eq!(metrics.total_replied(), 6);
         assert_eq!(metrics.within_hour_rate(), Some(0.5));
         assert_eq!(metrics.time_to_reply["P1"].median, Some(3600.0));
+        assert_eq!(metrics.within_sla_of("P0"), (1, Some(1.0)));
+        assert_eq!(metrics.within_sla_of("P1").1.map(|s| (s * 100.0).round() as u64), Some(67));
+        assert_eq!(metrics.within_sla_of("P3"), (0, None), "nothing replied, no share");
+        assert_eq!(metrics.sla["P1"], 1800);
     }
 
     #[test]

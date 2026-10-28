@@ -1,7 +1,7 @@
 import type { SlackWatch } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { RULES_TEMPLATE, type RuleInput, applyRules, firstLine, inQuietHours, learn, parseRules, withFloor } from "./slack-rules.ts";
+import { DEFAULT_SLA, RULES_TEMPLATE, type RuleInput, applyRules, firstLine, inQuietHours, learn, parseRules, withFloor } from "./slack-rules.ts";
 
 const now = new Date("2026-10-28T12:00:00Z");
 
@@ -42,7 +42,15 @@ describe("parseRules", () => {
       quietHours: { start: 22 * 60, end: 8 * 60 },
       notes: "Replies to the data team are in PT-BR.\nKeep it short.",
       learned: { "@bot-ci": { direction: "lowered", n: 3 }, "#payments": { direction: "raised", n: 1 } },
+      sla: { P0: 600, P1: 1800, P2: 3600, P3: 3600 },
     });
+  });
+
+  it("reads the SLA in minutes, hours or seconds, off for none, defaults for a missing line or section", () => {
+    expect(parseRules("## SLA\n- P0: 5m\n- P1: 2h\n- P2: 90\n- P3: off\n").sla).toEqual({ P0: 300, P1: 7200, P2: 90, P3: null });
+    expect(parseRules("## SLA\n<!-- - P0: 1m -->\n- p1: 45M\n- P2: nonsense\n").sla).toEqual({ P0: 600, P1: 2700, P2: 3600, P3: 3600 });
+    expect(parseRules("").sla).toEqual(DEFAULT_SLA);
+    expect(DEFAULT_SLA).toEqual({ P0: 600, P1: 1800, P2: 3600, P3: 3600 });
   });
 
   it("parses the shipped template to defaults", () => {
@@ -53,6 +61,7 @@ describe("parseRules", () => {
     expect(rules.quietHours).toBeNull();
     expect(rules.notes).toBe("");
     expect(rules.learned).toEqual({});
+    expect(rules.sla).toEqual(DEFAULT_SLA);
   });
 
   it("knows the quiet window, across midnight", () => {

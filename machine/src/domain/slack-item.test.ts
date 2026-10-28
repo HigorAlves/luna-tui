@@ -1,7 +1,8 @@
 import type { SlackTriage, SlackWatch } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { type IncomingMessage, type SlackItemRow, fold, higher, inSnapshot, matchWatches, mentionsUser, prUrlsIn, splitOf, touch, watchFloor } from "./slack-item.ts";
+import { type IncomingMessage, type SlackItemRow, dueOf, fold, higher, inSnapshot, matchWatches, mentionsUser, prUrlsIn, splitOf, toSlackItem, touch, watchFloor } from "./slack-item.ts";
+import { DEFAULT_SLA } from "./slack-rules.ts";
 
 const now = new Date("2026-10-28T12:00:00Z");
 const hoursAgo = (h: number) => new Date(now.getTime() - h * 3_600_000).toISOString();
@@ -204,5 +205,36 @@ describe("snapshot membership and PR links", () => {
       { repo: "o/a", number: 212 },
       { repo: "o/b", number: 7 },
     ]);
+  });
+});
+
+describe("dueOf and toSlackItem", () => {
+  const asked = row({ ts: hoursAgo(1), triage: triage({ priority: "P1" }) });
+
+  it("dues an open ask at its latest message plus the SLA of its priority, and marks it overdue once that passed", () => {
+    // P1 at 30m: an hour-old ask was due half an hour ago.
+    expect(dueOf(asked, now, DEFAULT_SLA)).toEqual({ dueAt: hoursAgo(0.5), overdue: true });
+    expect(dueOf({ ...asked, triage: triage({ priority: "P2" }) }, now, DEFAULT_SLA)).toEqual({ dueAt: hoursAgo(0), overdue: false });
+    expect(dueOf({ ...asked, triage: triage({ priority: "P0", overridden: true }) }, now, DEFAULT_SLA)).toEqual({ dueAt: hoursAgo(50 / 60), overdue: true });
+    expect(dueOf(asked, now, { ...DEFAULT_SLA, P1: null })).toEqual({ dueAt: null, overdue: false });
+  });
+
+  it("has no due time when no reply is expected, you replied, it is done or still snoozed", () => {
+    const none = { dueAt: null, overdue: false };
+    expect(dueOf(row({ ts: hoursAgo(1) }), now, DEFAULT_SLA)).toEqual(none);
+    expect(dueOf({ ...asked, triage: triage({ expectsReply: false }) }, now, DEFAULT_SLA)).toEqual(none);
+    expect(dueOf({ ...asked, youReplied: true }, now, DEFAULT_SLA)).toEqual(none);
+    expect(dueOf({ ...asked, doneAt: hoursAgo(0) }, now, DEFAULT_SLA)).toEqual(none);
+    expect(dueOf({ ...asked, snoozedUntil: hoursAgo(-1) }, now, DEFAULT_SLA)).toEqual(none);
+    // A snooze that passed counts again, from the message, not from the snooze.
+    expect(dueOf({ ...asked, snoozedUntil: hoursAgo(0.25) }, now, DEFAULT_SLA)).toEqual({ dueAt: hoursAgo(0.5), overdue: true });
+  });
+
+  it("toSlackItem carries split, dueAt and overdue and drops the storage-only fields", () => {
+    const item = toSlackItem(asked, now, DEFAULT_SLA);
+    expect(item).toMatchObject({ id: asked.id, split: "needs_reply", dueAt: hoursAgo(0.5), overdue: true });
+    expect(item).not.toHaveProperty("slackTs");
+    expect(item).not.toHaveProperty("arrivedAt");
+    expect(item).not.toHaveProperty("repliedAt");
   });
 });

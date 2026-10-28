@@ -31,6 +31,7 @@ import {
   KEEP_DONE_MS,
   type SlackItemRow,
   compareTs,
+  dueOf,
   fold,
   inSnapshot,
   matchWatches,
@@ -41,7 +42,7 @@ import {
   toSlackItem,
   touch,
 } from "../domain/slack-item.ts";
-import { RULES_TEMPLATE, type SlackRules, applyRules, firstLine, learn, parseRules, withFloor } from "../domain/slack-rules.ts";
+import { DEFAULT_SLA, RULES_TEMPLATE, type SlaTargets, type SlackRules, applyRules, firstLine, learn, parseRules, withFloor } from "../domain/slack-rules.ts";
 import type { TaskRow } from "../domain/task.ts";
 import type { NewTask } from "./pipeline.ts";
 import { type ChannelInfo, type Conversation, type RawMessage, type Slack, type SlackMe, type Usergroup, messageOf } from "./slack.ts";
@@ -121,6 +122,8 @@ export interface SlackInboxOptions {
 const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
+/** Items go overdue with no Slack event: the snapshot is recomputed this often. */
+const TICK_MS = 60_000;
 /** The first poll looks back this far. */
 const FIRST_LOOKBACK_MS = DAY_MS;
 /** Threads touched this recently are re-read for replies. */
@@ -142,6 +145,8 @@ const BUILTIN_WATCHES: Array<{ value: string; label: string }> = [
 ];
 
 const toSlackTs = (date: Date): string => (date.getTime() / 1000).toFixed(6);
+/** The SLA as the board sees it: 0 stands for "no SLA" on the wire. */
+const toWireSla = (sla: SlaTargets): SlackSnapshot["sla"] => ({ P0: sla.P0 ?? 0, P1: sla.P1 ?? 0, P2: sla.P2 ?? 0, P3: sla.P3 ?? 0 });
 const key = (row: SlackItemRow): string => (row.kind === "watch" || row.kind === "automated" ? `#${row.channel.name}` : `@${row.author.name}`);
 
 const realFiles: NonNullable<SlackInboxOptions["files"]> = {
@@ -159,11 +164,12 @@ interface Gathered {
 }
 
 export class SlackInbox implements SlackInboxPort {
-  snapshot: SlackSnapshot = { items: [], watches: [], me: null, polledAt: null, error: null, socket: "off" };
+  snapshot: SlackSnapshot = { items: [], watches: [], me: null, polledAt: null, error: null, socket: "off", sla: toWireSla(DEFAULT_SLA) };
   /** How long until the next poll: the interval, or the backoff after a rate limit. */
   nextDelayMs: number;
 
   private timer: NodeJS.Timeout | undefined;
+  private clock: NodeJS.Timeout | undefined;
   private soon: NodeJS.Timeout | undefined;
   private stopped = false;
   private polling: Promise<SlackSnapshot> | null = null;
@@ -183,6 +189,8 @@ export class SlackInbox implements SlackInboxPort {
   private listings: { usergroups?: { at: number; value: Usergroup[] }; channels?: { at: number; value: ChannelInfo[] } } = {};
   private readonly now: () => Date;
   private readonly files: NonNullable<SlackInboxOptions["files"]>;
+  /** The SLA the last refresh read from the rules file; the minute tick recomputes with it. */
+  private sla: SlaTargets = DEFAULT_SLA;
   /** Items waiting for the pack, with the floor the rules set; one container runs at a time. */
   private readonly triageQueue = new Map<string, SlackPriority | null>();
   private triaging: Promise<void> | null = null;
@@ -194,26 +202,41 @@ export class SlackInbox implements SlackInboxPort {
     this.snapshot.socket = options.socketToken ? "disconnected" : "off";
   }
 
-  /** Polls now, then again after each poll's delay. Never throws. */
+  /** Polls now, then again after each poll's delay; recomputes what is overdue every minute. Never throws. */
   start(): void {
     if (this.timer || this.stopped) return;
-    const tick = () => {
+    const poll = () => {
       void this.pollOnce()
         .catch((error: unknown) => console.warn("slack inbox: poll failed", error))
         .finally(() => {
           if (this.stopped) return;
-          this.timer = setTimeout(tick, this.nextDelayMs);
+          this.timer = setTimeout(poll, this.nextDelayMs);
           this.timer.unref();
         });
     };
-    tick();
+    poll();
+    this.clock = setInterval(() => this.tick(), TICK_MS);
+    this.clock.unref();
   }
 
   stop(): void {
     this.stopped = true;
     if (this.timer) clearTimeout(this.timer);
+    if (this.clock) clearInterval(this.clock);
     if (this.soon) clearTimeout(this.soon);
     this.timer = undefined;
+    this.clock = undefined;
+  }
+
+  /**
+   * The minute tick: an ask goes overdue, a snooze ends, with nothing from Slack to say so.
+   * A pure recompute over the snapshot it already holds (no store, no file), published only
+   * when a due time, an overdue flag or a split flipped.
+   */
+  tick(): void {
+    const now = this.now();
+    const items = this.snapshot.items.map((item) => ({ ...item, ...dueOf(item, now, this.sla), split: splitOf(item, now) }));
+    this.publishIfChanged({ ...this.snapshot, items });
   }
 
   /** One poll; a poll already running is shared rather than doubled. */
@@ -297,33 +320,40 @@ export class SlackInbox implements SlackInboxPort {
     while (this.triaging) await this.triaging;
   }
 
-  /** Rebuilds the snapshot from the store and publishes it when it changed. */
+  /** Rebuilds the snapshot from the store and the rules file's SLA, and publishes it when it changed. */
   private async refresh(polledAt: string | null, error: string | null): Promise<SlackSnapshot> {
     const now = this.now();
+    this.sla = (await this.rules()).sla;
     const rows = await this.options.store.items(new Date(now.getTime() - KEEP_DONE_MS));
     const items = rows
       .filter((row) => inSnapshot(row, now))
       .map((row) => {
         const pr = this.options.linkPr(prUrlsIn(row.text)) ?? row.linked.pr;
-        return toSlackItem({ ...row, linked: { ...row.linked, pr } }, now);
+        return toSlackItem({ ...row, linked: { ...row.linked, pr } }, now, this.sla);
       });
     const watches = await this.options.store.watches();
-    const next: SlackSnapshot = {
+    this.publishIfChanged({
       items,
       watches,
       me: this.me ? { ...this.me, isBot: false } : null,
       polledAt,
       error,
       socket: this.options.socketToken ? this.socketState : "off",
-    };
+      sla: toWireSla(this.sla),
+    });
+    return this.snapshot;
+  }
+
+  /** The one place the snapshot is replaced: the board hears about it only when something it shows changed. */
+  private publishIfChanged(next: SlackSnapshot): void {
     const changed =
       JSON.stringify(next.items) !== JSON.stringify(this.snapshot.items) ||
       JSON.stringify(next.watches) !== JSON.stringify(this.snapshot.watches) ||
+      JSON.stringify(next.sla) !== JSON.stringify(this.snapshot.sla) ||
       next.error !== this.snapshot.error ||
       next.socket !== this.snapshot.socket;
     this.snapshot = next;
     if (changed) this.options.publish(next);
-    return next;
   }
 
   /** The rules file, created from the template when it is missing. */
@@ -640,7 +670,7 @@ export class SlackInbox implements SlackInboxPort {
   private async saveAndPublish(row: SlackItemRow): Promise<SlackItem> {
     await this.options.store.save([row]);
     const snapshot = await this.refresh(this.snapshot.polledAt, this.snapshot.error);
-    return snapshot.items.find((i) => i.id === row.id) ?? toSlackItem(row, this.now());
+    return snapshot.items.find((i) => i.id === row.id) ?? toSlackItem(row, this.now(), this.sla);
   }
 
   /** Writes a learned line; a failure here must not fail the action. */
@@ -741,10 +771,11 @@ export class SlackInbox implements SlackInboxPort {
   }
 
   async metrics(since: Date): Promise<SlackMetrics> {
-    const rows = await this.options.store.metricRows(since);
+    const [rows, { sla }] = await Promise.all([this.options.store.metricRows(since), this.rules()]);
     const zero = (): Record<SlackPriority, number> => ({ P0: 0, P1: 0, P2: 0, P3: 0 });
     const items = zero();
     const replied = zero();
+    const withinSla = zero();
     const seconds: Record<SlackPriority, number[]> = { P0: [], P1: [], P2: [], P3: [] };
     let withinHour = 0;
     const days = new Map<string, { items: number; replied: number }>();
@@ -758,7 +789,11 @@ export class SlackInbox implements SlackInboxPort {
         const s = (new Date(row.repliedAt).getTime() - new Date(row.ts).getTime()) / 1000;
         if (s < 3600) withinHour++;
         if (row.priority) {
-          if (row.expectsReply) replied[row.priority]++;
+          if (row.expectsReply) {
+            replied[row.priority]++;
+            const target = sla[row.priority];
+            if (target !== null && s <= target) withinSla[row.priority]++;
+          }
           seconds[row.priority].push(s);
         }
       }
@@ -769,12 +804,13 @@ export class SlackInbox implements SlackInboxPort {
       items,
       replied,
       withinHour,
+      withinSla,
+      sla: toWireSla(sla),
       timeToReply: { P0: stats(seconds.P0), P1: stats(seconds.P1), P2: stats(seconds.P2), P3: stats(seconds.P3) },
       byDay: [...days.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([day, d]) => ({ day, ...d })),
     };
   }
 
-  /** The ten-line morning text: open P0/P1, what waits on others, yesterday's response time. */
   /** `GET /slack/triage-runs`: the pack's runs since `since`, with the items and cost summed. */
   async triageRuns(since: Date): Promise<SlackTriageRuns> {
     const runs = await this.options.store.triageRuns(since);
@@ -783,9 +819,12 @@ export class SlackInbox implements SlackInboxPort {
     return { since: since.toISOString(), runs, items, costUsd };
   }
 
+  /** The ten-line morning text: what is overdue, open P0/P1, what waits on others, yesterday's response time. */
   async digest(): Promise<string> {
     const now = this.now();
+    const { sla } = await this.rules();
     const rows = (await this.options.store.items(new Date(now.getTime() - KEEP_DONE_MS))).map((row) => ({ row, split: splitOf(row, now) }));
+    const overdue = rows.filter(({ row }) => dueOf(row, now, sla).overdue).length;
     const line = (r: SlackItemRow) => `- ${r.triage?.priority ?? "P?"} #${r.channel.name} @${r.author.name}: ${r.triage?.summary ?? firstLine(r.text, 60)}`;
     const urgent = rows.filter(({ row, split }) => split === "needs_reply" && (row.triage?.priority === "P0" || row.triage?.priority === "P1")).map(({ row }) => row);
     const waiting = rows.filter(({ split }) => split === "waiting_on_them").map(({ row }) => row);
@@ -796,6 +835,7 @@ export class SlackInbox implements SlackInboxPort {
     const total = Object.values(yesterday.items).reduce((a, b) => a + b, 0);
     return [
       `Slack inbox · ${now.toISOString().slice(0, 10)}`,
+      ...(overdue > 0 ? [`${overdue} overdue now`] : []),
       `Needs reply: ${needs} (${urgent.length} at P0/P1)`,
       ...urgent.slice(0, 4).map(line),
       `Waiting on them: ${waiting.length}`,

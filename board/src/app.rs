@@ -334,7 +334,14 @@ pub const SLACK_SECTIONS: &[HelpSection] = &[
             ("n / d / space / e", "in Watches: add (@handle, #channel or a word), delete, on / off, priority floor"),
         ],
     ),
-    section("Other", &[("R", "poll Slack now"), ("esc", "close")]),
+    section(
+        "Other",
+        &[
+            ("‼ red row", "overdue: past its reply SLA (rules file `## SLA`); sorted first, counted on the badge"),
+            ("R", "poll Slack now"),
+            ("esc", "close"),
+        ],
+    ),
 ];
 
 pub const DETAIL_SECTIONS: &[HelpSection] = &[
@@ -410,6 +417,7 @@ pub const SLACK_HELP: &[(&str, &str)] = &[
     ("x", "the same actions as a menu, with why a key is off"),
     ("W", "the handles, broadcasts, keywords and channels the inbox treats as you"),
     ("n / d / space / e", "in Watches: add (@handle, #channel or a word), delete, on / off, priority floor"),
+    ("‼ red row", "overdue: past its reply SLA (rules file `## SLA`); sorted first, counted on the badge"),
     ("R", "poll Slack now"),
     ("esc", "close"),
 ];
@@ -1041,15 +1049,15 @@ impl App {
     }
 
     /// A fresh Slack snapshot: notices for the P0/P1 items that moved into Needs reply or
-    /// Decide and for threads that came back after you cleared them; the view's cursors kept
-    /// inside their lists.
+    /// Decide, for items that went past their reply SLA and for threads that came back after
+    /// you cleared them; the view's cursors kept inside their lists.
     fn take_slack(&mut self, snapshot: SlackSnapshot) {
-        let before: std::collections::HashMap<&str, (Option<SlackSplit>, Option<&str>)> =
-            self.slack_snapshot.items.iter().map(|i| (i.id.as_str(), (i.split_enum(), i.reopened_at.as_deref()))).collect();
+        let before: std::collections::HashMap<&str, (Option<SlackSplit>, Option<&str>, bool)> =
+            self.slack_snapshot.items.iter().map(|i| (i.id.as_str(), (i.split_enum(), i.reopened_at.as_deref(), i.overdue))).collect();
         let mut notices = Vec::new();
         for item in &snapshot.items {
             let old = before.get(item.id.as_str());
-            if let Some(notice) = notify::slack_notice(old.and_then(|o| o.0), old.and_then(|o| o.1), item) {
+            if let Some(notice) = notify::slack_notice(old.and_then(|o| o.0), old.and_then(|o| o.1), old.is_some_and(|o| o.2), item) {
                 notices.push(notice);
             }
         }
@@ -1175,11 +1183,20 @@ impl App {
         std::mem::take(&mut self.notices)
     }
 
-    /// How many tickets wait on you right now: the Board tab's badge.
+    /// How many tickets wait on you right now: the Board tab's badge. On Slack that is every
+    /// P0/P1 in Needs reply or Decide plus every open item past its reply SLA, each once.
     pub fn needs_you_count(&self) -> usize {
         let tickets = self.tasks.iter().filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated)).count();
         let prs = self.prs.prs.iter().filter(|p| p.split_enum().is_some_and(PrSplit::needs_me)).count();
-        let slack = self.slack_snapshot.items.iter().filter(|i| i.urgent() && i.split_enum().is_some_and(SlackSplit::needs_me)).count();
+        let slack = self
+            .slack_snapshot
+            .items
+            .iter()
+            .filter(|i| {
+                let split = i.split_enum();
+                (i.urgent() && split.is_some_and(SlackSplit::needs_me)) || (i.overdue && split.is_some_and(SlackSplit::open))
+            })
+            .count();
         tickets + prs + slack
     }
 
@@ -4468,11 +4485,11 @@ mod slack_tests {
     }
 
     #[test]
-    fn urgent_items_count_on_the_badge_and_raise_a_notice_once_and_a_reopen_always_does() {
+    fn urgent_and_overdue_items_count_on_the_badge_and_raise_a_notice_once_and_a_reopen_always_does() {
         let mut app = app_with(snapshot());
-        assert_eq!(app.needs_you_count(), 1, "the P0 in Needs reply; the FYI does not count");
+        assert_eq!(app.needs_you_count(), 2, "the P0 in Needs reply and the overdue P2 in Decide; the FYI does not count");
         let notices = app.take_notices();
-        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Needs reply"]);
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Needs reply", "Overdue"]);
         assert_eq!(notices[0].body, "#payments-oncall @marta: approve rollback");
 
         let mut next = snapshot();
@@ -4481,8 +4498,17 @@ mod slack_tests {
         app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: next })).unwrap();
         app.pump();
         let notices = app.take_notices();
-        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Reopened"], "staying put is not news; a P2 in Decide is not either");
-        assert_eq!(app.needs_you_count(), 1);
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Reopened"], "staying put or overdue is not news; a P2 in Decide is not either");
+        assert_eq!(app.needs_you_count(), 2);
+
+        let mut late = snapshot();
+        late.items[0].overdue = true;
+        late.items[2].split = "done".into();
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: late })).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Overdue"], "the P0 going past its SLA is news");
+        assert_eq!(app.needs_you_count(), 1, "the overdue P0 counts once; the done item no longer does");
     }
 }
 

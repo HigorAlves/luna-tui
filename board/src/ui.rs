@@ -23,8 +23,8 @@ use crate::slack::{self, SlackKey, SlackSplit, SlackState};
 use crate::{
     app::{ACTIONS, App, Density, FloorState, GroupBy, HelpFor, Mode},
     model::{
-        COLUMNS, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd,
-        repo_colour_slot, spend_p90, now_secs, unix_secs,
+        COLUMNS, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
+        fmt_usd, repo_colour_slot, sla_targets, spend_p90, now_secs, unix_secs,
     },
 };
 
@@ -1250,6 +1250,10 @@ fn render_slack(frame: &mut Frame, area: Rect, app: &App, state: &SlackState) {
         "disconnected" => head.push(Span::from("  ⚡ socket down").fg(c(YELLOW))),
         _ => {}
     }
+    let overdue = slack::overdue_count(&snapshot.items);
+    if overdue > 0 {
+        head.push(Span::from(format!("  ‼ {overdue} overdue")).fg(c(RED)).bold());
+    }
     let mut top = vec![Line::from(head)];
     if let Some(error) = &snapshot.error {
         top.push(Line::from(Span::from(format!(" ⚠ {error}")).fg(c(RED))));
@@ -1288,7 +1292,7 @@ fn render_slack(frame: &mut Frame, area: Rect, app: &App, state: &SlackState) {
             .padding(Padding::horizontal(1))
             .title(Line::from(item.map_or(" message ".to_string(), |i| format!(" {} ", i.channel_label()))).bold());
         let lines = match item {
-            Some(item) => slack_detail_lines(item, now),
+            Some(item) => slack_detail_lines(item, snapshot.sla_for(item.priority()), now),
             None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
         };
         frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), detail_area);
@@ -1309,16 +1313,17 @@ fn priority_style(priority: Option<&str>) -> Style {
     }
 }
 
-/// The two-glyph tag after the age: `↺` came back after you cleared it, `⚙` already a ticket,
-/// `⎇` inside a thread.
+/// The tag after the age, two glyphs from `↺` came back after you cleared it, `⚙` already a
+/// ticket, `⎇` inside a thread; an overdue item puts `‼` in front of them and takes a third.
 fn slack_tag(item: &SlackItem) -> String {
     let mut tag = String::new();
-    for (on, glyph) in [(item.reopened_at.is_some(), '↺'), (item.task_id().is_some(), '⚙'), (item.thread_ts.is_some(), '⎇')] {
-        if on && tag.chars().count() < 2 {
+    let room = if item.overdue { 3 } else { 2 };
+    for (on, glyph) in [(item.overdue, '‼'), (item.reopened_at.is_some(), '↺'), (item.task_id().is_some(), '⚙'), (item.thread_ts.is_some(), '⎇')] {
+        if on && tag.chars().count() < room {
             tag.push(glyph);
         }
     }
-    while tag.chars().count() < 2 {
+    while tag.chars().count() < room {
         tag.push(' ');
     }
     tag
@@ -1326,7 +1331,9 @@ fn slack_tag(item: &SlackItem) -> String {
 
 /// One item as a row of fixed columns: the priority, the channel's colour bar and name, the
 /// author, triage's summary (the only field ever cut, `×N` when a thread collapsed into it),
-/// the age, and the tag. Everything else lives in the detail pane.
+/// the age, and the tag. Everything else lives in the detail pane. Past its reply SLA the
+/// summary and the age go red and the tag leads with `‼`; inside five minutes of it the age
+/// goes yellow.
 fn slack_row(item: &SlackItem, selected: bool, width: usize, now: u64) -> Line<'static> {
     let channel = item.channel_label();
     let channel_colour = REPO_COLOURS[repo_colour_slot(&item.channel.name)];
@@ -1335,9 +1342,23 @@ fn slack_row(item: &SlackItem, selected: bool, width: usize, now: u64) -> Line<'
     if item.count > 1 {
         summary.push_str(&format!(" ×{}", item.count));
     }
-    let (tag, tag_colour) = (slack_tag(item), if item.reopened_at.is_some() { YELLOW } else { SUBTEXT0 });
-    // sel(2) prio(3) bar(1) channel(16) gap(1) author(9) gap(1) summary gap(2) age(3) gap(1) tag(2)
-    let fixed = 2 + 3 + 1 + 16 + 1 + 9 + 1 + 2 + 3 + 1 + 2;
+    let tag = slack_tag(item);
+    let tag_colour = if item.overdue {
+        RED
+    } else if item.reopened_at.is_some() {
+        YELLOW
+    } else {
+        SUBTEXT0
+    };
+    let (summary_style, age_style) = if item.overdue {
+        (Style::new().fg(c(RED)).bold(), Style::new().fg(c(RED)).bold())
+    } else if item.due_soon(now) {
+        (Style::new().bold(), Style::new().fg(c(YELLOW)))
+    } else {
+        (Style::new().bold(), Style::new().fg(c(SUBTEXT0)))
+    };
+    // sel(2) prio(3) bar(1) channel(16) gap(1) author(9) gap(1) summary gap(2) age(3) gap(1) tag(2, 3 overdue)
+    let fixed = 2 + 3 + 1 + 16 + 1 + 9 + 1 + 2 + 3 + 1 + tag.chars().count();
     let room = width.saturating_sub(fixed).max(4);
     let mut spans = vec![
         Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
@@ -1345,8 +1366,8 @@ fn slack_row(item: &SlackItem, selected: bool, width: usize, now: u64) -> Line<'
         Span::from("▌").fg(c(channel_colour)),
         Span::from(format!("{:<16} ", truncate(&channel, 16))).fg(c(channel_colour)),
         Span::from(format!("{:<9} ", truncate(&author, 9))).fg(c(SUBTEXT0)),
-        Span::from(format!("{:<room$}", truncate(&summary, room))).bold(),
-        Span::from(format!("  {:>3} ", item.age(now))).fg(c(SUBTEXT0)),
+        Span::from(format!("{:<room$}", truncate(&summary, room))).style(summary_style),
+        Span::from(format!("  {:>3} ", item.age(now))).style(age_style),
         Span::from(tag).fg(c(tag_colour)),
     ];
     if selected {
@@ -1355,9 +1376,10 @@ fn slack_row(item: &SlackItem, selected: bool, width: usize, now: u64) -> Line<'
     Line::from(spans)
 }
 
-/// The item as the pane and the actions menu draw it: where and who, the context, the
-/// message, and triage's verdict with why, links and draft.
-fn slack_widget(item: &SlackItem, now: u64) -> Vec<Line<'static>> {
+/// The item as the pane and the actions menu draw it: where and who, when the reply is due
+/// under `sla` (its priority's, in seconds; 0 for none), the context, the message, and
+/// triage's verdict with why, links and draft.
+fn slack_widget(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
     let muted = |text: String| Line::from(Span::from(text).fg(c(SUBTEXT0)));
     let field = |name: &str, text: String| {
         Line::from(vec![Span::from(format!("{name:<9}")).fg(c(SUBTEXT0)), Span::from(text)])
@@ -1370,6 +1392,15 @@ fn slack_widget(item: &SlackItem, now: u64) -> Vec<Line<'static>> {
         head.push_str(&format!(" · {} messages", item.count));
     }
     let mut lines = vec![muted(head)];
+    if let Some(due) = item.due_label(now) {
+        let target = match (item.priority(), sla) {
+            (Some(p), 0) => format!(" ({p})"),
+            (Some(p), secs) => format!(" ({p} · {} SLA)", age_secs(secs)),
+            (None, _) => String::new(),
+        };
+        let style = if item.overdue { Style::new().fg(c(RED)).bold() } else { Style::new() };
+        lines.push(Line::from(vec![Span::from(format!("{:<9}", "due")).fg(c(SUBTEXT0)), Span::from(format!("{due}{target}")).style(style)]));
+    }
     if item.reopened_at.is_some() {
         lines.push(Line::from(Span::from("new since you cleared it").fg(c(YELLOW)).bold()));
     }
@@ -1421,8 +1452,8 @@ fn slack_widget(item: &SlackItem, now: u64) -> Vec<Line<'static>> {
 }
 
 /// The widget, then every key with whether it is on and why not.
-fn slack_detail_lines(item: &SlackItem, now: u64) -> Vec<Line<'static>> {
-    let mut lines = slack_widget(item, now);
+fn slack_detail_lines(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
+    let mut lines = slack_widget(item, sla, now);
     lines.push(Line::default());
     for key in SlackKey::ALL {
         let label = key.short();
@@ -1448,7 +1479,7 @@ fn render_slack_actions(frame: &mut Frame, app: &App, cursor: usize) {
     let Some(item) = app.slack_under_cursor() else { return };
     let now = now_secs();
     let blockers: Vec<Option<&str>> = SlackKey::ALL.iter().map(|k| slack::blocker(item, *k)).collect();
-    let widget = slack_widget(item, now);
+    let widget = slack_widget(item, app.slack_snapshot.sla_for(item.priority()), now);
     let longest = SlackKey::ALL
         .iter()
         .map(|k| k.label().chars().count())
@@ -1673,30 +1704,37 @@ fn render_slack_task(frame: &mut Frame, app: &App, id: &str, title: &str, repo: 
     frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
 }
 
-/// The Floor's Slack block: items and replies by priority over 7d / 30d, the share answered
-/// within an hour, and how long a reply took (7d).
+/// The Floor's Slack block: items and replies by priority over 7d / 30d, how many of the 7d
+/// replies came inside their SLA (count and share), how long a reply took (7d), the share
+/// answered within an hour, and the SLA targets in force.
 fn slack_metric_lines(d7: &SlackMetrics, d30: &SlackMetrics, head_style: Style, label_style: Style) -> Vec<Line<'static>> {
     let pair = |a: u64, b: u64| format!("{a} / {b}");
     let seconds = |v: Option<f64>| fmt_ms(v.map(|s| s * 1000.0));
     let mut out = vec![Line::from(
-        Span::from(format!(" {:<14}{:>11}{:>11}{:>20}", "Slack · 7d / 30d", "items", "replied", "reply median / p90")).style(head_style),
+        Span::from(format!(" {:<14}{:>8}{:>8}{:>12}{:>16}", "Slack · 7d / 30d", "items", "replied", "within SLA", "median / p90")).style(head_style),
     )];
     for p in SLACK_PRIORITIES {
         let stats = d7.time_to_reply.get(p);
+        let (within, share) = d7.within_sla_of(p);
         out.push(Line::from(vec![
             Span::from(format!(" {p:<14}")).style(priority_style(Some(p))),
             Span::from(format!(
-                "{:>11}{:>11}{:>20}",
+                "{:>8}{:>8}{:>12}{:>16}",
                 pair(d7.items.get(p).copied().unwrap_or(0), d30.items.get(p).copied().unwrap_or(0)),
                 pair(d7.replied.get(p).copied().unwrap_or(0), d30.replied.get(p).copied().unwrap_or(0)),
+                format!("{within} · {}", fmt_pct(share)),
                 format!("{} / {}", seconds(stats.and_then(|s| s.median)), seconds(stats.and_then(|s| s.p90))),
             )),
         ]));
     }
     out.push(Line::from(vec![
         Span::from(format!(" {:<14}", "within 1h")).style(label_style),
-        Span::from(format!("{:>11}{:>11}", fmt_pct(d7.within_hour_rate()), fmt_pct(d30.within_hour_rate()))),
-        Span::from(format!("{:>20}", format!("{} / {} items", d7.total_items(), d30.total_items()))).style(label_style),
+        Span::from(format!("{:>8}{:>8}", fmt_pct(d7.within_hour_rate()), fmt_pct(d30.within_hour_rate()))),
+        Span::from(format!("{:>28}", format!("{} / {} items", d7.total_items(), d30.total_items()))).style(label_style),
+    ]));
+    out.push(Line::from(vec![
+        Span::from(format!(" {:<14}", "SLA targets")).style(label_style),
+        Span::from(format!("{} (P0/P1/P2/P3)", sla_targets(&d7.sla))).style(label_style),
     ]));
     out
 }
@@ -1739,16 +1777,6 @@ fn render_digest(frame: &mut Frame, area: Rect, app: &App, digest: &DigestState)
         lines.push(Line::from(line));
     }
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// `3h`, `2d`: a duration in seconds, in the largest unit that fits.
-fn age_secs(secs: u64) -> String {
-    match secs {
-        s if s < 60 => format!("{s}s"),
-        s if s < 3600 => format!("{}m", s / 60),
-        s if s < 86_400 => format!("{}h", s / 3600),
-        s => format!("{}d", s / 86_400),
-    }
 }
 
 /// A small centered box with one line of text, for a yes/no that has no single ticket.
@@ -2655,7 +2683,7 @@ mod slack_render_tests {
 
     use super::*;
     use crate::client::Machine;
-    use crate::model::{SlackMetrics, SlackSnapshot};
+    use crate::model::{SlackMetrics, SlackSnapshot, unix_secs};
     use crate::slack::{WatchesState, fixtures::snapshot};
 
     fn app_with(snapshot: SlackSnapshot) -> App {
@@ -2728,6 +2756,56 @@ mod slack_render_tests {
     }
 
     #[test]
+    fn an_overdue_item_is_red_with_its_tag_leads_its_split_and_is_counted_on_the_strip() {
+        let now = unix_secs("2026-10-28T10:00:00Z").unwrap();
+        let app = app_with(snapshot());
+        let text = render(120, 40, &app);
+        assert!(text.contains("‼ 1 overdue"), "the strip counts the overdue Decide item: {text}");
+        let row = text.lines().find(|l| l.contains("approve rollback")).unwrap_or_default().to_string();
+        assert!(!row.contains('‼'), "the P0 in Needs reply is due, not overdue: {row}");
+        assert!(text.contains("due      in") || text.contains("due      overdue"), "the pane says when the reply is due: {text}");
+
+        let mut app = app;
+        app.slack.as_mut().unwrap().split = SlackSplit::Decide;
+        app.slack.as_mut().unwrap().cursor = 0;
+        let text = render(120, 40, &app);
+        let row = text.lines().find(|l| l.contains("approve rollback") && l.contains("@marta")).unwrap_or_default().to_string();
+        assert!(row.contains("‼⎇"), "the overdue tag leads the thread's: {row}");
+        assert!(row.contains("P2 ▌#payments-oncall"), "the priority cell keeps its own text: {row}");
+        assert!(text.contains("due      overdue") && text.contains("(P2 · 1h SLA)"), "{text}");
+
+        let items = &app.slack_snapshot.items;
+        let late = slack_row(&items[2], false, 110, now);
+        let red: Vec<&Span> = late.spans.iter().filter(|s| s.style.fg == Some(c(RED))).collect();
+        assert!(red.iter().any(|s| s.content.contains("approve rollback")), "the summary is red: {late:?}");
+        assert!(red.iter().any(|s| s.content.contains("2h")), "the age is red: {late:?}");
+        assert!(red.iter().any(|s| s.content.contains('‼')), "the tag is red: {late:?}");
+        assert!(late.spans.iter().any(|s| s.content.starts_with("P2") && s.style.fg != Some(c(RED))), "the prio cell keeps its colour: {late:?}");
+        let soon = slack_row(&items[0], false, 110, now - 180);
+        assert!(soon.spans.iter().any(|s| s.content.contains("9m") && s.style.fg == Some(c(YELLOW))), "due in a minute, the age is yellow: {soon:?}");
+        let calm = slack_row(&items[0], false, 110, now - 600);
+        assert!(calm.spans.iter().any(|s| s.content.contains("2m") && s.style.fg == Some(c(SUBTEXT0))), "eight minutes out it is plain: {calm:?}");
+        assert_eq!(slack_tag(&items[0]).chars().count(), 2);
+        assert_eq!(slack_tag(&items[2]).chars().count(), 3);
+
+        let lines = slack_detail_lines(&items[0], 600, now - 300);
+        let due = lines.iter().find(|l| l.to_string().starts_with("due")).map(|l| l.to_string()).unwrap_or_default();
+        assert_eq!(due, "due      due in 3m (P0 · 10m SLA)");
+        let lines = slack_detail_lines(&items[2], 3600, now);
+        let due = lines.iter().find(|l| l.to_string().starts_with("due")).map(|l| l.to_string()).unwrap_or_default();
+        assert_eq!(due, "due      overdue 1h (P2 · 1h SLA)");
+        let lines = slack_detail_lines(&items[2], 0, now);
+        assert!(lines.iter().any(|l| l.to_string() == "due      overdue 1h (P2)"), "no SLA figure when the machine has none");
+        let lines = slack_detail_lines(&items[1], 3600, now);
+        assert!(!lines.iter().any(|l| l.to_string().starts_with("due")), "nothing due, no line");
+
+        let mut none = app_with(snapshot());
+        none.slack_snapshot.items[2].overdue = false;
+        let strip = render(120, 40, &none).lines().next().unwrap_or_default().to_string();
+        assert!(!strip.contains('‼'), "no count at zero: {strip}");
+    }
+
+    #[test]
     fn the_popups_draw_over_the_view() {
         let mut app = app_with(snapshot());
         app.slack.as_mut().unwrap().watches = Some(WatchesState { cursor: 1 });
@@ -2770,7 +2848,8 @@ mod slack_render_tests {
     fn the_floor_gains_a_slack_block_when_the_metrics_came() {
         let metrics: SlackMetrics = serde_json::from_str(
             r#"{"since":"2026-10-21T00:00:00.000Z","items":{"P0":1,"P1":4,"P2":10,"P3":20},"replied":{"P0":1,"P1":3,"P2":2,"P3":0},
-            "withinHour":3,"timeToReply":{"P0":{"median":600,"p90":600},"P1":{"median":3600,"p90":7200},"P2":{"median":null,"p90":null},"P3":{"median":null,"p90":null}},"byDay":[]}"#,
+            "withinHour":3,"withinSla":{"P0":1,"P1":2,"P2":0,"P3":0},"sla":{"P0":600,"P1":1800,"P2":3600,"P3":3600},
+            "timeToReply":{"P0":{"median":600,"p90":600},"P1":{"median":3600,"p90":7200},"P2":{"median":null,"p90":null},"P3":{"median":null,"p90":null}},"byDay":[]}"#,
         )
         .unwrap();
         let mut floor = super::tests::floor();
@@ -2779,10 +2858,13 @@ mod slack_render_tests {
         terminal.draw(|f| render_floor(f, f.area(), &floor)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let text: String = (0..40).map(|y| (0..140).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>() + "\n").collect();
-        assert!(text.contains("Slack · 7d / 30d") && text.contains("reply median / p90"), "{text}");
+        assert!(text.contains("Slack · 7d / 30d") && text.contains("within SLA") && text.contains("median / p90"), "{text}");
         let p1 = text.lines().find(|l| l.trim_start().starts_with("P1")).unwrap_or_default().to_string();
-        assert!(p1.contains("4 / 4") && p1.contains("3 / 3") && p1.contains("1h / 2h"), "{p1}");
+        assert!(p1.contains("4 / 4") && p1.contains("3 / 3") && p1.contains("2 · 67%") && p1.contains("1h / 2h"), "{p1}");
+        let p3 = text.lines().find(|l| l.trim_start().starts_with("P3")).unwrap_or_default().to_string();
+        assert!(p3.contains("0 · –"), "nothing replied, no share: {p3}");
         assert!(text.contains("within 1h") && text.contains("50%"), "{text}");
+        assert!(text.contains("SLA targets") && text.contains("10m/30m/1h/1h (P0/P1/P2/P3)"), "{text}");
         floor.slack = None;
         terminal.draw(|f| render_floor(f, f.area(), &floor)).unwrap();
         let buffer = terminal.backend().buffer().clone();

@@ -4,8 +4,10 @@
 // in application/slack-inbox.ts feeds them and persists what they return.
 import type { SlackItem, SlackPriority, SlackSplit, SlackWatch } from "@hardness/contracts";
 
-/** An item as stored: the contract's shape minus the computed split, plus what metrics need. */
-export interface SlackItemRow extends Omit<SlackItem, "split"> {
+import type { SlaTargets } from "./slack-rules.ts";
+
+/** An item as stored: the contract's shape minus what is computed at snapshot time (split, dueAt, overdue), plus what metrics need. */
+export interface SlackItemRow extends Omit<SlackItem, "split" | "dueAt" | "overdue"> {
   /** Slack's own ts of the latest message folded into the item. */
   slackTs: string;
   /** When the machine first stored the item. */
@@ -200,10 +202,26 @@ function union(a: string[], b: string[]): string[] {
   return [...new Set([...a, ...b])];
 }
 
-/** The item for the board: the row plus its split. */
-export function toSlackItem(row: SlackItemRow, now: Date): SlackItem {
+/**
+ * When a reply is due and whether that passed: the latest message plus the SLA of the triage
+ * priority (a hand override counts), only while the item still waits on you (a reply is
+ * expected, you have not answered, it is not cleared, any snooze has passed). Computed at
+ * snapshot time and never stored, so a changed SLA applies at once.
+ */
+export function dueOf(item: Pick<SlackItemRow, "ts" | "triage" | "youReplied" | "doneAt" | "snoozedUntil">, now: Date, sla: SlaTargets): Pick<SlackItem, "dueAt" | "overdue"> {
+  const none = { dueAt: null, overdue: false };
+  if (!item.triage?.expectsReply || item.youReplied || item.doneAt) return none;
+  if (item.snoozedUntil && new Date(item.snoozedUntil).getTime() > now.getTime()) return none;
+  const seconds = sla[item.triage.priority];
+  if (seconds === null) return none;
+  const due = new Date(item.ts).getTime() + seconds * 1000;
+  return { dueAt: new Date(due).toISOString(), overdue: due < now.getTime() };
+}
+
+/** The item for the board: the row plus its split and its due time under `sla`. */
+export function toSlackItem(row: SlackItemRow, now: Date, sla: SlaTargets): SlackItem {
   const { slackTs: _slackTs, arrivedAt: _arrivedAt, repliedAt: _repliedAt, ...item } = row;
-  return { ...item, split: splitOf(row, now) };
+  return { ...item, ...dueOf(row, now, sla), split: splitOf(row, now) };
 }
 
 /** Open, or done within the last 30 days: what the snapshot shows. */

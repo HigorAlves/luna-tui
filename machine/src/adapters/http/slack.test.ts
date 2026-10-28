@@ -43,6 +43,8 @@ const item = (id: string, split: SlackItem["split"]): SlackItem => ({
   doneAt: null,
   snoozedUntil: null,
   reopenedAt: null,
+  dueAt: null,
+  overdue: false,
   triage: null,
   split,
   linked: { pr: null, taskId: null },
@@ -53,7 +55,7 @@ const watch = (id: string, builtin: boolean): SlackWatch => ({ id, kind: builtin
 /** A fake inbox: a fixed snapshot, and a log of what the routes asked it to do. */
 function fakeInbox(items: SlackItem[], over: { hasToken?: boolean } = {}): SlackInboxPort & { did: string[] } {
   const watches = [watch("w1", true), watch("w2", false)];
-  const snapshot: SlackSnapshot = { items, watches, me: { id: "U1", name: "higor", isBot: false }, polledAt: "2026-10-28T12:00:00Z", error: null, socket: "off" };
+  const snapshot: SlackSnapshot = { items, watches, me: { id: "U1", name: "higor", isBot: false }, polledAt: "2026-10-28T12:00:00Z", error: null, socket: "off", sla: { P0: 600, P1: 1800, P2: 3600, P3: 3600 } };
   const did: string[] = [];
   const find = (id: string) => {
     const found = items.find((i) => i.id === id);
@@ -109,7 +111,7 @@ function fakeInbox(items: SlackItem[], over: { hasToken?: boolean } = {}): Slack
       did.push(`metrics ${since.toISOString()}`);
       const zero = { P0: 0, P1: 0, P2: 0, P3: 0 };
       const none = { median: null, p90: null };
-      return { since: since.toISOString(), items: zero, replied: zero, withinHour: 0, timeToReply: { P0: none, P1: none, P2: none, P3: none }, byDay: [] } satisfies SlackMetrics;
+      return { since: since.toISOString(), items: zero, replied: zero, withinHour: 0, withinSla: zero, sla: { P0: 600, P1: 1800, P2: 3600, P3: 3600 }, timeToReply: { P0: none, P1: none, P2: none, P3: none }, byDay: [] } satisfies SlackMetrics;
     },
     async triageRuns(since) {
       did.push(`triage-runs ${since.toISOString()}`);

@@ -69,6 +69,11 @@ impl SlackSplit {
         matches!(self, SlackSplit::NeedsReply | SlackSplit::Decide)
     }
 
+    /// Still live: an overdue item here counts and shows; Snoozed and Done are put away.
+    pub fn open(self) -> bool {
+        !matches!(self, SlackSplit::Snoozed | SlackSplit::Done)
+    }
+
     pub fn next(self) -> SlackSplit {
         let i = SlackSplit::ALL.iter().position(|s| *s == self).unwrap_or(0);
         SlackSplit::ALL[(i + 1) % SlackSplit::ALL.len()]
@@ -80,17 +85,31 @@ impl SlackSplit {
     }
 }
 
-/// Indices into `items` for `split`. Needs reply and Decide go P0 first, then oldest, so the
-/// most pressing thing is on top; the other splits newest first, like Slack itself.
+/// Indices into `items` for `split`. Needs reply and Decide go overdue first (the longest
+/// overdue on top), then P0 first, then oldest, so the most pressing thing is on top; the
+/// other splits newest first, like Slack itself.
 pub fn items(all: &[SlackItem], split: SlackSplit) -> Vec<usize> {
     let mut found: Vec<usize> = all.iter().enumerate().filter(|(_, i)| i.split_enum() == Some(split)).map(|(i, _)| i).collect();
     let at = |i: usize| unix_secs(&all[i].ts).unwrap_or(0);
     if split.needs_me() {
-        found.sort_by_key(|&i| (all[i].priority_rank(), at(i)));
+        found.sort_by_key(|&i| {
+            let item = &all[i];
+            if item.overdue {
+                (0, item.due_at.as_deref().and_then(unix_secs).unwrap_or(0), at(i))
+            } else {
+                (1, item.priority_rank() as u64, at(i))
+            }
+        });
     } else {
         found.sort_by_key(|&i| std::cmp::Reverse(at(i)));
     }
     found
+}
+
+/// How many items past their reply SLA sit in an open split (anything but Snoozed and Done):
+/// the header strip's `‼ N overdue`.
+pub fn overdue_count(all: &[SlackItem]) -> usize {
+    all.iter().filter(|i| i.overdue && i.split_enum().is_some_and(SlackSplit::open)).count()
 }
 
 /// How many items sit in each split, in `SlackSplit::ALL` order.
@@ -246,8 +265,14 @@ pub(crate) mod fixtures {
     use crate::model::{SlackItem, SlackSnapshot, SlackWatch};
 
     /// A realistic item as the machine sends it, every field present, nulls where the contract
-    /// allows them. `triage` is `null` when `priority` is None.
+    /// allows them. `triage` is `null` when `priority` is None; no reply due.
     pub fn item_json(id: &str, split: &str, priority: Option<&str>, ts: &str) -> String {
+        item_json_due(id, split, priority, ts, None, false)
+    }
+
+    /// `item_json` with a reply due at `due_at` and whether the machine has it overdue.
+    pub fn item_json_due(id: &str, split: &str, priority: Option<&str>, ts: &str, due_at: Option<&str>, overdue: bool) -> String {
+        let due_at = due_at.map_or("null".to_string(), |d| format!("\"{d}\""));
         let triage = match priority {
             Some(p) => format!(
                 r#"{{"priority":"{p}","category":"blocker","expectsReply":true,"summary":"approve rollback",
@@ -266,13 +291,18 @@ pub(crate) mod fixtures {
                        {{"ts":"1730112100.0002","user":{{"id":"U2","name":"joão","isBot":false}},"text":"I can run the rollback once Higor says go"}}],
             "permalink":"https://acme.slack.com/archives/C0123/p1730112345000100","ts":"{ts}",
             "matched":["me"],"count":1,"replies":3,"youReplied":false,"seenAt":null,"doneAt":null,"snoozedUntil":null,
-            "reopenedAt":null,"triage":{triage},"split":"{split}",
+            "reopenedAt":null,"dueAt":{due_at},"overdue":{overdue},"triage":{triage},"split":"{split}",
             "linked":{{"pr":{{"repo":"acme/app","number":212,"split":"ci_failed"}},"taskId":null}}}}"#
         )
     }
 
     pub fn item(id: &str, split: &str, priority: Option<&str>, ts: &str) -> SlackItem {
         serde_json::from_str(&item_json(id, split, priority, ts)).unwrap()
+    }
+
+    /// An item with its reply overdue since `due_at`.
+    pub fn overdue_item(id: &str, split: &str, priority: Option<&str>, ts: &str, due_at: &str) -> SlackItem {
+        serde_json::from_str(&item_json_due(id, split, priority, ts, Some(due_at), true)).unwrap()
     }
 
     pub fn watch_json(id: &str, kind: &str, value: &str, label: &str, builtin: bool) -> String {
@@ -287,12 +317,16 @@ pub(crate) mod fixtures {
         serde_json::from_str(&watch_json(id, kind, value, label, builtin)).unwrap()
     }
 
+    /// Three items: a P0 in Needs reply with its reply due, a P3 FYI, and a P2 in Decide an
+    /// hour past its SLA.
     pub fn snapshot_json() -> String {
         format!(
-            r#"{{"items":[{},{}],"watches":[{},{}],"me":{{"id":"U0","name":"higor","isBot":false}},
-            "polledAt":"2026-10-28T10:00:00.000Z","error":null,"socket":"connected"}}"#,
-            item_json("C0123:1730112345.0001", "needs_reply", Some("P0"), "2026-10-28T09:48:00.000Z"),
+            r#"{{"items":[{},{},{}],"watches":[{},{}],"me":{{"id":"U0","name":"higor","isBot":false}},
+            "polledAt":"2026-10-28T10:00:00.000Z","error":null,"socket":"connected",
+            "sla":{{"P0":600,"P1":1800,"P2":3600,"P3":3600}}}}"#,
+            item_json_due("C0123:1730112345.0001", "needs_reply", Some("P0"), "2026-10-28T09:48:00.000Z", Some("2026-10-28T09:58:00.000Z"), false),
             item_json("C0123:1730100000.0001", "fyi", Some("P3"), "2026-10-28T07:00:00.000Z"),
+            item_json_due("C0123:1730101000.0001", "decide", Some("P2"), "2026-10-28T08:00:00.000Z", Some("2026-10-28T09:00:00.000Z"), true),
             watch_json("w1", "usergroup", "S04ABCD", "@platform-team", false),
             watch_json("w2", "broadcast", "here", "@here", true),
         )
@@ -305,9 +339,9 @@ pub(crate) mod fixtures {
 
 #[cfg(test)]
 mod tests {
-    use super::fixtures::item;
+    use super::fixtures::{item, overdue_item};
     use super::*;
-    use crate::model::{SlackItem, priority_step};
+    use crate::model::{SlackItem, priority_step, unix_secs};
 
     #[test]
     fn needs_reply_sorts_p0_first_then_oldest_and_the_rest_newest_first() {
@@ -325,6 +359,38 @@ mod tests {
         assert_eq!(ids(items(&all, SlackSplit::Fyi)), vec!["f", "e"], "FYI newest first");
         assert_eq!(ids(items(&all, SlackSplit::Decide)), Vec::<&str>::new());
         assert_eq!(counts(&all), [4, 0, 0, 2, 0, 1]);
+        assert_eq!(overdue_count(&all), 0);
+    }
+
+    #[test]
+    fn overdue_items_lead_needs_reply_longest_overdue_first_and_count_while_open() {
+        let all = vec![
+            item("a", "needs_reply", Some("P0"), "2026-10-28T09:00:00Z"),
+            overdue_item("b", "needs_reply", Some("P2"), "2026-10-28T07:00:00Z", "2026-10-28T08:00:00Z"),
+            overdue_item("c", "needs_reply", Some("P3"), "2026-10-28T06:00:00Z", "2026-10-28T07:00:00Z"),
+            item("d", "needs_reply", Some("P1"), "2026-10-28T05:00:00Z"),
+            overdue_item("e", "done", Some("P1"), "2026-10-28T05:00:00Z", "2026-10-28T05:30:00Z"),
+            overdue_item("f", "snoozed", Some("P1"), "2026-10-28T05:00:00Z", "2026-10-28T05:30:00Z"),
+            overdue_item("g", "decide", Some("P1"), "2026-10-28T05:00:00Z", "2026-10-28T05:30:00Z"),
+        ];
+        let ids = |ix: Vec<usize>| ix.iter().map(|&i| all[i].id.as_str()).collect::<Vec<_>>();
+        assert_eq!(ids(items(&all, SlackSplit::NeedsReply)), vec!["c", "b", "a", "d"], "overdue first, the longest overdue on top, then P0 then oldest");
+        assert_eq!(overdue_count(&all), 3, "needs reply twice and decide once; snoozed and done are put away");
+        let now = unix_secs("2026-10-28T10:00:00Z").unwrap();
+        assert_eq!(all[1].due_label(now).as_deref(), Some("overdue 2h"));
+        assert_eq!(all[0].due_label(now), None, "nothing due, nothing said");
+        let mut soon = item("h", "needs_reply", Some("P1"), "2026-10-28T09:45:00Z");
+        soon.due_at = Some("2026-10-28T10:12:00Z".into());
+        assert_eq!(soon.due_label(now).as_deref(), Some("due in 12m"));
+        assert!(!soon.due_soon(now), "twelve minutes out is not yet soon");
+        soon.due_at = Some("2026-10-28T10:04:00Z".into());
+        assert!(soon.due_soon(now), "inside five minutes it is");
+        assert_eq!(soon.due_label(now).as_deref(), Some("due in 4m"));
+        soon.due_at = Some("2026-10-28T09:59:20Z".into());
+        assert_eq!(soon.due_label(now).as_deref(), Some("overdue 40s"), "past due reads overdue even before the machine says so");
+        assert!(!soon.due_soon(now));
+        assert!(SlackSplit::NeedsReply.open() && SlackSplit::Fyi.open() && SlackSplit::WaitingOnThem.open());
+        assert!(!SlackSplit::Done.open() && !SlackSplit::Snoozed.open());
     }
 
     #[test]

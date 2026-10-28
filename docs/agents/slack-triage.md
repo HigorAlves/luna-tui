@@ -24,6 +24,15 @@ Lines starting with `<!--` are comments.
 <!-- HH:MM-HH:MM local time; only P0 raises a notice in this window. Leave empty for none. -->
 <!-- 22:00-08:00 -->
 
+## SLA
+
+<!-- How long you give yourself to reply, by priority: Nm, Nh, N (seconds) or off. An item
+     past its target turns red on the board. Missing lines fall back to these values. -->
+- P0: 10m
+- P1: 30m
+- P2: 1h
+- P3: 1h
+
 ## Notes
 
 <!-- Free text the model reads: tone, context, who is who. -->

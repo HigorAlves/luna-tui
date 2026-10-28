@@ -502,7 +502,7 @@ mod pr_tests {
         assert_eq!(slack_item_path("C0123:1.2", "/reply"), "/slack/items/C0123%3A1.2/reply");
         let data = format!(r#"{{"type":"slack.items","snapshot":{}}}"#, crate::slack::fixtures::snapshot_json());
         let event = parse_stream_event("slack.items", &data);
-        assert!(matches!(event, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.len() == 2 && snapshot.socket == "connected"));
+        assert!(matches!(event, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.len() == 3 && snapshot.socket == "connected"));
         let bare = parse_stream_event("slack.items", r#"{"type":"slack.items","snapshot":{"items":[],"watches":[],"me":null,"polledAt":null,"error":null,"socket":"off"}}"#);
         assert!(matches!(bare, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.is_empty()));
     }

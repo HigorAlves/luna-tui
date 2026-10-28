@@ -32,6 +32,8 @@ interface World {
   markRead?: boolean;
   triager?: Triager | null;
   linkPr?: SlackInbox["snapshot"]["items"][number]["linked"]["pr"];
+  now?: () => Date;
+  intervalMs?: number;
 }
 
 const msg = (over: Partial<RawMessage> & { ts: string }): RawMessage => ({ user: "U2", botId: null, text: "", subtype: null, threadTs: null, replyCount: 0, latestReply: null, ...over });
@@ -91,7 +93,7 @@ function setup(world: World = {}) {
     slack,
     triager,
     store,
-    intervalMs: 60_000,
+    intervalMs: world.intervalMs ?? 60_000,
     publish: (s) => void published.push(s),
     findTask: async (id) => tasks.get(id) ?? null,
     linkPr: () => world.linkPr ?? null,
@@ -104,7 +106,7 @@ function setup(world: World = {}) {
     markRead: world.markRead ?? false,
     rulesPath: "/rules.md",
     socketToken: null,
-    now: () => NOW,
+    now: world.now ?? (() => NOW),
     files: { read: async (p) => files.get(p) ?? null, write: async (p, t) => void files.set(p, t) },
   });
   return { inbox, slack, store, published, triaged, files, created };
@@ -287,6 +289,56 @@ describe("SlackInbox.pollOnce", () => {
     expect(summary.runs.map((r) => r.startedAt)).toEqual([iso(30), iso(60)]);
   });
 
+  it("dues each open ask under the rules file's SLA and says which SLA is in effect; off is 0 on the wire", async () => {
+    const { inbox } = setup({ hits: [hit({ ts: ts(45), text: "<@U1> approve?" }), hit({ ts: ts(5), text: "<@U1> fyi only" })] });
+    const { items, sla } = await poll(inbox);
+    // P1 at 30m: the 45-minute-old ask was due 15 minutes ago; the FYI expects nothing.
+    expect(items.map((i) => [i.dueAt, i.overdue])).toEqual([
+      [null, false],
+      [iso(15), true],
+    ]);
+    expect(sla).toEqual({ P0: 600, P1: 1800, P2: 3600, P3: 3600 });
+    const relaxed = setup({ rules: "## SLA\n- P1: 2h\n- P2: off\n", hits: [hit({ ts: ts(45), text: "<@U1> approve?" })] });
+    const snapshot = await poll(relaxed.inbox);
+    expect(snapshot.items[0]).toMatchObject({ dueAt: iso(-75), overdue: false });
+    expect(snapshot.sla).toEqual({ P0: 600, P1: 7200, P2: 0, P3: 3600 });
+  });
+
+  it("the minute tick turns an ask overdue with no Slack event, publishing only when something flipped", async () => {
+    const clock = { now: NOW };
+    const { inbox, published } = setup({ hits: [hit({ ts: ts(20), text: "<@U1> approve?" })], now: () => clock.now });
+    await poll(inbox);
+    expect(inbox.snapshot.items[0]).toMatchObject({ dueAt: iso(-10), overdue: false });
+    const before = published.length;
+    clock.now = new Date(NOW.getTime() + 5 * 60_000);
+    inbox.tick();
+    expect(published).toHaveLength(before);
+    clock.now = new Date(NOW.getTime() + 11 * 60_000);
+    inbox.tick();
+    expect(published).toHaveLength(before + 1);
+    expect(published.at(-1)!.items[0]).toMatchObject({ dueAt: iso(-10), overdue: true });
+  });
+
+  it("start() runs the tick every minute, between polls", async () => {
+    vi.useFakeTimers({ now: NOW });
+    const clock = { now: NOW };
+    const { inbox, slack } = setup({ hits: [hit({ ts: ts(29), text: "<@U1> approve?" })], now: () => clock.now, intervalMs: 10 * 60_000 });
+    try {
+      inbox.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await inbox.idle();
+      expect(inbox.snapshot.items[0]!.overdue).toBe(false);
+      const polls = slack.searchMentions.mock.calls.length;
+      clock.now = new Date(NOW.getTime() + 2 * 60_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(inbox.snapshot.items[0]!.overdue).toBe(true);
+      expect(slack.searchMentions.mock.calls.length).toBe(polls);
+    } finally {
+      inbox.stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("gives an item the model skipped a rules fallback", async () => {
     const { inbox } = setup({ hits: [hit({ ts: ts(2), text: "<@U1> fyi" })], answer: () => null });
     const { items } = await poll(inbox);
@@ -333,8 +385,20 @@ describe("SlackInbox actions", () => {
     expect(files.get("/rules.md")).toContain("- @marta: raised (1)");
     expect(published.length).toBe(before + 1);
     const metrics = await inbox.metrics(new Date(NOW.getTime() - 86_400_000));
-    expect(metrics).toMatchObject({ items: { P0: 0, P1: 1, P2: 0, P3: 0 }, replied: { P1: 1 }, withinHour: 1, timeToReply: { P1: { median: 1800, p90: 1800 } } });
+    expect(metrics).toMatchObject({ items: { P0: 0, P1: 1, P2: 0, P3: 0 }, replied: { P1: 1 }, withinHour: 1, withinSla: { P0: 0, P1: 1, P2: 0, P3: 0 }, sla: { P1: 1800 }, timeToReply: { P1: { median: 1800, p90: 1800 } } });
     expect(metrics.byDay).toEqual([{ day: "2026-10-28", items: 1, replied: 1 }]);
+  });
+
+  it("metrics count the replies inside each priority's SLA, skipping a priority whose SLA is off", async () => {
+    const { inbox, store, item } = await seeded({ rules: "## SLA\n- P3: off\n" });
+    const base = (await store.item(item.id))!;
+    const replied = (id: string, priority: "P0" | "P1" | "P2" | "P3", minutes: number) => ({ ...base, id, ts: iso(minutes), repliedAt: iso(0), doneAt: iso(0), youReplied: true, triage: { ...base.triage!, priority, expectsReply: true } });
+    // P0 at 10m: 30 minutes is late; P2 at 1h: 30 minutes is fine; P3 off: not counted at all.
+    await store.save([replied("C1:a", "P0", 30), replied("C1:b", "P2", 30), replied("C1:c", "P3", 1), replied("C1:d", "P1", 30)]);
+    const metrics = await inbox.metrics(new Date(NOW.getTime() - 86_400_000));
+    expect(metrics.replied).toEqual({ P0: 1, P1: 1, P2: 1, P3: 1 });
+    expect(metrics.withinSla).toEqual({ P0: 0, P1: 1, P2: 1, P3: 0 });
+    expect(metrics.sla).toEqual({ P0: 600, P1: 1800, P2: 3600, P3: 0 });
   });
 
   it("reply in a thread uses the parent ts, and without a token fails with NoSlackTokenError", async () => {
@@ -391,6 +455,7 @@ describe("SlackInbox actions", () => {
     const text = await inbox.digest();
     expect(text.split("\n")).toEqual([
       "Slack inbox · 2026-10-28",
+      "1 overdue now",
       "Needs reply: 1 (1 at P0/P1)",
       "- P0 #eng @marta: re: @higor can you appro",
       "Waiting on them: 1",
@@ -400,6 +465,9 @@ describe("SlackInbox actions", () => {
     await inbox.postDigest();
     expect(slack.openDm).toHaveBeenCalledWith("U1");
     expect(slack.postMessage).toHaveBeenCalledWith("D1", text);
+    // Nothing overdue: no such line.
+    const calm = await seeded({ rules: "## SLA\n- P1: 2h\n" });
+    expect((await calm.inbox.digest()).split("\n")[1]).toBe("Needs reply: 1 (1 at P0/P1)");
   });
 
   it("socket events flag channels for the next poll and queue reactions to your messages", async () => {
