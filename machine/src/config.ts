@@ -84,6 +84,8 @@ export interface JiraConfig {
   token: string;
   /** Set for a scoped API token: calls go through `https://api.atlassian.com/ex/jira/<cloudId>`. */
   cloudId: string | null;
+  /** When the token expires (`MACHINE_JIRA_TOKEN_EXPIRES`, an ISO date you copy from id.atlassian.com); the machine warns daily in the last two weeks. */
+  tokenExpiresAt: string | null;
 }
 
 export type RestartPolicy = "requeue" | "escalate";
@@ -203,7 +205,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (set > 0 && set < 3) throw new Error("MACHINE_JIRA_SITE, MACHINE_JIRA_EMAIL and MACHINE_JIRA_TOKEN go together; set all three or none");
     if (set === 3) {
       if (!/^https:\/\/[^/\s]+$/.test(site)) throw new Error(`MACHINE_JIRA_SITE must be the site's https url, like https://acme.atlassian.net, got "${env.MACHINE_JIRA_SITE}"`);
-      jira = { site, email, token, cloudId: env.MACHINE_JIRA_CLOUD_ID?.trim() || null };
+      const expires = env.MACHINE_JIRA_TOKEN_EXPIRES?.trim() || null;
+      if (expires !== null && Number.isNaN(Date.parse(expires))) throw new Error(`MACHINE_JIRA_TOKEN_EXPIRES must be an ISO date like 2027-01-31, got "${env.MACHINE_JIRA_TOKEN_EXPIRES}"`);
+      jira = { site, email, token, cloudId: env.MACHINE_JIRA_CLOUD_ID?.trim() || null, tokenExpiresAt: expires };
     }
   }
   const sla = {

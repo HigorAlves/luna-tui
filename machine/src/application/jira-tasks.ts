@@ -58,9 +58,15 @@ export interface JiraTasksPort {
   create(taskId: string, input: JiraCreateInput): Promise<TaskRow>;
 }
 
-/** Remembers the token expiry Jira last named on a 401, for `GET /jira/status` and the daily warning. */
+/** When the token expires, for `GET /jira/status` and JiraWatch's daily warning: what you set in
+ *  `MACHINE_JIRA_TOKEN_EXPIRES` (Jira never tells the machine ahead of time), overridden by the
+ *  date a 401 names once the token has actually gone. */
 export class TokenExpiry {
-  at: string | null = null;
+  at: string | null;
+
+  constructor(configured: string | null = null) {
+    this.at = configured;
+  }
 
   /** Notes the expiry from an auth error, when it carries one. */
   note(error: unknown): void {

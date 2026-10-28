@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { DEFAULT_POLICY } from "../../domain/policy.ts";
 import { noTokenJira } from "../../application/jira.ts";
-import { JiraTasks } from "../../application/jira-tasks.ts";
+import { JiraTasks, TokenExpiry } from "../../application/jira-tasks.ts";
 import { Pipeline } from "../../application/pipeline.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
 import { freshTestDatabase } from "../../test/database.ts";
@@ -46,6 +46,8 @@ const post = (path: string, body?: unknown) => app().request(path, { method: "PO
 describe("the Jira routes", () => {
   it("reports status and answers a search: a key is that issue, text is your issues first then everyone's", async () => {
     expect(await json(await app().request("/jira/status"))).toEqual({ configured: true, site: SITE, tokenExpiresAt: null, error: null });
+    const dated = createApp({ db, pipeline, bus, jira: new JiraTasks({ jira, site: SITE, pipeline, expiry: new TokenExpiry("2027-01-31") }) });
+    expect(await json(await dated.request("/jira/status"))).toMatchObject({ tokenExpiresAt: "2027-01-31" });
     expect(await json(await app().request("/jira/search?q=plat-123"))).toEqual([{ key: "PLAT-123", summary: "Login page", status: "In Progress", issueType: "Bug", url: `${SITE}/browse/PLAT-123` }]);
     expect(await (await app().request("/jira/search?q=PLAT-999")).json()).toEqual([]);
     jira.searchHits = ["PLAT-7"];

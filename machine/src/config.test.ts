@@ -160,7 +160,9 @@ describe("loadConfig", () => {
   it("reads Jira when all three variables are set, refuses a partial set, and honours the off switch and the cloud id", () => {
     expect(loadConfig({}).jira).toBeNull();
     const env = { MACHINE_JIRA_SITE: "https://acme.atlassian.net/", MACHINE_JIRA_EMAIL: "me@acme.com", MACHINE_JIRA_TOKEN: "tok" };
-    expect(loadConfig(env).jira).toEqual({ site: "https://acme.atlassian.net", email: "me@acme.com", token: "tok", cloudId: null });
+    expect(loadConfig(env).jira).toEqual({ site: "https://acme.atlassian.net", email: "me@acme.com", token: "tok", cloudId: null, tokenExpiresAt: null });
+    expect(loadConfig({ ...env, MACHINE_JIRA_TOKEN_EXPIRES: "2027-01-31" }).jira?.tokenExpiresAt).toBe("2027-01-31");
+    expect(() => loadConfig({ ...env, MACHINE_JIRA_TOKEN_EXPIRES: "next year" })).toThrow(/MACHINE_JIRA_TOKEN_EXPIRES must be an ISO date/);
     expect(loadConfig({ ...env, MACHINE_JIRA_CLOUD_ID: "1111-2222" }).jira?.cloudId).toBe("1111-2222");
     expect(loadConfig({ ...env, MACHINE_JIRA: "off" }).jira).toBeNull();
     expect(() => loadConfig({ MACHINE_JIRA_SITE: "https://acme.atlassian.net" })).toThrow(/go together/);

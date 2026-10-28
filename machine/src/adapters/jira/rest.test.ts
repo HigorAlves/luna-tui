@@ -10,7 +10,7 @@ interface Call {
   body: unknown;
 }
 
-type Answer = { status?: number; headers?: Record<string, string>; json?: unknown; text?: string };
+type Answer = { status?: number; headers?: Record<string, string>; json?: unknown; text?: string; throws?: Error };
 
 /** A fetch that answers from a queue (or a function of the call) and records every call. */
 function wire(answer: Answer | Answer[] | ((call: Call) => Answer), over: { cloudId?: string } = {}) {
@@ -20,6 +20,7 @@ function wire(answer: Answer | Answer[] | ((call: Call) => Answer), over: { clou
     const call: Call = { url, method: init.method, headers: init.headers, body: init.body === undefined ? undefined : JSON.parse(init.body) };
     calls.push(call);
     const a: Answer = queue ? (queue.shift() ?? { status: 500, text: "queue empty" }) : typeof answer === "function" ? answer(call) : (answer as Answer);
+    if (a.throws) throw a.throws;
     const status = a.status ?? 200;
     const text = a.text ?? (a.json === undefined ? "" : JSON.stringify(a.json));
     return { status, ok: status >= 200 && status < 300, headers: new Headers(a.headers ?? {}), text: async () => text };
@@ -131,6 +132,27 @@ describe("createJira", () => {
     expect(once.calls).toHaveLength(2);
     const twice = wire([limited, limited]);
     await expect(twice.jira.me()).rejects.toThrow(/rate limit on GET myself: retry after 3s/);
+  });
+
+  it("retries a 5xx or a dropped connection twice with a growing pause, then reports the last failure", async () => {
+    const ok = { json: { accountId: "A1", displayName: "H" } };
+    const recovered = wire([{ status: 502, text: "bad gateway" }, { throws: new Error("fetch failed: ECONNRESET") }, ok]);
+    await recovered.jira.me();
+    expect(recovered.calls).toHaveLength(3);
+    expect(recovered.slept).toEqual([1000, 3000]);
+    const down = wire([{ status: 503, text: "down" }, { status: 503, text: "down" }, { status: 503, json: { errorMessages: ["still down"] } }]);
+    const error = (await down.jira.me().catch((e: unknown) => e)) as JiraError;
+    expect(error).toBeInstanceOf(JiraError);
+    expect(error.message).toBe("GET myself: still down");
+    expect(error.status).toBe(503);
+    expect(down.calls).toHaveLength(3);
+    const dropped = wire([{ throws: new Error("fetch failed") }, { throws: new Error("fetch failed") }, { throws: new Error("fetch failed") }]);
+    await expect(dropped.jira.me()).rejects.toThrow("GET myself: fetch failed");
+    expect(dropped.calls).toHaveLength(3);
+    // A 4xx is Jira's answer, not a hiccup: no retry.
+    const refused = wire([{ status: 400, text: "no" }, ok]);
+    await expect(refused.jira.me()).rejects.toBeInstanceOf(JiraError);
+    expect(refused.calls).toHaveLength(1);
   });
 
   it("turns a 401 into a clear token error (with the expiry when the answer names one), a 404 issue into JiraNotFoundError, and other failures into Jira's words", async () => {

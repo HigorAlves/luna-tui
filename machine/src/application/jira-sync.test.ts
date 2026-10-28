@@ -249,6 +249,32 @@ describe("JiraSync", () => {
     expect(jira.comments["PLAT-123"]).toEqual(["PR opened: https://github.com/o/a/pull/7"]);
   });
 
+  it("retries a blocked transition on request: lands it once a route exists, stays quiet while none does, and drops a mark the task has outgrown", async () => {
+    const { pipeline, jira, sync } = wire(jiraPolicy({ on: { implementing: "In Progress", awaiting_ship: "Done" } }));
+    jira.issues.get("PLAT-123")!.status = "In Progress";
+    const task = await pipeline.createTask({ title: "Fix PLAT-123", repoPath: "/r/a" });
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved");
+    await pipeline.decide(task.id, "approved");
+    await sync.idle();
+    expect((await pipeline.get(task.id)).jira?.blocked).toMatchObject({ wanted: "Done", current: "In Progress" });
+    // Still no way from In Progress to Done: nothing happens, and no second jira.blocked.
+    await sync.retry(await pipeline.get(task.id));
+    expect((await kinds(pipeline, task.id)).map((e) => e[0])).toEqual(["jira.blocked"]);
+    // Someone moved the issue along in Jira: the retry finds the route and clears the mark.
+    jira.issues.get("PLAT-123")!.status = "In Review";
+    await sync.retry(await pipeline.get(task.id));
+    expect(jira.issues.get("PLAT-123")!.status).toBe("Done");
+    expect((await pipeline.get(task.id)).jira).toMatchObject({ status: "Done", blocked: null });
+    expect((await kinds(pipeline, task.id)).map((e) => e[0])).toEqual(["jira.blocked", "jira.transitioned"]);
+    // A mark for a state the task has since left is stale: it goes without a move.
+    const stale = await pipeline.setJira(task.id, { ...(await pipeline.get(task.id)).jira!, blocked: { wanted: "Nowhere", current: "Done", why: "x", at: "2026-10-28T12:00:00.000Z" } });
+    await pipeline.decide(task.id, "approved"); // → reviewing_memory, which maps to nothing
+    await sync.idle();
+    await sync.retry(stale);
+    expect((await pipeline.get(task.id)).jira?.blocked).toBeNull();
+  });
+
   it("links a ticket whose text names a key only when Jira is configured, and an intake import always", async () => {
     const quiet = new Pipeline(db, stubs.runnerFor, { inline: true });
     expect((await quiet.createTask({ title: "PLAT-123 nothing" })).jira).toBeNull();

@@ -59,13 +59,44 @@ export class JiraSync {
   /** Reacts to one pipeline event. Never throws; failures are logged. Resolves once done. */
   handle(event: EventRow): Promise<void> {
     if (!this.options.enabled) return Promise.resolve();
-    const previous = this.chains.get(event.taskId) ?? Promise.resolve();
-    const run = previous.then(() => this.react(event)).catch((error: unknown) => console.warn(`jira sync for task ${event.taskId} failed: ${messageOf(error)}`));
-    this.chains.set(event.taskId, run);
+    return this.enqueue(event.taskId, () => this.react(event));
+  }
+
+  /** Tries again the declared transition a task's link is marked blocked on (JiraWatch calls this
+   *  while the issue answers): the issue may have been moved by hand to where a route exists, or
+   *  be there already. Still no way there: the mark stays as it is, with no new event. A mark
+   *  for a state the task has left is cleared. Never throws. */
+  retry(task: TaskRow): Promise<void> {
+    if (!this.options.enabled) return Promise.resolve();
+    return this.enqueue(task.id, async () => {
+      const fresh = await this.options.pipeline.get(task.id);
+      const link = jiraOf(fresh);
+      if (!link?.blocked) return;
+      const policy = (await this.options.pipeline.policyFor(fresh.repoPath)).jira;
+      if (!policy) return;
+      const wanted = policy.on[fresh.state];
+      if (!wanted) {
+        await this.options.pipeline.setJira(fresh.id, { ...link, blocked: null });
+        return;
+      }
+      const issue = await this.options.jira.issue(link.key);
+      if (!same(issue.status, wanted)) {
+        const transitions = await this.options.jira.transitions(link.key);
+        if (!transitions.some((t) => same(t.to.name, wanted))) return;
+      }
+      await this.move(fresh, link, policy, fresh.state, wanted);
+    });
+  }
+
+  /** Runs `fn` after everything already queued for the task, so reactions never interleave. */
+  private enqueue(taskId: string, fn: () => Promise<void>): Promise<void> {
+    const previous = this.chains.get(taskId) ?? Promise.resolve();
+    const run = previous.then(fn).catch((error: unknown) => console.warn(`jira sync for task ${taskId} failed: ${messageOf(error)}`));
+    this.chains.set(taskId, run);
     this.pending.add(run);
     void run.finally(() => {
       this.pending.delete(run);
-      if (this.chains.get(event.taskId) === run) this.chains.delete(event.taskId);
+      if (this.chains.get(taskId) === run) this.chains.delete(taskId);
     });
     return run;
   }

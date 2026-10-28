@@ -221,7 +221,7 @@ pipeline = new Pipeline(db, runnerFor, {
 replies = new ThreadReplies({ pipeline, github, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}) });
 /** One Jira client for every call; without the three variables each call says so and nothing syncs. */
 const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
-const jiraExpiry = new TokenExpiry();
+const jiraExpiry = new TokenExpiry(config.jira?.tokenExpiresAt ?? null);
 jiraSync = new JiraSync({ pipeline, jira: jiraApi, enabled: config.jira !== null, boardUrl: `http://${config.host}:${config.port}` });
 slaClocks = new SlaClocks({ pipeline, defaults: { gate: config.sla.gateSecs, cycle: config.sla.cycleSecs } });
 const recovered = await pipeline.recover();
@@ -340,7 +340,14 @@ if (config.githubPoll.repos.length > 0) {
 let jiraWatch: JiraWatch | undefined;
 let jiraIntake: JiraIntake | undefined;
 if (config.jira) {
-  jiraWatch = new JiraWatch({ pipeline, jira: jiraApi, intervalMs: 5 * MINUTE_MS, expiry: jiraExpiry, publish: (task) => void slaClocks.for(task).then((sla) => bus.publish({ type: "task.updated", task: toTask(task, null, sla) })) });
+  jiraWatch = new JiraWatch({
+    pipeline,
+    jira: jiraApi,
+    intervalMs: 5 * MINUTE_MS,
+    expiry: jiraExpiry,
+    retryBlocked: (task) => jiraSync.retry(task),
+    publish: (task) => void slaClocks.for(task).then((sla) => bus.publish({ type: "task.updated", task: toTask(task, null, sla) })),
+  });
   jiraWatch.start();
   const jiraTriager = agentDeps ? createJiraTriager(agentDeps) : null;
   jiraIntake = new JiraIntake({
