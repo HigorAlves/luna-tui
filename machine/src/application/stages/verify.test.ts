@@ -26,10 +26,11 @@ function setup(opts: {
   pack?: StageResult;
   controller?: AbortController;
   noPack?: boolean;
+  identity?: { name: string; email: string } | null;
 }) {
   const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
   const calls: string[][] = [];
-  const exec = vi.fn(async (command: string, args: string[]) => {
+  const exec = vi.fn(async (command: string, args: string[], _options?: { env?: NodeJS.ProcessEnv }) => {
     calls.push([command, ...args]);
     return opts.checks?.[[command, ...args].join(" ")] ?? { code: 0, stdout: "ok\n", stderr: "" };
   });
@@ -39,6 +40,7 @@ function setup(opts: {
     runPack: opts.noPack ? null : runPack,
     stateDir,
     detect: async () => (opts.detected ?? { manager: "pnpm", test: ["pnpm", "run", "test"], lint: ["pnpm", "run", "lint"] }) as never,
+    gitIdentity: async () => ("identity" in opts ? opts.identity! : { name: "Ada L", email: "ada@x.dev" }),
   });
   const controller = opts.controller ?? new AbortController();
   const context: StageContext = {
@@ -82,6 +84,22 @@ describe("verifying stage", () => {
     const result = await run(context);
     expect(result.outcome).toBe("escalated");
     expect(result.detail).toMatchObject({ reason: expect.stringMatching(/pnpm run test.*runner image/) });
+    expect(runPack).not.toHaveBeenCalled();
+  });
+
+  it("runs every check as you: the identity git resolves for the repo rides into the check container", async () => {
+    const { run, context, exec } = setup({});
+    await run(context);
+    const env = exec.mock.calls[0]![2]!.env!;
+    expect(env).toMatchObject({ GIT_AUTHOR_NAME: "Ada L", GIT_AUTHOR_EMAIL: "ada@x.dev", GIT_COMMITTER_NAME: "Ada L", GIT_COMMITTER_EMAIL: "ada@x.dev" });
+  });
+
+  it("escalates before running anything when the repo has no git identity: a suite that commits would fail as nobody", async () => {
+    const { run, context, exec, runPack } = setup({ identity: null });
+    const result = await run(context);
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ step: "checks", reason: expect.stringMatching(/user\.name.*user\.email/) });
+    expect(exec).not.toHaveBeenCalled();
     expect(runPack).not.toHaveBeenCalled();
   });
 

@@ -5,6 +5,7 @@ import type { Finding } from "@hardness/contracts";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
@@ -24,6 +25,8 @@ export interface VerifyDeps {
   runPack: ((context: StageContext) => Promise<StageResult>) | null;
   stateDir: string;
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
+  /** Who a check commits as: the identity git resolves for the repo. Null escalates. */
+  gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
 }
 
 interface CheckReport {
@@ -48,6 +51,7 @@ const answerOf = (detail: Record<string, unknown> | undefined): Record<string, u
 
 export function verifyRunner(deps: VerifyDeps): StageRunner {
   const detect = deps.detect ?? detectChecks;
+  const resolveIdentity = deps.gitIdentity ?? hostGitIdentity;
   return async (context) => {
     const { task, signal } = context;
     // No worktree means implementing was stubbed (agents off): behave like the stub, not an escalation.
@@ -56,6 +60,25 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     const aborted = (): StageResult => ({ outcome: "fail", detail: { error: "aborted" } });
     if (signal.aborted) return aborted();
 
+    // A suite that commits in a scratch repo (this repo's worktree tests do) needs an author,
+    // and the check container has no gitconfig: it gets yours, the one git resolves for the repo.
+    const identity = await resolveIdentity(task.repoPath ?? cwd);
+    if (!identity) {
+      return {
+        outcome: "escalated",
+        detail: {
+          step: "checks",
+          reason: `git has no identity for ${task.repoPath ?? cwd}: set user.name and user.email (git config) so checks and commits run as you`,
+          options: ["git config user.name / user.email in the repo or globally, then approve"],
+        },
+      };
+    }
+    const identityEnv = {
+      GIT_AUTHOR_NAME: identity.name,
+      GIT_AUTHOR_EMAIL: identity.email,
+      GIT_COMMITTER_NAME: identity.name,
+      GIT_COMMITTER_EMAIL: identity.email,
+    };
     // Step A: the project's own checks.
     const found = await detect(cwd);
     const commands = CHECK_NAMES.flatMap((name) => (found[name] ? [{ name, argv: found[name]! }] : []));
@@ -75,7 +98,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
           cwd,
           signal,
           timeoutMs: remaining,
-          env: { ...process.env, HARDNESS_STAGE: "verifying" },
+          env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
         });
         timedOut = result.code !== 0 && Date.now() >= deadline;
       }

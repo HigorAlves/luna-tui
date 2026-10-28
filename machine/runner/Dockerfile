@@ -7,6 +7,7 @@ FROM node:24-slim
 
 ARG GH_VERSION=2.63.2
 ARG GO_VERSION=1.25.1
+ARG RUST_VERSION=1.99.1
 ARG FACTORY_REF=unknown
 
 RUN apt-get update \
@@ -24,6 +25,20 @@ RUN arch="$(dpkg --print-architecture)" \
  && curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${arch}.tar.gz" | tar -xz -C /usr/local \
  && /usr/local/go/bin/go version
 ENV PATH="/usr/local/go/bin:${PATH}" GOTOOLCHAIN=local
+
+# Rust, pinned, for repos whose suite is `cargo test` (the board is one). The toolchain lives
+# under /usr/local so it is part of the image; at run time CARGO_HOME and CARGO_TARGET_DIR
+# point at the repo's /cache volume, so the registry and build output survive a retry.
+# `rustup` needs a C linker for the final link step: build-essential provides `cc`.
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME_IMAGE=/usr/local/cargo
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends build-essential pkg-config libssl-dev \
+ && curl -fsSL https://sh.rustup.rs | CARGO_HOME=/usr/local/cargo sh -s -- -y --no-modify-path --profile minimal \
+      --default-toolchain "${RUST_VERSION}" --component clippy --component rustfmt \
+ && chmod -R a+rX /usr/local/rustup /usr/local/cargo \
+ && /usr/local/cargo/bin/cargo --version \
+ && rm -rf /var/lib/apt/lists/*
+ENV PATH="/usr/local/cargo/bin:${PATH}"
 
 # The factory runner and the contracts package it shares with the machine, installed with the
 # workspace's own lockfile so the image runs exactly what the checkout tests. The Agent SDK

@@ -27,6 +27,7 @@ export const CACHE_ENV = [
   `GOCACHE=${CACHE_DIR}/go-build`,
   `GOMODCACHE=${CACHE_DIR}/go-mod`,
   `CARGO_HOME=${CACHE_DIR}/cargo`,
+  `CARGO_TARGET_DIR=${CACHE_DIR}/cargo-target`,
   `PIP_CACHE_DIR=${CACHE_DIR}/pip`,
   `UV_CACHE_DIR=${CACHE_DIR}/uv`,
 ];
@@ -123,11 +124,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     "-e", run.credential.name,
     // The worktree is owned by the host user, not the container's; and there is no gpg key
     // in here, so a commit must not try to sign.
-    "-e", "GIT_CONFIG_COUNT=2",
-    "-e", "GIT_CONFIG_KEY_0=safe.directory",
-    "-e", "GIT_CONFIG_VALUE_0=*",
-    "-e", "GIT_CONFIG_KEY_1=commit.gpgsign",
-    "-e", "GIT_CONFIG_VALUE_1=false",
+    ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]),
     "-v", `${run.worktree}:/work${run.writable ? "" : ":ro"}`,
     "-v", `${inDir}:/in:ro`,
     "-v", `${outDir}:/out`,
@@ -141,12 +138,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
       for (const sub of run.gitReadOnly ?? []) args.push("-v", `${run.gitDir}/${sub}:${run.gitDir}/${sub}:ro`);
     }
   }
-  if (run.gitIdentity) {
-    const { name, email } = run.gitIdentity;
-    for (const who of ["AUTHOR", "COMMITTER"]) {
-      args.push("-e", `GIT_${who}_NAME=${name}`, "-e", `GIT_${who}_EMAIL=${email}`);
-    }
-  }
+  args.push(...identityEnv(run.gitIdentity));
   for (const [key, value] of Object.entries(run.extraEnv ?? {})) args.push("-e", `${key}=${value}`);
   args.push(run.image);
 
@@ -236,7 +228,25 @@ export interface SandboxExec {
   env?: Record<string, string>;
   /** The repo's cache volume, as for a stage. */
   cacheVolume?: string;
+  /** Who a commit the check makes is by: a suite that commits in a scratch repo needs one,
+   *  and the container has no gitconfig. */
+  gitIdentity?: { name: string; email: string } | null;
 }
+
+/** Git config every container gets by env: the mounted worktree is another user's to git,
+ *  and there is no key to sign with. */
+const GIT_CONFIG_ENV = [
+  "GIT_CONFIG_COUNT=2",
+  "GIT_CONFIG_KEY_0=safe.directory",
+  "GIT_CONFIG_VALUE_0=*",
+  "GIT_CONFIG_KEY_1=commit.gpgsign",
+  "GIT_CONFIG_VALUE_1=false",
+];
+
+const identityEnv = (identity: { name: string; email: string } | null | undefined): string[] =>
+  identity
+    ? ["AUTHOR", "COMMITTER"].flatMap((who) => ["-e", `GIT_${who}_NAME=${identity.name}`, "-e", `GIT_${who}_EMAIL=${identity.email}`])
+    : [];
 
 /** The `docker run` argument list for one command. Pure. */
 export function sandboxExecArgs(run: SandboxExec): string[] {
@@ -245,7 +255,7 @@ export function sandboxExecArgs(run: SandboxExec): string[] {
   args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...SANDBOX_LIMITS);
   const user = run.user === undefined ? hostUser() : run.user;
   if (user) args.push("--user", user);
-  args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp");
+  args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]), ...identityEnv(run.gitIdentity));
   for (const [key, value] of Object.entries(run.env ?? {})) args.push("-e", `${key}=${value}`);
   args.push(...cacheArgs(run.cacheVolume));
   // Writable: a test runner writes its cache next to the code (node_modules/.vite, go's are on the tmpfs).
@@ -265,8 +275,9 @@ export async function execInSandbox(
 }
 
 /** An `exec` for the stages that run a project's checks: same signature as the host one,
- *  `cwd` is the worktree, and only HARDNESS_* env reaches the container. The cache volume is
- *  the repo's: task worktrees live at `<worktreesDir>/<repo>/task-…`, so the parent names it. */
+ *  `cwd` is the worktree, and only HARDNESS_* env and the git identity (GIT_AUTHOR_*,
+ *  GIT_COMMITTER_*) reach the container. The cache volume is the repo's: task worktrees live
+ *  at `<worktreesDir>/<repo>/task-…`, so the parent names it. */
 export function sandboxExecutor(image: string) {
   return (
     command: string,
@@ -275,9 +286,14 @@ export function sandboxExecutor(image: string) {
   ): Promise<ExecResult> => {
     if (!options.cwd) throw new Error("sandboxExecutor needs cwd: the worktree to mount");
     const env: Record<string, string> = {};
+    const identity: Record<string, string> = {};
     for (const [key, value] of Object.entries(options.env ?? {})) {
-      if (key.startsWith("HARDNESS_") && typeof value === "string") env[key] = value;
+      if (typeof value !== "string") continue;
+      if (key.startsWith("HARDNESS_")) env[key] = value;
+      if (key.startsWith("GIT_AUTHOR_") || key.startsWith("GIT_COMMITTER_")) identity[key] = value;
     }
+    const gitIdentity =
+      identity.GIT_AUTHOR_NAME && identity.GIT_AUTHOR_EMAIL ? { name: identity.GIT_AUTHOR_NAME, email: identity.GIT_AUTHOR_EMAIL } : null;
     return execInSandbox(
       {
         name: `hardness-check-${randomUUID().slice(0, 8)}`,
@@ -285,6 +301,7 @@ export function sandboxExecutor(image: string) {
         worktree: options.cwd,
         argv: [command, ...args],
         env,
+        gitIdentity,
         cacheVolume: cacheVolumeFor(dirname(options.cwd)),
       },
       { signal: options.signal, timeoutMs: options.timeoutMs },
