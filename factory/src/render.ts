@@ -3,6 +3,7 @@
 // the project context, so a test needs no files.
 import type { Pack, StageInput } from "@hardness/contracts";
 import { answerJsonSchema } from "@hardness/contracts";
+import { createHash } from "node:crypto";
 
 const NONE = "(none)";
 
@@ -96,4 +97,17 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "",
   ].join("\n");
   return header + body;
+}
+
+const CALL_TARGET_MAX = 160;
+
+/** The transcript line for one tool call: `→ <Tool> <target>`. The machine's stuck detector
+ *  counts identical lines, so an edit carries a fingerprint of what it changes: four
+ *  different edits of one file are four calls, the same failing edit four times is a loop. */
+export function callLine(name: string, input: Record<string, unknown>): string {
+  const target = input.file_path ?? input.path ?? input.command ?? input.pattern ?? input.url ?? input.label ?? "";
+  const first = String(target).split("\n")[0]!.slice(0, CALL_TARGET_MAX);
+  const change = name === "Edit" || name === "MultiEdit" ? `${input.old_string ?? ""}\u0000${input.new_string ?? ""}${JSON.stringify(input.edits ?? "")}` : name === "Write" ? String(input.content ?? "") : null;
+  const fingerprint = change === null ? "" : ` ·${createHash("sha1").update(change).digest("hex").slice(0, 8)}`;
+  return `→ ${name} ${first}`.trimEnd() + fingerprint;
 }

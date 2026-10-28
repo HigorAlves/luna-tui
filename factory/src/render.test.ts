@@ -1,7 +1,7 @@
 import { PACKS, type StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { FACTORY_RULES, renderPrompt } from "./render.ts";
+import { FACTORY_RULES, callLine, renderPrompt } from "./render.ts";
 
 const input: StageInput = {
   schema: 3,
@@ -97,5 +97,23 @@ describe("renderPrompt", () => {
     expect(FACTORY_RULES).toContain("Never call AskUserQuestion");
     expect(FACTORY_RULES).toContain("requested[]");
     expect(FACTORY_RULES).toContain("Never write outside /work and /out");
+  });
+});
+
+describe("callLine", () => {
+  it("names the tool and its target, one line, cut to 160 columns", () => {
+    expect(callLine("Read", { file_path: "/work/a.ts" })).toBe("→ Read /work/a.ts");
+    expect(callLine("Bash", { command: "cargo test\n--verbose" })).toBe("→ Bash cargo test");
+    expect(callLine("Grep", { pattern: "x".repeat(200) })).toHaveLength("→ Grep ".length + 160);
+    expect(callLine("mcp__luna__step", { label: "slice 1" })).toBe("→ mcp__luna__step slice 1");
+  });
+
+  it("fingerprints an edit by what it changes, so four different edits of one file are not one call four times", () => {
+    const a = callLine("Edit", { file_path: "/work/a.rs", old_string: "x", new_string: "y" });
+    const b = callLine("Edit", { file_path: "/work/a.rs", old_string: "y", new_string: "z" });
+    expect(a).toMatch(/^→ Edit \/work\/a\.rs ·[0-9a-f]{8}$/);
+    expect(a).not.toBe(b);
+    expect(callLine("Edit", { file_path: "/work/a.rs", old_string: "x", new_string: "y" })).toBe(a);
+    expect(callLine("Write", { file_path: "/work/a.rs", content: "hello" })).toMatch(/^→ Write \/work\/a\.rs ·[0-9a-f]{8}$/);
   });
 });
