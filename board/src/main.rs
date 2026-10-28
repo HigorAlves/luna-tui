@@ -12,6 +12,7 @@ mod herdr;
 mod inbox;
 mod model;
 mod notify;
+mod pulls;
 mod store;
 mod ui;
 mod vim;

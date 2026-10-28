@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use ureq::{Agent, Body, http::Response};
 
-use crate::model::{Metrics, PlanEdit, StreamMessage, Task, TaskDetail, TicketText, Health, Slots};
+use crate::model::{Health, Metrics, PlanEdit, PrAction, PrSnapshot, Slots, StreamMessage, Task, TaskDetail, TicketText};
 
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -215,6 +215,36 @@ impl Machine {
     pub fn remove_worktree(&self, id: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/worktree/remove"), json!({}))
     }
+
+    /// The PR inbox as the machine last polled it.
+    pub fn prs(&self) -> Result<PrSnapshot, String> {
+        Self::typed(self.agent.get(self.url("/github/prs")).call())
+    }
+
+    /// Polls GitHub now and answers the fresh snapshot.
+    pub fn refresh_prs(&self) -> Result<PrSnapshot, String> {
+        Self::typed(self.agent.post(self.url("/github/prs/refresh")).send_json(json!({})))
+    }
+
+    /// Dispatches a PR task; answers the task the machine started.
+    pub fn pr_action(&self, repo: &str, number: u64, action: PrAction) -> Result<Task, String> {
+        self.post(&pr_path(repo, number, "actions"), json!({ "action": action.wire() }))
+    }
+
+    /// Squash-merges a PR the machine shows as ready.
+    pub fn merge_pr(&self, repo: &str, number: u64) -> Result<(), String> {
+        Self::json(self.agent.post(self.url(&pr_path(repo, number, "merge"))).send_json(json!({}))).map(|_| ())
+    }
+
+    /// Asks the machine to clone `owner/name` into `dest`; the next snapshot shows the checkout.
+    pub fn clone_repo(&self, repo: &str, dest: &str) -> Result<(), String> {
+        Self::json(self.agent.post(self.url("/github/clone")).send_json(json!({ "repo": repo, "dest": dest }))).map(|_| ())
+    }
+}
+
+/// `/github/prs/<owner>/<name>/<number>/<verb>`.
+fn pr_path(repo: &str, number: u64, verb: &str) -> String {
+    format!("/github/prs/{repo}/{number}/{verb}")
 }
 
 /// `HARDNESS_MACHINE_URL` alone when set, else the dev machine, then the Docker one.
@@ -277,7 +307,7 @@ fn spawn_stream(shared: Arc<RwLock<String>>, candidates: Vec<String>, tx: Sender
 /// snapshot does not say which window it covers. Unknown event types are never an error.
 fn parse_stream_event(event: &str, data: &str) -> Option<StreamMessage> {
     match event {
-        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed" | "budget.alert" => {
+        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed" | "budget.alert" | "github.prs" => {
             serde_json::from_str(data).ok()
         }
         _ => None,
@@ -360,5 +390,18 @@ mod tests {
     fn with_nothing_up_the_dev_machine_is_assumed_and_an_override_is_the_only_candidate() {
         assert_eq!(pick(&candidates(None), |_| false), DEV_URL);
         assert_eq!(candidates(Some("http://box:9000/".into())), vec!["http://box:9000".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod pr_tests {
+    use super::*;
+
+    #[test]
+    fn the_pr_routes_are_built_from_the_repo_and_number() {
+        assert_eq!(pr_path("o/a", 12, "merge"), "/github/prs/o/a/12/merge");
+        assert_eq!(pr_path("o/a", 12, "actions"), "/github/prs/o/a/12/actions");
+        let event = parse_stream_event("github.prs", r#"{"type":"github.prs","snapshot":{"prs":[],"polledAt":null,"error":"x"}}"#);
+        assert!(matches!(event, Some(StreamMessage::Prs { ref snapshot }) if snapshot.error.as_deref() == Some("x")));
     }
 }

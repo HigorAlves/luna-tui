@@ -26,7 +26,7 @@ use crate::{
     discover::{discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, Look, Metrics, RepoMetrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
+        COLUMNS, Look, Metrics, PrSnapshot, RepoMetrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
         parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown, Slots,
     },
     store,
@@ -400,6 +400,8 @@ pub struct App {
     pub floor: Option<FloorState>,
     /// The Inbox view, open while this is `Some`.
     pub inbox: Option<InboxState>,
+    /// The PR inbox as the machine last sent it; empty until the first `github.prs` event.
+    pub prs: PrSnapshot,
     /// Tickets marked with `v`/`V`: `a`, `X`, `d`, `w` act on all of them.
     pub marked: BTreeSet<String>,
     /// The stage pool as `/health` last reported it; None until the first answer.
@@ -452,6 +454,7 @@ impl App {
             fold: false,
             floor: None,
             inbox: None,
+            prs: PrSnapshot::default(),
             marked: BTreeSet::new(),
             slots: None,
             digest: None,
@@ -586,6 +589,7 @@ impl App {
                     self.notices.push(Notice { title: "Budget".to_string(), body: line.clone() });
                     self.notify(format!("budget: {line}"), alert.pct >= 100);
                 }
+                Incoming::Message(StreamMessage::Prs { snapshot }) => self.prs = snapshot,
             }
         }
     }
