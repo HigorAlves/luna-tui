@@ -40,7 +40,7 @@ The card states the board already shows map from the same data: a waiting gate i
 |---|---|
 | `board/` | The Luna TUI board, the Rust TUI and herdr plugin. A client of the machine. |
 | `machine/` | The orchestrator: TypeScript on Node 24+, HTTP API plus an SSE stream, Postgres for state. |
-| `factory/` | What runs inside a stage container: the runner (Agent SDK), the seven agent roles, the prompt templates, the skills plugin, the guards and the `luna` tool server. |
+| `factory/` | What runs inside a stage container: the runner (Agent SDK), the eight agent roles, the prompt templates, the skills plugin, the guards and the `luna` tool server. |
 | `contracts/` | Types shared by the machine, the factory and the board, including the pack registry. |
 | `fixtures/` | Fixture repos used by `pnpm golden` (one seeded bug or feature each). |
 | `docs/` | This folder. |
