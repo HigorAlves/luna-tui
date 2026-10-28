@@ -32,6 +32,17 @@ export function branchType(issueType: string | null | undefined): string {
   return type || "task";
 }
 
+/** Branches no task may ever work on, whatever a pattern or a row says. */
+export const PROTECTED_BRANCHES: ReadonlySet<string> = new Set(["main", "master", "develop"]);
+
+/** Why a `jira.branch` pattern cannot be used, or null when it can: it must carry `{key}` or `{id}`,
+ *  so two tasks never share a branch and no render is ever a bare `main`, `master` or `develop`
+ *  (the pack runner refuses those, and the repo's default branch, at run time all the same). */
+export function branchPatternProblem(pattern: string): string | null {
+  if (!pattern.includes("{key}") && !pattern.includes("{id}")) return `"${pattern}" must contain {key} or {id}, so every task gets its own branch`;
+  return null;
+}
+
 /** The branch for a linked task from the repo's pattern: `{type}`, `{key}`, `{slug}`, `{route}`, `{id}`. */
 export function jiraBranch(task: { id: string; title: string; route: string; jira: JiraLink | null; source: TaskSource | null }, pattern: string = DEFAULT_JIRA_BRANCH): string | null {
   const link = jiraOf(task);

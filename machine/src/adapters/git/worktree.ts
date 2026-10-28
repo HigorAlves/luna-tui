@@ -47,6 +47,14 @@ export async function ownedWorkspace(task: Parameters<typeof workspaceFor>[0], r
   return workspaceFor(task, repoPath, worktreesDir, `${jiraPattern}-{id}`);
 }
 
+/** The repo's default branch: what `origin/HEAD` points at, else the branch the checkout is on; null when neither is known. */
+export async function defaultBranch(repoPath: string): Promise<string | null> {
+  const head = await exec("git", [...HOST_GIT, "-C", repoPath, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
+  if (head.code === 0) return head.stdout.trim().replace(/^refs\/remotes\/origin\//, "") || null;
+  const current = await exec("git", [...HOST_GIT, "-C", repoPath, "symbolic-ref", "--quiet", "--short", "HEAD"]);
+  return current.code === 0 ? current.stdout.trim() || null : null;
+}
+
 /** Whether `refs/heads/<branch>` exists in the repo. */
 export async function branchExists(repoPath: string, branch: string): Promise<boolean> {
   return (await exec("git", [...HOST_GIT, "-C", repoPath, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;

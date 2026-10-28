@@ -3,6 +3,7 @@
 import { type JiraConfig, LunaConfig, RUNNING, type SlaConfig, TaskState } from "@hardness/contracts";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 
+import { branchPatternProblem } from "./jira-link.ts";
 import { DEFAULT_JIRA_BRANCH, DEFAULT_JIRA_COMMENTS, DEFAULT_POLICY, type JiraPolicy, type Policy, PolicyParseError } from "./policy.ts";
 import { type SlaTargets, parseDuration } from "./sla.ts";
 
@@ -62,7 +63,8 @@ function seconds(path: string, value: string): number | null {
   }
 }
 
-/** The `jira` block as policy: unknown task states in `on` and `fields` are dropped with a warning. */
+/** The `jira` block as policy: unknown task states in `on` and `fields` are dropped with a warning, as
+ *  is a `branch` pattern that cannot tell tasks apart (no `{key}` or `{id}`) or spells a protected branch. */
 export function jiraPolicyOf(jira: JiraConfig, warn: Warn = quiet): JiraPolicy {
   const on: JiraPolicy["on"] = {};
   for (const [state, status] of Object.entries(jira.on ?? {})) {
@@ -75,13 +77,19 @@ export function jiraPolicyOf(jira: JiraConfig, warn: Warn = quiet): JiraPolicy {
     else warn(`jira.fields.${state}: not a task state; dropped`);
   }
   const every = jira.intake?.every === undefined ? DEFAULT_INTAKE_EVERY_SECS : seconds("jira.intake.every", jira.intake.every);
+  let branch = jira.branch ?? DEFAULT_JIRA_BRANCH;
+  const problem = branchPatternProblem(branch);
+  if (problem) {
+    warn(`jira.branch: ${problem}; using ${DEFAULT_JIRA_BRANCH}`);
+    branch = DEFAULT_JIRA_BRANCH;
+  }
   return {
     project: jira.project ?? null,
     intake: jira.intake ? { jql: jira.intake.jql, everySecs: every ?? DEFAULT_INTAKE_EVERY_SECS } : null,
     on,
     comments: jira.comments ?? DEFAULT_JIRA_COMMENTS,
     fields,
-    branch: jira.branch ?? DEFAULT_JIRA_BRANCH,
+    branch,
   };
 }
 

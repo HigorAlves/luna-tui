@@ -13,6 +13,7 @@ import {
   diffNameStatus,
   ensureWorktree,
   headCommit,
+  defaultBranch,
   dirtyFiles,
   ownedWorkspace,
   resetWorktree,
@@ -21,7 +22,7 @@ import {
 import type { Credential } from "../../adapters/docker/credentials.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
-import { jiraOf } from "../../domain/jira-link.ts";
+import { PROTECTED_BRANCHES, jiraOf } from "../../domain/jira-link.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
 import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
@@ -57,8 +58,6 @@ export interface AgentDeps {
 
 /** Every branch the pipeline writes starts with this; see `workspaceFor`. */
 const TASK_BRANCH_PREFIX = "task/";
-/** Branches no task may ever work on, whatever a row or a pattern says. */
-const PROTECTED_BRANCHES = new Set(["main", "master", "develop", "HEAD"]);
 
 /** How long the original tests may take when replayed against a changed test file. */
 const LOCKED_REPLAY_TIMEOUT_MS = 10 * 60_000;
@@ -103,9 +102,12 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   // name), or, for a PR task, the PR's own head branch.
   const prBranch = task.source?.kind === "github_pr" ? task.source.headRef : null;
   const link = jiraOf(task);
-  const ownsPersisted = (branch: string): boolean =>
-    persisted && link !== null && !PROTECTED_BRANCHES.has(branch) && (branch.includes(link.key) || branch.includes(task.id.slice(0, 8)));
-  if (limits.writable && !workspace.branch.startsWith(TASK_BRANCH_PREFIX) && workspace.branch !== prBranch && workspace.branch !== owned.branch && !ownsPersisted(workspace.branch)) {
+  const ownsPersisted = (branch: string): boolean => persisted && link !== null && (branch.includes(link.key) || branch.includes(task.id.slice(0, 8)));
+  const protectedBranch = limits.writable && !extra.checkout && (PROTECTED_BRANCHES.has(workspace.branch) || workspace.branch === (await defaultBranch(task.repoPath)));
+  if (
+    limits.writable &&
+    (protectedBranch || (!workspace.branch.startsWith(TASK_BRANCH_PREFIX) && workspace.branch !== prBranch && workspace.branch !== owned.branch && !ownsPersisted(workspace.branch)))
+  ) {
     return {
       outcome: "fail",
       detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches (or the branch it named for a Jira-linked task)` },
