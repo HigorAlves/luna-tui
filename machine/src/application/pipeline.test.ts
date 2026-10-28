@@ -34,7 +34,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await db.query("truncate tasks cascade");
   stubs.reset();
-  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true });
+  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
 });
 
 /** A ticket in Intake (draft), ready for `pipeline.start()` to run triage. */
@@ -81,6 +81,67 @@ describe("creating and starting", () => {
   });
 });
 
+describe("the setup gate", () => {
+  /** The real rule: a luna.yaml on disk. The other suites stub it as present. */
+  const onDisk = (repoPath: string) => existsSync(join(repoPath, "luna.yaml"));
+  const repoDir = () => {
+    const dir = mkdtempSync(join(tmpdir(), "setup-repo-"));
+    return dir;
+  };
+
+  it("runs setup before triage for a repo with no luna.yaml, and writes the approved file", async () => {
+    const dir = repoDir();
+    const written: Array<[string, string]> = [];
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: onDisk, writeConfig: async (repoPath, text) => void written.push([repoPath, text]) });
+    stubs.plan("setup", { outcome: "pass", detail: { config: "checks: []\n", proof: [], summary: "nothing to run" } });
+    const task = await p.createTask({ title: "Login page", repoPath: dir });
+    const started = await p.start(task.id);
+    expect(started.state).toBe("awaiting_setup");
+    expect(await p.approvals(task.id)).toMatchObject([{ kind: "awaiting_setup", decision: null, requested: { config: "checks: []\n" } }]);
+
+    const approved = await p.decide(task.id, "approved");
+    expect(written).toEqual([[dir, "checks: []\n"]]);
+    expect(approved.state).toBe("awaiting_approval");
+    expect(await stagesRun(task.id)).toEqual(["setup", "triage"]);
+    expect((await p.events(task.id)).map((e) => e.kind)).toContain("config.written");
+  });
+
+  it("skips setup for a repo that already has a luna.yaml", async () => {
+    const dir = repoDir();
+    writeFileSync(join(dir, "luna.yaml"), "{}\n");
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: onDisk });
+    const task = await p.createTask({ title: "Login page", repoPath: dir });
+    expect((await p.start(task.id)).state).toBe("awaiting_approval");
+    expect(await stagesRun(task.id)).toEqual(["triage"]);
+  });
+
+  it("sends the proposal back with a note that re-runs setup, and closes a setup-only task once approved", async () => {
+    const dir = repoDir();
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: onDisk, writeConfig: async () => {} });
+    stubs.plan("setup", { outcome: "pass", detail: { config: "a: 1\n" } }, { outcome: "pass", detail: { config: "b: 2\n" } });
+    const task = await p.setupRepo(dir);
+    expect(task).toMatchObject({ route: "setup", state: "awaiting_setup", title: `Set up ${dir.split("/").pop()}` });
+
+    await p.decide(task.id, "sent_back", "add the lint check");
+    expect(await stagesRun(task.id)).toEqual(["setup", "setup"]);
+    const closed = await p.decide(task.id, "approved");
+    expect(closed.state).toBe("closed");
+    const approvals = await p.approvals(task.id);
+    expect(approvals.map((a) => [a.kind, a.decision, a.reason])).toEqual([
+      ["awaiting_setup", "sent_back", "add the lint check"],
+      ["awaiting_setup", "approved", null],
+    ]);
+  });
+
+  it("escalates when setup fails, continuing at setup", async () => {
+    const dir = repoDir();
+    stubs.plan("setup", fail);
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: onDisk });
+    const task = await p.createTask({ title: "Login page", repoPath: dir });
+    expect(await p.start(task.id)).toMatchObject({ state: "escalated", resumeTo: "setup", reason: "setup failed" });
+  });
+});
+
 describe("the whole pipeline with stub stages", () => {
   it("runs every stage once and closes after your four approvals", async () => {
     const task = await newTask();
@@ -117,7 +178,7 @@ describe("closing", () => {
   it("runs the close step after the last approval and logs the report", async () => {
     const seen: string[] = [];
     const closing = new Pipeline(db, stubs.runnerFor, {
-      inline: true,
+      inline: true, hasConfig: () => true,
       closeDeps: {
         exec: async () => ({ code: 0, stdout: "", stderr: "" }),
         worktreeRemove: false,
@@ -137,7 +198,7 @@ describe("closing", () => {
 
   it("logs a failed step instead of failing the approval", async () => {
     const closing = new Pipeline(db, stubs.runnerFor, {
-      inline: true,
+      inline: true, hasConfig: () => true,
       closeDeps: {
         exec: async () => ({ code: 0, stdout: "", stderr: "" }),
         worktreeRemove: false,
@@ -159,7 +220,7 @@ describe("closing", () => {
 describe("memory review decision", () => {
   const closing = () =>
     new Pipeline(db, stubs.runnerFor, {
-      inline: true,
+      inline: true, hasConfig: () => true,
       closeDeps: { exec: async () => ({ code: 0, stdout: "", stderr: "" }), worktreeRemove: false },
     });
 
@@ -303,7 +364,7 @@ describe("the verifying findings loop", () => {
       }
       return stubs.runnerFor(stage);
     };
-    pipeline = new Pipeline(db, runner, { inline: true });
+    pipeline = new Pipeline(db, runner, { inline: true, hasConfig: () => true });
     stubs.plan(
       "verifying",
       { outcome: "fail", detail: { findings: [finding("first")] } },
@@ -330,7 +391,7 @@ describe("the ci_watch findings loop", () => {
       }
       return stubs.runnerFor(stage);
     };
-    pipeline = new Pipeline(db, runner, { inline: true });
+    pipeline = new Pipeline(db, runner, { inline: true, hasConfig: () => true });
     stubs.plan("ci_watch", { outcome: "fail", detail: { findings: [finding("ci red")] } });
     const task = await newTask();
     await startAndApprove(task.id);
@@ -356,7 +417,7 @@ describe("the implementing findings loop", () => {
       }
       return stubs.runnerFor(stage);
     };
-    pipeline = new Pipeline(db, runner, { inline: true });
+    pipeline = new Pipeline(db, runner, { inline: true, hasConfig: () => true });
     const task = await newTask();
     await startAndApprove(task.id);
     expect(seen).toEqual([[], ["left uncommitted"]]);
@@ -380,7 +441,7 @@ describe("the implementing findings loop", () => {
       }
       return stubs.runnerFor(stage);
     };
-    pipeline = new Pipeline(db, runner, { inline: true });
+    pipeline = new Pipeline(db, runner, { inline: true, hasConfig: () => true });
     const task = await newTask();
     await startAndApprove(task.id);
     expect(seen).toEqual([[], ["locked test file changed"]]);
@@ -422,7 +483,7 @@ describe("retries and escalation", () => {
       throw new Error("container exited with 137");
     };
     pipeline = new Pipeline(db, (stage) => (stage === "triage" ? throwing : stubs.runnerFor(stage)), {
-      inline: true,
+      inline: true, hasConfig: () => true,
     });
     const task = await newTask();
 
@@ -436,7 +497,7 @@ describe("retries and escalation", () => {
 describe("test_change undoes verifying's tests", () => {
   it("reverts the commit verifying's tests came in on before test_design re-plans, so the wrong test is not locked in", async () => {
     const reverted: Array<[string, string]> = [];
-    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, revertCommit: async (worktree, sha) => void reverted.push([worktree, sha]) });
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, revertCommit: async (worktree, sha) => void reverted.push([worktree, sha]) });
     stubs.plan(
       "implementing",
       { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/x" } },
@@ -452,7 +513,7 @@ describe("test_change undoes verifying's tests", () => {
   });
 
   it("escalates when the revert fails, instead of sending the task round a loop it cannot win", async () => {
-    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, revertCommit: async () => { throw new Error("conflict in test/cart.test.js"); } });
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, revertCommit: async () => { throw new Error("conflict in test/cart.test.js"); } });
     stubs.plan(
       "implementing",
       { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/x" } },
@@ -470,7 +531,7 @@ describe("the card triad", () => {
   it("records tests passed/total from verifying's results and the diff of a writable pass on the task", async () => {
     const diffs: string[] = [];
     pipeline = new Pipeline(db, stubs.runnerFor, {
-      inline: true,
+      inline: true, hasConfig: () => true,
       diffStat: async (worktree, repoPath) => {
         diffs.push(`${worktree}@${repoPath}`);
         return { added: 142, removed: 18 };
@@ -545,7 +606,7 @@ describe("restart recovery", () => {
       expect((await startAndApprove(task.id)).state).toBe("paused_rate_limit");
 
       // A new machine over the same database: no timers survive in memory.
-      const restarted = new Pipeline(db, stubs.runnerFor, { inline: true });
+      const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
       expect(restarted.hasResumeTimer(task.id)).toBe(false);
       await restarted.recover();
       expect(restarted.hasResumeTimer(task.id)).toBe(true);
@@ -560,7 +621,7 @@ describe("restart recovery", () => {
     const task = await newTask();
     expect((await startAndApprove(task.id)).state).toBe("paused_rate_limit");
 
-    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true });
+    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
     await restarted.recover();
     // inline: the resumed implementing run (now a plain pass) drives on to the ship gate.
     expect((await restarted.get(task.id)).state).toBe("awaiting_ship");
@@ -639,7 +700,7 @@ describe("the supervisor tick", () => {
       const task = await newTask();
       expect((await startAndApprove(task.id)).state).toBe("paused_rate_limit");
 
-      const restarted = new Pipeline(db, stubs.runnerFor, { inline: true });
+      const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
       await restarted.tick();
       expect(restarted.hasResumeTimer(task.id)).toBe(true);
     } finally {
@@ -677,7 +738,7 @@ describe("budgets", () => {
     db.query("update stage_runs set started_at = now() - interval '25 hours' where task_id = $1", [taskId]);
 
   it("escalates a task that spent past its own ceiling before its next stage runs", async () => {
-    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, budget: { taskUsd: 2 } });
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, budget: { taskUsd: 2 } });
     stubs.plan("triage", costly(3));
     const task = await newTask();
     expect((await pipeline.start(task.id)).state).toBe("awaiting_approval");
@@ -688,7 +749,7 @@ describe("budgets", () => {
   });
 
   it("holds the queue while the day's spend is over the ceiling, and drains it once it is not", async () => {
-    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, budget: { dailyUsd: 2 } });
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, budget: { dailyUsd: 2 } });
     stubs.plan("triage", costly(3));
     const a = await newTask();
     expect((await pipeline.start(a.id)).state).toBe("awaiting_approval");
@@ -705,7 +766,7 @@ describe("budgets", () => {
   });
 
   it("parks a running task between stages once the day's ceiling is reached, instead of escalating it", async () => {
-    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, budget: { dailyUsd: 2 } });
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, budget: { dailyUsd: 2 } });
     stubs.plan("triage", costly(3));
     const task = await newTask();
     expect((await pipeline.start(task.id)).state).toBe("awaiting_approval");
@@ -727,7 +788,7 @@ describe("a repo's monthly budget and the alerts", () => {
   });
 
   it("parks a task between stages once its repo spent its month, and the queue skips that repo", async () => {
-    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: policies({ "/r/a": 2 }) });
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies({ "/r/a": 2 }) });
     stubs.plan("triage", costly(3));
     const a = await pipeline.createTask({ title: "a", repoPath: "/r/a" });
     expect((await pipeline.start(a.id)).state).toBe("awaiting_approval");
@@ -754,7 +815,7 @@ describe("a repo's monthly budget and the alerts", () => {
   it("raises each threshold once per scope: task, repo-month and day", async () => {
     const alerts: BudgetAlert[] = [];
     pipeline = new Pipeline(db, stubs.runnerFor, {
-      inline: true,
+      inline: true, hasConfig: () => true,
       budget: { taskUsd: 10, dailyUsd: 100 },
       policies: policies({ "/r/a": 10 }),
       onAlert: (alert) => alerts.push(alert),
@@ -792,7 +853,7 @@ describe("timer-approved plans", () => {
   });
 
   it("approves a confident, low-risk plan by itself once the policy's minutes have passed", async () => {
-    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: policies(10) });
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(10) });
     stubs.plan("triage", confident());
     const task = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
     await pipeline.start(task.id);
@@ -819,7 +880,7 @@ describe("timer-approved plans", () => {
     ];
     for (const [minutes, result] of cases) {
       await db.query("truncate tasks cascade");
-      pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, policies: policies(minutes) });
+      pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(minutes) });
       stubs.plan("triage", result);
       const task = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
       const started = await pipeline.start(task.id);
@@ -877,7 +938,7 @@ describe("fair claims", () => {
   const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 
   it("claims in the order tasks joined the queue, even when a queued ticket was edited meanwhile", async () => {
-    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 1 });
+    pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 1 });
     const a = await create("/r/a");
     await pipeline.start(a.id);
     const b = await create("/r/a");
@@ -894,7 +955,7 @@ describe("fair claims", () => {
   });
 
   it("gives a free slot to the repo with the fewest running tasks, not the oldest ticket", async () => {
-    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 2 });
+    pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 2 });
     const a1 = await create("/r/a");
     const b0 = await create("/r/b");
     await pipeline.start(a1.id);
@@ -912,7 +973,7 @@ describe("fair claims", () => {
   });
 
   it("holds a repo at its cap in the queue while slots stay free for the others", async () => {
-    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 3, maxPerRepo: 1 });
+    pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 3, maxPerRepo: 1 });
     const a1 = await create("/r/a");
     await pipeline.start(a1.id);
     const a2 = await create("/r/a");
@@ -942,7 +1003,7 @@ describe("per-stage caps", () => {
 
   it("holds a stage at its cap in the queue while another stage still takes the free slots", async () => {
     const runnerFor = (stage: TaskState) => (stage === "triage" || stage === "implementing" ? holding : stubs.runnerFor(stage));
-    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 4, maxPerStage: { triage: 1 } });
+    pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 4, maxPerStage: { triage: 1 } });
     const a = await newTask();
     await pipeline.start(a.id);
     const b = await newTask();
@@ -969,7 +1030,7 @@ describe("per-stage caps", () => {
     let held = 0;
     const holdOnce: StageRunner = (context) => (held++ === 0 ? holding(context) : Promise.resolve({ outcome: "pass" }));
     const runnerFor = (stage: TaskState) => (stage === "test_design" ? holdOnce : stubs.runnerFor(stage));
-    pipeline = new Pipeline(db, runnerFor, { inline: true, maxConcurrentTasks: 4, maxPerStage: { test_design: 1 } });
+    pipeline = new Pipeline(db, runnerFor, { inline: true, hasConfig: () => true, maxConcurrentTasks: 4, maxPerStage: { test_design: 1 } });
     const b = await newTask();
     await pipeline.start(b.id);
     // a is parked at test_design (inline, so after b's start: a loop's end fills the queue).
@@ -996,7 +1057,7 @@ describe("per-stage caps", () => {
   it("lets a repo's PIPELINE.md cap its own concurrency below the machine's", async () => {
     const runnerFor = (stage: TaskState) => (stage === "triage" ? holding : stubs.runnerFor(stage));
     const policies = { for: async (repoPath: string | null) => ({ ...DEFAULT_POLICY, maxConcurrent: repoPath === "/r/a" ? 1 : null }) };
-    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 4, policies });
+    pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 4, policies });
     const a1 = await pipeline.createTask({ title: "a1", repoPath: "/r/a" });
     await pipeline.start(a1.id);
     const a2 = await pipeline.createTask({ title: "a2", repoPath: "/r/a" });
@@ -1021,7 +1082,7 @@ describe("ci_watch outside the pool", () => {
 
   it("gives the slot back while polling, and takes one again (or queues) for the stage after", async () => {
     const runnerFor = (stage: TaskState) => (stage === "ci_watch" ? polling : stage === "triage" ? holding : stubs.runnerFor(stage));
-    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 1 });
+    pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 1 });
     const a = await newTask();
     await db.query("update tasks set state = 'ci_watch', queued = true, queued_at = now() where id = $1", [a.id]);
     await pipeline.tick();
@@ -1068,7 +1129,7 @@ describe("re-attaching to a container after a restart", () => {
             return { outcome: "pass", run: { containerId: context.resume?.container } };
           }
         : stubs.runnerFor(stage);
-    const restarted = new Pipeline(db, runnerFor, { inline: true, containerRunning: async (name) => name === "hardness-c1" });
+    const restarted = new Pipeline(db, runnerFor, { inline: true, hasConfig: () => true, containerRunning: async (name) => name === "hardness-c1" });
     expect(await restarted.recover()).toBe(0);
     expect(resumed).toEqual({ container: "hardness-c1", inputCommit: "abc123" });
     expect((await restarted.get(task.id)).state).toBe("awaiting_ship");
@@ -1080,7 +1141,7 @@ describe("re-attaching to a container after a restart", () => {
   it("still escalates when the container is gone", async () => {
     const task = await newTask();
     await running(task.id, "hardness-c1");
-    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, containerRunning: async () => false });
+    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, containerRunning: async () => false });
     expect(await restarted.recover()).toBe(1);
     expect(await restarted.get(task.id)).toMatchObject({ state: "escalated", resumeTo: "implementing" });
     expect((await restarted.stageRuns(task.id))[0]).toMatchObject({ status: "aborted" });
@@ -1095,7 +1156,7 @@ describe("re-attaching to a container after a restart", () => {
             return { outcome: "pass" };
           }
         : stubs.runnerFor(stage);
-    pipeline = new Pipeline(db, runnerFor, { inline: true });
+    pipeline = new Pipeline(db, runnerFor, { inline: true, hasConfig: () => true });
     await pipeline.start(task.id);
     expect((await pipeline.stageRuns(task.id))[0]).toMatchObject({ containerId: "hardness-t1", inputCommit: "def456", status: "passed" });
   });
@@ -1114,7 +1175,7 @@ describe("restart policy", () => {
 
   it("parks running tasks in the queue on shutdown, so a restart resumes them with no approval", async () => {
     reached = 0;
-    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 1 });
+    pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 1 });
     const a = await newTask();
     const b = await newTask();
     await pipeline.start(a.id);
@@ -1130,7 +1191,7 @@ describe("restart policy", () => {
     expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: true });
     expect(await stagesRun(b.id)).toEqual([]);
 
-    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true });
+    const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
     expect(await restarted.recover()).toBe(0);
     expect((await restarted.get(a.id)).state).toBe("awaiting_approval");
     expect((await restarted.get(b.id)).state).toBe("awaiting_approval");
@@ -1138,7 +1199,7 @@ describe("restart policy", () => {
 
   it("escalates them instead under the escalate policy, as before", async () => {
     reached = 0;
-    pipeline = new Pipeline(db, runnerFor, { restartPolicy: "escalate" });
+    pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, restartPolicy: "escalate" });
     const a = await newTask();
     await pipeline.start(a.id);
     while (reached < 1) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -1185,7 +1246,7 @@ describe("drain and slots", () => {
 
   it("draining takes no new work while running stages finish; resume picks the queue back up", async () => {
     reached = 0;
-    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 2 });
+    pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 2 });
     const a = await newTask();
     await pipeline.start(a.id);
     while (reached < 1) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -1205,7 +1266,7 @@ describe("drain and slots", () => {
 
   it("slots can be resized at run time; a smaller pool queues new work, a larger one fills", async () => {
     reached = 0;
-    pipeline = new Pipeline(db, runnerFor, { maxConcurrentTasks: 1 });
+    pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 1 });
     const a = await newTask();
     await pipeline.start(a.id);
     while (reached < 1) await new Promise((resolve) => setTimeout(resolve, 5));
@@ -1353,7 +1414,7 @@ describe("events", () => {
   it("tells listeners about every logged event, in order", async () => {
     const seen: string[] = [];
     pipeline = new Pipeline(db, stubs.runnerFor, {
-      inline: true,
+      inline: true, hasConfig: () => true,
       onEvent: (event) => {
         seen.push(event.kind);
       },

@@ -33,6 +33,11 @@ Scenarios test_design named, as a guide (verifying proves these, not you):
 ## Project context
 {{context.projectContext}}
 
+## Repo checks (from luna.yaml)
+{{context.checks}}
+
+These are the suite: "the full suite" and "lint/type-check if configured" below mean these lines, run from the directory named. A check scoped to paths you did not touch may be skipped.
+
 ## What to do
 1. Slice ledger: call `mcp__luna__slice_list`. When it holds no slices, build the list from the plan's slices in order (`{"id": 1, "title": "..."}`, ids counting up from 1) and call `mcp__luna__slice_init` with `{slices: [...]}`. When it already holds slices (a resumed attempt), keep them and continue from the first slice that is not `committed`.
 2. No test files exist yet for this ticket's new behavior (verifying writes those, after). Use the scenarios above, the plan and the ticket as your guide to what "done" looks like; write the failing test for each slice yourself, in the repo's idiom, before the code.

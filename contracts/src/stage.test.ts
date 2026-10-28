@@ -171,9 +171,9 @@ describe("StageOutput", () => {
 });
 
 describe("PackId", () => {
-  it("has the ten packs, each named after a task state", () => {
+  it("has the eleven packs, each named after a task state", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing"].sort(),
+      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing"].sort(),
     );
     for (const pack of PackId.options) expect(TaskState.options).toContain(pack);
   });
@@ -193,8 +193,8 @@ describe("PR tasks", () => {
     expect(TaskSource.parse({ kind: "github", repo: "a/b", number: 7, url: "u" }).kind).toBe("github");
   });
 
-  it("routes are a closed set with feature as today's pipeline", () => {
-    expect(TaskRoute.options).toEqual(["feature", "ci_fix", "review", "address"]);
+  it("routes are a closed set: feature is today's pipeline, setup only proposes luna.yaml, the rest are PR actions", () => {
+    expect(TaskRoute.options).toEqual(["feature", "setup", "ci_fix", "review", "address"]);
     expect(PrAction.options).toEqual(["ci_fix", "review", "address"]);
   });
 

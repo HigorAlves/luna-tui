@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type CiContext, type Finding, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type RunSummary, type StageInput, TestCase, type TaskState } from "@hardness/contracts";
+import { type CiContext, type Finding, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type RunSummary, type StageInput, TestCase, type TaskState, type CheckSpec } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -57,8 +57,10 @@ export function buildStageInput(opts: {
   /** The repo's PIPELINE.md holds test_design's cases out of implementing's input, so the
    *  implementer cannot overfit to them; verifying still judges by them. */
   holdoutCases?: boolean;
-  /** For e2e: the repo's QA targets from PIPELINE.md. */
+  /** For e2e: the repo's QA targets from luna.yaml. */
   qaTargets?: QaTarget[];
+  /** For implementing and verifying: the repo's checks from luna.yaml. */
+  checks?: CheckSpec[] | null;
   /** For reviewing_memory: the last implementing ledger and every earlier run of the task. */
   history?: { ledger: Ledger | null; runs: RunSummary[] } | null;
 }): StageInput {
@@ -98,6 +100,7 @@ export function buildStageInput(opts: {
       baseCommit: opts.baseCommit ?? null,
       ci: opts.ci ?? null,
       ...(pack === "e2e" && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
+      ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),
       ...(pack === "reviewing_memory" && opts.history ? { ledger: opts.history.ledger, runs: opts.history.runs } : {}),
       // A retry continues the ledger the last attempt left: committed slices are not redone.
       ...(pack === "implementing" && opts.history?.ledger ? { ledger: opts.history.ledger } : {}),

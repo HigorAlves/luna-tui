@@ -172,6 +172,12 @@ impl Machine {
         self.post(&format!("/tasks/{id}/start"), json!({}))
     }
 
+    /// A setup-only task for the checkout at `repo_path`: the setup pack proposes its luna.yaml,
+    /// approving writes the file and closes the task.
+    pub fn setup_repo(&self, repo_path: &str) -> Result<Task, String> {
+        self.post("/repos/setup", json!({ "repoPath": repo_path }))
+    }
+
     /// Approves (or sends back) whatever the task waits on, with an optional reason.
     pub fn decide(&self, id: &str, approve: bool, reason: Option<&str>) -> Result<Task, String> {
         let decision = if approve { "approved" } else { "sent_back" };

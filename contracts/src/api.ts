@@ -13,6 +13,10 @@ export const NewTaskInput = z.object({
   repoPath: z.string().nullable().optional(),
   source: TaskSource.nullable().optional(),
 });
+
+/** `POST /repos/setup`: have the setup pack propose a luna.yaml for the checkout at `repoPath`. */
+export const SetupRepoInput = z.object({ repoPath: z.string().trim().min(1) });
+export type SetupRepoInput = z.infer<typeof SetupRepoInput>;
 export type NewTaskInput = z.infer<typeof NewTaskInput>;
 
 /** `PATCH /tasks/:id`: only the fields given change. */

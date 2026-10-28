@@ -25,14 +25,15 @@ export interface Snapshot {
   retries: Retries;
   /** Where a paused or escalated task goes when it continues. */
   resumeTo: TaskState | null;
-  /** Which graph the task walks: the feature pipeline, or one of the PR task routes. */
+  /** Which graph the task walks: the feature pipeline, setup only, or one of the PR task routes. */
   route: TaskRoute;
 }
 
 export type StageOutcome = "pass" | "fail" | "needs_input" | "test_change" | "escalated";
 
 export type PipelineEvent =
-  | { type: "start" }
+  /** `setup` when the repo has no luna.yaml yet: the setup gate runs before triage. */
+  | { type: "start"; setup?: boolean }
   | { type: "stage_done"; outcome: StageOutcome; reason?: string }
   | { type: "answered" }
   | { type: "approved" }
@@ -158,7 +159,8 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       if (state === "paused_rate_limit" && task.resumeTo) return run(task.resumeTo, retries);
       break;
     case "start":
-      if (state === "draft") return run(ENTRY[task.route], retries);
+      // A feature on a repo with no luna.yaml yet runs the setup gate before its own entry.
+      if (state === "draft") return run(task.route === "feature" && event.setup ? "setup" : ENTRY[task.route], retries);
       break;
     case "answered":
       if (state === "awaiting_answers") return run("triage", retries);
@@ -166,6 +168,7 @@ function next(task: Snapshot, event: PipelineEvent): Move {
     case "approved":
       return approved(task, event);
     case "sent_back":
+      if (state === "awaiting_setup") return run("setup", retries);
       // A review verdict sent back is dropped: the comment review already went out.
       if (task.route === "review" && state === "awaiting_ship") return done(retries);
       if (task.route !== "feature") break;
@@ -181,6 +184,7 @@ function next(task: Snapshot, event: PipelineEvent): Move {
 /** The first stage each route runs when a task starts. */
 const ENTRY: Record<TaskRoute, TaskState> = {
   feature: "triage",
+  setup: "setup",
   ci_fix: "ci_watch",
   review: "reviewing",
   address: "addressing",
@@ -194,6 +198,8 @@ function approved(task: Snapshot, event: PipelineEvent): Move {
     if (state === "awaiting_ship") return run("shipping", retries);
     throw new TransitionError(task, event);
   }
+  // The setup gate: a setup-only task is done; a feature goes on to its own entry.
+  if (state === "awaiting_setup") return task.route === "setup" ? done(retries) : run("triage", retries);
   if (task.route !== "feature") throw new TransitionError(task, event);
   switch (state) {
     case "awaiting_approval":
@@ -263,9 +269,13 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
   if (outcome === "escalated" && RUNNING.has(state)) {
     return escalate(event.reason || `${state} escalated`, state, retries);
   }
-  if (task.route !== "feature") return prStageDone(task, event);
+  if (task.route !== "feature" && task.route !== "setup") return prStageDone(task, event);
 
   switch (state) {
+    case "setup":
+      if (outcome === "pass") return wait("awaiting_setup", retries);
+      if (outcome === "fail") return escalate("setup failed", "setup", retries);
+      break;
     case "triage":
       if (outcome === "pass") return wait("awaiting_approval", retries);
       if (outcome === "needs_input") return wait("awaiting_answers", retries);

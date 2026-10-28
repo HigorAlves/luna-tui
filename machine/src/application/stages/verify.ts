@@ -1,11 +1,13 @@
 // The verifying stage: run the project's own checks in the task worktree, and only when they
 // are green hand the change to the verifying review pack. A red check fails the stage with
 // its output as findings, so the next implementing attempt sees what broke.
-import type { Finding } from "@hardness/contracts";
+import type { CheckSpec, Finding, ServiceSpec } from "@hardness/contracts";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { changedPaths as hostChangedPaths, gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
+import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
@@ -18,12 +20,19 @@ export interface VerifyDeps {
   exec: (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number },
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> },
   ) => Promise<ExecResult>;
   /** Runs the verifying review pack; null when agents are off, which skips the review. */
   runPack: ((context: StageContext) => Promise<StageResult>) | null;
   stateDir: string;
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
+  /** Who a check commits as: the identity git resolves for the repo. Null escalates. */
+  gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
+  /** The repo's luna.yaml: its own checks (null means detect them from the tree) and the
+   *  services to run beside each one. */
+  policy?: (repoPath: string | null) => Promise<{ checks: CheckSpec[] | null; services: Record<string, ServiceSpec> }>;
+  /** The files the branch changed, worktree-relative; null when unknown (then every check runs). */
+  changedPaths?: (worktreePath: string, repoPath: string) => Promise<string[] | null>;
 }
 
 interface CheckReport {
@@ -33,6 +42,8 @@ interface CheckReport {
   ok?: boolean;
   tail?: string;
   note?: string;
+  /** A luna.yaml check the change did not call for. */
+  skipped?: string;
 }
 
 const tailOf = (text: string): string => text.trimEnd().split("\n").slice(-TAIL_LINES).join("\n");
@@ -48,6 +59,9 @@ const answerOf = (detail: Record<string, unknown> | undefined): Record<string, u
 
 export function verifyRunner(deps: VerifyDeps): StageRunner {
   const detect = deps.detect ?? detectChecks;
+  const resolveIdentity = deps.gitIdentity ?? hostGitIdentity;
+  const repoPolicy = deps.policy ?? (async () => ({ checks: null, services: {} }));
+  const changed = deps.changedPaths ?? hostChangedPaths;
   return async (context) => {
     const { task, signal } = context;
     // No worktree means implementing was stubbed (agents off): behave like the stub, not an escalation.
@@ -56,14 +70,45 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     const aborted = (): StageResult => ({ outcome: "fail", detail: { error: "aborted" } });
     if (signal.aborted) return aborted();
 
-    // Step A: the project's own checks.
-    const found = await detect(cwd);
-    const commands = CHECK_NAMES.flatMap((name) => (found[name] ? [{ name, argv: found[name]! }] : []));
+    // A suite that commits in a scratch repo (this repo's worktree tests do) needs an author,
+    // and the check container has no gitconfig: it gets yours, the one git resolves for the repo.
+    const identity = await resolveIdentity(task.repoPath ?? cwd);
+    if (!identity) {
+      return {
+        outcome: "escalated",
+        detail: {
+          step: "checks",
+          reason: `git has no identity for ${task.repoPath ?? cwd}: set user.name and user.email (git config) so checks and commits run as you`,
+          options: ["git config user.name / user.email in the repo or globally, then approve"],
+        },
+      };
+    }
+    const identityEnv = {
+      GIT_AUTHOR_NAME: identity.name,
+      GIT_AUTHOR_EMAIL: identity.email,
+      GIT_COMMITTER_NAME: identity.name,
+      GIT_COMMITTER_EMAIL: identity.email,
+    };
+    // Step A: the project's own checks: the luna.yaml list when the repo has one (those the
+    // change calls for), else what the tree says.
+    const { checks: declared, services } = await repoPolicy(task.repoPath ?? null);
     const reports: CheckReport[] = [];
+    let commands: Array<{ name: string; cmd: string; argv: string[] }>;
+    let noTests: boolean;
+    const skipped: CheckReport[] = [];
+    if (declared) {
+      const selected = selectChecks(declared, task.repoPath ? await changed(cwd, task.repoPath) : null);
+      commands = selected.map(checkCommand);
+      for (const check of declared) if (!selected.includes(check)) skipped.push({ name: check.name, skipped: skippedReason(check) });
+      noTests = declared.length === 0;
+    } else {
+      const found = await detect(cwd);
+      commands = CHECK_NAMES.flatMap((name) => (found[name] ? [{ name, cmd: found[name]!.join(" "), argv: found[name]! }] : []));
+      noTests = !found.test;
+    }
     const log: string[] = [];
     const deadline = Date.now() + CHECKS_TIMEOUT_MS;
-    for (const { name, argv } of commands) {
-      const cmd = argv.join(" ");
+    for (const { name, cmd, argv } of commands) {
       const remaining = deadline - Date.now();
       let result: ExecResult;
       let timedOut = false;
@@ -75,7 +120,8 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
           cwd,
           signal,
           timeoutMs: remaining,
-          env: { ...process.env, HARDNESS_STAGE: "verifying" },
+          env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
+          services,
         });
         timedOut = result.code !== 0 && Date.now() >= deadline;
       }
@@ -97,9 +143,9 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       log.push(`$ ${cmd}\n(exit ${result.code})\n${text}\n`);
       reports.push({ name, cmd, ok: result.code === 0, tail });
     }
+    reports.push(...skipped);
     // No test command (a docs, shell or markdown-only repo): the pack still proves each
     // scenario by direct check, so the stage goes on with a note instead of failing here.
-    const noTests = !found.test;
     if (noTests) reports.push({ check: "none", note: "no test command detected; verifying proves the scenarios by direct check" });
     const runDir = join(deps.stateDir, "runs", context.runId);
     await mkdir(runDir, { recursive: true });

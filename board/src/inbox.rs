@@ -43,7 +43,7 @@ impl Split {
     /// Which split a ticket belongs to, if it needs you at all.
     pub fn of(task: &Task, now: u64) -> Option<Split> {
         match task.state.as_str() {
-            "awaiting_approval" | "awaiting_test_check" | "awaiting_ship" => Some(Split::Approve),
+            "awaiting_setup" | "awaiting_approval" | "awaiting_test_check" | "awaiting_ship" => Some(Split::Approve),
             "awaiting_answers" | "reviewing_memory" => Some(Split::Review),
             "escalated" => Some(Split::Failed),
             "paused_rate_limit" => Some(Split::Stale),

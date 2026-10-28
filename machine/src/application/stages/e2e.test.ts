@@ -111,7 +111,7 @@ describe("e2eRunner", () => {
     const policy = async () => ({ qa: "none" as const });
     const result = await e2eRunner({ runPack, detectWeb: async () => true, policy })(context());
     expect(runPack).not.toHaveBeenCalled();
-    expect(result).toEqual({ outcome: "pass", detail: { step: "e2e", skipped: true, reason: "PIPELINE.md says qa: none" } });
+    expect(result).toEqual({ outcome: "pass", detail: { step: "e2e", skipped: true, reason: "the repo's config says qa: none" } });
   });
 
   it("runs the pack for a .ts change under the web package's src", async () => {

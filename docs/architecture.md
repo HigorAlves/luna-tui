@@ -21,7 +21,7 @@ The machine is one service for every repo you point a task at, not one per repo:
 
 | Column | Task states |
 |---|---|
-| Intake | `draft` |
+| Intake | `draft`, `setup`, `awaiting_setup` |
 | Triage | `triage`, `awaiting_answers`, `awaiting_approval` |
 | Approved | `test_design`, `awaiting_test_check` |
 | Build | `implementing`, `escalated`, `paused_rate_limit` |
@@ -29,6 +29,8 @@ The machine is one service for every repo you point a task at, not one per repo:
 | Evidence | `evidence` |
 | Ship | `awaiting_ship`, `shipping`, `reviewing_memory` |
 | Done | `closed` |
+
+A task on a repo with no `luna.yaml` runs the `setup` stage first: the setup pack reads the checkout read-only and proposes the file, the machine proves every proposed check once with the proposed services beside it, and the `awaiting_setup` gate shows you the file and the proof. Approving writes `luna.yaml` into the checkout and the task goes on to triage; a `:setup <repo>` task (route `setup`) closes instead. Sending it back with a note re-runs setup with the note as guidance. See [configuration](configuration.md).
 
 The card states the board already shows map from the same data: a waiting gate is "needs you", a running stage is "working", `escalated` and an aborted run are "lost". Source of truth: `COLUMNS` and `COLUMN_OF` in `contracts/src/index.ts`.
 
@@ -38,7 +40,7 @@ The card states the board already shows map from the same data: a waiting gate i
 |---|---|
 | `board/` | The Luna TUI board, the Rust TUI and herdr plugin. A client of the machine. |
 | `machine/` | The orchestrator: TypeScript on Node 24+, HTTP API plus an SSE stream, Postgres for state. |
-| `factory/` | What runs inside a stage container: the runner (Agent SDK), the seven agent roles, the prompt templates, the skills plugin, the guards and the `luna` tool server. |
+| `factory/` | What runs inside a stage container: the runner (Agent SDK), the eight agent roles, the prompt templates, the skills plugin, the guards and the `luna` tool server. |
 | `contracts/` | Types shared by the machine, the factory and the board, including the pack registry. |
 | `fixtures/` | Fixture repos used by `pnpm golden` (one seeded bug or feature each). |
 | `docs/` | This folder. |

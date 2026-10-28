@@ -47,6 +47,10 @@ pub struct TaskSource {
     pub url: String,
 }
 
+fn feature_route() -> String {
+    "feature".to_string()
+}
+
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Task {
@@ -59,6 +63,10 @@ pub struct Task {
     pub worktree_path: Option<String>,
     pub state: String,
     pub column: String,
+    /// Which graph the task walks: `feature` (a ticket), `setup` (proposes the repo's luna.yaml,
+    /// then closes) or a PR task's route. Absent from machines that predate it.
+    #[serde(default = "feature_route")]
+    pub route: String,
     pub waiting_on_you: bool,
     pub running: bool,
     /// Ready to run, but waiting for a free concurrency slot.
@@ -428,8 +436,10 @@ impl Task {
 
     #[allow(dead_code)] // the card renders the prefix dim, so it builds from `issue_prefix`
     /// The title as a card reads it: issue number first when the task has one.
+    /// The card's first line: the issue number when linked, a gear for a setup task, the title.
     pub fn card_label(&self) -> String {
-        format!("{}{}", self.issue_prefix(), self.title)
+        let setup = if self.route == "setup" { "⚙ " } else { "" };
+        format!("{setup}{}{}", self.issue_prefix(), self.title)
     }
 
     pub fn column_index(&self) -> usize {
@@ -471,6 +481,8 @@ impl Task {
     pub fn status_label(&self) -> String {
         let stage = match self.state.as_str() {
             "draft" => "intake".to_string(),
+            "setup" => "setting up".to_string(),
+            "awaiting_setup" => "approve setup".to_string(),
             "awaiting_answers" => "answer questions".to_string(),
             "awaiting_approval" => "approve plan".to_string(),
             "awaiting_test_check" => "check tests".to_string(),
@@ -771,6 +783,17 @@ mod tests {
     }
 
     #[test]
+    fn the_setup_gate_reads_as_approve_setup_and_a_task_without_a_route_is_a_feature() {
+        let task: Task = serde_json::from_str(&task_json("")).unwrap();
+        assert_eq!(task.route, "feature");
+        let mut setup = task.clone();
+        setup.state = "awaiting_setup".to_string();
+        assert_eq!(setup.status_label(), "approve setup");
+        setup.state = "setup".to_string();
+        assert_eq!(setup.status_label(), "setting up");
+    }
+
+    #[test]
     fn a_stage_run_carries_its_cost_and_turns_and_the_detail_sums_the_spend() {
         let detail: TaskDetail = serde_json::from_str(&format!(
             r#"{{"task":{},"stageRuns":[
@@ -889,6 +912,8 @@ mod tests {
         let plain: Task = serde_json::from_str(&task_json("")).unwrap();
         assert_eq!(linked.card_label(), "#42 Login page");
         assert_eq!(plain.card_label(), "Login page");
+        let setup: Task = serde_json::from_str(&task_json(r#","route":"setup""#)).unwrap();
+        assert_eq!(setup.card_label(), "⚙ Login page", "a setup task reads apart on the board");
     }
 
     #[test]

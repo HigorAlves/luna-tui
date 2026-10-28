@@ -22,7 +22,7 @@ export const TaskSource = z.discriminatedUnion("kind", [
 export type TaskSource = z.infer<typeof TaskSource>;
 
 /** Which graph a task walks: `feature` is the full pipeline; the others are PR tasks. */
-export const TaskRoute = z.enum(["feature", "ci_fix", "review", "address"]);
+export const TaskRoute = z.enum(["feature", "setup", "ci_fix", "review", "address"]);
 export type TaskRoute = z.infer<typeof TaskRoute>;
 
 /** A question the stage could not answer alone, with the answer it would pick. */
@@ -81,6 +81,7 @@ export type Finding = z.infer<typeof Finding>;
 
 /** Pack ids equal the Hardness stage names they run. */
 export const PackId = z.enum([
+  "setup",
   "triage",
   "test_design",
   "implementing",
@@ -184,6 +185,58 @@ export const RunSummary = z.object({
 });
 export type RunSummary = z.infer<typeof RunSummary>;
 
+/** One of a repo's own checks, from its luna.yaml: a shell line run in `cwd` (the worktree
+ *  root by default). With `paths`, it runs only for a change that touches one of them. */
+export const CheckSpec = z.object({
+  name: z.string().min(1),
+  run: z.string().min(1),
+  cwd: z.string().min(1).optional(),
+  paths: z.array(z.string().min(1)).optional(),
+});
+export type CheckSpec = z.infer<typeof CheckSpec>;
+
+/** A service a repo's code needs beside it (a database, a broker), from its luna.yaml. The
+ *  machine runs it next to each stage and check container; `exports` is the env the code
+ *  gets, with the service reachable by its key as hostname; `ready` is run inside the
+ *  service until it exits 0. */
+export const ServiceSpec = z.object({
+  image: z.string().min(1),
+  env: z.record(z.string(), z.string()).optional(),
+  ready: z.string().min(1).optional(),
+  exports: z.record(z.string(), z.string()).optional(),
+});
+export type ServiceSpec = z.infer<typeof ServiceSpec>;
+
+/** A repo's `luna.yaml` as data: what the setup pack proposes and what the machine reads.
+ *  Unknown keys are ignored, so a newer file loads on an older machine. */
+export const LunaConfig = z.object({
+  policy: z
+    .object({
+      qa: z.enum(["web", "none"]).optional(),
+      monthly_budget_usd: z.number().positive().optional(),
+      auto_approve_plan_minutes: z.number().int().positive().optional(),
+      max_concurrent: z.number().int().positive().optional(),
+      holdout_cases: z.boolean().optional(),
+    })
+    .optional(),
+  qa_targets: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        url: z.string().regex(/^https?:\/\//, "url must start with http:// or https://"),
+        credential: z
+          .string()
+          .regex(/^env:[A-Z_][A-Z0-9_]*$/, "credential must be a reference like env:QA_PASSWORD, never a value")
+          .optional(),
+      }),
+    )
+    .optional(),
+  checks: z.array(CheckSpec).optional(),
+  services: z.record(z.string().min(1), ServiceSpec).optional(),
+  toolchains: z.record(z.string().min(1), z.union([z.string(), z.number()])).optional(),
+});
+export type LunaConfig = z.infer<typeof LunaConfig>;
+
 /** A place the e2e stage may drive. `credential` is a reference (`env:NAME`), never a value. */
 export const QaTarget = z.object({
   name: z.string(),
@@ -237,12 +290,14 @@ export const StageInput = z.object({
     ledger: Ledger.nullable().optional(),
     /** For reviewing_memory: one row per earlier stage run of this task. */
     runs: z.array(RunSummary).optional(),
-    /** For e2e: where QA runs, from the repo's PIPELINE.md. Credentials are references, never values. */
+    /** For e2e: where QA runs, from the repo's luna.yaml. Credentials are references, never values. */
     qaTargets: z.array(QaTarget).optional(),
     /** For reviewing (a PR task): the PR's diff and comments, fetched by the host. */
     review: ReviewContext.nullable().optional(),
     /** For addressing (a PR task): the unresolved threads, fetched by the host. */
     threads: ThreadsContext.nullable().optional(),
+    /** For implementing and verifying: the repo's own checks from its luna.yaml; absent means detect them. */
+    checks: z.array(CheckSpec).optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),

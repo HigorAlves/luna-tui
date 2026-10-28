@@ -1,5 +1,7 @@
-// A repo's own say over the pipeline: `PIPELINE.md` at its root, a markdown file whose
-// front matter sets the knobs below. The prose after it is for people. Pure: parsing only.
+// A repo's own say over the pipeline. The policy shape is shared by `luna.yaml`
+// (luna-config.ts, the current file) and `PIPELINE.md` (parsed here, deprecated: its front
+// matter only ever set the knobs below). Pure: parsing only.
+import type { CheckSpec, ServiceSpec } from "@hardness/contracts";
 
 export interface Policy {
   /** `web` runs the e2e stage when the change renders something; `none` never runs it. */
@@ -15,6 +17,12 @@ export interface Policy {
   holdoutCases: boolean;
   /** Where the e2e stage may drive the app, besides the dev server it boots itself. */
   qaTargets: QaTarget[];
+  /** The repo's own checks (luna.yaml); null means detect them from the tree. */
+  checks: CheckSpec[] | null;
+  /** Services run beside every stage and check container, by hostname. */
+  services: Record<string, ServiceSpec>;
+  /** What the repo says it builds with, by tool; recorded by setup, read by nothing yet. */
+  toolchains: Record<string, string>;
 }
 
 /** `qa_target: <name> <base url> [credential ref]`, one line per target; the ref is `env:NAME`. */
@@ -31,6 +39,9 @@ export const DEFAULT_POLICY: Policy = {
   maxConcurrent: null,
   holdoutCases: false,
   qaTargets: [],
+  checks: null,
+  services: {},
+  toolchains: {},
 };
 
 export class PolicyParseError extends Error {
@@ -85,7 +96,7 @@ const qaTarget = (key: string, raw: string): QaTarget => {
 
 /** The policy a PIPELINE.md declares; unknown keys are ignored, a bad value throws. */
 export function parsePolicy(text: string): Policy {
-  const policy: Policy = { ...DEFAULT_POLICY, qaTargets: [] };
+  const policy: Policy = { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {} };
   for (const { key, value } of frontMatter(text)) {
     switch (key) {
       case "qa":

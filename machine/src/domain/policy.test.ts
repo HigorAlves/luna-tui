@@ -16,6 +16,9 @@ describe("parsePolicy", () => {
       maxConcurrent: 1,
       holdoutCases: true,
       qaTargets: [],
+      checks: null,
+      services: {},
+      toolchains: {},
     });
   });
 
@@ -30,6 +33,9 @@ describe("parsePolicy", () => {
       maxConcurrent: null,
       holdoutCases: false,
       qaTargets: [],
+      checks: null,
+      services: {},
+      toolchains: {},
     });
   });
 

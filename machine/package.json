@@ -23,6 +23,7 @@
   "devDependencies": {
     "@types/node": "^26.6.5",
     "@types/pg": "^8.23.1",
+    "@types/picomatch": "4.0.2",
     "ajv": "^8.20.0",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
@@ -33,7 +34,9 @@
     "@hono/node-server": "^2.1.5",
     "hono": "^4.13.13",
     "pg": "^8.23.1",
+    "picomatch": "4.0.7",
     "typeorm": "^1.1.2",
+    "yaml": "2.8.1",
     "zod": "^4.6.7"
   }
 }

@@ -1,6 +1,6 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
-import { Ledger } from "@hardness/contracts";
+import { Ledger, PrAction } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -80,7 +80,7 @@ const watcher = new StreamWatcher(bus);
 // `pipeline` is assigned below, after the real stages are built — `latestE2e` is only
 // ever called once a stage actually runs, by which point `pipeline` is set.
 let pipeline: Pipeline;
-/** Every repo's PIPELINE.md, read on demand; shared so a bad edit warns once. */
+/** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
 const policies = new PolicyStore();
 const { real, verifyPack, checksExec } = await buildRealStages(
   config,
@@ -107,6 +107,10 @@ const realVerifyRunner = verifyRunner({
   exec: checksExec ?? exec,
   runPack: verifyPack,
   stateDir: config.stateDir,
+  policy: async (repoPath) => {
+    const { checks, services } = await policies.for(repoPath);
+    return { checks, services };
+  },
 });
 /** Delivering and shipping need only git and gh, not a Claude credential, so they always run for real. */
 const runnerFor = buildRunnerFor({
@@ -183,7 +187,8 @@ const pulls = new GitHubPulls({
   rememberRepo: (repo, path) => repoMap.remember(repo, path),
   findTask: async (repo, number) => {
     const task = await pipeline.findBySource(repo, number, "github_pr");
-    return task && task.state !== "closed" && task.route !== "feature" ? { id: task.id, state: task.state, route: task.route } : null;
+    const route = task ? PrAction.safeParse(task.route) : null;
+    return task && route?.success && task.state !== "closed" ? { id: task.id, state: task.state, route: route.data } : null;
   },
   publish: (snapshot) => bus.publish({ type: "github.prs", snapshot }),
 });

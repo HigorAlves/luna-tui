@@ -9,13 +9,14 @@ The machine's HTTP API, read straight from `machine/src/adapters/http/app.ts`. S
 | POST | `/resume` | Carry on: the queue is picked up again at once. |
 | PATCH | `/slots` | `{max}`: resize the pool at run time (at least 1). |
 | GET | `/metrics` | Factory metrics over a window: `?since=7d\|30d\|<ISO timestamp>` (default `7d`). Cycle time, first-pass rate, escalations, cost, queue depth; also streamed as `task.metrics`. `&repo=<path>` limits the numbers to one checkout (`repo=` to the tasks with none); `&groupBy=repo` adds `byRepo`, one slim row per checkout (tasks, escalation rate, first-pass verifying, cost). |
-| GET | `/tasks` | List every task with its state and column. |
+| GET | `/tasks` | List every task with its state, column and `route` (`feature`, `setup`, or a PR task's `ci_fix`, `review` or `address`). |
 | POST | `/tasks` | Create a task: title, description, criteria, repo path, source. |
 | GET | `/tasks/:id` | One task with its stage runs, approvals, recent events and artifacts. |
 | PATCH | `/tasks/:id` | Edit the ticket's text (title, description, criteria, repo path, source). |
 | PATCH | `/tasks/:id/plan` | Edit triage's proposed plan while it awaits your approval: `{ "brief"?, "criteria"?, "assumptions"? }`, at least one field. Only the fields given change; slices stay as triage wrote them. 409 if there's no open plan to edit. |
 | DELETE | `/tasks/:id` | Delete a task with its runs, approvals and events (blocked while a stage is running); closes its herdr watch tab (via `task.closed`). |
-| POST | `/tasks/:id/start` | Start the pipeline. |
+| POST | `/tasks/:id/start` | Start the pipeline. A repo with no `luna.yaml` gets the `setup` stage and its gate before triage. |
+| POST | `/repos/setup` | `{ "repoPath" }`: a setup-only task (route `setup`) for that checkout, started at once; its one gate is the proposed `luna.yaml` with the proof per check. Approving writes the file and closes the task. |
 | POST | `/tasks/:id/answers` | Answer triage questions: `{ "answers": { "<question>": "<answer>" } }`. |
 | POST | `/tasks/:id/decision` | Approve or send back whatever the task waits on, including an escalation: `{ "decision": "approved" \| "sent_back", "reason"?, "applyRules"? }`. |
 | POST | `/tasks/:id/abort` | Stop a running or queued stage; the task then waits for you. |
