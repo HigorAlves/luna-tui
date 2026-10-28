@@ -6,6 +6,7 @@ import { AddQueuedAt1793000000000 } from "./1793000000000-AddQueuedAt.ts";
 import { RetireBacklog1793100000000 } from "./1793100000000-RetireBacklog.ts";
 import { AddTriad1793200000000 } from "./1793200000000-AddTriad.ts";
 import { AddTaskKind1793300000000 } from "./1793300000000-AddTaskKind.ts";
+import { RenameKindToRoute1793400000000 } from "./1793400000000-RenameKindToRoute.ts";
 
 export const MIGRATIONS: Function[] = [
   Init1792712166445,
@@ -15,4 +16,5 @@ export const MIGRATIONS: Function[] = [
   RetireBacklog1793100000000,
   AddTriad1793200000000,
   AddTaskKind1793300000000,
+  RenameKindToRoute1793400000000,
 ];

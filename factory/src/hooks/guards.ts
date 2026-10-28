@@ -9,6 +9,7 @@
 import { posix } from "node:path";
 
 import type { HookCallbackMatcher, HookInput, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
+import type { StageInput } from "@hardness/contracts";
 
 export interface GuardContext {
   /** Whether this stage may edit the worktree and commit. */
@@ -26,6 +27,11 @@ const WORK = "/work";
 const OUT = "/out";
 const TMP = "/tmp";
 const DEFAULT_BRANCH_PREFIX = "task/";
+
+/** The branches a stage may commit to: a PR task owns the PR's own head branch; every other task a `task/` branch. */
+export function branchPrefixFor(task: Pick<StageInput["task"], "branch" | "source">): string {
+  return task.source?.kind === "github_pr" && task.source.headRef ? task.source.headRef : DEFAULT_BRANCH_PREFIX;
+}
 
 // ---------------------------------------------------------------------------------------
 // Command parsing. A quote-aware scanner rather than a regex split: the attribution check

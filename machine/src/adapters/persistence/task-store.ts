@@ -35,9 +35,9 @@ export class PgTaskStore implements TaskStore {
       criteria: input.criteria,
       repoPath: input.repoPath,
       source: input.source,
-      kind: input.kind ?? "feature",
-      branch: null,
-      worktreePath: null,
+      route: input.route ?? "feature",
+      branch: input.branch ?? null,
+      worktreePath: input.worktreePath ?? null,
       state: "draft",
       retries: { ...NO_RETRIES },
       resumeTo: null,
@@ -53,12 +53,14 @@ export class PgTaskStore implements TaskStore {
     return this.db.getRepository(TaskEntity).findOneBy({ id });
   }
 
-  findTaskBySource(repo: string, number: number): Promise<TaskRow | null> {
+  findTaskBySource(repo: string, number: number, kind: "github" | "github_pr" = "github"): Promise<TaskRow | null> {
     return this.db
       .getRepository(TaskEntity)
       .createQueryBuilder("task")
       .where("task.source->>'repo' = :repo", { repo })
       .andWhere("(task.source->>'number')::int = :number", { number })
+      .andWhere("task.source->>'kind' = :kind", { kind })
+      .orderBy("task.created_at", "DESC")
       .getOne();
   }
 

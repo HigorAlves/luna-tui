@@ -17,12 +17,39 @@ export const ROLE_DESCRIPTION: Record<AgentRole, string> = {
   "qa-validator": "Drives the running app in a browser to prove each plan criterion and writes the evidence packet.",
   "ci-investigator": "Diagnoses a red CI run from its logs and classifies it: fixable, flake, infra, needs_debug or green.",
   "retro-reviewer": "Looks back at a finished task and proposes rules for the project context from incidents and patterns.",
+  "pr-reviewer": "Reviews someone else's open pull request from its diff and returns line-anchored comments and a mechanical verdict; never posts, never edits.",
+  "security-reviewer": "Reviews a diff for exploitable security issues and returns review-contract findings with a concrete exploit each; never edits.",
+  "reply-drafter": "Drafts one short reply per review thread from the thread, the code and what changed; text only, never edits.",
+  "code-fixer": "Applies a decided list of code changes to answer review threads, runs the project's checks and reports the diff.",
 };
 
-/** The one definition a pack runs as, keyed by its role name. */
+/** What a helper runs as when the pack's role dispatches it: read-only, its own model, its own skills. */
+const HELPER: Partial<Record<AgentRole, Pick<AgentDefinition, "tools" | "model" | "skills" | "maxTurns">>> = {
+  "security-reviewer": {
+    tools: ["Read", "Glob", "Grep", "Bash(git diff:*)", "Bash(git log:*)"],
+    model: "opus",
+    skills: [`${PLUGIN_NAME}:review-contract`],
+    maxTurns: 25,
+  },
+  "reply-drafter": {
+    tools: ["Read", "Glob", "Grep"],
+    model: "haiku",
+    skills: [`${PLUGIN_NAME}:receiving-code-review`],
+    maxTurns: 15,
+  },
+};
+
+/** The definition a pack runs as, keyed by its role name, plus one per helper it may dispatch. */
 export function agentDefinitions(pack: Pack, agentsDir: string): Record<string, AgentDefinition> {
   if (!pack.agent) return {};
-  const prompt = readFileSync(join(agentsDir, `${pack.agent}.md`), "utf8");
+  const body = (role: AgentRole) => readFileSync(join(agentsDir, `${role}.md`), "utf8");
+  const helpers = Object.fromEntries(
+    pack.helpers.map((role) => [
+      role,
+      { description: ROLE_DESCRIPTION[role], prompt: body(role), effort: pack.effort, ...(HELPER[role] ?? { tools: ["Read", "Glob", "Grep"] }) },
+    ]),
+  );
+  const prompt = body(pack.agent);
   return {
     [pack.agent]: {
       description: ROLE_DESCRIPTION[pack.agent],
@@ -35,5 +62,6 @@ export function agentDefinitions(pack: Pack, agentsDir: string): Record<string, 
       // No `maxTurns` either: the query's own limit is the slice-scaled budget the machine set.
       skills: pack.skills.map((skill) => `${PLUGIN_NAME}:${skill}`),
     },
+    ...helpers,
   };
 }

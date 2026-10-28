@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type CiContext, type Finding, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type RunSummary, type StageInput, TestCase, type TaskState, type CheckSpec } from "@hardness/contracts";
+import { type CheckSpec, type CiContext, type Finding, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -63,6 +63,10 @@ export function buildStageInput(opts: {
   checks?: CheckSpec[] | null;
   /** For reviewing_memory: the last implementing ledger and every earlier run of the task. */
   history?: { ledger: Ledger | null; runs: RunSummary[] } | null;
+  /** For reviewing (a PR task): the PR's diff and comments the host fetched. */
+  review?: ReviewContext | null;
+  /** For addressing (a PR task): the unresolved threads the host fetched. */
+  threads?: ThreadsContext | null;
 }): StageInput {
   const { task, stage, attempt, approvals } = opts;
   const pack = stage as PackId;
@@ -101,6 +105,8 @@ export function buildStageInput(opts: {
       ci: opts.ci ?? null,
       ...(pack === "e2e" && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
       ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),
+      ...(pack === "reviewing" && opts.review ? { review: opts.review } : {}),
+      ...(pack === "addressing" && opts.threads ? { threads: opts.threads } : {}),
       ...(pack === "reviewing_memory" && opts.history ? { ledger: opts.history.ledger, runs: opts.history.runs } : {}),
       // A retry continues the ledger the last attempt left: committed slices are not redone.
       ...(pack === "implementing" && opts.history?.ledger ? { ledger: opts.history.ledger } : {}),

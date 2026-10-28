@@ -17,6 +17,11 @@ export const AgentRole = z.enum([
   "qa-validator",
   "ci-investigator",
   "retro-reviewer",
+  "pr-reviewer",
+  // Helpers a PR task's role dispatches through the Agent tool; never a pack's own role.
+  "security-reviewer",
+  "reply-drafter",
+  "code-fixer",
 ]);
 export type AgentRole = z.infer<typeof AgentRole>;
 
@@ -122,10 +127,36 @@ export const ReviewingMemoryAnswer = z.object({
   rulesMarkdown: z.string().optional(),
 });
 
+/** reviewing (PR task): a comment review the host posts at once; approve / request_changes wait for you. */
+export const PrReviewAnswer = z.object({
+  kind: z.enum(["done", "escalated"]).optional(),
+  verdict: z.enum(["approve", "request_changes", "comment"]),
+  summary: z.string(),
+  findings: z.array(Finding),
+  /** Line-anchored comments the host posts as one COMMENT review. */
+  comments: z.array(
+    z.object({ path: z.string(), line: z.number().int(), side: z.enum(["RIGHT", "LEFT"]).default("RIGHT"), body: z.string() }),
+  ),
+  reason: z.string().optional(),
+  options: z.array(z.string()).optional(),
+});
+
+/** addressing (PR task): one commit per thread; the host posts each reply and resolves the threads marked. */
+export const PrAddressAnswer = z.object({
+  kind: z.enum(["done", "escalated"]),
+  summary: z.string(),
+  commit: z.string().nullable().optional(),
+  replies: z.array(z.object({ threadId: z.string(), body: z.string(), resolve: z.boolean() })),
+  reason: z.string().optional(),
+  options: z.array(z.string()).optional(),
+});
+
 export interface Pack {
   id: PackId;
   /** The role the stage runs as; null for a script-only pack that calls no model. */
   agent: AgentRole | null;
+  /** Roles the pack's agent may dispatch as subagents (the SDK's Agent tool); each gets its own body, model and read-only tools. */
+  helpers: AgentRole[];
   /** Skills the role may invoke, by the name the plugin folder gives them. */
   skills: string[];
   /** The tool allow-list, verbatim for the SDK. */
@@ -156,6 +187,7 @@ export const PACKS: Record<PackId, Pack> = {
   setup: {
     id: "setup",
     agent: "setup-planner",
+    helpers: [],
     skills: ["code-discovery"],
     // Read-only over the repo checkout itself (not a worktree), with network: it may fetch a
     // tool's docs. It proposes; the machine proves the checks and writes the file on approval.
@@ -171,6 +203,7 @@ export const PACKS: Record<PackId, Pack> = {
   triage: {
     id: "triage",
     agent: "triage-planner",
+    helpers: [],
     skills: ["writing-plans", "code-discovery"],
     tools: [...READ_ONLY_TOOLS, "WebFetch", "Bash(gh issue view:*)", "mcp__luna__decision_get"],
     writable: false,
@@ -184,6 +217,7 @@ export const PACKS: Record<PackId, Pack> = {
   test_design: {
     id: "test_design",
     agent: "test-designer",
+    helpers: [],
     skills: ["tdd"],
     // Read-only: test_design designs the cases the implementer then writes as tests (the
     // approved cases reach implementing and verifying as `context.testCases`).
@@ -199,6 +233,7 @@ export const PACKS: Record<PackId, Pack> = {
   implementing: {
     id: "implementing",
     agent: "implementer",
+    helpers: [],
     skills: ["tdd", "verification-before-completion", "code-discovery"],
     tools: [
       ...READ_ONLY_TOOLS,
@@ -223,6 +258,7 @@ export const PACKS: Record<PackId, Pack> = {
   verifying: {
     id: "verifying",
     agent: "verifier",
+    helpers: [],
     skills: ["review-contract", "caveman-review"],
     tools: [
       ...READ_ONLY_TOOLS,
@@ -250,6 +286,7 @@ export const PACKS: Record<PackId, Pack> = {
   e2e: {
     id: "e2e",
     agent: "qa-validator",
+    helpers: [],
     skills: ["browser-qa", "playwright-qa", "agent-browser", "qa-targets"],
     tools: [
       ...READ_ONLY_TOOLS,
@@ -276,6 +313,7 @@ export const PACKS: Record<PackId, Pack> = {
   evidence: {
     id: "evidence",
     agent: null,
+    helpers: [],
     skills: [],
     tools: [],
     writable: false,
@@ -289,6 +327,7 @@ export const PACKS: Record<PackId, Pack> = {
   ci_watch: {
     id: "ci_watch",
     agent: "ci-investigator",
+    helpers: [],
     skills: ["ci-routing", "review-contract"],
     tools: [
       ...READ_ONLY_TOOLS,
@@ -310,6 +349,7 @@ export const PACKS: Record<PackId, Pack> = {
   reviewing_memory: {
     id: "reviewing_memory",
     agent: "retro-reviewer",
+    helpers: [],
     skills: [],
     tools: [...READ_ONLY_TOOLS, "Bash(git log:*)", "Bash(git blame:*)", "mcp__luna__slice_list"],
     writable: false,
@@ -319,6 +359,48 @@ export const PACKS: Record<PackId, Pack> = {
     effort: "high",
     answer: ReviewingMemoryAnswer,
     template: "reviewing_memory.md",
+  },
+  reviewing: {
+    id: "reviewing",
+    agent: "pr-reviewer",
+    // The security pass runs as a subagent when the diff touches a sensitive path.
+    helpers: ["security-reviewer"],
+    skills: ["review-contract", "caveman-review", "inline-review", "code-discovery"],
+    tools: [...READ_ONLY_TOOLS, "Agent", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git merge-base:*)"],
+    writable: false,
+    maxTurns: 40,
+    timeoutMs: 15 * MINUTE,
+    model: "opus",
+    effort: "high",
+    answer: PrReviewAnswer,
+    template: "reviewing.md",
+  },
+  addressing: {
+    id: "addressing",
+    // The code fixer applies what each thread asks for; the reply drafter writes the thread replies.
+    agent: "code-fixer",
+    helpers: ["reply-drafter"],
+    skills: ["receiving-code-review", "verification-before-completion", "tdd", "code-discovery"],
+    tools: [
+      ...READ_ONLY_TOOLS,
+      "Agent",
+      "Write",
+      "Edit",
+      ...LEDGER_TOOLS,
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      ...CHECK_COMMANDS,
+    ],
+    writable: true,
+    maxTurns: 60,
+    timeoutMs: 25 * MINUTE,
+    model: "sonnet",
+    effort: "medium",
+    answer: PrAddressAnswer,
+    template: "addressing.md",
   },
 };
 

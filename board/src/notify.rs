@@ -1,7 +1,8 @@
 //! What the board tells you when you are elsewhere: a herdr notification on the transitions
 //! that need you, a live count on the Board tab, a terminal BEL when herdr is not there.
 //! `HARDNESS_BOARD_QUIET=1` silences all of it.
-use crate::model::{Look, Task};
+use crate::model::{Look, PullRequest, Task};
+use crate::pulls::PrSplit;
 
 /// One thing worth telling you about.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -26,6 +27,16 @@ pub fn notice_for(old: Option<Look>, task: &Task) -> Option<Notice> {
     let what = task.reason.clone().unwrap_or_else(|| task.status_label());
     let repo = task.repo_name().map(|r| format!("{r} · ")).unwrap_or_default();
     Some(Notice { title: title.to_string(), body: format!("{repo}#{} {}: {what}", task.short_id(), task.title) })
+}
+
+/// The notice a PR's change of split is worth: into Review requested, Ready to merge, CI failed
+/// or Changes requested from anywhere else (or from nowhere). Staying put, or leaving, is not news.
+pub fn pr_notice(old: Option<PrSplit>, pr: &PullRequest) -> Option<Notice> {
+    let new = pr.split_enum()?;
+    if !new.needs_me() || old == Some(new) {
+        return None;
+    }
+    Some(Notice { title: new.label().to_string(), body: format!("{} {}", pr.key(), pr.title) })
 }
 
 /// The notice for losing the machine.
@@ -84,5 +95,35 @@ mod tests {
         assert!(!quiet(Some("")));
         assert!(!quiet(None));
         assert_eq!(offline_notice("connection refused").title, "Machine offline");
+    }
+}
+
+#[cfg(test)]
+mod pr_tests {
+    use super::*;
+    use crate::pulls::PrSplit;
+
+    fn pr(split: &str) -> PullRequest {
+        serde_json::from_str(&format!(
+            r#"{{"repo":"acme/app","number":12,"title":"Export CSV","url":"u","author":"them","mine":false,"reviewRequested":true,
+            "isDraft":false,"headRef":"h","baseRef":"main","fromFork":false,"reviewDecision":null,"mergeable":"MERGEABLE",
+            "checks":{{"state":"none","passed":0,"total":0,"failed":[]}},"unresolvedThreads":0,"split":"{split}",
+            "localPath":null,"task":null,"updatedAt":"2026-10-27T09:00:00Z"}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_pr_moving_into_a_split_that_needs_you_is_news_and_staying_there_is_not() {
+        let asked = pr("review_requested");
+        let notice = pr_notice(None, &asked).expect("first sight counts");
+        assert_eq!(notice.title, "Review requested");
+        assert_eq!(notice.body, "acme/app#12 Export CSV");
+        assert_eq!(pr_notice(Some(PrSplit::ReviewRequested), &asked), None, "already there");
+        assert_eq!(pr_notice(Some(PrSplit::Mine), &pr("ready_to_merge")).map(|n| n.title), Some("Ready to merge".into()));
+        assert_eq!(pr_notice(Some(PrSplit::CiRunning), &pr("ci_failed")).map(|n| n.title), Some("CI failed".into()));
+        assert_eq!(pr_notice(Some(PrSplit::Mine), &pr("changes_requested")).map(|n| n.title), Some("Changes requested".into()));
+        assert_eq!(pr_notice(Some(PrSplit::ReviewRequested), &pr("ci_running")), None, "leaving a needs-you split is not news");
+        assert_eq!(pr_notice(None, &pr("mine")), None);
     }
 }

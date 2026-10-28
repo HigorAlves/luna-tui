@@ -1,31 +1,30 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { TaskRow } from "../../domain/task.ts";
-import type { ExecResult } from "../../adapters/process/exec.ts";
+import type { Check } from "../github.ts";
+import { fakeGitHub } from "../../test/github.ts";
 import { ciWatchRunner } from "./ci.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 
-const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
-const checks = (...states: Array<[string, string]>) =>
-  ok(JSON.stringify(states.map(([name, state]) => ({ name, state, link: `https://github.com/a/b/actions/runs/${name === "lint" ? 111 : 222}/job/1` }))));
+const checks = (...states: Array<[string, string]>): Check[] =>
+  states.map(([name, state]) => ({ name, state, link: `https://github.com/a/b/actions/runs/${name === "lint" ? 111 : 222}/job/1` }));
 const finding = { path: "a.ts", line: 1, start_line: null, severity: "test", title: "red", body: "", suggestion_code: null, confidence: 1 };
 const pack = (answer: Record<string, unknown>): StageResult => ({ outcome: "pass", detail: { answer } });
 
-function setup(opts: { polls: ExecResult[]; pack?: StageResult; maxWaitMs?: number }) {
-  const calls: string[][] = [];
+function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number }) {
   let poll = 0;
-  const exec = vi.fn(async (command: string, args: string[]) => {
-    calls.push([command, ...args]);
-    if (args[1] === "checks") return opts.polls[Math.min(poll++, opts.polls.length - 1)]!;
-    if (args[0] === "pr" && args[1] === "view") return ok(JSON.stringify({ url: "https://github.com/a/b/pull/7", number: 7, isDraft: true }));
-    if (args[0] === "run" && args[1] === "view") return ok(`log of run ${args[2]}\nFAIL src/a.test.ts > boom\n`);
-    return ok();
+  const github = fakeGitHub({
+    prChecks: async () => opts.polls[Math.min(poll++, opts.polls.length - 1)]!,
+    findPr: async () => ({ url: "https://github.com/a/b/pull/7", number: 7, isDraft: true }),
+    failedRunLog: async (_slug, runId) => `log of run ${runId}\nFAIL src/a.test.ts > boom\n`,
+    rerunFailedJobs: async () => {},
   });
   const runPack = vi.fn(async (_context: StageContext, _ci?: unknown) => opts.pack ?? pack({ verdict: "green" }));
   const sleeps: number[] = [];
   const run = ciWatchRunner({
-    exec,
+    github,
     runPack,
+    slugOf: async () => "a/b",
     pollMs: 10,
     maxWaitMs: opts.maxWaitMs ?? 1_000,
     sleep: async (ms) => void sleeps.push(ms),
@@ -38,7 +37,7 @@ function setup(opts: { polls: ExecResult[]; pack?: StageResult; maxWaitMs?: numb
     approvals: [],
     signal: new AbortController().signal,
   } as StageContext;
-  return { run, context, calls, runPack, sleeps };
+  return { run, context, github, runPack, sleeps };
 }
 
 describe("ci_watch", () => {
@@ -50,18 +49,18 @@ describe("ci_watch", () => {
   });
 
   it("passes with a note when no checks are configured", async () => {
-    const { run, context } = setup({ polls: [ok("[]")] });
+    const { run, context } = setup({ polls: [[]] });
     const result = await run(context);
     expect(result.outcome).toBe("pass");
     expect(String(result.detail?.note)).toContain("no CI checks");
   });
 
   it("polls while checks are pending", async () => {
-    const { run, context, calls, sleeps } = setup({
+    const { run, context, github, sleeps } = setup({
       polls: [checks(["lint", "PENDING"]), checks(["lint", "IN_PROGRESS"]), checks(["lint", "SUCCESS"])],
     });
     expect((await run(context)).outcome).toBe("pass");
-    expect(calls.filter((c) => c[2] === "checks")).toHaveLength(3);
+    expect(github.prChecks).toHaveBeenCalledTimes(3);
     expect(sleeps).toEqual([10, 10]);
   });
 
@@ -76,12 +75,12 @@ describe("ci_watch", () => {
   });
 
   it("re-runs a flake once and passes when it goes green", async () => {
-    const { run, context, calls } = setup({
+    const { run, context, github } = setup({
       polls: [checks(["lint", "FAILURE"]), checks(["lint", "SUCCESS"])],
       pack: pack({ verdict: "flake", summary: "network" }),
     });
     const result = await run(context);
-    expect(calls).toContainEqual(["gh", "run", "rerun", "--failed", "111"]);
+    expect(github.rerunFailedJobs).toHaveBeenCalledWith("a/b", "111");
     expect(result.outcome).toBe("pass");
     expect(String(result.detail?.note)).toContain("flake, re-run passed");
   });
@@ -96,12 +95,12 @@ describe("ci_watch", () => {
   });
 
   it("hands the pack the PR, the checks and the failed run's log, fetched on the host", async () => {
-    const { run, context, runPack, calls } = setup({
+    const { run, context, runPack, github } = setup({
       polls: [checks(["lint", "FAILURE"], ["unit", "SUCCESS"])],
       pack: pack({ verdict: "fixable", summary: "lint broke", findings: [finding] }),
     });
     await run(context);
-    expect(calls).toContainEqual(["gh", "run", "view", "111", "--log-failed"]);
+    expect(github.failedRunLog).toHaveBeenCalledWith("a/b", "111");
     expect(runPack).toHaveBeenCalledWith(context, {
       pr: { number: 7, url: "https://github.com/a/b/pull/7" },
       checks: [

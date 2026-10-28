@@ -1,6 +1,28 @@
 import { describe, expect, it } from "vitest";
 
-import { ArtifactKind, PackId, StageInput, StageOutput, TaskState, TestCase, VerifyResult } from "./index.ts";
+import {
+  AgentRole,
+  ArtifactKind,
+  CloneInput,
+  COLUMN_OF,
+  MergeInput,
+  PACKS,
+  PackId,
+  PrAction,
+  PrAddressAnswer,
+  PrReviewAnswer,
+  PrSplit,
+  ReviewContext,
+  RUNNING,
+  StageInput,
+  StageOutput,
+  TaskRoute,
+  TaskSource,
+  TaskState,
+  TestCase,
+  ThreadsContext,
+  VerifyResult,
+} from "./index.ts";
 
 // The two examples are the contract's own: what the machine writes and what a runner answers.
 const stageInputExample = {
@@ -151,9 +173,9 @@ describe("StageOutput", () => {
 });
 
 describe("PackId", () => {
-  it("has the nine packs, each named after a task state", () => {
+  it("has the eleven packs, each named after a task state", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory"].sort(),
+      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing"].sort(),
     );
     for (const pack of PackId.options) expect(TaskState.options).toContain(pack);
   });
@@ -162,5 +184,61 @@ describe("PackId", () => {
 describe("ArtifactKind", () => {
   it("lists the nine kinds", () => {
     expect(ArtifactKind.options).toHaveLength(9);
+  });
+});
+
+describe("PR tasks", () => {
+  it("a PR source carries its head and base; an issue source is unchanged", () => {
+    const pr = TaskSource.parse({ kind: "github_pr", repo: "a/b", number: 7, url: "u", headRef: "feat/x", baseRef: "main" });
+    expect(pr.kind).toBe("github_pr");
+    expect(() => TaskSource.parse({ kind: "github_pr", repo: "a/b", number: 7, url: "u" })).toThrow();
+    expect(TaskSource.parse({ kind: "github", repo: "a/b", number: 7, url: "u" }).kind).toBe("github");
+  });
+
+  it("routes are a closed set: feature is today's pipeline, setup only proposes luna.yaml, the rest are PR actions", () => {
+    expect(TaskRoute.options).toEqual(["feature", "setup", "ci_fix", "review", "address"]);
+    expect(PrAction.options).toEqual(["ci_fix", "review", "address"]);
+  });
+
+  it("review and address answers have the shape the host posts from", () => {
+    const review = PrReviewAnswer.parse({ verdict: "comment", summary: "s", findings: [], comments: [{ path: "a.ts", line: 3, body: "nit" }] });
+    expect(review.comments[0]?.side).toBe("RIGHT");
+    const address = PrAddressAnswer.parse({ kind: "done", summary: "s", replies: [{ threadId: "T1", body: "fixed", resolve: true }] });
+    expect(address.replies).toHaveLength(1);
+    expect(() => PrReviewAnswer.parse({ verdict: "maybe", summary: "s", findings: [], comments: [] })).toThrow();
+  });
+
+  it("a stage input may carry a review or a threads context", () => {
+    const review = { pr: { repo: "a/b", number: 1, url: "u", title: "t", body: null, author: "x", baseRef: "main", headRef: "f" }, diff: "", files: [], existingComments: [] };
+    expect(ReviewContext.safeParse(review).success).toBe(true);
+    expect(ThreadsContext.safeParse({ pr: review.pr, threads: [{ id: "T", path: "a.ts", line: 1, comments: [{ author: "r", body: "b", at: "2026-10-27T00:00:00Z" }] }] }).success).toBe(true);
+    expect(StageInput.safeParse({ ...stageInputExample, pack: "reviewing", context: { projectContext: null, review } }).success).toBe(true);
+  });
+
+  it("the new states sit in Build and Verify and count as running", () => {
+    expect(COLUMN_OF.reviewing).toBe("Verify");
+    expect(COLUMN_OF.addressing).toBe("Build");
+    expect(RUNNING.has("reviewing")).toBe(true);
+    expect(RUNNING.has("addressing")).toBe(true);
+  });
+
+  it("the PR packs run as the orc roles with their helpers: a security pass for reviewing, a reply drafter for addressing", () => {
+    expect(PACKS.reviewing).toMatchObject({ agent: "pr-reviewer", helpers: ["security-reviewer"] });
+    expect(PACKS.reviewing.skills).toEqual(expect.arrayContaining(["inline-review", "review-contract", "caveman-review"]));
+    expect(PACKS.addressing).toMatchObject({ agent: "code-fixer", helpers: ["reply-drafter"] });
+    expect(PACKS.addressing.skills).toEqual(expect.arrayContaining(["receiving-code-review", "verification-before-completion"]));
+    for (const pack of Object.values(PACKS)) {
+      expect(Array.isArray(pack.helpers), pack.id).toBe(true);
+      // A role with helpers needs the Agent tool to dispatch them; one without must not carry it.
+      expect(pack.tools.includes("Agent"), pack.id).toBe(pack.helpers.length > 0);
+    }
+    expect(AgentRole.options).toEqual(expect.arrayContaining(["security-reviewer", "reply-drafter", "code-fixer"]));
+  });
+
+  it("a PR splits into one of six places and the snapshot shape parses", () => {
+    expect(PrSplit.options).toEqual(["review_requested", "ready_to_merge", "ci_failed", "ci_running", "changes_requested", "mine"]);
+    expect(CloneInput.safeParse({ repo: "owner/name", dest: "/x" }).success).toBe(true);
+    expect(CloneInput.safeParse({ repo: "owner", dest: "/x" }).success).toBe(false);
+    expect(MergeInput.parse({}).method).toBe("squash");
   });
 });

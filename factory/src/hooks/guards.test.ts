@@ -1,7 +1,7 @@
 import type { HookInput, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
 
-import { guardBash, guardWrite, preToolUseGuards } from "./guards.ts";
+import { branchPrefixFor, guardBash, guardWrite, preToolUseGuards } from "./guards.ts";
 import type { GuardContext } from "./guards.ts";
 
 const WRITABLE: GuardContext = { writable: true, branch: "task/abc" };
@@ -500,5 +500,14 @@ describe("guardWrite with moved roots", () => {
     expect(guardWrite("/srv/spike/work/.git/hooks/pre-commit", ctx)).toMatch(/never written/);
     expect(guardWrite("/work/src/cart.js", ctx)).toMatch(/outside the writable roots/);
     expect(guardWrite("/srv/spike/work/src/cart.js", { ...ctx, writable: false })).toMatch(/read-only stage/);
+  });
+});
+
+describe("branchPrefixFor", () => {
+  it("lets a PR task commit on the PR's own branch and keeps every other task on task/", () => {
+    expect(branchPrefixFor({ branch: "feat/export", source: { kind: "github_pr", repo: "o/a", number: 1, url: "u", headRef: "feat/export", baseRef: "main" } })).toBe("feat/export");
+    expect(branchPrefixFor({ branch: "task/t1-fix", source: null })).toBe("task/");
+    expect(branchPrefixFor({ branch: "task/t1-fix", source: { kind: "github", repo: "o/a", number: 1, url: "u" } })).toBe("task/");
+    expect(guardBash('git commit -m "fix: lint"', { writable: true, branch: "feat/export", branchPrefix: branchPrefixFor({ branch: "feat/export", source: { kind: "github_pr", repo: "o/a", number: 1, url: "u", headRef: "feat/export", baseRef: "main" } }) })).toBeNull();
   });
 });

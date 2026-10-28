@@ -16,7 +16,7 @@ containers, and stops at approval gates so you stay in control.
 
 ## Pipeline
 
-Every ticket moves Intake → Triage → Build → Verify → E2E/Evidence → Deliver → CI watch → Ship → Done, with an approval gate at the big steps. The agent stages run as stage packs in a throwaway Docker container through the Claude Agent SDK, with the roles, prompts, skills and guardrails that live in [`factory/`](factory/); Deliver, Ship and CI watch are plain `git`/`gh` host commands. Everything needed is in this repository: clone it, run it. Full stage-by-stage detail: [docs/architecture.md](docs/architecture.md).
+Every ticket moves Intake → Triage → Build → Verify → E2E/Evidence → Deliver → CI watch → Ship → Done, with an approval gate at the big steps. The agent stages run as stage packs in a throwaway Docker container through the Claude Agent SDK, with the roles, prompts, skills and guardrails that live in [`factory/`](factory/); Deliver, Ship and CI watch run on the host: git for the pushes, the GitHub API for the rest. Everything needed is in this repository: clone it, run it. Full stage-by-stage detail: [docs/architecture.md](docs/architecture.md).
 
 ## Install
 

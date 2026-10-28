@@ -3,11 +3,8 @@
 import { z } from "zod";
 
 import type { Column, TaskState } from "./index.ts";
-import { type ArtifactKind, StageOutcome, TaskSource } from "./stage.ts";
-
-/** `feature` is a ticket through the whole pipeline; `setup` only proposes the repo's luna.yaml and closes. */
-export const TaskKind = z.enum(["feature", "setup"]);
-export type TaskKind = z.infer<typeof TaskKind>;
+import type { PrSnapshot } from "./github.ts";
+import { type ArtifactKind, StageOutcome, type TaskRoute, TaskSource } from "./stage.ts";
 
 export const NewTaskInput = z.object({
   title: z.string().trim().min(1),
@@ -15,7 +12,6 @@ export const NewTaskInput = z.object({
   criteria: z.array(z.string().trim().min(1)).optional(),
   repoPath: z.string().nullable().optional(),
   source: TaskSource.nullable().optional(),
-  kind: TaskKind.optional(),
 });
 
 /** `POST /repos/setup`: have the setup pack propose a luna.yaml for the checkout at `repoPath`. */
@@ -86,10 +82,10 @@ export interface Task {
   description: string;
   criteria: string[];
   repoPath: string | null;
-  /** The tracker item this task came from, if any. */
+  /** The tracker item or PR this task came from, if any. */
   source: TaskSource | null;
-  /** A ticket (`feature`) or a one-off that proposes the repo's luna.yaml (`setup`). */
-  kind: TaskKind;
+  /** The graph the task walks; `feature` is the full pipeline. */
+  route: TaskRoute;
   branch: string | null;
   worktreePath: string | null;
   state: TaskState;
@@ -177,6 +173,7 @@ export interface TaskDetail {
  *   labelled `label` that follows `container`'s logs.
  * - `task.closed`: the task is done or deleted; the board closes its watch tab.
  * - `budget.alert`: a spend crossed 80, 90 or 100% of a ceiling (a task's, a repo's month's, the day's).
+ * - `github.prs`: the PR inbox changed; carries the whole snapshot.
  */
 export type StreamMessage =
   | { type: "task.updated"; task: Task }
@@ -185,7 +182,8 @@ export type StreamMessage =
   | { type: "task.deleted"; id: string }
   | { type: "task.metrics"; metrics: Metrics }
   | { type: "stage.started"; taskId: string; label: string; cwd: string; container: string }
-  | { type: "task.closed"; id: string };
+  | { type: "task.closed"; id: string }
+  | { type: "github.prs"; snapshot: PrSnapshot };
 
 /** A spend passing a threshold of a ceiling; raised once per scope and threshold. */
 export interface BudgetAlert {

@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type BudgetAlert, type Finding, RUNNING, type TaskSource, type TaskState } from "@hardness/contracts";
+import { type BudgetAlert, type Finding, RUNNING, type TaskRoute, type TaskSource, type TaskState } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -40,7 +40,10 @@ export interface NewTask {
   criteria?: string[];
   repoPath?: string | null;
   source?: TaskSource | null;
-  kind?: TaskRow["kind"];
+  /** Defaults to `feature`. A PR task also names the PR's branch and its prepared worktree. */
+  route?: TaskRoute;
+  branch?: string | null;
+  worktreePath?: string | null;
 }
 
 export interface PipelineOptions {
@@ -228,9 +231,11 @@ export class Pipeline {
       criteria: input.criteria ?? [],
       repoPath: input.repoPath ?? null,
       source: input.source ?? null,
-      kind: input.kind ?? "feature",
+      ...(input.route ? { route: input.route } : {}),
+      ...(input.branch !== undefined ? { branch: input.branch } : {}),
+      ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
     });
-    await this.log(task.id, "task.created", { title: task.title });
+    await this.log(task.id, "task.created", { title: task.title, ...(input.route && input.route !== "feature" ? { route: input.route } : {}) });
     return this.get(task.id);
   }
 
@@ -241,7 +246,7 @@ export class Pipeline {
       title: `Set up ${basename(repoPath)}`,
       description: `Propose the ${CONFIG_FILE} for ${repoPath}: its checks, the services its code needs, its toolchains and policy.`,
       repoPath,
-      kind: "setup",
+      route: "setup",
     });
     return this.dispatch(task.id, { type: "start", setup: true });
   }
@@ -317,9 +322,9 @@ export class Pipeline {
     return this.log(taskId, kind, payload);
   }
 
-  /** The task created from this external issue, if any. */
-  findBySource(repo: string, number: number): Promise<TaskRow | null> {
-    return this.store.findTaskBySource(repo, number);
+  /** The task created from this external issue (or, with `github_pr`, the latest from this PR), if any. */
+  findBySource(repo: string, number: number, kind: "github" | "github_pr" = "github"): Promise<TaskRow | null> {
+    return this.store.findTaskBySource(repo, number, kind);
   }
 
   /** Edits the ticket's text. Stages started after this see the new text. */
@@ -385,7 +390,7 @@ export class Pipeline {
   /** Starts the pipeline; a repo with no luna.yaml yet gets the setup gate before triage. */
   async start(id: string): Promise<TaskRow> {
     const task = await this.get(id);
-    const setup = task.kind === "setup" || (task.repoPath !== null && !this.hasConfig(task.repoPath));
+    const setup = task.route === "setup" || (task.repoPath !== null && !this.hasConfig(task.repoPath));
     return this.dispatch(id, { type: "start", setup });
   }
 

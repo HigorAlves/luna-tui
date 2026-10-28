@@ -120,7 +120,7 @@ describe("the setup gate", () => {
     const p = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: onDisk, writeConfig: async () => {} });
     stubs.plan("setup", { outcome: "pass", detail: { config: "a: 1\n" } }, { outcome: "pass", detail: { config: "b: 2\n" } });
     const task = await p.setupRepo(dir);
-    expect(task).toMatchObject({ kind: "setup", state: "awaiting_setup", title: `Set up ${dir.split("/").pop()}` });
+    expect(task).toMatchObject({ route: "setup", state: "awaiting_setup", title: `Set up ${dir.split("/").pop()}` });
 
     await p.decide(task.id, "sent_back", "add the lint check");
     expect(await stagesRun(task.id)).toEqual(["setup", "setup"]);

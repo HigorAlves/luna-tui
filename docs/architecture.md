@@ -9,7 +9,7 @@ Every ticket moves through these stages, from Intake (not ready yet) to Done:
 3. **Build**: the implementer agent writes the change on a task branch (a git worktree on the host).
 4. **Verify**: runs the project's own checks, then the review pack.
 5. **E2E and Evidence**: for a repo with a web surface, a QA agent drives the app in a browser (the `runner-qa` image) and writes a manifest, screenshots and video; repos with none skip with a recorded reason. Evidence then checks the manifest on the host and shows its verdict, artifact count and a few screenshot paths in the ship approval.
-6. **Deliver**: pushes the branch and opens a draft PR with `gh`, so CI starts early. Its body follows the caveman-pr shape (a one-line what, terse why bullets) and adds `Closes #N` when the ticket came from a GitHub issue in the same repo.
+6. **Deliver**: pushes the branch with git and opens a draft PR through the GitHub API, so CI starts early. Its body follows the caveman-pr shape (a one-line what, terse why bullets) and adds `Closes #N` when the ticket came from a GitHub issue in the same repo.
 7. **CI watch**: polls the PR's checks until they settle, outside the stage pool (polling computes nothing, so its slot goes to the queue meanwhile). A red run goes to the `ci_watch` pack: a fixable failure loops back to Build with its findings, a flake is re-run once, and infra or needs-debug failures escalate.
 8. **Ship**: marks the draft PR ready for review (it opens a ready PR only if Deliver never did), then you review before closing it. After a passing Ship, a read-only memory review (the `reviewing_memory` pack) looks at the task's slice ledger, its runs and `git log` and proposes rules for `docs/agents/project-context.md`; the last gate shows them, `a` commits them to the task branch (refused above 150 lines / 6 KB, pushed only if the branch has an upstream) and `A` skips them.
 
@@ -30,9 +30,21 @@ The machine is one service for every repo you point a task at, not one per repo:
 | Ship | `awaiting_ship`, `shipping`, `reviewing_memory` |
 | Done | `closed` |
 
-A task on a repo with no `luna.yaml` runs the `setup` stage first: the setup pack reads the checkout read-only and proposes the file, the machine proves every proposed check once with the proposed services beside it, and the `awaiting_setup` gate shows you the file and the proof. Approving writes `luna.yaml` into the checkout and the task goes on to triage; a `:setup <repo>` task (kind `setup`) closes instead. Sending it back with a note re-runs setup with the note as guidance. See [configuration](configuration.md).
+A task on a repo with no `luna.yaml` runs the `setup` stage first: the setup pack reads the checkout read-only and proposes the file, the machine proves every proposed check once with the proposed services beside it, and the `awaiting_setup` gate shows you the file and the proof. Approving writes `luna.yaml` into the checkout and the task goes on to triage; a `:setup <repo>` task (route `setup`) closes instead. Sending it back with a note re-runs setup with the note as guidance. See [configuration](configuration.md).
 
 The card states the board already shows map from the same data: a waiting gate is "needs you", a running stage is "working", `escalated` and an aborted run are "lost". Source of truth: `COLUMNS` and `COLUMN_OF` in `contracts/src/index.ts`.
+
+## PR tasks
+
+The board's `P` view lists every open PR involving you (the machine polls `gh search prs --review-requested=@me` and `--author=@me`, then one GraphQL call per PR) and splits them by what you do about them: Review requested, Ready to merge, CI failed, CI running, Changes requested, Mine. `m` merges a ready PR; `c`, `v` and `t` turn a PR into a **PR task**: a task whose `source.kind` is `github_pr` and whose `route` is `ci_fix`, `review` or `address`. The transition engine switches on the route first, so a PR task walks a short graph built from the same stages:
+
+| Route | Graph |
+|---|---|
+| `ci_fix` | `ci_watch` → closed on green; on red the ci-investigator pack runs and a fixable verdict goes `implementing` → `verifying` (the project's checks only, no review pack) → `delivering` (a push to the PR's branch) → `ci_watch` again, three strikes as today |
+| `review` | `reviewing`: the host fetches the diff, files and existing comments; the `pr-reviewer` role answers line-anchored comments and a verdict per `inline-review`, dispatching the `security-reviewer` helper when the diff touches a sensitive path; the host posts one COMMENT review at once. A `comment` verdict closes; `approve` / `request_changes` wait at the Ship gate (`a` posts it, `r` drops it) |
+| `address` | `addressing`: the host fetches the unresolved review threads; the `code-fixer` role categorizes each per `receiving-code-review` (action, question, nitpick, disagree), commits the fixes and has the `reply-drafter` helper write each reply; then `verifying` (checks only), then the follow-up `delivering` pushes, posts the replies and resolves the threads it marked, then `ci_watch` as in `ci_fix` |
+
+A PR task's worktree is checked out on the PR's own head branch (`<worktrees>/<repo>/pr-<n>-<branch>`), and that branch is the one its stages may commit to. Agents never hold a GitHub credential: everything they read about the PR comes in the stage input, everything that goes out is posted by the host after the stage. A PR from a fork can be reviewed but not fixed or addressed; a PR in a repo with no local checkout is read-only until the board clones it (`POST /github/clone`).
 
 ## Repository layout
 
@@ -52,18 +64,18 @@ Grouped by layer, not by technology:
 
 - `domain/` — pure types and logic with no I/O: task/stage-run/event rows, the transition engine, locked-files/pr-body/detect-checks helpers, memory-rule parsing, stage-input building.
 - `application/` — use cases and ports: `pipeline.ts` (orchestrates the transition engine and the stage runners), `task-store.ts` (the persistence port `pipeline.ts` depends on, never a concrete DB call), `ports.ts` (the `StageRunner`/`StageContext`/`StageResult` contract), the stage runners under `application/stages/` (`pack-runner.ts`, `verify.ts`, `deliver.ts`, `ship.ts`, `ci.ts`, `e2e.ts`, `evidence.ts`, `memory.ts`, `ingest.ts`, `stubs.ts`), and the GitHub poll loop (`intake.ts`).
-- `adapters/` — everything that talks to the outside world: `persistence/` (Postgres via TypeORM, implementing the `TaskStore` port), `http/` (the Hono API), `docker/` (the stage sandbox), `process/` (the generic subprocess runner), `git/` (worktrees), `github/` (the `gh` CLI). `http/` also announces running stage containers on the event stream, which the board follows in herdr tabs.
+- `adapters/` — everything that talks to the outside world: `persistence/` (Postgres via TypeORM, implementing the `TaskStore` port), `http/` (the Hono API), `docker/` (the stage sandbox), `process/` (the generic subprocess runner), `git/` (worktrees), `github/` (the GitHub API through Octokit, behind the `GitHub` port in `application/github.ts`). `http/` also announces running stage containers on the event stream, which the board follows in herdr tabs.
 - `bootstrap/` — wires the above together at startup (`stages.ts`); `main.ts` itself is just the entry point.
 
-Dependencies point inward: `adapters` depend on `application` ports, `application` depends on `domain` types, nothing in `domain` or `application` imports `typeorm`, `pg`, `hono`, or shells out to `docker`/`gh` directly.
+Dependencies point inward: `adapters` depend on `application` ports, `application` depends on `domain` types, nothing in `domain` or `application` imports `typeorm`, `pg`, `hono`, or shells out to `docker` directly, and nothing but `adapters/github/` imports Octokit.
 
-This is a lightweight application of ports-and-adapters, not a formal DI container: most stage runners already took their dependencies as plain function parameters before this layout existed (`deps.exec`, `deps.runPack`, `deps.sandbox`), so the move mostly made that existing seam's *location* match its *role*. A port got a named interface only where three or more call sites actually shared one (`TaskStore`, the `gh` CLI, the generic `exec`).
+This is a lightweight application of ports-and-adapters, not a formal DI container: most stage runners already took their dependencies as plain function parameters before this layout existed (`deps.exec`, `deps.runPack`, `deps.sandbox`), so the move mostly made that existing seam's *location* match its *role*. A port got a named interface only where three or more call sites actually shared one (`TaskStore`, `GitHub`, the generic `exec`).
 
 ## Shipping
 
 Approving the Ship gate runs `git push -u origin <task branch>` from the task's worktree, then `gh pr create` (or reuses the PR if one is already open for that branch). It needs, on the host:
 
-- The [`gh` CLI](https://cli.github.com/), signed in (`gh auth status`).
+- A GitHub token in `GITHUB_TOKEN` (or `GH_TOKEN`) with repo scope: every GitHub call goes through the API with it. Git itself stays yours: pushes and clones use your own git credentials.
 - A repo with an `origin` remote you can push to.
 
 Without either, the stage fails with a clear reason and escalates — nothing silently retries a `git push` against a repo with no remote.

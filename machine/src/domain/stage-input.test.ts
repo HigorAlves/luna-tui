@@ -114,11 +114,11 @@ describe("buildStageInput", () => {
     }
   });
 
-  it("has no plan before one is approved, and covers all nine packs", () => {
+  it("has no plan before one is approved, and covers all eleven packs", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["ci_watch", "e2e", "evidence", "implementing", "reviewing_memory", "setup", "test_design", "triage", "verifying"],
+      ["addressing", "ci_watch", "e2e", "evidence", "implementing", "reviewing", "reviewing_memory", "setup", "test_design", "triage", "verifying"],
     );
   });
 

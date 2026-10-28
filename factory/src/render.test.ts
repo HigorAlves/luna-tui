@@ -89,6 +89,22 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.implementing, input, template })).toContain("checks:\n(none declared; detect the suite from the tree)");
   });
 
+  it("renders the PR's diff and comments for reviewing, and each thread with its id for addressing", () => {
+    const pr = { repo: "o/a", number: 12, url: "https://github.com/o/a/pull/12", title: "Export CSV", body: "Adds it.", author: "them", baseRef: "main", headRef: "feat/export" };
+    const review = { pr, diff: "diff --git a/a.ts b/a.ts\n+x", files: [{ path: "a.ts", additions: 1, deletions: 0 }], existingComments: [{ path: "a.ts", line: 3, author: "x", body: "old note" }] };
+    const reviewed = renderPrompt({ pack: PACKS.reviewing, input: { ...input, pack: "reviewing", stage: "reviewing", context: { projectContext: null, review } }, template: "{{context.review}}" });
+    expect(reviewed).toContain("PR #12 Export CSV by @them: feat/export into main (https://github.com/o/a/pull/12)");
+    expect(reviewed).toContain("Adds it.");
+    expect(reviewed).toContain("- a.ts (+1 -0)");
+    expect(reviewed).toContain("- a.ts:3 @x: old note");
+    expect(reviewed).toContain("```diff\ndiff --git a/a.ts b/a.ts\n+x\n```");
+    const threads = { pr, threads: [{ id: "PRRT_1", path: "a.ts", line: 4, comments: [{ author: "them", body: "why?", at: "2026-10-27T10:00:00Z" }] }] };
+    const addressed = renderPrompt({ pack: PACKS.addressing, input: { ...input, pack: "addressing", stage: "addressing", context: { projectContext: null, threads } }, template: "{{context.threads}}" });
+    expect(addressed).toContain("### Thread PRRT_1 at a.ts:4");
+    expect(addressed).toContain("- @them (2026-10-27T10:00:00Z): why?");
+    expect(renderPrompt({ pack: PACKS.reviewing, input, template: "{{context.review}}|{{context.threads}}" })).toMatch(/\n\(none\)\|\(none\)$/);
+  });
+
   it("names a script pack's agent as script", () => {
     expect(renderPrompt({ pack: PACKS.evidence, input: { ...input, pack: "evidence", stage: "evidence" }, template: "{{agent}}" })).toMatch(/\nscript$/);
   });

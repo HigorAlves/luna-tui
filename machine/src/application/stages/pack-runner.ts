@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import type { CiContext, Ledger, PackId, RunSummary, ServiceSpec, TaskState } from "@hardness/contracts";
+import type { CiContext, Ledger, PackId, ReviewContext, RunSummary, ServiceSpec, TaskState, ThreadsContext } from "@hardness/contracts";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -66,8 +66,12 @@ const MINUTE = 60_000;
 const GIT_READ_ONLY = ["hooks", "config"];
 
 export interface AgentExtra {
-  /** ci_watch: what the host fetched about the PR's CI, since the sandbox has no gh credential. */
+  /** ci_watch: what the host fetched about the PR's CI, since the sandbox has no GitHub credential. */
   ci?: CiContext | null;
+  /** reviewing: the PR's diff, files and comments, fetched by the host. */
+  review?: ReviewContext | null;
+  /** addressing: the PR's unresolved threads, fetched by the host. */
+  threads?: ThreadsContext | null;
   /** reviewing_memory: the last implementing ledger and every earlier run, from the machine's records. */
   history?: { ledger: Ledger | null; runs: RunSummary[] } | null;
   /** setup: run over the repo checkout itself, read-only, no task worktree or branch. */
@@ -87,8 +91,9 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       ? { branch: task.branch, path: task.worktreePath }
       : workspaceFor(task, task.repoPath, deps.worktreesDir);
   // The branch prefix is a structural gate: whatever a task row says, a writable stage only
-  // ever commits to a branch the pipeline owns.
-  if (limits.writable && !workspace.branch.startsWith(TASK_BRANCH_PREFIX)) {
+  // ever commits to a branch the pipeline owns. A PR task owns the PR's own head branch.
+  const prBranch = task.source?.kind === "github_pr" ? task.source.headRef : null;
+  if (limits.writable && !workspace.branch.startsWith(TASK_BRANCH_PREFIX) && workspace.branch !== prBranch) {
     return {
       outcome: "fail",
       detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches` },
@@ -113,6 +118,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
     baseCommit: await branchBase(workspace.path, task.repoPath),
     ci: extra.ci ?? null,
+    review: extra.review ?? null,
+    threads: extra.threads ?? null,
     holdoutCases: policy.holdoutCases,
     qaTargets: policy.qaTargets,
     checks: policy.checks,

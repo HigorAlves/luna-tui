@@ -21,12 +21,13 @@ use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
+use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::{
     client::{Incoming, Machine},
-    discover::{discover_repos, repos_root},
+    discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, Look, Metrics, RepoMetrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
+        COLUMNS, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
         parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown, Slots,
     },
     store,
@@ -73,6 +74,7 @@ pub enum HelpFor {
     Inbox,
     Digest,
     Detail,
+    Pulls,
 }
 
 impl HelpFor {
@@ -83,6 +85,7 @@ impl HelpFor {
             HelpFor::Inbox => " Inbox keys · any key closes ",
             HelpFor::Digest => " Digest keys · any key closes ",
             HelpFor::Detail => " Ticket keys · any key closes ",
+            HelpFor::Pulls => " Pulls keys · any key closes ",
         }
     }
 
@@ -95,6 +98,7 @@ impl HelpFor {
             HelpFor::Inbox => INBOX_HELP,
             HelpFor::Digest => DIGEST_HELP,
             HelpFor::Detail => DETAIL_HELP,
+            HelpFor::Pulls => PULLS_HELP,
         }
     }
 
@@ -106,6 +110,7 @@ impl HelpFor {
             HelpFor::Inbox => INBOX_SECTIONS,
             HelpFor::Digest => DIGEST_SECTIONS,
             HelpFor::Detail => DETAIL_SECTIONS,
+            HelpFor::Pulls => PULLS_SECTIONS,
         }
     }
 }
@@ -167,6 +172,7 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
             ("F", "Floor: 7d and 30d metrics, a row per repo (tab focuses one, r refreshes, esc closes)"),
             ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
             ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
+            ("P", "Pulls: every open PR involving you, split by what you do; m merges, c/v/t dispatch an agent"),
         ],
     ),
     section(
@@ -179,7 +185,7 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
     section(
         "App",
         &[
-            (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest"),
+            (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs"),
             ("esc", "clear the filter"),
             ("?", "this help"),
             ("q", "quit"),
@@ -198,7 +204,7 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
             ("setup <repo>", "propose the repo's luna.yaml (a name under HARDNESS_REPOS_DIR, or a path)"),
             ("slots <n>", "resize the pool"),
             ("drain / resume", "take no new work / carry on"),
-            ("floor / inbox / digest", "open that view"),
+            ("floor / inbox / digest / prs", "open that view"),
             ("help", "this sheet"),
         ],
     ),
@@ -244,6 +250,29 @@ pub const DIGEST_SECTIONS: &[HelpSection] = &[section(
     ],
 )];
 
+pub const PULLS_SECTIONS: &[HelpSection] = &[
+    section(
+        "Move",
+        &[
+            ("j / k", "previous / next PR"),
+            ("h / l", "previous / next split (1-6 jump)"),
+            ("enter", "jump to its task on the board, else open the PR"),
+            ("o", "open the PR in the browser"),
+        ],
+    ),
+    section(
+        "Act",
+        &[
+            ("m", "merge: squash and delete the branch, after a yes (Ready to merge only)"),
+            ("c", "CI fix: an agent diagnoses the red run and pushes a fix"),
+            ("v", "review: an agent posts line comments; approve / request changes waits for you"),
+            ("t", "threads: an agent answers every unresolved review thread on your PR"),
+            ("x", "the same actions as a menu, with why a key is off"),
+        ],
+    ),
+    section("Other", &[("R", "poll GitHub now"), ("esc", "close")]),
+];
+
 pub const DETAIL_SECTIONS: &[HelpSection] = &[
     section("Read", &[("j / k", "scroll"), ("esc", "close")]),
     section(
@@ -276,6 +305,21 @@ pub const INBOX_HELP: &[(&str, &str)] = &[
     ("e", "edit in place"),
     ("A", "approve every ticket in the split, after one yes"),
     ("enter", "open the ticket"),
+    ("esc", "close"),
+];
+
+#[cfg(test)]
+pub const PULLS_HELP: &[(&str, &str)] = &[
+    ("j / k", "previous / next PR"),
+    ("h / l", "previous / next split (1-6 jump)"),
+    ("o", "open the PR in the browser"),
+    ("enter", "jump to its task on the board, else open the PR"),
+    ("m", "merge: squash and delete the branch, after a yes (Ready to merge only)"),
+    ("c", "CI fix: an agent diagnoses the red run and pushes a fix"),
+    ("v", "review: an agent posts line comments; approve / request changes waits for you"),
+    ("t", "threads: an agent answers every unresolved review thread on your PR"),
+    ("R", "poll GitHub now"),
+    ("x", "the same actions as a menu, with why a key is off"),
     ("esc", "close"),
 ];
 
@@ -313,7 +357,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("setup <repo>", "propose the repo's luna.yaml (a name under HARDNESS_REPOS_DIR, or a path)"),
     ("slots <n>", "resize the pool"),
     ("drain / resume", "take no new work / carry on"),
-    ("floor / inbox / digest", "open that view"),
+    ("floor / inbox / digest / prs", "open that view"),
     ("help", "this sheet"),
 ];
 
@@ -347,9 +391,10 @@ pub const HELP: &[(&str, &str)] = &[
     ("F", "Floor: 7d and 30d metrics, a row per repo (tab focuses one, r refreshes, esc closes)"),
     ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
     ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
+    ("P", "Pulls: every open PR involving you, split by what you do; m merges, c/v/t dispatch an agent"),
     ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
     ("x", "actions for the selected ticket (P resumes every paused one)"),
-    (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest"),
+    (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs"),
     ("esc", "clear the filter"),
     ("?", "this help"),
     ("q", "quit"),
@@ -508,6 +553,19 @@ pub enum Mode {
         all: Vec<String>,
         cursor: usize,
     },
+    /// `m` on a ready PR: one yes, then the machine squash-merges it.
+    ConfirmMerge { repo: String, number: u64 },
+    /// A dispatch on a PR the machine has no checkout of: pick the folder to clone it into
+    /// (the same filter-as-you-type list `R` uses, over folders); `then` runs once it lands.
+    ClonePrompt {
+        repo: String,
+        query: String,
+        all: Vec<String>,
+        cursor: usize,
+        then: PrAction,
+    },
+    /// `x` in the PR view: the keys for the selected PR, each with why it is off when it is.
+    PrActions { cursor: usize },
     Help(HelpFor),
 }
 
@@ -568,6 +626,12 @@ pub struct App {
     pub floor: Option<FloorState>,
     /// The Inbox view, open while this is `Some`.
     pub inbox: Option<InboxState>,
+    /// The PR inbox as the machine last sent it; empty until the first `github.prs` event.
+    pub prs: PrSnapshot,
+    /// The PR view, open while this is `Some`.
+    pub pulls: Option<PullsState>,
+    /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
+    pending_dispatch: Option<(String, PrAction)>,
     /// Tickets marked with `v`/`V`: `a`, `X`, `d`, `w` act on all of them.
     pub marked: BTreeSet<String>,
     /// The stage pool as `/health` last reported it; None until the first answer.
@@ -625,6 +689,9 @@ impl App {
             fold: false,
             floor: None,
             inbox: None,
+            prs: PrSnapshot::default(),
+            pulls: None,
+            pending_dispatch: None,
             marked: BTreeSet::new(),
             slots: None,
             digest: None,
@@ -762,8 +829,38 @@ impl App {
                     self.notices.push(Notice { title: "Budget".to_string(), body: line.clone() });
                     self.notify(format!("budget: {line}"), alert.pct >= 100);
                 }
+                Incoming::Message(StreamMessage::Prs { snapshot }) => self.take_prs(snapshot),
             }
         }
+    }
+
+    /// A fresh PR snapshot: notices for the PRs that moved into a split that needs you, the
+    /// dispatch a clone was holding, and the view's cursor kept inside its split.
+    fn take_prs(&mut self, snapshot: PrSnapshot) {
+        let before: std::collections::HashMap<String, Option<PrSplit>> =
+            self.prs.prs.iter().map(|p| (p.key(), p.split_enum())).collect();
+        for pr in &snapshot.prs {
+            if let Some(notice) = notify::pr_notice(before.get(&pr.key()).copied().flatten(), pr) {
+                self.notices.push(notice);
+            }
+        }
+        self.prs = snapshot;
+        if let Some(state) = self.pulls.as_mut() {
+            state.cursor = state.cursor.min(pulls::items(&self.prs.prs, state.split).len().saturating_sub(1));
+        }
+        if let Some((key, action)) = self.pending_dispatch.clone()
+            && let Some(pr) = self.prs.prs.iter().find(|p| p.key() == key && p.local_path.is_some()).cloned()
+        {
+            self.pending_dispatch = None;
+            self.dispatch_pr(&pr, action);
+        }
+    }
+
+    /// The PR under the cursor of the open PR view.
+    pub fn pr_under_cursor(&self) -> Option<PullRequest> {
+        let state = self.pulls.as_ref()?;
+        let items = pulls::items(&self.prs.prs, state.split);
+        items.get(state.cursor.min(items.len().saturating_sub(1))).map(|&i| self.prs.prs[i].clone())
     }
 
     fn shows_detail_of(&self, id: &str) -> bool {
@@ -804,7 +901,9 @@ impl App {
 
     /// How many tickets wait on you right now: the Board tab's badge.
     pub fn needs_you_count(&self) -> usize {
-        self.tasks.iter().filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated)).count()
+        let tickets = self.tasks.iter().filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated)).count();
+        let prs = self.prs.prs.iter().filter(|p| p.split_enum().is_some_and(PrSplit::needs_me)).count();
+        tickets + prs
     }
 
     /// Highlights a ticket. With `follow`, the board also moves to the ticket's column.
@@ -1232,6 +1331,9 @@ impl App {
         if self.digest.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_digest(key);
         }
+        if self.pulls.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_pulls(key);
+        }
         match &self.mode {
             Mode::Normal => self.handle_normal(key),
             Mode::Detail(id) => {
@@ -1253,6 +1355,9 @@ impl App {
             Mode::ConfirmMany { .. } => self.handle_confirm_many(key),
             Mode::Actions { .. } => self.handle_actions(key),
             Mode::RepoPicker { .. } => self.handle_repo_picker(key),
+            Mode::ConfirmMerge { .. } => self.handle_confirm_merge(key),
+            Mode::ClonePrompt { .. } => self.handle_clone_prompt(key),
+            Mode::PrActions { .. } => self.handle_pr_actions(key),
             Mode::Help(_) => {
                 let scroll = self.help_scroll.get();
                 match key.code {
@@ -1514,6 +1619,228 @@ impl App {
         Outcome::Continue
     }
 
+    /// Opens the PR view, refreshing the snapshot from the machine when the stream has not sent one yet.
+    fn open_pulls(&mut self) {
+        if self.prs.polled_at.is_none()
+            && let Ok(snapshot) = self.machine.prs()
+        {
+            self.take_prs(snapshot);
+        }
+        self.pulls = Some(PullsState::default());
+    }
+
+    /// The PR view's keys: move, switch split, open, merge, dispatch an agent, refresh.
+    fn handle_pulls(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.pulls.clone() else {
+            return Outcome::Continue;
+        };
+        let count = pulls::items(&self.prs.prs, state.split).len();
+        let under = self.pr_under_cursor();
+        let mut next = state.clone();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('P') | KeyCode::Char('q') => {
+                self.pulls = None;
+                return Outcome::Continue;
+            }
+            KeyCode::Char('?') => {
+                self.mode = Mode::Help(HelpFor::Pulls);
+                return Outcome::Continue;
+            }
+            KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(count.saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => next.cursor = state.cursor.saturating_sub(1),
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => {
+                next.split = state.split.next();
+                next.cursor = 0;
+            }
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => {
+                next.split = state.split.prev();
+                next.cursor = 0;
+            }
+            KeyCode::Char(d @ '1'..='6') => {
+                next.split = PrSplit::ALL[(d as usize) - ('1' as usize)];
+                next.cursor = 0;
+            }
+            KeyCode::Char('R') => {
+                match self.machine.refresh_prs() {
+                    Ok(snapshot) => {
+                        self.take_prs(snapshot);
+                        self.notify("polled GitHub", false);
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('o') => {
+                if let Some(pr) = under {
+                    self.open_url(&pr.url);
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Enter => {
+                if let Some(pr) = under {
+                    match pr.task.as_ref().map(|t| t.id.clone()) {
+                        Some(id) if self.task(&id).is_some() => {
+                            self.pulls = None;
+                            self.select(&id, true);
+                            self.detail_stale = true;
+                            self.detail_scroll.set(0);
+                            self.mode = Mode::Detail(id);
+                        }
+                        _ => self.open_url(&pr.url),
+                    }
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('x') => {
+                if under.is_some() {
+                    self.mode = Mode::PrActions { cursor: 0 };
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char(c) => {
+                if let (Some(pr), Some(key)) = (under, PrKey::ALL.iter().copied().find(|k| k.key() == c)) {
+                    self.pr_key(key, &pr);
+                }
+                return Outcome::Continue;
+            }
+            _ => {}
+        }
+        self.pulls = Some(next);
+        Outcome::Continue
+    }
+
+    /// Opens a URL in the browser, detached; says so when it cannot.
+    fn open_url(&mut self, url: &str) {
+        let (program, args) = opener_command(url);
+        if Command::new(program).args(args).spawn().is_err() {
+            self.notify(format!("could not open {url}"), true);
+        }
+    }
+
+    /// One of `m`, `c`, `v`, `t` on a PR: the blocker as a toast, a merge confirm, or a dispatch
+    /// (through the clone prompt when the machine has no checkout of the repo).
+    fn pr_key(&mut self, key: PrKey, pr: &PullRequest) {
+        if key != PrKey::Merge && pr.local_path.is_none() && pr.task.is_none() {
+            if let Some(action) = key.action() {
+                self.open_clone_prompt(pr, action);
+            }
+            return;
+        }
+        if let Some(why) = pulls::blocker(pr, key) {
+            self.notify(why, false);
+            return;
+        }
+        match key.action() {
+            None => self.mode = Mode::ConfirmMerge { repo: pr.repo.clone(), number: pr.number },
+            Some(action) => self.dispatch_pr(pr, action),
+        }
+    }
+
+    fn dispatch_pr(&mut self, pr: &PullRequest, action: PrAction) {
+        match self.machine.pr_action(&pr.repo, pr.number, action) {
+            Ok(task) => {
+                let id = task.id.clone();
+                self.upsert(task);
+                self.notify(format!("dispatched {} on {}: #{}", action.wire(), pr.key(), short_id(&id)), false);
+            }
+            Err(error) => self.notify(error, true),
+        }
+    }
+
+    fn open_clone_prompt(&mut self, pr: &PullRequest, then: PrAction) {
+        let all = repos_root().map(|root| discover_folders(&root)).unwrap_or_default();
+        if all.is_empty() {
+            self.notify(format!("no checkout of {}, and no HARDNESS_REPOS_DIR to clone into", pr.repo), true);
+            return;
+        }
+        self.mode = Mode::ClonePrompt { repo: pr.repo.clone(), query: String::new(), all, cursor: 0, then };
+    }
+
+    fn handle_confirm_merge(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') => {
+                let Mode::ConfirmMerge { repo, number } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                match self.machine.merge_pr(&repo, number) {
+                    Ok(()) => self.notify(format!("merged {repo}#{number}"), false),
+                    Err(error) => self.notify(error, true),
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The clone prompt: filter the folders, enter clones `<folder>/<name>` and holds the
+    /// dispatch until the next snapshot shows the checkout, esc leaves the PR read-only.
+    fn handle_clone_prompt(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::ClonePrompt { repo, query, all, cursor, then } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char(c) => {
+                query.push(c);
+                *cursor = 0;
+            }
+            KeyCode::Backspace => {
+                query.pop();
+                *cursor = 0;
+            }
+            KeyCode::Down => {
+                let len = Self::matching_repos(all, query).len();
+                if len > 0 {
+                    *cursor = (*cursor + 1).min(len - 1);
+                }
+            }
+            KeyCode::Up => *cursor = cursor.saturating_sub(1),
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let matches = Self::matching_repos(all, query);
+                let Some(folder) = matches.get(*cursor).map(|f| f.to_string()) else {
+                    return Outcome::Continue;
+                };
+                let (repo, then) = (repo.clone(), *then);
+                let name = repo.rsplit('/').next().unwrap_or(&repo).to_string();
+                let dest = format!("{}/{name}", folder.trim_end_matches('/'));
+                self.mode = Mode::Normal;
+                match self.machine.clone_repo(&repo, &dest) {
+                    Ok(()) => {
+                        self.pending_dispatch = Some((repo.clone(), then));
+                        self.notify(format!("cloning {repo} into {dest}; {} runs when it lands", then.wire()), false);
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// `x` in the PR view: a menu of the four keys, each line saying why it is off when it is.
+    fn handle_pr_actions(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::PrActions { cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let mut chosen = None;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(PrKey::ALL.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(PrKey::ALL[*cursor]),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Char(c) => chosen = PrKey::ALL.iter().copied().find(|k| k.key() == c),
+            _ => {}
+        }
+        if let Some(key) = chosen {
+            self.mode = Mode::Normal;
+            if let Some(pr) = self.pr_under_cursor() {
+                self.pr_key(key, &pr);
+            }
+        }
+        Outcome::Continue
+    }
+
     fn handle_confirm_approve_all(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Char('y') => {
@@ -1585,6 +1912,7 @@ impl App {
             }
             KeyCode::Char('I') => self.inbox = Some(InboxState::default()),
             KeyCode::Char('D') => self.digest = Some(DigestState::default()),
+            KeyCode::Char('P') => self.open_pulls(),
             KeyCode::Char('v') => {
                 // Toggle: remove it if it was marked, else mark it.
                 if let Some(id) = self.selected_id().filter(|id| !self.marked.remove(id)) {
@@ -2026,6 +2354,7 @@ impl App {
             }
             "inbox" => self.inbox = Some(InboxState::default()),
             "digest" => self.digest = Some(DigestState::default()),
+            "prs" | "pulls" => self.open_pulls(),
             "help" | "?" => self.mode = Mode::Help(HelpFor::Board),
             other => self.notify(format!("unknown command: {other} (try :help)"), true),
         }
@@ -2895,11 +3224,12 @@ mod tests {
         assert_eq!(flattened(HelpFor::Inbox), sorted(&[INBOX_HELP]));
         assert_eq!(flattened(HelpFor::Digest), sorted(&[DIGEST_HELP]));
         assert_eq!(flattened(HelpFor::Detail), sorted(&[DETAIL_HELP]));
+        assert_eq!(flattened(HelpFor::Pulls), sorted(&[PULLS_HELP]));
     }
 
     #[test]
     fn help_sections_are_named_and_not_empty() {
-        for ctx in [HelpFor::Board, HelpFor::Floor, HelpFor::Inbox, HelpFor::Digest, HelpFor::Detail] {
+        for ctx in [HelpFor::Board, HelpFor::Floor, HelpFor::Inbox, HelpFor::Digest, HelpFor::Detail, HelpFor::Pulls] {
             assert!(!ctx.sections().is_empty());
             assert!(ctx.sections().iter().all(|s| !s.heading.is_empty() && !s.rows.is_empty()));
         }
@@ -2934,5 +3264,119 @@ mod tests {
             vec!["/Developer/project-x/backend", "/Developer/project-x/frontend"],
         );
         assert_eq!(App::matching_repos(&all, "nope"), Vec::<&str>::new());
+    }
+}
+
+#[cfg(test)]
+mod pr_tests {
+    use super::*;
+    use crate::model::{PrSnapshot, PullRequest};
+    use crate::pulls::PrSplit;
+
+    fn pr(number: u64, split: &str, mine: bool, local: bool) -> PullRequest {
+        let local = if local { "\"/r/app\"" } else { "null" };
+        let author = if mine { "me" } else { "them" };
+        serde_json::from_str(&format!(
+            r#"{{"repo":"acme/app","number":{number},"title":"PR {number}","url":"https://github.com/acme/app/pull/{number}",
+            "author":"{author}","mine":{mine},"reviewRequested":{},"isDraft":false,"headRef":"feat/{number}","baseRef":"main",
+            "fromFork":false,"reviewDecision":null,"mergeable":"MERGEABLE","checks":{{"state":"none","passed":0,"total":0,"failed":[]}},
+            "unresolvedThreads":0,"split":"{split}","localPath":{local},"task":null,"updatedAt":"2026-10-27T0{number}:00:00Z"}}"#,
+            !mine
+        ))
+        .unwrap()
+    }
+
+    fn type_command(app: &mut App, text: &str) -> Outcome {
+        app.handle_key(KeyEvent::from(KeyCode::Char(':')));
+        for ch in text.chars() {
+            app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter))
+    }
+
+    fn app_with(prs: Vec<PullRequest>) -> App {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.clear();
+        app.toast = None;
+        app.take_notices();
+        app.tx.send(Incoming::Message(StreamMessage::Prs { snapshot: PrSnapshot { prs, polled_at: None, error: None } })).unwrap();
+        app.pump();
+        app
+    }
+
+    #[test]
+    fn p_opens_the_pr_view_and_its_keys_move_between_splits_and_rows() {
+        let mut app = app_with(vec![pr(1, "ready_to_merge", true, true), pr(2, "ready_to_merge", true, true), pr(3, "review_requested", false, true)]);
+        app.handle_key(KeyEvent::from(KeyCode::Char('P')));
+        let state = app.pulls.clone().expect("the PR view opens");
+        assert_eq!(state.split, PrSplit::ReviewRequested);
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(app.pulls.as_ref().unwrap().split, PrSplit::ReadyToMerge);
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.pulls.as_ref().unwrap().cursor, 1);
+        assert_eq!(app.pr_under_cursor().map(|p| p.number), Some(2));
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.pulls.as_ref().unwrap().cursor, 1, "stops at the last row");
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        assert_eq!(app.pulls.as_ref().unwrap().split, PrSplit::CiFailed);
+        assert_eq!(app.pulls.as_ref().unwrap().cursor, 0);
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Pulls)));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(app.pulls.is_none());
+        type_command(&mut app, "prs");
+        assert!(app.pulls.is_some(), ":prs opens it too");
+    }
+
+    #[test]
+    fn m_asks_before_merging_a_ready_pr_and_refuses_the_rest() {
+        let mut app = app_with(vec![pr(1, "ready_to_merge", true, true), pr(2, "ci_running", true, true)]);
+        app.handle_key(KeyEvent::from(KeyCode::Char('P')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('2')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        assert!(matches!(&app.mode, Mode::ConfirmMerge { repo, number } if repo == "acme/app" && *number == 1));
+        app.handle_key(KeyEvent::from(KeyCode::Char('n')));
+        assert!(matches!(app.mode, Mode::Normal));
+        app.handle_key(KeyEvent::from(KeyCode::Char('4')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("not ready to merge"));
+    }
+
+    #[test]
+    fn dispatch_keys_follow_the_blockers_and_a_missing_checkout_opens_the_clone_prompt() {
+        let mut app = app_with(vec![pr(1, "review_requested", false, false), pr(2, "ci_failed", true, true)]);
+        app.handle_key(KeyEvent::from(KeyCode::Char('P')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+        let Mode::ClonePrompt { repo, then, .. } = &app.mode else { panic!("no checkout opens the clone prompt: {:?}", app.toast.as_ref().map(|t| t.text.clone())) };
+        assert_eq!(repo, "acme/app");
+        assert_eq!(*then, PrAction::Review);
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal), "esc keeps the row read-only");
+        assert!(app.pulls.is_some());
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("review is for other people's PRs"));
+        app.handle_key(KeyEvent::from(KeyCode::Char('c')));
+        let toast = app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
+        assert!(toast.contains("machine unreachable") || toast.contains("unreachable"), "the dispatch reached the machine call: {toast}");
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        assert!(matches!(app.mode, Mode::PrActions { .. }));
+    }
+
+    #[test]
+    fn prs_that_need_you_count_on_the_badge_and_raise_a_notice_once() {
+        let mut app = app_with(vec![pr(1, "review_requested", false, true), pr(2, "mine", true, true)]);
+        assert_eq!(app.needs_you_count(), 1);
+        let notices = app.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].title, "Review requested");
+        app.tx.send(Incoming::Message(StreamMessage::Prs { snapshot: PrSnapshot { prs: vec![pr(1, "review_requested", false, true), pr(2, "ci_failed", true, true)], polled_at: None, error: None } })).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["CI failed"], "staying put is not news; a new split is");
+        assert_eq!(app.needs_you_count(), 2);
     }
 }

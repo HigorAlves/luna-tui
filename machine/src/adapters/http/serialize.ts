@@ -21,7 +21,7 @@ export const toTask = (row: TaskRow, usage: { spentUsd: number; workedMs: number
   criteria: row.criteria,
   repoPath: row.repoPath,
   source: row.source,
-  kind: row.kind,
+  route: row.route,
   branch: row.branch,
   worktreePath: row.worktreePath,
   state: row.state,

@@ -47,7 +47,7 @@ pub struct TaskSource {
     pub url: String,
 }
 
-fn feature_kind() -> String {
+fn feature_route() -> String {
     "feature".to_string()
 }
 
@@ -63,10 +63,10 @@ pub struct Task {
     pub worktree_path: Option<String>,
     pub state: String,
     pub column: String,
-    /// `feature` (a ticket) or `setup` (proposes the repo's luna.yaml, then closes). Absent
-    /// from machines that predate it.
-    #[serde(default = "feature_kind")]
-    pub kind: String,
+    /// Which graph the task walks: `feature` (a ticket), `setup` (proposes the repo's luna.yaml,
+    /// then closes) or a PR task's route. Absent from machines that predate it.
+    #[serde(default = "feature_route")]
+    pub route: String,
     pub waiting_on_you: bool,
     pub running: bool,
     /// Ready to run, but waiting for a free concurrency slot.
@@ -158,6 +158,124 @@ impl TaskDetail {
     }
 }
 
+/// What you can ask the machine to do about a PR, as `POST /github/prs/.../actions` takes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrAction {
+    CiFix,
+    Review,
+    Address,
+}
+
+impl PrAction {
+    pub fn wire(self) -> &'static str {
+        match self {
+            PrAction::CiFix => "ci_fix",
+            PrAction::Review => "review",
+            PrAction::Address => "address",
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct PrCheck {
+    pub name: String,
+    pub state: String,
+    pub url: Option<String>,
+}
+
+/// A PR's checks rolled up: `none`, `pending`, `success` or `failure`, with the failed ones named.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct PrChecks {
+    pub state: String,
+    pub passed: u64,
+    pub total: u64,
+    pub failed: Vec<PrCheck>,
+}
+
+/// The PR task in flight for a PR, if any.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct PrTask {
+    pub id: String,
+    pub state: String,
+    pub route: String,
+}
+
+/// One open pull request involving you, as the machine's PR inbox shows it.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequest {
+    pub repo: String,
+    pub number: u64,
+    pub title: String,
+    pub url: String,
+    pub author: String,
+    pub mine: bool,
+    #[allow(dead_code)] // the split already folds it in; kept for a future filter
+    pub review_requested: bool,
+    pub is_draft: bool,
+    pub head_ref: String,
+    #[allow(dead_code)]
+    pub base_ref: String,
+    pub from_fork: bool,
+    pub review_decision: Option<String>,
+    #[allow(dead_code)]
+    pub mergeable: String,
+    pub checks: PrChecks,
+    pub unresolved_threads: u64,
+    /// The machine's split name; `split_enum` reads it.
+    pub split: String,
+    pub local_path: Option<String>,
+    pub task: Option<PrTask>,
+    pub updated_at: String,
+}
+
+impl PullRequest {
+    /// `owner/name#12`: how a PR is told apart, and how a notice names it.
+    pub fn key(&self) -> String {
+        format!("{}#{}", self.repo, self.number)
+    }
+
+    pub fn split_enum(&self) -> Option<crate::pulls::PrSplit> {
+        crate::pulls::PrSplit::from_wire(&self.split)
+    }
+
+    /// `✓ 3/3`, `◐ 2/3`, `✗ lint`, or `no checks`.
+    pub fn checks_label(&self) -> String {
+        match self.checks.state.as_str() {
+            "none" => "no checks".to_string(),
+            "failure" => {
+                let names: Vec<&str> = self.checks.failed.iter().map(|c| c.name.as_str()).take(2).collect();
+                let more = if self.checks.failed.len() > 2 { format!(" +{}", self.checks.failed.len() - 2) } else { String::new() };
+                format!("✗ {}{more}", names.join(", "))
+            }
+            "pending" => format!("◐ {}/{}", self.checks.passed, self.checks.total),
+            _ => format!("✓ {}/{}", self.checks.passed, self.checks.total),
+        }
+    }
+
+    /// `draft`, `approved`, `changes requested`, `review needed` or `no review`.
+    pub fn review_label(&self) -> &'static str {
+        if self.is_draft {
+            return "draft";
+        }
+        match self.review_decision.as_deref() {
+            Some("APPROVED") => "approved",
+            Some("CHANGES_REQUESTED") => "changes requested",
+            Some("REVIEW_REQUIRED") => "review needed",
+            _ => "no review",
+        }
+    }
+}
+
+/// `GET /github/prs` and the `github.prs` stream event.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PrSnapshot {
+    pub prs: Vec<PullRequest>,
+    pub polled_at: Option<String>,
+    pub error: Option<String>,
+}
+
 /// Messages on the machine's `/events` stream.
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type")]
@@ -177,6 +295,9 @@ pub enum StreamMessage {
     /// A spend crossed 80, 90 or 100% of a ceiling.
     #[serde(rename = "budget.alert")]
     BudgetAlert { alert: BudgetAlert },
+    /// The PR inbox changed; the whole snapshot rides along.
+    #[serde(rename = "github.prs")]
+    Prs { snapshot: PrSnapshot },
 }
 
 /// `budget.alert`: a task's, a repo's month's or the day's spend passing a threshold.
@@ -438,7 +559,7 @@ impl Task {
     /// The title as a card reads it: issue number first when the task has one.
     /// The card's first line: the issue number when linked, a gear for a setup task, the title.
     pub fn card_label(&self) -> String {
-        let setup = if self.kind == "setup" { "⚙ " } else { "" };
+        let setup = if self.route == "setup" { "⚙ " } else { "" };
         format!("{setup}{}{}", self.issue_prefix(), self.title)
     }
 
@@ -486,6 +607,7 @@ impl Task {
             "awaiting_answers" => "answer questions".to_string(),
             "awaiting_approval" => "approve plan".to_string(),
             "awaiting_test_check" => "check tests".to_string(),
+            "awaiting_ship" if self.route == "review" => "post the verdict".to_string(),
             "awaiting_ship" => "choose ship".to_string(),
             "shipping" => "opening PR".to_string(),
             "reviewing_memory" => "review memory".to_string(),
@@ -783,9 +905,9 @@ mod tests {
     }
 
     #[test]
-    fn the_setup_gate_reads_as_approve_setup_and_a_task_without_a_kind_is_a_feature() {
+    fn the_setup_gate_reads_as_approve_setup_and_a_task_without_a_route_is_a_feature() {
         let task: Task = serde_json::from_str(&task_json("")).unwrap();
-        assert_eq!(task.kind, "feature");
+        assert_eq!(task.route, "feature");
         let mut setup = task.clone();
         setup.state = "awaiting_setup".to_string();
         assert_eq!(setup.status_label(), "approve setup");
@@ -912,7 +1034,7 @@ mod tests {
         let plain: Task = serde_json::from_str(&task_json("")).unwrap();
         assert_eq!(linked.card_label(), "#42 Login page");
         assert_eq!(plain.card_label(), "Login page");
-        let setup: Task = serde_json::from_str(&task_json(r#","kind":"setup""#)).unwrap();
+        let setup: Task = serde_json::from_str(&task_json(r#","route":"setup""#)).unwrap();
         assert_eq!(setup.card_label(), "⚙ Login page", "a setup task reads apart on the board");
     }
 
@@ -1010,5 +1132,50 @@ mod tests {
         assert_eq!(fmt_usd(Some(1.234)), "$1.23");
         assert_eq!(fmt_usd(Some(0.0)), "$0.00");
         assert_eq!(fmt_usd(None), "–");
+    }
+}
+
+#[cfg(test)]
+mod pr_tests {
+    use super::*;
+
+    #[test]
+    fn a_github_prs_event_carries_the_snapshot_and_unknown_fields_are_ignored() {
+        let json = r#"{"type":"github.prs","snapshot":{"polledAt":"2026-10-27T10:00:00Z","error":null,"prs":[
+            {"repo":"o/a","number":12,"title":"Export CSV","url":"https://github.com/o/a/pull/12","author":"them",
+             "mine":false,"reviewRequested":true,"isDraft":false,"headRef":"feat/export","baseRef":"main","fromFork":false,
+             "reviewDecision":"APPROVED","mergeable":"MERGEABLE","checks":{"state":"failure","passed":1,"total":2,
+             "failed":[{"name":"lint","state":"FAILURE","url":null}]},"unresolvedThreads":2,"split":"review_requested",
+             "localPath":null,"task":{"id":"t1","state":"reviewing","route":"review"},"updatedAt":"2026-10-27T09:00:00Z","extra":1}]}}"#;
+        let message: StreamMessage = serde_json::from_str(json).unwrap();
+        let StreamMessage::Prs { snapshot } = message else { panic!("not a prs message") };
+        assert_eq!(snapshot.polled_at.as_deref(), Some("2026-10-27T10:00:00Z"));
+        let pr = &snapshot.prs[0];
+        assert_eq!(pr.key(), "o/a#12");
+        assert_eq!(pr.split_enum(), Some(crate::pulls::PrSplit::ReviewRequested));
+        assert_eq!(pr.checks.failed[0].name, "lint");
+        assert_eq!(pr.task.as_ref().map(|t| t.route.as_str()), Some("review"));
+        assert_eq!(pr.checks_label(), "✗ lint");
+        assert_eq!(pr.review_label(), "approved");
+    }
+
+    #[test]
+    fn the_checks_and_review_labels_read_at_a_glance() {
+        let mut pr: PullRequest = serde_json::from_str(r#"{"repo":"o/a","number":1,"title":"t","url":"u","author":"me","mine":true,
+            "reviewRequested":false,"isDraft":true,"headRef":"h","baseRef":"main","fromFork":false,"reviewDecision":null,
+            "mergeable":"UNKNOWN","checks":{"state":"pending","passed":2,"total":3,"failed":[]},"unresolvedThreads":0,
+            "split":"mine","localPath":"/r/a","task":null,"updatedAt":"2026-10-27T09:00:00Z"}"#).unwrap();
+        assert_eq!(pr.checks_label(), "◐ 2/3");
+        assert_eq!(pr.review_label(), "draft");
+        pr.checks.state = "success".into();
+        pr.is_draft = false;
+        pr.review_decision = Some("CHANGES_REQUESTED".into());
+        assert_eq!(pr.checks_label(), "✓ 2/3");
+        assert_eq!(pr.review_label(), "changes requested");
+        pr.checks.state = "none".into();
+        pr.review_decision = None;
+        assert_eq!(pr.checks_label(), "no checks");
+        assert_eq!(pr.review_label(), "no review");
+        assert_eq!(PrAction::CiFix.wire(), "ci_fix");
     }
 }

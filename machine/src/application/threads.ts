@@ -5,7 +5,7 @@
 import { WAITING_ON_USER, type TaskState } from "@hardness/contracts";
 import { basename } from "node:path";
 
-import { defaultGh, type Gh } from "../adapters/github/gh.ts";
+import { type GitHub, messageOf } from "./github.ts";
 import type { EventRow, TaskRow } from "../domain/task.ts";
 import type { Pipeline } from "./pipeline.ts";
 
@@ -20,8 +20,8 @@ export interface ThreadRepliesOptions {
   pipeline: Pick<Pipeline, "get" | "events" | "record">;
   /** `MACHINE_THREAD_REPLIES=off` turns every reply off. */
   enabled: boolean;
-  /** Runs the gh CLI, for issue comments. Tests inject a fake. */
-  gh?: Gh;
+  /** Posts the issue comments. */
+  github: GitHub;
   slack?: SlackOptions;
 }
 
@@ -37,16 +37,13 @@ const ASKS: Partial<Record<TaskState, string>> = {
 const SLACK_API = "https://slack.com/api/chat.postMessage";
 
 export class ThreadReplies {
-  private readonly gh: Gh;
   private readonly pending = new Set<Promise<void>>();
   /** Slack thread per task, once known; filled from `thread.opened` events after a restart. */
   private readonly threads = new Map<string, string>();
   /** PR urls already announced per task. */
   private readonly announced = new Map<string, Set<string>>();
 
-  constructor(private readonly options: ThreadRepliesOptions) {
-    this.gh = options.gh ?? defaultGh;
-  }
+  constructor(private readonly options: ThreadRepliesOptions) {}
 
   /** Reacts to one pipeline event. Never throws; failures are logged. Returns once sent. */
   handle(event: EventRow): Promise<void> {
@@ -112,8 +109,11 @@ export class ThreadReplies {
   private async comment(task: TaskRow, body: string): Promise<void> {
     const source = task.source;
     if (!source || source.kind !== "github") return;
-    const result = await this.gh(["issue", "comment", String(source.number), "--repo", source.repo, "--body", body]);
-    if (result.code !== 0) console.warn(`gh issue comment failed for ${source.repo}#${source.number}: ${result.stderr.trim()}`);
+    try {
+      await this.options.github.commentOnIssue(source.repo, source.number, body);
+    } catch (error) {
+      console.warn(`issue comment failed for ${source.repo}#${source.number}: ${messageOf(error)}`);
+    }
   }
 
   /** The task's Slack thread, from memory or from the `thread.opened` event a previous machine logged. */

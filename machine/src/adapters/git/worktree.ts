@@ -189,3 +189,37 @@ export async function dirtyFiles(path: string): Promise<string[]> {
   const status = await execOrThrow("git", [...HOST_GIT, "-C", path, "status", "--porcelain"]);
   return status === "" ? [] : status.split("\n");
 }
+
+/** `owner/name` of the checkout's `origin` remote, or null when it has none or it is not on GitHub. */
+export async function originSlugOf(cwd: string): Promise<string | null> {
+  const url = await exec("git", [...HOST_GIT, "-C", cwd, "remote", "get-url", "origin"]);
+  if (url.code !== 0) return null;
+  const match = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?\s*$/.exec(url.stdout.trim());
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+
+/** A PR task's checkout: `<dir>/<repo>/pr-<number>-<head slug>`, beside the task worktrees. */
+export function prWorktreePath(repoPath: string, worktreesDir: string, number: number, headRef: string): string {
+  return join(worktreesDir, basename(repoPath), `pr-${number}-${slug(headRef)}`);
+}
+
+/**
+ * Checks a PR's head branch out at `path`, tracking `origin/<headRef>` after a fetch, so a
+ * fix lands on the PR's own branch. An existing worktree is reused (its stale lock cleared),
+ * not reset: a retry continues from what the last attempt pushed.
+ */
+export async function ensurePrWorktree(repoPath: string, headRef: string, path: string): Promise<void> {
+  if (existsSync(join(path, ".git"))) {
+    await clearStaleLock(path);
+    return;
+  }
+  await exec("git", [...HOST_GIT, "-C", repoPath, "worktree", "prune"]);
+  const fetched = await exec(
+    "git",
+    [...HOST_GIT, "-C", repoPath, "fetch", "--quiet", "origin", `+refs/heads/${headRef}:refs/remotes/origin/${headRef}`],
+    { timeoutMs: FETCH_TIMEOUT_MS },
+  );
+  if (fetched.code !== 0) throw new Error(`git fetch origin ${headRef} failed: ${(fetched.stderr || fetched.stdout).trim()}`);
+  await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "add", "-B", headRef, path, `origin/${headRef}`]);
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "branch", "--set-upstream-to", `origin/${headRef}`, headRef]);
+}
