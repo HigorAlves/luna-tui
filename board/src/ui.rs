@@ -18,10 +18,11 @@ use tui_textarea::TextArea;
 use crate::detail::{self, DetailView};
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
+use crate::keys::{self, Avail, HelpRow, Scope};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState};
 use crate::{
-    app::{ACTIONS, App, Density, FloorState, GroupBy, HelpFor, Mode},
+    app::{App, Density, FloorState, GroupBy, Mode},
     model::{
         COLUMNS, JiraIssueHit, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
         fmt_usd, repo_colour_slot, sla_targets, spend_p90, now_secs, unix_secs,
@@ -114,28 +115,32 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if let Some(floor) = &app.floor {
         render_floor(frame, body, floor);
         frame.render_widget(footer_line(app), footer);
-        if let Mode::Help(ctx) = &app.mode {
-            let max = render_help(frame, *ctx, app.help_scroll.get());
-            app.help_max.set(max);
-            app.help_scroll.set(app.help_scroll.get().min(max));
+        if matches!(app.mode, Mode::Help { .. }) {
+            render_help(frame, app);
         }
         return;
     }
-    if let Some(digest) = app.digest.as_ref().filter(|_| matches!(app.mode, Mode::Normal)) {
+    if let Some(digest) = app.digest.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
         render_digest(frame, body, app, digest);
         frame.render_widget(footer_line(app), footer);
+        if matches!(app.mode, Mode::Help { .. }) {
+            render_help(frame, app);
+        }
         return;
     }
-    if let Some(inbox) = app.inbox.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::ConfirmApproveAll(_))) {
+    if let Some(inbox) = app.inbox.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::ConfirmApproveAll(_) | Mode::Help { .. })) {
         render_inbox(frame, body, app, inbox);
         frame.render_widget(footer_line(app), footer);
         if let Mode::ConfirmApproveAll(ids) = &app.mode {
             render_note(frame, " Approve them all? ", &format!("{} ticket(s) in Approve get a yes, each with no guidance.  y / n", ids.len()));
         }
+        if matches!(app.mode, Mode::Help { .. }) {
+            render_help(frame, app);
+        }
         return;
     }
     if let Some(state) = app.pulls.as_ref().filter(|_| {
-        matches!(app.mode, Mode::Normal | Mode::ConfirmMerge { .. } | Mode::ClonePrompt { .. } | Mode::PrActions { .. } | Mode::Help(_))
+        matches!(app.mode, Mode::Normal | Mode::ConfirmMerge { .. } | Mode::ClonePrompt { .. } | Mode::PrActions { .. } | Mode::Help { .. })
     }) {
         render_pulls(frame, body, app, state);
         frame.render_widget(footer_line(app), footer);
@@ -145,10 +150,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
             Mode::ClonePrompt { repo, query, all, cursor, .. } => render_clone_prompt(frame, repo, query, all, *cursor),
             Mode::PrActions { cursor } => render_pr_actions(frame, app, *cursor),
-            Mode::Help(ctx) => {
-                let max = render_help(frame, *ctx, app.help_scroll.get());
-                app.help_scroll.set(app.help_scroll.get().min(max));
-            }
+            Mode::Help { .. } => render_help(frame, app),
             _ => {}
         }
         return;
@@ -162,7 +164,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 | Mode::SlackTask { .. }
                 | Mode::SlackWatchAdd { .. }
                 | Mode::SlackActions { .. }
-                | Mode::Help(_)
+                | Mode::Help { .. }
         )
     }) {
         render_slack(frame, body, app, state);
@@ -176,10 +178,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
             Mode::SlackTask { id, title, repo } => render_slack_task(frame, app, id, title, repo.as_deref()),
             Mode::SlackWatchAdd { query, cursor } => render_slack_watch_add(frame, app, query, *cursor),
             Mode::SlackActions { cursor } => render_slack_actions(frame, app, *cursor),
-            Mode::Help(ctx) => {
-                let max = render_help(frame, *ctx, app.help_scroll.get());
-                app.help_scroll.set(app.help_scroll.get().min(max));
-            }
+            Mode::Help { .. } => render_help(frame, app),
             _ => {}
         }
         return;
@@ -247,6 +246,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     .clone()
                     .border_type(BorderType::Rounded)
                     .border_style(Style::new().fg(c(mode_color)))
+                    .title(Line::from(format!("· {} ", keys::editor_line(app))).fg(c(SUBTEXT0)))
                     .title_bottom(Line::from(label).bold().fg(c(mode_color)).left_aligned());
                 if let Some(task) = app.task(id) {
                     block = block.title_bottom(
@@ -283,7 +283,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
                         .border_style(Style::new().fg(c(border)))
                         .title(title);
                     if focused {
-                        block = block.title_bottom(Line::from(label).bold().fg(c(mode_color)).left_aligned());
+                        block = block
+                            .title(Line::from(format!("· {} ", keys::editor_line(app))).fg(c(SUBTEXT0)))
+                            .title_bottom(Line::from(label).bold().fg(c(mode_color)).left_aligned());
                     }
                     area.set_block(block);
                 }
@@ -324,11 +326,8 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 render_confirm(frame, task, &format!(" unlink {key}? "), "The ticket forgets the issue; nothing changes in Jira.");
             }
         }
-        Mode::Help(ctx) => {
-            let max = render_help(frame, *ctx, app.help_scroll.get());
-            app.help_max.set(max);
-            app.help_scroll.set(app.help_scroll.get().min(max));
-        }
+        Mode::Help { .. } => render_help(frame, app),
+        Mode::Command { text, pick } => render_completions(frame, text, *pick),
         _ => {}
     }
 }
@@ -400,36 +399,8 @@ fn footer_line(app: &App) -> Line<'static> {
         let color = if toast.error { RED } else { GREEN };
         return Line::from(Span::from(format!(" {}", toast.text)).fg(c(color)).bold());
     }
-
-    if app.floor.is_some() && matches!(app.mode, Mode::Normal) {
-        return hint(&[("tab", "next repo"), ("r", "refresh"), ("esc", "close")]);
-    }
-    if app.digest.is_some() && matches!(app.mode, Mode::Normal) {
-        return hint(&[("j/k", "move"), ("enter", "jump to the ticket"), ("o", "open the PR"), ("esc", "close")]);
-    }
-    if app.inbox.is_some() && matches!(app.mode, Mode::Normal) {
-        return hint(&[("j/k", "move"), ("h/l", "split"), ("a/r/e", "act"), ("A", "approve all"), ("enter", "open"), ("esc", "close")]);
-    }
-    if app.pulls.is_some() && matches!(app.mode, Mode::Normal) {
-        return hint(&[("j/k", "move"), ("h/l", "split"), ("m", "merge"), ("c/v/t", "CI fix / review / threads"), ("o", "open"), ("R", "poll"), ("x", "menu"), ("esc", "close")]);
-    }
-    if let Some(state) = app.slack.as_ref().filter(|_| matches!(app.mode, Mode::Normal)) {
-        if state.watches.is_some() {
-            return hint(&[("j/k", "move"), ("n", "add"), ("e", "floor"), ("d", "delete"), ("space", "on/off"), ("esc", "close")]);
-        }
-        return hint(&[
-            ("j/k", "move"),
-            ("h/l 1-6", "split"),
-            ("r", "reply"),
-            ("t", "ticket"),
-            ("d", "done"),
-            ("s", "snooze"),
-            ("! -", "priority"),
-            ("W", "watches"),
-            ("o", "open"),
-            ("R", "poll"),
-            ("esc", "close"),
-        ]);
+    if let Some((prefix, seconds)) = app.which_key() {
+        return which_key_line(prefix, &seconds);
     }
 
     match &app.mode {
@@ -438,47 +409,22 @@ fn footer_line(app: &App) -> Line<'static> {
             Span::from(format!("{buf}▏")),
             Span::from("   enter create and edit · esc cancel").fg(c(SUBTEXT0)),
         ]),
-        Mode::EditTicket { vim, .. } | Mode::Answer { vim, .. } | Mode::EditCases { vim, .. } | Mode::SlackReply { vim, .. } => {
+        Mode::EditTicket { .. } | Mode::Answer { .. } | Mode::EditCases { .. } | Mode::SlackReply { .. } | Mode::EditPlan { .. } => {
             let save = match app.mode {
                 Mode::Answer { .. } => "send answers",
                 Mode::SlackReply { .. } => "send",
+                Mode::EditPlan { .. } => "save both",
                 _ => "save",
             };
-            match vim.mode() {
-                crate::vim::Mode::Normal => hint(&[
-                    ("i/a/o", "insert"),
-                    ("hjkl", "move"),
-                    ("dd/x", "delete"),
-                    ("ctrl+s", save),
-                    ("esc", "cancel"),
-                ]),
-                crate::vim::Mode::Insert => hint(&[("esc", "normal mode"), ("ctrl+s", save)]),
+            let mut keys: Vec<(String, String)> = Vec::new();
+            if let Mode::EditPlan { .. } = app.mode {
+                keys.push(("tab".to_string(), "switch pane".to_string()));
             }
-        }
-        Mode::EditPlan { focus, plan_vim, ticket_vim, .. } => {
-            let vim = match focus {
-                crate::app::PlanPane::Plan => plan_vim,
-                crate::app::PlanPane::Ticket => ticket_vim,
-            };
-            let pane = match focus {
-                crate::app::PlanPane::Plan => "plan",
-                crate::app::PlanPane::Ticket => "ticket",
-            };
-            match vim.mode() {
-                crate::vim::Mode::Normal => hint(&[
-                    ("tab", "switch pane"),
-                    ("i/a/o", "insert"),
-                    ("hjkl", "move"),
-                    ("ctrl+s", "save both"),
-                    ("esc", "cancel"),
-                ]),
-                crate::vim::Mode::Insert => {
-                    Line::from(vec![
-                        Span::from(format!(" editing the {pane} ")).fg(c(ACCENT)).bold(),
-                        Span::from("   esc normal mode · ctrl+s save both").fg(c(SUBTEXT0)),
-                    ])
-                }
+            for b in keys::footer_keys(app, Scope::Editor, 8) {
+                let label = if b.keys == "ctrl+s" { save.to_string() } else { b.label.to_string() };
+                keys.push((b.short_keys(), label));
             }
+            hint_owned(&keys)
         }
         Mode::Filter => Line::from(vec![
             Span::from(" filter: ").fg(c(ACCENT)).bold(),
@@ -500,44 +446,55 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::ConfirmDelete(_) | Mode::ConfirmAbort(_) | Mode::ConfirmWorktree(_) => {
             hint(&[("y", "yes"), ("n", "no")])
         }
-        Mode::Actions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
+        Mode::Actions { .. } | Mode::PrActions { .. } | Mode::SlackActions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
         Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
         Mode::ConfirmMerge { .. } => hint(&[("y", "merge"), ("n", "cancel")]),
         Mode::JiraLink { .. } => hint(&[("type", "search from 3 chars"), ("↑/↓", "move"), ("enter", "link (row 0 creates)"), ("ctrl+n", "create"), ("esc", "cancel")]),
         Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
         Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
-        Mode::PrActions { .. } | Mode::SlackActions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
         Mode::SlackSnooze { .. } => hint(&[("j/k 1-4", "pick"), ("enter", "snooze"), ("esc", "cancel")]),
         Mode::SlackTask { .. } => hint(&[("y", "create the ticket"), ("n", "cancel")]),
         Mode::SlackWatchAdd { .. } => hint(&[("type", "@handle, #channel or a word"), ("↑/↓", "pick"), ("enter", "watch"), ("esc", "cancel")]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
         Mode::ConfirmMany { .. } => hint(&[("y", "do it to all of them"), ("n", "cancel")]),
-        Mode::Help(_) => Line::from(Span::from(" j/k scroll · any key closes ").fg(c(SUBTEXT0))),
-        Mode::Command(text) => Line::from(vec![
+        Mode::Command { text, .. } => Line::from(vec![
             Span::from(" :").fg(c(ACCENT)).bold(),
             Span::from(format!("{text}▏")),
-            Span::from("   enter run · esc close · :help lists commands").fg(c(SUBTEXT0)),
+            Span::from("   tab completes · enter runs · esc closes").fg(c(SUBTEXT0)),
         ]),
-        Mode::Detail(id) => {
-            let shippable = app.task(id).is_some_and(|t| t.state == "awaiting_ship");
-            let (rows, scroll) = if app.detail_section.has_cursor() { (("jk", "pick"), ("JK", "scroll")) } else { (("jk", "scroll"), ("^d/^u", "page")) };
-            if shippable {
-                hint(&[("h/l 1-8", "section"), rows, scroll, ("S", "ship"), ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
-            } else {
-                hint(&[("h/l 1-8", "section"), rows, scroll, ("a", "advance"), ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
-            }
-        }
-        Mode::Normal => hint(&[
-            ("?", "help"),
-            ("n", "new"),
-            ("a", "advance"),
-            ("enter", "open"),
-            ("x", "actions"),
-            ("=", "density"),
-            ("/", "filter"),
-            ("q", "quit"),
-        ]),
+        Mode::Help { .. } => scope_footer(app, Scope::Help),
+        // Every view, the ticket popup and the Watches popup: the registry's heaviest keys.
+        _ => scope_footer(app, keys::active_scope(app)),
     }
+}
+
+/// How many keys the footer shows: `?` and seven more fit in 120 columns with these labels.
+const FOOTER_KEYS: usize = 8;
+
+/// The footer of a scope: its `On` bindings by weight, `?` first.
+fn scope_footer(app: &App, scope: Scope) -> Line<'static> {
+    let keys: Vec<(String, String)> = keys::footer_keys(app, scope, FOOTER_KEYS).into_iter().map(|b| (b.short_keys(), b.label.to_string())).collect();
+    hint_owned(&keys)
+}
+
+/// The which-key strip: ` g ▸  g first ticket   s order by stage …   esc `.
+fn which_key_line(prefix: char, seconds: &[(char, &str)]) -> Line<'static> {
+    let mut spans = vec![Span::from(format!(" {prefix} ▸ ")).fg(c(BASE)).bg(c(ACCENT)).bold()];
+    for (key, label) in seconds {
+        spans.push(Span::from(format!("  {key} ")).fg(c(ACCENT)).bold());
+        spans.push(Span::from((*label).to_string()).fg(c(SUBTEXT0)));
+    }
+    spans.push(Span::from("   esc").fg(c(SUBTEXT0)));
+    Line::from(spans)
+}
+
+fn hint_owned(keys: &[(String, String)]) -> Line<'static> {
+    let mut spans = vec![Span::raw(" ")];
+    for (key, desc) in keys {
+        spans.push(Span::from(format!(" {key} ")).fg(c(BASE)).bg(c(ACCENT)));
+        spans.push(Span::from(format!(" {desc}  ")).fg(c(SUBTEXT0)));
+    }
+    Line::from(spans)
 }
 
 fn hint(keys: &[(&str, &str)]) -> Line<'static> {
@@ -1236,41 +1193,50 @@ fn render_clone_prompt(frame: &mut Frame, repo: &str, query: &str, all: &[String
 /// detail shows.
 fn render_pr_actions(frame: &mut Frame, app: &App, cursor: usize) {
     let Some(pr) = app.pr_under_cursor() else { return };
-    let now = now_secs();
-    let blockers: Vec<Option<&str>> = PrKey::ALL.iter().map(|k| pulls::blocker(&pr, *k)).collect();
-    let widget = detail::pr_widget(&pr, now);
-    let longest = PrKey::ALL
+    let widget = detail::pr_widget(&pr, now_secs());
+    render_menu(frame, format!(" {} ", pr.key()), widget, &keys::menu(app, Scope::Pulls), cursor, 0);
+}
+
+/// An `x` menu: the item's widget (when the view gives one), then the registry's rows for it,
+/// the dim ones with why they are off. The cursor's row is bright; a dim row keeps its grey.
+fn render_menu(frame: &mut Frame, title: String, widget: Vec<Line<'static>>, rows: &[(&keys::Binding, Avail)], cursor: usize, min_width: u16) {
+    let reasons = rows.iter().filter(|(_, a)| matches!(a, Avail::Off(_))).count();
+    let longest = rows
         .iter()
-        .map(|k| k.label().chars().count())
-        .chain(blockers.iter().flatten().map(|w| w.chars().count() + 4))
-        .chain(widget.iter().map(Line::width))
+        .map(|(b, a)| match a {
+            Avail::Off(why) => b.label.chars().count().max(why.chars().count() + 4),
+            _ => b.label.chars().count(),
+        })
+        .chain(widget.iter().map(|l| l.width().min(70)))
         .max()
         .unwrap_or(40);
-    let rows = widget.len() + 1 + PrKey::ALL.len() + blockers.iter().flatten().count();
-    let width = (longest as u16 + 12).min(frame.area().width.saturating_sub(2));
-    let area = centered(frame.area(), width, (rows as u16 + 4).min(frame.area().height));
+    let gap = usize::from(!widget.is_empty());
+    let height = widget.len() + gap + rows.len() + reasons;
+    let width = (longest as u16 + 12).max(min_width).min(frame.area().width.saturating_sub(2));
+    let area = centered(frame.area(), width, (height as u16 + 4).min(frame.area().height));
     frame.render_widget(Clear, area);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
         .padding(Padding::horizontal(2))
-        .title(Line::from(format!(" {} ", pr.key())).bold());
+        .title(Line::from(title).bold());
     let mut lines: Vec<Line> = widget;
-    lines.push(Line::default());
-    for (i, key) in PrKey::ALL.iter().enumerate() {
+    if gap == 1 {
+        lines.push(Line::default());
+    }
+    for (i, (binding, avail)) in rows.iter().enumerate() {
         let selected = i == cursor;
-        let blocked = blockers[i];
-        let style = match (selected, blocked) {
-            (_, Some(_)) => Style::new().fg(c(MUTED)),
-            (true, None) => Style::new().fg(c(ACCENT)).bold(),
-            (false, None) => Style::new(),
+        let style = match (selected, avail) {
+            (_, Avail::Off(_)) => Style::new().fg(c(MUTED)),
+            (true, _) => Style::new().fg(c(ACCENT)).bold(),
+            (false, _) => Style::new(),
         };
         lines.push(Line::from(vec![
             Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
-            Span::from(format!("{:<4}", key.key())).fg(c(SUBTEXT0)),
-            Span::from(key.label()).style(style),
+            Span::from(format!("{:<4}", binding.menu_keys())).fg(c(SUBTEXT0)),
+            Span::from(binding.label).style(style),
         ]));
-        if let Some(why) = blocked {
+        if let Avail::Off(why) = avail {
             lines.push(Line::from(Span::from(format!("      ↳ {why}")).fg(c(MUTED))));
         }
     }
@@ -1535,45 +1501,8 @@ fn slack_detail_lines(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>
 /// under it. On a terminal too narrow for the pane this is where the detail shows.
 fn render_slack_actions(frame: &mut Frame, app: &App, cursor: usize) {
     let Some(item) = app.slack_under_cursor() else { return };
-    let now = now_secs();
-    let blockers: Vec<Option<&str>> = SlackKey::ALL.iter().map(|k| slack::blocker(item, *k)).collect();
-    let widget = slack_widget(item, app.slack_snapshot.sla_for(item.priority()), now);
-    let longest = SlackKey::ALL
-        .iter()
-        .map(|k| k.label().chars().count())
-        .chain(blockers.iter().flatten().map(|w| w.chars().count() + 4))
-        .chain(widget.iter().map(|l| l.width().min(70)))
-        .max()
-        .unwrap_or(40);
-    let rows = widget.len() + 2 + SlackKey::ALL.len() + blockers.iter().flatten().count();
-    let width = (longest as u16 + 12).min(frame.area().width.saturating_sub(2));
-    let area = centered(frame.area(), width, (rows as u16 + 4).min(frame.area().height));
-    frame.render_widget(Clear, area);
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(c(ACCENT)))
-        .padding(Padding::horizontal(2))
-        .title(Line::from(format!(" {} · @{} ", item.channel_label(), item.author.name)).bold());
-    let mut lines: Vec<Line> = widget;
-    lines.push(Line::default());
-    for (i, key) in SlackKey::ALL.iter().enumerate() {
-        let selected = i == cursor;
-        let blocked = blockers[i];
-        let style = match (selected, blocked) {
-            (_, Some(_)) => Style::new().fg(c(MUTED)),
-            (true, None) => Style::new().fg(c(ACCENT)).bold(),
-            (false, None) => Style::new(),
-        };
-        lines.push(Line::from(vec![
-            Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
-            Span::from(format!("{:<4}", key.key())).fg(c(SUBTEXT0)),
-            Span::from(key.label()).style(style),
-        ]));
-        if let Some(why) = blocked {
-            lines.push(Line::from(Span::from(format!("      ↳ {why}")).fg(c(MUTED))));
-        }
-    }
-    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
+    let widget = slack_widget(item, app.slack_snapshot.sla_for(item.priority()), now_secs());
+    render_menu(frame, format!(" {} · @{} ", item.channel_label(), item.author.name), widget, &keys::menu(app, Scope::Slack), cursor, 0);
 }
 
 /// The reply editor: the text on top, the thread's last messages under a `context` rule, so
@@ -1598,6 +1527,7 @@ fn render_slack_reply(frame: &mut Frame, app: &App, id: &str, area: &TextArea<'s
         .border_style(Style::new().fg(c(mode_color)))
         .padding(Padding::horizontal(1))
         .title(Line::from(title).bold())
+        .title(Line::from(format!("· {} ", keys::editor_line(app))).fg(c(SUBTEXT0)))
         .title_top(Line::from(" ctrl+s send  esc back ").fg(c(SUBTEXT0)).right_aligned())
         .title_bottom(Line::from(label).bold().fg(c(mode_color)).left_aligned());
     let inner = block.inner(rect);
@@ -1857,7 +1787,7 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
         Span::from(format!(" Floor ·{scope} since {} (7d) · {} (30d)", since(&floor.d7), since(&floor.d30))).style(head_style),
     )];
     if floor.d7.is_none() && floor.d30.is_none() {
-        lines.push(Line::from(Span::from(" no numbers yet; r to retry").style(label_style)));
+        lines.push(Line::from(Span::from(" no numbers yet; R to retry").style(label_style)));
     }
 
     // The per-repo table takes the bottom when there is more than one repo to compare.
@@ -1966,35 +1896,46 @@ fn render_floor_repos(frame: &mut Frame, area: Rect, floor: &FloorState, head_st
 }
 
 fn render_actions(frame: &mut Frame, app: &App, cursor: usize) {
-    let area = centered(frame.area(), 56, ACTIONS.len() as u16 + 4);
-    frame.render_widget(Clear, area);
-
     let title = app
         .selected_task()
         .map_or(" Actions ".to_string(), |t| format!(" #{} {} ", t.short_id(), t.title));
-    let block = Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(c(ACCENT)))
-        .padding(Padding::horizontal(2))
-        .title(Line::from(title).bold());
-    let lines: Vec<Line> = ACTIONS
+    render_menu(frame, title, Vec::new(), &keys::menu(app, Scope::Board), cursor, 56);
+}
+
+/// The `:` prompt's completions, over the footer: up to six commands the text is a prefix of,
+/// each with its label; the picked one (tab) bright.
+fn render_completions(frame: &mut Frame, text: &str, pick: Option<usize>) {
+    const SHOWN: usize = 6;
+    let matches = keys::completions(text);
+    if matches.is_empty() || (matches.len() == 1 && matches[0].0 == text) {
+        return;
+    }
+    let shown: Vec<&(&str, &keys::Binding)> = matches.iter().take(SHOWN).collect();
+    let name_width = shown.iter().map(|(n, _)| n.chars().count()).max().unwrap_or(0) + 2;
+    let longest = shown.iter().map(|(_, b)| name_width + b.label.chars().count()).max().unwrap_or(20);
+    let more = matches.len() > SHOWN;
+    let height = shown.len() as u16 + u16::from(more);
+    let frame_area = frame.area();
+    let width = (longest as u16 + 6).min(frame_area.width);
+    let area = Rect::new(frame_area.x, frame_area.bottom().saturating_sub(1 + height), width, height.min(frame_area.height.saturating_sub(1)));
+    frame.render_widget(Clear, area);
+    let mut lines: Vec<Line> = shown
         .iter()
         .enumerate()
-        .map(|(i, (key, label))| {
-            let selected = i == cursor;
-            let style = if selected {
-                Style::new().fg(c(ACCENT)).bold()
-            } else {
-                Style::new()
-            };
+        .map(|(i, (name, b))| {
+            let picked = pick == Some(i);
+            let style = if picked { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
             Line::from(vec![
-                Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
-                Span::from(format!("{key:<4}")).fg(c(SUBTEXT0)),
-                Span::from(*label).style(style),
+                Span::from(if picked { " ▌ :" } else { "   :" }).fg(c(ACCENT)),
+                Span::from(format!("{name:<name_width$}")).style(style),
+                Span::from(b.label).fg(c(SUBTEXT0)),
             ])
         })
         .collect();
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    if more {
+        lines.push(Line::from(Span::from(format!("    … {} more", matches.len() - SHOWN)).fg(c(SUBTEXT0))));
+    }
+    frame.render_widget(Paragraph::new(lines).style(Style::new().bg(c(SURFACE0))), area);
 }
 
 fn render_repo_picker(frame: &mut Frame, task: &Task, query: &str, all: &[String], cursor: usize) {
@@ -2079,16 +2020,43 @@ fn render_jira_link(frame: &mut Frame, task: &Task, query: &str, hits: &[JiraIss
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-/// The keys of the view `?` was pressed in; the board's sheet also lists the `:` commands.
-/// Draws the sheet scrolled by `scroll` rows (clamped) and returns the furthest it can scroll.
-fn render_help(frame: &mut Frame, ctx: HelpFor, scroll: u16) -> u16 {
+/// A frame this wide or wider lays the sheet out in two columns of groups.
+const HELP_WIDE_FROM: u16 = 100;
+const HELP_COLUMN_GAP: usize = 3;
+
+/// One laid-out line of the sheet: its spans and, for a key row, which runnable row it is.
+struct HelpLine {
+    spans: Vec<Span<'static>>,
+    row: Option<usize>,
+}
+
+/// The `?` sheet: the registry's keys for the sheet's scope, the bright ones as `key  label`,
+/// the dim ones as `key  (reason)`, dense groups folded to a strip unless `long`, two columns
+/// from `HELP_WIDE_FROM`. The layer under a popup folds to one line at the bottom. Scrolls to
+/// keep the cursor's row in view and records how far it can scroll.
+fn render_help(frame: &mut Frame, app: &App) {
+    let Mode::Help { scope, long, query, cursor } = &app.mode else { return };
+    let (scope, long, cursor) = (*scope, *long, *cursor);
     let frame_area = frame.area();
-    let wide = frame_area.width >= HELP_WIDE_FROM;
-    let box_width = frame_area.width.min(if wide { 176 } else { 84 });
+    let wide = frame_area.width >= HELP_WIDE_FROM && query.is_none();
+    let box_width = frame_area.width.min(if wide { 150 } else { 84 });
     // Two border cells and two padding cells on each side.
     let inner_width = usize::from(box_width.saturating_sub(6));
-    let rows = help_layout(ctx, inner_width, wide);
-    let total = rows.len();
+    let sections = keys::help_sections(app, scope, long, query.as_deref());
+    let mut lines = help_layout(&sections, inner_width, wide);
+    if let Some(query) = query {
+        lines.insert(0, HelpLine { spans: vec![Span::from(" / ").fg(c(BASE)).bg(c(ACCENT)).bold(), Span::from(format!(" {query}▏"))], row: None });
+        lines.insert(1, HelpLine { spans: Vec::new(), row: None });
+    } else {
+        lines.insert(0, HelpLine { spans: vec![Span::from("/ search").fg(c(SUBTEXT0))], row: None });
+        lines.insert(1, HelpLine { spans: Vec::new(), row: None });
+    }
+    if let Some(under) = keys::help_under_line(app, scope) {
+        lines.push(HelpLine { spans: Vec::new(), row: None });
+        lines.push(HelpLine { spans: vec![Span::from(truncate(&under, inner_width)).fg(c(SUBTEXT0))], row: None });
+    }
+    let total = lines.len();
+    let runnable = lines.iter().filter(|l| l.row.is_some()).count();
 
     let height = u16::try_from(total + 2).unwrap_or(u16::MAX).min(frame_area.height);
     let area = centered(frame_area, box_width, height);
@@ -2096,119 +2064,130 @@ fn render_help(frame: &mut Frame, ctx: HelpFor, scroll: u16) -> u16 {
 
     let viewport = usize::from(height.saturating_sub(2));
     let max = total.saturating_sub(viewport);
-    let start = usize::from(scroll).min(max);
+    // The cursor's line stays in view; otherwise the scroll is where the keys left it.
+    let mut start = usize::from(app.help_scroll.get()).min(max);
+    if cursor == 0 {
+        start = 0;
+    } else if let Some(at) = lines.iter().position(|l| l.row == Some(cursor)) {
+        if at < start {
+            start = at;
+        } else if viewport > 0 && at >= start + viewport {
+            start = at + 1 - viewport;
+        }
+    }
+    app.help_scroll.set(u16::try_from(start).unwrap_or(u16::MAX));
+    app.help_max.set(u16::try_from(max).unwrap_or(u16::MAX));
+    app.help_viewport.set(u16::try_from(viewport).unwrap_or(u16::MAX));
 
-    let mut block = Block::bordered()
+    let seen = (start + viewport).min(total);
+    let bottom = format!(" enter runs · esc closes · ? {} · {seen}/{total} ", if long { "short form" } else { "long form" });
+    let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
         .padding(Padding::horizontal(2))
-        .title(Line::from(ctx.title()).bold());
-    if max > 0 {
-        let seen = (start + viewport).min(total);
-        block = block.title_bottom(Line::from(format!(" j/k scroll · {seen}/{total} ")).fg(c(SUBTEXT0)));
-    }
-    let visible: Vec<Line> = rows.into_iter().skip(start).take(viewport).collect();
+        .title(Line::from(keys::help_title(app, scope)).bold())
+        .title_bottom(Line::from(bottom).fg(c(SUBTEXT0)));
+    let visible: Vec<Line> = lines
+        .into_iter()
+        .skip(start)
+        .take(viewport)
+        .map(|l| {
+            let line = Line::from(l.spans);
+            if l.row == Some(cursor) && runnable > 0 { line.style(selection_style()) } else { line }
+        })
+        .collect();
     frame.render_widget(Paragraph::new(visible).block(block), area);
-    u16::try_from(max).unwrap_or(u16::MAX)
 }
 
-/// A frame this wide or wider lays the sheet out in two columns of sections.
-const HELP_WIDE_FROM: u16 = 120;
-const HELP_COLUMN_GAP: usize = 3;
-
-/// The sheet's rows: the sections stacked, or split over two columns when `two_columns`.
-fn help_layout(ctx: HelpFor, inner_width: usize, two_columns: bool) -> Vec<Line<'static>> {
-    let sections = ctx.sections();
+/// The sections stacked, or split over two columns at the group boundary that balances them.
+fn help_layout(sections: &[Vec<HelpRow>], inner_width: usize, two_columns: bool) -> Vec<HelpLine> {
+    let mut row = 0;
     if !two_columns || sections.len() < 2 {
-        return stack_sections(sections, inner_width);
+        let rendered: Vec<Vec<HelpLine>> = sections.iter().map(|s| help_section_lines(s, inner_width, &mut row)).collect();
+        return join_help_sections(rendered);
     }
     let col = inner_width.saturating_sub(HELP_COLUMN_GAP) / 2;
-    let rendered: Vec<Vec<Line<'static>>> = sections.iter().map(|s| help_section_lines(s, col)).collect();
-    let height = |part: &[Vec<Line<'static>>]| part.iter().map(Vec::len).sum::<usize>() + part.len().saturating_sub(1);
-    let split = (1..rendered.len())
-        .min_by_key(|k| height(&rendered[..*k]).max(height(&rendered[*k..])))
-        .unwrap_or(1);
-    let left = join_sections(&rendered[..split]);
-    let right = join_sections(&rendered[split..]);
-    (0..left.len().max(right.len()))
-        .map(|i| {
-            let mut spans = Vec::new();
-            let used = match left.get(i) {
-                Some(line) => {
-                    spans.extend(line.spans.iter().cloned());
-                    line.width()
-                }
-                None => 0,
-            };
-            if let Some(line) = right.get(i) {
-                spans.push(Span::raw(" ".repeat(col.saturating_sub(used) + HELP_COLUMN_GAP)));
-                spans.extend(line.spans.iter().cloned());
-            }
-            Line::from(spans)
-        })
-        .collect()
-}
-
-fn stack_sections(sections: &[crate::app::HelpSection], width: usize) -> Vec<Line<'static>> {
-    let rendered: Vec<Vec<Line<'static>>> = sections.iter().map(|s| help_section_lines(s, width)).collect();
-    join_sections(&rendered)
-}
-
-fn join_sections(sections: &[Vec<Line<'static>>]) -> Vec<Line<'static>> {
+    let rendered: Vec<Vec<HelpLine>> = sections.iter().map(|s| help_section_lines(s, col, &mut row)).collect();
+    let height = |part: &[Vec<HelpLine>]| part.iter().map(Vec::len).sum::<usize>() + part.len().saturating_sub(1);
+    let split = (1..rendered.len()).min_by_key(|k| height(&rendered[..*k]).max(height(&rendered[*k..]))).unwrap_or(1);
+    let mut rendered = rendered.into_iter();
+    let left: Vec<Vec<HelpLine>> = rendered.by_ref().take(split).collect();
+    let right: Vec<Vec<HelpLine>> = rendered.collect();
+    let left = join_help_sections(left);
+    let right = join_help_sections(right);
+    let mut left = left.into_iter();
+    let mut right = right.into_iter();
     let mut out = Vec::new();
-    for (i, lines) in sections.iter().enumerate() {
-        if i > 0 {
-            out.push(Line::default());
+    loop {
+        let (l, r) = (left.next(), right.next());
+        if l.is_none() && r.is_none() {
+            break;
         }
-        out.extend(lines.iter().cloned());
+        let mut spans = Vec::new();
+        let mut row = None;
+        let mut used = 0;
+        if let Some(l) = l {
+            used = l.spans.iter().map(Span::width).sum::<usize>();
+            spans.extend(l.spans);
+            row = l.row;
+        }
+        if let Some(r) = r {
+            spans.push(Span::raw(" ".repeat(col.saturating_sub(used) + HELP_COLUMN_GAP)));
+            spans.extend(r.spans);
+            // A line holding two key rows answers to the left one; the right one is reached
+            // through its own line in the cursor order (left column first).
+            row = row.or(r.row);
+        }
+        out.push(HelpLine { spans, row });
     }
     out
 }
 
-/// One section: its heading, then each key with its description wrapped at a hanging indent.
-fn help_section_lines(section: &crate::app::HelpSection, width: usize) -> Vec<Line<'static>> {
-    let key_width = section.rows.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0) + 2;
-    let desc_width = width.saturating_sub(key_width).max(1);
-    let mut lines = vec![Line::from(Span::from(section.heading).fg(c(SUBTEXT0)).bold())];
-    for (keys, what) in section.rows {
-        for (i, part) in wrap_words(what, desc_width).into_iter().enumerate() {
-            let lead = if i == 0 {
-                Span::from(format!("{keys:<key_width$}")).fg(c(ACCENT)).bold()
-            } else {
-                Span::raw(" ".repeat(key_width))
-            };
-            lines.push(Line::from(vec![lead, Span::from(part)]));
+fn join_help_sections(sections: Vec<Vec<HelpLine>>) -> Vec<HelpLine> {
+    let mut out = Vec::new();
+    for (i, lines) in sections.into_iter().enumerate() {
+        if i > 0 {
+            out.push(HelpLine { spans: Vec::new(), row: None });
         }
+        out.extend(lines);
     }
-    lines
+    out
 }
 
-/// Word-wraps `text` to `width` columns; a word longer than a line is cut.
-fn wrap_words(text: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
+/// One group: its heading, then `key  label` rows (dim `key  (reason)` for an off key, `in
+/// Pulls` after a search hit from another view), or its strip. `row` numbers the key rows.
+fn help_section_lines(section: &[HelpRow], width: usize, row: &mut usize) -> Vec<HelpLine> {
+    let key_width = section
+        .iter()
+        .filter_map(|r| match r {
+            HelpRow::Key { binding, .. } => Some(binding.keys.chars().count()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+        + 2;
     let mut lines = Vec::new();
-    let mut cur = String::new();
-    for mut word in text.split_whitespace() {
-        loop {
-            let sep = usize::from(!cur.is_empty());
-            if cur.chars().count() + sep + word.chars().count() <= width {
-                if sep == 1 {
-                    cur.push(' ');
+    for item in section {
+        match item {
+            HelpRow::Heading(heading) => lines.push(HelpLine { spans: vec![Span::from(*heading).fg(c(SUBTEXT0)).bold()], row: None }),
+            HelpRow::Strip(strip) => lines.push(HelpLine { spans: vec![Span::from(truncate(strip, width)).fg(c(ACCENT)).bold()], row: None }),
+            HelpRow::Key { binding, avail, foreign } => {
+                let room = width.saturating_sub(key_width).max(1);
+                let (key, text) = match avail {
+                    Avail::Off(why) => (
+                        Span::from(format!("{:<key_width$}", binding.keys)).fg(c(MUTED)),
+                        Span::from(truncate(&format!("({why})"), room)).fg(c(MUTED)),
+                    ),
+                    _ => (Span::from(format!("{:<key_width$}", binding.keys)).fg(c(ACCENT)).bold(), Span::from(truncate(binding.label, room))),
+                };
+                let mut spans = vec![key, text];
+                if *foreign {
+                    spans.push(Span::from(format!("  in {}", binding.scope.name())).fg(c(SUBTEXT0)));
                 }
-                cur.push_str(word);
-                break;
+                lines.push(HelpLine { spans, row: Some(*row) });
+                *row += 1;
             }
-            if !cur.is_empty() {
-                lines.push(std::mem::take(&mut cur));
-                continue;
-            }
-            let cut = word.char_indices().nth(width).map_or(word.len(), |(i, _)| i);
-            lines.push(word[..cut].to_string());
-            word = &word[cut..];
         }
-    }
-    if !cur.is_empty() || lines.is_empty() {
-        lines.push(cur);
     }
     lines
 }
@@ -2235,102 +2214,6 @@ mod tests {
     use ratatui::{Terminal, backend::TestBackend};
 
     use super::*;
-
-    fn help_rows(ctx: HelpFor, width: u16, height: u16, scroll: u16) -> (Vec<String>, u16) {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut max = 0;
-        terminal.draw(|f| max = render_help(f, ctx, scroll)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        let rows = (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
-            .collect();
-        (rows, max)
-    }
-
-    const ALL_HELP: [HelpFor; 5] = [HelpFor::Board, HelpFor::Floor, HelpFor::Inbox, HelpFor::Digest, HelpFor::Detail];
-
-    #[test]
-    fn wide_board_help_fits_in_two_columns() {
-        let (rows, max) = help_rows(HelpFor::Board, 200, 50, 0);
-        let text = rows.join("\n");
-        assert_eq!(max, 0, "nothing to scroll");
-        assert!(!text.contains("j/k scroll"));
-        for s in HelpFor::Board.sections() {
-            assert!(text.contains(s.heading), "heading {}", s.heading);
-            for (k, _) in s.rows {
-                assert!(text.contains(k), "key {k}");
-            }
-        }
-        let x_of = |h: &str| rows.iter().find_map(|r| r.find(h)).unwrap();
-        assert!(HelpFor::Board.sections().iter().any(|s| x_of(s.heading) > 100), "a heading in the right column");
-    }
-
-    #[test]
-    fn narrow_board_help_is_one_column_with_a_hanging_indent() {
-        let (rows, max) = help_rows(HelpFor::Board, 80, 24, 0);
-        assert!(max > 0);
-        let longest = HelpFor::Board
-            .sections()
-            .iter()
-            .flat_map(|s| s.rows.iter())
-            .filter(|(k, _)| *k == "a")
-            .max_by_key(|(_, d)| d.len())
-            .unwrap();
-        let first_word = longest.1.split_whitespace().next().unwrap();
-        let (y, line) = rows.iter().enumerate().find(|(_, r)| r.contains(&format!("a  {first_word}"))).expect("the a row");
-        let col = |needle: &str| line[..line.find(needle).unwrap()].chars().count();
-        let desc_x = col(first_word);
-        let key_x = col("a  ");
-        assert!(desc_x > key_x + 1);
-        let next: Vec<char> = rows[y + 1].chars().collect();
-        assert!(next[key_x..desc_x].iter().all(|ch| *ch == ' '), "blank under the key column");
-        assert_ne!(next[desc_x], ' ', "the continuation starts at the description column");
-        assert!(rows.iter().all(|r| r.matches("Move").count() <= 1));
-    }
-
-    #[test]
-    fn descriptions_share_a_column_within_a_section() {
-        let (rows, _) = help_rows(HelpFor::Detail, 80, 24, 0);
-        let section = HelpFor::Detail.sections()[0];
-        assert!(rows.join("\n").contains(section.heading));
-        let xs: Vec<usize> = section
-            .rows
-            .iter()
-            .map(|(k, d)| {
-                let first = d.split_whitespace().next().unwrap();
-                let line = rows.iter().find(|r| r.contains(k) && r.contains(first)).unwrap();
-                let key_end = line.find(k).unwrap() + k.len();
-                key_end + line[key_end..].chars().take_while(|ch| *ch == ' ').count()
-            })
-            .collect();
-        assert!(xs.windows(2).all(|w| w[0] == w[1]), "{xs:?}");
-    }
-
-    #[test]
-    fn help_scrolls_and_clamps() {
-        let (top, max) = help_rows(HelpFor::Board, 80, 24, 0);
-        let (one, _) = help_rows(HelpFor::Board, 80, 24, 1);
-        assert_eq!(one[1], top[2], "the first visible row moves down one line");
-        let (last, _) = help_rows(HelpFor::Board, 80, 24, max);
-        let (past, _) = help_rows(HelpFor::Board, 80, 24, max + 50);
-        assert_eq!(last, past);
-        assert!(top.join("\n").contains("j/k scroll"));
-        assert!(last.join("\n").contains(&format!("{0}/{0}", max + 24 - 2)));
-    }
-
-    #[test]
-    fn help_survives_any_size() {
-        for ctx in ALL_HELP {
-            for (w, h) in [(20, 6), (80, 24), (120, 40), (200, 50), (1, 1), (3, 2)] {
-                let (rows, _) = help_rows(ctx, w, h, 0);
-                assert_eq!(rows.len(), h as usize);
-                if (w, h) == (120, 40) {
-                    let text = rows.join("\n");
-                    assert!(ctx.sections().iter().all(|s| text.contains(s.heading)) || text.contains("j/k scroll"));
-                }
-            }
-        }
-    }
 
     fn find(text: &str, needle: &str) -> Option<(usize, usize)> {
         text.lines().enumerate().find_map(|(row, line)| line.find(needle).map(|col| (row, col)))
@@ -2840,7 +2723,7 @@ mod pr_tests {
         assert!(text.contains("clone acme/app into") && text.contains("/r/projects/app") && !text.contains("▌ /r/app"), "{text}");
         app.mode = Mode::PrActions { cursor: 0 };
         let text = render(100, 30, &app);
-        assert!(text.contains("merge (squash") && !text.contains("review is for other people's PRs"), "{text}");
+        assert!(text.contains("merge: squash, delete the branch") && !text.contains("review is for other people's PRs"), "{text}");
         assert!(text.contains("↳ threads are answered on your own PRs"), "{text}");
         assert!(text.contains("@them · h → main"), "the menu carries the PR widget: {text}");
     }
@@ -2893,7 +2776,7 @@ mod slack_render_tests {
         assert!(text.contains("why      production incident"), "{text}");
         assert!(text.contains("acme/app#212 (ci failed) · INC-4411"), "the linked PR's split and the refs: {text}");
         assert!(text.contains("draft    Approve the rollback"), "{text}");
-        assert!(text.contains("r  reply     ready") && text.contains("n  nudge     off: only while waiting on them"), "{text}");
+        assert!(text.contains("r  reply     ready") && text.contains("N  nudge     off: only while waiting on them"), "{text}");
         assert!(text.contains("off: already P0"), "{text}");
 
         let text = render(80, 30, &app);
@@ -3009,7 +2892,7 @@ mod slack_render_tests {
 
         app.mode = Mode::SlackActions { cursor: 0 };
         let text = render(80, 40, &app);
-        assert!(text.contains("reply: edit the draft") && text.contains("↳ only while waiting on them"), "{text}");
+        assert!(text.contains("reply: edit the draft, ctrl+s posts") && text.contains("↳ only while waiting on them"), "{text}");
         assert!(text.contains("checkout is returning 500s since the 14:02"), "the menu carries the item under 100 columns: {text}");
     }
 
@@ -3047,447 +2930,287 @@ mod help_sheet_tests {
     use ratatui::{
         Terminal,
         backend::TestBackend,
-        crossterm::event::{KeyCode, KeyEvent},
+        crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     };
 
     use super::*;
+    use crate::client::Machine;
+    use crate::model::Task;
 
-    const VIEWS: [HelpFor; 7] = [HelpFor::Board, HelpFor::Floor, HelpFor::Inbox, HelpFor::Digest, HelpFor::Detail, HelpFor::Pulls, HelpFor::Slack];
-
-    fn cells(terminal: &Terminal<TestBackend>) -> Vec<Vec<char>> {
-        let buffer = terminal.backend().buffer().clone();
-        let area = buffer.area;
-        (0..area.height)
-            .map(|y| (0..area.width).map(|x| buffer[(x, y)].symbol().chars().next().unwrap_or(' ')).collect())
-            .collect()
+    fn task(id: &str, state: &str, repo: bool) -> Task {
+        let repo = if repo { "\"/r/app\"" } else { "null" };
+        let waiting = state.starts_with("awaiting");
+        serde_json::from_str(&format!(
+            r#"{{"id":"{id}","title":"Login page","description":"","criteria":[],
+            "repoPath":{repo},"branch":null,"worktreePath":null,"state":"{state}","column":"Approved",
+            "waitingOnYou":{waiting},"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+        ))
+        .unwrap()
     }
 
-    /// Just the help overlay, scrolled by `scroll`, plus the furthest it can scroll.
-    fn sheet(ctx: HelpFor, width: u16, height: u16, scroll: u16) -> (Vec<Vec<char>>, u16) {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let mut max = 0;
-        terminal.draw(|f| max = render_help(f, ctx, scroll)).unwrap();
-        (cells(&terminal), max)
+    fn app_with(state: &str, repo: bool) -> App {
+        let mut app = App::new(Machine::from_env());
+        app.tasks = vec![task("a1b2c3d4e5f6", state, repo)];
+        app.focus = app.tasks[0].column_index();
+        app.toast = None;
+        app
     }
 
     /// The whole app, as the user sees it.
     fn screen(app: &App, width: u16, height: u16) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| draw(f, app)).unwrap();
-        cells(&terminal).into_iter().map(|r| r.into_iter().collect()).collect()
+        let buffer = terminal.backend().buffer().clone();
+        (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect()).collect()
     }
 
     fn press(app: &mut App, code: KeyCode) {
         app.handle_key(KeyEvent::from(code));
     }
 
-    /// The first few words of a description: short enough never to wrap.
-    fn opening(description: &str) -> String {
-        description.split_whitespace().take(3).collect::<Vec<_>>().join(" ")
-    }
-
-    fn text(rows: &[Vec<char>]) -> String {
-        rows.iter().map(|r| r.iter().collect::<String>()).collect::<Vec<_>>().join("\n")
-    }
-
-    fn starts_with_at(row: &[char], x: usize, needle: &str) -> bool {
-        let n: Vec<char> = needle.chars().collect();
-        row.len() >= x + n.len() && row[x..x + n.len()] == n[..]
-    }
-
-    /// Every content row of the sheet at this size, gathered by scrolling one line at a time.
-    fn whole_sheet(ctx: HelpFor, width: u16, height: u16) -> Vec<Vec<char>> {
-        let (first, max) = sheet(ctx, width, height, 0);
-        let top = first.iter().position(|r| r.contains(&'╭')).unwrap();
-        let bottom = first.iter().rposition(|r| r.contains(&'╰')).unwrap();
-        let mut rows: Vec<Vec<char>> = first[top + 1..bottom].to_vec();
-        for s in 1..=max {
-            let (page, _) = sheet(ctx, width, height, s);
-            rows.push(page[bottom - 1].clone());
-        }
-        rows
-    }
-
-    /// The x where a heading sits at the start of a column: not part of a longer run of text.
-    fn heading_at(rows: &[Vec<char>], heading: &str) -> Option<(usize, usize)> {
-        let len = heading.chars().count();
-        rows.iter().enumerate().find_map(|(y, r)| {
-            (2..r.len()).find(|&x| {
-                starts_with_at(r, x, heading)
-                    && r[x - 1] == ' '
-                    && r[x - 2] == ' '
-                    && r.get(x + len).is_none_or(|ch| *ch == ' ' || *ch == '│')
-            })
-            .map(|x| (y, x))
-        })
-    }
-
-    /// For each section, the x of every description line (first lines and continuations).
-    fn description_columns(ctx: HelpFor, rows: &[Vec<char>]) -> Vec<Vec<usize>> {
-        ctx.sections()
-            .iter()
-            .map(|section| {
-                let (hy, x0) = heading_at(rows, section.heading).unwrap_or_else(|| panic!("heading {}", section.heading));
-                let mut xs = Vec::new();
-                let mut found = 0;
-                let mut desc_x = None;
-                for row in &rows[hy + 1..] {
-                    if let Some((k, d)) = section.rows.get(found)
-                        && starts_with_at(row, x0, k)
-                        && row.get(x0 + k.chars().count()) == Some(&' ')
-                    {
-                        let after = x0 + k.chars().count();
-                        let x = (after..row.len()).find(|&x| row[x] != ' ').unwrap();
-                        assert!(starts_with_at(row, x, d.split_whitespace().next().unwrap()), "{k}: {d}");
-                        xs.push(x);
-                        desc_x = Some(x);
-                        found += 1;
-                    } else if let Some(x) = desc_x
-                        && row[x0..x].iter().all(|ch| *ch == ' ')
-                        && row[x] != ' '
-                    {
-                        xs.push(x);
-                    } else {
-                        break;
-                    }
-                }
-                assert_eq!(found, section.rows.len(), "every row of {} is drawn", section.heading);
-                xs
-            })
-            .collect()
+    fn footer(app: &App) -> String {
+        footer_line(app).spans.iter().map(|s| s.content.to_string()).collect()
     }
 
     #[test]
-    fn every_view_draws_its_section_headings_and_rows() {
-        for ctx in VIEWS {
-            let (rows, _) = sheet(ctx, 200, 50, 0);
-            let t = text(&rows);
-            for s in ctx.sections() {
-                assert!(heading_at(&rows, s.heading).is_some(), "{ctx:?} heading {}: {t}", s.heading);
-                assert!(t.contains(&opening(s.rows[0].1)), "{ctx:?}: {t}");
-            }
-        }
-        let (rows, _) = sheet(HelpFor::Board, 200, 50, 0);
-        assert!(heading_at(&rows, "Commands (type after :)").is_some());
-    }
-
-    #[test]
-    fn question_mark_in_board_inbox_digest_and_detail_draws_the_sectioned_sheet() {
-        let mut app = App::new(crate::Machine::from_env());
-        let check = |app: &App, ctx: HelpFor| {
-            assert!(matches!(app.mode, Mode::Help(c) if c == ctx), "{ctx:?}");
-            let t = screen(app, 200, 50).join("\n");
-            for s in ctx.sections() {
-                assert!(t.contains(s.heading), "{ctx:?} heading {}: {t}", s.heading);
-                assert!(t.contains(&opening(s.rows[0].1)), "{ctx:?} row {}: {t}", s.rows[0].1);
-            }
-        };
+    fn the_sheet_names_the_ticket_and_its_state_and_dims_what_does_not_apply() {
+        let mut app = app_with("awaiting_approval", true);
         press(&mut app, KeyCode::Char('?'));
-        check(&app, HelpFor::Board);
+        let text = screen(&app, 120, 40).join("\n");
+        assert!(text.contains(" Keys · ticket #a1b2c3d4 Login page · approve plan "), "{text}");
+        assert!(text.contains("/ search"), "{text}");
+        assert!(text.contains("a         approve the plan") || text.contains("a    approve the plan"), "the gate's a, bright: {text}");
+        assert!(text.contains("(not at the ship gate)"), "x S dim with its reason: {text}");
+        assert!(text.contains("(no memory review waiting)"), "{text}");
+        assert!(!text.contains("approve the setup") && !text.contains("a    start"), "the other a meanings are hidden: {text}");
+        assert!(text.contains("h l  j k  gg  G  1-8  ] [  enter"), "Move folds to a strip: {text}");
+        assert!(text.contains("enter runs · esc closes · ? long form"), "{text}");
+        for heading in ["Gate", "Ticket", "Move", "Filter & order", "Views", "Marks & bulk", "App", "Commands (type after :)"] {
+            assert!(text.contains(heading), "heading {heading}: {text}");
+        }
+        press(&mut app, KeyCode::Char('?'));
+        let long = screen(&app, 120, 50).join("\n");
+        assert!(long.contains("previous / next column") && !long.contains("h l  j k"), "the long form has rows: {long}");
+        assert!(long.contains("? short form"), "{long}");
+    }
+
+    #[test]
+    fn the_sheet_is_two_columns_from_100_and_one_below_and_the_popup_folds_the_board() {
+        let mut app = app_with("draft", false);
+        press(&mut app, KeyCode::Char('?'));
+        let wide = screen(&app, 120, 50);
+        let col = |rows: &[String], needle: &str| rows.iter().find_map(|r| r.find(needle).map(|i| r[..i].chars().count()));
+        assert!(col(&wide, "Gate").unwrap() + 20 < col(&wide, "Commands (type after :)").unwrap(), "Commands sits in the right column: {}", wide.join("\n"));
+        let narrow = screen(&app, 90, 60);
+        assert_eq!(col(&narrow, "Gate"), col(&narrow, "Commands (type after :)"), "one column under 100: {}", narrow.join("\n"));
+        assert!(narrow.join("\n").contains(" Keys · ticket #a1b2c3d4 Login page · intake "));
         press(&mut app, KeyCode::Esc);
-
-        app.inbox = Some(InboxState::default());
+        app.mode = Mode::Detail("a1b2c3d4e5f6".into());
         press(&mut app, KeyCode::Char('?'));
-        check(&app, HelpFor::Inbox);
-        press(&mut app, KeyCode::Esc);
-        app.inbox = None;
+        let text = screen(&app, 120, 50).join("\n");
+        assert!(text.contains("▸ board keys: "), "the layer under the popup folds to one line: {text}");
+        assert!(text.contains("S         (not at the ship gate)") || text.contains("(not at the ship gate)"), "{text}");
+    }
 
-        app.digest = Some(DigestState::default());
+    #[test]
+    fn search_lists_other_views_keys_with_where_they_live() {
+        let mut app = app_with("draft", true);
         press(&mut app, KeyCode::Char('?'));
-        check(&app, HelpFor::Digest);
-        press(&mut app, KeyCode::Esc);
-        app.digest = None;
+        press(&mut app, KeyCode::Char('/'));
+        for ch in "poll".chars() {
+            press(&mut app, KeyCode::Char(ch));
+        }
+        let text = screen(&app, 120, 40).join("\n");
+        assert!(text.contains(" poll▏"), "{text}");
+        assert!(text.contains("poll GitHub now") && text.contains("in Pulls"), "{text}");
+        assert!(text.contains("poll Slack now") && text.contains("in Slack"), "{text}");
+        assert!(!text.contains("Commands (type after :)"), "a search is one flat section: {text}");
+    }
 
-        app.mode = Mode::Detail("aaaaaaaa0000".to_string());
+    #[test]
+    fn the_cursor_stays_in_view_and_the_footer_counts_rows() {
+        let mut app = app_with("awaiting_approval", true);
         press(&mut app, KeyCode::Char('?'));
-        check(&app, HelpFor::Detail);
-    }
-
-    #[test]
-    fn each_source_pair_sits_in_exactly_one_section() {
-        for ctx in VIEWS {
-            for s in ctx.sections() {
-                let mut pairs: Vec<_> = s.rows.to_vec();
-                pairs.sort();
-                pairs.dedup();
-                assert_eq!(pairs.len(), s.rows.len(), "{ctx:?} {} repeats a pair", s.heading);
-            }
-        }
-        // Across the board's sections a pair repeats only as often as the old tables held it.
-        let mut source: Vec<_> = crate::app::HELP.iter().chain(crate::app::COMMANDS).copied().collect();
-        source.sort();
-        for pair in &source {
-            let in_source = source.iter().filter(|p| *p == pair).count();
-            let in_sections = HelpFor::Board.sections().iter().filter(|s| s.rows.contains(pair)).count();
-            assert_eq!(in_sections, in_source, "{pair:?}");
-        }
-    }
-
-    #[test]
-    fn board_descriptions_share_a_column_per_section_at_80x24_and_200x50() {
-        for rows in [whole_sheet(HelpFor::Board, 80, 24), sheet(HelpFor::Board, 200, 50, 0).0] {
-            for xs in description_columns(HelpFor::Board, &rows) {
-                assert!(xs.len() > 1);
-                assert!(xs.windows(2).all(|w| w[0] == w[1]), "{xs:?}\n{}", text(&rows));
-            }
-        }
-    }
-
-    #[test]
-    fn the_long_a_row_wraps_under_its_description_at_80x24() {
-        let rows = whole_sheet(HelpFor::Board, 80, 24);
-        let (hy, x0) = heading_at(&rows, "Ticket").unwrap();
-        let y = (hy + 1..rows.len()).find(|&y| starts_with_at(&rows[y], x0, "a  advance:")).expect("the a row");
-        let desc_x = x0 + 3;
-        let next = &rows[y + 1];
-        assert!(next[x0..desc_x].iter().all(|ch| *ch == ' '), "blank under the key");
-        assert_ne!(next[desc_x], ' ', "continues at the description column");
-        let continued: String = next[desc_x..].iter().collect();
-        assert!(continued.trim_end().trim_end_matches('│').trim_end().len() > 3);
-        assert!(!rows[y].iter().collect::<String>().contains("resume"), "the row wrapped");
-    }
-
-    #[test]
-    fn narrow_board_sheet_is_one_column_with_a_position_footer() {
-        let (rows, max) = sheet(HelpFor::Board, 80, 24, 0);
-        assert!(max > 0);
-        let all = whole_sheet(HelpFor::Board, 80, 24);
-        let ys: Vec<usize> = HelpFor::Board.sections().iter().map(|s| heading_at(&all, s.heading).unwrap().0).collect();
-        let mut unique = ys.clone();
-        unique.dedup();
-        assert_eq!(unique.len(), ys.len(), "no two headings on one row: {ys:?}");
-        let xs: Vec<usize> = HelpFor::Board.sections().iter().map(|s| heading_at(&all, s.heading).unwrap().1).collect();
-        assert!(xs.windows(2).all(|w| w[0] == w[1]), "one column: {xs:?}");
-        let bottom: String = rows[23].iter().collect();
-        let at = bottom.find("j/k scroll · ").expect("scroll footer") + "j/k scroll · ".len();
-        let pos: String = bottom[at..].chars().take_while(|ch| ch.is_ascii_digit() || *ch == '/').collect();
-        let (n, m) = pos.split_once('/').expect("n/m");
-        let (n, m): (usize, usize) = (n.parse().unwrap(), m.parse().unwrap());
-        assert_eq!(n, 22);
-        assert_eq!(m, all.len());
-    }
-
-    #[test]
-    fn wide_board_sheet_puts_a_heading_past_the_middle() {
-        let (rows, max) = sheet(HelpFor::Board, 200, 50, 0);
-        assert_eq!(max, 0);
-        let left = rows.iter().find_map(|r| r.iter().position(|ch| *ch == '╭')).unwrap();
-        let right = rows.iter().find_map(|r| r.iter().position(|ch| *ch == '╮')).unwrap();
-        let middle = (left + right) / 2;
-        assert!(HelpFor::Board.sections().iter().any(|s| heading_at(&rows, s.heading).unwrap().1 > middle));
-        assert!(!text(&rows).contains("j/k scroll"));
-    }
-
-    #[test]
-    fn j_and_down_scroll_the_drawn_sheet_by_one_line() {
-        for code in [KeyCode::Char('j'), KeyCode::Down] {
-            let mut app = App::new(crate::Machine::from_env());
-            press(&mut app, KeyCode::Char('?'));
-            let before = screen(&app, 80, 24);
-            press(&mut app, code);
-            let after = screen(&app, 80, 24);
-            assert!(matches!(app.mode, Mode::Help(HelpFor::Board)));
-            assert_eq!(after[1], before[2], "{code:?}");
-            assert_ne!(after[1], before[1]);
-            assert_ne!(after[23], before[23], "the position moves");
-        }
-    }
-
-    #[test]
-    fn k_and_up_at_the_top_change_nothing() {
-        let mut app = App::new(crate::Machine::from_env());
         press(&mut app, KeyCode::Char('?'));
-        let before = screen(&app, 80, 24);
-        for _ in 0..3 {
-            press(&mut app, KeyCode::Char('k'));
-            press(&mut app, KeyCode::Up);
-        }
-        assert_eq!(screen(&app, 80, 24), before);
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Board)));
-    }
-
-    #[test]
-    fn j_past_the_end_stops_on_the_last_page() {
-        let mut app = App::new(crate::Machine::from_env());
-        press(&mut app, KeyCode::Char('?'));
-        let first = screen(&app, 80, 24);
+        let top = screen(&app, 80, 24);
+        assert!(top[23].contains("22/"), "{}", top[23]);
         for _ in 0..500 {
             press(&mut app, KeyCode::Char('j'));
         }
         let last = screen(&app, 80, 24);
-        let total = whole_sheet(HelpFor::Board, 80, 24).len();
+        assert_ne!(last, top);
+        assert!(last.join("\n").contains(":help"), "the last rows show: {}", last.join("\n"));
+        let total = last[23].split('/').next_back().and_then(|t| t.split_whitespace().next()).and_then(|n| n.parse::<usize>().ok()).unwrap();
         assert!(last[23].contains(&format!("{total}/{total}")), "{}", last[23]);
-        assert!(last.join("\n").contains("this sheet"), "the last row shows");
-        assert_ne!(last, first);
+        for _ in 0..500 {
+            press(&mut app, KeyCode::Char('k'));
+        }
+        assert_eq!(screen(&app, 80, 24), top, "back at the top");
         press(&mut app, KeyCode::Char('j'));
-        assert_eq!(screen(&app, 80, 24), last);
-        assert!(matches!(app.mode, Mode::Help(_)));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(screen(&app, 80, 24)[1..23], top[1..23], "two rows down still fits the first page");
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Help { .. }));
     }
 
     #[test]
-    fn scrolling_a_sheet_that_fits_is_a_no_op() {
-        let mut app = App::new(crate::Machine::from_env());
+    fn growing_the_terminal_pulls_a_scrolled_sheet_back_to_the_top() {
+        let mut app = app_with("awaiting_approval", true);
         press(&mut app, KeyCode::Char('?'));
-        let before = screen(&app, 200, 50);
-        press(&mut app, KeyCode::Char('j'));
-        press(&mut app, KeyCode::Down);
-        press(&mut app, KeyCode::Char('k'));
-        assert_eq!(screen(&app, 200, 50), before);
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Board)));
+        press(&mut app, KeyCode::Char('?'));
+        let top = screen(&app, 80, 24);
+        for _ in 0..30 {
+            press(&mut app, KeyCode::Char('j'));
+        }
+        assert_ne!(screen(&app, 80, 24), top, "scrolled at 80x24");
+        let wide = screen(&app, 200, 60).join("\n");
+        assert!(wide.contains("Commands (type after :)") && wide.contains("Gate"), "everything fits at 200x60: {wide}");
+        for _ in 0..40 {
+            press(&mut app, KeyCode::Char('k'));
+        }
+        assert_eq!(screen(&app, 80, 24), top, "back at 80x24 the sheet starts at the top again");
     }
 
     #[test]
-    fn esc_q_question_mark_x_and_enter_close_the_sheet() {
-        for code in [KeyCode::Esc, KeyCode::Char('q'), KeyCode::Char('?'), KeyCode::Char('x'), KeyCode::Enter] {
-            let mut app = App::new(crate::Machine::from_env());
+    fn every_view_draws_its_sheet_at_any_size_without_panicking() {
+        for (w, h) in [(1, 1), (6, 3), (10, 4), (20, 6), (80, 24), (120, 40), (200, 50)] {
+            let mut app = app_with("awaiting_ship", true);
             press(&mut app, KeyCode::Char('?'));
-            assert!(matches!(app.mode, Mode::Help(_)));
-            press(&mut app, code);
-            assert!(matches!(app.mode, Mode::Normal), "{code:?} closes");
+            assert_eq!(screen(&app, w, h).len(), usize::from(h));
+            press(&mut app, KeyCode::Esc);
+            type Toggle = fn(&mut App);
+            let views: [(Toggle, Toggle); 6] = [
+                (|a| a.floor = Some(FloorState::default()), |a| a.floor = None),
+                (|a| a.inbox = Some(InboxState::default()), |a| a.inbox = None),
+                (|a| a.digest = Some(DigestState::default()), |a| a.digest = None),
+                (|a| a.pulls = Some(PullsState::default()), |a| a.pulls = None),
+                (|a| a.slack = Some(SlackState::default()), |a| a.slack = None),
+                (|a| a.slack = Some(SlackState { watches: Some(Default::default()), ..Default::default() }), |a| a.slack = None),
+            ];
+            for (open, close) in views {
+                open(&mut app);
+                press(&mut app, KeyCode::Char('?'));
+                assert!(matches!(app.mode, Mode::Help { .. }));
+                for _ in 0..3 {
+                    press(&mut app, KeyCode::Char('j'));
+                    assert_eq!(screen(&app, w, h).len(), usize::from(h));
+                }
+                press(&mut app, KeyCode::Esc);
+                assert!(matches!(app.mode, Mode::Normal));
+                close(&mut app);
+            }
+            app.mode = Mode::Detail("a1b2c3d4e5f6".to_string());
+            press(&mut app, KeyCode::Char('?'));
+            assert_eq!(screen(&app, w, h).len(), usize::from(h));
+            press(&mut app, KeyCode::Esc);
+            assert!(matches!(&app.mode, Mode::Detail(id) if id == "a1b2c3d4e5f6"));
         }
     }
 
     #[test]
-    fn the_status_bar_says_scroll_and_any_key_closes() {
-        let mut app = App::new(crate::Machine::from_env());
-        press(&mut app, KeyCode::Char('?'));
-        let line: String = footer_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
-        assert!(line.contains("j/k scroll"), "{line}");
-        assert!(line.contains("any key closes"), "{line}");
-        assert!(!line.contains("any key  close"), "{line}");
-    }
-
-    #[test]
-    fn closing_help_after_scrolling_returns_to_detail_and_resets() {
-        let mut app = App::new(crate::Machine::from_env());
-        app.mode = Mode::Detail("aaaaaaaa0000".to_string());
-        press(&mut app, KeyCode::Char('?'));
-        screen(&app, 80, 24);
-        press(&mut app, KeyCode::Char('j'));
-        press(&mut app, KeyCode::Char('q'));
-        assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"));
-        app.mode = Mode::Normal;
-        press(&mut app, KeyCode::Char('?'));
-        assert_eq!(app.help_scroll.get(), 0, "a reopened sheet starts at the top");
-        press(&mut app, KeyCode::Esc);
-        assert!(matches!(app.mode, Mode::Normal), "the board's help closes to the board");
-    }
-
-    #[test]
-    fn floor_and_digest_stay_open_after_closing_help() {
-        let mut app = App::new(crate::Machine::from_env());
+    fn floor_and_digest_stay_open_after_closing_help_and_the_sheet_draws_over_them() {
+        let mut app = App::new(Machine::from_env());
         app.floor = Some(FloorState::default());
         press(&mut app, KeyCode::Char('?'));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Floor)));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Floor, .. }));
+        let text = screen(&app, 120, 40).join("\n");
+        assert!(text.contains(" Keys · Floor ") && text.contains("refresh the numbers"), "a small group reads as rows: {text}");
         press(&mut app, KeyCode::Esc);
         assert!(app.floor.is_some() && matches!(app.mode, Mode::Normal));
         app.floor = None;
 
         app.digest = Some(DigestState::default());
         press(&mut app, KeyCode::Char('?'));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Digest)));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Digest, .. }));
+        assert!(screen(&app, 120, 40).join("\n").contains(" Keys · Digest "));
         press(&mut app, KeyCode::Esc);
         assert!(app.digest.is_some() && matches!(app.mode, Mode::Normal));
     }
 
     #[test]
-    fn floor_help_is_drawn_over_the_floor() {
-        let mut app = App::new(crate::Machine::from_env());
-        app.floor = Some(FloorState::default());
-        press(&mut app, KeyCode::Char('?'));
-        let text = screen(&app, 200, 50).join("\n");
-        for s in HelpFor::Floor.sections() {
-            assert!(text.contains(s.heading), "heading {}", s.heading);
-        }
+    fn the_footer_derives_from_the_registry_and_follows_the_ticket() {
+        let approval = app_with("awaiting_approval", true);
+        let line = footer(&approval);
+        assert!(line.starts_with("  ?  keys   a  approve the plan   r  send back with a reason  "), "{line}");
+        let draft = app_with("draft", false);
+        let line = footer(&draft);
+        assert!(line.contains(" a  start  ") && line.contains(" R  set the repo") && !line.contains(" r  "), "{line}");
+        let mut pulls = App::new(Machine::from_env());
+        pulls.pulls = Some(PullsState::default());
+        pulls.toast = None;
+        let line = footer(&pulls);
+        assert!(line.starts_with("  ?  keys ") && line.contains(" R  poll GitHub now ") && !line.contains(" m "), "no PR under the cursor, m is off: {line}");
+        let mut floor = App::new(Machine::from_env());
+        floor.floor = Some(FloorState::default());
+        floor.toast = None;
+        assert!(footer(&floor).contains(" R  refresh the numbers "), "{}", footer(&floor));
+        let mut help = app_with("draft", true);
+        press(&mut help, KeyCode::Char('?'));
+        let line = footer(&help);
+        assert!(line.contains(" enter  run the row's key ") && line.contains(" /  search every view's keys "), "{line}");
     }
 
     #[test]
-    fn every_view_draws_at_any_size_without_panicking() {
-        for ctx in VIEWS {
-            for (w, h) in [(1, 1), (6, 3), (20, 6), (80, 24), (120, 40), (200, 50)] {
-                let (rows, _) = sheet(ctx, w, h, u16::MAX);
-                assert_eq!(rows.len(), usize::from(h));
-                assert!(rows.iter().all(|r| r.len() == usize::from(w)));
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod help_resize_tests {
-    use ratatui::{
-        Terminal,
-        backend::TestBackend,
-        crossterm::event::{KeyCode, KeyEvent},
-    };
-
-    use super::*;
-
-    fn screen(app: &App, width: u16, height: u16) -> Vec<String> {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        terminal.draw(|f| draw(f, app)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect())
-            .collect()
-    }
-
-    fn press(app: &mut App, code: KeyCode) {
-        app.handle_key(KeyEvent::from(code));
+    fn the_which_key_strip_replaces_the_footer_after_the_delay() {
+        let mut app = app_with("draft", true);
+        press(&mut app, KeyCode::Char('g'));
+        assert!(!footer(&app).contains("▸"), "{}", footer(&app));
+        app.age_prefix();
+        let line = footer(&app);
+        assert!(line.starts_with(" g ▸ "), "{line}");
+        assert!(line.contains(" g first ticket in the column") && line.contains(" s order columns by stage") && line.ends_with("esc"), "{line}");
+        press(&mut app, KeyCode::Char('s'));
+        press(&mut app, KeyCode::Char('z'));
+        app.age_prefix();
+        assert!(footer(&app).contains(" c fold the focused column"), "{}", footer(&app));
     }
 
     #[test]
-    fn growing_the_terminal_pulls_a_scrolled_sheet_back_to_the_top() {
-        let mut app = App::new(crate::Machine::from_env());
-        press(&mut app, KeyCode::Char('?'));
-        let top = screen(&app, 80, 24);
-        for _ in 0..5 {
-            press(&mut app, KeyCode::Char('j'));
-        }
-        assert_ne!(screen(&app, 80, 24), top, "scrolled at 80x24");
-        let wide = screen(&app, 200, 50);
-        let positions = wide.iter().flat_map(|r| r.match_indices("j/k scroll · ").map(|(i, m)| r[i + m.len()..].to_string()));
-        assert!(positions.clone().count() > 0, "the status bar hint is there");
-        assert!(positions.clone().all(|rest| rest.starts_with("any key")), "no n/m footer: everything fits at 200x50");
-        assert!(HelpFor::Board.sections().iter().all(|s| wide.join("\n").contains(s.heading)));
-        assert_eq!(screen(&app, 80, 24), top, "back at 80x24 the sheet starts at the top again");
+    fn the_editors_title_carries_the_mode_key_line() {
+        let mut app = app_with("draft", true);
+        press(&mut app, KeyCode::Char('e'));
+        assert!(matches!(app.mode, Mode::EditTicket { .. }));
+        let text = screen(&app, 140, 40).join("\n");
+        assert!(text.contains("· normal · i a o insert · dd x delete · u ^r undo · ctrl+s save · esc q cancel"), "{text}");
+        press(&mut app, KeyCode::Char('i'));
+        let text = screen(&app, 140, 40).join("\n");
+        assert!(text.contains("· insert · esc normal · ctrl+s save") && !text.contains("dd x delete"), "{text}");
+        let line = footer(&app);
+        assert!(line.contains(" esc  normal ") && line.contains(" ctrl+s  save "), "{line}");
     }
 
     #[test]
-    fn the_whole_app_draws_every_views_help_at_tiny_sizes() {
-        for (w, h) in [(1, 1), (10, 4), (20, 6), (80, 24)] {
-            let mut app = App::new(crate::Machine::from_env());
-            press(&mut app, KeyCode::Char('?'));
-            assert_eq!(screen(&app, w, h).len(), usize::from(h));
-            press(&mut app, KeyCode::Esc);
+    fn the_colon_prompt_lists_completions_and_the_picked_one_is_marked() {
+        let mut app = app_with("draft", true);
+        press(&mut app, KeyCode::Char(':'));
+        press(&mut app, KeyCode::Char('f'));
+        let text = screen(&app, 100, 24).join("\n");
+        assert!(text.contains(":filter") && text.contains(":fold") && text.contains(":floor"), "{text}");
+        assert!(text.contains("filter: title, #id or repo (bare clears)"), "{text}");
+        press(&mut app, KeyCode::Tab);
+        press(&mut app, KeyCode::Tab);
+        let text = screen(&app, 100, 24).join("\n");
+        assert!(text.contains("▌ :fold"), "{text}");
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char(':'));
+        let text = screen(&app, 100, 24);
+        let listed = text.iter().filter(|r| r.contains("   :")).count();
+        assert!(listed <= 7 && text.join("\n").contains("more"), "six at most, then a count: {}", text.join("\n"));
+    }
 
-            app.floor = Some(FloorState::default());
-            press(&mut app, KeyCode::Char('?'));
-            assert!(matches!(app.mode, Mode::Help(HelpFor::Floor)));
-            for _ in 0..3 {
-                press(&mut app, KeyCode::Char('j'));
-                assert_eq!(screen(&app, w, h).len(), usize::from(h));
-            }
-            press(&mut app, KeyCode::Esc);
-            app.floor = None;
-
-            app.inbox = Some(InboxState::default());
-            press(&mut app, KeyCode::Char('?'));
-            assert_eq!(screen(&app, w, h).len(), usize::from(h));
-            press(&mut app, KeyCode::Esc);
-            app.inbox = None;
-
-            app.digest = Some(DigestState::default());
-            press(&mut app, KeyCode::Char('?'));
-            assert_eq!(screen(&app, w, h).len(), usize::from(h));
-            press(&mut app, KeyCode::Esc);
-            app.digest = None;
-
-            app.mode = Mode::Detail("aaaaaaaa0000".to_string());
-            press(&mut app, KeyCode::Char('?'));
-            assert_eq!(screen(&app, w, h).len(), usize::from(h));
-            press(&mut app, KeyCode::Esc);
-            assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"));
-        }
+    #[test]
+    fn the_ticket_menu_lists_the_registry_rows_dim_with_reasons() {
+        let mut app = app_with("awaiting_approval", true);
+        press(&mut app, KeyCode::Char('x'));
+        let text = screen(&app, 100, 40).join("\n");
+        assert!(text.contains(" #a1b2c3d4 Login page "), "{text}");
+        assert!(text.contains("P   resume every ticket paused on the limit"), "{text}");
+        assert!(text.contains("S   ship: approve and open the PR") && text.contains("↳ not at the ship gate"), "{text}");
+        assert!(text.contains("a   approve the plan") && text.contains("R   set the repo"), "{text}");
+        assert!(text.contains("↳ has a repo; x or :repo <name> replaces it"), "{text}");
+        press(&mut app, KeyCode::Char('a'));
+        assert!(matches!(app.mode, Mode::Normal), "a menu key runs and closes");
     }
 }

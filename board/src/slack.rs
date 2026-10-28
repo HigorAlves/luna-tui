@@ -155,7 +155,7 @@ impl SlackKey {
             SlackKey::Done => 'd',
             SlackKey::Snooze => 's',
             SlackKey::Open => 'o',
-            SlackKey::Nudge => 'n',
+            SlackKey::Nudge => 'N',
             SlackKey::Bump => '!',
             SlackKey::Lower => '-',
         }

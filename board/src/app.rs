@@ -20,6 +20,7 @@ use std::collections::BTreeSet;
 use crate::detail::Section;
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
+use crate::keys::{self, Scope};
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
@@ -29,15 +30,17 @@ use crate::{
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, StreamMessage, Task,
-        TaskDetail, TaskDiff, TicketText, answers_markdown, iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of, plan_markdown,
-        priority_step, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
+        COLUMNS, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
+        StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of,
+        plan_markdown, priority_step, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
     store,
     vim::Vim,
 };
 
 const INFO_TOAST_FOR: Duration = Duration::from_secs(3);
+/// How long a prefix key (`g`, `z`) waits before the footer lists its second keys.
+pub const WHICH_KEY_DELAY: Duration = Duration::from_millis(400);
 /// The platform's "open this URL" program and its arguments.
 fn opener_command(url: &str) -> (&'static str, Vec<String>) {
     let program = if cfg!(target_os = "macos") {
@@ -83,442 +86,6 @@ fn start_cursor(section: Section) -> usize {
 
 /// Rows one card takes on the board, including its spacer line.
 pub const CARD_HEIGHT: usize = 3;
-
-/// Actions in the `x` menu for the selected ticket, as the key each one is.
-pub const ACTIONS: [(char, &str); 15] = [
-    ('P', "resume every ticket paused on the usage window"),
-    ('D', "drain / carry on: take no new work, or pick the queue back up"),
-    ('+', "one more slot"),
-    ('-', "one slot fewer"),
-    ('a', "advance: start, approve, answer, retry, resume"),
-    ('S', "ship: approve the Ship gate and open the PR"),
-    ('r', "send back with a reason"),
-    ('e', "edit the ticket"),
-    ('R', "search for its repo"),
-    ('f', "focus the agent's tab"),
-    ('o', "open the linked GitHub issue, else the Jira issue"),
-    ('J', "link a Jira issue (unlink when linked)"),
-    ('X', "abort the running stage"),
-    ('w', "kill its worktree"),
-    ('d', "delete"),
-];
-
-/// Which view `?` was pressed in: the sheet shows that view's keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HelpFor {
-    Board,
-    Floor,
-    Inbox,
-    Digest,
-    Detail,
-    Pulls,
-    Slack,
-}
-
-impl HelpFor {
-    pub fn title(self) -> &'static str {
-        match self {
-            HelpFor::Board => " Keys · any key closes ",
-            HelpFor::Floor => " Floor keys · any key closes ",
-            HelpFor::Inbox => " Inbox keys · any key closes ",
-            HelpFor::Digest => " Digest keys · any key closes ",
-            HelpFor::Detail => " Ticket keys · any key closes ",
-            HelpFor::Pulls => " Pulls keys · any key closes ",
-            HelpFor::Slack => " Slack keys · any key closes ",
-        }
-    }
-
-    /// The keys that work in this view, as (keys, what they do).
-    #[cfg(test)]
-    pub fn keys(self) -> &'static [(&'static str, &'static str)] {
-        match self {
-            HelpFor::Board => HELP,
-            HelpFor::Floor => FLOOR_HELP,
-            HelpFor::Inbox => INBOX_HELP,
-            HelpFor::Digest => DIGEST_HELP,
-            HelpFor::Detail => DETAIL_HELP,
-            HelpFor::Pulls => PULLS_HELP,
-            HelpFor::Slack => SLACK_HELP,
-        }
-    }
-
-    /// The same keys as `keys()` (the board's also holds the `:` commands), grouped under headings.
-    pub fn sections(self) -> &'static [HelpSection] {
-        match self {
-            HelpFor::Board => BOARD_SECTIONS,
-            HelpFor::Floor => FLOOR_SECTIONS,
-            HelpFor::Inbox => INBOX_SECTIONS,
-            HelpFor::Digest => DIGEST_SECTIONS,
-            HelpFor::Detail => DETAIL_SECTIONS,
-            HelpFor::Pulls => PULLS_SECTIONS,
-            HelpFor::Slack => SLACK_SECTIONS,
-        }
-    }
-}
-
-/// A heading and the (keys, what they do) rows under it.
-#[derive(Clone, Copy, Debug)]
-pub struct HelpSection {
-    pub heading: &'static str,
-    pub rows: &'static [(&'static str, &'static str)],
-}
-
-const fn section(heading: &'static str, rows: &'static [(&'static str, &'static str)]) -> HelpSection {
-    HelpSection { heading, rows }
-}
-
-pub const BOARD_SECTIONS: &[HelpSection] = &[
-    section(
-        "Move",
-        &[
-            ("h / l", "previous / next column"),
-            ("j / k", "previous / next ticket"),
-            ("gg / G", "first / last ticket in the column"),
-            ("1 … 8", "jump to that column"),
-            ("] / [", "next / previous ticket that needs you, across the board"),
-            ("enter", "open details"),
-        ],
-    ),
-    section(
-        "Ticket",
-        &[
-            ("n", "new ticket, then edit it in place"),
-            ("e", "edit title, description and criteria in place (ctrl+s saves)"),
-            ("R", "search for its repo under HARDNESS_REPOS_DIR / ~/Developer"),
-            ("a", "advance: start, approve, answer triage in place (ctrl+s sends), retry an escalation, resume"),
-            ("A", "memory review: approve without applying the proposed rules"),
-            ("r", "send the plan or tests back, with a reason"),
-            ("X", "abort the running stage (asks first)"),
-            ("w", "kill its worktree once you are done with it (asks first)"),
-            ("d", "delete (asks first)"),
-            ("f", "focus the agent's watch tab in herdr"),
-            ("o", "open the linked GitHub issue in the browser, else the Jira issue"),
-            ("J", "link a Jira issue: search by key or words, enter links, ctrl+n creates one; unlinks when linked"),
-        ],
-    ),
-    section(
-        "Filter & order",
-        &[
-            ("/", "filter by title, #id or repo"),
-            ("!", "show only tickets that need you"),
-            ("@", "show only tickets for this repo"),
-            ("zc / zo", "fold / unfold the focused column (Done starts folded)"),
-            ("zz", "fold every column but the focused one"),
-            ("gs / gr / ga", "order columns by stage, by repo, by age (gr names each repo group)"),
-            ("=", "card density: 3 lines, 4 with worked · diff · tests, 1"),
-        ],
-    ),
-    section(
-        "Views",
-        &[
-            ("F", "Floor: 7d and 30d metrics, a row per repo (tab focuses one, r refreshes, esc closes)"),
-            ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
-            ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
-            ("P", "Pulls: every open PR involving you, split by what you do; m merges, c/v/t dispatch an agent"),
-            ("S", "Slack: your mentions, DMs and watched handles, triaged and split by what you do; r replies, t makes a ticket"),
-        ],
-    ),
-    section(
-        "Marks & bulk",
-        &[
-            ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
-            ("x", "actions for the selected ticket (P resumes every paused one)"),
-        ],
-    ),
-    section(
-        "App",
-        &[
-            (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs, slack, jira"),
-            ("esc", "clear the filter"),
-            ("?", "this help"),
-            ("q", "quit"),
-        ],
-    ),
-    section(
-        "Commands (type after :)",
-        &[
-            ("q", "quit"),
-            ("new <title>", "new ticket, then edit it in place"),
-            ("filter <text>", "filter by title, #id or repo (bare: clear)"),
-            ("repo <name>", "show only that repo"),
-            ("open <#id>", "open a ticket by id prefix"),
-            ("group stage|repo|age", "order columns"),
-            ("fold / unfold", "fold / unfold the focused column"),
-            ("setup <repo>", "propose the repo's luna.yaml (a name under HARDNESS_REPOS_DIR, or a path)"),
-            ("slots <n>", "resize the pool"),
-            ("drain / resume", "take no new work / carry on"),
-            ("floor / inbox / digest / prs / slack", "open that view"),
-            ("jira <KEY>", "link that Jira issue to the selected ticket (bare: the search)"),
-            ("help", "this sheet"),
-        ],
-    ),
-];
-
-pub const FLOOR_SECTIONS: &[HelpSection] = &[section(
-    "Floor",
-    &[
-        ("tab / shift+tab", "focus the next / previous repo; the numbers follow"),
-        ("r", "refresh"),
-        ("esc", "close"),
-    ],
-)];
-
-pub const INBOX_SECTIONS: &[HelpSection] = &[
-    section(
-        "Navigate",
-        &[
-            ("j / k", "previous / next ticket"),
-            ("h / l", "previous / next split (1-5 jump)"),
-            ("enter", "open the ticket"),
-            ("esc", "close"),
-        ],
-    ),
-    section(
-        "Act",
-        &[
-            ("a", "advance: approve, answer, retry"),
-            ("r", "send back with a reason"),
-            ("e", "edit in place"),
-            ("A", "approve every ticket in the split, after one yes"),
-        ],
-    ),
-];
-
-pub const DIGEST_SECTIONS: &[HelpSection] = &[section(
-    "Digest",
-    &[
-        ("j / k", "previous / next entry"),
-        ("enter", "jump to the ticket"),
-        ("o", "open its PR or issue in the browser"),
-        ("esc", "close"),
-    ],
-)];
-
-pub const PULLS_SECTIONS: &[HelpSection] = &[
-    section(
-        "Move",
-        &[
-            ("j / k", "previous / next PR"),
-            ("h / l", "previous / next split (1-6 jump)"),
-            ("enter", "jump to its task on the board, else open the PR"),
-            ("o", "open the PR in the browser"),
-        ],
-    ),
-    section(
-        "Act",
-        &[
-            ("m", "merge: squash and delete the branch, after a yes (Ready to merge only)"),
-            ("c", "CI fix: an agent diagnoses the red run and pushes a fix"),
-            ("v", "review: an agent posts line comments; approve / request changes waits for you"),
-            ("t", "threads: an agent answers every unresolved review thread on your PR"),
-            ("x", "the same actions as a menu, with why a key is off"),
-        ],
-    ),
-    section("Other", &[("R", "poll GitHub now"), ("esc", "close")]),
-];
-
-pub const SLACK_SECTIONS: &[HelpSection] = &[
-    section(
-        "Move",
-        &[
-            ("j / k", "previous / next item"),
-            ("h / l", "previous / next split (1-6 jump)"),
-            ("enter", "jump to its ticket on the board, else open the message in Slack"),
-            ("o", "open the message in Slack"),
-        ],
-    ),
-    section(
-        "Act",
-        &[
-            ("r", "reply: edit the drafted answer, ctrl+s posts it as you in the thread"),
-            ("t", "ticket: a Backlog task from the message and its thread, after a yes"),
-            ("d", "done: clear it; it comes back, re-triaged, if the thread moves"),
-            ("s", "snooze: 1h, 3h, tomorrow 9:00 or next Monday 9:00"),
-            ("n", "nudge: a one-line reminder in a thread you are waiting on"),
-            ("! / -", "priority up / down one step; re-triage keeps your value"),
-            ("x", "the same actions as a menu, with why a key is off"),
-        ],
-    ),
-    section(
-        "Watches",
-        &[
-            ("W", "the handles, broadcasts, keywords and channels the inbox treats as you"),
-            ("n / d / space / e", "in Watches: add (@handle, #channel or a word), delete, on / off, priority floor"),
-        ],
-    ),
-    section(
-        "Other",
-        &[
-            ("‼ red row", "overdue: past its reply SLA (rules file `## SLA`); sorted first, counted on the badge"),
-            ("R", "poll Slack now"),
-            ("esc", "close"),
-        ],
-    ),
-];
-
-pub const DETAIL_SECTIONS: &[HelpSection] = &[
-    section(
-        "Read",
-        &[
-            ("h / l, 1-8", "previous / next section: Overview, Plan, Tests, Runs, Diff, Evidence, PR, Activity"),
-            ("j / k", "scroll the section, or pick a run / file where it lists them"),
-            ("J / K, ctrl+d / ctrl+u", "scroll the section where j / k pick a row (a line, half a page)"),
-            ("+", "toggle the popup between most of the screen and all of it"),
-            ("esc", "close"),
-        ],
-    ),
-    section(
-        "Act",
-        &[
-            ("a", "advance: start, approve, answer, retry, resume"),
-            ("S", "ship"),
-            ("r", "send back with a reason"),
-            ("e", "edit in place"),
-            ("X / w / d", "abort / kill the worktree / delete (each asks)"),
-            ("f", "focus its herdr tab"),
-            ("o", "open the selected file (Diff, Evidence), the PR (PR), else the linked issue"),
-            ("J", "link or unlink a Jira issue"),
-        ],
-    ),
-];
-
-#[cfg(test)]
-pub const FLOOR_HELP: &[(&str, &str)] = &[
-    ("tab / shift+tab", "focus the next / previous repo; the numbers follow"),
-    ("r", "refresh"),
-    ("esc", "close"),
-];
-
-#[cfg(test)]
-pub const INBOX_HELP: &[(&str, &str)] = &[
-    ("j / k", "previous / next ticket"),
-    ("h / l", "previous / next split (1-5 jump)"),
-    ("a", "advance: approve, answer, retry"),
-    ("r", "send back with a reason"),
-    ("e", "edit in place"),
-    ("A", "approve every ticket in the split, after one yes"),
-    ("enter", "open the ticket"),
-    ("esc", "close"),
-];
-
-#[cfg(test)]
-pub const PULLS_HELP: &[(&str, &str)] = &[
-    ("j / k", "previous / next PR"),
-    ("h / l", "previous / next split (1-6 jump)"),
-    ("o", "open the PR in the browser"),
-    ("enter", "jump to its task on the board, else open the PR"),
-    ("m", "merge: squash and delete the branch, after a yes (Ready to merge only)"),
-    ("c", "CI fix: an agent diagnoses the red run and pushes a fix"),
-    ("v", "review: an agent posts line comments; approve / request changes waits for you"),
-    ("t", "threads: an agent answers every unresolved review thread on your PR"),
-    ("R", "poll GitHub now"),
-    ("x", "the same actions as a menu, with why a key is off"),
-    ("esc", "close"),
-];
-
-#[cfg(test)]
-pub const SLACK_HELP: &[(&str, &str)] = &[
-    ("j / k", "previous / next item"),
-    ("h / l", "previous / next split (1-6 jump)"),
-    ("enter", "jump to its ticket on the board, else open the message in Slack"),
-    ("o", "open the message in Slack"),
-    ("r", "reply: edit the drafted answer, ctrl+s posts it as you in the thread"),
-    ("t", "ticket: a Backlog task from the message and its thread, after a yes"),
-    ("d", "done: clear it; it comes back, re-triaged, if the thread moves"),
-    ("s", "snooze: 1h, 3h, tomorrow 9:00 or next Monday 9:00"),
-    ("n", "nudge: a one-line reminder in a thread you are waiting on"),
-    ("! / -", "priority up / down one step; re-triage keeps your value"),
-    ("x", "the same actions as a menu, with why a key is off"),
-    ("W", "the handles, broadcasts, keywords and channels the inbox treats as you"),
-    ("n / d / space / e", "in Watches: add (@handle, #channel or a word), delete, on / off, priority floor"),
-    ("‼ red row", "overdue: past its reply SLA (rules file `## SLA`); sorted first, counted on the badge"),
-    ("R", "poll Slack now"),
-    ("esc", "close"),
-];
-
-#[cfg(test)]
-pub const DIGEST_HELP: &[(&str, &str)] = &[
-    ("j / k", "previous / next entry"),
-    ("enter", "jump to the ticket"),
-    ("o", "open its PR or issue in the browser"),
-    ("esc", "close"),
-];
-
-#[cfg(test)]
-pub const DETAIL_HELP: &[(&str, &str)] = &[
-    ("h / l, 1-8", "previous / next section: Overview, Plan, Tests, Runs, Diff, Evidence, PR, Activity"),
-    ("j / k", "scroll the section, or pick a run / file where it lists them"),
-    ("J / K, ctrl+d / ctrl+u", "scroll the section where j / k pick a row (a line, half a page)"),
-    ("+", "toggle the popup between most of the screen and all of it"),
-    ("a", "advance: start, approve, answer, retry, resume"),
-    ("S", "ship"),
-    ("r", "send back with a reason"),
-    ("e", "edit in place"),
-    ("X / w / d", "abort / kill the worktree / delete (each asks)"),
-    ("f", "focus its herdr tab"),
-    ("o", "open the selected file (Diff, Evidence), the PR (PR), else the linked issue"),
-    ("J", "link or unlink a Jira issue"),
-    ("esc", "close"),
-];
-
-/// What `:` understands. Typed as `:name args`.
-#[cfg(test)]
-pub const COMMANDS: &[(&str, &str)] = &[
-    ("q", "quit"),
-    ("new <title>", "new ticket, then edit it in place"),
-    ("filter <text>", "filter by title, #id or repo (bare: clear)"),
-    ("repo <name>", "show only that repo"),
-    ("open <#id>", "open a ticket by id prefix"),
-    ("group stage|repo|age", "order columns"),
-    ("fold / unfold", "fold / unfold the focused column"),
-    ("setup <repo>", "propose the repo's luna.yaml (a name under HARDNESS_REPOS_DIR, or a path)"),
-    ("slots <n>", "resize the pool"),
-    ("drain / resume", "take no new work / carry on"),
-    ("floor / inbox / digest / prs / slack", "open that view"),
-    ("jira <KEY>", "link that Jira issue to the selected ticket (bare: the search)"),
-    ("help", "this sheet"),
-];
-
-/// Keys shown in the help overlay, as (keys, what they do).
-#[cfg(test)]
-pub const HELP: &[(&str, &str)] = &[
-    ("h / l", "previous / next column"),
-    ("j / k", "previous / next ticket"),
-    ("gg / G", "first / last ticket in the column"),
-    ("1 … 8", "jump to that column"),
-    ("] / [", "next / previous ticket that needs you, across the board"),
-    ("enter", "open details"),
-    ("n", "new ticket, then edit it in place"),
-    ("e", "edit title, description and criteria in place (ctrl+s saves)"),
-    ("R", "search for its repo under HARDNESS_REPOS_DIR / ~/Developer"),
-    ("a", "advance: start, approve, answer triage in place (ctrl+s sends), retry an escalation, resume"),
-    ("A", "memory review: approve without applying the proposed rules"),
-    ("r", "send the plan or tests back, with a reason"),
-    ("X", "abort the running stage (asks first)"),
-    ("w", "kill its worktree once you are done with it (asks first)"),
-    ("d", "delete (asks first)"),
-    ("f", "focus the agent's watch tab in herdr"),
-    ("o", "open the linked GitHub issue in the browser, else the Jira issue"),
-    ("J", "link a Jira issue: search by key or words, enter links, ctrl+n creates one; unlinks when linked"),
-    ("/", "filter by title, #id or repo"),
-    ("!", "show only tickets that need you"),
-    ("@", "show only tickets for this repo"),
-    ("zc / zo", "fold / unfold the focused column (Done starts folded)"),
-    ("zz", "fold every column but the focused one"),
-    ("gs / gr / ga", "order columns by stage, by repo, by age (gr names each repo group)"),
-    ("=", "card density: 3 lines, 4 with worked · diff · tests, 1"),
-    ("F", "Floor: 7d and 30d metrics, a row per repo (tab focuses one, r refreshes, esc closes)"),
-    ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
-    ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
-    ("P", "Pulls: every open PR involving you, split by what you do; m merges, c/v/t dispatch an agent"),
-    ("S", "Slack: your mentions, DMs and watched handles, triaged and split by what you do; r replies, t makes a ticket"),
-    ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
-    ("x", "actions for the selected ticket (P resumes every paused one)"),
-    (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs, slack, jira"),
-    ("esc", "clear the filter"),
-    ("?", "this help"),
-    ("q", "quit"),
-];
 
 /// The Floor view's numbers, one window each. A window stays `None` until its first fetch
 /// succeeds; a failed refresh keeps what was there.
@@ -653,8 +220,8 @@ pub enum Mode {
     Adding(String),
     /// Typing the filter. The text lives in `App::filter`.
     Filter,
-    /// Typing a `:` command; enter runs it, esc closes.
-    Command(String),
+    /// Typing a `:` command; `pick` is the highlighted completion (tab cycles), enter runs.
+    Command { text: String, pick: Option<usize> },
     Detail(String),
     /// Editing a ticket's markdown in place: title, description, criteria, repo.
     EditTicket {
@@ -752,7 +319,14 @@ pub enum Mode {
     },
     /// `J` on a linked ticket: one yes, then the link is dropped (the issue stays).
     ConfirmJiraUnlink(String),
-    Help(HelpFor),
+    /// The `?` sheet for `scope`: `long` shows every group as rows, `query` is the `/` search
+    /// while typing, `cursor` the row enter runs. How far it is scrolled lives in `help_scroll`.
+    Help {
+        scope: Scope,
+        long: bool,
+        query: Option<String>,
+        cursor: usize,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -850,8 +424,10 @@ pub struct App {
     pub group: GroupBy,
     /// How tall the cards are (`=` cycles).
     pub density: Density,
-    /// A two-key sequence in flight: `z` (fold) or `g` (group).
+    /// A two-key sequence in flight: `z` (fold) or `g` (group), and when it started: after
+    /// `WHICH_KEY_DELAY` the footer lists the second keys.
     prefix: Option<char>,
+    prefix_at: Option<Instant>,
     /// When the board was last open (unix seconds): the Digest's since, the cards' new dot.
     pub last_seen_secs: Option<u64>,
     /// The repo this board defaults new tickets to, for the `@` filter. `None` if it
@@ -882,9 +458,11 @@ pub struct App {
     diff_failed: Option<String>,
     /// The `J` prompt's query waiting to be searched, and when it was typed; see `ensure_jira_search`.
     jira_search_due: Option<(String, Instant)>,
-    /// How far the help sheet is scrolled, and the furthest `ui` found it can scroll.
+    /// How far the help sheet is scrolled, the furthest `ui` found it can scroll, and how many
+    /// rows it showed last frame (the page the ctrl+d / ctrl+u keys move by).
     pub help_scroll: Cell<u16>,
     pub help_max: Cell<u16>,
+    pub help_viewport: Cell<u16>,
     /// The ticket whose Detail `?` was pressed in; closing the help returns to it.
     help_return: Option<String>,
     imported: bool,
@@ -931,6 +509,7 @@ impl App {
             group: GroupBy::default(),
             density: Density::default(),
             prefix: None,
+            prefix_at: None,
             last_seen_secs: store::last_seen_secs_at(&store::state_path()),
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
@@ -947,6 +526,7 @@ impl App {
             jira_search_due: None,
             help_scroll: Cell::new(0),
             help_max: Cell::new(0),
+            help_viewport: Cell::new(0),
             help_return: None,
             imported: false,
         };
@@ -1426,6 +1006,162 @@ impl App {
 
     pub fn task(&self, id: &str) -> Option<&Task> {
         self.tasks.iter().find(|t| t.id == id)
+    }
+
+    /// The ticket a key would act on: the open popup's (also under its `?` sheet), the Inbox
+    /// row's, else the board's selection. The registry's predicates read it.
+    pub fn focus_task(&self) -> Option<&Task> {
+        match &self.mode {
+            Mode::Detail(id) => return self.task(id),
+            Mode::Help { .. } if self.help_return.is_some() => return self.task(self.help_return.as_deref().unwrap_or_default()),
+            _ => {}
+        }
+        if let Some(state) = &self.inbox {
+            let ids = inbox::items(&self.tasks, state.split, now_secs());
+            return ids.get(state.cursor.min(ids.len().saturating_sub(1))).map(|&i| &self.tasks[i]);
+        }
+        self.selected_task()
+    }
+
+    /// The vim state of the editor that has the keyboard, if one is open.
+    pub fn editor_vim(&self) -> Option<&Vim> {
+        match &self.mode {
+            Mode::EditTicket { vim, .. } | Mode::EditCases { vim, .. } | Mode::Answer { vim, .. } | Mode::SlackReply { vim, .. } => Some(vim),
+            Mode::EditPlan { focus: PlanPane::Plan, plan_vim, .. } => Some(plan_vim),
+            Mode::EditPlan { focus: PlanPane::Ticket, ticket_vim, .. } => Some(ticket_vim),
+            _ => None,
+        }
+    }
+
+    /// The watch under the cursor of the open Watches popup.
+    pub fn watch_under_cursor(&self) -> Option<&SlackWatch> {
+        let open = self.slack.as_ref()?.watches.as_ref()?;
+        let count = self.slack_snapshot.watches.len();
+        self.slack_snapshot.watches.get(open.cursor.min(count.saturating_sub(1)))
+    }
+
+    /// The which-key strip: the prefix in flight and its second keys, once it has waited
+    /// `WHICH_KEY_DELAY` for one. Read every frame; the 200 ms poll makes the frame.
+    pub fn which_key(&self) -> Option<(char, Vec<(char, &'static str)>)> {
+        let prefix = self.prefix?;
+        if self.prefix_at.is_some_and(|at| at.elapsed() >= WHICH_KEY_DELAY) { Some((prefix, keys::which_key(prefix))) } else { None }
+    }
+
+    /// Tests: makes the prefix in flight old enough for the strip.
+    #[cfg(test)]
+    pub fn age_prefix(&mut self) {
+        self.prefix_at = self.prefix_at.map(|at| at - WHICH_KEY_DELAY);
+    }
+
+    /// `?`: the sheet for whatever has the keyboard, scrolled to the top.
+    fn open_help(&mut self) {
+        let scope = keys::active_scope(self);
+        self.help_scroll.set(0);
+        self.mode = Mode::Help { scope, long: false, query: None, cursor: 0 };
+    }
+
+    /// Closes the sheet: back to the popup it was opened over, else the view under it.
+    fn close_help(&mut self) {
+        self.help_scroll.set(0);
+        self.mode = match self.help_return.take() {
+            Some(id) => Mode::Detail(id),
+            None => Mode::Normal,
+        };
+    }
+
+    /// The keys `handle_help` matches, besides the view's own that it passes on.
+    #[cfg(test)]
+    pub(crate) const HANDLED_HELP: &[&str] = &["j", "k", "ctrl+d", "ctrl+u", "/", "?", "enter", "esc", "q"];
+
+    /// The sheet's keys. `j`/`k` and ctrl+d/ctrl+u move the cursor, `/` searches every view's
+    /// keys, `?` toggles the long form, enter runs the row (in its own view only), esc and `q`
+    /// close. Any other key that is bright in the sheet closes it and runs as if pressed on the
+    /// view; a dim or unknown one only says why.
+    fn handle_help(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::Help { scope, long, query, .. } = &self.mode else {
+            return Outcome::Continue;
+        };
+        let scope = *scope;
+        let rows = keys::help_rows_for(self, scope, *long, query.as_deref());
+        let runnable = rows.iter().filter(|r| matches!(r, keys::HelpRow::Key { .. })).count();
+        let Mode::Help { long, query, cursor, .. } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let page = usize::from(self.help_viewport.get() / 2).max(1);
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('d') => *cursor = (*cursor + page).min(runnable.saturating_sub(1)),
+                KeyCode::Char('u') => *cursor = cursor.saturating_sub(page),
+                _ => {}
+            }
+            return Outcome::Continue;
+        }
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => *cursor = (*cursor + 1).min(runnable.saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => *cursor = cursor.saturating_sub(1),
+            KeyCode::PageDown => *cursor = (*cursor + page).min(runnable.saturating_sub(1)),
+            KeyCode::PageUp => *cursor = cursor.saturating_sub(page),
+            KeyCode::Esc if query.is_some() => {
+                *query = None;
+                *cursor = 0;
+            }
+            KeyCode::Esc => self.close_help(),
+            KeyCode::Backspace => {
+                if let Some(q) = query.as_mut() {
+                    if q.pop().is_none() {
+                        *query = None;
+                    }
+                    *cursor = 0;
+                }
+            }
+            KeyCode::Char(c) if query.is_some() => {
+                if let Some(q) = query.as_mut() {
+                    q.push(c);
+                }
+                *cursor = 0;
+            }
+            KeyCode::Char('q') => self.close_help(),
+            KeyCode::Char('/') => {
+                *query = Some(String::new());
+                *cursor = 0;
+            }
+            KeyCode::Char('?') => {
+                *long = !*long;
+                *cursor = 0;
+            }
+            KeyCode::Enter => {
+                let at = *cursor;
+                let row = rows.iter().filter(|r| matches!(r, keys::HelpRow::Key { .. })).nth(at);
+                if let Some(keys::HelpRow::Key { binding, avail, .. }) = row {
+                    let (binding, avail) = (*binding, *avail);
+                    if binding.scope != scope {
+                        self.notify(format!("open {} first", binding.scope.name()), false);
+                    } else if let keys::Avail::Off(why) = avail {
+                        self.notify(why, false);
+                    } else {
+                        self.close_help();
+                        for event in keys::key_events(binding.first()) {
+                            if let Outcome::Quit = self.handle_key(event) {
+                                return Outcome::Quit;
+                            }
+                        }
+                    }
+                }
+            }
+            KeyCode::Char(c) => {
+                let hit = keys::bindings_for(self, scope).into_iter().find(|(b, _)| b.menu_key().is_none() && b.group != keys::Group::Commands && b.matches_char(c));
+                match hit {
+                    Some((_, keys::Avail::On)) => {
+                        self.close_help();
+                        return self.handle_key(key);
+                    }
+                    Some((_, keys::Avail::Off(why))) => self.notify(why, false),
+                    _ => self.notify(format!("{c} is not a key here; esc closes"), false),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
     }
 
     /// Repos from `all` whose path contains `query`, case-insensitively.
@@ -1995,7 +1731,7 @@ impl App {
             Mode::Answer { .. } => self.handle_answer(key),
             Mode::EditPlan { .. } => self.handle_edit_plan(key),
             Mode::Filter => self.handle_filter(key),
-            Mode::Command(_) => self.handle_command(key),
+            Mode::Command { .. } => self.handle_command(key),
             Mode::Reason { .. } => self.handle_reason(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
@@ -2015,23 +1751,7 @@ impl App {
             Mode::SlackActions { .. } => self.handle_slack_actions(key),
             Mode::JiraLink { .. } => self.handle_jira_link(key),
             Mode::ConfirmJiraUnlink(_) => self.handle_confirm_jira_unlink(key),
-            Mode::Help(_) => {
-                let scroll = self.help_scroll.get();
-                match key.code {
-                    KeyCode::Char('j') | KeyCode::Down => {
-                        self.help_scroll.set((scroll + 1).min(self.help_max.get()));
-                    }
-                    KeyCode::Char('k') | KeyCode::Up => self.help_scroll.set(scroll.saturating_sub(1)),
-                    _ => {
-                        self.help_scroll.set(0);
-                        self.mode = match self.help_return.take() {
-                            Some(id) => Mode::Detail(id),
-                            None => Mode::Normal,
-                        };
-                    }
-                }
-                Outcome::Continue
-            }
+            Mode::Help { .. } => self.handle_help(key),
         }
     }
 
@@ -2080,11 +1800,15 @@ impl App {
         }
     }
 
+    /// The keys `handle_floor` matches; the registry's Floor scope must list exactly these.
+    #[cfg(test)]
+    pub(crate) const HANDLED_FLOOR: &[&str] = &["esc", "F", "q", "?", "R", "tab", "shift+tab"];
+
     fn handle_floor(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Esc | KeyCode::Char('F') | KeyCode::Char('q') => self.floor = None,
-            KeyCode::Char('?') => self.mode = Mode::Help(HelpFor::Floor),
-            KeyCode::Char('r') => self.refresh_floor(),
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('R') => self.refresh_floor(),
             KeyCode::Tab | KeyCode::BackTab => {
                 if let Some(floor) = self.floor.as_mut() {
                     floor.cycle(if key.code == KeyCode::Tab { 1 } else { -1 });
@@ -2157,6 +1881,10 @@ impl App {
         digest::is_new(task, self.last_seen_secs)
     }
 
+    /// The keys `handle_digest` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_DIGEST: &[&str] = &["esc", "D", "q", "?", "j", "k", "enter", "o"];
+
     /// The Digest's keys: move, jump to the ticket, open its PR, close.
     fn handle_digest(&mut self, key: KeyEvent) -> Outcome {
         let Some(state) = self.digest.clone() else {
@@ -2171,7 +1899,7 @@ impl App {
                 return Outcome::Continue;
             }
             KeyCode::Char('?') => {
-                self.mode = Mode::Help(HelpFor::Digest);
+                self.open_help();
                 return Outcome::Continue;
             }
             KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(entries.len().saturating_sub(1)),
@@ -2215,6 +1943,12 @@ impl App {
         }
     }
 
+    /// The keys `handle_inbox` matches: its own, then everything `ticket_key` takes (`A` is its
+    /// own: the split's approval, not the memory review).
+    #[cfg(test)]
+    pub(crate) const HANDLED_INBOX: &[&str] =
+        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "X", "w", "d", "f", "o", "J"];
+
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
     fn handle_inbox(&mut self, key: KeyEvent) -> Outcome {
         let now = now_secs();
@@ -2230,7 +1964,7 @@ impl App {
                 return Outcome::Continue;
             }
             KeyCode::Char('?') => {
-                self.mode = Mode::Help(HelpFor::Inbox);
+                self.open_help();
                 return Outcome::Continue;
             }
             KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(ids.len().saturating_sub(1)),
@@ -2285,6 +2019,10 @@ impl App {
         self.pulls = Some(PullsState::default());
     }
 
+    /// The keys `handle_pulls` matches, `PrKey::ALL` included.
+    #[cfg(test)]
+    pub(crate) const HANDLED_PULLS: &[&str] = &["esc", "P", "q", "?", "j", "k", "l", "h", "1-6", "R", "o", "enter", "x", "m", "c", "v", "t"];
+
     /// The PR view's keys: move, switch split, open, merge, dispatch an agent, refresh.
     fn handle_pulls(&mut self, key: KeyEvent) -> Outcome {
         let Some(state) = self.pulls.clone() else {
@@ -2299,7 +2037,7 @@ impl App {
                 return Outcome::Continue;
             }
             KeyCode::Char('?') => {
-                self.mode = Mode::Help(HelpFor::Pulls);
+                self.open_help();
                 return Outcome::Continue;
             }
             KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(count.saturating_sub(1)),
@@ -2506,6 +2244,10 @@ impl App {
         self.prefetch_slack_catalog();
     }
 
+    /// The keys `handle_slack` matches, `SlackKey::ALL` included.
+    #[cfg(test)]
+    pub(crate) const HANDLED_SLACK: &[&str] = &["esc", "S", "q", "?", "j", "k", "l", "h", "1-6", "R", "W", "enter", "x", "r", "t", "d", "s", "o", "N", "!", "-"];
+
     /// The Slack view's keys: move, switch split, open, act on the item, Watches, refresh.
     fn handle_slack(&mut self, key: KeyEvent) -> Outcome {
         let Some(state) = self.slack.clone() else {
@@ -2523,7 +2265,7 @@ impl App {
                 return Outcome::Continue;
             }
             KeyCode::Char('?') => {
-                self.mode = Mode::Help(HelpFor::Slack);
+                self.open_help();
                 return Outcome::Continue;
             }
             KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(count.saturating_sub(1)),
@@ -2770,6 +2512,10 @@ impl App {
         Outcome::Continue
     }
 
+    /// The keys `handle_slack_watches` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_WATCHES: &[&str] = &["esc", "W", "q", "?", "j", "k", "n", "space", "e", "d"];
+
     /// The Watches popup: j/k move, space toggles, d deletes (not a built-in), e cycles the
     /// priority floor, n adds, esc / W closes.
     fn handle_slack_watches(&mut self, key: KeyEvent) -> Outcome {
@@ -2787,7 +2533,7 @@ impl App {
                 return Outcome::Continue;
             }
             KeyCode::Char('?') => {
-                self.mode = Mode::Help(HelpFor::Slack);
+                self.open_help();
                 return Outcome::Continue;
             }
             KeyCode::Char('j') | KeyCode::Down => cursor = (cursor + 1).min(count.saturating_sub(1)),
@@ -2955,6 +2701,14 @@ impl App {
         Outcome::Continue
     }
 
+    /// The keys `handle_normal` matches: its own, the second keys `prefixed` takes, then
+    /// everything `ticket_key` takes (`S` opens Slack here, so it is not ship).
+    #[cfg(test)]
+    pub(crate) const HANDLED_BOARD: &[&str] = &[
+        "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "S", "v", "V", "?", ":",
+        "esc", "enter", "R", "a", "A", "e", "r", "X", "w", "d", "f", "o", "J",
+    ];
+
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
         if let Some(prefix) = self.prefix.take() {
             if let KeyCode::Char(c) = key.code {
@@ -2990,6 +2744,7 @@ impl App {
             KeyCode::Char('z') | KeyCode::Char('g') => {
                 if let KeyCode::Char(c) = key.code {
                     self.prefix = Some(c);
+                    self.prefix_at = Some(Instant::now());
                 }
             }
             KeyCode::Char('G') => {
@@ -3027,8 +2782,19 @@ impl App {
                     self.marked.extend(ids);
                 }
             }
-            KeyCode::Char('?') => self.mode = Mode::Help(HelpFor::Board),
-            KeyCode::Char(':') => self.mode = Mode::Command(String::new()),
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char(':') => self.mode = Mode::Command { text: String::new(), pick: None },
+            // The repo search is the one key you need on a ticket without a repo; with one set,
+            // the deliberate paths are the menu and `:repo <name>`.
+            KeyCode::Char('R') => match self.selected_task().map(|t| t.repo_path.is_some()) {
+                Some(true) => self.notify("use :repo <name> or x", false),
+                Some(false) => {
+                    if let Some(id) = self.selected_id() {
+                        return self.ticket_key('R', &id);
+                    }
+                }
+                None => {}
+            },
             KeyCode::Esc => {
                 self.filter.clear();
                 self.needs_only = false;
@@ -3155,6 +2921,12 @@ impl App {
         self.notify(format!("resumed {done} of {}", ids.len()), done < ids.len());
     }
 
+    /// The keys `handle_detail` matches: its own, then everything `ticket_key` takes (`J`
+    /// scrolls here, so the Jira link is not among them).
+    #[cfg(test)]
+    pub(crate) const HANDLED_DETAIL: &[&str] =
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-8", "+", "?", "o", "a", "A", "S", "e", "R", "r", "X", "w", "d", "f"];
+
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
         if key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -3183,7 +2955,7 @@ impl App {
             KeyCode::Char('+') => self.detail_full = !self.detail_full,
             KeyCode::Char('?') => {
                 self.help_return = Some(id.to_string());
-                self.mode = Mode::Help(HelpFor::Detail);
+                self.open_help();
             }
             KeyCode::Char('o') => match self.detail_open_target() {
                 Some(target) => self.open_url(&target),
@@ -3444,21 +3216,43 @@ impl App {
         Outcome::Continue
     }
 
-    /// Typing a `:` command.
+    /// Typing a `:` command. The commands the text is a prefix of show under the prompt; tab
+    /// cycles them, enter runs the highlighted one, or the only one left, else the text as typed.
     fn handle_command(&mut self, key: KeyEvent) -> Outcome {
-        let Mode::Command(text) = &mut self.mode else {
+        let Mode::Command { text, pick } = &mut self.mode else {
             return Outcome::Continue;
         };
         match key.code {
-            KeyCode::Char(c) => text.push(c),
+            KeyCode::Char(c) => {
+                text.push(c);
+                *pick = None;
+            }
             KeyCode::Backspace => {
+                *pick = None;
                 if text.pop().is_none() {
                     self.mode = Mode::Normal;
                 }
             }
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Down | KeyCode::Up => {
+                let n = keys::completions(text).len();
+                if n > 0 {
+                    let back = matches!(key.code, KeyCode::BackTab | KeyCode::Up);
+                    *pick = Some(match (*pick, back) {
+                        (None, false) => 0,
+                        (None, true) => n - 1,
+                        (Some(p), false) => (p + 1) % n,
+                        (Some(p), true) => (p + n - 1) % n,
+                    });
+                }
+            }
             KeyCode::Esc => self.mode = Mode::Normal,
             KeyCode::Enter => {
-                let line = text.trim().to_string();
+                let matches = keys::completions(text);
+                let line = match (*pick, matches.as_slice()) {
+                    (Some(p), _) if p < matches.len() => matches[p].0.to_string(),
+                    (None, [(only, _)]) => only.to_string(),
+                    _ => text.trim().to_string(),
+                };
                 self.mode = Mode::Normal;
                 return self.run_command(&line);
             }
@@ -3466,6 +3260,13 @@ impl App {
         }
         Outcome::Continue
     }
+
+    /// The names `run_command` knows, aliases left out.
+    #[cfg(test)]
+    pub(crate) const HANDLED_COMMANDS: &[&str] = &[
+        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "slack", "jira",
+        "help",
+    ];
 
     /// Runs one palette command: `name` and whatever follows it.
     fn run_command(&mut self, line: &str) -> Outcome {
@@ -3483,10 +3284,15 @@ impl App {
                 self.needs_only = false;
                 self.clamp_selection();
             }
-            "repo" => {
-                self.filter = rest.to_string();
-                self.clamp_selection();
-            }
+            "repo" => match self.selected_id() {
+                None => self.notify("no ticket selected", true),
+                Some(id) if rest.is_empty() => self.open_repo_picker(&id),
+                Some(id) => self.set_repo_named(&id, rest),
+            },
+            "start" => match self.selected_id() {
+                Some(id) => return self.ticket_key('a', &id),
+                None => self.notify("no ticket selected", true),
+            },
             "open" => {
                 let wanted = rest.trim_start_matches('#');
                 match self.tasks.iter().find(|t| !wanted.is_empty() && t.id.starts_with(wanted)).map(|t| t.id.clone()) {
@@ -3547,7 +3353,7 @@ impl App {
                 Some(id) => self.link_jira(&id, rest),
                 None => self.notify("no ticket selected", true),
             },
-            "help" | "?" => self.mode = Mode::Help(HelpFor::Board),
+            "help" | "?" => self.open_help(),
             other => self.notify(format!("unknown command: {other} (try :help)"), true),
         }
         self.clamp_selection();
@@ -3633,34 +3439,52 @@ impl App {
                 };
                 let id = id.clone();
                 self.mode = Mode::Normal;
-                let Some(task) = self.task(&id).cloned() else {
-                    return Outcome::Continue;
-                };
-                let text = TicketText {
-                    title: task.title,
-                    description: task.description,
-                    criteria: task.criteria,
-                    repo_path: Some(repo),
-                };
-                self.act(|m| m.update(&id, &text), "repo set");
+                self.set_repo(&id, repo);
             }
             _ => {}
         }
         Outcome::Continue
     }
 
-    /// Runs the chosen action as if its key were pressed on the selected ticket.
+    /// Sets `repo` on the ticket, keeping its text.
+    fn set_repo(&mut self, id: &str, repo: String) {
+        let Some(task) = self.task(id).cloned() else {
+            return;
+        };
+        let text = TicketText { title: task.title, description: task.description, criteria: task.criteria, repo_path: Some(repo) };
+        self.act(|m| m.update(id, &text), "repo set");
+    }
+
+    /// `:repo <name>`: the one repo under the repos root whose path holds `name` (a path as
+    /// given when it is one); says so when none or several match.
+    fn set_repo_named(&mut self, id: &str, name: &str) {
+        if name.starts_with('/') || name.starts_with('~') || name.starts_with('.') {
+            return self.set_repo(id, name.to_string());
+        }
+        let all = repos_root().map(|root| discover_repos(&root)).unwrap_or_default();
+        let hits = Self::matching_repos(&all, name);
+        let exact: Vec<&str> = hits.iter().copied().filter(|r| r.trim_end_matches('/').rsplit('/').next() == Some(name)).collect();
+        match (exact.as_slice(), hits.as_slice()) {
+            ([one], _) | (_, [one]) => self.set_repo(id, one.to_string()),
+            (_, []) => self.notify(format!("no repo under the repos root matches {name}; R searches"), true),
+            (_, many) => self.notify(format!("{} repos match {name}; R searches, or type more of the path", many.len()), true),
+        }
+    }
+
+    /// The `x` menu: the registry's rows for the ticket (`keys::menu`), run as if the key were
+    /// pressed on it. A dim row still runs: the key itself says why it does nothing.
     fn handle_actions(&mut self, key: KeyEvent) -> Outcome {
+        let rows: Vec<char> = keys::menu(self, Scope::Board).iter().filter_map(|(b, _)| keys::menu_char(b)).collect();
         let Mode::Actions { cursor } = &mut self.mode else {
             return Outcome::Continue;
         };
         let mut chosen = None;
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(ACTIONS.len() - 1),
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(rows.len().saturating_sub(1)),
             KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
-            KeyCode::Enter => chosen = Some(ACTIONS[*cursor].0),
+            KeyCode::Enter => chosen = rows.get(*cursor).copied(),
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
-            KeyCode::Char(c) if ACTIONS.iter().any(|(k, _)| *k == c) => chosen = Some(c),
+            KeyCode::Char(c) if rows.contains(&c) => chosen = Some(c),
             _ => {}
         }
         if let Some(c) = chosen {
@@ -3679,6 +3503,10 @@ impl App {
         }
         Outcome::Continue
     }
+
+    /// The chars the `x` menu runs: the pool keys, then every ticket key `ticket_key` takes.
+    #[cfg(test)]
+    pub(crate) const HANDLED_ACTIONS: &[&str] = &["P", "D", "+", "-", "S", "a", "A", "r", "e", "R", "f", "o", "J", "X", "w", "d"];
 
     /// Opens triage's questions in place, each with its recommended answer ready to edit.
     /// The questions come from the ticket's detail: the one already shown, or fetched now.
@@ -3731,6 +3559,23 @@ impl App {
         }
         Outcome::Continue
     }
+}
+
+/// What each handler matches, for the registry's parity test: see each `HANDLED_*` next to its handler.
+#[cfg(test)]
+pub(crate) mod handled {
+    pub(crate) use super::App;
+    pub(crate) const BOARD: &[&str] = App::HANDLED_BOARD;
+    pub(crate) const DETAIL: &[&str] = App::HANDLED_DETAIL;
+    pub(crate) const INBOX: &[&str] = App::HANDLED_INBOX;
+    pub(crate) const PULLS: &[&str] = App::HANDLED_PULLS;
+    pub(crate) const SLACK: &[&str] = App::HANDLED_SLACK;
+    pub(crate) const WATCHES: &[&str] = App::HANDLED_WATCHES;
+    pub(crate) const DIGEST: &[&str] = App::HANDLED_DIGEST;
+    pub(crate) const FLOOR: &[&str] = App::HANDLED_FLOOR;
+    pub(crate) const HELP: &[&str] = App::HANDLED_HELP;
+    pub(crate) const ACTIONS: &[&str] = App::HANDLED_ACTIONS;
+    pub(crate) const COMMANDS: &[&str] = App::HANDLED_COMMANDS;
 }
 
 /// The checkout `:setup <repo>` means: a path as given when it is absolute (or starts with
@@ -4292,7 +4137,7 @@ mod tests {
 
     fn type_command(app: &mut App, text: &str) -> Outcome {
         app.handle_key(KeyEvent::from(KeyCode::Char(':')));
-        assert!(matches!(app.mode, Mode::Command(_)), "colon opens the palette");
+        assert!(matches!(app.mode, Mode::Command { .. }), "colon opens the palette");
         for ch in text.chars() {
             app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
         }
@@ -4327,7 +4172,7 @@ mod tests {
         assert!(app.digest.is_some());
         app.digest = None;
         type_command(&mut app, "help");
-        assert!(matches!(app.mode, Mode::Help(_)));
+        assert!(matches!(app.mode, Mode::Help { .. }));
         app.mode = Mode::Normal;
         type_command(&mut app, "slots x");
         assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("slots takes a number, e.g. :slots 3"));
@@ -4346,105 +4191,192 @@ mod tests {
         let mut app = App::new(Machine::from_env());
         app.mode = Mode::Detail("aaaaaaaa0000".to_string());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Detail)));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Detail, .. }));
         app.handle_key(KeyEvent::from(KeyCode::Esc));
         assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"));
         app.mode = Mode::Normal;
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        app.handle_key(KeyEvent::from(KeyCode::Char('q')));
         assert!(matches!(app.mode, Mode::Normal));
     }
 
     #[test]
-    fn help_scrolls_with_j_and_k_and_clamps() {
+    fn help_cursor_moves_with_j_and_k_and_clamps() {
         let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.focus = app.tasks[0].column_index();
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        app.help_max.set(2);
-        for _ in 0..5 {
+        let rows = keys::help_rows_for(&app, Scope::Board, false, None).iter().filter(|r| matches!(r, keys::HelpRow::Key { .. })).count();
+        assert!(rows > 3);
+        for _ in 0..rows + 5 {
             app.handle_key(KeyEvent::from(KeyCode::Char('j')));
         }
-        assert_eq!(app.help_scroll.get(), 2);
-        assert!(matches!(app.mode, Mode::Help(_)));
-        for _ in 0..5 {
+        assert!(matches!(app.mode, Mode::Help { cursor, .. } if cursor == rows - 1), "stops on the last row");
+        for _ in 0..rows + 5 {
             app.handle_key(KeyEvent::from(KeyCode::Up));
         }
-        assert_eq!(app.help_scroll.get(), 0);
-        app.help_max.set(0);
-        app.handle_key(KeyEvent::from(KeyCode::Down));
-        assert_eq!(app.help_scroll.get(), 0, "nothing to scroll");
-        assert!(matches!(app.mode, Mode::Help(_)));
+        assert!(matches!(app.mode, Mode::Help { cursor: 0, .. }));
+        app.help_viewport.set(10);
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Help { cursor: 5, .. }), "ctrl+d moves half the page");
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Help { cursor: 0, .. }));
     }
 
     #[test]
-    fn question_mark_shows_the_keys_of_the_view_you_are_in() {
+    fn question_mark_opens_the_sheet_for_the_view_you_are_in() {
         let mut app = App::new(Machine::from_env());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Board)));
-        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
-        assert!(matches!(app.mode, Mode::Normal), "any key closes it");
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Board, .. }));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
 
         app.inbox = Some(InboxState::default());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Inbox)));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Inbox, .. }));
         app.handle_key(KeyEvent::from(KeyCode::Esc));
         assert!(app.inbox.is_some(), "closing the help keeps the view");
         app.inbox = None;
 
         app.digest = Some(DigestState::default());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Digest)));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Digest, .. }));
         app.mode = Mode::Normal;
         app.digest = None;
 
         app.floor = Some(FloorState::default());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Floor)));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Floor, .. }));
         app.mode = Mode::Normal;
         app.floor = None;
 
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.mode = Mode::Detail("aaaaaaaa0000".to_string());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Detail)));
-        assert!(HelpFor::Inbox.keys().iter().any(|(k, _)| *k == "A"));
-        assert!(HelpFor::Floor.keys().iter().any(|(k, _)| k.starts_with("tab")));
-        assert!(HelpFor::Digest.keys().iter().any(|(k, _)| *k == "o"));
-        assert!(HelpFor::Detail.keys().iter().any(|(k, _)| *k == "j / k"));
-    }
-
-    fn flattened(ctx: HelpFor) -> Vec<(&'static str, &'static str)> {
-        let mut v: Vec<_> = ctx.sections().iter().flat_map(|s| s.rows.iter().copied()).collect();
-        v.sort();
-        v
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Detail, .. }));
     }
 
     #[test]
-    fn help_sections_hold_exactly_the_legacy_pairs() {
-        let sorted = |tables: &[&[(&'static str, &'static str)]]| {
-            let mut v: Vec<_> = tables.iter().flat_map(|t| t.iter().copied()).collect();
-            v.sort();
-            v
-        };
-        assert_eq!(flattened(HelpFor::Board), sorted(&[HELP, COMMANDS]));
-        assert_eq!(flattened(HelpFor::Floor), sorted(&[FLOOR_HELP]));
-        assert_eq!(flattened(HelpFor::Inbox), sorted(&[INBOX_HELP]));
-        assert_eq!(flattened(HelpFor::Digest), sorted(&[DIGEST_HELP]));
-        assert_eq!(flattened(HelpFor::Detail), sorted(&[DETAIL_HELP]));
-        assert_eq!(flattened(HelpFor::Pulls), sorted(&[PULLS_HELP]));
-        assert_eq!(flattened(HelpFor::Slack), sorted(&[SLACK_HELP]));
+    fn a_bright_key_closes_the_sheet_and_runs_a_dim_or_unknown_one_only_says_why() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.focus = app.tasks[0].column_index();
+        app.toast = None;
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        assert!(matches!(app.mode, Mode::Actions { .. }), "x is bright: the sheet closes and the menu opens");
+        app.mode = Mode::Normal;
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('r')));
+        assert!(matches!(app.mode, Mode::Help { .. }), "a dim key keeps the sheet");
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("only a setup, plan or tests go back"));
+        app.handle_key(KeyEvent::from(KeyCode::Char('%')));
+        assert!(matches!(app.mode, Mode::Help { .. }));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("% is not a key here; esc closes"));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help { long: true, .. }), "? again shows the long form");
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help { long: false, .. }));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('G')));
+        assert!(matches!(app.mode, Mode::Normal), "G is bright: the sheet closes and runs it");
     }
 
     #[test]
-    fn help_sections_are_named_and_not_empty() {
-        for ctx in [HelpFor::Board, HelpFor::Floor, HelpFor::Inbox, HelpFor::Digest, HelpFor::Detail, HelpFor::Pulls, HelpFor::Slack] {
-            assert!(!ctx.sections().is_empty());
-            assert!(ctx.sections().iter().all(|s| !s.heading.is_empty() && !s.rows.is_empty()));
+    fn enter_runs_the_cursor_row_in_its_own_view_only() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.focus = app.tasks[0].column_index();
+        app.toast = None;
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        // The first row is the gate's `a`, dim while a stage runs.
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Help { .. }));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("a stage is running; X aborts it"));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('/')));
+        for ch in "merge".chars() {
+            app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
         }
-        assert!(HelpFor::Board.sections().len() >= 4);
-        let commands: Vec<_> =
-            HelpFor::Board.sections().iter().filter(|s| s.heading == "Commands (type after :)").collect();
-        assert_eq!(commands.len(), 1);
-        assert_eq!(commands[0].rows, COMMANDS);
+        assert!(matches!(&app.mode, Mode::Help { query: Some(q), .. } if q == "merge"));
+        let rows = keys::help_rows_for(&app, Scope::Board, false, Some("merge"));
+        assert!(rows.iter().any(|r| matches!(r, keys::HelpRow::Key { binding, foreign: true, .. } if binding.scope == Scope::Pulls)));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("open Pulls first"));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(&app.mode, Mode::Help { query: None, .. }), "esc leaves the search first");
+
+        // In the long form, down to `enter  open the ticket's workspace`, and run it.
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        let rows = keys::help_rows_for(&app, Scope::Board, true, None);
+        let at = rows.iter().filter(|r| matches!(r, keys::HelpRow::Key { .. })).position(|r| matches!(r, keys::HelpRow::Key { binding, .. } if binding.keys == "enter")).unwrap();
+        for _ in 0..at {
+            app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"), "{:?}", app.toast.as_ref().map(|t| t.text.clone()));
+    }
+
+    #[test]
+    fn a_prefix_key_shows_its_second_keys_after_the_delay() {
+        let mut app = App::new(Machine::from_env());
+        app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+        assert!(app.which_key().is_none(), "nothing before the delay");
+        app.age_prefix();
+        let (prefix, seconds) = app.which_key().expect("the strip");
+        assert_eq!(prefix, 'g');
+        assert_eq!(seconds.iter().map(|(c, _)| *c).collect::<Vec<_>>(), ['g', 's', 'r', 'a']);
+        app.handle_key(KeyEvent::from(KeyCode::Char('s')));
+        assert!(app.which_key().is_none(), "the second key ends it");
+        app.handle_key(KeyEvent::from(KeyCode::Char('z')));
+        app.age_prefix();
+        assert_eq!(app.which_key().unwrap().1.iter().map(|(c, _)| *c).collect::<Vec<_>>(), ['c', 'o', 'z']);
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(app.which_key().is_none());
+    }
+
+    #[test]
+    fn the_colon_prompt_completes_commands() {
+        let mut app = App::new(Machine::from_env());
+        app.handle_key(KeyEvent::from(KeyCode::Char(':')));
+        for ch in "fo".chars() {
+            app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(app.folded.contains(&app.focus), "the only completion runs");
+        app.handle_key(KeyEvent::from(KeyCode::Char(':')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('f')));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert!(matches!(&app.mode, Mode::Command { pick: Some(1), .. }));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(app.folded.contains(&app.focus), "tab tab picks fold");
+        type_command(&mut app, "unfo");
+        assert!(!app.folded.contains(&app.focus));
+        app.toast = None;
+        type_command(&mut app, "f");
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("unknown command: f (try :help)"), "several matches and no pick: as typed");
+    }
+
+    #[test]
+    fn capital_r_searches_only_on_a_ticket_without_a_repo() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "draft", false, false));
+        app.focus = app.tasks[0].column_index();
+        app.toast = None;
+        app.handle_key(KeyEvent::from(KeyCode::Char('R')));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("use :repo <name> or x"));
+        assert!(matches!(app.mode, Mode::Normal));
+        app.tasks[0].repo_path = None;
+        app.handle_key(KeyEvent::from(KeyCode::Char('R')));
+        let opened = matches!(app.mode, Mode::RepoPicker { .. }) || app.toast.as_ref().is_some_and(|t| t.text.starts_with("no repos found"));
+        assert!(opened, "without a repo R searches (or says there is nothing to search)");
+        app.mode = Mode::Normal;
+        app.tasks.clear();
+        app.toast = None;
+        type_command(&mut app, "repo luna");
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("no ticket selected"));
     }
 
     #[test]
@@ -4528,7 +4460,7 @@ mod pr_tests {
         assert_eq!(app.pulls.as_ref().unwrap().split, PrSplit::CiFailed);
         assert_eq!(app.pulls.as_ref().unwrap().cursor, 0);
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Pulls)));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Pulls, .. }));
         app.handle_key(KeyEvent::from(KeyCode::Esc));
         app.handle_key(KeyEvent::from(KeyCode::Esc));
         assert!(app.pulls.is_none());
@@ -4715,7 +4647,7 @@ mod slack_tests {
         press(&mut app, KeyCode::Char('h'));
         assert_eq!(app.slack.as_ref().unwrap().split, SlackSplit::Decide);
         press(&mut app, KeyCode::Char('?'));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Slack)));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Slack, .. }));
         press(&mut app, KeyCode::Esc);
         assert!(matches!(app.mode, Mode::Normal) && app.slack.is_some(), "closing the help keeps the view");
         press(&mut app, KeyCode::Esc);
@@ -4750,7 +4682,7 @@ mod slack_tests {
         assert_eq!(toast(&app), "already P0", "the blocker speaks before any call");
         press(&mut app, KeyCode::Char('-'));
         assert_eq!(toast(&app), "P0 → P1");
-        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Char('N'));
         assert_eq!(toast(&app), "only while waiting on them");
         press(&mut app, KeyCode::Char('6'));
         press(&mut app, KeyCode::Char('d'));
@@ -4798,7 +4730,7 @@ mod slack_tests {
         let mut app = app_with(waiting);
         press(&mut app, KeyCode::Char('S'));
         press(&mut app, KeyCode::Char('2'));
-        press(&mut app, KeyCode::Char('n'));
+        press(&mut app, KeyCode::Char('N'));
         let Mode::SlackReply { area, nudge, .. } = &app.mode else { panic!("the reply editor opens: {}", toast(&app)) };
         assert!(*nudge);
         assert_eq!(area.lines().join("\n"), "gentle nudge on this one: any news?", "no @name typed into the text: the machine mentions the author by id");

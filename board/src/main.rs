@@ -2,7 +2,8 @@
 //!
 //! Modules: `model` (tickets and markdown), `client` (the machine's API and event stream),
 //! `store` (one-time import of the old local board), `herdr` (CLI calls), `app`
-//! (behaviour), `ui` (drawing). This file only wires them to the terminal.
+//! (behaviour), `keys` (the key registry every surface reads), `ui` (drawing). This file only
+//! wires them to the terminal, and answers `--keys-md` (the README's key tables) without one.
 
 mod app;
 mod client;
@@ -11,6 +12,7 @@ mod digest;
 mod discover;
 mod herdr;
 mod inbox;
+mod keys;
 mod model;
 mod notify;
 mod pulls;
@@ -65,6 +67,28 @@ fn run(terminal: &mut DefaultTerminal, app: &mut App) -> io::Result<()> {
     }
 }
 
+/// `--keys-md`: prints the registry's markdown key tables; with a file, rewrites the tables
+/// between that file's `<!-- keys:start <scope> -->` and `<!-- keys:end -->` markers in place.
+fn keys_md(file: Option<&str>) -> io::Result<()> {
+    match file {
+        None => {
+            print!("{}", keys::markdown());
+            Ok(())
+        }
+        Some(path) => {
+            let text = std::fs::read_to_string(path)?;
+            let spliced = keys::splice_markdown(&text);
+            if spliced != text {
+                std::fs::write(path, &spliced)?;
+                eprintln!("{path}: key tables regenerated");
+            } else {
+                eprintln!("{path}: key tables already current");
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Notices go to herdr, or ring the terminal bell without it; the tab badge follows the count.
 /// herdr calls are subprocesses, so they stay off the UI thread.
 fn tell(app: &mut App, quiet: bool, badge: &mut (usize, usize)) {
@@ -88,6 +112,10 @@ fn tell(app: &mut App, quiet: bool, badge: &mut (usize, usize)) {
 }
 
 fn main() -> io::Result<()> {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    if args.first().map(String::as_str) == Some("--keys-md") {
+        return keys_md(args.get(1).map(String::as_str));
+    }
     herdr::name_tab_and_pane();
     let mut app = App::new(Machine::from_env());
     let mut terminal = ratatui::init();
