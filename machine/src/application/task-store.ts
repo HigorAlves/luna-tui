@@ -1,7 +1,7 @@
 // Everything Pipeline needs from storage. Every method here is plain CRUD except
 // `withTaskLock`, whose Postgres implementation takes a row lock inside a transaction —
 // the one seam where the transition engine's correctness depends on the storage layer.
-import type { TaskRoute, TaskState } from "@hardness/contracts";
+import type { StageRunCase, TaskRoute, TaskState } from "@hardness/contracts";
 
 import type { ApprovalRow, ArtifactRow, Decision, EventRow, StageRunRow, StageRunStatus, TaskRow } from "../domain/task.ts";
 
@@ -46,6 +46,7 @@ export interface UpdateStageRunInput {
   outputCommit: string | null;
   turns?: number | null;
   costUsd?: string | null;
+  cases?: StageRunCase[] | null;
   /** Marks the run as ended now (`clock_timestamp()` on Postgres — not a value the caller computes). */
   ended: true;
 }

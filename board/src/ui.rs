@@ -1,7 +1,6 @@
 //! Drawing. Reads the app and never changes it.
 
 use std::{
-    cell::Cell,
     env,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -10,48 +9,47 @@ use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style, Stylize},
-    text::{Line, Span, Text},
+    text::{Line, Span},
     widgets::{Block, BorderType, Clear, List, ListItem, ListState, Padding, Paragraph, Wrap},
 };
 use serde_json::Value;
 use tui_textarea::TextArea;
 
+use crate::detail::{self, DetailView};
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::{
-    app::{ACTIONS, App, FloorState, HelpFor, Mode},
+    app::{ACTIONS, App, Density, FloorState, GroupBy, HelpFor, Mode},
     model::{
-        Approval, COLUMNS, Look, Metrics, REPO_COLOUR_SLOTS, Task, TaskDetail, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, repo_colour_slot, spend_p90,
-        now_secs, questions_of, unix_secs,
+        COLUMNS, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, Task, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, repo_colour_slot, spend_p90,
+        now_secs, unix_secs,
     },
 };
 
 // Catppuccin Mocha, the theme herdr is configured with.
-const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
-const SURFACE0: Color = Color::Rgb(0x31, 0x32, 0x44);
-const SURFACE1: Color = Color::Rgb(0x45, 0x47, 0x5a);
-const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
-const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
-const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
-const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
-const YELLOW: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
-const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
-const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
+pub(crate) const BASE: Color = Color::Rgb(0x1e, 0x1e, 0x2e);
+pub(crate) const SURFACE0: Color = Color::Rgb(0x31, 0x32, 0x44);
+pub(crate) const SURFACE1: Color = Color::Rgb(0x45, 0x47, 0x5a);
+pub(crate) const SUBTEXT0: Color = Color::Rgb(0xa6, 0xad, 0xc8);
+pub(crate) const BLUE: Color = Color::Rgb(0x89, 0xb4, 0xfa);
+pub(crate) const LAVENDER: Color = Color::Rgb(0xb4, 0xbe, 0xfe);
+pub(crate) const GREEN: Color = Color::Rgb(0xa6, 0xe3, 0xa1);
+pub(crate) const YELLOW: Color = Color::Rgb(0xf9, 0xe2, 0xaf);
+pub(crate) const PEACH: Color = Color::Rgb(0xfa, 0xb3, 0x87);
+pub(crate) const RED: Color = Color::Rgb(0xf3, 0x8b, 0xa8);
 
-const ACCENT: Color = BLUE;
-const MUTED: Color = SURFACE1;
+pub(crate) const ACCENT: Color = BLUE;
+pub(crate) const MUTED: Color = SURFACE1;
 const SELECTED_BG: Color = SURFACE0;
 
 /// Narrowest a column may get before the board scrolls instead of squeezing.
 const MIN_COLUMN_WIDTH: u16 = 18;
 /// Width of a collapsed column in folded mode: wide enough for its header bar, not its cards.
 const FOLD_WIDTH: u16 = 14;
-/// Activity lines shown with a ticket.
-const ACTIVITY_LINES: usize = 10;
 
 /// Colours are dropped when `NO_COLOR` is set. States still read from their glyph and label.
-fn c(color: Color) -> Color {
+pub(crate) fn c(color: Color) -> Color {
     if env::var_os("NO_COLOR").is_some() {
         Color::Reset
     } else {
@@ -59,7 +57,7 @@ fn c(color: Color) -> Color {
     }
 }
 
-fn look_color(look: Look) -> Color {
+pub(crate) fn look_color(look: Look) -> Color {
     match look {
         Look::Escalated => c(RED),
         Look::NeedsYou => c(PEACH),
@@ -72,7 +70,7 @@ fn look_color(look: Look) -> Color {
     }
 }
 
-fn look_glyph(look: Look) -> &'static str {
+pub(crate) fn look_glyph(look: Look) -> &'static str {
     match look {
         Look::Escalated => "✗",
         Look::NeedsYou => "⏸",
@@ -160,9 +158,18 @@ pub fn draw(frame: &mut Frame, app: &App) {
     match &app.mode {
         Mode::Detail(id) => {
             if let Some(task) = app.task(id) {
-                let area = centered(frame.area(), frame.area().width * 9 / 10, frame.area().height * 8 / 10);
-                frame.render_widget(Clear, area);
-                render_detail(frame, area, task, app.detail.as_ref(), &app.detail_scroll);
+                let view = DetailView {
+                    task,
+                    detail: app.detail.as_ref(),
+                    section: app.detail_section,
+                    cursor: app.detail_cursor,
+                    scroll: &app.detail_scroll,
+                    prs: &app.prs.prs,
+                    diff: app.diff.as_ref().filter(|d| d.0 == task.id).map(|d| &d.1),
+                    viewport: &app.detail_viewport,
+                    follow: &app.detail_follow,
+                };
+                detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
             }
         }
         Mode::ConfirmDelete(id) => {
@@ -195,7 +202,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 );
             }
         }
-        Mode::EditTicket { id, area, vim } | Mode::Answer { id, area, vim } => {
+        Mode::EditTicket { id, area, vim } | Mode::Answer { id, area, vim } | Mode::EditCases { id, area, vim } => {
             let rect = centered(frame.area(), frame.area().width * 9 / 10, frame.area().height * 8 / 10);
             frame.render_widget(Clear, rect);
             let (label, mode_color) = match vim.mode() {
@@ -363,7 +370,7 @@ fn footer_line(app: &App) -> Line<'static> {
             Span::from(format!("{buf}▏")),
             Span::from("   enter create and edit · esc cancel").fg(c(SUBTEXT0)),
         ]),
-        Mode::EditTicket { vim, .. } | Mode::Answer { vim, .. } => {
+        Mode::EditTicket { vim, .. } | Mode::Answer { vim, .. } | Mode::EditCases { vim, .. } => {
             let save = if matches!(app.mode, Mode::Answer { .. }) { "send answers" } else { "save" };
             match vim.mode() {
                 crate::vim::Mode::Normal => hint(&[
@@ -436,25 +443,11 @@ fn footer_line(app: &App) -> Line<'static> {
         ]),
         Mode::Detail(id) => {
             let shippable = app.task(id).is_some_and(|t| t.state == "awaiting_ship");
+            let (rows, scroll) = if app.detail_section.has_cursor() { (("jk", "pick"), ("JK", "scroll")) } else { (("jk", "scroll"), ("^d/^u", "page")) };
             if shippable {
-                hint(&[
-                    ("jk", "scroll"),
-                    ("S", "ship"),
-                    ("r", "send back"),
-                    ("e", "edit"),
-                    ("f", "focus agent"),
-                    ("esc", "back"),
-                ])
+                hint(&[("h/l 1-8", "section"), rows, scroll, ("S", "ship"), ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
             } else {
-                hint(&[
-                    ("jk", "scroll"),
-                    ("a", "advance"),
-                    ("r", "send back"),
-                    ("e", "edit"),
-                    ("f", "focus agent"),
-                    ("X", "abort"),
-                    ("esc", "back"),
-                ])
+                hint(&[("h/l 1-8", "section"), rows, scroll, ("a", "advance"), ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
             }
         }
         Mode::Normal => hint(&[
@@ -463,6 +456,7 @@ fn footer_line(app: &App) -> Line<'static> {
             ("a", "advance"),
             ("enter", "open"),
             ("x", "actions"),
+            ("=", "density"),
             ("/", "filter"),
             ("q", "quit"),
         ]),
@@ -553,10 +547,22 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
     }
 
     let p90 = spend_p90(&app.tasks);
-    let items: Vec<ListItem> = indices
-        .iter()
-        .map(|&i| card(&app.tasks[i], p90, app.marked.contains(&app.tasks[i].id), app.is_new(&app.tasks[i])))
-        .collect();
+    // Two cells go to the highlight symbol, one to the padding each side.
+    let width = usize::from(area.width.saturating_sub(6));
+    let by_repo = app.group == GroupBy::Repo;
+    let mut items: Vec<ListItem> = Vec::new();
+    let mut positions = Vec::with_capacity(indices.len());
+    let mut last_repo: Option<Option<&str>> = None;
+    for &i in &indices {
+        let task = &app.tasks[i];
+        if by_repo && last_repo != Some(task.repo_name()) {
+            let count = indices.iter().filter(|&&j| app.tasks[j].repo_name() == task.repo_name()).count();
+            items.push(repo_separator(task.repo_name(), count, width));
+            last_repo = Some(task.repo_name());
+        }
+        positions.push(items.len());
+        items.push(card(task, p90, app.marked.contains(&task.id), app.is_new(task), app.density, width));
+    }
     let list = List::new(items)
         .block(block)
         .highlight_style(selection_style())
@@ -564,16 +570,26 @@ fn render_column(frame: &mut Frame, area: Rect, app: &App, column: usize, expand
 
     let mut state = ListState::default();
     if focused && !indices.is_empty() {
-        state.select(Some(app.selection[column]));
+        state.select(positions.get(app.selection[column]).copied().or(positions.last().copied()));
     }
     frame.render_stateful_widget(list, area, &mut state);
 }
 
-/// A board card: id and title, then state, age, worktree and how many implementer runs.
-/// One colour per repo, so a column scans by repo: the bar and the name share it.
+/// Under `gr` ordering: `── luna-tui 3 ─────`, a line that names the group the cards below
+/// belong to, in the repo's colour.
+fn repo_separator(repo: Option<&str>, count: usize, width: usize) -> ListItem<'static> {
+    let name = repo.unwrap_or("no repo");
+    let colour = repo.map_or(SUBTEXT0, |r| REPO_COLOURS[repo_colour_slot(r)]);
+    let head = format!("── {name} {count} ");
+    let rule = "─".repeat(width.saturating_sub(head.chars().count()));
+    ListItem::new(Line::from(Span::from(format!("{head}{rule}")).fg(c(colour))))
+}
+
+/// A board card. One colour per repo, so a column scans by repo: the bar and the name share it.
 const REPO_COLOURS: [Color; REPO_COLOUR_SLOTS] = [BLUE, GREEN, PEACH, LAVENDER, YELLOW, RED];
 
-/// The card's first line: a repo-coloured bar, the id, the repo's name, the title.
+/// The card's first line: the marks, a repo-coloured bar, the issue number, the title. The
+/// title leads so a narrow column cuts the identifiers, never the words.
 fn card_head(task: &Task, marked: bool, is_new: bool) -> Line<'static> {
     let mut spans = Vec::new();
     if marked {
@@ -583,57 +599,81 @@ fn card_head(task: &Task, marked: bool, is_new: bool) -> Line<'static> {
         spans.push(Span::from("• ").fg(c(YELLOW)).bold());
     }
     if let Some(repo) = task.repo_name() {
-        let colour = REPO_COLOURS[repo_colour_slot(repo)];
-        spans.push(Span::from("▌").fg(c(colour)));
-        spans.push(Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)));
-        spans.push(Span::from(format!("{repo} ")).fg(c(colour)));
-    } else {
-        spans.push(Span::from(format!("#{} ", task.short_id())).fg(c(SUBTEXT0)));
+        spans.push(Span::from("▌").fg(c(REPO_COLOURS[repo_colour_slot(repo)])));
+    }
+    if task.route == "setup" {
+        spans.push(Span::from("⚙ ").fg(c(SUBTEXT0)));
     }
     spans.push(Span::from(task.issue_prefix()).fg(c(SUBTEXT0)));
     spans.push(Span::from(task.title.clone()).bold());
     Line::from(spans)
 }
 
-fn card(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool) -> ListItem<'static> {
-    ListItem::new(card_lines(task, spend_p90, marked, is_new))
+fn card(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, density: Density, width: usize) -> ListItem<'static> {
+    ListItem::new(card_lines(task, spend_p90, marked, is_new, density, width))
 }
 
-/// The card's three lines: head, status, and the triad (or a blank spacer without one).
-fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool) -> Vec<Line<'static>> {
+/// The card's lines by density: the head; `#id · repo`; the status with its age and badges;
+/// and, when comfortable, the worked / diff / tests line. Compact is the head alone with the
+/// status glyph and the age.
+fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, density: Density, width: usize) -> Vec<Line<'static>> {
     let look = task.look();
+    let age = age(&task.updated_at, now_secs());
+    if density == Density::Compact {
+        let mut spans = Vec::new();
+        if marked {
+            spans.push(Span::from("◆ ").fg(c(ACCENT)).bold());
+        }
+        if is_new {
+            spans.push(Span::from("• ").fg(c(YELLOW)).bold());
+        }
+        spans.push(Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)));
+        let used: usize = spans.iter().map(Span::width).sum::<usize>() + age.chars().count() + 1;
+        spans.push(Span::from(truncate(&task.title, width.saturating_sub(used).max(4))).bold());
+        spans.push(Span::from(format!(" {age}")).fg(c(SUBTEXT0)));
+        return vec![Line::from(spans)];
+    }
     let head = card_head(task, marked, is_new);
+
+    let mut ids = format!("  #{}", task.short_id());
+    if let Some(repo) = task.repo_name() {
+        ids.push_str(&format!(" · {repo}"));
+    }
+    if let Some(source) = &task.source {
+        ids.push_str(&format!(" · gh#{}", source.number));
+    }
+    let ids = Line::from(Span::from(ids).fg(c(SUBTEXT0)));
 
     let mut meta = vec![
         Span::raw("  "),
-        Span::from(format!("{} {}", look_glyph(look), task.status_label()))
-            .fg(look_color(look))
-            .bold(),
-        Span::from(format!(" {}", age(&task.updated_at, now_secs()))).fg(c(SUBTEXT0)),
+        Span::from(format!("{} {}", look_glyph(look), task.status_label())).fg(look_color(look)).bold(),
+        Span::from(format!(" · {age}")).fg(c(SUBTEXT0)),
     ];
     if task.worktree_path.is_some() {
-        meta.push(Span::from("  ⎇").fg(c(ACCENT)));
+        meta.push(Span::from(" ⎇").fg(c(ACCENT)));
     }
     if task.retries.total > 1 {
-        meta.push(Span::from(format!("  run {}", task.retries.total)).fg(c(PEACH)));
+        meta.push(Span::from(format!(" ×{}", task.retries.total)).fg(c(PEACH)));
     }
     if task.repo_path.is_none() && task.state == "draft" {
-        meta.push(Span::from("  no repo").fg(c(SUBTEXT0)));
+        meta.push(Span::from(" no repo").fg(c(SUBTEXT0)));
     }
     // A dim `$` on the tickets above the p90 of spend: the expensive ones at a glance.
     if task.spent_usd.zip(spend_p90).is_some_and(|(spent, p90)| spent > p90) {
-        meta.push(Span::from("  $").fg(c(SUBTEXT0)));
+        meta.push(Span::from(" $").fg(c(SUBTEXT0)));
     }
-
-    let third = task.triad().map_or_else(Line::default, |t| Line::from(Span::from(format!("  {t}")).fg(c(SUBTEXT0))));
-    vec![head, Line::from(meta), third]
+    let mut lines = vec![head, ids, Line::from(meta)];
+    if density == Density::Comfortable {
+        lines.push(task.triad().map_or_else(Line::default, |t| Line::from(Span::from(format!("  {t}")).fg(c(SUBTEXT0)))));
+    }
+    lines
 }
 
-fn bullets(items: &[String]) -> Vec<Line<'static>> {
+pub(crate) fn bullets(items: &[String]) -> Vec<Line<'static>> {
     items.iter().map(|item| Line::from(format!("  • {item}"))).collect()
 }
 
-fn json_list(value: &Value) -> Vec<String> {
+pub(crate) fn json_list(value: &Value) -> Vec<String> {
     value
         .as_array()
         .map(|items| items.iter().filter_map(|i| i.as_str().map(str::to_string)).collect())
@@ -641,7 +681,7 @@ fn json_list(value: &Value) -> Vec<String> {
 }
 
 /// "title (~N LOC)" per proposed slice; entries without a title are skipped.
-fn slice_lines(value: &Value) -> Vec<String> {
+pub(crate) fn slice_lines(value: &Value) -> Vec<String> {
     value
         .as_array()
         .map(|items| {
@@ -659,28 +699,8 @@ fn slice_lines(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// test_design's cases: what each proves (the plan criterion) and the test that does it.
-fn case_lines(value: &Value) -> Vec<String> {
-    value
-        .as_array()
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| {
-                    let title = item["title"].as_str()?;
-                    let test = item["test"].as_str().unwrap_or("");
-                    Some(match item["criterion"].as_str() {
-                        Some(criterion) => format!("{title} — proves: {criterion} · {test}"),
-                        None => format!("{title} · {test}"),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 /// "verdict", "N artifacts" and up to three artifact paths from `requested.evidence`.
-fn evidence_lines(value: &Value) -> Vec<String> {
+pub(crate) fn evidence_lines(value: &Value) -> Vec<String> {
     let Some(verdict) = value["verdict"].as_str() else { return Vec::new() };
     let count = value["artifactCount"].as_u64().unwrap_or(0);
     let mut lines = vec![
@@ -693,7 +713,7 @@ fn evidence_lines(value: &Value) -> Vec<String> {
 
 /// Counts, calibration and the proposed rules text from `requested.rules`, at most 12 lines of
 /// it, each cut to `width` columns. Empty when the review proposed nothing.
-fn rules_lines(value: &Value, width: usize) -> Vec<String> {
+pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
     let Some(markdown) = value["markdown"].as_str().filter(|m| !m.trim().is_empty()) else {
         return Vec::new();
     };
@@ -717,7 +737,7 @@ fn rules_lines(value: &Value, width: usize) -> Vec<String> {
 
 /// One line per proved check: `✓ name: cmd` or `✗ name: cmd`, a failed one followed by the
 /// last lines of its output.
-fn proof_lines(value: &Value) -> Vec<(bool, String)> {
+pub(crate) fn proof_lines(value: &Value) -> Vec<(bool, String)> {
     const TAIL: usize = 3;
     let Some(items) = value.as_array() else { return Vec::new() };
     let mut lines = Vec::new();
@@ -736,27 +756,8 @@ fn proof_lines(value: &Value) -> Vec<(bool, String)> {
     lines
 }
 
-/// Assumptions, the proposed slices and the test cases (or, without them, the test files)
-/// an open gate asks you to judge.
-fn push_proposal_sections(lines: &mut Vec<Line<'static>>, requested: &Value) {
-    let heading = |text: &str| Line::from(Span::from(text.to_string()).fg(c(PEACH)).bold());
-    let cases = case_lines(&requested["cases"]);
-    let tests = if cases.is_empty() { json_list(&requested["tests"]) } else { Vec::new() };
-    for (title, items) in [
-        ("Assumptions", json_list(&requested["assumptions"])),
-        ("Slices", slice_lines(&requested["slices"])),
-        ("Test cases", cases),
-        ("Tests", tests),
-    ] {
-        if !items.is_empty() {
-            lines.extend([Line::default(), heading(title)]);
-            lines.extend(bullets(&items));
-        }
-    }
-}
-
 /// Where a paused or escalated ticket picks up; an escalated one also says how to retry it.
-fn continues_line(state: &str, stage: &str) -> String {
+pub(crate) fn continues_line(state: &str, stage: &str) -> String {
     if state == "escalated" {
         format!("Continues at: {stage} · a retries it (add guidance if you like)")
     } else {
@@ -764,301 +765,8 @@ fn continues_line(state: &str, stage: &str) -> String {
     }
 }
 
-/// The full ticket: state, what it waits on you for, text, stage runs and activity.
-fn render_detail(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&TaskDetail>, scroll: &Cell<u16>) {
-    let detail = detail.filter(|d| d.task.id == task.id);
-    if task.state == "awaiting_approval"
-        && let Some(approval) = detail.and_then(TaskDetail::open_approval) {
-            render_plan_and_ticket(frame, area, task, detail, approval, scroll);
-            return;
-        }
-
-    let heading = |text: String| Line::from(Span::from(text).fg(c(ACCENT)).bold());
-    // What the agent proposed, needing your judgment, gets its own color — distinct from the
-    // plain facts (Description, Stages, Activity...) below it.
-    let proposal_heading = |text: String| Line::from(Span::from(text).fg(c(PEACH)).bold());
-    let muted = |text: String| Line::from(Span::from(text).fg(c(SUBTEXT0)));
-    let look = task.look();
-
-    let mut lines = vec![muted(format!(
-        "Repo: {}",
-        task.repo_path.as_deref().unwrap_or("none (add one with e to run real agents)")
-    ))];
-    if let Some(source) = &task.source {
-        lines.push(muted(format!("GitHub: {}#{}  {}", source.repo, source.number, source.url)));
-    }
-    if let Some(branch) = &task.branch {
-        lines.push(muted(format!("Branch: {branch}")));
-    }
-    if let Some(stage) = &task.resume_to {
-        lines.push(muted(continues_line(&task.state, stage)));
-    }
-    if let Some(reason) = &task.reason {
-        lines.push(Line::from(format!("Why: {reason}")).fg(look_color(look)));
-    }
-    if task.retries.total > 0 {
-        let r = &task.retries;
-        lines.push(muted(format!(
-            "Implementer runs: {} · failures: verify {} · e2e {} · ci {}",
-            r.total, r.verify, r.e2e, r.ci
-        )));
-    }
-
-    if let Some(approval) = detail.and_then(TaskDetail::open_approval) {
-        lines.extend([Line::default(), Line::from(Span::from(format!("Waiting on you: {}", task.status_label())).fg(look_color(look)).bold())]);
-        let requested = &approval.requested;
-        if let Some(error) = requested["error"].as_str() {
-            lines.extend([Line::default(), Line::from(Span::from("Error").fg(c(RED)).bold())]);
-            lines.extend(error.lines().map(|l| Line::from(format!("  {l}")).fg(c(RED))));
-        }
-        if let Some(note) = requested["note"].as_str() {
-            lines.push(muted(note.to_string()));
-        }
-        if let Some(url) = requested["prUrl"].as_str() {
-            let reused = requested["reused"].as_bool().unwrap_or(false);
-            lines.push(Line::from(vec![
-                Span::from(if reused { "PR (already open): " } else { "PR opened: " }).fg(c(SUBTEXT0)),
-                Span::from(url.to_string()).fg(c(BLUE)),
-            ]));
-        }
-        if let Some(brief) = requested["brief"].as_str() {
-            lines.extend([Line::default(), proposal_heading("Plan".into())]);
-            lines.extend(brief.lines().map(|l| Line::from(format!("  {l}"))));
-        }
-        let criteria = json_list(&requested["criteria"]);
-        if !criteria.is_empty() {
-            lines.extend([Line::default(), proposal_heading("Criteria to build".into())]);
-            lines.extend(bullets(&criteria));
-        }
-        push_proposal_sections(&mut lines, requested);
-        let evidence = evidence_lines(&requested["evidence"]);
-        if !evidence.is_empty() {
-            lines.extend([Line::default(), proposal_heading("Evidence".into())]);
-            lines.extend(bullets(&evidence));
-        }
-        let rules = rules_lines(&requested["rules"], usize::from(area.width).saturating_sub(8).max(20));
-        if !rules.is_empty() {
-            lines.extend([Line::default(), proposal_heading("Proposed rules (a applies, A skips)".into())]);
-            lines.extend(rules.iter().map(|l| Line::from(format!("  {l}"))));
-        }
-        if let Some(config) = requested["config"].as_str() {
-            lines.extend([Line::default(), proposal_heading("Proposed luna.yaml (a writes it to the repo, r sends it back)".into())]);
-            lines.extend(config.lines().map(|l| Line::from(format!("  {l}"))));
-            let proof = proof_lines(&requested["proof"]);
-            if !proof.is_empty() {
-                lines.extend([Line::default(), proposal_heading("Proof (each check run once)".into())]);
-                for (ok, text) in proof {
-                    lines.push(Line::from(format!("  {text}")).fg(c(if ok { GREEN } else { RED })));
-                }
-            }
-            let notes = json_list(&requested["notes"]);
-            if !notes.is_empty() {
-                lines.extend([Line::default(), proposal_heading("Notes from setup".into())]);
-                lines.extend(bullets(&notes));
-            }
-        }
-        let questions = questions_of(approval);
-        if !questions.is_empty() {
-            lines.extend([Line::default(), proposal_heading("Questions (a to answer)".into())]);
-            for (question, recommended) in questions {
-                lines.push(Line::from(format!("  ? {question}")));
-                lines.push(muted(format!("    recommended: {recommended}")));
-            }
-        }
-    }
-
-    lines.extend([Line::default(), heading("Description".into())]);
-    if task.description.trim().is_empty() {
-        lines.push(muted("  (none yet, press e to add)".into()));
-    } else {
-        lines.extend(task.description.lines().map(|l| Line::from(format!("  {l}"))));
-    }
-    lines.extend([Line::default(), heading("Acceptance criteria".into())]);
-    if task.criteria.is_empty() {
-        lines.push(muted("  (none yet, press e to add)".into()));
-    } else {
-        lines.extend(bullets(&task.criteria));
-    }
-
-    if let Some(detail) = detail {
-        if !detail.stage_runs.is_empty() {
-            lines.extend([Line::default(), heading("Stages".into())]);
-            for run in &detail.stage_runs {
-                let color = match run.status.as_str() {
-                    "passed" => GREEN,
-                    "failed" => RED,
-                    "running" => YELLOW,
-                    _ => SUBTEXT0,
-                };
-                let mut spans = vec![
-                    Span::from(format!("  {} #{} ", run.stage, run.attempt)),
-                    Span::from(run.status.clone()).fg(c(color)),
-                ];
-                if let Some(usage) = run.usage_label() {
-                    spans.push(Span::from(format!("  {usage}")).fg(c(SUBTEXT0)));
-                }
-                lines.push(Line::from(spans));
-            }
-            if let Some(spent) = detail.spent_usd() {
-                lines.push(Line::from(Span::from(format!("  Spent: ${spent:.2}")).fg(c(SUBTEXT0))));
-            }
-        }
-        lines.extend([Line::default(), heading("Activity".into())]);
-        let start = detail.events.len().saturating_sub(ACTIVITY_LINES);
-        lines.extend(detail.events[start..].iter().map(|e| muted(format!("  {}", describe(e)))));
-    }
-
-    let block = detail_block(task, look);
-
-    // Clamp to the content's actual height, which depends on the terminal width (wrapping),
-    // so j/k can't scroll into empty space past the end.
-    let inner = block.inner(area);
-    let total_lines = Paragraph::new(Text::from(lines.clone())).wrap(Wrap { trim: false }).line_count(inner.width);
-    let offset = scroll.get().min(total_lines.saturating_sub(inner.height as usize) as u16);
-    scroll.set(offset);
-
-    frame.render_widget(
-        Paragraph::new(Text::from(lines))
-            .block(block)
-            .wrap(Wrap { trim: false })
-            .scroll((offset, 0)),
-        area,
-    );
-}
-
-/// The detail popup's border and titles: look-colored, the ticket's name, status and age.
-fn detail_block(task: &Task, look: Look) -> Block<'static> {
-    Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(c(look_color(look))))
-        .padding(Padding::new(2, 2, 1, 1))
-        .title(Line::from(format!(" #{} {} ", task.short_id(), task.title)).bold())
-        .title_bottom(
-            Line::from(vec![
-                Span::from(format!(" {} {} ", look_glyph(look), task.status_label())).bold(),
-            ])
-            .fg(c(look_color(look)))
-            .left_aligned(),
-        )
-        .title_bottom(
-            Line::from(format!(" {} · {} ago ", task.column, age(&task.updated_at, now_secs())))
-                .fg(c(SUBTEXT0))
-                .right_aligned(),
-        )
-}
-
-/// Triage's plan (left) and the ticket's own text (right), side by side at 110 columns or
-/// wider — stacked, plan first, on a narrower terminal. `e` edits both.
-fn render_plan_and_ticket(frame: &mut Frame, area: Rect, task: &Task, detail: Option<&TaskDetail>, approval: &Approval, scroll: &Cell<u16>) {
-    let heading = |text: String| Line::from(Span::from(text).fg(c(ACCENT)).bold());
-    let proposal_heading = |text: String| Line::from(Span::from(text).fg(c(PEACH)).bold());
-    let muted = |text: String| Line::from(Span::from(text).fg(c(SUBTEXT0)));
-    let look = task.look();
-    let requested = &approval.requested;
-
-    let mut plan_lines = vec![proposal_heading("Plan".into())];
-    match requested["brief"].as_str() {
-        Some(brief) => plan_lines.extend(brief.lines().map(|l| Line::from(format!("  {l}")))),
-        None => plan_lines.push(muted("  (none)".into())),
-    }
-    plan_lines.extend([Line::default(), proposal_heading("Criteria to build".into())]);
-    let criteria = json_list(&requested["criteria"]);
-    if criteria.is_empty() {
-        plan_lines.push(muted("  (none)".into()));
-    } else {
-        plan_lines.extend(bullets(&criteria));
-    }
-    push_proposal_sections(&mut plan_lines, requested);
-
-    let mut ticket_lines = vec![muted(format!(
-        "Repo: {}",
-        task.repo_path.as_deref().unwrap_or("none (add one with e to run real agents)")
-    ))];
-    if let Some(source) = &task.source {
-        ticket_lines.push(muted(format!("GitHub: {}#{}  {}", source.repo, source.number, source.url)));
-    }
-    if let Some(branch) = &task.branch {
-        ticket_lines.push(muted(format!("Branch: {branch}")));
-    }
-    ticket_lines.extend([
-        Line::default(),
-        Line::from(Span::from(format!("Waiting on you: {}", task.status_label())).fg(look_color(look)).bold()),
-    ]);
-    ticket_lines.extend([Line::default(), heading("Description".into())]);
-    if task.description.trim().is_empty() {
-        ticket_lines.push(muted("  (none yet, press e to add)".into()));
-    } else {
-        ticket_lines.extend(task.description.lines().map(|l| Line::from(format!("  {l}"))));
-    }
-    ticket_lines.extend([Line::default(), heading("Acceptance criteria".into())]);
-    if task.criteria.is_empty() {
-        ticket_lines.push(muted("  (none yet, press e to add)".into()));
-    } else {
-        ticket_lines.extend(bullets(&task.criteria));
-    }
-    if let Some(detail) = detail {
-        if !detail.stage_runs.is_empty() {
-            ticket_lines.extend([Line::default(), heading("Stages".into())]);
-            for run in &detail.stage_runs {
-                let color = match run.status.as_str() {
-                    "passed" => GREEN,
-                    "failed" => RED,
-                    "running" => YELLOW,
-                    _ => SUBTEXT0,
-                };
-                let mut spans = vec![
-                    Span::from(format!("  {} #{} ", run.stage, run.attempt)),
-                    Span::from(run.status.clone()).fg(c(color)),
-                ];
-                if let Some(usage) = run.usage_label() {
-                    spans.push(Span::from(format!("  {usage}")).fg(c(SUBTEXT0)));
-                }
-                ticket_lines.push(Line::from(spans));
-            }
-            if let Some(spent) = detail.spent_usd() {
-                ticket_lines.push(Line::from(Span::from(format!("  Spent: ${spent:.2}")).fg(c(SUBTEXT0))));
-            }
-        }
-        ticket_lines.extend([Line::default(), heading("Activity".into())]);
-        let start = detail.events.len().saturating_sub(ACTIVITY_LINES);
-        ticket_lines.extend(detail.events[start..].iter().map(|e| muted(format!("  {}", describe(e)))));
-    }
-
-    let block = detail_block(task, look).title_bottom(Line::from(" e edits both ").fg(c(SUBTEXT0)).left_aligned());
-    let inner = block.inner(area);
-    let wide = inner.width >= 110;
-    let (plan_area, ticket_area) = if wide {
-        let [plan_area, _gap, ticket_area] =
-            Layout::horizontal([Constraint::Percentage(54), Constraint::Length(2), Constraint::Percentage(44)]).areas(inner);
-        (plan_area, ticket_area)
-    } else {
-        let plan_height = Paragraph::new(Text::from(plan_lines.clone())).wrap(Wrap { trim: false }).line_count(inner.width) as u16;
-        let [plan_area, ticket_area] =
-            Layout::vertical([Constraint::Length(plan_height.min(inner.height / 2)), Constraint::Min(0)]).areas(inner);
-        (plan_area, ticket_area)
-    };
-
-    // One shared scroll offset, clamped to whichever column is taller — the two stay in step.
-    let plan_total = Paragraph::new(Text::from(plan_lines.clone())).wrap(Wrap { trim: false }).line_count(plan_area.width);
-    let ticket_total = Paragraph::new(Text::from(ticket_lines.clone())).wrap(Wrap { trim: false }).line_count(ticket_area.width);
-    let total_lines = plan_total.max(ticket_total);
-    let offset = scroll.get().min(total_lines.saturating_sub(inner.height as usize) as u16);
-    scroll.set(offset);
-
-    frame.render_widget(Clear, area);
-    frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(Text::from(plan_lines)).wrap(Wrap { trim: false }).scroll((offset, 0)),
-        plan_area,
-    );
-    frame.render_widget(
-        Paragraph::new(Text::from(ticket_lines)).wrap(Wrap { trim: false }).scroll((offset, 0)),
-        ticket_area,
-    );
-}
-
 /// One activity entry in words.
-fn describe(event: &TaskEvent) -> String {
+pub(crate) fn describe(event: &TaskEvent) -> String {
     let p = &event.payload;
     let s = |key: &str| p[key].as_str().unwrap_or("?").to_string();
     let time = event.at.get(11..19).unwrap_or("");
@@ -1110,7 +818,7 @@ fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
 
 /// The `x` menu: each action with the key it maps to.
 /// Cuts `text` to `width` characters, ending in `…` when it had to cut.
-fn truncate(text: &str, width: usize) -> String {
+pub(crate) fn truncate(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_string();
     }
@@ -1242,79 +950,140 @@ fn render_inbox(frame: &mut Frame, area: Rect, app: &App, inbox: &InboxState) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// The PR view: a header of splits with their counts and when GitHub was last polled, then
-/// the split's PRs oldest first. Under 100 columns the author and thread columns drop.
+/// The PR view: a header of splits with their counts and when GitHub was last polled; the
+/// split's PRs oldest first as an aligned list on the left; the selected PR drawn by the same
+/// widget the ticket popup uses on the right (from 100 columns; `x` shows it narrower).
 fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     let now = now_secs();
     let counts = pulls::counts(&app.prs.prs);
     let mut head = vec![Span::from(" Pulls ").fg(c(ACCENT)).bold()];
     for (i, split) in PrSplit::ALL.iter().enumerate() {
+        if i > 0 {
+            head.push(Span::from("│").fg(c(MUTED)));
+        }
         let label = format!(" {} {} ", split.label(), counts[i]);
         head.push(if *split == state.split {
             Span::from(label).fg(c(BASE)).bg(c(ACCENT)).bold()
         } else {
             Span::from(label).fg(c(SUBTEXT0))
         });
-        head.push(Span::from(" "));
     }
     let polled = match app.prs.polled_at.as_deref().and_then(unix_secs) {
         Some(at) => format!("polled {} ago", age_secs(now.saturating_sub(at))),
         None => "not polled yet".to_string(),
     };
-    head.push(Span::from(format!(" · {polled}")).fg(c(SUBTEXT0)));
-    let mut lines = vec![Line::from(head)];
+    head.push(Span::from(format!("  {polled}")).fg(c(SUBTEXT0)));
+    let mut top = vec![Line::from(head)];
     if let Some(error) = &app.prs.error {
-        lines.push(Line::from(Span::from(format!(" ⚠ {error}")).fg(c(RED))));
+        top.push(Line::from(Span::from(format!(" ⚠ {error}")).fg(c(RED))));
     }
-    lines.push(Line::default());
+    let [head_area, body] = Layout::vertical([Constraint::Length(top.len() as u16), Constraint::Min(0)]).areas(area);
+    frame.render_widget(Paragraph::new(top), head_area);
+
     let items = pulls::items(&app.prs.prs, state.split);
+    let selected = state.cursor.min(items.len().saturating_sub(1));
+    let wide = body.width >= PULLS_DETAIL_FROM;
+    let [list_area, detail_area] = if wide {
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(PULLS_DETAIL_WIDTH)]).areas(body)
+    } else {
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(0)]).areas(body)
+    };
+
+    let list_block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .title(Line::from(format!(" {} {} ", state.split.label(), items.len())).bold());
+    let inner = list_block.inner(list_area);
+    let mut lines = Vec::new();
     if items.is_empty() {
         lines.push(Line::from(Span::from("  ✓ nothing here").fg(c(GREEN))));
     }
-    let wide = area.width >= 100;
-    for (row, &i) in items.iter().enumerate() {
-        let pr = &app.prs.prs[i];
-        let selected = row == state.cursor.min(items.len().saturating_sub(1));
-        let bar = if selected { "▌ " } else { "  " };
-        let checks = pr.checks_label();
-        let checks_color = match pr.checks.state.as_str() {
-            "failure" => RED,
-            "pending" => YELLOW,
-            "success" => GREEN,
-            _ => SUBTEXT0,
-        };
-        let tag = match (&pr.task, pr.local_path.is_some()) {
-            (Some(task), _) => format!("  ⚙ {}", task.state.replace('_', " ")),
-            (None, false) => "  no checkout".to_string(),
-            _ => String::new(),
-        };
-        let threads = if wide && pr.unresolved_threads > 0 { format!("  {} thread(s)", pr.unresolved_threads) } else { String::new() };
-        let author = if wide { format!("  @{}", pr.author) } else { String::new() };
-        let tail = format!("  {checks}  {}{threads}{tag}  {}", pr.review_label(), age(&pr.updated_at, now));
-        let head_text = format!("{bar}{}#{}  ", pr.repo, pr.number);
-        let used = head_text.chars().count() + author.chars().count() + tail.chars().count();
-        let room = (area.width as usize).saturating_sub(used).max(8);
-        let title: String = if pr.title.chars().count() > room {
-            pr.title.chars().take(room.saturating_sub(1)).collect::<String>() + "…"
-        } else {
-            pr.title.clone()
-        };
-        let mut line = vec![
-            Span::from(head_text).fg(c(SUBTEXT0)),
-            Span::from(title).bold(),
-            Span::from(author).fg(c(SUBTEXT0)),
-            Span::from(format!("  {checks}")).fg(c(checks_color)),
-            Span::from(format!("  {}", pr.review_label())).fg(c(LAVENDER)),
-            Span::from(threads).fg(c(PEACH)),
-            Span::from(tag).fg(c(YELLOW)),
-            Span::from(format!("  {}", age(&pr.updated_at, now))).fg(c(SUBTEXT0)),
-        ];
-        if selected {
-            line = line.into_iter().map(|s| s.bg(c(SELECTED_BG))).collect();
-        }
-        lines.push(Line::from(line));
+    // A window of rows around the cursor, so a long split never hides the selected PR.
+    let visible = (inner.height as usize).max(1);
+    let start = selected.saturating_sub(visible / 2).min(items.len().saturating_sub(visible));
+    for (row, &i) in items.iter().enumerate().skip(start).take(visible) {
+        lines.push(pr_row(&app.prs.prs[i], row == selected, inner.width as usize, now));
     }
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines).block(list_block), list_area);
+
+    if wide {
+        let pr = items.get(selected).map(|&i| &app.prs.prs[i]);
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(c(MUTED)))
+            .padding(Padding::horizontal(1))
+            .title(Line::from(pr.map_or(" PR ".to_string(), |pr| format!(" {} ", pr.key()))).bold());
+        let lines = match pr {
+            Some(pr) => pr_detail_lines(pr, now),
+            None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
+        };
+        frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), detail_area);
+    }
+}
+
+/// From this width the PR view keeps a detail pane beside the list.
+const PULLS_DETAIL_FROM: u16 = 100;
+const PULLS_DETAIL_WIDTH: u16 = 46;
+
+/// One PR as a row of fixed columns: the checks glyph, the repo's colour bar and name (after
+/// the owner's `/`; the whole slug when there is none), the
+/// number, the title (the only field ever cut), the age, and a tag (⚙ a task runs, ⌂ no
+/// checkout). Everything else lives in the detail pane.
+fn pr_row(pr: &PullRequest, selected: bool, width: usize, now: u64) -> Line<'static> {
+    let (glyph, checks_color) = match pr.checks.state.as_str() {
+        "failure" => ("✗", RED),
+        "pending" => ("◐", YELLOW),
+        "success" => ("✓", GREEN),
+        _ => ("·", SUBTEXT0),
+    };
+    let repo_name = pr.repo.rsplit('/').next().unwrap_or(&pr.repo);
+    let repo_colour = REPO_COLOURS[repo_colour_slot(repo_name)];
+    let (tag, tag_color) = match (&pr.task, pr.local_path.is_some()) {
+        (Some(_), _) => ("⚙", YELLOW),
+        (None, false) => ("⌂", SUBTEXT0),
+        _ => (" ", SUBTEXT0),
+    };
+    let number = format!("#{}", pr.number);
+    let age = age(&pr.updated_at, now);
+    // sel(2) glyph(2) bar(1) repo(10) gap(1) number(5) gap(1) title gap(2) age(3) gap(2) tag(1)
+    let fixed = 2 + 2 + 1 + 10 + 1 + 5 + 1 + 2 + 3 + 2 + 1;
+    let room = width.saturating_sub(fixed).max(4);
+    let mut spans = vec![
+        Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+        Span::from(format!("{glyph} ")).fg(c(checks_color)),
+        Span::from("▌").fg(c(repo_colour)),
+        Span::from(format!("{:<10} ", truncate(repo_name, 10))).fg(c(repo_colour)),
+        Span::from(format!("{number:>5} ")).fg(c(SUBTEXT0)),
+        Span::from(format!("{:<room$}", truncate(&pr.title, room))).bold(),
+        Span::from(format!("  {age:>3}  ")).fg(c(SUBTEXT0)),
+        Span::from(tag.to_string()).fg(c(tag_color)),
+    ];
+    if selected {
+        spans = spans.into_iter().map(|s| s.bg(c(SELECTED_BG))).collect();
+    }
+    Line::from(spans)
+}
+
+/// The PR widget, then the four keys with whether each is on and why not.
+fn pr_detail_lines(pr: &PullRequest, now: u64) -> Vec<Line<'static>> {
+    let mut lines = detail::pr_widget(pr, now);
+    lines.push(Line::default());
+    for key in PrKey::ALL {
+        let label = key.label().split(':').next().unwrap_or(key.label()).split(" (").next().unwrap_or("");
+        match pulls::blocker(pr, key) {
+            None => lines.push(Line::from(vec![
+                Span::from(format!("{} ", key.key())).fg(c(BASE)).bg(c(ACCENT)),
+                Span::from(format!(" {label:<8}")).bold(),
+                Span::from("  ready").fg(c(GREEN)),
+            ])),
+            Some(why) => lines.push(Line::from(vec![
+                Span::from(format!("{} ", key.key())).fg(c(BASE)).bg(c(MUTED)),
+                Span::from(format!(" {label:<8}")).fg(c(SUBTEXT0)),
+                Span::from(format!("  off: {why}")).fg(c(SUBTEXT0)),
+            ])),
+        }
+    }
+    lines
 }
 
 /// Where to clone a repo the machine has no checkout of: the folders under the repos root.
@@ -1350,17 +1119,22 @@ fn render_clone_prompt(frame: &mut Frame, repo: &str, query: &str, all: &[String
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-/// `x` in the PR view: the four keys for the PR under the cursor; an off key says why under it.
+/// `x` in the PR view: the PR drawn by the shared widget, then the four keys for it; an off
+/// key says why under it. On a terminal too narrow for the detail pane this is where the
+/// detail shows.
 fn render_pr_actions(frame: &mut Frame, app: &App, cursor: usize) {
     let Some(pr) = app.pr_under_cursor() else { return };
+    let now = now_secs();
     let blockers: Vec<Option<&str>> = PrKey::ALL.iter().map(|k| pulls::blocker(&pr, *k)).collect();
+    let widget = detail::pr_widget(&pr, now);
     let longest = PrKey::ALL
         .iter()
         .map(|k| k.label().chars().count())
         .chain(blockers.iter().flatten().map(|w| w.chars().count() + 4))
+        .chain(widget.iter().map(Line::width))
         .max()
         .unwrap_or(40);
-    let rows = PrKey::ALL.len() + blockers.iter().flatten().count();
+    let rows = widget.len() + 1 + PrKey::ALL.len() + blockers.iter().flatten().count();
     let width = (longest as u16 + 12).min(frame.area().width.saturating_sub(2));
     let area = centered(frame.area(), width, (rows as u16 + 4).min(frame.area().height));
     frame.render_widget(Clear, area);
@@ -1368,8 +1142,9 @@ fn render_pr_actions(frame: &mut Frame, app: &App, cursor: usize) {
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
         .padding(Padding::horizontal(2))
-        .title(Line::from(format!(" {} {} · {} ", pr.key(), pr.title, pr.head_ref)).bold());
-    let mut lines: Vec<Line> = Vec::new();
+        .title(Line::from(format!(" {} ", pr.key())).bold());
+    let mut lines: Vec<Line> = widget;
+    lines.push(Line::default());
     for (i, key) in PrKey::ALL.iter().enumerate() {
         let selected = i == cursor;
         let blocked = blockers[i];
@@ -1387,7 +1162,7 @@ fn render_pr_actions(frame: &mut Frame, app: &App, cursor: usize) {
             lines.push(Line::from(Span::from(format!("      ↳ {why}")).fg(c(MUTED))));
         }
     }
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
 }
 
 /// The Digest: what changed since the board was last open, by group, newest first.
@@ -1760,7 +1535,7 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
 }
 
 /// A `width` x `height` rectangle centred in `area`.
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
+pub(crate) fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let [_, middle, _] = Layout::vertical([
         Constraint::Length(area.height.saturating_sub(height) / 2),
         Constraint::Length(height),
@@ -1878,125 +1653,8 @@ mod tests {
         }
     }
 
-    fn awaiting_approval_task() -> Task {
-        serde_json::from_str(
-            r#"{"id":"abcd1234","title":"Add CSV export","description":"Users want to export their data.",
-            "criteria":["handles a/b & c"],"repoPath":"/repo","branch":null,"worktreePath":null,
-            "state":"awaiting_approval","column":"Approved","waitingOnYou":true,"running":false,"queued":false,
-            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
-            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#,
-        )
-        .unwrap()
-    }
-
-    fn task_detail_with_open_plan(task: &Task) -> TaskDetail {
-        let task_json = r#"{"id":"abcd1234","title":"Add CSV export","description":"Users want to export their data.",
-            "criteria":["handles a/b & c"],"repoPath":"/repo","branch":null,"worktreePath":null,
-            "state":"awaiting_approval","column":"Approved","waitingOnYou":true,"running":false,"queued":false,
-            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
-            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
-        let _ = task;
-        serde_json::from_str(&format!(
-            r#"{{"task":{task_json},"stageRuns":[],
-            "approvals":[{{"requested":{{"brief":"Add a CSV export endpoint.","criteria":["handles a/b & c","exports UTF-8"],"assumptions":["CSV only for now"]}},"decision":null}}],
-            "events":[]}}"#
-        ))
-        .unwrap()
-    }
-
     fn find(text: &str, needle: &str) -> Option<(usize, usize)> {
         text.lines().enumerate().find_map(|(row, line)| line.find(needle).map(|col| (row, col)))
-    }
-
-    const TASK_JSON_DRAFT: &str = r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
-            "repoPath":null,"branch":null,"worktreePath":null,"state":"draft","column":"Intake",
-            "waitingOnYou":false,"running":false,"queued":false,
-            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
-            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
-
-    fn render_task_detail(width: u16, height: u16, task: &Task, detail: Option<&TaskDetail>) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
-        let scroll = Cell::new(0);
-        terminal.draw(|f| render_detail(f, f.area(), task, detail, &scroll)).unwrap();
-        let buffer = terminal.backend().buffer().clone();
-        (0..height)
-            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
-            .collect::<Vec<_>>()
-            .join("
-")
-    }
-
-    #[test]
-    fn a_plan_awaiting_approval_renders_plan_and_ticket_as_two_columns() {
-        let task = awaiting_approval_task();
-        let detail = task_detail_with_open_plan(&task);
-        let text = render_task_detail(140, 40, &task, Some(&detail));
-
-        let (_, plan_col) = find(&text, "Plan").expect("a Plan heading");
-        let (_, criteria_col) = find(&text, "Criteria to build").expect("the plan's criteria");
-        let (_, desc_col) = find(&text, "Description").expect("the ticket's Description");
-        let (_, accept_col) = find(&text, "Acceptance criteria").expect("the ticket's criteria");
-        assert!(plan_col < 70 && criteria_col < 70, "plan content should sit in the left column: {text}");
-        assert!(desc_col >= 70 && accept_col >= 70, "ticket content should sit in the right column: {text}");
-        assert!(text.contains("exports UTF-8"), "the edited plan's criteria should show: {text}");
-        assert!(text.contains("handles a/b & c"), "the ticket's own criteria should show: {text}");
-    }
-
-    #[test]
-    fn the_detail_shows_each_run_s_cost_and_turns_and_what_the_ticket_has_spent() {
-        let task: Task = serde_json::from_str(TASK_JSON_DRAFT).unwrap();
-        let detail: TaskDetail = serde_json::from_str(&format!(
-            r#"{{"task":{TASK_JSON_DRAFT},"stageRuns":[
-              {{"stage":"triage","attempt":1,"status":"passed","costUsd":0.42,"turns":18}},
-              {{"stage":"implementing","attempt":1,"status":"running","costUsd":null,"turns":null}}],
-              "approvals":[],"events":[]}}"#
-        ))
-        .unwrap();
-        let text = render_task_detail(100, 40, &task, Some(&detail));
-        assert!(text.contains("$0.42 · 18 turns"), "a run shows its cost and turns: {text}");
-        assert!(text.contains("Spent: $0.42"), "the ticket's spend is summed: {text}");
-    }
-
-    #[test]
-    fn the_setup_gate_shows_the_proposed_file_the_proof_per_check_and_the_notes() {
-        let mut task: Task = serde_json::from_str(TASK_JSON_DRAFT).unwrap();
-        task.state = "awaiting_setup".to_string();
-        task.waiting_on_you = true;
-        let detail: TaskDetail = serde_json::from_str(&format!(
-            r#"{{"task":{TASK_JSON_DRAFT},"stageRuns":[],"approvals":[{{"requested":{{
-              "config":"checks:\n  - name: board tests\n    run: cargo test\n",
-              "proof":[{{"name":"board tests","cmd":"cargo test (in board)","ok":true,"tail":""}},
-                       {{"name":"lint","cmd":"pnpm lint","ok":false,"tail":"a\nb\n3 problems"}}],
-              "notes":["no e2e surface"]}},"decision":null}}],"events":[]}}"#
-        ))
-        .unwrap();
-        let text = render_task_detail(100, 40, &task, Some(&detail));
-        assert!(text.contains("Proposed luna.yaml"), "{text}");
-        assert!(text.contains("run: cargo test"), "the file is shown as is: {text}");
-        assert!(text.contains("✓ board tests: cargo test (in board)"), "{text}");
-        assert!(text.contains("✗ lint: pnpm lint"), "{text}");
-        assert!(text.contains("3 problems"), "a failed check shows its tail: {text}");
-        assert!(text.contains("no e2e surface"), "{text}");
-    }
-
-    #[test]
-    fn a_narrow_terminal_stacks_the_plan_above_the_ticket_instead() {
-        let task = awaiting_approval_task();
-        let detail = task_detail_with_open_plan(&task);
-        let text = render_task_detail(90, 50, &task, Some(&detail));
-
-        let (plan_row, _) = find(&text, "Plan").expect("a Plan heading");
-        let (desc_row, _) = find(&text, "Description").expect("the ticket's Description");
-        assert!(plan_row < desc_row, "the plan should render above the ticket when stacked: {text}");
-    }
-
-    #[test]
-    fn a_ticket_with_no_open_plan_keeps_the_single_column_view() {
-        let mut task = awaiting_approval_task();
-        task.state = "implementing".to_string();
-        let text = render_task_detail(140, 40, &task, None);
-        assert!(find(&text, "Criteria to build").is_none(), "no plan is open, so there is nothing to show: {text}");
-        assert!(find(&text, "Description").is_some());
     }
 
     fn floor() -> FloorState {
@@ -2084,26 +1742,35 @@ mod tests {
             .join("\n");
         let (row3, _) = find(&text, "Ticket 3").expect("the expensive ticket");
         let (row0, _) = find(&text, "Ticket 0").expect("a cheap ticket");
-        let line_after = |row: usize| text.lines().nth(row + 1).unwrap_or("").to_string();
-        assert!(line_after(row3).contains('$'), "the expensive card is marked: {text}");
-        assert!(!line_after(row0).contains('$'), "a cheap card is not: {text}");
+        let status_line = |row: usize| text.lines().nth(row + 2).unwrap_or("").to_string();
+        assert!(status_line(row3).contains('$'), "the expensive card is marked: {text}");
+        assert!(!status_line(row0).contains('$'), "a cheap card is not: {text}");
     }
 
     #[test]
-    fn a_card_shows_its_repo_name_after_the_id() {
+    fn a_card_leads_with_its_title_and_names_its_repo_on_the_second_line() {
         const TASK: &str = r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
             "repoPath":"/Developer/projects/luna-tui","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
             "waitingOnYou":false,"running":false,"queued":false,
             "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
         let task: Task = serde_json::from_str(TASK).unwrap();
-        let head = card_head(&task, false, false).to_string();
-        assert!(head.contains("luna-tui"), "{head}");
-        assert!(head.starts_with('▌'), "a repo bar leads the card: {head}");
+        let lines: Vec<String> = card_lines(&task, None, false, false, Density::Cozy, 40).iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines[0], "▌Login page", "a repo bar, then the title, nothing else in the way");
+        assert_eq!(lines[1], "  #abcdef12 · luna-tui");
+        assert!(lines[2].contains("○ intake · "), "{}", lines[2]);
+        assert_eq!(lines.len(), 3);
         let mut bare = task.clone();
         bare.repo_path = None;
-        let head = card_head(&bare, false, false).to_string();
-        assert!(!head.contains("luna-tui") && !head.starts_with('▌'), "{head}");
+        let lines: Vec<String> = card_lines(&bare, None, false, false, Density::Cozy, 40).iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines[0], "Login page");
+        assert_eq!(lines[1], "  #abcdef12");
+        assert!(lines[2].contains("no repo"), "{}", lines[2]);
+        let compact: Vec<String> = card_lines(&task, None, true, false, Density::Compact, 24).iter().map(|l| l.to_string()).collect();
+        assert_eq!(compact.len(), 1);
+        assert!(compact[0].starts_with("◆ ○ Login page "), "{}", compact[0]);
+        let long: Vec<String> = card_lines(&task, None, false, false, Density::Compact, 12).iter().map(|l| l.to_string()).collect();
+        assert!(long[0].contains('…') && long[0].chars().count() <= 12, "the title is cut to the width: {}", long[0]);
     }
 
     #[test]
@@ -2114,7 +1781,7 @@ mod tests {
     }
 
     #[test]
-    fn a_card_s_second_line_is_the_triad_when_the_task_has_one() {
+    fn a_comfortable_card_s_fourth_line_is_the_triad_when_the_task_has_one() {
         const TASK: &str = r#"{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
             "repoPath":"/r/app","branch":null,"worktreePath":null,"state":"implementing","column":"Build",
             "waitingOnYou":false,"running":true,"queued":false,
@@ -2122,14 +1789,47 @@ mod tests {
             "workedMs":240000,"diff":{"added":142,"removed":18},"tests":{"passed":7,"total":9},
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
         let task: Task = serde_json::from_str(TASK).unwrap();
-        let lines: Vec<String> = card_lines(&task, None, false, false).iter().map(|l| l.to_string()).collect();
-        assert!(lines[2].contains("worked 4m · +142 −18 · tests 7/9"), "{lines:?}");
+        let lines: Vec<String> = card_lines(&task, None, false, false, Density::Comfortable, 60).iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines.len(), 4);
+        assert!(lines[3].contains("worked 4m · +142 −18 · tests 7/9"), "{lines:?}");
+        assert!(lines[2].contains("implementing · "), "the status line keeps the stage and age: {lines:?}");
         let mut bare = task.clone();
         bare.worked_ms = None;
         bare.diff = None;
         bare.tests = None;
-        let lines: Vec<String> = card_lines(&bare, None, false, false).iter().map(|l| l.to_string()).collect();
-        assert_eq!(lines[2].trim(), "", "no numbers, no line: {lines:?}");
+        let lines: Vec<String> = card_lines(&bare, None, false, false, Density::Comfortable, 60).iter().map(|l| l.to_string()).collect();
+        assert_eq!(lines[3].trim(), "", "no numbers, no line: {lines:?}");
+        assert_eq!(card_lines(&task, None, false, false, Density::Cozy, 60).len(), 3, "cozy drops the triad");
+    }
+
+    #[test]
+    fn ordering_by_repo_names_each_group_and_keeps_the_selection_on_its_card() {
+        let mut app = App::new(crate::Machine::from_env());
+        for (i, repo) in ["/r/notch", "/r/luna-tui", "/r/notch"].iter().enumerate() {
+            let task: Task = serde_json::from_str(&format!(
+                r#"{{"id":"{i}{i}{i}{i}{i}{i}{i}{i}0000","title":"Ticket {i}","description":"","criteria":[],
+                "repoPath":"{repo}","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
+                "waitingOnYou":false,"running":false,"queued":false,
+                "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+                "createdAt":"2026-10-2{i}T10:00:00.000Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+            ))
+            .unwrap();
+            app.tasks.push(task);
+        }
+        app.group = GroupBy::Repo;
+        app.selection[0] = 2;
+        let mut terminal = Terminal::new(TestBackend::new(60, 24)).unwrap();
+        terminal.draw(|f| render_column(f, f.area(), &app, 0, true)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let rows: Vec<String> = (0..24).map(|y| (0..60).map(|x| buffer[(x, y)].symbol().to_string()).collect()).collect();
+        let text = rows.join("\n");
+        assert!(text.contains("── luna-tui 1 ──"), "{text}");
+        assert!(text.contains("── notch 2 ──"), "{text}");
+        let luna = rows.iter().position(|r| r.contains("── luna-tui")).unwrap();
+        let notch = rows.iter().position(|r| r.contains("── notch")).unwrap();
+        assert!(luna < notch, "groups in name order: {text}");
+        let selected = rows.iter().find(|r| r.contains("▌ ")).expect("a highlighted row");
+        assert!(selected.contains("Ticket"), "the highlight sits on a card, not a separator: {selected}");
     }
 
     #[test]
@@ -2271,23 +1971,6 @@ mod tests {
     }
 
     #[test]
-    fn test_cases_show_what_each_proves_and_its_test() {
-        let v: Value = serde_json::json!([
-            {"title":"rejects a bad password","criterion":"Bad password shows an error","test":"src/a.test.ts > rejects"},
-            {"title":"an edge case","criterion":null,"test":"src/b.test.ts > edge"},
-            {"criterion":"no title"}, "junk"
-        ]);
-        assert_eq!(
-            case_lines(&v),
-            [
-                "rejects a bad password — proves: Bad password shows an error · src/a.test.ts > rejects",
-                "an edge case · src/b.test.ts > edge",
-            ]
-        );
-        assert!(case_lines(&Value::Null).is_empty());
-    }
-
-    #[test]
     fn slice_lines_show_title_and_size() {
         let v: Value = serde_json::json!([{"title":"Add route","est_loc":80},{"title":"No size"},{"est_loc":5},"junk"]);
         assert_eq!(slice_lines(&v), ["Add route (~80 LOC)", "No size"]);
@@ -2319,23 +2002,6 @@ mod tests {
         assert_eq!(lines[13], "… +3 more");
         assert!(rules_lines(&Value::Null, 20).is_empty());
         assert!(rules_lines(&serde_json::json!({"markdown": "  \n"}), 20).is_empty());
-    }
-
-    #[test]
-    fn test_gate_lists_tests_and_approval_lists_slices() {
-        let t: Value = serde_json::json!({"tests":["src/a.test.ts","src/b.test.ts"]});
-        assert_eq!(json_list(&t["tests"]), ["src/a.test.ts", "src/b.test.ts"]);
-        let mut lines = Vec::new();
-        push_proposal_sections(&mut lines, &t);
-        let text: String = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(text.contains("Tests"), "{text}");
-        assert!(text.contains("  • src/a.test.ts"), "{text}");
-        let p: Value = serde_json::json!({"assumptions":["x"],"slices":[{"title":"S1","est_loc":10}]});
-        let mut lines = Vec::new();
-        push_proposal_sections(&mut lines, &p);
-        let text: String = lines.iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
-        assert!(text.find("Assumptions").unwrap() < text.find("Slices").unwrap(), "{text}");
-        assert!(text.contains("  • S1 (~10 LOC)"), "{text}");
     }
 }
 
@@ -2387,20 +2053,48 @@ mod pr_tests {
             pr(13, "A very long pull request title that will not fit in a narrow terminal at all", "review_requested", "pending", false, false),
             pr(14, "Ready one", "ready_to_merge", "success", true, true),
         ]);
-        let text = render(120, 12, &app);
+        let text = render(120, 20, &app);
         assert!(text.contains("Review requested 2"), "{text}");
         assert!(text.contains("Ready to merge 1"), "{text}");
         assert!(text.contains("polled"), "{text}");
-        let row = text.lines().find(|l| l.contains("acme/app#12")).unwrap_or_default().to_string();
-        assert!(row.contains("Export CSV") && row.contains("@them") && row.contains("✗ lint") && row.contains("approved") && row.contains("2 thread(s)"), "{row}");
-        let narrow = text.lines().find(|l| l.contains("acme/app#13")).unwrap_or_default().to_string();
-        assert!(narrow.contains("no checkout") && narrow.contains("…"), "{narrow}");
+        let row = text.lines().find(|l| l.contains("#12") && l.contains("Export CSV")).unwrap_or_default().to_string();
+        assert!(row.starts_with("│▌ ✗ ▌app "), "selected, red checks, the repo bar then the repo's name without its owner: {row}");
+        assert!(!row.contains("@them") && !row.contains("lint"), "author and check names leave the row: {row}");
+        let second = text.lines().find(|l| l.contains("#13")).unwrap_or_default().to_string();
+        let col = |line: &str, needle: &str| line.find(needle).map(|i| line[..i].chars().count());
+        assert_eq!(col(&row, "#12"), col(&second, "#13"), "numbers line up");
+        assert_eq!(col(&row, "Export"), col(&second, "A very"), "titles line up");
+        assert!(second.contains("…") && second.contains("⌂"), "a long title is cut, no checkout is a tag: {second}");
+        let mut ready = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, true)]);
+        ready.pulls = Some(PullsState { split: PrSplit::ReadyToMerge, cursor: 0 });
+        let third = render(120, 20, &ready).lines().find(|l| l.contains("#14") && l.contains("Ready one")).unwrap_or_default().to_string();
+        assert!(third.contains("⚙") && third.contains("✓"), "a running task is a tag: {third}");
+        // The detail pane shows the selected PR with the fields the row dropped.
+        assert!(text.contains("acme/app#12  Export CSV"), "{text}");
+        assert!(text.contains("@them · h → main"), "{text}");
+        assert!(text.contains("✗ lint") && text.contains("✗ 1 of 3 failed"), "{text}");
+        assert!(text.contains("approved · 2 unresolved threads"), "{text}");
+        assert!(text.contains("m ") && text.contains("off: not ready to merge"), "{text}");
         assert!(text.contains("[pulls]"), "{text}");
 
-        let text = render(80, 12, &app);
-        let row = text.lines().find(|l| l.contains("acme/app#12")).unwrap_or_default().to_string();
-        assert!(!row.contains("@them") && row.contains("✗ lint"), "author drops under 100 columns: {row}");
+        let text = render(80, 20, &app);
+        assert!(!text.contains("@them"), "no detail pane under 100 columns: {text}");
+        let row = text.lines().find(|l| l.contains("#12")).unwrap_or_default().to_string();
+        assert!(row.contains("Export CSV") && row.contains("✗"), "{row}");
         assert!(!text.contains("\u{2588}"), "nothing overflows: {text}");
+    }
+
+    #[test]
+    fn the_list_scrolls_to_keep_the_selected_pr_in_view() {
+        let prs: Vec<PullRequest> = (1..=40).map(|n| pr(n, &format!("Pull {n}"), "review_requested", "success", true, false)).collect();
+        let mut app = app_with(prs);
+        app.pulls = Some(PullsState { split: PrSplit::ReviewRequested, cursor: 30 });
+        let text = render(80, 14, &app);
+        assert!(text.contains("#31") && text.contains("Pull 31"), "the selected row shows: {text}");
+        assert!(!text.contains("#1 ") && !text.contains("#40"), "a window around the cursor, not the top: {text}");
+        let mut owner_less = app_with(vec![pr(7, "Bare", "review_requested", "success", true, false)]);
+        owner_less.prs.prs[0].repo = "app".into();
+        assert!(render(80, 14, &owner_less).contains("▌app "), "a repo without an owner prints whole");
     }
 
     #[test]
@@ -2413,9 +2107,10 @@ mod pr_tests {
         let text = render(100, 20, &app);
         assert!(text.contains("clone acme/app into") && text.contains("/r/projects/app") && !text.contains("▌ /r/app"), "{text}");
         app.mode = Mode::PrActions { cursor: 0 };
-        let text = render(100, 14, &app);
+        let text = render(100, 30, &app);
         assert!(text.contains("merge (squash") && !text.contains("review is for other people's PRs"), "{text}");
         assert!(text.contains("↳ threads are answered on your own PRs"), "{text}");
+        assert!(text.contains("@them · h → main"), "the menu carries the PR widget: {text}");
     }
 }
 

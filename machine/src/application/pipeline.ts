@@ -2,14 +2,14 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type BudgetAlert, type Finding, RUNNING, type TaskRoute, type TaskSource, type TaskState } from "@hardness/contracts";
+import { type BudgetAlert, type Finding, RUNNING, type StageRunCase, type TaskRoute, type TaskSource, type TaskState, type TestCase } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
 import type { TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+import { NoCasesToEditError, NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
@@ -23,7 +23,7 @@ import { basename, join } from "node:path";
 import type { Policy } from "../domain/policy.ts";
 import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 
-export { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+export { NoCasesToEditError, NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -131,6 +131,17 @@ const ABORT_WIND_DOWN_MS = 15_000;
 const STUCK_REPEATS = 3;
 /** How long one rate-limit result holds every claim when it names no reset time. */
 const LATCH_FALLBACK_MS = 5 * 60_000;
+
+/** Verifying's per-case verdicts from its detail (`cases: [{title, ok}]`), or null when it gave none. */
+function casesOf(detail: Record<string, unknown> | undefined): StageRunCase[] | null {
+  const cases = detail?.cases;
+  if (!Array.isArray(cases)) return null;
+  const rows = cases.flatMap((c) => {
+    const row = c as { title?: unknown; ok?: unknown };
+    return typeof row.title === "string" && typeof row.ok === "boolean" ? [{ title: row.title, ok: row.ok }] : [];
+  });
+  return rows.length > 0 ? rows : null;
+}
 
 export class Pipeline {
   private readonly store: TaskStore;
@@ -343,21 +354,57 @@ export class Pipeline {
     return this.get(id);
   }
 
-  /** Edits triage's proposed plan before you approve it: only the fields given change,
-   *  the rest (including slices) stay as triage wrote them. */
+  /** Edits triage's plan while it awaits your approval, or at the test check (the plan is
+   *  approved then, but nothing is built yet, so the latest plan approval still moves). Only the
+   *  fields given change; the rest (including slices) stay as triage wrote them. Each edit is
+   *  kept as a revision on the approval and logged as `plan.edited`. */
   async editPlan(
     id: string,
     patch: { brief?: string; criteria?: string[]; assumptions?: string[] },
   ): Promise<TaskRow> {
-    return this.store.withTaskLock(id, async (task, tx) => {
+    const { fields, gate } = await this.store.withTaskLock(id, async (task, tx) => {
       const open = await tx.findOpenApproval(id);
-      if (!open || open.kind !== "awaiting_approval") throw new NoPlanToEditError(id);
-      const changes = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
-      if (Object.keys(changes).length > 0) {
-        await tx.updateApprovalRequested(open, { ...open.requested, ...changes });
+      let plan: ApprovalRow | undefined;
+      if (open?.kind === "awaiting_approval") plan = open;
+      else if (open?.kind === "awaiting_test_check") {
+        plan = (await this.store.listApprovals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
       }
-      return task;
+      if (!open || !plan) throw new NoPlanToEditError(id);
+      const before: Record<string, unknown> = {};
+      const after: Record<string, unknown> = {};
+      for (const [field, value] of Object.entries(patch)) {
+        if (value === undefined || JSON.stringify(value) === JSON.stringify(plan.requested[field])) continue;
+        if (plan.requested[field] !== undefined) before[field] = plan.requested[field];
+        after[field] = value;
+      }
+      const fields = Object.keys(after);
+      if (fields.length > 0) {
+        const revisions = Array.isArray(plan.requested.revisions) ? plan.requested.revisions : [];
+        await tx.updateApprovalRequested(plan, {
+          ...plan.requested,
+          ...after,
+          revisions: [...revisions, { at: new Date().toISOString(), before, after }],
+        });
+        // Approving the plan adopted its criteria onto the ticket; an edit after that follows them.
+        if (plan.decision === "approved" && Array.isArray(after.criteria) && after.criteria.length > 0) {
+          await tx.updateTask(id, { criteria: after.criteria.map(String) });
+        }
+      }
+      return { fields, gate: open.kind };
     });
+    if (fields.length > 0) await this.log(id, "plan.edited", { fields, gate });
+    return this.get(id);
+  }
+
+  /** Replaces test_design's cases while the test check is open; everything else on the gate stays. */
+  async editCases(id: string, cases: TestCase[]): Promise<TaskRow> {
+    await this.store.withTaskLock(id, async (_task, tx) => {
+      const open = await tx.findOpenApproval(id);
+      if (!open || open.kind !== "awaiting_test_check") throw new NoCasesToEditError(id);
+      await tx.updateApprovalRequested(open, { ...open.requested, cases });
+    });
+    await this.log(id, "cases.edited", { count: cases.length });
+    return this.get(id);
   }
 
   /** Deletes a task with its runs, approvals and events. Its worktree is kept. */
@@ -1126,6 +1173,7 @@ export class Pipeline {
       transcriptPath: result.run?.transcriptPath ?? null,
       outputCommit: result.run?.outputCommit ?? null,
       ...(result.usage ? { turns: result.usage.turns, costUsd: result.usage.costUsd?.toString() ?? null } : {}),
+      ...(stage === "verifying" ? { cases: casesOf(result.detail) } : {}),
     });
     if (result.usage?.costUsd) await this.raiseAlerts(id);
     for (const artifact of result.artifacts ?? []) {

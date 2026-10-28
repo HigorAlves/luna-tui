@@ -91,9 +91,18 @@ pub struct Task {
     pub source: Option<TaskSource>,
 }
 
+/// Verifying's verdict on one of test_design's cases, by title.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct CaseResult {
+    pub title: String,
+    pub ok: bool,
+}
+
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct StageRun {
+    #[serde(default)]
+    pub id: Option<String>,
     pub stage: String,
     pub attempt: u32,
     pub status: String,
@@ -102,29 +111,95 @@ pub struct StageRun {
     pub cost_usd: Option<f64>,
     #[serde(default)]
     pub turns: Option<u32>,
+    /// When it started and ended; absent from machines that predate them.
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub ended_at: Option<String>,
+    /// Verifying's per-case verdicts, when the run could tell them apart.
+    #[serde(default)]
+    pub cases: Vec<CaseResult>,
 }
 
 impl StageRun {
-    /// `$0.42 · 18 turns`, or None when the run has no usage yet.
-    pub fn usage_label(&self) -> Option<String> {
-        match (self.cost_usd, self.turns) {
-            (None, None) => None,
-            (cost, turns) => Some(
-                [cost.map(|c| format!("${c:.2}")), turns.map(|t| format!("{t} turns"))]
-                    .into_iter()
-                    .flatten()
-                    .collect::<Vec<_>>()
-                    .join(" · "),
-            ),
-        }
+    /// How long the run took (`3m`), or has been running so far; None without a start time.
+    pub fn took(&self, now: u64) -> Option<String> {
+        let start = unix_secs(self.started_at.as_deref()?)?;
+        let end = self.ended_at.as_deref().and_then(unix_secs).unwrap_or(now);
+        Some(fmt_ms(Some(end.saturating_sub(start) as f64 * 1000.0)))
     }
 }
 
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Approval {
+    /// The gate this is (`awaiting_approval`, `awaiting_test_check`, ...); absent from machines
+    /// that predate it, in which case `kind_or_guess` reads it off the request's shape.
+    #[serde(default)]
+    pub kind: Option<String>,
     pub requested: Value,
     pub decision: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+    #[serde(default)]
+    pub decided_at: Option<String>,
+}
+
+impl Approval {
+    /// The gate's state name, guessed from what was requested when the machine did not say.
+    pub fn kind_or_guess(&self) -> &str {
+        if let Some(kind) = &self.kind {
+            return kind;
+        }
+        let r = &self.requested;
+        if !r["questions"].is_null() {
+            "awaiting_answers"
+        } else if !r["cases"].is_null() || !r["tests"].is_null() {
+            "awaiting_test_check"
+        } else if !r["config"].is_null() {
+            "awaiting_setup"
+        } else if !r["rules"].is_null() {
+            "reviewing_memory"
+        } else if !r["prUrl"].is_null() || !r["evidence"].is_null() {
+            "awaiting_ship"
+        } else {
+            "awaiting_approval"
+        }
+    }
+}
+
+/// A file a stage run produced: a screenshot, a recording, the QA manifest.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Artifact {
+    #[serde(default)]
+    pub stage_run_id: Option<String>,
+    pub kind: String,
+    pub path: String,
+    #[serde(default)]
+    pub label: String,
+}
+
+/// One of test_design's cases: what it proves, how, and what verifying said about it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TestCase {
+    pub title: String,
+    pub criterion: Option<String>,
+    pub approach: String,
+    /// Verifying's verdict, once a run reported one for this title.
+    pub result: Option<bool>,
+}
+
+/// One row of the Overview's criteria summary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CriterionRow {
+    pub criterion: String,
+    /// Whether the plan lists it; None while there is no plan yet.
+    pub planned: Option<bool>,
+    /// How many cases prove it.
+    pub cases: usize,
+    /// (passed, total) among its cases, once verifying ran.
+    pub verify: Option<(usize, usize)>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -143,6 +218,8 @@ pub struct TaskDetail {
     pub stage_runs: Vec<StageRun>,
     pub approvals: Vec<Approval>,
     pub events: Vec<TaskEvent>,
+    #[serde(default)]
+    pub artifacts: Vec<Artifact>,
 }
 
 impl TaskDetail {
@@ -156,6 +233,137 @@ impl TaskDetail {
     pub fn open_approval(&self) -> Option<&Approval> {
         self.approvals.iter().rev().find(|a| a.decision.is_none())
     }
+
+    /// The newest approval of `kind`, decided or not: the plan stays readable after `a`.
+    pub fn latest_approval(&self, kind: &str) -> Option<&Approval> {
+        self.approvals.iter().rev().find(|a| a.kind_or_guess() == kind)
+    }
+
+    /// The newest verifying run that reported per-case verdicts.
+    fn case_results(&self) -> &[CaseResult] {
+        self.stage_runs
+            .iter()
+            .rev()
+            .find(|r| r.stage == "verifying" && !r.cases.is_empty())
+            .map_or(&[], |r| r.cases.as_slice())
+    }
+
+    /// test_design's cases with verifying's verdict on each, in the order they were written.
+    pub fn cases(&self) -> Vec<TestCase> {
+        let requested = match self.latest_approval("awaiting_test_check") {
+            Some(a) => &a.requested,
+            None => return Vec::new(),
+        };
+        let results = self.case_results();
+        cases_of(requested)
+            .into_iter()
+            .map(|mut c| {
+                c.result = results.iter().find(|r| r.title == c.title).map(|r| r.ok);
+                c
+            })
+            .collect()
+    }
+
+    /// The cases grouped under the criterion each proves, criteria in first-seen order; cases
+    /// that name none gather under `(no criterion)` at the end.
+    pub fn cases_by_criterion(&self) -> Vec<(String, Vec<TestCase>)> {
+        let mut groups: Vec<(String, Vec<TestCase>)> = Vec::new();
+        let mut loose: Vec<TestCase> = Vec::new();
+        for case in self.cases() {
+            match &case.criterion {
+                Some(criterion) => match groups.iter_mut().find(|(c, _)| c == criterion) {
+                    Some((_, cases)) => cases.push(case),
+                    None => groups.push((criterion.clone(), vec![case])),
+                },
+                None => loose.push(case),
+            }
+        }
+        if !loose.is_empty() {
+            groups.push(("(no criterion)".to_string(), loose));
+        }
+        groups
+    }
+}
+
+/// The cases as test_design wrote them (`approach`, or `test` from older runs), no verdicts.
+pub fn cases_of(requested: &Value) -> Vec<TestCase> {
+    requested["cases"]
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    Some(TestCase {
+                        title: item["title"].as_str()?.to_string(),
+                        criterion: item["criterion"].as_str().map(str::to_string),
+                        approach: item["approach"].as_str().or_else(|| item["test"].as_str()).unwrap_or_default().to_string(),
+                        result: None,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// One row per acceptance criterion: the plan's first, then the ticket's own that the plan
+/// dropped. What the plan says, how many cases prove it, and what verifying found.
+pub fn criteria_summary(detail: &TaskDetail) -> Vec<CriterionRow> {
+    let plan = detail.latest_approval("awaiting_approval").map(|a| {
+        a.requested["criteria"]
+            .as_array()
+            .map(|items| items.iter().filter_map(|i| i.as_str().map(str::to_string)).collect::<Vec<_>>())
+            .unwrap_or_default()
+    });
+    let mut names: Vec<String> = plan.clone().unwrap_or_default();
+    for own in &detail.task.criteria {
+        if !names.contains(own) {
+            names.push(own.clone());
+        }
+    }
+    let cases = detail.cases();
+    names
+        .into_iter()
+        .map(|criterion| {
+            let mine: Vec<&TestCase> = cases.iter().filter(|c| c.criterion.as_deref() == Some(criterion.as_str())).collect();
+            let judged: Vec<bool> = mine.iter().filter_map(|c| c.result).collect();
+            CriterionRow {
+                planned: plan.as_ref().map(|p| p.contains(&criterion)),
+                cases: mine.len(),
+                verify: if judged.is_empty() { None } else { Some((judged.iter().filter(|ok| **ok).count(), judged.len())) },
+                criterion,
+            }
+        })
+        .collect()
+}
+
+/// `hh:mm` of an ISO timestamp, for history lines.
+fn clock(iso: &str) -> &str {
+    iso.get(11..16).unwrap_or("")
+}
+
+/// What happened to the plan, oldest first: each send-back with its reason, each edit, the
+/// approval. One line each, `hh:mm  what`.
+pub fn plan_history(detail: &TaskDetail) -> Vec<String> {
+    let mut lines = Vec::new();
+    for approval in detail.approvals.iter().filter(|a| a.kind_or_guess() == "awaiting_approval") {
+        if let Some(revisions) = approval.requested["revisions"].as_array() {
+            for revision in revisions {
+                let at = revision["at"].as_str().unwrap_or("");
+                let mut fields: Vec<&str> = revision["after"].as_object().map(|o| o.keys().map(String::as_str).collect()).unwrap_or_default();
+                fields.sort_unstable();
+                lines.push(format!("{}  {} edited", clock(at), if fields.is_empty() { "plan".to_string() } else { fields.join(", ") }));
+            }
+        }
+        if let (Some(decision), Some(at)) = (&approval.decision, approval.decided_at.as_deref()) {
+            let what = match (decision.as_str(), &approval.reason) {
+                ("sent_back", Some(reason)) => format!("sent back · {reason}"),
+                ("sent_back", None) => "sent back".to_string(),
+                (other, _) => other.replace('_', " "),
+            };
+            lines.push(format!("{}  {what}", clock(at)));
+        }
+    }
+    lines
 }
 
 /// What you can ask the machine to do about a PR, as `POST /github/prs/.../actions` takes it.
@@ -190,6 +398,34 @@ pub struct PrChecks {
     pub passed: u64,
     pub total: u64,
     pub failed: Vec<PrCheck>,
+    /// Every check with its state, from machines that send them; the failed ones otherwise.
+    #[serde(default)]
+    pub all: Vec<PrCheck>,
+}
+
+/// One file of a task branch's diff against its base.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct DiffFile {
+    pub path: String,
+    /// `A`, `M`, `D` or `R`.
+    pub status: String,
+    pub added: u64,
+    pub removed: u64,
+}
+
+/// `GET /tasks/:id/diff`: the branch against its base, and one file's patch when asked for.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct TaskDiff {
+    pub base: String,
+    pub head: String,
+    pub files: Vec<DiffFile>,
+    #[serde(default)]
+    pub file: Option<String>,
+    #[serde(default)]
+    pub patch: Option<String>,
+    /// The machine cut `patch` at its cap (512 KB).
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// The PR task in flight for a PR, if any.
@@ -713,6 +949,59 @@ pub fn parse_plan(markdown: &str) -> PlanEdit {
     edit
 }
 
+/// test_design's cases as markdown you can edit: one `##` heading per criterion, one bullet
+/// per case, its approach indented under it. Cases that prove no criterion sit under
+/// `## (no criterion)`.
+pub fn cases_markdown(cases: &[TestCase]) -> String {
+    let mut out = String::from("# Test cases\n");
+    let mut groups: Vec<(Option<&str>, Vec<&TestCase>)> = Vec::new();
+    for case in cases {
+        match groups.iter_mut().find(|(c, _)| *c == case.criterion.as_deref()) {
+            Some((_, cases)) => cases.push(case),
+            None => groups.push((case.criterion.as_deref(), vec![case])),
+        }
+    }
+    for (criterion, cases) in groups {
+        out.push_str(&format!("\n## {}\n\n", criterion.unwrap_or("(no criterion)")));
+        for case in cases {
+            out.push_str(&format!("- {}\n", case.title));
+            for line in case.approach.lines().filter(|l| !l.trim().is_empty()) {
+                out.push_str(&format!("  {}\n", line.trim()));
+            }
+        }
+    }
+    out
+}
+
+/// Parses `cases_markdown`. Verdicts are not part of the text, so every case comes back
+/// without one.
+pub fn parse_cases(markdown: &str) -> Vec<TestCase> {
+    let mut cases: Vec<TestCase> = Vec::new();
+    let mut criterion: Option<String> = None;
+    for line in markdown.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            let heading = heading.trim();
+            criterion = (!heading.is_empty() && heading != "(no criterion)").then(|| heading.to_string());
+        } else if line.starts_with("# ") {
+            continue;
+        } else if let Some(title) = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")) {
+            let title = title.trim();
+            if !title.is_empty() {
+                cases.push(TestCase { title: title.to_string(), criterion: criterion.clone(), approach: String::new(), result: None });
+            }
+        } else if let Some(case) = cases.last_mut() {
+            let text = line.trim();
+            if !text.is_empty() {
+                if !case.approach.is_empty() {
+                    case.approach.push('\n');
+                }
+                case.approach.push_str(text);
+            }
+        }
+    }
+    cases
+}
+
 /// A ticket's editable text, as shown in `$EDITOR`.
 #[derive(Debug, Default, PartialEq)]
 pub struct TicketText {
@@ -1071,6 +1360,25 @@ mod tests {
     }
 
     #[test]
+    fn cases_round_trip_through_their_markdown_grouped_by_criterion() {
+        let cases = vec![
+            TestCase { title: "rejects a bad password".into(), criterion: Some("handles a/b & c".into()), approach: "run the suite".into(), result: Some(true) },
+            TestCase { title: "escapes a quoted comma".into(), criterion: Some("handles a/b & c".into()), approach: "read the output; \"a,b\" stays one cell".into(), result: None },
+            TestCase { title: "writes EF BB BF first".into(), criterion: Some("exports UTF-8".into()), approach: "hexdump the first 3 bytes".into(), result: None },
+            TestCase { title: "an orphan".into(), criterion: None, approach: String::new(), result: None },
+        ];
+        let markdown = cases_markdown(&cases);
+        assert!(markdown.starts_with("# Test cases\n\n## handles a/b & c\n\n- rejects a bad password\n  run the suite\n- escapes a quoted comma\n"), "{markdown}");
+        assert!(markdown.contains("\n## (no criterion)\n\n- an orphan\n"), "{markdown}");
+        let expected: Vec<TestCase> = cases.iter().cloned().map(|c| TestCase { result: None, ..c }).collect();
+        assert_eq!(parse_cases(&markdown), expected);
+        assert_eq!(parse_cases("## c\n- t\n  line one\n  line two\n")[0].approach, "line one\nline two", "a multi-line approach keeps its lines");
+        let steps = vec![TestCase { title: "t".into(), criterion: None, approach: "step one\nstep two".into(), result: None }];
+        assert_eq!(parse_cases(&cases_markdown(&steps)), steps, "and round-trips");
+        assert!(parse_cases("# nothing\n").is_empty());
+    }
+
+    #[test]
     fn ticket_text_round_trips() {
         let text = TicketText {
             title: "Format prices".into(),
@@ -1177,5 +1485,125 @@ mod pr_tests {
         assert_eq!(pr.checks_label(), "no checks");
         assert_eq!(pr.review_label(), "no review");
         assert_eq!(PrAction::CiFix.wire(), "ci_fix");
+    }
+}
+
+#[cfg(test)]
+mod detail_tests {
+    use super::*;
+
+    const TASK: &str = r#"{"id":"abcdef123456","title":"Add CSV export","description":"","criteria":["handles a/b & c","declares charset in header"],
+        "repoPath":"/r/app","branch":"task/abcdef12","worktreePath":"/w","state":"implementing","column":"Build",
+        "waitingOnYou":false,"running":true,"queued":false,
+        "retries":{"verify":1,"e2e":0,"ci":0,"total":2},"resumeTo":null,"reason":null,
+        "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
+
+    fn detail() -> TaskDetail {
+        serde_json::from_str(&format!(
+            r#"{{"task":{TASK},
+            "stageRuns":[
+              {{"stage":"triage","attempt":1,"status":"passed","costUsd":0.42,"turns":18,"startedAt":"2026-10-22T09:30:00Z","endedAt":"2026-10-22T09:33:00Z"}},
+              {{"stage":"verifying","attempt":1,"status":"failed","costUsd":null,"turns":null,"startedAt":"2026-10-22T10:07:00Z","endedAt":"2026-10-22T10:11:00Z",
+                "cases":[{{"title":"rejects a bad password","ok":true}},{{"title":"escapes a quoted comma","ok":false}},{{"title":"writes EF BB BF first","ok":true}}]}},
+              {{"stage":"implementing","attempt":2,"status":"running","costUsd":null,"turns":null,"startedAt":"2026-10-22T10:11:00Z","endedAt":null}}],
+            "approvals":[
+              {{"id":"p1","kind":"awaiting_approval","requested":{{"brief":"first try","criteria":["handles a/b & c"]}},"decision":"sent_back","reason":"criteria too vague","createdAt":"2026-10-22T09:33:00Z","decidedAt":"2026-10-22T09:40:00Z"}},
+              {{"id":"p2","kind":"awaiting_approval","requested":{{"brief":"Add a CSV export endpoint.","criteria":["handles a/b & c","exports UTF-8 with a BOM"],"assumptions":["CSV only"],
+                 "revisions":[{{"at":"2026-10-22T09:55:00Z","before":{{"brief":"Add CSV."}},"after":{{"brief":"Add a CSV export endpoint."}}}}]}},
+                 "decision":"approved","reason":null,"createdAt":"2026-10-22T09:50:00Z","decidedAt":"2026-10-22T09:58:00Z"}},
+              {{"id":"t1","kind":"awaiting_test_check","requested":{{"cases":[
+                 {{"title":"rejects a bad password","criterion":"handles a/b & c","approach":"run the suite"}},
+                 {{"title":"escapes a quoted comma","criterion":"handles a/b & c","approach":"read the output"}},
+                 {{"title":"writes EF BB BF first","criterion":"exports UTF-8 with a BOM","test":"hexdump"}}]}},
+                 "decision":"approved","reason":null,"createdAt":"2026-10-22T10:00:00Z","decidedAt":"2026-10-22T10:02:00Z"}}],
+            "events":[],
+            "artifacts":[{{"id":"a1","stageRunId":"r9","kind":"screenshot","path":"/out/files/qa/home.png","label":"home","sha256":"x","createdAt":"2026-10-22T10:20:00Z"}}]}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_decided_approval_keeps_its_kind_reason_and_times_and_an_old_machine_s_still_loads() {
+        let d = detail();
+        assert_eq!(d.approvals[0].kind.as_deref(), Some("awaiting_approval"));
+        assert_eq!(d.approvals[0].reason.as_deref(), Some("criteria too vague"));
+        assert_eq!(d.approvals[0].decided_at.as_deref(), Some("2026-10-22T09:40:00Z"));
+        let old: Approval = serde_json::from_str(r#"{"requested":{"brief":"b"},"decision":null}"#).unwrap();
+        assert_eq!(old.kind, None);
+        assert_eq!(old.kind_or_guess(), "awaiting_approval", "a plan-shaped request reads as the plan gate");
+        let cases: Approval = serde_json::from_str(r#"{"requested":{"cases":[]},"decision":null}"#).unwrap();
+        assert_eq!(cases.kind_or_guess(), "awaiting_test_check");
+    }
+
+    #[test]
+    fn the_latest_approval_of_a_kind_is_found_whether_or_not_it_was_decided() {
+        let d = detail();
+        assert!(d.open_approval().is_none(), "every gate is decided");
+        let plan = d.latest_approval("awaiting_approval").expect("the plan");
+        assert_eq!(plan.requested["brief"], "Add a CSV export endpoint.");
+        assert_eq!(plan.decision.as_deref(), Some("approved"));
+        assert!(d.latest_approval("awaiting_test_check").is_some());
+        assert!(d.latest_approval("awaiting_ship").is_none());
+    }
+
+    #[test]
+    fn the_plan_history_lists_send_backs_edits_and_the_approval_in_order() {
+        let lines = plan_history(&detail());
+        assert_eq!(
+            lines,
+            [
+                "09:40  sent back · criteria too vague",
+                "09:55  brief edited",
+                "09:58  approved",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_run_knows_how_long_it_took_and_a_running_one_counts_from_its_start() {
+        let d = detail();
+        assert_eq!(d.stage_runs[0].took(unix_secs("2026-10-22T12:00:00Z").unwrap()).as_deref(), Some("3m"));
+        assert_eq!(d.stage_runs[2].took(unix_secs("2026-10-22T10:15:00Z").unwrap()).as_deref(), Some("4m"));
+        let bare: StageRun = serde_json::from_str(r#"{"stage":"triage","attempt":1,"status":"passed"}"#).unwrap();
+        assert_eq!(bare.took(0), None);
+        assert!(bare.cases.is_empty());
+    }
+
+    #[test]
+    fn artifacts_load_and_an_old_machine_without_them_still_does() {
+        let d = detail();
+        assert_eq!(d.artifacts.len(), 1);
+        assert_eq!(d.artifacts[0].kind, "screenshot");
+        let old: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{TASK},"stageRuns":[],"approvals":[],"events":[]}}"#)).unwrap();
+        assert!(old.artifacts.is_empty());
+    }
+
+    #[test]
+    fn cases_group_under_the_criterion_they_prove_and_carry_verifying_s_verdict() {
+        let d = detail();
+        let groups = d.cases_by_criterion();
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].0, "handles a/b & c");
+        assert_eq!(groups[0].1.len(), 2);
+        assert_eq!(groups[0].1[0].title, "rejects a bad password");
+        assert_eq!(groups[0].1[0].approach, "run the suite");
+        assert_eq!(groups[0].1[0].result, Some(true));
+        assert_eq!(groups[0].1[1].result, Some(false));
+        assert_eq!(groups[1].1[0].approach, "hexdump", "an older `test` field still reads as the approach");
+    }
+
+    #[test]
+    fn the_criteria_summary_has_a_row_per_criterion_with_plan_cases_and_verify_columns() {
+        let d = detail();
+        let rows = criteria_summary(&d);
+        let names: Vec<&str> = rows.iter().map(|r| r.criterion.as_str()).collect();
+        assert_eq!(names, ["handles a/b & c", "exports UTF-8 with a BOM", "declares charset in header"]);
+        assert_eq!((rows[0].planned, rows[0].cases, rows[0].verify), (Some(true), 2, Some((1, 2))));
+        assert_eq!((rows[1].planned, rows[1].cases, rows[1].verify), (Some(true), 1, Some((1, 1))));
+        assert_eq!((rows[2].planned, rows[2].cases, rows[2].verify), (Some(false), 0, None));
+        let bare: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{TASK},"stageRuns":[],"approvals":[],"events":[]}}"#)).unwrap();
+        let rows = criteria_summary(&bare);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].planned, None, "no plan yet: the column is empty, not a cross");
     }
 }

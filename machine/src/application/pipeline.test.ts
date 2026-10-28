@@ -14,6 +14,7 @@ import { StubStages } from "./stages/stubs.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { type BudgetAlert, Pipeline, TaskNotFoundError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
+import { approvedPlan } from "../domain/stage-input.ts";
 import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
 import type { CloseReport } from "./close-task.ts";
 
@@ -306,11 +307,73 @@ describe("editing the plan before approving", () => {
     await expect(pipeline.editPlan(task.id, { brief: "x" })).rejects.toThrow(/no plan/i);
   });
 
-  it("rejects editing an answers or test-check gate", async () => {
+  it("rejects editing an answers gate", async () => {
     stubs.plan("triage", { outcome: "needs_input", detail: { questions: [{ question: "q", recommended: "r" }] } });
     const task = await newTask();
     await pipeline.start(task.id);
     await expect(pipeline.editPlan(task.id, { brief: "x" })).rejects.toThrow(/no plan/i);
+  });
+
+  it("keeps a revision of what changed and logs the edited fields, instead of overwriting silently", async () => {
+    stubs.plan("triage", { outcome: "pass", detail: { brief: "old", criteria: ["c1"], assumptions: ["a1"] } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+
+    await pipeline.editPlan(task.id, { brief: "new", criteria: ["c1"], assumptions: ["a2"] });
+
+    const approval = (await pipeline.approvals(task.id)).find((a) => a.kind === "awaiting_approval");
+    expect(approval?.requested).toMatchObject({
+      brief: "new",
+      assumptions: ["a2"],
+      revisions: [{ at: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/), before: { brief: "old", assumptions: ["a1"] }, after: { brief: "new", assumptions: ["a2"] } }],
+    });
+    const edited = (await pipeline.events(task.id)).filter((e) => e.kind === "plan.edited");
+    expect(edited.map((e) => e.payload)).toEqual([{ fields: ["brief", "assumptions"], gate: "awaiting_approval" }]);
+  });
+
+  it("edits the approved plan at the test check too, and test_design's input reads the edit", async () => {
+    stubs.plan("triage", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved");
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_test_check");
+
+    await pipeline.editPlan(task.id, { criteria: ["c1", "c2"] });
+
+    const approvals = await pipeline.approvals(task.id);
+    const plan = approvals.findLast((a) => a.kind === "awaiting_approval");
+    expect(plan?.decision).toBe("approved");
+    expect(plan?.requested).toMatchObject({ criteria: ["c1", "c2"], revisions: [{ before: { criteria: ["c1"] }, after: { criteria: ["c1", "c2"] } }] });
+    expect(approvedPlan(approvals)?.criteria).toEqual(["c1", "c2"]);
+    expect((await pipeline.get(task.id)).criteria).toEqual(["c1", "c2"]);
+    const edited = (await pipeline.events(task.id)).filter((e) => e.kind === "plan.edited");
+    expect(edited.map((e) => e.payload)).toEqual([{ fields: ["criteria"], gate: "awaiting_test_check" }]);
+  });
+});
+
+describe("editing the test cases at the test check", () => {
+  const designed = [{ title: "old", criterion: "c1", approach: "a" }];
+
+  it("replaces the cases on the open test-check approval, keeps its other fields, and logs it", async () => {
+    stubs.plan("test_design", { outcome: "pass", detail: { summary: "found vitest", cases: designed } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved");
+    const cases = [{ title: "new", criterion: "c1", approach: "a2" }, { title: "more", criterion: "c1", approach: "a3" }];
+
+    await pipeline.editCases(task.id, cases);
+
+    const open = (await pipeline.approvals(task.id)).find((a) => a.kind === "awaiting_test_check" && a.decision === null);
+    expect(open?.requested).toMatchObject({ summary: "found vitest", cases });
+    const edited = (await pipeline.events(task.id)).filter((e) => e.kind === "cases.edited");
+    expect(edited.map((e) => e.payload)).toEqual([{ count: 2 }]);
+  });
+
+  it("rejects editing cases anywhere but the test check", async () => {
+    const task = await newTask();
+    await pipeline.start(task.id);
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_approval");
+    await expect(pipeline.editCases(task.id, designed)).rejects.toThrow(/no test cases/i);
   });
 });
 
@@ -538,15 +601,19 @@ describe("the card triad", () => {
       },
     });
     stubs.plan("implementing", { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/x" }, run: { inputCommit: "base1", outputCommit: "out1" } });
+    const cases = [{ title: "a", ok: true }, { title: "b", ok: false }, { title: "c", ok: true }];
     stubs.plan("verifying", {
       outcome: "pass",
-      detail: { step: "review", results: [{ title: "a", outcome: "pass" }, { title: "b", outcome: "fail" }, { title: "c", outcome: "pass" }] },
+      detail: { step: "review", results: [{ title: "a", outcome: "pass" }, { title: "b", outcome: "fail" }, { title: "c", outcome: "pass" }], cases },
     });
     const task = await newTask();
     await startAndApprove(task.id);
     const row = await pipeline.get(task.id);
     expect(row).toMatchObject({ diffAdded: 142, diffRemoved: 18, testsPassed: 2, testsTotal: 3 });
     expect(diffs).toEqual(["/wt/x@null"]);
+    const runs = await pipeline.stageRuns(task.id);
+    expect(runs.find((r) => r.stage === "verifying")?.cases).toEqual(cases);
+    expect(runs.find((r) => r.stage === "implementing")?.cases).toBeNull();
   });
 });
 

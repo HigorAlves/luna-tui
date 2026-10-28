@@ -49,6 +49,7 @@ export const toStageRun = (row: StageRunRow): StageRun => ({
   // numeric comes back from pg as a string.
   costUsd: row.costUsd === null ? null : Number(row.costUsd),
   turns: row.turns,
+  cases: row.cases,
   startedAt: row.startedAt.toISOString(),
   endedAt: iso(row.endedAt),
 });

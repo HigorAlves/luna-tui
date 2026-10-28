@@ -57,6 +57,7 @@ export const StageRunEntity = new EntitySchema<StageRunRow & { task?: TaskRow }>
     inputCommit: { name: "input_commit", type: "text", nullable: true },
     outputCommit: { name: "output_commit", type: "text", nullable: true },
     transcriptPath: { name: "transcript_path", type: "text", nullable: true },
+    cases: { type: "jsonb", nullable: true },
     startedAt: { name: "started_at", type: "timestamptz" },
     endedAt: { name: "ended_at", type: "timestamptz", nullable: true },
   },

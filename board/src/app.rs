@@ -10,13 +10,14 @@ use std::{
 };
 
 use ratatui::{
-    crossterm::event::{KeyCode, KeyEvent},
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::Rect,
 };
 use tui_textarea::TextArea;
 
 use std::collections::BTreeSet;
 
+use crate::detail::Section;
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::model::now_secs;
@@ -27,8 +28,8 @@ use crate::{
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
-        parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown, Slots,
+        COLUMNS, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, parse_answers,
+        parse_cases, parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
     store,
     vim::Vim,
@@ -43,6 +44,15 @@ fn opener_command(url: &str) -> (&'static str, Vec<String>) {
         "xdg-open"
     };
     (program, vec![url.to_string()])
+}
+
+/// Where a section's cursor starts: Runs and Evidence on their latest row (`usize::MAX`
+/// resolves to the last once the rows are known), everything else on the first.
+fn start_cursor(section: Section) -> usize {
+    match section {
+        Section::Runs | Section::Evidence => usize::MAX,
+        _ => 0,
+    }
 }
 
 /// Rows one card takes on the board, including its spacer line.
@@ -163,7 +173,8 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
             ("@", "show only tickets for this repo"),
             ("zc / zo", "fold / unfold the focused column (Done starts folded)"),
             ("zz", "fold every column but the focused one"),
-            ("gs / gr / ga", "order columns by stage, by repo, by age"),
+            ("gs / gr / ga", "order columns by stage, by repo, by age (gr names each repo group)"),
+            ("=", "card density: 3 lines, 4 with worked · diff · tests, 1"),
         ],
     ),
     section(
@@ -274,7 +285,16 @@ pub const PULLS_SECTIONS: &[HelpSection] = &[
 ];
 
 pub const DETAIL_SECTIONS: &[HelpSection] = &[
-    section("Read", &[("j / k", "scroll"), ("esc", "close")]),
+    section(
+        "Read",
+        &[
+            ("h / l, 1-8", "previous / next section: Overview, Plan, Tests, Runs, Diff, Evidence, PR, Activity"),
+            ("j / k", "scroll the section, or pick a run / file where it lists them"),
+            ("J / K, ctrl+d / ctrl+u", "scroll the section where j / k pick a row (a line, half a page)"),
+            ("+", "toggle the popup between most of the screen and all of it"),
+            ("esc", "close"),
+        ],
+    ),
     section(
         "Act",
         &[
@@ -284,7 +304,7 @@ pub const DETAIL_SECTIONS: &[HelpSection] = &[
             ("e", "edit in place"),
             ("X / w / d", "abort / kill the worktree / delete (each asks)"),
             ("f", "focus its herdr tab"),
-            ("o", "open the linked issue"),
+            ("o", "open the selected file (Diff, Evidence), the PR (PR), else the linked issue"),
         ],
     ),
 ];
@@ -333,14 +353,17 @@ pub const DIGEST_HELP: &[(&str, &str)] = &[
 
 #[cfg(test)]
 pub const DETAIL_HELP: &[(&str, &str)] = &[
-    ("j / k", "scroll"),
+    ("h / l, 1-8", "previous / next section: Overview, Plan, Tests, Runs, Diff, Evidence, PR, Activity"),
+    ("j / k", "scroll the section, or pick a run / file where it lists them"),
+    ("J / K, ctrl+d / ctrl+u", "scroll the section where j / k pick a row (a line, half a page)"),
+    ("+", "toggle the popup between most of the screen and all of it"),
     ("a", "advance: start, approve, answer, retry, resume"),
     ("S", "ship"),
     ("r", "send back with a reason"),
     ("e", "edit in place"),
     ("X / w / d", "abort / kill the worktree / delete (each asks)"),
     ("f", "focus its herdr tab"),
-    ("o", "open the linked issue"),
+    ("o", "open the selected file (Diff, Evidence), the PR (PR), else the linked issue"),
     ("esc", "close"),
 ];
 
@@ -387,7 +410,8 @@ pub const HELP: &[(&str, &str)] = &[
     ("@", "show only tickets for this repo"),
     ("zc / zo", "fold / unfold the focused column (Done starts folded)"),
     ("zz", "fold every column but the focused one"),
-    ("gs / gr / ga", "order columns by stage, by repo, by age"),
+    ("gs / gr / ga", "order columns by stage, by repo, by age (gr names each repo group)"),
+    ("=", "card density: 3 lines, 4 with worked · diff · tests, 1"),
     ("F", "Floor: 7d and 30d metrics, a row per repo (tab focuses one, r refreshes, esc closes)"),
     ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
     ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
@@ -484,6 +508,34 @@ pub fn paused_ids(tasks: &[Task]) -> Vec<String> {
 /// A burst of events for the open ticket becomes one detail refetch, not one per event.
 const DETAIL_DEBOUNCE: Duration = Duration::from_millis(300);
 
+/// How tall a card is: three lines (title; id and repo; status), four with the worked / diff /
+/// tests line, or one (glyph, title, age) so a busy column shows twice the tickets.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Density {
+    #[default]
+    Cozy,
+    Comfortable,
+    Compact,
+}
+
+impl Density {
+    pub fn next(self) -> Density {
+        match self {
+            Density::Cozy => Density::Comfortable,
+            Density::Comfortable => Density::Compact,
+            Density::Compact => Density::Cozy,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Density::Cozy => "3 lines",
+            Density::Comfortable => "4 lines with worked · diff · tests",
+            Density::Compact => "1 line",
+        }
+    }
+}
+
 /// How the tickets inside a column are ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum GroupBy {
@@ -521,6 +573,13 @@ pub enum Mode {
         focus: PlanPane,
         plan_vim: Vim,
         ticket_vim: Vim,
+    },
+    /// Editing test_design's cases in place while they wait for your check, as the markdown
+    /// `cases_markdown` writes; ctrl+s saves.
+    EditCases {
+        id: String,
+        area: TextArea<'static>,
+        vim: Vim,
     },
     /// Answering triage's questions in place: the same markdown `$EDITOR` used to get,
     /// one `## Q:` heading per question with the recommended answer under it; ctrl+s sends.
@@ -579,6 +638,18 @@ pub enum PlanPane {
 /// opens the two-pane plan editor instead of the plain ticket editor.
 fn has_open_plan(task: &Task, detail: Option<&TaskDetail>) -> bool {
     task.state == "awaiting_approval" && detail.is_some_and(|d| d.task.id == task.id && d.open_approval().is_some())
+}
+
+/// Whether the plan may still be edited: at its own gate, or at the test check, before anything
+/// is built. The machine refuses the edit after that.
+fn plan_editable(task: &Task, detail: Option<&TaskDetail>) -> bool {
+    matches!(task.state.as_str(), "awaiting_approval" | "awaiting_test_check")
+        && detail.is_some_and(|d| d.task.id == task.id && d.latest_approval("awaiting_approval").is_some())
+}
+
+/// Whether the cases may be edited: only while they wait for your check.
+fn cases_editable(task: &Task, detail: Option<&TaskDetail>) -> bool {
+    task.state == "awaiting_test_check" && detail.is_some_and(|d| d.task.id == task.id && !d.cases().is_empty())
 }
 
 /// What the event loop must do after a key press.
@@ -642,6 +713,8 @@ pub struct App {
     pub folded: BTreeSet<usize>,
     /// How tickets are ordered inside a column (`gs`/`gr`/`ga`).
     pub group: GroupBy,
+    /// How tall the cards are (`=` cycles).
+    pub density: Density,
     /// A two-key sequence in flight: `z` (fold) or `g` (group).
     prefix: Option<char>,
     /// When the board was last open (unix seconds): the Digest's since, the cards' new dot.
@@ -654,6 +727,24 @@ pub struct App {
     /// How far the open ticket's detail popup is scrolled. `ui` clamps it to the content's
     /// actual height, which only it knows (it depends on the terminal width).
     pub detail_scroll: Cell<u16>,
+    /// The pane's height on the last frame, for the page keys; and whether the next frame
+    /// should bring the selected row into view (set when the cursor moves, cleared by `ui`).
+    pub detail_viewport: Cell<u16>,
+    pub detail_follow: Cell<bool>,
+    /// Which section of the workspace popup is open, and the selected row in sections that
+    /// have one (runs, files). `usize::MAX` means the last row, resolved against the rows
+    /// once they are known (`detail_row`). `+` toggles the popup between most of the screen
+    /// and all of it.
+    pub detail_section: Section,
+    pub detail_cursor: usize,
+    pub detail_full: bool,
+    /// The branch diff of the ticket whose popup is open, once fetched: (task id, diff).
+    pub diff: Option<(String, TaskDiff)>,
+    diff_pending: Option<(String, Option<String>)>,
+    /// Bumped whenever `diff` is reset; an answer tagged with an older one is dropped.
+    pub diff_generation: u64,
+    /// A diff fetch that failed for this ticket; no retry until the section is reopened.
+    diff_failed: Option<String>,
     /// How far the help sheet is scrolled, and the furthest `ui` found it can scroll.
     pub help_scroll: Cell<u16>,
     pub help_max: Cell<u16>,
@@ -697,11 +788,21 @@ impl App {
             digest: None,
             folded: COLUMNS.iter().position(|c| *c == "Done").into_iter().collect(),
             group: GroupBy::default(),
+            density: Density::default(),
             prefix: None,
             last_seen_secs: store::last_seen_secs_at(&store::state_path()),
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
             detail_scroll: Cell::new(0),
+            detail_viewport: Cell::new(0),
+            detail_follow: Cell::new(false),
+            detail_section: Section::Overview,
+            detail_cursor: 0,
+            detail_full: false,
+            diff: None,
+            diff_pending: None,
+            diff_generation: 0,
+            diff_failed: None,
             help_scroll: Cell::new(0),
             help_max: Cell::new(0),
             help_return: None,
@@ -805,9 +906,33 @@ impl App {
                         self.detail = detail;
                     }
                 }
+                Incoming::Diff { id, file, diff, generation } => {
+                    if generation != self.diff_generation {
+                        // The branch moved while this was in flight; the next frame asks again.
+                        continue;
+                    }
+                    if self.diff_pending.as_ref().is_some_and(|(pending, _)| *pending == id) {
+                        self.diff_pending = None;
+                    }
+                    match diff {
+                        Ok(mut diff) => {
+                            diff.file = file;
+                            self.diff = Some((id, diff));
+                        }
+                        Err(error) => {
+                            self.diff_failed = Some(id);
+                            self.notify(format!("diff: {error}"), true);
+                        }
+                    }
+                }
                 Incoming::Message(StreamMessage::Updated { task }) => {
                     if self.shows_detail_of(&task.id) {
                         self.detail_stale = true;
+                    }
+                    let diff_of_it = self.diff.as_ref().is_some_and(|(id, _)| *id == task.id) || self.diff_pending.as_ref().is_some_and(|(id, _)| *id == task.id);
+                    if diff_of_it && task.running != self.task(&task.id).is_some_and(|t| t.running) {
+                        // A stage started or ended: the branch may have moved.
+                        self.reset_diff();
                     }
                     self.upsert(task);
                 }
@@ -861,6 +986,24 @@ impl App {
         let state = self.pulls.as_ref()?;
         let items = pulls::items(&self.prs.prs, state.split);
         items.get(state.cursor.min(items.len().saturating_sub(1))).map(|&i| self.prs.prs[i].clone())
+    }
+
+    /// Opens the workspace popup on `id`, on the section its open gate concerns.
+    pub fn open_detail(&mut self, id: String) {
+        self.detail_stale = true;
+        self.detail_scroll.set(0);
+        self.diff_failed = None;
+        self.detail_section = self.task(&id).map(Section::for_task).unwrap_or_default();
+        self.detail_cursor = start_cursor(self.detail_section);
+        self.detail_follow.set(true);
+        self.mode = Mode::Detail(id);
+    }
+
+    /// Forgets the open ticket's diff and any fetch in flight; a late answer is then stale.
+    fn reset_diff(&mut self) {
+        self.diff = None;
+        self.diff_pending = None;
+        self.diff_generation += 1;
     }
 
     fn shows_detail_of(&self, id: &str) -> bool {
@@ -972,6 +1115,38 @@ impl App {
         self.detail_pending = Some(id);
         self.detail_fetched_at = Some(Instant::now());
         self.detail_stale = false;
+    }
+
+    /// Fetches the open ticket's diff while its Diff section shows: the file list first, then
+    /// the selected file's patch, one request at a time, off the UI thread.
+    pub fn ensure_diff(&mut self) {
+        let Mode::Detail(id) = &self.mode else { return };
+        if self.detail_section != Section::Diff || !self.online || self.diff_pending.is_some() {
+            return;
+        }
+        let id = id.clone();
+        if self.diff_failed.as_deref() == Some(id.as_str()) || self.task(&id).is_none_or(|t| t.branch.is_none()) {
+            return;
+        }
+        let have = self.diff.as_ref().filter(|(for_id, _)| *for_id == id).map(|(_, d)| d);
+        let file = match have {
+            None => None,
+            Some(diff) => {
+                let wanted = diff.files.get(self.detail_row()).map(|f| f.path.clone());
+                if wanted.is_none() || (diff.file == wanted && diff.patch.is_some()) {
+                    return;
+                }
+                wanted
+            }
+        };
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        let (fetching, wanted, generation) = (id.clone(), file.clone(), self.diff_generation);
+        thread::spawn(move || {
+            let diff = machine.diff(&fetching, wanted.as_deref());
+            let _ = tx.send(Incoming::Diff { id: fetching, file: wanted, diff, generation });
+        });
+        self.diff_pending = Some((id, file));
     }
 
     pub fn task(&self, id: &str) -> Option<&Task> {
@@ -1164,7 +1339,7 @@ impl App {
         let Some(task) = self.task(id).cloned() else {
             return;
         };
-        let Some(requested) = self.detail.as_ref().and_then(TaskDetail::open_approval).map(|a| a.requested.clone()) else {
+        let Some(requested) = self.detail.as_ref().and_then(|d| d.latest_approval("awaiting_approval")).map(|a| a.requested.clone()) else {
             return;
         };
         let plan_edit = plan_edit_of(&requested);
@@ -1199,6 +1374,59 @@ impl App {
             plan_vim: Vim::new(),
             ticket_vim: Vim::new(),
         };
+    }
+
+    /// Opens test_design's cases for editing, as markdown grouped by the criterion each proves.
+    fn open_cases_editor(&mut self, id: &str) {
+        let Some(task) = self.task(id) else {
+            return;
+        };
+        let Some(cases) = self.detail.as_ref().filter(|d| d.task.id == id).map(TaskDetail::cases) else {
+            return;
+        };
+        let mut area = TextArea::new(cases_markdown(&cases).lines().map(str::to_string).collect());
+        area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+        area.set_block(
+            ratatui::widgets::Block::bordered()
+                .padding(ratatui::widgets::Padding::new(2, 2, 1, 1))
+                .title(format!(" cases for #{} {} — ## criterion, - case, its approach under it ", task.short_id(), task.title)),
+        );
+        self.mode = Mode::EditCases { id: id.to_string(), area, vim: Vim::new() };
+    }
+
+    fn handle_edit_cases(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::EditCases { id, area, vim } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match vim.handle(area, key) {
+            crate::vim::Outcome::Continue => {}
+            crate::vim::Outcome::Cancel => self.mode = Mode::Detail(id.clone()),
+            crate::vim::Outcome::Save => {
+                let id = id.clone();
+                let markdown = area.lines().join("\n");
+                self.mode = Mode::Detail(id.clone());
+                // The baseline is what the editor opened with, read back the same way, so
+                // whitespace the markdown never carried does not count as a change.
+                let before: Vec<crate::model::TestCase> =
+                    self.detail.as_ref().filter(|d| d.task.id == id).map(|d| parse_cases(&cases_markdown(&d.cases()))).unwrap_or_default();
+                let edited = parse_cases(&markdown);
+                if edited.is_empty() {
+                    self.notify("keep at least one case; r sends the whole set back instead", true);
+                } else if edited != before {
+                    match self.machine.edit_cases(&id, &edited) {
+                        Ok(task) => {
+                            self.upsert(task);
+                            self.detail_stale = true;
+                            self.notify("cases saved", false);
+                        }
+                        Err(error) => self.notify(error, true),
+                    }
+                } else {
+                    self.notify("nothing changed", false);
+                }
+            }
+        }
+        Outcome::Continue
     }
 
     /// Opens the repo search for `id`: type to filter, enter to set it on the ticket.
@@ -1263,7 +1491,11 @@ impl App {
                 self.notify("nothing waiting to ship on this ticket", false);
             }
             'e' => {
-                if has_open_plan(&task, self.detail.as_ref()) {
+                let in_popup = matches!(&self.mode, Mode::Detail(open) if open == id);
+                let section = self.detail_section;
+                if in_popup && section == Section::Tests && cases_editable(&task, self.detail.as_ref()) {
+                    self.open_cases_editor(id);
+                } else if (in_popup && section == Section::Plan && plan_editable(&task, self.detail.as_ref())) || has_open_plan(&task, self.detail.as_ref()) {
                     self.open_plan_editor(id);
                 } else {
                     self.open_ticket_editor(id);
@@ -1342,6 +1574,7 @@ impl App {
             }
             Mode::Adding(_) => self.handle_adding(key),
             Mode::EditTicket { .. } => self.handle_edit_ticket(key),
+            Mode::EditCases { .. } => self.handle_edit_cases(key),
             Mode::Answer { .. } => self.handle_answer(key),
             Mode::EditPlan { .. } => self.handle_edit_plan(key),
             Mode::Filter => self.handle_filter(key),
@@ -1520,9 +1753,7 @@ impl App {
                 if let Some(id) = under_cursor {
                     self.digest = None;
                     self.select(&id, true);
-                    self.detail_stale = true;
-                    self.detail_scroll.set(0);
-                    self.mode = Mode::Detail(id);
+                    self.open_detail(id);
                 }
                 return Outcome::Continue;
             }
@@ -1593,9 +1824,7 @@ impl App {
                 if let Some(id) = under_cursor {
                     self.inbox = None;
                     self.select(&id, true);
-                    self.detail_stale = true;
-                    self.detail_scroll.set(0);
-                    self.mode = Mode::Detail(id);
+                    self.open_detail(id);
                 }
                 return Outcome::Continue;
             }
@@ -1682,9 +1911,7 @@ impl App {
                         Some(id) if self.task(&id).is_some() => {
                             self.pulls = None;
                             self.select(&id, true);
-                            self.detail_stale = true;
-                            self.detail_scroll.set(0);
-                            self.mode = Mode::Detail(id);
+                            self.open_detail(id);
                         }
                         _ => self.open_url(&pr.url),
                     }
@@ -1878,6 +2105,10 @@ impl App {
             KeyCode::Char('n') => self.mode = Mode::Adding(String::new()),
             KeyCode::Char('x') => self.mode = Mode::Actions { cursor: 0 },
             KeyCode::Char('/') => self.mode = Mode::Filter,
+            KeyCode::Char('=') => {
+                self.density = self.density.next();
+                self.notify(format!("cards: {}", self.density.label()), false);
+            }
             KeyCode::Char('!') => {
                 self.needs_only = !self.needs_only;
                 self.clamp_selection();
@@ -1940,9 +2171,7 @@ impl App {
             }
             KeyCode::Enter => {
                 if let Some(id) = self.selected_id() {
-                    self.detail_stale = true;
-                    self.detail_scroll.set(0);
-                    self.mode = Mode::Detail(id);
+                    self.open_detail(id);
                 }
             }
             KeyCode::Char(c) => {
@@ -2060,18 +2289,110 @@ impl App {
     }
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
+        let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('d') => self.scroll_detail(half_page),
+                KeyCode::Char('u') => self.scroll_detail(-half_page),
+                _ => {}
+            }
+            return Outcome::Continue;
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
-            KeyCode::Char('j') | KeyCode::Down => self.scroll_detail(1),
-            KeyCode::Char('k') | KeyCode::Up => self.scroll_detail(-1),
+            KeyCode::Char('j') | KeyCode::Down => self.move_in_detail(1),
+            KeyCode::Char('k') | KeyCode::Up => self.move_in_detail(-1),
+            KeyCode::Char('J') => self.scroll_detail(1),
+            KeyCode::Char('K') => self.scroll_detail(-1),
+            KeyCode::PageDown => self.scroll_detail(half_page),
+            KeyCode::PageUp => self.scroll_detail(-half_page),
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => self.set_section(self.detail_section.next()),
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.set_section(self.detail_section.prev()),
+            KeyCode::Char(digit @ '1'..='8') => {
+                if let Some(section) = Section::from_digit(digit) {
+                    self.set_section(section);
+                }
+            }
+            KeyCode::Char('+') => self.detail_full = !self.detail_full,
             KeyCode::Char('?') => {
                 self.help_return = Some(id.to_string());
                 self.mode = Mode::Help(HelpFor::Detail);
             }
+            KeyCode::Char('o') => match self.detail_open_target() {
+                Some(target) => self.open_url(&target),
+                None if self.detail_section.has_cursor() => self.notify("nothing to open here", false),
+                None => return self.ticket_key('o', id),
+            },
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// Switches the popup's section; each starts at the top, Runs and Evidence on their
+    /// latest row, the others on their first.
+    fn set_section(&mut self, section: Section) {
+        if section != self.detail_section {
+            self.detail_section = section;
+            self.detail_scroll.set(0);
+            self.detail_cursor = start_cursor(section);
+            self.detail_follow.set(true);
+            self.diff_failed = None;
+        }
+    }
+
+    /// `j`/`k` in the popup: the next row where the section has rows, else a line of scroll.
+    fn move_in_detail(&mut self, delta: i16) {
+        if self.detail_section.has_cursor() {
+            let rows = self.detail_rows();
+            let next = (self.detail_row() as i64 + i64::from(delta)).clamp(0, rows.saturating_sub(1) as i64);
+            self.detail_cursor = next as usize;
+            self.detail_follow.set(true);
+        } else {
+            self.scroll_detail(delta);
+        }
+    }
+
+    /// The selected row of the open section, inside its rows (`usize::MAX` is the last).
+    pub fn detail_row(&self) -> usize {
+        self.detail_cursor.min(self.detail_rows().saturating_sub(1))
+    }
+
+    /// The open ticket's detail, when it is the one loaded.
+    fn open_detail_of(&self) -> Option<&TaskDetail> {
+        self.detail.as_ref().filter(|d| matches!(&self.mode, Mode::Detail(id) if *id == d.task.id))
+    }
+
+    /// How many rows the open section's cursor can land on.
+    fn detail_rows(&self) -> usize {
+        let detail = self.open_detail_of();
+        match self.detail_section {
+            Section::Runs => detail.map_or(0, |d| d.stage_runs.len()),
+            Section::Evidence => detail.map_or(0, |d| d.artifacts.len()),
+            Section::Diff => self.diff.as_ref().filter(|(id, _)| matches!(&self.mode, Mode::Detail(open) if open == id)).map_or(0, |(_, d)| d.files.len()),
+            _ => 0,
+        }
+    }
+
+    /// What `o` opens in the popup, by section: the selected file inside the worktree (Diff),
+    /// the selected artifact (Evidence), the PR's URL from the inbox or the ship gate (PR).
+    /// `None` elsewhere: `o` then means what it means on the board, the linked issue.
+    pub fn detail_open_target(&self) -> Option<String> {
+        let Mode::Detail(id) = &self.mode else { return None };
+        let task = self.task(id)?;
+        match self.detail_section {
+            Section::Diff => {
+                let (_, diff) = self.diff.as_ref().filter(|(for_id, _)| for_id == id)?;
+                let file = diff.files.get(self.detail_row())?;
+                let root = task.worktree_path.as_deref()?;
+                Some(format!("{}/{}", root.trim_end_matches('/'), file.path))
+            }
+            Section::Evidence => self.open_detail_of()?.artifacts.get(self.detail_row()).map(|a| a.path.clone()),
+            Section::Pr => crate::detail::pr_for(task, &self.prs.prs)
+                .map(|pr| pr.url.clone())
+                .or_else(|| self.open_detail_of().and_then(|d| d.latest_approval("awaiting_ship")).and_then(|a| a.requested["prUrl"].as_str().map(str::to_string))),
+            _ => None,
+        }
     }
 
     /// Scrolls the open detail popup. `ui` clamps this to the content's actual height on the
@@ -2130,7 +2451,7 @@ impl App {
         let before_plan = self
             .detail
             .as_ref()
-            .and_then(TaskDetail::open_approval)
+            .and_then(|d| d.latest_approval("awaiting_approval"))
             .map(|a| plan_edit_of(&a.requested))
             .unwrap_or_default();
         let edited_plan = parse_plan(&plan_markdown_text);
@@ -2304,9 +2625,7 @@ impl App {
                 match self.tasks.iter().find(|t| !wanted.is_empty() && t.id.starts_with(wanted)).map(|t| t.id.clone()) {
                     Some(id) => {
                         self.select(&id, true);
-                        self.detail_stale = true;
-                        self.detail_scroll.set(0);
-                        self.mode = Mode::Detail(id);
+                        self.open_detail(id);
                     }
                     None => self.notify(format!("no ticket starts with #{wanted}"), true),
                 }
@@ -3378,5 +3697,323 @@ mod pr_tests {
         let notices = app.take_notices();
         assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["CI failed"], "staying put is not news; a new split is");
         assert_eq!(app.needs_you_count(), 2);
+    }
+}
+
+#[cfg(test)]
+mod workspace_key_tests {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::*;
+
+    fn task(state: &str) -> Task {
+        serde_json::from_str(&format!(
+            r#"{{"id":"abcdef123456","title":"Add CSV export","description":"","criteria":[],
+            "repoPath":"/r/app","branch":"task/abcdef12","worktreePath":"/w","state":"{state}","column":"Build",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+        ))
+        .unwrap()
+    }
+
+    fn detail_with_runs(task: &Task, runs: usize) -> TaskDetail {
+        let runs: Vec<String> = (0..runs).map(|i| format!(r#"{{"stage":"implementing","attempt":{},"status":"passed"}}"#, i + 1)).collect();
+        serde_json::from_str(&format!(
+            r#"{{"task":{},"stageRuns":[{}],"approvals":[],"events":[]}}"#,
+            serde_json::to_string(&serde_json::json!({
+                "id": task.id, "title": task.title, "description": "", "criteria": [], "repoPath": "/r/app", "branch": "task/abcdef12",
+                "worktreePath": "/w", "state": task.state, "column": "Build", "waitingOnYou": false, "running": false, "queued": false,
+                "retries": {"verify":0,"e2e":0,"ci":0,"total":0}, "resumeTo": null, "reason": null,
+                "createdAt": "2026-10-22T23:24:22.089Z", "updatedAt": "2026-10-22T23:24:22.089Z"
+            }))
+            .unwrap(),
+            runs.join(",")
+        ))
+        .unwrap()
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn open(state: &str) -> App {
+        let mut app = App::new(crate::Machine::from_env());
+        let task = task(state);
+        app.tasks.push(task.clone());
+        app.open_detail(task.id);
+        app
+    }
+
+    #[test]
+    fn enter_opens_on_the_section_the_gate_concerns_and_h_l_digits_switch() {
+        let app = open("awaiting_approval");
+        assert_eq!(app.detail_section, Section::Plan);
+        let mut app = open("implementing");
+        assert_eq!(app.detail_section, Section::Overview);
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.detail_section, Section::Plan);
+        press(&mut app, KeyCode::Char('h'));
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(app.detail_section, Section::Activity, "h wraps around");
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.detail_section, Section::Runs);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.detail_section, Section::Diff);
+        assert!(matches!(app.mode, Mode::Detail(_)), "still open");
+    }
+
+    #[test]
+    fn j_k_pick_a_run_in_runs_and_scroll_elsewhere_and_plus_toggles_the_size() {
+        let mut app = open("implementing");
+        app.detail = Some(detail_with_runs(&app.tasks[0], 3));
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.detail_cursor, 2, "the cursor stops at the last run");
+        assert_eq!(app.detail_scroll.get(), 0, "picking does not scroll");
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.detail_cursor, 1);
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(app.detail_cursor, 0, "a new section starts at its first row");
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.detail_scroll.get(), 1, "the Plan section scrolls");
+        assert!(!app.detail_full);
+        press(&mut app, KeyCode::Char('+'));
+        assert!(app.detail_full);
+        press(&mut app, KeyCode::Char('+'));
+        assert!(!app.detail_full);
+    }
+
+    #[test]
+    fn the_diff_is_fetched_only_while_its_section_shows_and_never_blocks() {
+        let mut app = open("implementing");
+        app.online = true;
+        app.ensure_diff();
+        assert!(app.diff_pending.is_none(), "Overview asks for no diff");
+        press(&mut app, KeyCode::Char('5'));
+        let before = std::time::Instant::now();
+        app.ensure_diff();
+        assert!(before.elapsed() < std::time::Duration::from_millis(100), "the fetch runs off the UI thread");
+        assert_eq!(app.diff_pending.as_ref().map(|(id, file)| (id.as_str(), file.is_none())), Some(("abcdef123456", true)));
+        app.ensure_diff();
+        assert!(app.diff_pending.is_some(), "one fetch at a time");
+        let files: TaskDiff = serde_json::from_str(r#"{"base":"b","head":"h","files":[{"path":"a.rs","status":"M","added":1,"removed":0},{"path":"b.rs","status":"A","added":2,"removed":0}]}"#).unwrap();
+        app.diff_pending = None;
+        app.diff = Some(("abcdef123456".into(), files));
+        app.ensure_diff();
+        assert_eq!(app.diff_pending.as_ref().and_then(|(_, f)| f.as_deref()), Some("a.rs"), "then the selected file's patch");
+        app.diff_pending = None;
+        let mut with_patch = app.diff.clone().unwrap().1;
+        with_patch.file = Some("a.rs".into());
+        with_patch.patch = Some("@@".into());
+        app.diff = Some(("abcdef123456".into(), with_patch));
+        app.ensure_diff();
+        assert!(app.diff_pending.is_none(), "nothing left to fetch for this file");
+        press(&mut app, KeyCode::Char('j'));
+        app.ensure_diff();
+        assert_eq!(app.diff_pending.as_ref().and_then(|(_, f)| f.as_deref()), Some("b.rs"), "moving the cursor asks for the next file");
+        let mut offline = open("implementing");
+        press(&mut offline, KeyCode::Char('5'));
+        offline.ensure_diff();
+        assert!(offline.diff_pending.is_none(), "offline: nothing to fetch from");
+    }
+
+    fn files() -> TaskDiff {
+        serde_json::from_str(r#"{"base":"b","head":"h","files":[{"path":"a.rs","status":"M","added":1,"removed":0},{"path":"b.rs","status":"A","added":2,"removed":0}]}"#).unwrap()
+    }
+
+    #[test]
+    fn a_diff_that_arrives_after_the_branch_moved_is_dropped() {
+        let mut app = open("implementing");
+        app.online = true;
+        press(&mut app, KeyCode::Char('5'));
+        app.ensure_diff();
+        let generation = app.diff_generation;
+        assert!(app.diff_pending.is_some());
+        // A stage starts while the fetch is in flight: the branch may move, so the answer is stale.
+        let mut moved = task("implementing");
+        moved.running = true;
+        app.tx.send(Incoming::Message(StreamMessage::Updated { task: moved })).unwrap();
+        app.pump();
+        assert!(app.diff_pending.is_none(), "the reset forgets the fetch in flight");
+        assert_ne!(app.diff_generation, generation);
+        app.tx.send(Incoming::Diff { id: "abcdef123456".into(), file: None, diff: Ok(files()), generation }).unwrap();
+        app.pump();
+        assert!(app.diff.is_none(), "the late answer is ignored");
+        app.tx.send(Incoming::Diff { id: "abcdef123456".into(), file: None, diff: Ok(files()), generation: app.diff_generation }).unwrap();
+        app.pump();
+        assert!(app.diff.is_some(), "a fresh answer lands");
+    }
+
+    #[test]
+    fn capital_j_k_and_the_page_keys_scroll_a_cursor_section_and_equals_is_not_size() {
+        let mut app = open("implementing");
+        app.detail = Some(detail_with_runs(&app.tasks[0], 3));
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('j'));
+        let cursor = app.detail_row();
+        press(&mut app, KeyCode::Char('J'));
+        assert_eq!(app.detail_scroll.get(), 1, "J scrolls the pane");
+        assert_eq!(app.detail_row(), cursor, "without moving the cursor");
+        press(&mut app, KeyCode::Char('K'));
+        assert_eq!(app.detail_scroll.get(), 0);
+        app.detail_viewport.set(20);
+        press(&mut app, KeyCode::PageDown);
+        assert_eq!(app.detail_scroll.get(), 10, "a page key scrolls half the pane");
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert_eq!(app.detail_scroll.get(), 20);
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        press(&mut app, KeyCode::PageUp);
+        assert_eq!(app.detail_scroll.get(), 0);
+        press(&mut app, KeyCode::Char('='));
+        assert!(!app.detail_full, "= is the board's density key, not the popup's size");
+    }
+
+    #[test]
+    fn runs_and_evidence_open_on_their_latest_row() {
+        let mut app = open("escalated");
+        assert_eq!(app.detail_section, Section::Runs);
+        app.detail = Some(detail_with_runs(&app.tasks[0], 3));
+        assert_eq!(app.detail_row(), 2, "the latest run, not the oldest");
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.detail_row(), 1);
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('5'));
+        assert_eq!(app.detail_row(), 0, "the Diff starts on the first file");
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.detail_row(), 2, "coming back to Runs lands on the latest run again");
+    }
+
+    #[test]
+    fn the_diff_rows_belong_to_the_open_ticket_only() {
+        let mut app = open("implementing");
+        press(&mut app, KeyCode::Char('5'));
+        app.diff = Some(("someone-else".into(), files()));
+        assert_eq!(app.detail_rows(), 0);
+        app.diff = Some(("abcdef123456".into(), files()));
+        assert_eq!(app.detail_rows(), 2);
+    }
+
+    #[test]
+    fn o_targets_the_selected_file_the_artifact_or_the_pr_by_section() {
+        let mut app = open("implementing");
+        assert_eq!(app.detail_open_target(), None, "Overview falls through to the linked issue");
+        press(&mut app, KeyCode::Char('5'));
+        app.diff = Some(("abcdef123456".into(), files()));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.detail_open_target().as_deref(), Some("/w/b.rs"), "the selected file inside the worktree");
+        press(&mut app, KeyCode::Char('6'));
+        let mut detail = detail_with_runs(&app.tasks[0], 1);
+        detail.artifacts = serde_json::from_str(r#"[{"id":"a1","stageRunId":"r1","kind":"log","path":"/out/files/verify.log","label":"verify","sha256":"x","createdAt":"2026-10-22T10:11:00Z"}]"#).unwrap();
+        detail.approvals = serde_json::from_str(r#"[{"id":"s1","kind":"awaiting_ship","requested":{"prUrl":"https://github.com/acme/app/pull/9"},"decision":null,"reason":null,"createdAt":"2026-10-22T10:11:00Z","decidedAt":null}]"#).unwrap();
+        app.detail = Some(detail);
+        assert_eq!(app.detail_open_target().as_deref(), Some("/out/files/verify.log"));
+        press(&mut app, KeyCode::Char('7'));
+        assert_eq!(app.detail_open_target().as_deref(), Some("https://github.com/acme/app/pull/9"), "the ship gate's URL when the inbox has no row");
+        let mut pr: PullRequest = serde_json::from_str(
+            r#"{"repo":"acme/app","number":412,"title":"t","url":"https://github.com/acme/app/pull/412","author":"me","mine":true,"reviewRequested":false,
+            "isDraft":false,"headRef":"task/abcdef12","baseRef":"main","fromFork":false,"reviewDecision":null,"mergeable":"MERGEABLE",
+            "checks":{"state":"none","passed":0,"total":0,"failed":[]},"unresolvedThreads":0,"split":"mine","localPath":null,"task":null,"updatedAt":"2026-10-27T09:00:00Z"}"#,
+        )
+        .unwrap();
+        pr.head_ref = "task/abcdef12".into();
+        app.prs.prs.push(pr);
+        assert_eq!(app.detail_open_target().as_deref(), Some("https://github.com/acme/app/pull/412"), "the inbox's PR first");
+    }
+
+    #[test]
+    fn saving_the_cases_editor_unchanged_patches_nothing_and_keeps_multi_line_approaches() {
+        let mut app = open("awaiting_test_check");
+        let mut detail = detail_with_runs(&app.tasks[0], 1);
+        detail.approvals = serde_json::from_str(
+            r#"[{"id":"t1","kind":"awaiting_test_check","requested":{"cases":[{"title":"rejects a bad password","criterion":"c1","approach":"run the suite\n\n  then read the log  "}]},
+            "decision":null,"reason":null,"createdAt":"2026-10-22T10:00:00Z","decidedAt":null}]"#,
+        )
+        .unwrap();
+        app.detail = Some(detail);
+        app.open_cases_editor("abcdef123456");
+        assert!(matches!(app.mode, Mode::EditCases { .. }));
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Detail(_)));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("nothing changed"), "an untouched editor sends no PATCH");
+    }
+}
+
+#[cfg(test)]
+mod edit_route_tests {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
+    use super::*;
+
+    fn task(state: &str) -> Task {
+        serde_json::from_str(&format!(
+            r#"{{"id":"abcdef123456","title":"Add CSV export","description":"","criteria":["c1"],
+            "repoPath":"/r/app","branch":"task/abcdef12","worktreePath":"/w","state":"{state}","column":"Approved",
+            "waitingOnYou":true,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+        ))
+        .unwrap()
+    }
+
+    fn detail(state: &str) -> TaskDetail {
+        let task = serde_json::to_string(&serde_json::json!({
+            "id":"abcdef123456","title":"Add CSV export","description":"","criteria":["c1"],"repoPath":"/r/app","branch":"task/abcdef12",
+            "worktreePath":"/w","state":state,"column":"Approved","waitingOnYou":true,"running":false,"queued":false,
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"
+        }))
+        .unwrap();
+        serde_json::from_str(&format!(
+            r#"{{"task":{task},"stageRuns":[],"approvals":[
+              {{"kind":"awaiting_approval","requested":{{"brief":"b","criteria":["c1"]}},"decision":"approved","decidedAt":"2026-10-22T09:58:00Z"}},
+              {{"kind":"awaiting_test_check","requested":{{"cases":[{{"title":"t1","criterion":"c1","approach":"run it"}}]}},"decision":null}}],
+              "events":[]}}"#
+        ))
+        .unwrap()
+    }
+
+    fn open(state: &str) -> App {
+        let mut app = App::new(crate::Machine::from_env());
+        let task = task(state);
+        app.tasks.push(task.clone());
+        app.detail = Some(detail(state));
+        app.open_detail(task.id);
+        app
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    #[test]
+    fn e_at_the_test_check_edits_the_cases_from_tests_and_the_plan_from_plan() {
+        let mut app = open("awaiting_test_check");
+        assert_eq!(app.detail_section, Section::Tests);
+        press(&mut app, KeyCode::Char('e'));
+        let Mode::EditCases { area, .. } = &app.mode else { panic!("the cases editor opens: {:?}", std::mem::discriminant(&app.mode)) };
+        let text = area.lines().join("\n");
+        assert!(text.contains("## c1") && text.contains("- t1") && text.contains("  run it"), "{text}");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "abcdef123456"), "esc returns to the popup");
+
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('e'));
+        assert!(matches!(app.mode, Mode::EditPlan { .. }), "the approved plan is still editable before Build");
+
+        app.mode = Mode::Detail("abcdef123456".into());
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Char('e'));
+        assert!(matches!(app.mode, Mode::EditTicket { .. }), "Overview edits the ticket's own text");
+    }
+
+    #[test]
+    fn once_build_started_e_in_plan_falls_back_to_the_ticket_editor() {
+        let mut app = open("implementing");
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('e'));
+        assert!(matches!(app.mode, Mode::EditTicket { .. }));
     }
 }

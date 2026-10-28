@@ -36,11 +36,17 @@ export function approvedPlan(approvals: ApprovalRow[]): StageInput["plan"] {
   };
 }
 
-/** The test cases approved at the last test check; anything malformed is dropped. */
+/** The test cases approved at the last test check; anything malformed is dropped. A case
+ *  recorded under schema 2 (`test` for `approach`) is read as today's shape. */
 function checkedCases(approvals: ApprovalRow[]): TestCase[] {
   const approval = approvals.findLast((a) => a.kind === "awaiting_test_check" && a.decision === "approved");
   const cases = approval?.requested.cases;
-  return Array.isArray(cases) ? cases.flatMap((c) => (TestCase.safeParse(c).success ? [c as TestCase] : [])) : [];
+  if (!Array.isArray(cases)) return [];
+  return cases.flatMap((c) => {
+    const legacy = c as { approach?: unknown; test?: unknown };
+    const parsed = TestCase.safeParse(legacy.approach === undefined && typeof legacy.test === "string" ? { ...c, approach: legacy.test } : c);
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 
 export function buildStageInput(opts: {

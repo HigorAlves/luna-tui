@@ -140,11 +140,13 @@ describe("buildStageInput", () => {
       { title: "an edge case", criterion: null, approach: "run src/b.test.ts" },
     ];
     const approvals = [
-      approval({ kind: "awaiting_test_check", requested: { cases: [...cases, "junk"] } }),
+      approval({ kind: "awaiting_test_check", requested: { cases: [...cases, "junk", { title: "older", criterion: null, test: "run c.test.ts" }] } }),
     ];
     const at = (stage: "implementing" | "verifying" | "e2e") =>
       buildStageInput({ task, stage, attempt: 1, approvals, priorFindings: [] });
     expect(at("implementing").schema).toBe(3);
+    // A case recorded under schema 2 (`test`) reads as today's `approach`.
+    cases.push({ title: "older", criterion: null, approach: "run c.test.ts" });
     expect(at("implementing").context.testCases).toEqual(cases);
     expect(at("verifying").context.testCases).toEqual(cases);
     expect(at("e2e").context.testCases).toEqual([]);

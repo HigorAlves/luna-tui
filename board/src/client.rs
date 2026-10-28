@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use ureq::{Agent, Body, http::Response};
 
-use crate::model::{Health, Metrics, PlanEdit, PrAction, PrSnapshot, Slots, StreamMessage, Task, TaskDetail, TicketText};
+use crate::model::{Health, Metrics, PlanEdit, PrAction, PrSnapshot, Slots, StreamMessage, Task, TaskDetail, TicketText, TaskDiff, TestCase};
 
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -31,6 +31,10 @@ pub enum Incoming {
     Message(StreamMessage),
     /// A `/tasks/:id` answer, fetched off the UI thread.
     Detail { id: String, detail: Option<TaskDetail> },
+    /// A `/tasks/:id/diff` answer: the files, and `file`'s patch when one was asked for.
+    /// `generation` is the app's diff generation when the fetch left; an answer from an
+    /// older one is stale (the branch moved meanwhile) and is dropped.
+    Diff { id: String, file: Option<String>, diff: Result<TaskDiff, String>, generation: u64 },
 }
 
 #[derive(Clone)]
@@ -135,6 +139,12 @@ impl Machine {
         Self::typed(self.agent.get(self.url(&format!("/tasks/{id}"))).call())
     }
 
+    /// The task branch against its base; with `file`, that file's patch too.
+    pub fn diff(&self, id: &str, file: Option<&str>) -> Result<TaskDiff, String> {
+        let query = file.map(|f| format!("?file={}", urlencoding(f))).unwrap_or_default();
+        Self::typed(self.agent.get(self.url(&format!("/tasks/{id}/diff{query}"))).call())
+    }
+
     pub fn create(&self, text: &TicketText) -> Result<Task, String> {
         self.post(
             "/tasks",
@@ -162,6 +172,15 @@ impl Machine {
     pub fn edit_plan(&self, id: &str, edit: &PlanEdit) -> Result<Task, String> {
         let body = json!({ "brief": edit.brief, "criteria": edit.criteria, "assumptions": edit.assumptions });
         Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/plan"))).send_json(body))
+    }
+
+    /// Replaces test_design's cases while they wait for your check.
+    pub fn edit_cases(&self, id: &str, cases: &[TestCase]) -> Result<Task, String> {
+        let cases: Vec<Value> = cases
+            .iter()
+            .map(|c| json!({ "title": c.title, "criterion": c.criterion, "approach": c.approach }))
+            .collect();
+        Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/cases"))).send_json(json!({ "cases": cases })))
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {

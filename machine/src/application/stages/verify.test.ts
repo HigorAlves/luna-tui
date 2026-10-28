@@ -286,6 +286,20 @@ describe("verifying stage", () => {
     expect(detail?.results).toEqual(results);
   });
 
+  it("lists one verdict per case from the pack's results, and none when the pack gave no results", async () => {
+    const results = [
+      { title: "shows an error", criterion: "c", approach: "a", outcome: "pass" },
+      { title: "locks after three", criterion: "c", approach: "a", outcome: "fail" },
+    ];
+    const withResults = setup({ pack: { outcome: "pass", detail: { answer: { verdict: "pass", summary: "fine", findings: [], results } } } });
+    expect((await withResults.run(withResults.context)).detail?.cases).toEqual([
+      { title: "shows an error", ok: true },
+      { title: "locks after three", ok: false },
+    ]);
+    const without = setup({ pack: { outcome: "pass", detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } } });
+    expect((await without.run(without.context)).detail).not.toHaveProperty("cases");
+  });
+
   it("passes through an escalated pack unchanged, never computing a verdict over it", async () => {
     const escalated: StageResult = { outcome: "escalated", detail: { reason: "a pre-existing failure", options: [] } };
     const { run, context } = setup({ pack: escalated });
