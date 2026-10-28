@@ -179,7 +179,7 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
     section(
         "App",
         &[
-            (":", "command palette: q, new, filter, repo, open, group, fold, slots, drain, floor, inbox, digest"),
+            (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest"),
             ("esc", "clear the filter"),
             ("?", "this help"),
             ("q", "quit"),
@@ -195,6 +195,7 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
             ("open <#id>", "open a ticket by id prefix"),
             ("group stage|repo|age", "order columns"),
             ("fold / unfold", "fold / unfold the focused column"),
+            ("setup <repo>", "propose the repo's luna.yaml (a name under HARDNESS_REPOS_DIR, or a path)"),
             ("slots <n>", "resize the pool"),
             ("drain / resume", "take no new work / carry on"),
             ("floor / inbox / digest", "open that view"),
@@ -309,6 +310,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("open <#id>", "open a ticket by id prefix"),
     ("group stage|repo|age", "order columns"),
     ("fold / unfold", "fold / unfold the focused column"),
+    ("setup <repo>", "propose the repo's luna.yaml (a name under HARDNESS_REPOS_DIR, or a path)"),
     ("slots <n>", "resize the pool"),
     ("drain / resume", "take no new work / carry on"),
     ("floor / inbox / digest", "open that view"),
@@ -347,7 +349,7 @@ pub const HELP: &[(&str, &str)] = &[
     ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
     ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
     ("x", "actions for the selected ticket (P resumes every paused one)"),
-    (":", "command palette: q, new, filter, repo, open, group, fold, slots, drain, floor, inbox, digest"),
+    (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest"),
     ("esc", "clear the filter"),
     ("?", "this help"),
     ("q", "quit"),
