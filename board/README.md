@@ -126,7 +126,7 @@ The board opens a herdr tab following each stage's agent (`docker logs -f` on
 its container), whether the machine runs in Docker or on your host, and closes it
 once the ticket is closed. Stages already running when the board starts get a tab
 too. Tabs only open while a board is running. Approving the Ship gate (`a` on `awaiting_ship`)
-pushes the task's branch and opens a real PR with `gh` — see the root
+pushes the task's branch and opens a real PR through the GitHub API — see the root
 `README.md`'s "Shipping" section for what that needs.
 
 ## Tests

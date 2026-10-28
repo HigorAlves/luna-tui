@@ -1,11 +1,12 @@
 // The ci_watch stage: poll the PR's checks until they settle. Green passes; red goes to the
 // ci_watch pack, whose verdict decides: fixable fails (the loop hands its findings to
 // implementing), flake re-runs the failed workflow once, infra and needs_debug escalate to a
-// human with the pack's reason. The pack runs in a sandbox with no gh credential, so the
+// human with the pack's reason. The pack runs in a sandbox with no GitHub credential, so the
 // host fetches the PR, the checks and the failed run's log and hands them over as context.
 import type { CiContext, Finding } from "@hardness/contracts";
 
-import { type ExecFn, failedRunLog, findPr, prChecks, rerunWorkflow } from "../../adapters/github/gh.ts";
+import { originSlugOf } from "../../adapters/git/worktree.ts";
+import { type Check, type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
 const MINUTE = 60_000;
@@ -14,18 +15,14 @@ const RERUN_WAIT_MS = 15 * MINUTE;
 const LOG_TAIL_CHARS = 20_000;
 
 export interface CiDeps {
-  exec: ExecFn;
+  github: GitHub;
   /** Runs the ci_watch pack with what the host fetched about the red run. */
   runPack: (context: StageContext, ci: CiContext) => Promise<StageResult>;
+  /** The `owner/name` of a worktree; tests inject one. */
+  slugOf?: (cwd: string) => Promise<string | null>;
   pollMs?: number;
   maxWaitMs?: number;
   sleep?: (ms: number) => Promise<void>;
-}
-
-interface Check {
-  name: string;
-  state: string;
-  link?: string;
 }
 
 const PENDING = new Set(["PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED", "EXPECTED"]);
@@ -41,28 +38,27 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
   const pollMs = deps.pollMs ?? 30_000;
   const maxWaitMs = deps.maxWaitMs ?? 45 * MINUTE;
   const sleep = deps.sleep ?? defaultSleep;
+  const slugOf = deps.slugOf ?? originSlugOf;
 
   return async (context) => {
     const { task, signal } = context;
     if (!task.branch || !task.worktreePath) {
       return { outcome: "fail", detail: { error: "no branch to watch; the implementer never ran for real" } };
     }
-    const cwd = task.worktreePath;
     const branch = task.branch;
+    const origin = await slugOf(task.worktreePath);
+    if (!origin) return { outcome: "fail", detail: { error: "the worktree's origin is not a GitHub repository" } };
+    const slug: string = origin;
 
     async function settle(waitMs: number): Promise<Settled> {
       const deadline = Date.now() + waitMs;
       for (;;) {
         if (signal.aborted) return { kind: "aborted" };
-        const polled = await prChecks({ exec: deps.exec }, branch, cwd, signal);
-        let checks: Check[] = [];
+        let checks: Check[];
         try {
-          const parsed: unknown = JSON.parse(polled.stdout || "[]");
-          if (Array.isArray(parsed)) checks = parsed as Check[];
-        } catch {
-          if (polled.code !== 0 && !/no checks/i.test(polled.stderr)) {
-            return { kind: "error", error: `gh pr checks failed: ${(polled.stderr || polled.stdout).trim()}` };
-          }
+          checks = await deps.github.prChecks(slug, branch);
+        } catch (error) {
+          return { kind: "error", error: messageOf(error) };
         }
         if (!checks.some((c) => PENDING.has(String(c.state).toUpperCase()))) return { kind: "settled", checks };
         if (Date.now() >= deadline) return { kind: "timeout" };
@@ -84,12 +80,11 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
 
     /** What the pack cannot fetch itself: the PR, every check, and the failed runs' log tail. */
     async function gather(checks: Check[], failed: Check[]): Promise<CiContext> {
-      const pr = await findPr({ exec: deps.exec }, branch, cwd);
+      const pr = await deps.github.findPr(slug, branch).catch(() => null);
       const runIds = [...new Set(failed.map(runIdOf).filter((id): id is string => Boolean(id)))];
       const logs: string[] = [];
       for (const id of runIds) {
-        const log = await failedRunLog({ exec: deps.exec }, id, cwd, signal);
-        logs.push(log.code === 0 ? log.stdout : `(gh run view ${id} --log-failed failed: ${(log.stderr || log.stdout).trim()})`);
+        logs.push(await deps.github.failedRunLog(slug, id).catch((error: unknown) => `(the log of run ${id} could not be read: ${messageOf(error)})`));
       }
       const joined = logs.join("\n");
       return {
@@ -138,8 +133,11 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
     // Flake: one re-run of the failed workflow, then a second look.
     const runId = failed.map(runIdOf).find(Boolean);
     if (!runId) return fixable("flake verdict, but no workflow run id to re-run");
-    const rerun = await rerunWorkflow({ exec: deps.exec }, runId, cwd, signal);
-    if (rerun.code !== 0) return fixable(`flake verdict, but the re-run failed: ${rerun.stderr.trim()}`);
+    try {
+      await deps.github.rerunFailedJobs(slug, runId);
+    } catch (error) {
+      return fixable(`flake verdict, but the re-run failed: ${messageOf(error)}`);
+    }
     const second = await settle(RERUN_WAIT_MS);
     const stoppedAgain = stopped(second);
     if (stoppedAgain) return stoppedAgain;

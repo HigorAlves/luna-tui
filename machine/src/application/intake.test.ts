@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pipeline } from "./pipeline.ts";
 import { StubStages } from "./stages/stubs.ts";
 import { freshTestDatabase } from "../test/database.ts";
+import { fakeGitHub } from "../test/github.ts";
 import { GitHubIntake, parseChecklist } from "./intake.ts";
 
 let db: DataSource;
@@ -25,7 +26,7 @@ const issues = [
   { number: 8, title: "Dark mode", body: "", url: "https://github.com/o/a/issues/8" },
 ];
 
-const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" });
+const found = (list: typeof issues) => fakeGitHub({ listReadyIssues: async () => list });
 
 describe("parseChecklist", () => {
   it("returns trimmed checklist items and ignores other lines", () => {
@@ -36,18 +37,11 @@ describe("parseChecklist", () => {
 
 describe("GitHubIntake.pollOnce", () => {
   it("creates a task per new issue with source and criteria, once", async () => {
-    const calls: string[][] = [];
-    const gh = async (args: string[]) => {
-      calls.push(args);
-      return ok(JSON.stringify(issues));
-    };
-    const intake = new GitHubIntake({ pipeline, repos: ["o/a"], label: "ready-for-agent", intervalMs: 1000, gh });
+    const github = found(issues);
+    const intake = new GitHubIntake({ pipeline, github, repos: ["o/a"], label: "ready-for-agent", intervalMs: 1000 });
 
     await intake.pollOnce();
-    expect(calls[0]).toEqual([
-      "issue", "list", "--repo", "o/a", "--label", "ready-for-agent", "--state", "open",
-      "--json", "number,title,body,url", "--limit", "50",
-    ]);
+    expect(github.listReadyIssues).toHaveBeenCalledWith("o/a", "ready-for-agent");
     const tasks = await pipeline.list();
     expect(tasks.map((t) => t.title)).toEqual(["Export CSV", "Dark mode"]);
     expect(tasks[0]).toMatchObject({
@@ -63,22 +57,26 @@ describe("GitHubIntake.pollOnce", () => {
   });
 
   it("sets the task's repoPath from the resolver, so an imported issue needs no hand edit", async () => {
-    const gh = async () => ok(JSON.stringify([issues[0]]));
+    const github = found([issues[0]!]);
     const asked: string[] = [];
     const resolveRepo = async (repo: string) => {
       asked.push(repo);
       return repo === "o/a" ? "/repos/a" : null;
     };
-    const intake = new GitHubIntake({ pipeline, repos: ["o/a"], label: "x", intervalMs: 1000, gh, resolveRepo });
+    const intake = new GitHubIntake({ pipeline, github, repos: ["o/a"], label: "x", intervalMs: 1000, resolveRepo });
     await intake.pollOnce();
     expect(asked).toEqual(["o/a"]);
     expect((await pipeline.list())[0]!.repoPath).toBe("/repos/a");
   });
 
-  it("keeps polling other repos when one gh call fails", async () => {
-    const gh = async (args: string[]) =>
-      args[3] === "o/bad" ? { code: 1, stdout: "", stderr: "gh: auth required" } : ok(JSON.stringify([issues[0]]));
-    const intake = new GitHubIntake({ pipeline, repos: ["o/bad", "o/good"], label: "x", intervalMs: 1000, gh });
+  it("keeps polling other repos when one GitHub call fails", async () => {
+    const github = fakeGitHub({
+      listReadyIssues: async (repo) => {
+        if (repo === "o/bad") throw new Error("Bad credentials (401)");
+        return [issues[0]!];
+      },
+    });
+    const intake = new GitHubIntake({ pipeline, github, repos: ["o/bad", "o/good"], label: "x", intervalMs: 1000 });
     await intake.pollOnce();
     const tasks = await pipeline.list();
     expect(tasks).toHaveLength(1);

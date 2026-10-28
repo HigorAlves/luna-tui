@@ -16,11 +16,12 @@ import type { StageContext, StageResult, StageRunner } from "../application/port
 import { prAddressRunner } from "../application/stages/pr-address.ts";
 import { prReviewRunner } from "../application/stages/pr-review.ts";
 import { setupRunner } from "../application/stages/setup.ts";
-import { shipRunner } from "../application/stages/ship.ts";
+import { shipRunnerWith } from "../application/stages/ship.ts";
 import { loadCredential } from "../adapters/docker/credentials.ts";
 import { imageExists, removeLeftoverContainers, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PolicyStore } from "../application/policy.ts";
 import { exec } from "../adapters/process/exec.ts";
+import { type GitHub, noTokenGitHub } from "../application/github.ts";
 
 export interface RealStagesResult {
   real: Partial<Record<TaskState, StageRunner>>;
@@ -41,6 +42,7 @@ export async function buildRealStages(
   latestE2e: EvidenceDeps["latestE2e"],
   policies: PolicyStore = new PolicyStore(),
   history?: TaskHistory,
+  github: GitHub = noTokenGitHub(),
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -81,7 +83,7 @@ export async function buildRealStages(
     // Setup reads the repo checkout itself (no worktree yet) and proves what it proposes in the image.
     setup: setupRunner({ runPack: (context) => runAgent(deps, context, "setup", { checkout: true }), exec: checksExec, stateDir: config.stateDir }),
     // ci_watch polls the PR's checks on the host and only calls its pack when one is red.
-    ci_watch: ciWatchRunner({ exec, runPack: (context, ci) => runAgent(deps, context, "ci_watch", { ci }) }),
+    ci_watch: ciWatchRunner({ github, runPack: (context, ci) => runAgent(deps, context, "ci_watch", { ci }) }),
     // e2e skips repos with no web surface; without the QA image it passes with a note.
     e2e: qaImage
       ? e2eRunner({ runPack: (context) => runAgent(deps, context, "e2e"), policy: (repoPath) => policies.for(repoPath) })
@@ -89,12 +91,12 @@ export async function buildRealStages(
     // Evidence is script-only, so it runs on the host from what e2e left in the state dir.
     evidence: evidenceRunner({ stateDir: config.stateDir, latestE2e }),
     // The PR tasks' own stages: the host fetches the diff or the threads, the pack answers.
-    reviewing: prReviewRunner({ runPack: (context, review) => runAgent(deps, context, "reviewing", { review }) }),
-    addressing: prAddressRunner({ runPack: (context, threads) => runAgent(deps, context, "addressing", { threads }) }),
+    reviewing: prReviewRunner({ github, runPack: (context, review) => runAgent(deps, context, "reviewing", { review }) }),
+    addressing: prAddressRunner({ github, runPack: (context, threads) => runAgent(deps, context, "addressing", { threads }) }),
     // The memory-review gate has no stage of its own: the retro pack runs after shipping and its
     // proposal rides on the gate; approving applies it at close.
     shipping: withMemoryReview(
-      shipRunner,
+      shipRunnerWith({ exec, github }),
       memoryReviewRunner({
         runPack: async (context) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null }),
         stateDir: config.stateDir,

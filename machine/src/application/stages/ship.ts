@@ -1,33 +1,37 @@
 // The ship stage: the PR was opened as a draft at delivering, so shipping pushes any last
-// commits and marks it ready for review. It runs on the host with your own git and gh
-// credentials, never in a sandboxed container.
-import { type GitDeps, describe, findPr, markPrReady, openPr, pushBranch } from "../../adapters/github/gh.ts";
+// commits and marks it ready for review. Git on the host for the push, the GitHub port for the PR.
+import { originSlugOf } from "../../adapters/git/worktree.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
+import { type GitHub, messageOf } from "../github.ts";
 import type { StageRunner } from "../ports.ts";
+import { type DeliverDeps, openTaskPr, pushBranch } from "./deliver.ts";
 
-export function shipRunnerWith(deps: GitDeps): StageRunner {
+export function shipRunnerWith(deps: DeliverDeps): StageRunner {
+  const slugOf = deps.slugOf ?? originSlugOf;
   return async (context) => {
     const { task } = context;
     if (!task.repoPath || !task.branch || !task.worktreePath) {
       return { outcome: "fail", detail: { error: "no branch to ship; the implementer never ran for real" } };
     }
     const cwd = task.worktreePath;
-    const pushError = await pushBranch(deps, task.branch, cwd);
+    const pushError = await pushBranch(deps.exec, task.branch, cwd);
     if (pushError) return { outcome: "fail", detail: { error: pushError } };
-
-    const existing = await findPr(deps, task.branch, cwd);
-    if (!existing) {
-      // Delivering was skipped (an older task): open the PR ready, as shipping used to.
-      const opened = await openPr(deps, context, { draft: false });
-      if ("error" in opened) return { outcome: "fail", detail: { error: opened.error } };
-      return { outcome: "pass", detail: { prUrl: opened.ref.url, readied: false } };
+    const slug = await slugOf(cwd);
+    if (!slug) return { outcome: "fail", detail: { error: "the worktree's origin is not a GitHub repository" } };
+    try {
+      const existing = await deps.github.findPr(slug, task.branch);
+      if (!existing) {
+        // Delivering was skipped (an older task): open the PR ready, as shipping used to.
+        const opened = await openTaskPr(deps.github, slug, context, false);
+        return { outcome: "pass", detail: { prUrl: opened.url, readied: false } };
+      }
+      if (!existing.isDraft) return { outcome: "pass", detail: { prUrl: existing.url, readied: false } };
+      await deps.github.markPrReady(slug, existing.number);
+      return { outcome: "pass", detail: { prUrl: existing.url, readied: true } };
+    } catch (error) {
+      return { outcome: "fail", detail: { error: messageOf(error) } };
     }
-    if (!existing.isDraft) return { outcome: "pass", detail: { prUrl: existing.url, readied: false } };
-
-    const ready = await markPrReady(deps, existing.number, cwd);
-    if (ready.code !== 0) return { outcome: "fail", detail: { error: `gh pr ready failed: ${describe(ready)}` } };
-    return { outcome: "pass", detail: { prUrl: existing.url, readied: true } };
   };
 }
 
-export const shipRunner: StageRunner = shipRunnerWith({ exec: realExec });
+export const shipRunner = (github: GitHub): StageRunner => shipRunnerWith({ exec: realExec, github });

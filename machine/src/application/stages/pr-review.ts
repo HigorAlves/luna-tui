@@ -1,14 +1,14 @@
 // The reviewing stage of a review PR task: the host fetches the PR's diff, files and the
-// comments already on it (the sandbox has no gh credential), the pr-reviewer pack answers
+// comments already on it (the sandbox has no GitHub credential), the pr-reviewer pack answers
 // with line-anchored comments and a verdict, and the host posts one COMMENT review at once.
 // An approve / request-changes verdict waits at the gate; `postVerdictRunner` posts it on `a`.
 import { PrReviewAnswer, type RequestedAction, type ReviewContext } from "@hardness/contracts";
 
-import { type Gh, defaultGh, postReview, prComments, prDiff, prFacts, prFiles } from "../../adapters/github/gh.ts";
+import { type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
 export interface PrReviewDeps {
-  gh?: Gh;
+  github: GitHub;
   /** Runs the reviewing pack with what the host fetched. */
   runPack: (context: StageContext, review: ReviewContext) => Promise<StageResult>;
 }
@@ -40,8 +40,8 @@ export function prOf(context: StageContext): { repo: string; number: number; url
 }
 
 /** The PR's facts as the review and address packs read them. Throws when GitHub no longer shows it. */
-export async function gatherPr(gh: Gh, repo: string, number: number): Promise<ReviewContext["pr"]> {
-  const node = await prFacts(gh, repo, number);
+export async function gatherPr(github: GitHub, repo: string, number: number): Promise<ReviewContext["pr"]> {
+  const node = await github.prFacts(repo, number);
   if (!node) throw new Error(`${repo}#${number} is gone from GitHub`);
   return {
     repo,
@@ -56,21 +56,21 @@ export async function gatherPr(gh: Gh, repo: string, number: number): Promise<Re
 }
 
 export function prReviewRunner(deps: PrReviewDeps): StageRunner {
-  const gh = deps.gh ?? defaultGh;
+  const { github } = deps;
   return async (context) => {
     const pr = prOf(context);
     if (!pr) return { outcome: "fail", detail: { error: "not a PR task" } };
     let review: ReviewContext;
     try {
       const [facts, diff, files, existingComments] = await Promise.all([
-        gatherPr(gh, pr.repo, pr.number),
-        prDiff(gh, pr.repo, pr.number),
-        prFiles(gh, pr.repo, pr.number),
-        prComments(gh, pr.repo, pr.number),
+        gatherPr(github, pr.repo, pr.number),
+        github.prDiff(pr.repo, pr.number),
+        github.prFiles(pr.repo, pr.number),
+        github.prComments(pr.repo, pr.number),
       ]);
       review = { pr: facts, diff, files, existingComments };
     } catch (error) {
-      return { outcome: "fail", detail: { error: error instanceof Error ? error.message : String(error) } };
+      return { outcome: "fail", detail: { error: messageOf(error) } };
     }
 
     const pack = await deps.runPack(context, review);
@@ -88,8 +88,11 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
     );
     const posted = comments.length > 0;
     if (posted) {
-      const error = await postReview(gh, pr.repo, pr.number, { event: "COMMENT", body: answer.summary, comments });
-      if (error) return { ...pack, outcome: "fail", detail: { ...pack.detail, error } };
+      try {
+        await github.postReview(pr.repo, pr.number, { event: "COMMENT", body: answer.summary, comments });
+      } catch (error) {
+        return { ...pack, outcome: "fail", detail: { ...pack.detail, error: messageOf(error) } };
+      }
     }
     const base = { ...pack, findings: answer.findings };
     const detail = { ...pack.detail, summary: answer.summary, verdict: answer.verdict, posted, comments: comments.length };
@@ -102,8 +105,7 @@ export function prReviewRunner(deps: PrReviewDeps): StageRunner {
 }
 
 /** The review route's `shipping`: posts the APPROVE / REQUEST_CHANGES review the gate carried. */
-export function postVerdictRunner(deps: { gh?: Gh }): StageRunner {
-  const gh = deps.gh ?? defaultGh;
+export function postVerdictRunner(deps: { github: GitHub }): StageRunner {
   return async (context) => {
     const pr = prOf(context);
     if (!pr) return { outcome: "fail", detail: { error: "not a PR task" } };
@@ -115,8 +117,11 @@ export function postVerdictRunner(deps: { gh?: Gh }): StageRunner {
       return { outcome: "fail", detail: { error: "the gate carried no verdict to post" } };
     }
     const body = typeof post.payload.body === "string" ? post.payload.body : "";
-    const error = await postReview(gh, pr.repo, pr.number, { event, body, comments: [] });
-    if (error) return { outcome: "fail", detail: { error } };
+    try {
+      await deps.github.postReview(pr.repo, pr.number, { event, body, comments: [] });
+    } catch (error) {
+      return { outcome: "fail", detail: { error: messageOf(error) } };
+    }
     return { outcome: "pass", detail: { posted: event, prUrl: pr.url } };
   };
 }

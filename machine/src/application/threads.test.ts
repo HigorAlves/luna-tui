@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { Pipeline } from "./pipeline.ts";
 import { StubStages } from "./stages/stubs.ts";
 import { freshTestDatabase } from "../test/database.ts";
+import { fakeGitHub } from "../test/github.ts";
 import { ThreadReplies } from "./threads.ts";
 
 let db: DataSource;
@@ -31,10 +32,11 @@ function wire(options: { slack?: boolean; enabled?: boolean } = {}) {
   replies = new ThreadReplies({
     pipeline,
     enabled: options.enabled ?? true,
-    gh: async (args) => {
-      comments.push(args);
-      return { code: 0, stdout: "", stderr: "" };
-    },
+    github: fakeGitHub({
+      commentOnIssue: async (repo, number, body) => {
+        comments.push([repo, String(number), body]);
+      },
+    }),
     slack: options.slack
       ? {
           token: "xoxb-test",
@@ -57,8 +59,8 @@ describe("ThreadReplies", () => {
     await pipeline.start(task.id);
     await replies.idle();
     expect(comments).toEqual([
-      ["issue", "comment", "42", "--repo", "o/a", "--body", `Picked up by the pipeline as task #${task.id.slice(0, 8)}: triage is planning it.`],
-      ["issue", "comment", "42", "--repo", "o/a", "--body", "Needs you: approve the plan."],
+      ["o/a", "42", `Picked up by the pipeline as task #${task.id.slice(0, 8)}: triage is planning it.`],
+      ["o/a", "42", "Needs you: approve the plan."],
     ]);
 
     stubs.plan("delivering", { outcome: "pass", detail: { prUrl: "https://github.com/o/a/pull/7", prNumber: 7 } });

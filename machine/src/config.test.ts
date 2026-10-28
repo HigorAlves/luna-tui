@@ -22,6 +22,7 @@ describe("loadConfig", () => {
       stateDir: "/home/me/.local/state/hardness",
       githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },
       githubPrs: { enabled: true, intervalMs: 60_000 },
+      githubToken: null,
       retentionDays: DEFAULT_RETENTION_DAYS,
       taskBudgetUsd: null,
       dailyBudgetUsd: null,
@@ -77,6 +78,8 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ MACHINE_GITHUB_POLL: "nope" })).toThrow(/MACHINE_GITHUB_POLL/);
     expect(loadConfig({ HOME: "/h", MACHINE_GITHUB_PRS: "off", MACHINE_GITHUB_PRS_INTERVAL: "120" }).githubPrs).toEqual({ enabled: false, intervalMs: 120_000 });
     expect(() => loadConfig({ MACHINE_GITHUB_PRS_INTERVAL: "0" })).toThrow(/MACHINE_GITHUB_PRS_INTERVAL/);
+    expect(loadConfig({ HOME: "/h", GITHUB_TOKEN: "ghp_a", GH_TOKEN: "ghp_b" }).githubToken).toBe("ghp_a");
+    expect(loadConfig({ HOME: "/h", GH_TOKEN: " ghp_b " }).githubToken).toBe("ghp_b");
   });
 
   it("binds to the host in MACHINE_HOST, so a container can listen on every interface", () => {

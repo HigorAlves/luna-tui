@@ -190,6 +190,14 @@ export async function dirtyFiles(path: string): Promise<string[]> {
   return status === "" ? [] : status.split("\n");
 }
 
+/** `owner/name` of the checkout's `origin` remote, or null when it has none or it is not on GitHub. */
+export async function originSlugOf(cwd: string): Promise<string | null> {
+  const url = await exec("git", [...HOST_GIT, "-C", cwd, "remote", "get-url", "origin"]);
+  if (url.code !== 0) return null;
+  const match = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?\s*$/.exec(url.stdout.trim());
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+
 /** A PR task's checkout: `<dir>/<repo>/pr-<number>-<head slug>`, beside the task worktrees. */
 export function prWorktreePath(repoPath: string, worktreesDir: string, number: number, headRef: string): string {
   return join(worktreesDir, basename(repoPath), `pr-${number}-${slug(headRef)}`);

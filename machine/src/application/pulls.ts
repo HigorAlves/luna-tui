@@ -1,23 +1,16 @@
 // The PR inbox's poller: every open PR involving you, from `gh`, classified and kept as one
 // snapshot the board reads over HTTP and follows on the event stream. Like GitHubIntake it
-// speaks through the gh CLI, so auth is whatever `gh auth login` set up. Merging and cloning
+// speaks through the GitHub port (Octokit, one token). Merging and cloning
 // live here too, since both change what the next poll shows.
 import { isAbsolute, dirname } from "node:path";
 import { stat } from "node:fs/promises";
 
 import type { PrAction, PrSnapshot, PullRequest } from "@hardness/contracts";
 
-import {
-  type Gh,
-  cloneRepo,
-  defaultGh,
-  mergePr,
-  prFacts,
-  searchMyPrs,
-  viewerLogin,
-  viewerTeams,
-} from "../adapters/github/gh.ts";
+import { HOST_GIT } from "../adapters/git/worktree.ts";
+import { type ExecResult, exec as realExec } from "../adapters/process/exec.ts";
 import { fromGraphQl, splitOf } from "../domain/pull-request.ts";
+import { type GitHub, messageOf } from "./github.ts";
 
 /** What the HTTP routes need from the poller; the real class and a test fake both fit. */
 export interface PullsPort {
@@ -44,8 +37,9 @@ export interface GitHubPullsOptions {
   findTask: (repo: string, number: number) => Promise<PrTaskRef | null>;
   /** Called with the new snapshot when its PRs or its error changed. */
   publish: (snapshot: PrSnapshot) => void;
-  /** Runs the gh CLI. Tests inject a fake. */
-  gh?: Gh;
+  github: GitHub;
+  /** Runs git for the clone; tests inject a fake. */
+  exec?: (command: string, args: string[]) => Promise<ExecResult>;
   now?: () => Date;
 }
 
@@ -80,11 +74,9 @@ export class GitHubPulls implements PullsPort {
   private polling: Promise<PrSnapshot> | null = null;
   private warnedAuth = false;
   private me: { login: string; teams: string[] } | null = null;
-  private readonly gh: Gh;
   private readonly now: () => Date;
 
   constructor(private readonly options: GitHubPullsOptions) {
-    this.gh = options.gh ?? defaultGh;
     this.now = options.now ?? (() => new Date());
     this.nextDelayMs = options.intervalMs;
   }
@@ -121,10 +113,7 @@ export class GitHubPulls implements PullsPort {
   }
 
   private async whoAmI(): Promise<{ login: string; teams: string[] }> {
-    if (this.me) return this.me;
-    const login = await viewerLogin(this.gh);
-    const teams = await viewerTeams(this.gh);
-    this.me = { login, teams };
+    if (!this.me) this.me = await this.options.github.viewer();
     return this.me;
   }
 
@@ -136,10 +125,10 @@ export class GitHubPulls implements PullsPort {
       prs = await this.fetchAll();
       this.nextDelayMs = this.options.intervalMs;
     } catch (thrown) {
-      error = thrown instanceof Error ? thrown.message : String(thrown);
+      error = messageOf(thrown);
       prs = this.snapshot.prs;
-      if (/rate limit|RATE_LIMITED/i.test(error)) this.nextDelayMs = RATE_LIMIT_BACKOFF_MS;
-      if (/auth|credentials|401/i.test(error)) {
+      if (/rate limit|RATE_LIMITED|\(403\)/i.test(error)) this.nextDelayMs = RATE_LIMIT_BACKOFF_MS;
+      if (/auth|credentials|token|401/i.test(error)) {
         if (!this.warnedAuth) console.warn(`github prs: ${error}`);
         this.warnedAuth = true;
       } else {
@@ -159,14 +148,14 @@ export class GitHubPulls implements PullsPort {
 
   private async fetchAll(): Promise<PullRequest[]> {
     const me = await this.whoAmI();
-    const hits = await searchMyPrs(this.gh);
+    const hits = await this.options.github.searchMyPrs();
     const prs: PullRequest[] = [];
     for (const hit of hits) {
       let node;
       try {
-        node = await prFacts(this.gh, hit.repo, hit.number);
+        node = await this.options.github.prFacts(hit.repo, hit.number);
       } catch (error) {
-        console.warn(`github prs: ${hit.repo}#${hit.number}: ${error instanceof Error ? error.message : String(error)}`);
+        console.warn(`github prs: ${hit.repo}#${hit.number}: ${messageOf(error)}`);
         continue;
       }
       if (!node) continue;
@@ -189,8 +178,7 @@ export class GitHubPulls implements PullsPort {
   async merge(repo: string, number: number): Promise<void> {
     const pr = this.find(repo, number);
     if (!pr || pr.split !== "ready_to_merge") throw new NotReadyError(repo, number);
-    const error = await mergePr(this.gh, repo, number);
-    if (error) throw new Error(error);
+    await this.options.github.mergePr(repo, number);
     await this.pollOnce();
   }
 
@@ -203,10 +191,12 @@ export class GitHubPulls implements PullsPort {
     const parent = await stat(dirname(dest)).catch(() => null);
     if (!parent?.isDirectory()) throw new CloneError(`the parent of "${dest}" does not exist`);
     if (await stat(dest).catch(() => null)) throw new CloneError(`"${dest}" already exists`);
+    const exec = this.options.exec ?? realExec;
     this.cloning = this.cloning.then(async () => {
-      const error = await cloneRepo(this.gh, repo, dest);
-      if (error) {
-        this.replace({ ...this.snapshot, error: `clone of ${repo} failed: ${error}` });
+      // A clone is git with your own credentials, like every push the machine makes.
+      const cloned = await exec("git", [...HOST_GIT, "clone", `https://github.com/${repo}.git`, dest]);
+      if (cloned.code !== 0) {
+        this.replace({ ...this.snapshot, error: `clone of ${repo} failed: ${(cloned.stderr || cloned.stdout).trim()}` });
         return;
       }
       this.options.rememberRepo?.(repo, dest);

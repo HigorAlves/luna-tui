@@ -5,11 +5,8 @@ import { join } from "node:path";
 import type { PrSnapshot } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import type { Gh } from "../adapters/github/gh.ts";
+import { fakeGitHub } from "../test/github.ts";
 import { CloneError, GitHubPulls, NotReadyError } from "./pulls.ts";
-
-const ok = (stdout: string) => ({ code: 0, stdout, stderr: "" });
-const bad = (stderr: string) => ({ code: 1, stdout: "", stderr });
 
 /** A PR node as PR_QUERY answers it, approved and green unless overridden. */
 function node(number: number, over: Record<string, unknown> = {}) {
@@ -42,24 +39,27 @@ interface World {
 
 function setup(world: World, over: Partial<ConstructorParameters<typeof GitHubPulls>[0]> = {}) {
   const calls: string[][] = [];
-  const gh: Gh = async (args) => {
-    calls.push(args);
-    if (args[0] === "search") return world.searchError ? bad(world.searchError) : ok(JSON.stringify(args[2] === "--author=@me" ? world.hits : []));
-    if (args[0] === "api" && args[1] === "graphql") {
-      const query = args[3] ?? "";
-      if (query.includes("viewer{login}")) return ok(JSON.stringify({ data: { viewer: { login: "me" } } }));
-      const number = Number(args.find((a) => a.startsWith("number="))?.slice(7));
-      return ok(JSON.stringify({ data: { repository: { pullRequest: world.nodes[number] ?? null } } }));
-    }
-    if (args[0] === "api" && args[1] === "user/teams") return ok("[]");
-    if (args[0] === "pr" && args[1] === "merge") return world.mergeError ? bad(world.mergeError) : ok("");
-    if (args[0] === "repo" && args[1] === "clone") return world.cloneError ? bad(world.cloneError) : ok("");
-    return bad(`unexpected gh ${args.join(" ")}`);
+  const github = fakeGitHub({
+    viewer: async () => ({ login: "me", teams: [] }),
+    searchMyPrs: async () => {
+      if (world.searchError) throw new Error(world.searchError);
+      return world.hits.map((h) => ({ repo: h.repository.nameWithOwner, number: h.number, updatedAt: h.updatedAt }));
+    },
+    prFacts: async (_repo, number) => (world.nodes[number] ?? null) as never,
+    mergePr: async (repo, number) => {
+      calls.push(["merge", repo, String(number)]);
+      if (world.mergeError) throw new Error(world.mergeError);
+    },
+  });
+  const exec = async (command: string, args: string[]) => {
+    calls.push([command, ...args]);
+    return world.cloneError ? { code: 1, stdout: "", stderr: world.cloneError } : { code: 0, stdout: "", stderr: "" };
   };
   const published: PrSnapshot[] = [];
   const remembered: Array<[string, string]> = [];
   const pulls = new GitHubPulls({
-    gh,
+    github,
+    exec,
     intervalMs: 60_000,
     resolveRepo: async (repo) => (repo === "o/a" ? "/r/a" : null),
     rememberRepo: (repo, path) => void remembered.push([repo, path]),
@@ -99,7 +99,7 @@ describe("GitHubPulls.pollOnce", () => {
     const world: World = { hits: [hit(1)], nodes: { 1: node(1) } };
     const { pulls, published } = setup(world);
     await pulls.pollOnce();
-    world.searchError = "gh: HTTP 401: Bad credentials";
+    world.searchError = "searching pull requests failed (401): Bad credentials";
     const snapshot = await pulls.pollOnce();
     expect(snapshot.error).toMatch(/Bad credentials/);
     expect(snapshot.prs).toHaveLength(1);
@@ -126,7 +126,7 @@ describe("GitHubPulls.merge", () => {
     await expect(pulls.merge("o/a", 9)).rejects.toThrow(NotReadyError);
     world.hits = [hit(2)];
     await pulls.merge("o/a", 1);
-    expect(calls.some((c) => c[0] === "pr" && c[1] === "merge" && c[2] === "1")).toBe(true);
+    expect(calls).toContainEqual(["merge", "o/a", "1"]);
     expect(pulls.snapshot.prs.map((p) => p.number)).toEqual([2]);
   });
 
@@ -161,7 +161,7 @@ describe("GitHubPulls.clone", () => {
     const dest = join(root, "b");
     await pulls.clone("o/b", dest);
     await pulls.cloning;
-    expect(calls.some((c) => c[0] === "repo" && c[1] === "clone" && c[3] === dest)).toBe(true);
+    expect(calls).toContainEqual(["git", "-c", "core.hooksPath=/dev/null", "clone", "https://github.com/o/b.git", dest]);
     expect(remembered).toEqual([]);
     expect(resolved.get("o/b")).toBe(dest);
     expect(pulls.snapshot.prs[0]?.localPath).toBe(dest);

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { Gh } from "../../adapters/github/gh.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import type { TaskRow } from "../../domain/task.ts";
+import { fakeGitHub } from "../../test/github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import { prAddressRunner, prFollowUpRunner } from "./pr-address.ts";
 
@@ -27,8 +27,8 @@ const node = {
   commits: { nodes: [] },
 };
 const threads = [
-  { id: "T1", isResolved: false, path: "a.ts", line: 4, comments: { nodes: [{ author: { login: "them" }, body: "why?", createdAt: "t" }] } },
-  { id: "T2", isResolved: false, path: "b.ts", line: 9, comments: { nodes: [{ author: { login: "them" }, body: "rename", createdAt: "t" }] } },
+  { id: "T1", path: "a.ts", line: 4, comments: [{ author: "them", body: "why?", at: "t" }] },
+  { id: "T2", path: "b.ts", line: 9, comments: [{ author: "them", body: "rename", at: "t" }] },
 ];
 
 const context = (over: Record<string, unknown> = {}) =>
@@ -51,20 +51,13 @@ const context = (over: Record<string, unknown> = {}) =>
 
 describe("addressing", () => {
   it("hands the pack the PR and its unresolved threads and returns the pack's answer", async () => {
-    const gh: Gh = async (args) => {
-      if (args[0] === "api" && args[1] === "graphql") {
-        const query = args[3] ?? "";
-        if (query.includes("reviewThreads(first:100){nodes{ id")) return ok(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: threads } } } } }));
-        return ok(JSON.stringify({ data: { repository: { pullRequest: node } } }));
-      }
-      return bad("unexpected");
-    };
+    const github = fakeGitHub({ prFacts: async () => node as never, prThreads: async () => threads });
     let seen: unknown;
     const runPack = async (_c: StageContext, ctx: unknown): Promise<StageResult> => {
       seen = ctx;
       return { outcome: "pass", detail: { answer: { kind: "done", summary: "done", replies: [] } } };
     };
-    const result = await prAddressRunner({ gh, runPack })(context());
+    const result = await prAddressRunner({ github, runPack })(context());
     expect(result.outcome).toBe("pass");
     expect(seen).toMatchObject({
       pr: { repo: "o/a", number: 12, author: "me" },
@@ -76,11 +69,8 @@ describe("addressing", () => {
   });
 
   it("fails when the PR has nothing left to address", async () => {
-    const gh: Gh = async (args) =>
-      args[3]?.includes("reviewThreads(first:100){nodes{ id")
-        ? ok(JSON.stringify({ data: { repository: { pullRequest: { reviewThreads: { nodes: [] } } } } }))
-        : ok(JSON.stringify({ data: { repository: { pullRequest: node } } }));
-    const result = await prAddressRunner({ gh, runPack: async () => ({ outcome: "pass" }) })(context());
+    const github = fakeGitHub({ prFacts: async () => node as never, prThreads: async () => [] });
+    const result = await prAddressRunner({ github, runPack: async () => ({ outcome: "pass" }) })(context());
     expect(result.outcome).toBe("fail");
     expect(String(result.detail?.error)).toMatch(/no unresolved/);
   });
@@ -93,29 +83,25 @@ describe("the follow-up: push, reply, resolve", () => {
       calls.push([command, ...args]);
       return opts.pushFails ? bad("rejected") : ok();
     };
-    const gh: Gh = async (args) => {
-      calls.push(["gh", ...args]);
-      const query = args[3] ?? "";
-      const threadId = args.find((a) => a.startsWith("threadId="))?.slice(9) ?? "";
-      if (query.includes("isResolved} }")) return ok(JSON.stringify({ data: { node: { isResolved: opts.resolvedAlready?.includes(threadId) ?? false } } }));
-      if (query.includes("addPullRequestReviewThreadReply")) return opts.replyFails?.includes(threadId) ? bad("thread locked") : ok("{}");
-      if (query.includes("resolveReviewThread")) return ok("{}");
-      return bad("unexpected");
-    };
+    const github = fakeGitHub({
+      threadResolved: async (threadId) => opts.resolvedAlready?.includes(threadId) ?? false,
+      replyToThread: async (threadId) => {
+        if (opts.replyFails?.includes(threadId)) throw new Error("thread locked");
+      },
+      resolveThread: async () => {},
+    });
     const answer = { kind: "done", summary: "s", replies: [{ threadId: "T1", body: "Fixed in abc.", resolve: true }, { threadId: "T2", body: "Kept as is.", resolve: false }] };
-    const run = prFollowUpRunner({ gh, exec, latestAnswer: async () => answer });
-    return { run, calls };
+    const run = prFollowUpRunner({ github, exec, latestAnswer: async () => answer });
+    return { run, calls, github };
   }
 
   it("pushes the branch, replies to each thread and resolves the ones the agent marked", async () => {
-    const { run, calls } = setup();
+    const { run, calls, github } = setup();
     const result = await run(context({ stage: "delivering" }));
     expect(result.outcome).toBe("pass");
     expect(calls[0]).toEqual(["git", "-c", "core.hooksPath=/dev/null", "-C", "/wt", "push", "-u", "origin", "feat/export"]);
-    const replies = calls.filter((c) => c[0] === "gh" && c[4]?.includes("addPullRequestReviewThreadReply")).map((c) => c.find((a) => a.startsWith("threadId=")));
-    expect(replies).toEqual(["threadId=T1", "threadId=T2"]);
-    const resolved = calls.filter((c) => c[0] === "gh" && c[4]?.includes("resolveReviewThread")).map((c) => c.find((a) => a.startsWith("threadId=")));
-    expect(resolved).toEqual(["threadId=T1"]);
+    expect(github.replyToThread.mock.calls).toEqual([["T1", "Fixed in abc."], ["T2", "Kept as is."]]);
+    expect(github.resolveThread.mock.calls).toEqual([["T1"]]);
     expect(result.detail).toMatchObject({ replied: 2, resolved: 1, skipped: [] });
   });
 

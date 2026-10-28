@@ -66,7 +66,7 @@ const MINUTE = 60_000;
 const GIT_READ_ONLY = ["hooks", "config"];
 
 export interface AgentExtra {
-  /** ci_watch: what the host fetched about the PR's CI, since the sandbox has no gh credential. */
+  /** ci_watch: what the host fetched about the PR's CI, since the sandbox has no GitHub credential. */
   ci?: CiContext | null;
   /** reviewing: the PR's diff, files and comments, fetched by the host. */
   review?: ReviewContext | null;
