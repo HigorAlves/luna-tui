@@ -10,7 +10,7 @@ use std::{
 };
 
 use ratatui::{
-    crossterm::event::{KeyCode, KeyEvent},
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::Rect,
 };
 use tui_textarea::TextArea;
@@ -44,6 +44,15 @@ fn opener_command(url: &str) -> (&'static str, Vec<String>) {
         "xdg-open"
     };
     (program, vec![url.to_string()])
+}
+
+/// Where a section's cursor starts: Runs and Evidence on their latest row (`usize::MAX`
+/// resolves to the last once the rows are known), everything else on the first.
+fn start_cursor(section: Section) -> usize {
+    match section {
+        Section::Runs | Section::Evidence => usize::MAX,
+        _ => 0,
+    }
 }
 
 /// Rows one card takes on the board, including its spacer line.
@@ -281,6 +290,7 @@ pub const DETAIL_SECTIONS: &[HelpSection] = &[
         &[
             ("h / l, 1-8", "previous / next section: Overview, Plan, Tests, Runs, Diff, Evidence, PR, Activity"),
             ("j / k", "scroll the section, or pick a run / file where it lists them"),
+            ("J / K, ctrl+d / ctrl+u", "scroll the section where j / k pick a row (a line, half a page)"),
             ("+", "toggle the popup between most of the screen and all of it"),
             ("esc", "close"),
         ],
@@ -294,7 +304,7 @@ pub const DETAIL_SECTIONS: &[HelpSection] = &[
             ("e", "edit in place"),
             ("X / w / d", "abort / kill the worktree / delete (each asks)"),
             ("f", "focus its herdr tab"),
-            ("o", "open the linked issue"),
+            ("o", "open the selected file (Diff, Evidence), the PR (PR), else the linked issue"),
         ],
     ),
 ];
@@ -345,6 +355,7 @@ pub const DIGEST_HELP: &[(&str, &str)] = &[
 pub const DETAIL_HELP: &[(&str, &str)] = &[
     ("h / l, 1-8", "previous / next section: Overview, Plan, Tests, Runs, Diff, Evidence, PR, Activity"),
     ("j / k", "scroll the section, or pick a run / file where it lists them"),
+    ("J / K, ctrl+d / ctrl+u", "scroll the section where j / k pick a row (a line, half a page)"),
     ("+", "toggle the popup between most of the screen and all of it"),
     ("a", "advance: start, approve, answer, retry, resume"),
     ("S", "ship"),
@@ -352,7 +363,7 @@ pub const DETAIL_HELP: &[(&str, &str)] = &[
     ("e", "edit in place"),
     ("X / w / d", "abort / kill the worktree / delete (each asks)"),
     ("f", "focus its herdr tab"),
-    ("o", "open the linked issue"),
+    ("o", "open the selected file (Diff, Evidence), the PR (PR), else the linked issue"),
     ("esc", "close"),
 ];
 
@@ -716,14 +727,22 @@ pub struct App {
     /// How far the open ticket's detail popup is scrolled. `ui` clamps it to the content's
     /// actual height, which only it knows (it depends on the terminal width).
     pub detail_scroll: Cell<u16>,
+    /// The pane's height on the last frame, for the page keys; and whether the next frame
+    /// should bring the selected row into view (set when the cursor moves, cleared by `ui`).
+    pub detail_viewport: Cell<u16>,
+    pub detail_follow: Cell<bool>,
     /// Which section of the workspace popup is open, and the selected row in sections that
-    /// have one (runs, files). `+` toggles the popup between most of the screen and all of it.
+    /// have one (runs, files). `usize::MAX` means the last row, resolved against the rows
+    /// once they are known (`detail_row`). `+` toggles the popup between most of the screen
+    /// and all of it.
     pub detail_section: Section,
     pub detail_cursor: usize,
     pub detail_full: bool,
     /// The branch diff of the ticket whose popup is open, once fetched: (task id, diff).
     pub diff: Option<(String, TaskDiff)>,
     diff_pending: Option<(String, Option<String>)>,
+    /// Bumped whenever `diff` is reset; an answer tagged with an older one is dropped.
+    pub diff_generation: u64,
     /// A diff fetch that failed for this ticket; no retry until the section is reopened.
     diff_failed: Option<String>,
     /// How far the help sheet is scrolled, and the furthest `ui` found it can scroll.
@@ -775,11 +794,14 @@ impl App {
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
             detail_scroll: Cell::new(0),
+            detail_viewport: Cell::new(0),
+            detail_follow: Cell::new(false),
             detail_section: Section::Overview,
             detail_cursor: 0,
             detail_full: false,
             diff: None,
             diff_pending: None,
+            diff_generation: 0,
             diff_failed: None,
             help_scroll: Cell::new(0),
             help_max: Cell::new(0),
@@ -884,7 +906,11 @@ impl App {
                         self.detail = detail;
                     }
                 }
-                Incoming::Diff { id, file, diff } => {
+                Incoming::Diff { id, file, diff, generation } => {
+                    if generation != self.diff_generation {
+                        // The branch moved while this was in flight; the next frame asks again.
+                        continue;
+                    }
                     if self.diff_pending.as_ref().is_some_and(|(pending, _)| *pending == id) {
                         self.diff_pending = None;
                     }
@@ -903,9 +929,10 @@ impl App {
                     if self.shows_detail_of(&task.id) {
                         self.detail_stale = true;
                     }
-                    if self.diff.as_ref().is_some_and(|(id, _)| *id == task.id) && task.running != self.task(&task.id).is_some_and(|t| t.running) {
+                    let diff_of_it = self.diff.as_ref().is_some_and(|(id, _)| *id == task.id) || self.diff_pending.as_ref().is_some_and(|(id, _)| *id == task.id);
+                    if diff_of_it && task.running != self.task(&task.id).is_some_and(|t| t.running) {
                         // A stage started or ended: the branch may have moved.
-                        self.diff = None;
+                        self.reset_diff();
                     }
                     self.upsert(task);
                 }
@@ -965,10 +992,18 @@ impl App {
     pub fn open_detail(&mut self, id: String) {
         self.detail_stale = true;
         self.detail_scroll.set(0);
-        self.detail_cursor = 0;
         self.diff_failed = None;
         self.detail_section = self.task(&id).map(Section::for_task).unwrap_or_default();
+        self.detail_cursor = start_cursor(self.detail_section);
+        self.detail_follow.set(true);
         self.mode = Mode::Detail(id);
+    }
+
+    /// Forgets the open ticket's diff and any fetch in flight; a late answer is then stale.
+    fn reset_diff(&mut self) {
+        self.diff = None;
+        self.diff_pending = None;
+        self.diff_generation += 1;
     }
 
     fn shows_detail_of(&self, id: &str) -> bool {
@@ -1097,7 +1132,7 @@ impl App {
         let file = match have {
             None => None,
             Some(diff) => {
-                let wanted = diff.files.get(self.detail_cursor.min(diff.files.len().saturating_sub(1))).map(|f| f.path.clone());
+                let wanted = diff.files.get(self.detail_row()).map(|f| f.path.clone());
                 if wanted.is_none() || (diff.file == wanted && diff.patch.is_some()) {
                     return;
                 }
@@ -1106,10 +1141,10 @@ impl App {
         };
         let machine = self.machine.clone();
         let tx = self.tx.clone();
-        let (fetching, wanted) = (id.clone(), file.clone());
+        let (fetching, wanted, generation) = (id.clone(), file.clone(), self.diff_generation);
         thread::spawn(move || {
             let diff = machine.diff(&fetching, wanted.as_deref());
-            let _ = tx.send(Incoming::Diff { id: fetching, file: wanted, diff });
+            let _ = tx.send(Incoming::Diff { id: fetching, file: wanted, diff, generation });
         });
         self.diff_pending = Some((id, file));
     }
@@ -1370,12 +1405,10 @@ impl App {
                 let id = id.clone();
                 let markdown = area.lines().join("\n");
                 self.mode = Mode::Detail(id.clone());
-                let before: Vec<crate::model::TestCase> = self
-                    .detail
-                    .as_ref()
-                    .filter(|d| d.task.id == id)
-                    .map(|d| d.cases().into_iter().map(|c| crate::model::TestCase { result: None, ..c }).collect())
-                    .unwrap_or_default();
+                // The baseline is what the editor opened with, read back the same way, so
+                // whitespace the markdown never carried does not count as a change.
+                let before: Vec<crate::model::TestCase> =
+                    self.detail.as_ref().filter(|d| d.task.id == id).map(|d| parse_cases(&cases_markdown(&d.cases()))).unwrap_or_default();
                 let edited = parse_cases(&markdown);
                 if edited.is_empty() {
                     self.notify("keep at least one case; r sends the whole set back instead", true);
@@ -2256,10 +2289,23 @@ impl App {
     }
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
+        let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('d') => self.scroll_detail(half_page),
+                KeyCode::Char('u') => self.scroll_detail(-half_page),
+                _ => {}
+            }
+            return Outcome::Continue;
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
             KeyCode::Char('j') | KeyCode::Down => self.move_in_detail(1),
             KeyCode::Char('k') | KeyCode::Up => self.move_in_detail(-1),
+            KeyCode::Char('J') => self.scroll_detail(1),
+            KeyCode::Char('K') => self.scroll_detail(-1),
+            KeyCode::PageDown => self.scroll_detail(half_page),
+            KeyCode::PageUp => self.scroll_detail(-half_page),
             KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => self.set_section(self.detail_section.next()),
             KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.set_section(self.detail_section.prev()),
             KeyCode::Char(digit @ '1'..='8') => {
@@ -2267,23 +2313,30 @@ impl App {
                     self.set_section(section);
                 }
             }
-            KeyCode::Char('+') | KeyCode::Char('=') => self.detail_full = !self.detail_full,
+            KeyCode::Char('+') => self.detail_full = !self.detail_full,
             KeyCode::Char('?') => {
                 self.help_return = Some(id.to_string());
                 self.mode = Mode::Help(HelpFor::Detail);
             }
+            KeyCode::Char('o') => match self.detail_open_target() {
+                Some(target) => self.open_url(&target),
+                None if self.detail_section.has_cursor() => self.notify("nothing to open here", false),
+                None => return self.ticket_key('o', id),
+            },
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
         }
         Outcome::Continue
     }
 
-    /// Switches the popup's section; each starts at the top with the first row selected.
+    /// Switches the popup's section; each starts at the top, Runs and Evidence on their
+    /// latest row, the others on their first.
     fn set_section(&mut self, section: Section) {
         if section != self.detail_section {
             self.detail_section = section;
             self.detail_scroll.set(0);
-            self.detail_cursor = 0;
+            self.detail_cursor = start_cursor(section);
+            self.detail_follow.set(true);
             self.diff_failed = None;
         }
     }
@@ -2292,21 +2345,53 @@ impl App {
     fn move_in_detail(&mut self, delta: i16) {
         if self.detail_section.has_cursor() {
             let rows = self.detail_rows();
-            let next = (self.detail_cursor as i64 + i64::from(delta)).clamp(0, rows.saturating_sub(1) as i64);
+            let next = (self.detail_row() as i64 + i64::from(delta)).clamp(0, rows.saturating_sub(1) as i64);
             self.detail_cursor = next as usize;
+            self.detail_follow.set(true);
         } else {
             self.scroll_detail(delta);
         }
     }
 
+    /// The selected row of the open section, inside its rows (`usize::MAX` is the last).
+    pub fn detail_row(&self) -> usize {
+        self.detail_cursor.min(self.detail_rows().saturating_sub(1))
+    }
+
+    /// The open ticket's detail, when it is the one loaded.
+    fn open_detail_of(&self) -> Option<&TaskDetail> {
+        self.detail.as_ref().filter(|d| matches!(&self.mode, Mode::Detail(id) if *id == d.task.id))
+    }
+
     /// How many rows the open section's cursor can land on.
     fn detail_rows(&self) -> usize {
-        let detail = self.detail.as_ref().filter(|d| matches!(&self.mode, Mode::Detail(id) if *id == d.task.id));
+        let detail = self.open_detail_of();
         match self.detail_section {
             Section::Runs => detail.map_or(0, |d| d.stage_runs.len()),
             Section::Evidence => detail.map_or(0, |d| d.artifacts.len()),
-            Section::Diff => self.diff.as_ref().map_or(0, |(_, d)| d.files.len()),
+            Section::Diff => self.diff.as_ref().filter(|(id, _)| matches!(&self.mode, Mode::Detail(open) if open == id)).map_or(0, |(_, d)| d.files.len()),
             _ => 0,
+        }
+    }
+
+    /// What `o` opens in the popup, by section: the selected file inside the worktree (Diff),
+    /// the selected artifact (Evidence), the PR's URL from the inbox or the ship gate (PR).
+    /// `None` elsewhere: `o` then means what it means on the board, the linked issue.
+    pub fn detail_open_target(&self) -> Option<String> {
+        let Mode::Detail(id) = &self.mode else { return None };
+        let task = self.task(id)?;
+        match self.detail_section {
+            Section::Diff => {
+                let (_, diff) = self.diff.as_ref().filter(|(for_id, _)| for_id == id)?;
+                let file = diff.files.get(self.detail_row())?;
+                let root = task.worktree_path.as_deref()?;
+                Some(format!("{}/{}", root.trim_end_matches('/'), file.path))
+            }
+            Section::Evidence => self.open_detail_of()?.artifacts.get(self.detail_row()).map(|a| a.path.clone()),
+            Section::Pr => crate::detail::pr_for(task, &self.prs.prs)
+                .map(|pr| pr.url.clone())
+                .or_else(|| self.open_detail_of().and_then(|d| d.latest_approval("awaiting_ship")).and_then(|a| a.requested["prUrl"].as_str().map(str::to_string))),
+            _ => None,
         }
     }
 
@@ -3617,7 +3702,7 @@ mod pr_tests {
 
 #[cfg(test)]
 mod workspace_key_tests {
-    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     use super::*;
 
@@ -3733,6 +3818,126 @@ mod workspace_key_tests {
         press(&mut offline, KeyCode::Char('5'));
         offline.ensure_diff();
         assert!(offline.diff_pending.is_none(), "offline: nothing to fetch from");
+    }
+
+    fn files() -> TaskDiff {
+        serde_json::from_str(r#"{"base":"b","head":"h","files":[{"path":"a.rs","status":"M","added":1,"removed":0},{"path":"b.rs","status":"A","added":2,"removed":0}]}"#).unwrap()
+    }
+
+    #[test]
+    fn a_diff_that_arrives_after_the_branch_moved_is_dropped() {
+        let mut app = open("implementing");
+        app.online = true;
+        press(&mut app, KeyCode::Char('5'));
+        app.ensure_diff();
+        let generation = app.diff_generation;
+        assert!(app.diff_pending.is_some());
+        // A stage starts while the fetch is in flight: the branch may move, so the answer is stale.
+        let mut moved = task("implementing");
+        moved.running = true;
+        app.tx.send(Incoming::Message(StreamMessage::Updated { task: moved })).unwrap();
+        app.pump();
+        assert!(app.diff_pending.is_none(), "the reset forgets the fetch in flight");
+        assert_ne!(app.diff_generation, generation);
+        app.tx.send(Incoming::Diff { id: "abcdef123456".into(), file: None, diff: Ok(files()), generation }).unwrap();
+        app.pump();
+        assert!(app.diff.is_none(), "the late answer is ignored");
+        app.tx.send(Incoming::Diff { id: "abcdef123456".into(), file: None, diff: Ok(files()), generation: app.diff_generation }).unwrap();
+        app.pump();
+        assert!(app.diff.is_some(), "a fresh answer lands");
+    }
+
+    #[test]
+    fn capital_j_k_and_the_page_keys_scroll_a_cursor_section_and_equals_is_not_size() {
+        let mut app = open("implementing");
+        app.detail = Some(detail_with_runs(&app.tasks[0], 3));
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('j'));
+        let cursor = app.detail_row();
+        press(&mut app, KeyCode::Char('J'));
+        assert_eq!(app.detail_scroll.get(), 1, "J scrolls the pane");
+        assert_eq!(app.detail_row(), cursor, "without moving the cursor");
+        press(&mut app, KeyCode::Char('K'));
+        assert_eq!(app.detail_scroll.get(), 0);
+        app.detail_viewport.set(20);
+        press(&mut app, KeyCode::PageDown);
+        assert_eq!(app.detail_scroll.get(), 10, "a page key scrolls half the pane");
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert_eq!(app.detail_scroll.get(), 20);
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        press(&mut app, KeyCode::PageUp);
+        assert_eq!(app.detail_scroll.get(), 0);
+        press(&mut app, KeyCode::Char('='));
+        assert!(!app.detail_full, "= is the board's density key, not the popup's size");
+    }
+
+    #[test]
+    fn runs_and_evidence_open_on_their_latest_row() {
+        let mut app = open("escalated");
+        assert_eq!(app.detail_section, Section::Runs);
+        app.detail = Some(detail_with_runs(&app.tasks[0], 3));
+        assert_eq!(app.detail_row(), 2, "the latest run, not the oldest");
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.detail_row(), 1);
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('5'));
+        assert_eq!(app.detail_row(), 0, "the Diff starts on the first file");
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.detail_row(), 2, "coming back to Runs lands on the latest run again");
+    }
+
+    #[test]
+    fn the_diff_rows_belong_to_the_open_ticket_only() {
+        let mut app = open("implementing");
+        press(&mut app, KeyCode::Char('5'));
+        app.diff = Some(("someone-else".into(), files()));
+        assert_eq!(app.detail_rows(), 0);
+        app.diff = Some(("abcdef123456".into(), files()));
+        assert_eq!(app.detail_rows(), 2);
+    }
+
+    #[test]
+    fn o_targets_the_selected_file_the_artifact_or_the_pr_by_section() {
+        let mut app = open("implementing");
+        assert_eq!(app.detail_open_target(), None, "Overview falls through to the linked issue");
+        press(&mut app, KeyCode::Char('5'));
+        app.diff = Some(("abcdef123456".into(), files()));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.detail_open_target().as_deref(), Some("/w/b.rs"), "the selected file inside the worktree");
+        press(&mut app, KeyCode::Char('6'));
+        let mut detail = detail_with_runs(&app.tasks[0], 1);
+        detail.artifacts = serde_json::from_str(r#"[{"id":"a1","stageRunId":"r1","kind":"log","path":"/out/files/verify.log","label":"verify","sha256":"x","createdAt":"2026-10-22T10:11:00Z"}]"#).unwrap();
+        detail.approvals = serde_json::from_str(r#"[{"id":"s1","kind":"awaiting_ship","requested":{"prUrl":"https://github.com/acme/app/pull/9"},"decision":null,"reason":null,"createdAt":"2026-10-22T10:11:00Z","decidedAt":null}]"#).unwrap();
+        app.detail = Some(detail);
+        assert_eq!(app.detail_open_target().as_deref(), Some("/out/files/verify.log"));
+        press(&mut app, KeyCode::Char('7'));
+        assert_eq!(app.detail_open_target().as_deref(), Some("https://github.com/acme/app/pull/9"), "the ship gate's URL when the inbox has no row");
+        let mut pr: PullRequest = serde_json::from_str(
+            r#"{"repo":"acme/app","number":412,"title":"t","url":"https://github.com/acme/app/pull/412","author":"me","mine":true,"reviewRequested":false,
+            "isDraft":false,"headRef":"task/abcdef12","baseRef":"main","fromFork":false,"reviewDecision":null,"mergeable":"MERGEABLE",
+            "checks":{"state":"none","passed":0,"total":0,"failed":[]},"unresolvedThreads":0,"split":"mine","localPath":null,"task":null,"updatedAt":"2026-10-27T09:00:00Z"}"#,
+        )
+        .unwrap();
+        pr.head_ref = "task/abcdef12".into();
+        app.prs.prs.push(pr);
+        assert_eq!(app.detail_open_target().as_deref(), Some("https://github.com/acme/app/pull/412"), "the inbox's PR first");
+    }
+
+    #[test]
+    fn saving_the_cases_editor_unchanged_patches_nothing_and_keeps_multi_line_approaches() {
+        let mut app = open("awaiting_test_check");
+        let mut detail = detail_with_runs(&app.tasks[0], 1);
+        detail.approvals = serde_json::from_str(
+            r#"[{"id":"t1","kind":"awaiting_test_check","requested":{"cases":[{"title":"rejects a bad password","criterion":"c1","approach":"run the suite\n\n  then read the log  "}]},
+            "decision":null,"reason":null,"createdAt":"2026-10-22T10:00:00Z","decidedAt":null}]"#,
+        )
+        .unwrap();
+        app.detail = Some(detail);
+        app.open_cases_editor("abcdef123456");
+        assert!(matches!(app.mode, Mode::EditCases { .. }));
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Detail(_)));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("nothing changed"), "an untouched editor sends no PATCH");
     }
 }
 

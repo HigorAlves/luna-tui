@@ -32,7 +32,9 @@ pub enum Incoming {
     /// A `/tasks/:id` answer, fetched off the UI thread.
     Detail { id: String, detail: Option<TaskDetail> },
     /// A `/tasks/:id/diff` answer: the files, and `file`'s patch when one was asked for.
-    Diff { id: String, file: Option<String>, diff: Result<TaskDiff, String> },
+    /// `generation` is the app's diff generation when the fetch left; an answer from an
+    /// older one is stale (the branch moved meanwhile) and is dropped.
+    Diff { id: String, file: Option<String>, diff: Result<TaskDiff, String>, generation: u64 },
 }
 
 #[derive(Clone)]
