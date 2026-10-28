@@ -22,7 +22,7 @@ use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::{
     app::{ACTIONS, App, FloorState, HelpFor, Mode},
     model::{
-        COLUMNS, Look, Metrics, REPO_COLOUR_SLOTS, Task, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, repo_colour_slot, spend_p90,
+        COLUMNS, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, Task, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, repo_colour_slot, spend_p90,
         now_secs, unix_secs,
     },
 };
@@ -901,79 +901,136 @@ fn render_inbox(frame: &mut Frame, area: Rect, app: &App, inbox: &InboxState) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// The PR view: a header of splits with their counts and when GitHub was last polled, then
-/// the split's PRs oldest first. Under 100 columns the author and thread columns drop.
+/// The PR view: a header of splits with their counts and when GitHub was last polled; the
+/// split's PRs oldest first as an aligned list on the left; the selected PR drawn by the same
+/// widget the ticket popup uses on the right (from 100 columns; `x` shows it narrower).
 fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     let now = now_secs();
     let counts = pulls::counts(&app.prs.prs);
     let mut head = vec![Span::from(" Pulls ").fg(c(ACCENT)).bold()];
     for (i, split) in PrSplit::ALL.iter().enumerate() {
+        if i > 0 {
+            head.push(Span::from("│").fg(c(MUTED)));
+        }
         let label = format!(" {} {} ", split.label(), counts[i]);
         head.push(if *split == state.split {
             Span::from(label).fg(c(BASE)).bg(c(ACCENT)).bold()
         } else {
             Span::from(label).fg(c(SUBTEXT0))
         });
-        head.push(Span::from(" "));
     }
     let polled = match app.prs.polled_at.as_deref().and_then(unix_secs) {
         Some(at) => format!("polled {} ago", age_secs(now.saturating_sub(at))),
         None => "not polled yet".to_string(),
     };
-    head.push(Span::from(format!(" · {polled}")).fg(c(SUBTEXT0)));
-    let mut lines = vec![Line::from(head)];
+    head.push(Span::from(format!("  {polled}")).fg(c(SUBTEXT0)));
+    let mut top = vec![Line::from(head)];
     if let Some(error) = &app.prs.error {
-        lines.push(Line::from(Span::from(format!(" ⚠ {error}")).fg(c(RED))));
+        top.push(Line::from(Span::from(format!(" ⚠ {error}")).fg(c(RED))));
     }
-    lines.push(Line::default());
+    let [head_area, body] = Layout::vertical([Constraint::Length(top.len() as u16), Constraint::Min(0)]).areas(area);
+    frame.render_widget(Paragraph::new(top), head_area);
+
     let items = pulls::items(&app.prs.prs, state.split);
+    let selected = state.cursor.min(items.len().saturating_sub(1));
+    let wide = body.width >= PULLS_DETAIL_FROM;
+    let [list_area, detail_area] = if wide {
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(PULLS_DETAIL_WIDTH)]).areas(body)
+    } else {
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(0)]).areas(body)
+    };
+
+    let list_block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .title(Line::from(format!(" {} {} ", state.split.label(), items.len())).bold());
+    let inner = list_block.inner(list_area);
+    let mut lines = Vec::new();
     if items.is_empty() {
         lines.push(Line::from(Span::from("  ✓ nothing here").fg(c(GREEN))));
     }
-    let wide = area.width >= 100;
     for (row, &i) in items.iter().enumerate() {
-        let pr = &app.prs.prs[i];
-        let selected = row == state.cursor.min(items.len().saturating_sub(1));
-        let bar = if selected { "▌ " } else { "  " };
-        let checks = pr.checks_label();
-        let checks_color = match pr.checks.state.as_str() {
-            "failure" => RED,
-            "pending" => YELLOW,
-            "success" => GREEN,
-            _ => SUBTEXT0,
-        };
-        let tag = match (&pr.task, pr.local_path.is_some()) {
-            (Some(task), _) => format!("  ⚙ {}", task.state.replace('_', " ")),
-            (None, false) => "  no checkout".to_string(),
-            _ => String::new(),
-        };
-        let threads = if wide && pr.unresolved_threads > 0 { format!("  {} thread(s)", pr.unresolved_threads) } else { String::new() };
-        let author = if wide { format!("  @{}", pr.author) } else { String::new() };
-        let tail = format!("  {checks}  {}{threads}{tag}  {}", pr.review_label(), age(&pr.updated_at, now));
-        let head_text = format!("{bar}{}#{}  ", pr.repo, pr.number);
-        let used = head_text.chars().count() + author.chars().count() + tail.chars().count();
-        let room = (area.width as usize).saturating_sub(used).max(8);
-        let title: String = if pr.title.chars().count() > room {
-            pr.title.chars().take(room.saturating_sub(1)).collect::<String>() + "…"
-        } else {
-            pr.title.clone()
-        };
-        let mut line = vec![
-            Span::from(head_text).fg(c(SUBTEXT0)),
-            Span::from(title).bold(),
-            Span::from(author).fg(c(SUBTEXT0)),
-            Span::from(format!("  {checks}")).fg(c(checks_color)),
-            Span::from(format!("  {}", pr.review_label())).fg(c(LAVENDER)),
-            Span::from(threads).fg(c(PEACH)),
-            Span::from(tag).fg(c(YELLOW)),
-            Span::from(format!("  {}", age(&pr.updated_at, now))).fg(c(SUBTEXT0)),
-        ];
-        if selected {
-            line = line.into_iter().map(|s| s.bg(c(SELECTED_BG))).collect();
-        }
-        lines.push(Line::from(line));
+        lines.push(pr_row(&app.prs.prs[i], row == selected, inner.width as usize, now));
     }
-    frame.render_widget(Paragraph::new(lines), area);
+    frame.render_widget(Paragraph::new(lines).block(list_block), list_area);
+
+    if wide {
+        let pr = items.get(selected).map(|&i| &app.prs.prs[i]);
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(c(MUTED)))
+            .padding(Padding::horizontal(1))
+            .title(Line::from(pr.map_or(" PR ".to_string(), |pr| format!(" {} ", pr.key()))).bold());
+        let lines = match pr {
+            Some(pr) => pr_detail_lines(pr, now),
+            None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
+        };
+        frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), detail_area);
+    }
+}
+
+/// From this width the PR view keeps a detail pane beside the list.
+const PULLS_DETAIL_FROM: u16 = 100;
+const PULLS_DETAIL_WIDTH: u16 = 46;
+
+/// One PR as a row of fixed columns: the checks glyph, the repo's colour bar and name, the
+/// number, the title (the only field ever cut), the age, and a tag (⚙ a task runs, ⌂ no
+/// checkout). Everything else lives in the detail pane.
+fn pr_row(pr: &PullRequest, selected: bool, width: usize, now: u64) -> Line<'static> {
+    let (glyph, checks_color) = match pr.checks.state.as_str() {
+        "failure" => ("✗", RED),
+        "pending" => ("◐", YELLOW),
+        "success" => ("✓", GREEN),
+        _ => ("·", SUBTEXT0),
+    };
+    let repo_name = pr.repo.rsplit('/').next().unwrap_or(&pr.repo);
+    let repo_colour = REPO_COLOURS[repo_colour_slot(repo_name)];
+    let (tag, tag_color) = match (&pr.task, pr.local_path.is_some()) {
+        (Some(_), _) => ("⚙", YELLOW),
+        (None, false) => ("⌂", SUBTEXT0),
+        _ => (" ", SUBTEXT0),
+    };
+    let number = format!("#{}", pr.number);
+    let age = age(&pr.updated_at, now);
+    // sel(2) glyph(2) bar(1) repo(10) gap(1) number(5) gap(1) title gap(2) age(3) gap(2) tag(1)
+    let fixed = 2 + 2 + 1 + 10 + 1 + 5 + 1 + 2 + 3 + 2 + 1;
+    let room = width.saturating_sub(fixed).max(4);
+    let mut spans = vec![
+        Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+        Span::from(format!("{glyph} ")).fg(c(checks_color)),
+        Span::from("▌").fg(c(repo_colour)),
+        Span::from(format!("{:<10} ", truncate(&pr.repo, 10))).fg(c(repo_colour)),
+        Span::from(format!("{number:>5} ")).fg(c(SUBTEXT0)),
+        Span::from(format!("{:<room$}", truncate(&pr.title, room))).bold(),
+        Span::from(format!("  {age:>3}  ")).fg(c(SUBTEXT0)),
+        Span::from(tag.to_string()).fg(c(tag_color)),
+    ];
+    if selected {
+        spans = spans.into_iter().map(|s| s.bg(c(SELECTED_BG))).collect();
+    }
+    Line::from(spans)
+}
+
+/// The PR widget, then the four keys with whether each is on and why not.
+fn pr_detail_lines(pr: &PullRequest, now: u64) -> Vec<Line<'static>> {
+    let mut lines = detail::pr_widget(pr, now);
+    lines.push(Line::default());
+    for key in PrKey::ALL {
+        let label = key.label().split(':').next().unwrap_or(key.label()).split(" (").next().unwrap_or("");
+        match pulls::blocker(pr, key) {
+            None => lines.push(Line::from(vec![
+                Span::from(format!("{} ", key.key())).fg(c(BASE)).bg(c(ACCENT)),
+                Span::from(format!(" {label:<8}")).bold(),
+                Span::from("  ready").fg(c(GREEN)),
+            ])),
+            Some(why) => lines.push(Line::from(vec![
+                Span::from(format!("{} ", key.key())).fg(c(BASE)).bg(c(MUTED)),
+                Span::from(format!(" {label:<8}")).fg(c(SUBTEXT0)),
+                Span::from(format!("  off: {why}")).fg(c(SUBTEXT0)),
+            ])),
+        }
+    }
+    lines
 }
 
 /// Where to clone a repo the machine has no checkout of: the folders under the repos root.
@@ -1009,17 +1066,22 @@ fn render_clone_prompt(frame: &mut Frame, repo: &str, query: &str, all: &[String
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-/// `x` in the PR view: the four keys for the PR under the cursor; an off key says why under it.
+/// `x` in the PR view: the PR drawn by the shared widget, then the four keys for it; an off
+/// key says why under it. On a terminal too narrow for the detail pane this is where the
+/// detail shows.
 fn render_pr_actions(frame: &mut Frame, app: &App, cursor: usize) {
     let Some(pr) = app.pr_under_cursor() else { return };
+    let now = now_secs();
     let blockers: Vec<Option<&str>> = PrKey::ALL.iter().map(|k| pulls::blocker(&pr, *k)).collect();
+    let widget = detail::pr_widget(&pr, now);
     let longest = PrKey::ALL
         .iter()
         .map(|k| k.label().chars().count())
         .chain(blockers.iter().flatten().map(|w| w.chars().count() + 4))
+        .chain(widget.iter().map(Line::width))
         .max()
         .unwrap_or(40);
-    let rows = PrKey::ALL.len() + blockers.iter().flatten().count();
+    let rows = widget.len() + 1 + PrKey::ALL.len() + blockers.iter().flatten().count();
     let width = (longest as u16 + 12).min(frame.area().width.saturating_sub(2));
     let area = centered(frame.area(), width, (rows as u16 + 4).min(frame.area().height));
     frame.render_widget(Clear, area);
@@ -1027,8 +1089,9 @@ fn render_pr_actions(frame: &mut Frame, app: &App, cursor: usize) {
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(ACCENT)))
         .padding(Padding::horizontal(2))
-        .title(Line::from(format!(" {} {} · {} ", pr.key(), pr.title, pr.head_ref)).bold());
-    let mut lines: Vec<Line> = Vec::new();
+        .title(Line::from(format!(" {} ", pr.key())).bold());
+    let mut lines: Vec<Line> = widget;
+    lines.push(Line::default());
     for (i, key) in PrKey::ALL.iter().enumerate() {
         let selected = i == cursor;
         let blocked = blockers[i];
@@ -1046,7 +1109,7 @@ fn render_pr_actions(frame: &mut Frame, app: &App, cursor: usize) {
             lines.push(Line::from(Span::from(format!("      ↳ {why}")).fg(c(MUTED))));
         }
     }
-    frame.render_widget(Paragraph::new(lines).block(block), area);
+    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
 }
 
 /// The Digest: what changed since the board was last open, by group, newest first.
@@ -1895,19 +1958,34 @@ mod pr_tests {
             pr(13, "A very long pull request title that will not fit in a narrow terminal at all", "review_requested", "pending", false, false),
             pr(14, "Ready one", "ready_to_merge", "success", true, true),
         ]);
-        let text = render(120, 12, &app);
+        let text = render(120, 20, &app);
         assert!(text.contains("Review requested 2"), "{text}");
         assert!(text.contains("Ready to merge 1"), "{text}");
         assert!(text.contains("polled"), "{text}");
-        let row = text.lines().find(|l| l.contains("acme/app#12")).unwrap_or_default().to_string();
-        assert!(row.contains("Export CSV") && row.contains("@them") && row.contains("✗ lint") && row.contains("approved") && row.contains("2 thread(s)"), "{row}");
-        let narrow = text.lines().find(|l| l.contains("acme/app#13")).unwrap_or_default().to_string();
-        assert!(narrow.contains("no checkout") && narrow.contains("…"), "{narrow}");
+        let row = text.lines().find(|l| l.contains("#12") && l.contains("Export CSV")).unwrap_or_default().to_string();
+        assert!(row.starts_with("│▌ ✗ ▌acme/app"), "selected, red checks, the repo bar then the name: {row}");
+        assert!(!row.contains("@them") && !row.contains("lint"), "author and check names leave the row: {row}");
+        let second = text.lines().find(|l| l.contains("#13")).unwrap_or_default().to_string();
+        let col = |line: &str, needle: &str| line.find(needle).map(|i| line[..i].chars().count());
+        assert_eq!(col(&row, "#12"), col(&second, "#13"), "numbers line up");
+        assert_eq!(col(&row, "Export"), col(&second, "A very"), "titles line up");
+        assert!(second.contains("…") && second.contains("⌂"), "a long title is cut, no checkout is a tag: {second}");
+        let mut ready = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, true)]);
+        ready.pulls = Some(PullsState { split: PrSplit::ReadyToMerge, cursor: 0 });
+        let third = render(120, 20, &ready).lines().find(|l| l.contains("#14") && l.contains("Ready one")).unwrap_or_default().to_string();
+        assert!(third.contains("⚙") && third.contains("✓"), "a running task is a tag: {third}");
+        // The detail pane shows the selected PR with the fields the row dropped.
+        assert!(text.contains("acme/app#12  Export CSV"), "{text}");
+        assert!(text.contains("@them · h → main"), "{text}");
+        assert!(text.contains("✗ lint") && text.contains("✗ 1 of 3 failed"), "{text}");
+        assert!(text.contains("approved · 2 unresolved threads"), "{text}");
+        assert!(text.contains("m ") && text.contains("off: not ready to merge"), "{text}");
         assert!(text.contains("[pulls]"), "{text}");
 
-        let text = render(80, 12, &app);
-        let row = text.lines().find(|l| l.contains("acme/app#12")).unwrap_or_default().to_string();
-        assert!(!row.contains("@them") && row.contains("✗ lint"), "author drops under 100 columns: {row}");
+        let text = render(80, 20, &app);
+        assert!(!text.contains("@them"), "no detail pane under 100 columns: {text}");
+        let row = text.lines().find(|l| l.contains("#12")).unwrap_or_default().to_string();
+        assert!(row.contains("Export CSV") && row.contains("✗"), "{row}");
         assert!(!text.contains("\u{2588}"), "nothing overflows: {text}");
     }
 
@@ -1921,9 +1999,10 @@ mod pr_tests {
         let text = render(100, 20, &app);
         assert!(text.contains("clone acme/app into") && text.contains("/r/projects/app") && !text.contains("▌ /r/app"), "{text}");
         app.mode = Mode::PrActions { cursor: 0 };
-        let text = render(100, 14, &app);
+        let text = render(100, 30, &app);
         assert!(text.contains("merge (squash") && !text.contains("review is for other people's PRs"), "{text}");
         assert!(text.contains("↳ threads are answered on your own PRs"), "{text}");
+        assert!(text.contains("@them · h → main"), "the menu carries the PR widget: {text}");
     }
 }
 
