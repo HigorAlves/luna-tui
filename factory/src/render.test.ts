@@ -108,6 +108,12 @@ describe("callLine", () => {
     expect(callLine("mcp__luna__step", { label: "slice 1" })).toBe("→ mcp__luna__step slice 1");
   });
 
+  it("tells the pages of one file apart, so reading a long file in four pages is not one call four times", () => {
+    expect(callLine("Read", { file_path: "/work/ui.rs", offset: 400, limit: 200 })).toBe("→ Read /work/ui.rs:400+200");
+    expect(callLine("Read", { file_path: "/work/ui.rs", offset: 600, limit: 200 })).toBe("→ Read /work/ui.rs:600+200");
+    expect(callLine("Read", { file_path: "/work/ui.rs", limit: 50 })).toBe("→ Read /work/ui.rs:0+50");
+  });
+
   it("fingerprints an edit by what it changes, so four different edits of one file are not one call four times", () => {
     const a = callLine("Edit", { file_path: "/work/a.rs", old_string: "x", new_string: "y" });
     const b = callLine("Edit", { file_path: "/work/a.rs", old_string: "y", new_string: "z" });
