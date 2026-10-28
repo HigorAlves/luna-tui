@@ -143,6 +143,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("open <#id>", "open a ticket by id prefix"),
     ("group stage|repo|age", "order columns"),
     ("fold / unfold", "fold / unfold the focused column"),
+    ("setup <repo>", "propose the repo's luna.yaml (a name under HARDNESS_REPOS_DIR, or a path)"),
     ("slots <n>", "resize the pool"),
     ("drain / resume", "take no new work / carry on"),
     ("floor / inbox / digest", "open that view"),
@@ -995,14 +996,14 @@ impl App {
             }
             'R' => self.open_repo_picker(id),
             'r' => {
-                if matches!(task.state.as_str(), "awaiting_approval" | "awaiting_test_check") {
+                if matches!(task.state.as_str(), "awaiting_setup" | "awaiting_approval" | "awaiting_test_check") {
                     self.mode = Mode::Reason {
                         id: id.to_string(),
                         approve: false,
                         text: String::new(),
                     };
                 } else {
-                    self.notify("only a plan or tests waiting for you can be sent back", false);
+                    self.notify("only a setup, a plan or tests waiting for you can be sent back", false);
                 }
             }
             'X' => {
@@ -1802,6 +1803,13 @@ impl App {
             "unfold" => {
                 self.folded.remove(&self.focus);
             }
+            "setup" => match setup_repo_path(rest, repos_root()) {
+                Ok(path) => {
+                    let path = path.to_string_lossy().into_owned();
+                    self.act(|m| m.setup_repo(&path), "setup started: approve its luna.yaml when it asks");
+                }
+                Err(error) => self.notify(error, true),
+            },
             "slots" => match rest.parse::<u64>() {
                 Ok(n) if n >= 1 => match self.machine.set_slots(n) {
                     Ok(slots) => {
@@ -2012,6 +2020,26 @@ impl App {
     }
 }
 
+/// The checkout `:setup <repo>` means: a path as given when it is absolute (or starts with
+/// `~`, `.`), otherwise a name under the repos root. It must exist and hold a `.git`.
+fn setup_repo_path(arg: &str, root: Option<std::path::PathBuf>) -> Result<std::path::PathBuf, String> {
+    let arg = arg.trim();
+    if arg.is_empty() {
+        return Err("setup takes a repo: a name under HARDNESS_REPOS_DIR / ~/Developer, or a path".to_string());
+    }
+    let path = if let Some(rest) = arg.strip_prefix("~/") {
+        std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(rest)).ok_or("HOME is not set")?
+    } else if arg.starts_with('/') || arg.starts_with('.') {
+        std::path::PathBuf::from(arg)
+    } else {
+        root.ok_or("HARDNESS_REPOS_DIR / HOME is not set; give a path")?.join(arg)
+    };
+    if !path.join(".git").exists() {
+        return Err(format!("{} is not a git checkout", path.display()));
+    }
+    Ok(path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2218,6 +2246,32 @@ mod tests {
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn setup_resolves_a_name_under_the_repos_root_and_a_path_as_given_and_refuses_what_is_not_a_checkout() {
+        let root = std::env::temp_dir().join(format!("luna-setup-{}", std::process::id()));
+        let repo = root.join("app");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        assert_eq!(setup_repo_path("app", Some(root.clone())).unwrap(), repo);
+        assert_eq!(setup_repo_path(&repo.to_string_lossy(), None).unwrap(), repo);
+        assert!(setup_repo_path("missing", Some(root.clone())).unwrap_err().contains("not a git checkout"));
+        assert!(setup_repo_path("", Some(root.clone())).unwrap_err().contains("setup takes a repo"));
+        assert!(setup_repo_path("app", None).unwrap_err().contains("give a path"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn the_setup_command_asks_the_machine_and_reports_its_answer() {
+        let root = std::env::temp_dir().join(format!("luna-setup-cmd-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("app").join(".git")).unwrap();
+        let mut app = App::new(Machine::from_env());
+        type_command(&mut app, &format!("setup {}", root.join("app").display()));
+        // Offline machine: the call fails and the toast carries the error, which proves it was made.
+        assert!(app.toast.as_ref().is_some_and(|t| t.error), "an offline machine answers with an error toast: {:?}", app.toast.as_ref().map(|t| &t.text));
+        type_command(&mut app, "setup");
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("setup takes a repo")), "{:?}", app.toast.as_ref().map(|t| &t.text));
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
