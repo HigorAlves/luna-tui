@@ -1,6 +1,6 @@
 // Plain domain types for a task and everything attached to it. No TypeORM here — see
 // ../adapters/persistence/schemas.ts for the persistence mapping of these same shapes.
-import type { ArtifactKind, TaskSource, TaskState } from "@hardness/contracts";
+import type { ArtifactKind, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
 
 import type { Retries } from "./transition.ts";
 
@@ -10,8 +10,10 @@ export interface TaskRow {
   description: string;
   criteria: string[];
   repoPath: string | null;
-  /** The tracker item the task came from. */
+  /** The tracker item or PR the task came from. */
   source: TaskSource | null;
+  /** The graph the task walks; `feature` is the full pipeline. */
+  route: TaskRoute;
   branch: string | null;
   worktreePath: string | null;
   state: TaskState;

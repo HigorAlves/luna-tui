@@ -22,6 +22,7 @@ export const TaskEntity = new EntitySchema<TaskRow>({
     criteria: { type: "jsonb", default: () => "'[]'::jsonb" },
     repoPath: { name: "repo_path", type: "text", nullable: true },
     source: { type: "jsonb", nullable: true },
+    route: { type: "text", default: "feature" },
     branch: { type: "text", nullable: true },
     worktreePath: { name: "worktree_path", type: "text", nullable: true },
     state: { type: "text" },

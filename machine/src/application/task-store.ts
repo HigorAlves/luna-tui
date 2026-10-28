@@ -1,7 +1,7 @@
 // Everything Pipeline needs from storage. Every method here is plain CRUD except
 // `withTaskLock`, whose Postgres implementation takes a row lock inside a transaction —
 // the one seam where the transition engine's correctness depends on the storage layer.
-import type { TaskState } from "@hardness/contracts";
+import type { TaskRoute, TaskState } from "@hardness/contracts";
 
 import type { ApprovalRow, ArtifactRow, Decision, EventRow, StageRunRow, StageRunStatus, TaskRow } from "../domain/task.ts";
 
@@ -11,6 +11,11 @@ export interface NewTaskRow {
   criteria: string[];
   repoPath: string | null;
   source: TaskRow["source"];
+  /** Defaults to `feature`. */
+  route?: TaskRoute;
+  /** A PR task starts on the PR's own branch, in a worktree prepared before the task exists. */
+  branch?: string | null;
+  worktreePath?: string | null;
 }
 
 export interface DecideApprovalInput {
@@ -79,7 +84,8 @@ export interface TaskStore {
   createTask(input: NewTaskRow): Promise<TaskRow>;
   listTasks(): Promise<TaskRow[]>;
   getTask(id: string): Promise<TaskRow | null>;
-  findTaskBySource(repo: string, number: number): Promise<TaskRow | null>;
+  /** The task made from an issue (`github`) or a PR (`github_pr`) of this repo and number. */
+  findTaskBySource(repo: string, number: number, kind?: "github" | "github_pr"): Promise<TaskRow | null>;
   updateTask(id: string, patch: Partial<TaskRow>): Promise<void>;
   deleteTask(id: string): Promise<void>;
   findStuckTasks(running: ReadonlySet<TaskState>): Promise<TaskRow[]>;
