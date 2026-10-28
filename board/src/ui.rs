@@ -114,6 +114,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if let Some(floor) = &app.floor {
         render_floor(frame, body, floor);
         frame.render_widget(footer_line(app), footer);
+        if let Mode::Help(ctx) = &app.mode {
+            let max = render_help(frame, *ctx, app.help_scroll.get());
+            app.help_max.set(max);
+            app.help_scroll.set(app.help_scroll.get().min(max));
+        }
         return;
     }
     if let Some(digest) = app.digest.as_ref().filter(|_| matches!(app.mode, Mode::Normal)) {
@@ -2444,6 +2449,17 @@ mod help_sheet_tests {
         assert!(matches!(app.mode, Mode::Help(HelpFor::Digest)));
         press(&mut app, KeyCode::Esc);
         assert!(app.digest.is_some() && matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn floor_help_is_drawn_over_the_floor() {
+        let mut app = App::new(crate::Machine::from_env());
+        app.floor = Some(FloorState::default());
+        press(&mut app, KeyCode::Char('?'));
+        let text = screen(&app, 200, 50).join("\n");
+        for s in HelpFor::Floor.sections() {
+            assert!(text.contains(s.heading), "heading {}", s.heading);
+        }
     }
 
     #[test]
