@@ -72,6 +72,7 @@ export type Finding = z.infer<typeof Finding>;
 
 /** Pack ids equal the Hardness stage names they run. */
 export const PackId = z.enum([
+  "setup",
   "triage",
   "test_design",
   "implementing",
@@ -157,6 +158,36 @@ export const ServiceSpec = z.object({
   exports: z.record(z.string(), z.string()).optional(),
 });
 export type ServiceSpec = z.infer<typeof ServiceSpec>;
+
+/** A repo's `luna.yaml` as data: what the setup pack proposes and what the machine reads.
+ *  Unknown keys are ignored, so a newer file loads on an older machine. */
+export const LunaConfig = z.object({
+  policy: z
+    .object({
+      qa: z.enum(["web", "none"]).optional(),
+      monthly_budget_usd: z.number().positive().optional(),
+      auto_approve_plan_minutes: z.number().int().positive().optional(),
+      max_concurrent: z.number().int().positive().optional(),
+      holdout_cases: z.boolean().optional(),
+    })
+    .optional(),
+  qa_targets: z
+    .array(
+      z.object({
+        name: z.string().min(1),
+        url: z.string().regex(/^https?:\/\//, "url must start with http:// or https://"),
+        credential: z
+          .string()
+          .regex(/^env:[A-Z_][A-Z0-9_]*$/, "credential must be a reference like env:QA_PASSWORD, never a value")
+          .optional(),
+      }),
+    )
+    .optional(),
+  checks: z.array(CheckSpec).optional(),
+  services: z.record(z.string().min(1), ServiceSpec).optional(),
+  toolchains: z.record(z.string().min(1), z.union([z.string(), z.number()])).optional(),
+});
+export type LunaConfig = z.infer<typeof LunaConfig>;
 
 /** A place the e2e stage may drive. `credential` is a reference (`env:NAME`), never a value. */
 export const QaTarget = z.object({

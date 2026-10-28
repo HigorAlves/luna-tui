@@ -13,6 +13,7 @@ import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
 import { type EvidenceDeps, evidenceRunner } from "../application/stages/evidence.ts";
 import { memoryReviewRunner, withMemoryReview } from "../application/stages/memory.ts";
 import type { StageContext, StageResult, StageRunner } from "../application/ports.ts";
+import { setupRunner } from "../application/stages/setup.ts";
 import { shipRunner } from "../application/stages/ship.ts";
 import { loadCredential } from "../adapters/docker/credentials.ts";
 import { imageExists, removeLeftoverContainers, sandboxExecutor } from "../adapters/docker/docker.ts";
@@ -75,6 +76,8 @@ export async function buildRealStages(
   const verifyPack = (context: StageContext) => runAgent(deps, context, "verifying");
   const real: Partial<Record<TaskState, StageRunner>> = {
     ...agentRunners(deps),
+    // Setup reads the repo checkout itself (no worktree yet) and proves what it proposes in the image.
+    setup: setupRunner({ runPack: (context) => runAgent(deps, context, "setup", { checkout: true }), exec: checksExec, stateDir: config.stateDir }),
     // ci_watch polls the PR's checks on the host and only calls its pack when one is red.
     ci_watch: ciWatchRunner({ exec, runPack: (context, ci) => runAgent(deps, context, "ci_watch", { ci }) }),
     // e2e skips repos with no web surface; without the QA image it passes with a note.

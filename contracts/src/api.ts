@@ -5,13 +5,22 @@ import { z } from "zod";
 import type { Column, TaskState } from "./index.ts";
 import { type ArtifactKind, StageOutcome, TaskSource } from "./stage.ts";
 
+/** `feature` is a ticket through the whole pipeline; `setup` only proposes the repo's luna.yaml and closes. */
+export const TaskKind = z.enum(["feature", "setup"]);
+export type TaskKind = z.infer<typeof TaskKind>;
+
 export const NewTaskInput = z.object({
   title: z.string().trim().min(1),
   description: z.string().optional(),
   criteria: z.array(z.string().trim().min(1)).optional(),
   repoPath: z.string().nullable().optional(),
   source: TaskSource.nullable().optional(),
+  kind: TaskKind.optional(),
 });
+
+/** `POST /repos/setup`: have the setup pack propose a luna.yaml for the checkout at `repoPath`. */
+export const SetupRepoInput = z.object({ repoPath: z.string().trim().min(1) });
+export type SetupRepoInput = z.infer<typeof SetupRepoInput>;
 export type NewTaskInput = z.infer<typeof NewTaskInput>;
 
 /** `PATCH /tasks/:id`: only the fields given change. */
@@ -79,6 +88,8 @@ export interface Task {
   repoPath: string | null;
   /** The tracker item this task came from, if any. */
   source: TaskSource | null;
+  /** A ticket (`feature`) or a one-off that proposes the repo's luna.yaml (`setup`). */
+  kind: TaskKind;
   branch: string | null;
   worktreePath: string | null;
   state: TaskState;

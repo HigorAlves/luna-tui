@@ -21,6 +21,8 @@ export type Column = (typeof COLUMNS)[number];
 /** Every state a task can be in, from the stage graph in docs/architecture.md. */
 export const TaskState = z.enum([
   "draft",
+  "setup",
+  "awaiting_setup",
   "triage",
   "awaiting_answers",
   "awaiting_approval",
@@ -44,6 +46,8 @@ export type TaskState = z.infer<typeof TaskState>;
 /** The board column each task state is shown in. */
 export const COLUMN_OF: Record<TaskState, Column> = {
   draft: "Intake",
+  setup: "Intake",
+  awaiting_setup: "Intake",
   triage: "Triage",
   awaiting_answers: "Triage",
   awaiting_approval: "Triage",
@@ -65,6 +69,7 @@ export const COLUMN_OF: Record<TaskState, Column> = {
 
 /** States where an agent or script is running a stage. */
 export const RUNNING: ReadonlySet<TaskState> = new Set([
+  "setup",
   "triage",
   "test_design",
   "implementing",
@@ -78,6 +83,7 @@ export const RUNNING: ReadonlySet<TaskState> = new Set([
 
 /** States where the pipeline waits for the user. The board shows these as "needs you". */
 export const WAITING_ON_USER: ReadonlySet<TaskState> = new Set([
+  "awaiting_setup",
   "awaiting_answers",
   "awaiting_approval",
   "awaiting_test_check",

@@ -11,6 +11,8 @@ export interface NewTaskRow {
   criteria: string[];
   repoPath: string | null;
   source: TaskRow["source"];
+  /** Defaults to `feature`. */
+  kind?: TaskRow["kind"];
 }
 
 export interface DecideApprovalInput {

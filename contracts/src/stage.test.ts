@@ -151,9 +151,9 @@ describe("StageOutput", () => {
 });
 
 describe("PackId", () => {
-  it("has the eight packs, each named after a task state", () => {
+  it("has the nine packs, each named after a task state", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory"].sort(),
+      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory"].sort(),
     );
     for (const pack of PackId.options) expect(TaskState.options).toContain(pack);
   });

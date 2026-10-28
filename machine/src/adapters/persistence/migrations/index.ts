@@ -5,6 +5,7 @@ import { FactorySeam1792900000000 } from "./1792900000000-FactorySeam.ts";
 import { AddQueuedAt1793000000000 } from "./1793000000000-AddQueuedAt.ts";
 import { RetireBacklog1793100000000 } from "./1793100000000-RetireBacklog.ts";
 import { AddTriad1793200000000 } from "./1793200000000-AddTriad.ts";
+import { AddTaskKind1793300000000 } from "./1793300000000-AddTaskKind.ts";
 
 export const MIGRATIONS: Function[] = [
   Init1792712166445,
@@ -13,4 +14,5 @@ export const MIGRATIONS: Function[] = [
   AddQueuedAt1793000000000,
   RetireBacklog1793100000000,
   AddTriad1793200000000,
+  AddTaskKind1793300000000,
 ];

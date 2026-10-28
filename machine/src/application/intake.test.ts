@@ -17,7 +17,7 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   await db.query("truncate tasks cascade");
-  pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true });
+  pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true });
 });
 
 const issues = [

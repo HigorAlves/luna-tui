@@ -70,6 +70,8 @@ export interface AgentExtra {
   ci?: CiContext | null;
   /** reviewing_memory: the last implementing ledger and every earlier run, from the machine's records. */
   history?: { ledger: Ledger | null; runs: RunSummary[] } | null;
+  /** setup: run over the repo checkout itself, read-only, no task worktree or branch. */
+  checkout?: boolean;
 }
 
 export async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}): Promise<StageResult> {
@@ -78,8 +80,10 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     throw new Error("the task has no repoPath; create it with a repo to run real stages");
   }
   const limits = PACK_LIMITS[pack];
-  const workspace: Workspace =
-    task.branch && task.worktreePath
+  if (extra.checkout && limits.writable) throw new Error(`${pack} is writable; a checkout run must be read-only`);
+  const workspace: Workspace = extra.checkout
+    ? { branch: "", path: task.repoPath }
+    : task.branch && task.worktreePath
       ? { branch: task.branch, path: task.worktreePath }
       : workspaceFor(task, task.repoPath, deps.worktreesDir);
   // The branch prefix is a structural gate: whatever a task row says, a writable stage only
@@ -90,7 +94,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches` },
     };
   }
-  await ensureWorktree(task.repoPath, workspace);
+  if (!extra.checkout) await ensureWorktree(task.repoPath, workspace);
   // After a restart, the container the last machine started may still be running: its name and
   // the commit it started from come from the run row, and the sandbox waits on it instead.
   const resume = context.resume;
@@ -149,7 +153,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
 
   const base: StageResult = {
     outcome: "fail",
-    workspace: { branch: workspace.branch, worktreePath: workspace.path },
+    // A checkout run has no workspace of the task's own to record.
+    ...(extra.checkout ? {} : { workspace: { branch: workspace.branch, worktreePath: workspace.path } }),
     run: { containerId: container, transcriptPath: sandbox.transcriptPath, inputCommit },
   };
   // However this run ends without a clean, committed answer, the next attempt should not

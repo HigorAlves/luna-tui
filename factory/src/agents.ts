@@ -9,6 +9,7 @@ import { join } from "node:path";
 export const PLUGIN_NAME = "luna-factory";
 
 export const ROLE_DESCRIPTION: Record<AgentRole, string> = {
+  "setup-planner": "Reads a repository checkout and proposes its luna.yaml: the checks, the services the code needs, the toolchains and the policy; never writes.",
   "triage-planner": "Reads a ticket and the repo and turns it into a plan with testable criteria, assumptions and slices; asks at most three questions when no default exists.",
   "test-designer": "Designs the failing tests for an approved plan: one case per criterion, happy path, boundaries and error paths.",
   implementer: "Implements an approved plan slice by slice: red, green, one commit per slice, the suite green between.",

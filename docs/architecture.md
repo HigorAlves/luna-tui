@@ -21,7 +21,7 @@ The machine is one service for every repo you point a task at, not one per repo:
 
 | Column | Task states |
 |---|---|
-| Intake | `draft` |
+| Intake | `draft`, `setup`, `awaiting_setup` |
 | Triage | `triage`, `awaiting_answers`, `awaiting_approval` |
 | Approved | `test_design`, `awaiting_test_check` |
 | Build | `implementing`, `escalated`, `paused_rate_limit` |
@@ -29,6 +29,8 @@ The machine is one service for every repo you point a task at, not one per repo:
 | Evidence | `evidence` |
 | Ship | `awaiting_ship`, `shipping`, `reviewing_memory` |
 | Done | `closed` |
+
+A task on a repo with no `luna.yaml` runs the `setup` stage first: the setup pack reads the checkout read-only and proposes the file, the machine proves every proposed check once with the proposed services beside it, and the `awaiting_setup` gate shows you the file and the proof. Approving writes `luna.yaml` into the checkout and the task goes on to triage; a `:setup <repo>` task (kind `setup`) closes instead. Sending it back with a note re-runs setup with the note as guidance. See [configuration](configuration.md).
 
 The card states the board already shows map from the same data: a waiting gate is "needs you", a running stage is "working", `escalated` and an aborted run are "lost". Source of truth: `COLUMNS` and `COLUMN_OF` in `contracts/src/index.ts`.
 

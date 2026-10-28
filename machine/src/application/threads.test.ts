@@ -27,7 +27,7 @@ function wire(options: { slack?: boolean; enabled?: boolean } = {}) {
   const comments: string[][] = [];
   const posts: Array<Record<string, unknown>> = [];
   let replies: ThreadReplies;
-  const pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, onEvent: (event) => void replies.handle(event) });
+  const pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, onEvent: (event) => void replies.handle(event) });
   replies = new ThreadReplies({
     pipeline,
     enabled: options.enabled ?? true,
@@ -91,7 +91,7 @@ describe("ThreadReplies", () => {
 
     // A new machine over the same database finds the thread in the task's events.
     const again = wire({ slack: true });
-    const fresh = new Pipeline(db, stubs.runnerFor, { inline: true, onEvent: (event) => void again.replies.handle(event) });
+    const fresh = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, onEvent: (event) => void again.replies.handle(event) });
     await fresh.decide(task.id, "sent_back", "redo");
     await again.replies.idle();
     expect(again.posts).toEqual([{ channel: "C123", thread_ts: "1.1", text: "Needs you: approve the plan." }]);
