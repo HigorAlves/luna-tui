@@ -14,13 +14,14 @@ import {
   ensureWorktree,
   headCommit,
   dirtyFiles,
+  ownedWorkspace,
   resetWorktree,
   restoreFiles,
-  workspaceFor,
 } from "../../adapters/git/worktree.ts";
 import type { Credential } from "../../adapters/docker/credentials.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
+import { jiraOf } from "../../domain/jira-link.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
 import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
@@ -56,6 +57,8 @@ export interface AgentDeps {
 
 /** Every branch the pipeline writes starts with this; see `workspaceFor`. */
 const TASK_BRANCH_PREFIX = "task/";
+/** Branches no task may ever work on, whatever a row or a pattern says. */
+const PROTECTED_BRANCHES = new Set(["main", "master", "develop", "HEAD"]);
 
 /** How long the original tests may take when replayed against a changed test file. */
 const LOCKED_REPLAY_TIMEOUT_MS = 10 * 60_000;
@@ -87,18 +90,22 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   if (extra.checkout && limits.writable) throw new Error(`${pack} is writable; a checkout run must be read-only`);
   const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
   // The branch the pipeline would give this task today: `task/<id>-<slug>`, or the repo's
-  // `jira.branch` pattern for a linked task.
-  const owned = workspaceFor(task, task.repoPath, deps.worktreesDir, policy.jira?.branch);
-  const workspace: Workspace = extra.checkout
-    ? { branch: "", path: task.repoPath }
-    : task.branch && task.worktreePath
-      ? { branch: task.branch, path: task.worktreePath }
-      : owned;
+  // `jira.branch` pattern for a linked task (with the id appended when the repo already has
+  // that branch). A task that already works somewhere keeps that branch: it was named and
+  // checked when the worktree was made, and the link cannot change while the worktree exists,
+  // so a later issue-type change in Jira does not rename what is already pushed.
+  const owned = await ownedWorkspace(task, task.repoPath, deps.worktreesDir, policy.jira?.branch);
+  const persisted = Boolean(task.branch && task.worktreePath) && !extra.checkout;
+  const workspace: Workspace = extra.checkout ? { branch: "", path: task.repoPath } : persisted ? { branch: task.branch!, path: task.worktreePath! } : owned;
   // The branch is a structural gate: whatever a task row says, a writable stage only ever
   // commits to a branch the pipeline owns: a `task/` branch, the one it named for a linked
-  // task, or, for a PR task, the PR's own head branch.
+  // task (the branch it persisted carries the issue key or the task id, never a protected
+  // name), or, for a PR task, the PR's own head branch.
   const prBranch = task.source?.kind === "github_pr" ? task.source.headRef : null;
-  if (limits.writable && !workspace.branch.startsWith(TASK_BRANCH_PREFIX) && workspace.branch !== prBranch && workspace.branch !== owned.branch) {
+  const link = jiraOf(task);
+  const ownsPersisted = (branch: string): boolean =>
+    persisted && link !== null && !PROTECTED_BRANCHES.has(branch) && (branch.includes(link.key) || branch.includes(task.id.slice(0, 8)));
+  if (limits.writable && !workspace.branch.startsWith(TASK_BRANCH_PREFIX) && workspace.branch !== prBranch && workspace.branch !== owned.branch && !ownsPersisted(workspace.branch)) {
     return {
       outcome: "fail",
       detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches (or the branch it named for a Jira-linked task)` },

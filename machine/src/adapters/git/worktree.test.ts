@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { branchBase, commitAll, ensureCleanCheckout, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, prWorktreePath, workspaceFor } from "./worktree.ts";
+import { branchBase, commitAll, ensureCleanCheckout, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -197,5 +197,23 @@ describe("workspaceFor", () => {
     expect(workspaceFor({ ...task, jira: link }, "/repos/app", "/wt", "task/{key}-{slug}-{route}-{id}").branch).toBe("task/PLAT-123-login-page-feature-a1b2c3d4");
     // An intake import links through its source before JiraWatch fills the column.
     expect(workspaceFor({ ...task, source: { kind: "jira", key: "PLAT-9", url: "u", issueType: "Story" } }, "/repos/app", "/wt").branch).toBe("story/PLAT-9");
+  });
+
+  it("appends the task id when the repo already has the branch the pattern names (and the pattern has no {id} or {slug})", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "owned-")));
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "main");
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "init");
+    const linked = { ...task, jira: link };
+    expect((await ownedWorkspace(linked, repo, join(root, "wt"))).branch).toBe("bug/PLAT-123");
+    // An older task (or a person) left a bug/PLAT-123 behind: this task gets its own.
+    git(repo, "branch", "bug/PLAT-123");
+    expect(await ownedWorkspace(linked, repo, join(root, "wt"))).toEqual({ branch: "bug/PLAT-123-a1b2c3d4", path: join(root, "wt", "repo", "bug-PLAT-123-a1b2c3d4") });
+    expect((await ownedWorkspace(linked, repo, join(root, "wt"), "{type}/{key}-{slug}")).branch).toBe("bug/PLAT-123-login-page");
+    git(repo, "branch", "task/a1b2c3d4-login-page");
+    expect((await ownedWorkspace(task, repo, join(root, "wt"))).branch).toBe("task/a1b2c3d4-login-page");
   });
 });

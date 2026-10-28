@@ -3,7 +3,8 @@
 import { existsSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 
-import { jiraBranch, slug } from "../../domain/jira-link.ts";
+import { jiraBranch, jiraOf, slug } from "../../domain/jira-link.ts";
+import { DEFAULT_JIRA_BRANCH } from "../../domain/policy.ts";
 import { exec, execOrThrow } from "../process/exec.ts";
 
 export { slug };
@@ -30,6 +31,25 @@ export function workspaceFor(
   const linked = jiraBranch({ id: task.id, title: task.title, route: task.route ?? "feature", jira: task.jira ?? null, source: task.source ?? null }, jiraPattern);
   const branch = linked ?? `task/${task.id.slice(0, 8)}-${slug(task.title)}`;
   return { branch, path: join(worktreesDir, basename(repoPath), branch.replaceAll("/", "-")) };
+}
+
+/**
+ * The workspace the pipeline owns for a task that has none yet: `workspaceFor`, except that a
+ * linked task whose pattern names a branch the repo already has (an older task on the same
+ * issue, or a person's) gets the task id appended, so no two tasks ever share a branch. A
+ * pattern with `{id}` or `{slug}` already tells tasks apart and is left alone.
+ */
+export async function ownedWorkspace(task: Parameters<typeof workspaceFor>[0], repoPath: string, worktreesDir: string, jiraPattern: string = DEFAULT_JIRA_BRANCH): Promise<Workspace> {
+  const plain = workspaceFor(task, repoPath, worktreesDir, jiraPattern);
+  const linked = jiraOf({ jira: task.jira ?? null, source: task.source ?? null }) !== null;
+  if (!linked || jiraPattern.includes("{id}") || jiraPattern.includes("{slug}")) return plain;
+  if (!(await branchExists(repoPath, plain.branch))) return plain;
+  return workspaceFor(task, repoPath, worktreesDir, `${jiraPattern}-{id}`);
+}
+
+/** Whether `refs/heads/<branch>` exists in the repo. */
+export async function branchExists(repoPath: string, branch: string): Promise<boolean> {
+  return (await exec("git", [...HOST_GIT, "-C", repoPath, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;
 }
 
 /** A lock older than this was left by a git that died, not one that is running. */
