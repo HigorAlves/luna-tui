@@ -30,7 +30,6 @@ export interface SlackTriageDeps {
 /** Where the runs live under the state dir; each run is a folder named by its start time. */
 export const SLACK_TRIAGE_DIR = "slack-triage";
 const MINUTE = 60_000;
-const SUMMARY_MAX = 90;
 
 /** The rules file's sections the model reads, as one markdown block. */
 export function rulesText(context: TriageContext): string {
@@ -118,7 +117,8 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
               ok = true;
               const ids = new Set(batch.map((i) => i.id));
               for (const { id, ...verdict } of answer.data.items) {
-                if (ids.has(id) && !answers.has(id)) answers.set(id, { ...verdict, summary: verdict.summary.slice(0, SUMMARY_MAX) });
+                // The schema caps `summary` at 90 characters; structured output enforces it in the container.
+                if (ids.has(id) && !answers.has(id)) answers.set(id, verdict);
               }
             }
           }
