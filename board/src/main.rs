@@ -14,6 +14,7 @@ mod inbox;
 mod model;
 mod notify;
 mod pulls;
+mod slack;
 mod store;
 mod ui;
 mod vim;

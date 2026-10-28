@@ -1,8 +1,9 @@
 //! What the board tells you when you are elsewhere: a herdr notification on the transitions
 //! that need you, a live count on the Board tab, a terminal BEL when herdr is not there.
 //! `HARDNESS_BOARD_QUIET=1` silences all of it.
-use crate::model::{Look, PullRequest, Task};
+use crate::model::{Look, PullRequest, SlackItem, Task};
 use crate::pulls::PrSplit;
+use crate::slack::SlackSplit;
 
 /// One thing worth telling you about.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,6 +38,22 @@ pub fn pr_notice(old: Option<PrSplit>, pr: &PullRequest) -> Option<Notice> {
         return None;
     }
     Some(Notice { title: new.label().to_string(), body: format!("{} {}", pr.key(), pr.title) })
+}
+
+/// The notice a Slack item is worth: `Reopened` when its thread moved after you cleared it
+/// (`reopened_at` newly set), else `Needs reply` / `Decide` for a P0 or P1 entering one of
+/// those splits from anywhere else (or from nowhere). Lower priorities, staying put, and the
+/// other splits are not news; quiet hours are the machine's business.
+pub fn slack_notice(old_split: Option<SlackSplit>, old_reopened_at: Option<&str>, item: &SlackItem) -> Option<Notice> {
+    let body = format!("{} @{}: {}", item.channel_label(), item.author.name, item.summary());
+    if item.reopened_at.is_some() && item.reopened_at.as_deref() != old_reopened_at {
+        return Some(Notice { title: "Reopened".to_string(), body });
+    }
+    let new = item.split_enum()?;
+    if !new.needs_me() || old_split == Some(new) || !item.urgent() {
+        return None;
+    }
+    Some(Notice { title: new.label().to_string(), body })
 }
 
 /// The notice for losing the machine.
@@ -125,5 +142,31 @@ mod pr_tests {
         assert_eq!(pr_notice(Some(PrSplit::Mine), &pr("changes_requested")).map(|n| n.title), Some("Changes requested".into()));
         assert_eq!(pr_notice(Some(PrSplit::ReviewRequested), &pr("ci_running")), None, "leaving a needs-you split is not news");
         assert_eq!(pr_notice(None, &pr("mine")), None);
+    }
+}
+
+#[cfg(test)]
+mod slack_tests {
+    use super::*;
+    use crate::slack::fixtures::item;
+
+    #[test]
+    fn a_p0_or_p1_entering_needs_reply_or_decide_is_news_and_a_reopen_always_is() {
+        let p0 = item("a", "needs_reply", Some("P0"), "2026-10-28T09:00:00Z");
+        let notice = slack_notice(None, None, &p0).expect("first sight counts");
+        assert_eq!(notice.title, "Needs reply");
+        assert_eq!(notice.body, "#payments-oncall @marta: approve rollback");
+        assert_eq!(slack_notice(Some(SlackSplit::NeedsReply), None, &p0), None, "already there");
+        assert_eq!(slack_notice(Some(SlackSplit::Fyi), None, &item("b", "decide", Some("P1"), "t")).map(|n| n.title), Some("Decide".into()));
+        assert_eq!(slack_notice(None, None, &item("c", "needs_reply", Some("P2"), "t")), None, "a P2 is not news");
+        assert_eq!(slack_notice(None, None, &item("d", "needs_reply", None, "t")), None, "untriaged is not news");
+        assert_eq!(slack_notice(None, None, &item("e", "fyi", Some("P0"), "t")), None, "FYI never is");
+        assert_eq!(slack_notice(Some(SlackSplit::NeedsReply), None, &item("f", "done", Some("P0"), "t")), None, "leaving is not news");
+
+        let mut back = item("g", "fyi", Some("P3"), "t");
+        back.reopened_at = Some("2026-10-28T10:00:00Z".into());
+        assert_eq!(slack_notice(Some(SlackSplit::Done), None, &back).map(|n| n.title), Some("Reopened".into()), "whatever the priority");
+        assert_eq!(slack_notice(Some(SlackSplit::Fyi), Some("2026-10-28T10:00:00Z"), &back), None, "an old reopen is not news twice");
+        assert_eq!(slack_notice(Some(SlackSplit::Fyi), Some("2026-10-27T10:00:00Z"), &back).map(|n| n.title), Some("Reopened".into()), "a fresh one is");
     }
 }

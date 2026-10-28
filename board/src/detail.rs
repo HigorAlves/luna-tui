@@ -412,7 +412,7 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
         lines.push(muted(format!("Branch     {branch}")));
     }
     if let Some(source) = &task.source {
-        lines.push(muted(format!("GitHub     {}#{} · {}", source.repo, source.number, source.url)));
+        lines.push(muted(source.detail_line()));
     }
     if let Some(stage) = &task.resume_to {
         lines.push(muted(format!("Continues  {}", continues_line(&task.state, stage).trim_start_matches("Continues at: "))));
