@@ -4,7 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { DEFAULT_POLICY, type JiraPolicy } from "../domain/policy.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { fakeJira } from "../test/jira.ts";
+import { fakeJira, issueOf } from "../test/jira.ts";
 import type { JiraIssue } from "./jira.ts";
 import { JiraIntake, briefComment, reposUnder } from "./jira-intake.ts";
 import { Pipeline } from "./pipeline.ts";
@@ -97,6 +97,17 @@ describe("JiraIntake", () => {
     setNow(new Date("2026-10-28T12:12:00Z"));
     await intake.tick();
     expect(triaged).toEqual(["PLAT-1", "PLAT-2", "PLAT-3", "PLAT-2"]);
+  });
+
+  it("reads an issue the machine spoke last on again once it was edited after that comment", async () => {
+    const { jira, intake, triaged } = wire();
+    const ours = (created: string) => ({ author: "Luna", authorId: "A-ME", text: "Before an agent starts…", created });
+    // Edited two hours after the machine asked: someone answered in the description, not in a comment.
+    jira.issues.set("PLAT-5", issueOf({ key: "PLAT-5", summary: "Answered by editing", updated: "2026-10-28T11:00:00.000+0000", comments: [ours("2026-10-28T09:00:00.000+0000")] }));
+    // Updated a second after our comment: that is the comment itself landing, not an edit.
+    jira.issues.set("PLAT-6", issueOf({ key: "PLAT-6", summary: "Nothing since", updated: "2026-10-28T09:00:01.000+0000", comments: [ours("2026-10-28T09:00:00.000+0000")] }));
+    await intake.tick();
+    expect(triaged).toEqual(["PLAT-1", "PLAT-2", "PLAT-3", "PLAT-5"]);
   });
 
   it("imports every issue as written when agents are off, taking the criteria from its checklist, and stays silent with comments: none", async () => {

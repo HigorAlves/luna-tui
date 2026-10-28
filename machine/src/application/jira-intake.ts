@@ -3,7 +3,7 @@
 // ticket with the pack's title, description and criteria; `needs_brief` asks the questions back
 // on the issue and waits for it to change; `not_for_agent` says why once and moves on. An
 // issue already behind a ticket (by its key) is never imported twice; one the machine spoke
-// last on is left alone until someone else writes. Like GitHubIntake, never throws.
+// last on is left alone until someone else writes or edits it. Like GitHubIntake, never throws.
 import type { JiraIntakeAnswer } from "@hardness/contracts";
 
 import type { Policy } from "../domain/policy.ts";
@@ -35,6 +35,8 @@ export interface JiraIntakeOptions {
 /** The most issues one pass reads per repo. */
 export const INTAKE_PAGE = 50;
 const DEFAULT_TICK_MS = 60_000;
+/** How far `updated` may trail the machine's own last comment and still be that comment landing. */
+const COMMENT_STAMP_SLACK_MS = 5_000;
 
 /** The questions as the issue comment reads them. */
 export function briefComment(answer: JiraIntakeAnswer): string {
@@ -126,12 +128,18 @@ export class JiraIntake {
     }
   }
 
-  /** The issue's last comment is the machine's own: nothing has moved since it asked or declined. */
+  /** The issue's last comment is the machine's own and nothing moved since: `updated` is no later
+   *  than that comment (give or take the seconds Jira takes to stamp it). An edit after the
+   *  comment, an answer written into the description say, reads as new. */
   private async spokeLast(issue: JiraIssue): Promise<boolean> {
     const last = issue.comments.at(-1);
     if (!last?.authorId) return false;
     this.me ??= await this.options.jira.me();
-    return last.authorId === this.me.accountId;
+    if (last.authorId !== this.me.accountId) return false;
+    const updated = Date.parse(issue.updated ?? "");
+    const commented = Date.parse(last.created);
+    if (Number.isNaN(updated) || Number.isNaN(commented)) return true;
+    return updated <= commented + COMMENT_STAMP_SLACK_MS;
   }
 
   private async consider(issue: JiraIssue, repoPath: string, comments: "none" | "milestones" | "gates"): Promise<void> {
