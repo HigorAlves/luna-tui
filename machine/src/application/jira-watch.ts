@@ -1,5 +1,6 @@
 // Jira's side of the link, mirrored onto the task every few minutes: status, priority, due date
-// and issue type, so the board shows what Jira says without asking it. When the issue reaches a
+// and issue type, so the board shows what Jira says without asking it, plus the site's timezone
+// (read once from `/myself`), which says when a due date's day ends. When the issue reaches a
 // Done-category status (or Cancelled / Won't Do) while the task is still open, the task gets a
 // `jira.moved` event: someone decided in Jira, and you decide what the ticket does. A link
 // left blocked by JiraSync is tried again on each pass while the issue is reachable, through
@@ -47,6 +48,8 @@ export class JiraWatch {
   private polling: Promise<void> | null = null;
   private warnedAuth = false;
   private lastExpiryWarning: number | null = null;
+  /** The site's timezone from `/myself`, read once; undefined until asked, null when Jira left it out. */
+  private timeZone: string | null | undefined;
   /** How long until the next poll: the interval, or the backoff after a rate limit. */
   nextDelayMs: number;
   private readonly expiry: TokenExpiry;
@@ -95,13 +98,27 @@ export class JiraWatch {
     this.nextDelayMs = this.options.intervalMs;
     this.warnExpiry();
     const tasks = (await this.options.pipeline.list()).filter((t) => t.state !== "closed" && jiraOf(t));
+    if (tasks.length > 0 && this.timeZone === undefined) {
+      try {
+        this.timeZone = (await this.options.jira.me()).timeZone;
+      } catch (error) {
+        if (error instanceof JiraAuthError) {
+          this.expiry.note(error);
+          if (!this.warnedAuth) this.warn(`jira watch: ${error.message}`);
+          this.warnedAuth = true;
+          return;
+        }
+        this.warn(`jira watch: could not read the site's timezone: ${messageOf(error)}`);
+      }
+    }
     for (const task of tasks) {
       const link = jiraOf(task)!;
       try {
         const issue = await this.options.jira.issue(link.key);
         this.warnedAuth = false;
-        const next: JiraLink = { ...link, status: issue.status, priority: issue.priority, dueAt: issue.dueAt, issueType: issue.issueType, syncedAt: this.now().toISOString() };
-        const changed = next.status !== link.status || next.priority !== link.priority || next.dueAt !== link.dueAt || next.issueType !== link.issueType;
+        const timeZone = this.timeZone ?? link.timeZone ?? null;
+        const next: JiraLink = { ...link, status: issue.status, priority: issue.priority, dueAt: issue.dueAt, issueType: issue.issueType, syncedAt: this.now().toISOString(), timeZone };
+        const changed = next.status !== link.status || next.priority !== link.priority || next.dueAt !== link.dueAt || next.issueType !== link.issueType || timeZone !== (link.timeZone ?? null);
         let updated = await this.options.pipeline.setJira(task.id, next);
         if (changed || !task.jira) this.options.publish?.(updated);
         if (endedInJira(issue.status, issue.statusCategory) && !endedInJira(link.status, null) && next.status !== link.status) {

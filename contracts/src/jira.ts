@@ -15,6 +15,10 @@ export interface JiraLink {
   syncedAt: string | null;
   /** The last declared transition that Jira refused, until the next one succeeds. */
   blocked: { wanted: string; current: string | null; why: string; at: string } | null;
+  /** When the ticket was linked by hand or from the board (`J`, create); null for a link made with the ticket. The Jira due clock counts from here when later than creation. */
+  linkedAt?: string | null;
+  /** The Jira site's timezone (`/rest/api/3/myself` `timeZone`), read once by JiraWatch: the issue's due date ends at 23:59:59 there. Null until read (UTC is assumed). */
+  timeZone?: string | null;
 }
 
 /** One SLA clock: when it is due and whether it has passed. */
@@ -33,7 +37,7 @@ export interface TaskSla {
   stage: (SlaClock & { stage: TaskState; warn: boolean }) | null;
   /** Created to closed. */
   cycle: SlaClock | null;
-  /** The Jira issue's own due date, when linked and set. */
+  /** The Jira issue's own due date, when linked and set: the end of that day in the site's timezone; `targetSecs` counts from the task's creation or its link time, whichever is later. */
   jiraDue: SlaClock | null;
 }
 
@@ -61,7 +65,7 @@ export interface JiraIssueHit {
 export interface JiraStatus {
   configured: boolean;
   site: string | null;
-  /** The token's expiry when Jira reports it; the machine warns 14 days before. */
+  /** When the token expires: `MACHINE_JIRA_TOKEN_EXPIRES` as set, or the date a 401 named once it has gone; null when neither is known. The machine warns daily inside the last two weeks. */
   tokenExpiresAt: string | null;
   error: string | null;
 }

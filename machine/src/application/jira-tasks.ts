@@ -94,9 +94,9 @@ export interface JiraTasksOptions {
 export const SEARCH_MAX = 15;
 const DEFAULT_ISSUE_TYPE = "Task";
 
-/** The link for an issue as Jira shows it now. */
+/** The link for an issue as Jira shows it now, linked at `now`. */
 export function linkOf(issue: JiraIssue, now: Date): JiraLink {
-  return { ...bareLink(issue.key, issue.url, issue.issueType), status: issue.status, priority: issue.priority, dueAt: issue.dueAt, syncedAt: now.toISOString() };
+  return { ...bareLink(issue.key, issue.url, issue.issueType, now.toISOString()), status: issue.status, priority: issue.priority, dueAt: issue.dueAt, syncedAt: now.toISOString() };
 }
 
 const hit = (issue: JiraIssue): JiraIssueHit => ({ key: issue.key, summary: issue.summary, status: issue.status, issueType: issue.issueType, url: issue.url });
@@ -188,7 +188,8 @@ export class JiraTasks implements JiraTasksPort {
     if (!project) throw new NoProjectError();
     const issueType = input.issueType ?? DEFAULT_ISSUE_TYPE;
     const created = await this.options.jira.createIssue(project, issueType, task.title, issueDescription(task));
-    const after = await this.options.pipeline.setJira(taskId, { ...bareLink(created.key, created.url, issueType), syncedAt: this.now().toISOString() });
+    const now = this.now().toISOString();
+    const after = await this.options.pipeline.setJira(taskId, { ...bareLink(created.key, created.url, issueType, now), syncedAt: now });
     await this.options.pipeline.record(taskId, "jira.linked", { key: created.key, url: created.url, created: true });
     return after;
   }

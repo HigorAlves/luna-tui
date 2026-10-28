@@ -62,7 +62,7 @@ const Issue = z.object({ key: z.string(), fields: Fields });
 const Transitions = z.object({ transitions: z.array(z.object({ id: z.string(), name: z.string(), to: Status.optional() })) });
 const SearchResults = z.object({ issues: z.array(Issue).default([]), nextPageToken: z.string().optional().nullable() });
 const Created = z.object({ key: z.string() });
-const Me = z.object({ accountId: z.string(), displayName: z.string().default(""), emailAddress: z.string().optional().nullable() });
+const Me = z.object({ accountId: z.string(), displayName: z.string().default(""), emailAddress: z.string().optional().nullable(), timeZone: z.string().optional().nullable() });
 const ProjectStatuses = z.array(z.object({ statuses: z.array(Status).default([]) }));
 const ErrorBody = z.object({ errorMessages: z.array(z.string()).optional(), errors: z.record(z.string(), z.string()).optional() }).partial();
 
@@ -167,7 +167,7 @@ export function createJira(options: JiraRestOptions): Jira {
   return {
     async me() {
       const a = await call("GET", "myself", Me);
-      return { accountId: a.accountId, displayName: a.displayName, email: a.emailAddress ?? null };
+      return { accountId: a.accountId, displayName: a.displayName, email: a.emailAddress ?? null, timeZone: a.timeZone ?? null };
     },
 
     async issue(key) {

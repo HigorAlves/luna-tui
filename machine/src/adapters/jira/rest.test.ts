@@ -119,7 +119,7 @@ describe("createJira", () => {
       { json: { accountId: "A1", displayName: "Higor", emailAddress: "me@acme.com" } },
       { json: [{ name: "Story", statuses: [{ name: "To Do", statusCategory: { key: "new" } }, { name: "Done", statusCategory: { key: "done" } }] }, { name: "Bug", statuses: [{ name: "To Do", statusCategory: { key: "new" } }, { name: "Blocked", statusCategory: { key: "indeterminate" } }] }] },
     ]);
-    expect(await jira.me()).toEqual({ accountId: "A1", displayName: "Higor", email: "me@acme.com" });
+    expect(await jira.me()).toEqual({ accountId: "A1", displayName: "Higor", email: "me@acme.com", timeZone: null });
     expect(await jira.statuses("PLAT")).toEqual([{ name: "To Do", categoryKey: "new" }, { name: "Done", categoryKey: "done" }, { name: "Blocked", categoryKey: "indeterminate" }]);
   });
 

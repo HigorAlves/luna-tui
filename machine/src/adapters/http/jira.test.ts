@@ -62,7 +62,7 @@ describe("the Jira routes", () => {
     const seen: Task[] = [];
     bus.subscribe((m) => m.type === "task.updated" && seen.push(m.task));
     const linked = (await json(await post(`/tasks/${task.id}/jira`, { key: "PLAT-123" }))) as unknown as Task;
-    expect(linked.jira).toEqual({ key: "PLAT-123", url: `${SITE}/browse/PLAT-123`, issueType: "Bug", status: "In Progress", priority: "High", dueAt: "2026-10-31", syncedAt: NOW.toISOString(), blocked: null });
+    expect(linked.jira).toEqual({ key: "PLAT-123", url: `${SITE}/browse/PLAT-123`, issueType: "Bug", status: "In Progress", priority: "High", dueAt: "2026-10-31", syncedAt: NOW.toISOString(), blocked: null, linkedAt: NOW.toISOString(), timeZone: null });
     expect(linked.sla).toEqual(sla);
     expect(seen).toHaveLength(1);
     expect((await pipeline.events(task.id)).map((e) => [e.kind, e.payload])).toContainEqual(["jira.linked", { key: "PLAT-123", url: `${SITE}/browse/PLAT-123` }]);

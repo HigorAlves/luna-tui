@@ -9,7 +9,7 @@ export interface FakeJiraOptions {
   transitions?: Record<string, JiraTransition[]>;
   /** Makes a call fail: the method name to the error it throws. */
   failing?: Partial<Record<keyof Jira, Error>>;
-  me?: { accountId: string; displayName: string; email: string | null };
+  me?: { accountId: string; displayName: string; email: string | null; timeZone: string | null };
 }
 
 export interface FakeJira extends Jira {
@@ -67,7 +67,7 @@ export function fakeJira(options: FakeJiraOptions = {}): FakeJira {
     nextKey: 500,
     async me() {
       fail("me");
-      return options.me ?? { accountId: "A-ME", displayName: "Higor", email: "me@acme.com" };
+      return options.me ?? { accountId: "A-ME", displayName: "Higor", email: "me@acme.com", timeZone: "America/Sao_Paulo" };
     },
     async issue(key) {
       fail("issue");

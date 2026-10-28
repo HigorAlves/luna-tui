@@ -3,9 +3,9 @@ import type { JiraLink, TaskSource } from "@hardness/contracts";
 
 import { DEFAULT_JIRA_BRANCH } from "./policy.ts";
 
-/** A bare link: the key and url, nothing JiraWatch has filled in yet. */
-export function bareLink(key: string, url: string, issueType: string | null = null): JiraLink {
-  return { key, url, issueType, status: null, priority: null, dueAt: null, syncedAt: null, blocked: null };
+/** A bare link: the key and url, nothing JiraWatch has filled in yet; `linkedAt` when the link was made by hand (null: with the ticket). */
+export function bareLink(key: string, url: string, issueType: string | null = null, linkedAt: string | null = null): JiraLink {
+  return { key, url, issueType, status: null, priority: null, dueAt: null, syncedAt: null, blocked: null, linkedAt, timeZone: null };
 }
 
 /** The task's Jira link: the column, or, for an intake import never refreshed yet, the key its source carries. */

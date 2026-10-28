@@ -1,5 +1,5 @@
 import type { DataSource } from "typeorm";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { freshTestDatabase } from "../test/database.ts";
 import type { TaskRow } from "../domain/task.ts";
@@ -47,15 +47,17 @@ function wire(
 }
 
 describe("JiraWatch", () => {
-  it("mirrors the issue's status, priority, due date and type onto the task and publishes when something the board shows changed", async () => {
-    const { pipeline, watch, published } = wire();
+  it("mirrors the issue's status, priority, due date, type and the site's timezone (read once) onto the task, publishing when something the board shows changed", async () => {
+    const { pipeline, jira, watch, published } = wire();
+    const me = vi.spyOn(jira, "me");
     const task = await pipeline.createTask({ title: "PLAT-123 x" });
     await watch.pollOnce();
     const after = await pipeline.get(task.id);
-    expect(after.jira).toEqual({ key: "PLAT-123", url: `${SITE}/browse/PLAT-123`, issueType: "Bug", status: "In Progress", priority: "High", dueAt: "2026-10-31", syncedAt: NOW.toISOString(), blocked: null });
+    expect(after.jira).toEqual({ key: "PLAT-123", url: `${SITE}/browse/PLAT-123`, issueType: "Bug", status: "In Progress", priority: "High", dueAt: "2026-10-31", syncedAt: NOW.toISOString(), blocked: null, linkedAt: null, timeZone: "America/Sao_Paulo" });
     expect(published).toEqual(["In Progress"]);
     await watch.pollOnce();
     expect(published).toEqual(["In Progress"]);
+    expect(me).toHaveBeenCalledTimes(1);
     expect((await pipeline.events(task.id)).filter((e) => e.kind === "jira.moved")).toEqual([]);
   });
 

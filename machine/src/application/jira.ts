@@ -47,6 +47,8 @@ export interface JiraMe {
   accountId: string;
   displayName: string;
   email: string | null;
+  /** The account's (and so the site's, for due dates) IANA timezone, e.g. `America/Sao_Paulo`; null when Jira left it out. */
+  timeZone: string | null;
 }
 
 /** One comment on an issue, oldest first in `JiraIssue.comments`. */

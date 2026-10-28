@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { NO_RETRIES } from "./transition.ts";
 import type { TaskRow } from "./task.ts";
-import { computeSla, gateFactor, parseDuration, slaFlags } from "./sla.ts";
+import { computeSla, endOfDay, gateFactor, parseDuration, slaFlags } from "./sla.ts";
 
 const NOW = new Date("2026-10-28T12:00:00Z");
 const task = (over: Partial<TaskRow> = {}): TaskRow => ({
@@ -66,5 +66,21 @@ describe("computeSla", () => {
     expect(computeSla({ task: task({ state: "closed", jira }), stateSince: null, stageStartedAt: null, targets: { cycle: 86_400 }, defaults }, NOW)).toBeNull();
     expect(slaFlags(sla)).toBe("00001");
     expect(slaFlags(null)).toBe("");
+  });
+
+  it("ends the Jira due date at 23:59:59 in the site's timezone and counts it from creation or the link, whichever is later", () => {
+    const jira = { key: "PLAT-1", url: "u", issueType: null, status: null, priority: null, dueAt: "2026-10-28", syncedAt: null, blocked: null };
+    const at = (timeZone: string | null, linkedAt: string | null = null) =>
+      computeSla({ task: task({ state: "implementing", jira: { ...jira, timeZone, linkedAt } }), stateSince: null, stageStartedAt: null, targets: null, defaults }, NOW)?.jiraDue;
+    // São Paulo is UTC-3: its day ends three hours into the next UTC day. Tokyo (UTC+9) ends before the UTC day does.
+    expect(at("America/Sao_Paulo")).toEqual({ dueAt: "2026-10-29T02:59:59.999Z", overdue: false, targetSecs: 140_400 });
+    expect(at("Asia/Tokyo")).toEqual({ dueAt: "2026-10-28T14:59:59.999Z", overdue: false, targetSecs: 97_200 });
+    expect(at(null)?.dueAt).toBe("2026-10-28T23:59:59.999Z");
+    expect(at("Nowhere/Unknown")?.dueAt).toBe("2026-10-28T23:59:59.999Z");
+    // Linked six hours after the ticket was made: the clock's span runs from the link.
+    expect(at("Asia/Tokyo", "2026-10-28T06:00:00Z")?.targetSecs).toBe(32_400);
+    expect(at("Asia/Tokyo", "2026-10-27T06:00:00Z")?.targetSecs).toBe(97_200);
+    expect(endOfDay("2026-10-28T10:00:00Z", "Asia/Tokyo")?.toISOString()).toBe("2026-10-28T10:00:00.000Z");
+    expect(endOfDay("soon", null)).toBeNull();
   });
 });
