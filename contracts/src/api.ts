@@ -63,7 +63,10 @@ export interface TaskDiff {
   /** The worktree's HEAD. */
   head: string;
   files: TaskDiffFile[];
+  /** The one file's patch; at most 512 KB of it. */
   patch?: string;
+  /** Set when `patch` was cut at the cap. */
+  truncated?: boolean;
 }
 
 export interface TaskDiffFile {
