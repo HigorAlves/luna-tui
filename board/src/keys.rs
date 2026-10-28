@@ -967,18 +967,29 @@ pub fn markdown() -> String {
 
 pub fn markdown_block(scope: Scope) -> String {
     let mut out = format!("<!-- keys:start {} -->\n", scope.slug());
-    out.push_str("| Key | Does |\n|---|---|\n");
-    let mut rows: Vec<&Binding> = BINDINGS.iter().filter(|b| b.scope == scope).collect();
-    rows.sort_by_key(|b| Group::ORDER.iter().position(|g| *g == b.group));
-    let mut seen: Vec<(&str, &str)> = Vec::new();
-    for b in rows {
-        if seen.contains(&(b.keys, b.label)) {
+    let code = |text: &str| format!("`{}`", text.replace('|', "\\|"));
+    for group in Group::ORDER {
+        let rows: Vec<&Binding> = BINDINGS.iter().filter(|b| b.scope == scope && b.group == group).collect();
+        if rows.is_empty() {
             continue;
         }
-        seen.push((b.keys, b.label));
-        let keys = if b.menu_key().is_some() { format!("`x` then `{}`", b.menu_keys()) } else { format!("`{}`", b.keys) };
-        let label = b.label.replace('|', "\\|");
-        out.push_str(&format!("| {keys} | {label} |\n"));
+        out.push_str(&format!("**{}**\n\n| Key | Does |\n|---|---|\n", group.heading(scope)));
+        // One row per key: the meanings of a key with several (`a` per gate) share it.
+        let mut i = 0;
+        while i < rows.len() {
+            let b = rows[i];
+            let mut labels = vec![b.label];
+            while i + 1 < rows.len() && rows[i + 1].keys == b.keys {
+                i += 1;
+                if !labels.contains(&rows[i].label) {
+                    labels.push(rows[i].label);
+                }
+            }
+            let keys = if b.menu_key().is_some() { format!("`x` then {}", code(&b.menu_keys())) } else { code(b.keys) };
+            out.push_str(&format!("| {keys} | {} |\n", labels.join("; ").replace('|', "\\|")));
+            i += 1;
+        }
+        out.push('\n');
     }
     out.push_str("<!-- keys:end -->\n");
     out
@@ -1264,12 +1275,22 @@ mod tests {
         for scope in Scope::ALL {
             assert!(md.contains(&format!("<!-- keys:start {} -->", scope.slug())));
         }
-        assert!(md.contains("| `a` | approve the plan |") && md.contains("| `x` then `P` |"), "{md}");
+        assert!(md.contains("| `a` | start; approve the setup; answer triage's questions; approve the plan;") && md.contains("| `x` then `P` |"), "{md}");
+        assert!(md.contains("**Commands (type after :)**") && md.contains("| `:group stage\\|repo\\|age` |"), "{md}");
         let readme = "intro\n<!-- keys:start pulls -->\nold\n<!-- keys:end -->\nmiddle\n<!-- keys:start nope -->\nkept\n<!-- keys:end -->\nend\n";
         let spliced = splice_markdown(readme);
-        assert!(spliced.starts_with("intro\n<!-- keys:start pulls -->\n| Key | Does |"), "{spliced}");
+        assert!(spliced.starts_with("intro\n<!-- keys:start pulls -->\n**Pull request**\n\n| Key | Does |"), "{spliced}");
         assert!(spliced.contains("| `m` | merge: squash, delete the branch |") && !spliced.contains("old"));
         assert!(spliced.contains("<!-- keys:start nope -->\nkept\n<!-- keys:end -->\nend\n"), "{spliced}");
         assert_eq!(splice_markdown(&spliced), spliced, "idempotent");
+    }
+
+    #[test]
+    fn the_readme_blocks_are_what_the_registry_prints() {
+        let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md")).unwrap();
+        assert_eq!(splice_markdown(&readme), readme, "run `pnpm board:keys` to regenerate the README's key tables");
+        for scope in [Scope::Board, Scope::Detail, Scope::Pulls, Scope::Slack, Scope::Watches, Scope::Inbox, Scope::Digest, Scope::Floor] {
+            assert!(readme.contains(&format!("<!-- keys:start {} -->", scope.slug())), "the README documents {scope:?}");
+                }
     }
 }
