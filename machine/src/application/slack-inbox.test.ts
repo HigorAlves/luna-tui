@@ -1,6 +1,7 @@
 import type { SlackSnapshot } from "@hardness/contracts";
 import { describe, expect, it, vi } from "vitest";
 
+import type { SlackItemRow } from "../domain/slack-item.ts";
 import { RULES_TEMPLATE } from "../domain/slack-rules.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { MemorySlackStore, fakeSlack } from "../test/slack.ts";
@@ -34,6 +35,7 @@ interface World {
   linkPr?: SlackInbox["snapshot"]["items"][number]["linked"]["pr"];
   now?: () => Date;
   intervalMs?: number;
+  retentionDays?: number;
 }
 
 const msg = (over: Partial<RawMessage> & { ts: string }): RawMessage => ({ user: "U2", botId: null, text: "", subtype: null, threadTs: null, replyCount: 0, latestReply: null, ...over });
@@ -108,6 +110,7 @@ function setup(world: World = {}) {
     socketToken: null,
     now: world.now ?? (() => NOW),
     files: { read: async (p) => files.get(p) ?? null, write: async (p, t) => void files.set(p, t) },
+    ...(world.retentionDays !== undefined ? { retentionDays: world.retentionDays } : {}),
   });
   return { inbox, slack, store, published, triaged, files, created };
 }
@@ -561,4 +564,118 @@ describe("SlackInbox resilience", () => {
     await inbox.pollOnce(true);
     expect(slack.searchMentions).toHaveBeenCalledTimes(2);
   });
+
+  it("a failed container leaves triage null and retries after 1, 5 and 15 minutes, then gives up", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const clock = { now: NOW };
+      const calls: number[] = [];
+      let failing = true;
+      const triager: Triager = {
+        triage: async (items) => {
+          calls.push(clock.now.getTime());
+          if (failing) throw new Error("docker: not running");
+          return new Map(items.map((i) => [i.id, answerAll(i)]));
+        },
+      };
+      const { inbox, store } = setup({ triager, hits: [hit({ ts: ts(10), text: "<@U1> hi?" })], now: () => clock.now });
+      await poll(inbox);
+      expect(calls).toHaveLength(1);
+      expect((await store.item(`C1:${ts(10)}`))!.triage).toBeNull();
+      // Not yet a minute later: nothing runs again.
+      await poll(inbox);
+      expect(calls).toHaveLength(1);
+      clock.now = new Date(NOW.getTime() + 61_000);
+      await poll(inbox);
+      expect(calls).toHaveLength(2);
+      clock.now = new Date(NOW.getTime() + 2 * 60_000);
+      await poll(inbox);
+      expect(calls).toHaveLength(2);
+      clock.now = new Date(NOW.getTime() + 7 * 60_000);
+      await poll(inbox);
+      expect(calls).toHaveLength(3);
+      clock.now = new Date(NOW.getTime() + 23 * 60_000);
+      await poll(inbox);
+      expect(calls).toHaveLength(4);
+      expect((await store.item(`C1:${ts(10)}`))!.triage).toBeNull();
+      // Out of tries: nothing more, ever, until a new message folds in.
+      clock.now = new Date(NOW.getTime() + 60 * 60_000);
+      failing = false;
+      await poll(inbox);
+      expect(calls).toHaveLength(4);
+      expect(warn.mock.calls.some((c) => String(c[0]).includes("giving up"))).toBe(true);
+
+      // A failure followed by a success: the verdict lands on the retry.
+      const second = setup({ triager, hits: [hit({ ts: ts(9), text: "<@U1> again?" })], now: () => clock.now });
+      failing = true;
+      await poll(second.inbox);
+      failing = false;
+      clock.now = new Date(clock.now.getTime() + 61_000);
+      await poll(second.inbox);
+      expect((await second.store.item(`C1:${ts(9)}`))!.triage).toMatchObject({ by: "model", priority: "P1" });
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("start() queues the items a previous run left untriaged", async () => {
+    vi.useFakeTimers({ now: NOW });
+    const { inbox, store, triaged } = setup();
+    try {
+      const base = { ...(await fold()), id: "C1:old" };
+      await store.save([base, { ...base, id: "C1:done", doneAt: iso(5) }, { ...base, id: "C1:triaged", triage: { priority: "P2", category: "fyi", expectsReply: false, summary: "", why: "", draft: null, refs: [], deadline: null, by: "rules", triagedAt: iso(5), overridden: false } }]);
+      inbox.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await inbox.idle();
+      expect(triaged.flat().map((t) => t.id)).toEqual(["C1:old"]);
+    } finally {
+      inbox.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("stamps doneAt on an FYI that aged out, and prunes done items past 30 days and old triage runs each poll", async () => {
+    const { inbox, store } = setup({ hits: [hit({ ts: ts(8 * 24 * 60), text: "<@U1> fyi, shipped" })], retentionDays: 7 });
+    const stale = { ...(await fold()), id: "C1:stale", doneAt: iso(31 * 24 * 60) };
+    const kept = { ...(await fold()), id: "C1:kept", doneAt: iso(29 * 24 * 60) };
+    await store.save([stale, kept]);
+    const run = { endedAt: iso(0), items: 1, model: "m", turns: 1, costUsd: 0, ok: true, error: null };
+    await store.recordTriageRun({ ...run, startedAt: iso(8 * 24 * 60) });
+    await store.recordTriageRun({ ...run, startedAt: iso(6 * 24 * 60) });
+    const { items } = await poll(inbox);
+    const aged = items.find((i) => i.id === `C1:${ts(8 * 24 * 60)}`)!;
+    expect(aged).toMatchObject({ split: "done", doneAt: NOW.toISOString() });
+    expect((await store.item(aged.id))!.doneAt).toBe(NOW.toISOString());
+    expect(await store.item("C1:stale")).toBeNull();
+    expect(await store.item("C1:kept")).not.toBeNull();
+    expect(store.runs.map((r) => r.startedAt)).toEqual([iso(6 * 24 * 60)]);
+  });
 });
+
+/** A bare stored row, for tests that seed the store directly. */
+async function fold(): Promise<SlackItemRow> {
+  return {
+    id: "C1:seed",
+    kind: "mention",
+    channel: { id: "C1", name: "eng", kind: "channel" },
+    author: { id: "U2", name: "marta", isBot: false },
+    text: "@higor earlier",
+    threadTs: null,
+    context: [],
+    permalink: "",
+    ts: iso(120),
+    slackTs: ts(120),
+    matched: ["me"],
+    count: 1,
+    replies: 0,
+    youReplied: false,
+    seenAt: null,
+    doneAt: null,
+    snoozedUntil: null,
+    reopenedAt: null,
+    triage: null,
+    linked: { pr: null, taskId: null },
+    arrivedAt: iso(120),
+    repliedAt: null,
+  };
+}

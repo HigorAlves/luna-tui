@@ -75,6 +75,17 @@ describe("PgSlackStore items", () => {
     expect(await store.latestTs()).toBe("1730000000.000100");
   });
 
+  it("prunes items done before a cutoff and runs started before another, leaving open items alone", async () => {
+    await store.save([row("open"), row("fresh", { doneAt: daysAgo(10) }), row("stale", { doneAt: daysAgo(40) })]);
+    const run = { endedAt: daysAgo(0), items: 1, model: "m", turns: 1, costUsd: null, ok: true, error: null };
+    await store.recordTriageRun({ ...run, startedAt: daysAgo(100) });
+    await store.recordTriageRun({ ...run, startedAt: daysAgo(1) });
+    expect(await store.prune(new Date(now.getTime() - 30 * 86_400_000), new Date(now.getTime() - 90 * 86_400_000))).toEqual({ items: 1, runs: 1 });
+    expect((await store.items(new Date(0))).map((r) => r.id).sort()).toEqual(["fresh", "open"]);
+    expect((await store.triageRuns(new Date(0))).map((r) => r.startedAt)).toEqual([daysAgo(1)]);
+    expect(await store.prune(new Date(now.getTime() - 30 * 86_400_000), null)).toEqual({ items: 0, runs: 0 });
+  });
+
   it("starts empty", async () => {
     expect(await store.latestTs()).toBeNull();
     expect(await store.items(now)).toEqual([]);

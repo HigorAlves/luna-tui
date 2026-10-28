@@ -28,6 +28,8 @@ export interface SlackStore {
   save(rows: SlackItemRow[]): Promise<void>;
   /** The latest Slack ts the store holds, for the first poll after a restart. */
   latestTs(): Promise<string | null>;
+  /** Deletes items done before `doneBefore` and, when given, triage runs started before `runsBefore`. */
+  prune(doneBefore: Date, runsBefore: Date | null): Promise<{ items: number; runs: number }>;
   metricRows(since: Date): Promise<SlackMetricRow[]>;
 
   watches(): Promise<SlackWatch[]>;

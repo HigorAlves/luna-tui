@@ -48,7 +48,7 @@ import type { TaskRow } from "../domain/task.ts";
 import type { NewTask } from "./pipeline.ts";
 import { type ChannelInfo, type Conversation, type RawMessage, type Slack, type SlackMe, type Usergroup, messageOf } from "./slack.ts";
 import type { SlackStore } from "./slack-store.ts";
-import type { TriageItem, Triager } from "./slack-triage.ts";
+import { type TriageItem, TriageRunError, type Triager } from "./slack-triage.ts";
 
 /** What the HTTP routes need from the inbox; the real class and a test fake both fit. */
 export interface SlackInboxPort {
@@ -119,9 +119,13 @@ export interface SlackInboxOptions {
   now?: () => Date;
   /** Tests inject a fake file system. */
   files?: { read(path: string): Promise<string | null>; write(path: string, text: string): Promise<void> };
+  /** Days to keep slack_triage_runs rows (`MACHINE_RETENTION_DAYS`); 0 or unset keeps them. */
+  retentionDays?: number;
 }
 
 const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
+/** A failed container (Docker down, a timeout, no result) is retried this long after each failure; past the last one the item stays untriaged. */
+const TRIAGE_RETRY_MS = [60_000, 5 * 60_000, 15 * 60_000];
 const DAY_MS = 86_400_000;
 const HOUR_MS = 3_600_000;
 /** Items go overdue with no Slack event: the snapshot is recomputed this often. */
@@ -203,9 +207,12 @@ export class SlackInbox implements SlackInboxPort {
   private readonly files: NonNullable<SlackInboxOptions["files"]>;
   /** The SLA the last refresh read from the rules file; the minute tick recomputes with it. */
   private sla: SlaTargets = DEFAULT_SLA;
-  /** Items waiting for the pack, with the floor the rules set; one container runs at a time. */
-  private readonly triageQueue = new Map<string, SlackPriority | null>();
+  /** Items waiting for the pack, with the floor the rules set, how often the container failed on them and when they may run again; one container runs at a time. */
+  private readonly triageQueue = new Map<string, { floor: SlackPriority | null; failures: number; notBefore: number }>();
   private triaging: Promise<void> | null = null;
+  private retryTimer: NodeJS.Timeout | undefined;
+  /** The first poll of a run re-queues what the last run left untriaged. */
+  private recovered = false;
 
   constructor(private readonly options: SlackInboxOptions) {
     this.now = options.now ?? (() => new Date());
@@ -236,8 +243,10 @@ export class SlackInbox implements SlackInboxPort {
     if (this.timer) clearTimeout(this.timer);
     if (this.clock) clearInterval(this.clock);
     if (this.soon) clearTimeout(this.soon);
+    if (this.retryTimer) clearTimeout(this.retryTimer);
     this.timer = undefined;
     this.clock = undefined;
+    this.retryTimer = undefined;
   }
 
   /**
@@ -311,7 +320,12 @@ export class SlackInbox implements SlackInboxPort {
     const polledAt = this.now().toISOString();
     let error: string | null = null;
     try {
+      if (!this.recovered) {
+        this.recovered = true;
+        await this.requeueUntriaged();
+      }
       await this.gather();
+      await this.prune();
       this.nextDelayMs = this.options.intervalMs;
     } catch (thrown) {
       error = messageOf(thrown);
@@ -337,11 +351,33 @@ export class SlackInbox implements SlackInboxPort {
     while (this.triaging) await this.triaging;
   }
 
+  /** Open items the pack never reached (a restart mid-run, a container that kept failing) go back in the queue. */
+  private async requeueUntriaged(): Promise<void> {
+    if (!this.options.triager) return;
+    const rows = await this.options.store.items(this.now());
+    for (const row of rows) if (!row.doneAt && row.triage === null && row.kind !== "reaction") this.triageQueue.set(row.id, { floor: null, failures: 0, notBefore: 0 });
+  }
+
+  /** Done items past the 30 days the snapshot shows go, and triage runs past the retention window. */
+  private async prune(): Promise<void> {
+    const now = this.now().getTime();
+    const days = this.options.retentionDays ?? 0;
+    const { items, runs } = await this.options.store.prune(new Date(now - KEEP_DONE_MS), days > 0 ? new Date(now - days * DAY_MS) : null);
+    if (items > 0 || runs > 0) console.log(`slack inbox: pruned ${items} done item(s), ${runs} old triage run(s)`);
+  }
+
   /** Rebuilds the snapshot from the store and the rules file's SLA, and publishes it when it changed. */
   private async refresh(polledAt: string | null, error: string | null): Promise<SlackSnapshot> {
     const now = this.now();
     this.sla = (await this.rules()).sla;
-    const rows = await this.options.store.items(new Date(now.getTime() - KEEP_DONE_MS));
+    let rows = await this.options.store.items(new Date(now.getTime() - KEEP_DONE_MS));
+    // An FYI nobody touched for a week is done: stamped now, so it ages out of the snapshot like one you cleared.
+    const aged = rows.filter((row) => !row.doneAt && splitOf(row, now) === "done").map((row) => ({ ...row, doneAt: now.toISOString() }));
+    if (aged.length > 0) {
+      await this.options.store.save(aged);
+      const stamped = new Map(aged.map((row) => [row.id, row]));
+      rows = rows.map((row) => stamped.get(row.id) ?? row);
+    }
     const items = rows
       .filter((row) => inSnapshot(row, now))
       .map((row) => {
@@ -607,14 +643,31 @@ export class SlackInbox implements SlackInboxPort {
         this.warnedNoTriager = true;
         continue;
       }
-      this.triageQueue.set(id, floor);
+      // A new message resets the retry clock: the item is worth a fresh try.
+      this.triageQueue.set(id, { floor, failures: 0, notBefore: 0 });
     }
   }
 
-  /** Starts a triage run when items wait and none is in flight; the next one starts when it ends. */
+  /**
+   * Starts a triage run when items are ready and none is in flight; the next one starts when
+   * it ends. Items waiting out a retry delay are left for a timer (or the next poll).
+   */
   private kickTriage(): void {
     if (this.triaging || this.triageQueue.size === 0 || this.stopped) return;
-    this.triaging = this.drainTriage()
+    const now = this.now().getTime();
+    const ready = new Map([...this.triageQueue].filter(([, entry]) => entry.notBefore <= now));
+    if (ready.size === 0) {
+      if (this.retryTimer) return;
+      const earliest = Math.min(...[...this.triageQueue.values()].map((entry) => entry.notBefore));
+      this.retryTimer = setTimeout(() => {
+        this.retryTimer = undefined;
+        this.kickTriage();
+      }, Math.max(0, earliest - now));
+      this.retryTimer.unref();
+      return;
+    }
+    for (const id of ready.keys()) this.triageQueue.delete(id);
+    this.triaging = this.drainTriage(ready)
       .catch((error: unknown) => console.warn(`slack inbox: triage failed: ${messageOf(error)}`))
       .finally(() => {
         this.triaging = null;
@@ -622,11 +675,9 @@ export class SlackInbox implements SlackInboxPort {
       });
   }
 
-  /** One pack run over everything queued. */
-  private async drainTriage(): Promise<void> {
+  /** One pack run over the items given. A run that produced nothing re-queues them with backoff; past the last retry they stay untriaged. */
+  private async drainTriage(queued: Map<string, { floor: SlackPriority | null; failures: number; notBefore: number }>): Promise<void> {
     const { triager, store } = this.options;
-    const queued = new Map(this.triageQueue);
-    this.triageQueue.clear();
     if (!triager || queued.size === 0) return;
     const rows = new Map<string, SlackItemRow>();
     for (const id of queued.keys()) {
@@ -645,21 +696,37 @@ export class SlackInbox implements SlackInboxPort {
       isBot: row.author.isBot,
       threadReplies: row.replies,
     }));
-    let answers: Awaited<ReturnType<Triager["triage"]>>;
+    let answers: Awaited<ReturnType<Triager["triage"]>> = new Map();
+    let failed = false;
     try {
       const learned = Object.entries(rules.learned).map(([k, v]) => `- ${k}: ${v.direction} (${v.n})`);
       answers = await triager.triage(toModel, { me: { id: me.id, name: me.name }, notes: rules.notes, learned, vips: rules.vips, watches });
     } catch (error) {
       console.warn(`slack inbox: triage failed: ${messageOf(error)}`);
-      answers = new Map();
+      failed = true;
+      if (error instanceof TriageRunError) answers = error.answers;
+    }
+    if (failed) {
+      // The container did not run (or left nothing) for these: triage stays null and they wait for a retry.
+      const now = this.now().getTime();
+      const dropped: string[] = [];
+      for (const [id, entry] of queued) {
+        if (answers.has(id)) continue;
+        rows.delete(id);
+        const delay = TRIAGE_RETRY_MS[entry.failures];
+        if (delay === undefined) dropped.push(id);
+        else this.triageQueue.set(id, { ...entry, failures: entry.failures + 1, notBefore: now + delay });
+      }
+      if (dropped.length > 0) console.warn(`slack inbox: giving up on triage for ${dropped.length} item(s) after ${TRIAGE_RETRY_MS.length} retries; they stay untriaged until a new message arrives`);
+      if (rows.size === 0) return;
     }
     const at = this.now().toISOString();
-    const fallback = (row: SlackItemRow, why: string): SlackTriage => ({
+    const skipped = (row: SlackItemRow): SlackTriage => ({
       priority: "P2",
       category: "fyi",
       expectsReply: false,
       summary: firstLine(row.text),
-      why,
+      why: "the model skipped it",
       draft: null,
       refs: [],
       deadline: null,
@@ -673,8 +740,8 @@ export class SlackInbox implements SlackInboxPort {
       const row = await store.item(id);
       if (!row) continue;
       const answer = answers.get(id);
-      const triage = answer ? { ...answer, by: "model" as const, triagedAt: at, overridden: false } : fallback(row, answers.size === 0 ? "triage did not run" : "the model skipped it");
-      saved.push({ ...row, triage: withFloor(this.keepOverride(row.triage, triage), queued.get(id) ?? null) });
+      const triage = answer ? { ...answer, by: "model" as const, triagedAt: at, overridden: false } : skipped(row);
+      saved.push({ ...row, triage: withFloor(this.keepOverride(row.triage, triage), queued.get(id)?.floor ?? null) });
     }
     await store.save(saved);
     await this.refresh(this.snapshot.polledAt, this.snapshot.error);

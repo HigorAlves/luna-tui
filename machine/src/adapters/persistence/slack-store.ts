@@ -4,7 +4,7 @@
 // this file does the conversion and nothing else.
 import type { SlackItem, SlackPriority, SlackTriage, SlackTriageRun, SlackWatch, SlackWatchInput, SlackWatchPatch } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
-import { IsNull, MoreThanOrEqual } from "typeorm";
+import { IsNull, LessThan, MoreThanOrEqual } from "typeorm";
 
 import type { SlackMetricRow, SlackStore, SlackTriageRunInput } from "../../application/slack-store.ts";
 import type { SlackItemRow } from "../../domain/slack-item.ts";
@@ -144,6 +144,12 @@ export class PgSlackStore implements SlackStore {
   async latestTs(): Promise<string | null> {
     const [row]: { ts: string | null }[] = await this.db.query("select max(slack_ts::numeric)::text as ts from slack_items");
     return row?.ts ?? null;
+  }
+
+  async prune(doneBefore: Date, runsBefore: Date | null): Promise<{ items: number; runs: number }> {
+    const items = await this.db.getRepository(SlackItemEntity).delete({ doneAt: LessThan(doneBefore) });
+    const runs = runsBefore ? await this.db.getRepository(SlackTriageRunEntity).delete({ startedAt: LessThan(runsBefore) }) : null;
+    return { items: items.affected ?? 0, runs: runs?.affected ?? 0 };
   }
 
   async metricRows(since: Date): Promise<SlackMetricRow[]> {
