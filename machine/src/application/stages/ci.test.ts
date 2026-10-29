@@ -11,10 +11,10 @@ const checks = (...states: Array<[string, string]>): Check[] =>
 const finding = { path: "a.ts", line: 1, start_line: null, severity: "test", title: "red", body: "", suggestion_code: null, confidence: 1 };
 const pack = (answer: Record<string, unknown>): StageResult => ({ outcome: "pass", detail: { answer } });
 
-function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number }) {
+function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number; parent?: { ref: string; checks: Check[] }; graceMs?: number; realSleepMs?: number }) {
   let poll = 0;
   const github = fakeGitHub({
-    prChecks: async () => opts.polls[Math.min(poll++, opts.polls.length - 1)]!,
+    prChecks: async (_slug, ref) => (opts.parent && ref === opts.parent.ref ? opts.parent.checks : opts.polls[Math.min(poll++, opts.polls.length - 1)]!),
     findPr: async () => ({ url: "https://github.com/a/b/pull/7", number: 7, isDraft: true }),
     failedRunLog: async (_slug, runId) => `log of run ${runId}\nFAIL src/a.test.ts > boom\n`,
     rerunFailedJobs: async () => {},
@@ -27,7 +27,12 @@ function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number 
     slugOf: async () => "a/b",
     pollMs: 10,
     maxWaitMs: opts.maxWaitMs ?? 1_000,
-    sleep: async (ms) => void sleeps.push(ms),
+    parentRef: async () => opts.parent?.ref ?? null,
+    graceMs: opts.graceMs,
+    sleep: async (ms) => {
+      sleeps.push(ms);
+      if (opts.realSleepMs) await new Promise((resolve) => setTimeout(resolve, opts.realSleepMs));
+    },
   });
   const context = {
     task: { id: "t1", branch: "hardness/t1", worktreePath: "/wt", repoPath: "/repo" } as unknown as TaskRow,
@@ -39,6 +44,33 @@ function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number 
   } as StageContext;
   return { run, context, github, runPack, sleeps };
 }
+
+describe("ci_watch after a push", () => {
+  const before = checks(["guard", "SUCCESS"], ["lint", "FAILURE"]);
+
+  it("does not pass on the fast checks while the workflow run the parent had has not started", async () => {
+    const { run, context, github } = setup({
+      parent: { ref: "parent-sha", checks: before },
+      polls: [checks(["guard", "SUCCESS"]), checks(["guard", "SUCCESS"]), checks(["guard", "SUCCESS"], ["lint", "PENDING"]), checks(["guard", "SUCCESS"], ["lint", "SUCCESS"])],
+    });
+    const result = await run(context);
+    expect(result).toMatchObject({ outcome: "pass", detail: { step: "checks" } });
+    expect((result.detail?.checks as Check[]).map((c) => c.name).sort()).toEqual(["guard", "lint"]);
+    expect(github.prChecks).toHaveBeenCalledWith("a/b", "hardness/t1");
+  });
+
+  it("stops waiting for a check that never comes once the grace is over", async () => {
+    const { run, context } = setup({
+      parent: { ref: "parent-sha", checks: before },
+      polls: [checks(["guard", "SUCCESS"])],
+      graceMs: 30,
+      realSleepMs: 10,
+    });
+    const result = await run(context);
+    expect(result.outcome).toBe("pass");
+    expect((result.detail?.checks as Check[]).map((c) => c.name)).toEqual(["guard"]);
+  });
+});
 
 describe("ci_watch", () => {
   it("passes when every check is green", async () => {
