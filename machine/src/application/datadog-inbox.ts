@@ -64,6 +64,8 @@ const OVERLAP_MS = MINUTE_MS;
 const QUIET_RESOLVE_MS = DAY_MS;
 /** Done items stay listed (and stored) this long. */
 const KEEP_DONE_MS = 30 * DAY_MS;
+/** Error Tracking returns one page of this many issues; a full page may hide more. */
+const ERROR_TRACKING_CAP = 100;
 /** Error-log clusters fetched per poll. */
 const TOP_CLUSTERS = 10;
 const TICK_MS = MINUTE_MS;
@@ -175,6 +177,8 @@ export class DatadogInbox implements DatadogInboxPort {
     const webUrl = (path: string) => datadog.webUrl(path);
     /** Sources whose list stopped at the page cap: what is missing from it is unknown, not resolved. */
     const incomplete = new Set<DatadogSource>();
+    /** How many items each of the capped sources returned. */
+    const fetched = new Map<DatadogSource, number>();
     const calls: Record<DatadogSource, () => Promise<DatadogItem[]>> = {
       incident: async () => {
         const list = await datadog.incidents();
@@ -186,8 +190,16 @@ export class DatadogInbox implements DatadogInboxPort {
         if (list.incomplete) incomplete.add("monitor");
         return list.map((raw) => fromMonitor(raw, webUrl));
       },
-      error_tracking: async () => (await datadog.errorTrackingIssues(query, windows.get("error_tracking")!, to)).map((raw) => fromIssue(raw, webUrl)),
-      error_logs: async () => (await datadog.errorLogClusters(query, windows.get("error_logs")!, to, TOP_CLUSTERS)).map((raw) => fromCluster(raw, webUrl)),
+      error_tracking: async () => {
+        const list = await datadog.errorTrackingIssues(query, windows.get("error_tracking")!, to);
+        fetched.set("error_tracking", list.length);
+        return list.map((raw) => fromIssue(raw, webUrl));
+      },
+      error_logs: async () => {
+        const list = await datadog.errorLogClusters(query, windows.get("error_logs")!, to, TOP_CLUSTERS);
+        fetched.set("error_logs", list.length);
+        return list.map((raw) => fromCluster(raw, webUrl));
+      },
     };
     const settled = await Promise.allSettled(SOURCES.map((source) => calls[source]()));
     const failures = settled.flatMap((r, i) => (r.status === "rejected" ? [{ source: SOURCES[i]!, reason: r.reason as unknown }] : []));
@@ -243,6 +255,8 @@ export class DatadogInbox implements DatadogInboxPort {
         // Error Tracking issues and error-log clusters have no "gone" signal: one with no activity for a day counts as resolved until it fires again.
         for (const source of ["error_tracking", "error_logs"] as const) {
           if (settled[SOURCES.indexOf(source)]!.status !== "fulfilled") continue;
+          // A full fetch may have cut items off: quiet then proves nothing.
+          if ((fetched.get(source) ?? 0) >= (source === "error_tracking" ? ERROR_TRACKING_CAP : TOP_CLUSTERS)) continue;
           for (const row of new Map([...stored, ...merged]).values()) {
             if (row.source === source && !row.doneAt && row.resolvedAt === null && now.getTime() - Date.parse(row.lastSeen) >= QUIET_RESOLVE_MS) merged.set(row.id, { ...row, resolvedAt: now.toISOString() });
           }

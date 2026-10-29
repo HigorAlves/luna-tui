@@ -386,6 +386,31 @@ describe("DatadogInbox resolved marking", () => {
     log.mockRestore();
   });
 
+  it("applies the quiet rule only to complete fetches: a full top-10 of clusters or a full page of issues could be hiding the rest", async () => {
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const many = <T,>(make: (i: number) => T, n: number) => Array.from({ length: n }, (_, i) => make(i));
+    let size = 10;
+    const { inbox, advance } = make({
+      datadog: fakeDatadog({
+        errorLogClusters: async () => (size === 0 ? [] : many((i) => ({ ...cluster, service: `s${i}` }), size)),
+        errorTrackingIssues: async () => (size === 0 ? [] : many((i) => ({ ...issue, id: `i${i}` }), size === 10 ? 100 : 1)),
+      }),
+    });
+    await inbox.pollOnce(true);
+    size = 0;
+    advance(25 * 3_600_000);
+    // Both lists were full on the first poll, but the quiet rule looks at the poll in hand: empty lists are complete.
+    await inbox.pollOnce(true);
+    expect(inbox.snapshot.items.filter((i) => i.resolvedAt !== null).length).toBe(110);
+    size = 10;
+    advance(60_000);
+    await inbox.pollOnce(true);
+    advance(25 * 3_600_000);
+    await inbox.pollOnce(true);
+    expect(inbox.snapshot.items.filter((i) => i.resolvedAt !== null)).toHaveLength(0);
+    log.mockRestore();
+  });
+
   it("does not send a resolved item to the triager", async () => {
     let alerting = [monitor];
     const batches: string[][] = [];

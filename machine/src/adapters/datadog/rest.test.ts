@@ -27,7 +27,11 @@ describe("Datadog REST", () => {
   it("authenticates with both keys against the site's api host", async () => {
     const f = fake(json(200, incidents));
     await createDatadog(options(f)).incidents();
-    expect(f.calls[0]!.url).toMatch(/^https:\/\/api\.datadoghq\.eu\/api\/v2\/incidents\?/);
+    expect(f.calls[0]!.url).toMatch(/^https:\/\/api\.datadoghq\.eu\/api\/v2\/incidents\/search\?/);
+    const params = new URL(f.calls[0]!.url).searchParams;
+    expect(params.get("query")).toBe("state:(active OR stable)");
+    expect(params.get("sort")).toBe("-created");
+    expect(params.get("page[size]")).toBe("100");
     expect(f.calls[0]!.init.headers).toMatchObject({ "DD-API-KEY": "k", "DD-APPLICATION-KEY": "a" });
   });
   it("keeps unresolved incidents and reads either severity shape", async () => {
@@ -144,22 +148,25 @@ describe("Datadog REST", () => {
 
   const incidentPage = (from: number, n: number, nextOffset: number | null, state = "active") =>
     json(200, {
-      data: Array.from({ length: n }, (_, i) => ({ id: `id${from + i}`, attributes: { public_id: from + i, title: `t${from + i}`, state, severity: "SEV-3", customer_impacted: false, created: "2026-10-28T08:00:00.000Z", modified: "2026-10-28T09:00:00.000Z" } })),
+      data: {
+        type: "incidents_search_results",
+        attributes: { total: 9999, incidents: Array.from({ length: n }, (_, i) => ({ data: { id: `id${from + i}`, attributes: { public_id: from + i, title: `t${from + i}`, state, severity: "SEV-3", customer_impacted: false, created: "2026-10-28T08:00:00.000Z", modified: "2026-10-28T09:00:00.000Z" } } })) },
+      },
       meta: { pagination: { offset: from, next_offset: nextOffset, size: n } },
     });
 
   it("follows next_offset through every incident page", async () => {
-    const f = fake(incidentPage(0, 50, 50), incidentPage(50, 3, null));
+    const f = fake(incidentPage(0, 100, 100), incidentPage(100, 3, null));
     const list = await createDatadog(options(f)).incidents();
-    expect(list).toHaveLength(53);
-    expect(new URL(f.calls[1]!.url).searchParams.get("page[offset]")).toBe("50");
+    expect(list).toHaveLength(103);
+    expect(new URL(f.calls[1]!.url).searchParams.get("page[offset]")).toBe("100");
     expect(list.incomplete).toBeFalsy();
   });
   it("marks the incident list incomplete when the page cap is hit", async () => {
-    const f = fake(...Array.from({ length: 10 }, (_, i) => incidentPage(i * 50, 50, (i + 1) * 50)));
+    const f = fake(...Array.from({ length: 10 }, (_, i) => incidentPage(i * 100, 100, (i + 1) * 100)));
     const list = await createDatadog(options(f)).incidents();
     expect(f.calls).toHaveLength(10);
-    expect(list).toHaveLength(500);
+    expect(list).toHaveLength(1000);
     expect(list.incomplete).toBe(true);
   });
   it("pages monitor groups until page_count and marks the list incomplete at the cap", async () => {
@@ -201,6 +208,10 @@ describe("Datadog REST", () => {
     const clusters = await createDatadog(options(f)).errorLogClusters("", ...range, 2);
     expect(clusters).toHaveLength(2);
     expect(clusters.filter((c) => c.samples.length === 0)).toHaveLength(1);
+  });
+  it("throws a 429 from a sample search so the poller backs off, instead of hiding it as no samples", async () => {
+    const f = fake(json(200, bigAggregate(2)), json(429, {}, { "X-RateLimit-Reset": "540" }), json(200, search));
+    await expect(createDatadog(options(f)).errorLogClusters("", ...range, 2)).rejects.toMatchObject({ status: 429 });
   });
   it("normalises string timestamps and falls back for an invalid one", async () => {
     const odd = JSON.parse(JSON.stringify(errorTracking));

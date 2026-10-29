@@ -31,7 +31,7 @@ export interface DatadogRestOptions {
 /** The pauses before the second and third try of a call Datadog or the network failed. */
 export const RETRY_BACKOFF_MS = [500, 2_000] as const;
 /** The most incidents one list call asks for. */
-export const INCIDENT_PAGE = 50;
+export const INCIDENT_PAGE = 100;
 /** The most monitor groups one search asks for. */
 export const MONITOR_PAGE = 100;
 /** The most pages one incident or monitor listing follows before it reports itself incomplete. */
@@ -41,27 +41,27 @@ export const MAX_RATE_WAIT_S = 5;
 /** Sample searches running at once while building log clusters. */
 export const SAMPLE_CONCURRENCY = 3;
 
+const IncidentData = z.object({
+  id: z.string(),
+  attributes: z
+    .object({
+      public_id: z.number(),
+      title: z.string(),
+      state: z.string().nullish(),
+      severity: z.string().nullish(),
+      customer_impacted: z.boolean().nullish(),
+      created: z.string(),
+      modified: z.string(),
+      fields: z
+        .object({ state: z.object({ value: z.string().nullish() }).nullish(), severity: z.object({ value: z.string().nullish() }).nullish() })
+        .passthrough()
+        .nullish(),
+    })
+    .passthrough(),
+});
+// GET api/v2/incidents/search: the incident objects sit one level down, in data.attributes.incidents[].data.
 const Incidents = z.object({
-  data: z.array(
-    z.object({
-      id: z.string(),
-      attributes: z
-        .object({
-          public_id: z.number(),
-          title: z.string(),
-          state: z.string().nullish(),
-          severity: z.string().nullish(),
-          customer_impacted: z.boolean().nullish(),
-          created: z.string(),
-          modified: z.string(),
-          fields: z
-            .object({ state: z.object({ value: z.string().nullish() }).nullish(), severity: z.object({ value: z.string().nullish() }).nullish() })
-            .passthrough()
-            .nullish(),
-        })
-        .passthrough(),
-    }),
-  ),
+  data: z.object({ attributes: z.object({ incidents: z.array(z.object({ data: IncidentData })) }).passthrough() }).passthrough(),
   meta: z.object({ pagination: z.object({ next_offset: z.number().nullish() }).nullish() }).nullish(),
 });
 const OPEN_INCIDENT = new Set(["active", "stable"]);
@@ -230,8 +230,14 @@ export function createDatadog(options: DatadogRestOptions): Datadog {
       const out: Listing<DdIncident> = [];
       let offset = 0;
       for (let pages = 0; ; pages++) {
-        const page = await call("GET", "api/v2/incidents", Incidents, undefined, { "page[size]": String(INCIDENT_PAGE), "page[offset]": String(offset) });
-        for (const raw of page.data) {
+        const page = await call("GET", "api/v2/incidents/search", Incidents, undefined, {
+          query: "state:(active OR stable)",
+          sort: "-created",
+          "page[size]": String(INCIDENT_PAGE),
+          "page[offset]": String(offset),
+        });
+        const found = page.data.attributes.incidents;
+        for (const { data: raw } of found) {
           const a = raw.attributes;
           const state = a.state ?? a.fields?.state?.value ?? "unknown";
           if (!OPEN_INCIDENT.has(state.toLowerCase())) continue;
@@ -247,7 +253,7 @@ export function createDatadog(options: DatadogRestOptions): Datadog {
           });
         }
         const next = page.meta?.pagination?.next_offset;
-        if (page.data.length < INCIDENT_PAGE || next === null || next === undefined || next <= offset) break;
+        if (found.length < INCIDENT_PAGE || next === null || next === undefined || next <= offset) break;
         if (pages + 1 >= MAX_PAGES) {
           out.incomplete = true;
           break;
@@ -341,6 +347,9 @@ export function createDatadog(options: DatadogRestOptions): Datadog {
         const q = joinQuery(base, `service:${term(b.service)}`, b.kind === MISSING_KIND ? "-@error.kind:*" : `@error.kind:${quote(b.kind)}`);
         return (await call("POST", "api/v2/logs/events/search", LogEvents, { filter: { query: q, from, to }, sort: "-timestamp", page: { limit: LOG_SAMPLES } })).data;
       });
+      // A rate limit is the poller's cue to back off; it must not hide behind an empty sample list.
+      const limited = results.find((r) => r.status === "rejected" && r.reason instanceof DatadogError && r.reason.status === 429);
+      if (limited?.status === "rejected") throw limited.reason;
       return buckets.map((b, i): DdErrorLogCluster => {
         // A failed sample search keeps the cluster, without samples, rather than losing the whole poll.
         const events = results[i]!.status === "fulfilled" ? results[i]!.value : [];
