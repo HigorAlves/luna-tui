@@ -217,16 +217,20 @@ describe("JiraSync", () => {
   it("skips a stepping stone when the task has already moved on and the later status is reachable directly", async () => {
     const direct = { ...WORKFLOW, "To Do": [...WORKFLOW["To Do"]!, { id: "12", name: "Review now", to: { name: "In Review", categoryKey: "indeterminate" } }] };
     const { pipeline, jira, sync } = wire(jiraPolicy({ on: { implementing: "In Progress", awaiting_ship: "In Review" } }), { transitions: direct });
+    // Jira's answer is held until the task has moved on, however slow the machine running the test is.
     const read = jira.transitions.bind(jira);
+    let release!: () => void;
+    const moved = new Promise<void>((resolve) => (release = resolve));
     jira.transitions = async (key) => {
       const found = await read(key);
-      await new Promise((r) => setTimeout(r, 50));
+      await moved;
       return found;
     };
     const task = await pipeline.createTask({ title: "PLAT-123", repoPath: "/r/a" });
     await pipeline.start(task.id);
     await pipeline.decide(task.id, "approved");
     await pipeline.decide(task.id, "approved");
+    release();
     await sync.idle();
     expect(jira.issues.get("PLAT-123")!.status).toBe("In Review");
     expect(jira.writes.filter((w) => w[0] === "transition").map((w) => w[2])).toEqual(["12"]);

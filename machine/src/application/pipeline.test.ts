@@ -33,6 +33,9 @@ afterAll(async () => {
 });
 
 beforeEach(async () => {
+  // The last test's loops may still be writing events (a queued task claimed as the test ended);
+  // truncating under them deadlocks. Wind them down first.
+  await pipeline?.shutdown();
   await db.query("truncate tasks cascade");
   stubs.reset();
   pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
