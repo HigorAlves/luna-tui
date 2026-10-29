@@ -1,6 +1,8 @@
 // The machine's HTTP API: commands for the board, and a Server-Sent Events stream of
 // updates. Shapes are defined in @hardness/contracts.
 import {
+  DatadogItemPatch,
+  DatadogTaskInput,
   AnswersInput,
   type ApiError,
   CloneInput,
@@ -40,6 +42,7 @@ import { NoCasesToEditError, NoPlanToEditError, type Pipeline, TaskBusyError, Ta
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
 import { CloneError, NoPullError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
+import { type DatadogInboxPort, NoDatadogItemError } from "../../application/datadog-inbox.ts";
 import { AlreadyTaskError, BuiltinWatchError, NoItemError, NoWatchError, type SlackInboxPort } from "../../application/slack-inbox.ts";
 import { NoSlackTokenError } from "../../application/slack.ts";
 import { NoJiraTokenError } from "../../application/jira.ts";
@@ -69,6 +72,8 @@ export interface AppDeps {
   taskDiff?: (worktreePath: string, repoPath: string | null, file?: string) => Promise<TaskDiff>;
   /** The Slack inbox; without it the `/slack/*` routes are absent. */
   slack?: SlackInboxPort;
+  /** The Datadog inbox; without it the `/datadog/*` routes are absent. */
+  datadog?: DatadogInboxPort;
   /** Jira by hand (link, unlink, create, search, status); without it the `/jira/*` and `/tasks/:id/jira*` routes are absent. */
   jira?: JiraTasksPort;
   /** The ticket's SLA clocks, computed when a task is answered or published; without it every task shows `sla: null`. */
@@ -110,7 +115,7 @@ function prParams(c: Context): { owner: string; name: string; number: number } {
   return { owner, name, number };
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, datadog, jira, sla, slaAll }: AppDeps): Hono {
   const app = new Hono();
   /** A task row as the board reads it, clocks included. */
   const serialize = async (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null) => toTask(row, usage, sla ? await sla(row) : null);
@@ -131,6 +136,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof OwnPrError) return fail(c, 409, "own_pr", error.message);
     if (error instanceof CloneError) return fail(c, 400, "invalid_request", error.message);
     if (error instanceof NoItemError) return fail(c, 404, "no_item", error.message);
+    if (error instanceof NoDatadogItemError) return fail(c, 404, "no_item", error.message);
     if (error instanceof NoWatchError) return fail(c, 404, "no_watch", error.message);
     if (error instanceof NoSlackTokenError) return fail(c, 409, "no_token", error.message);
     if (error instanceof AlreadyTaskError) return fail(c, 409, "already_task", error.message);
@@ -316,6 +322,15 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     });
   }
 
+  const sinceOf = (value: string | undefined): Date => {
+    try {
+      return parseSince(value);
+    } catch (error) {
+      if (error instanceof InvalidSince) throw new BadRequest(error.message);
+      throw error;
+    }
+  };
+
   if (slack) {
     // The Slack inbox: the snapshot, a poll on demand, your actions on an item, the watches,
     // how fast you answer, and the listings the board's watch popup completes from.
@@ -334,19 +349,22 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
       await slack.deleteWatch(c.req.param("id"));
       return c.body(null, 204);
     });
-    const sinceOf = (value: string | undefined): Date => {
-      try {
-        return parseSince(value);
-      } catch (error) {
-        if (error instanceof InvalidSince) throw new BadRequest(error.message);
-        throw error;
-      }
-    };
     app.get("/slack/metrics", async (c) => c.json(await slack.metrics(sinceOf(c.req.query("since")))));
     // What the slack_triage pack cost: one row per container run, items and dollars summed.
     app.get("/slack/triage-runs", async (c) => c.json(await slack.triageRuns(sinceOf(c.req.query("since")))));
     app.get("/slack/usergroups", async (c) => c.json(await slack.usergroups()));
     app.get("/slack/channels", async (c) => c.json(await slack.channels()));
+  }
+
+  if (datadog) {
+    // The Datadog inbox: the snapshot, a poll on demand, your actions on an item, what triage cost.
+    // Ids carry colons (`et:9f3`), so the board percent-encodes them.
+    app.get("/datadog/items", (c) => c.json(datadog.snapshot));
+    app.post("/datadog/refresh", async (c) => c.json(await datadog.pollOnce(true)));
+    app.patch("/datadog/items/:id", async (c) => c.json(await datadog.patch(c.req.param("id"), await body(c, DatadogItemPatch))));
+    app.post("/datadog/items/:id/task", async (c) => c.json(await serialize(await datadog.toTask(c.req.param("id"), await body(c, DatadogTaskInput))), 201));
+    // What the datadog_triage pack cost: one row per container run.
+    app.get("/datadog/triage-runs", async (c) => c.json(await datadog.triageRuns(sinceOf(c.req.query("since")))));
   }
 
   if (jira) {

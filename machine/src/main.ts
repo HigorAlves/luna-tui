@@ -14,10 +14,15 @@ import { loadConfig } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns } from "./adapters/persistence/prune.ts";
-import { sweepImages, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
+import { sweepDatadogTriageRuns, sweepImages, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { GitHubPulls } from "./application/pulls.ts";
+import { DatadogInbox } from "./application/datadog-inbox.ts";
+import { noTokenDatadog } from "./application/datadog.ts";
+import { createDatadogTriager } from "./application/stages/datadog-triage-runner.ts";
+import { createDatadog } from "./adapters/datadog/rest.ts";
+import { PgDatadogStore } from "./adapters/persistence/datadog-store.ts";
 import { SlackInbox } from "./application/slack-inbox.ts";
 import { noTokenSlack } from "./application/slack.ts";
 import { createSlackTriager } from "./application/stages/slack-triage-runner.ts";
@@ -91,6 +96,10 @@ async function sweep(): Promise<void> {
   await step("slack triage runs", async () => {
     const removed = await sweepSlackTriageRuns(config.stateDir, config.retentionDays);
     return removed > 0 ? `removed ${removed} failed slack triage run folder(s)` : null;
+  });
+  await step("datadog triage runs", async () => {
+    const removed = await sweepDatadogTriageRuns(config.stateDir, config.retentionDays);
+    return removed > 0 ? `removed ${removed} failed datadog triage run folder(s)` : null;
   });
   await step("images", async () => {
     const removed = await sweepImages();
@@ -275,6 +284,23 @@ const slackInbox = new SlackInbox({
   socketToken: config.slackInbox.appToken,
   retentionDays: config.retentionDays,
 });
+/** The Datadog inbox: your API and application keys read; the datadog_triage pack triages in the
+ *  stage container, so triage is off when agents are. */
+const datadogApi = config.datadog.apiKey ? createDatadog({ apiKey: config.datadog.apiKey, appKey: config.datadog.appKey, site: config.datadog.site }) : noTokenDatadog(config.datadog.site);
+const datadogStore = new PgDatadogStore(db);
+const datadogTriager = agentDeps ? createDatadogTriager({ ...agentDeps, store: datadogStore }) : null;
+const datadogInbox = new DatadogInbox({
+  datadog: datadogApi,
+  triager: datadogTriager,
+  store: datadogStore,
+  scope: config.datadog.scope,
+  intervalMs: config.datadog.intervalMs,
+  publish: (snapshot) => bus.publish({ type: "datadog.items", snapshot }),
+  createTask: (input) => pipeline.createTask(input),
+  findTask: (id) => pipeline.get(id).catch(() => null),
+  resolveRepo: (slug) => repoMap.resolve(slug),
+  retentionDays: config.retentionDays,
+});
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 const app = createApp({
   db,
@@ -285,6 +311,7 @@ const app = createApp({
   pulls,
   prTasks,
   slack: slackInbox,
+  datadog: datadogInbox,
   ...(jiraTasks ? { jira: jiraTasks } : {}),
   sla: (task) => slaClocks.for(task),
   slaAll: (tasks) => slaClocks.forAll(tasks),
@@ -333,6 +360,13 @@ if (config.slackInbox.enabled && config.slackInbox.userToken) {
   }
 } else if (config.slackInbox.enabled) {
   console.log("slack inbox: off until MACHINE_SLACK_USER_TOKEN is set");
+}
+
+if (config.datadog.enabled && config.datadog.apiKey) {
+  console.log(`datadog inbox: polling incidents, monitors, Error Tracking and error logs every ${config.datadog.intervalMs / 1000}s${config.datadog.scope ? ` (${config.datadog.scope})` : ""}${datadogTriager ? " · triage by the datadog_triage pack (haiku)" : " · agents off, no triage"}`);
+  datadogInbox.start();
+} else if (config.datadog.enabled) {
+  console.log("datadog inbox: off until MACHINE_DATADOG_API_KEY and MACHINE_DATADOG_APP_KEY are set");
 }
 
 let intake: GitHubIntake | undefined;
@@ -394,6 +428,7 @@ async function shutdown(): Promise<void> {
   slaTicker.stop();
   pulls.stop();
   slackInbox.stop();
+  datadogInbox.stop();
   socket?.stop();
   if (digestTimer) clearTimeout(digestTimer);
   pipeline.stopSupervisor();

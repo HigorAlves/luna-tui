@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import type { Column, TaskState } from "./index.ts";
 import type { PrSnapshot } from "./github.ts";
+import type { DatadogSnapshot } from "./datadog.ts";
 import type { SlackSnapshot } from "./slack.ts";
 import type { JiraLink, TaskSla } from "./jira.ts";
 import { type ArtifactKind, StageOutcome, type TaskRoute, TaskSource, TestCase } from "./stage.ts";
@@ -224,6 +225,7 @@ export interface TaskDetail {
  * - `budget.alert`: a spend crossed 80, 90 or 100% of a ceiling (a task's, a repo's month's, the day's).
  * - `github.prs`: the PR inbox changed; carries the whole snapshot.
  * - `slack.items`: the Slack inbox changed; carries the whole snapshot, watches included.
+ * - `datadog.items`: the Datadog inbox changed; carries the whole snapshot.
  */
 export type StreamMessage =
   | { type: "task.updated"; task: Task }
@@ -234,7 +236,8 @@ export type StreamMessage =
   | { type: "stage.started"; taskId: string; label: string; cwd: string; container: string }
   | { type: "task.closed"; id: string }
   | { type: "github.prs"; snapshot: PrSnapshot }
-  | { type: "slack.items"; snapshot: SlackSnapshot };
+  | { type: "slack.items"; snapshot: SlackSnapshot }
+  | { type: "datadog.items"; snapshot: DatadogSnapshot };
 
 /** A spend passing a threshold of a ceiling; raised once per scope and threshold. */
 export interface BudgetAlert {
