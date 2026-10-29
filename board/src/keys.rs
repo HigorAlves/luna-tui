@@ -569,7 +569,7 @@ const INBOX: &[Binding] = &[
 ];
 
 const PULLS: &[Binding] = &[
-    b("m", "merge: squash, delete the branch", Group::Ticket, Scope::Pulls, |app| pr_key(app, PrKey::Merge), 90),
+    b("m", "merge, delete the branch", Group::Ticket, Scope::Pulls, |app| pr_key(app, PrKey::Merge), 90),
     b("c", "CI fix: an agent repairs the red run", Group::Ticket, Scope::Pulls, |app| pr_key(app, PrKey::CiFix), 85),
     b("v", "review: an agent posts line comments", Group::Ticket, Scope::Pulls, |app| pr_key(app, PrKey::Review), 84),
     b("t", "threads: an agent answers every one", Group::Ticket, Scope::Pulls, |app| pr_key(app, PrKey::Address), 83),
@@ -1280,7 +1280,7 @@ mod tests {
         let readme = "intro\n<!-- keys:start pulls -->\nold\n<!-- keys:end -->\nmiddle\n<!-- keys:start nope -->\nkept\n<!-- keys:end -->\nend\n";
         let spliced = splice_markdown(readme);
         assert!(spliced.starts_with("intro\n<!-- keys:start pulls -->\n**Pull request**\n\n| Key | Does |"), "{spliced}");
-        assert!(spliced.contains("| `m` | merge: squash, delete the branch |") && !spliced.contains("old"));
+        assert!(spliced.contains("| `m` | merge, delete the branch |") && !spliced.contains("old"));
         assert!(spliced.contains("<!-- keys:start nope -->\nkept\n<!-- keys:end -->\nend\n"), "{spliced}");
         assert_eq!(splice_markdown(&spliced), spliced, "idempotent");
     }

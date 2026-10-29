@@ -146,7 +146,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         frame.render_widget(footer_line(app), footer);
         match &app.mode {
             Mode::ConfirmMerge { repo, number } => {
-                render_note(frame, " Merge? ", &format!("{repo}#{number} is squash-merged and its branch deleted.  y / n"));
+                render_note(frame, " Merge? ", &format!("{repo}#{number} is merged (the repo's method) and its branch deleted.  y / n"));
             }
             Mode::ClonePrompt { repo, query, all, cursor, .. } => render_clone_prompt(frame, repo, query, all, *cursor),
             Mode::PrActions { cursor } => render_pr_actions(frame, app, *cursor),
@@ -2755,13 +2755,13 @@ mod pr_tests {
         let mut app = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, false)]);
         app.pulls = Some(PullsState { split: PrSplit::ReadyToMerge, cursor: 0 });
         app.mode = Mode::ConfirmMerge { repo: "acme/app".into(), number: 14 };
-        assert!(render(100, 14, &app).contains("acme/app#14 is squash-merged"));
+        assert!(render(100, 14, &app).contains("acme/app#14 is merged"));
         app.mode = Mode::ClonePrompt { repo: "acme/app".into(), query: "proj".into(), all: vec!["/r".into(), "/r/projects".into()], cursor: 0, then: crate::model::PrAction::Review };
         let text = render(100, 20, &app);
         assert!(text.contains("clone acme/app into") && text.contains("/r/projects/app") && !text.contains("▌ /r/app"), "{text}");
         app.mode = Mode::PrActions { cursor: 0 };
         let text = render(100, 30, &app);
-        assert!(text.contains("merge: squash, delete the branch") && !text.contains("review is for other people's PRs"), "{text}");
+        assert!(text.contains("merge, delete the branch") && !text.contains("review is for other people's PRs"), "{text}");
         assert!(text.contains("↳ threads are answered on your own PRs"), "{text}");
         assert!(text.contains("@them · h → main"), "the menu carries the PR widget: {text}");
     }

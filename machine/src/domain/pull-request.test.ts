@@ -98,7 +98,15 @@ describe("splitOf", () => {
     expect(mine({ reviewDecision: "APPROVED" })).toBe("ready_to_merge");
     expect(mine({ contexts: green, reviewDecision: "APPROVED", mergeable: "CONFLICTING" })).toBe("mine");
     expect(mine({ contexts: running, reviewDecision: "APPROVED" })).toBe("ci_running");
-    expect(mine({ contexts: green })).toBe("mine");
+    expect(mine({ contexts: green, reviewDecision: "REVIEW_REQUIRED" })).toBe("mine");
+  });
+
+  it("a repo that asks for no review has no decision at all: green and mergeable is ready", () => {
+    expect(mine({ contexts: green })).toBe("ready_to_merge");
+    expect(mine({ contexts: green, mergeable: "CONFLICTING" })).toBe("mine");
+    expect(mine({ contexts: green, isDraft: true })).toBe("mine");
+    expect(mine({ contexts: green, reviewThreads: { nodes: [{ isResolved: false }] } })).toBe("changes_requested");
+    expect(mine({ contexts: running })).toBe("ci_running");
   });
 
   it("a draft of mine is never ready", () => {

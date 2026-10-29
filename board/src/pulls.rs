@@ -108,7 +108,7 @@ impl PrKey {
 
     pub fn label(self) -> &'static str {
         match self {
-            PrKey::Merge => "merge (squash, delete the branch)",
+            PrKey::Merge => "merge (the repo's method, delete the branch)",
             PrKey::CiFix => "CI fix: an agent diagnoses the red run and pushes a fix",
             PrKey::Review => "review: an agent posts line comments; a verdict waits for you",
             PrKey::Address => "threads: an agent answers every unresolved review thread",

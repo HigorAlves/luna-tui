@@ -74,7 +74,7 @@ const hit = (number: number, repo = "o/a") => ({ number, repository: { nameWithO
 
 describe("GitHubPulls.pollOnce", () => {
   it("builds the snapshot with each PR's split, checkout and task, and publishes only when it changed", async () => {
-    const { pulls, published } = setup({ hits: [hit(1), hit(2), hit(3, "o/b")], nodes: { 1: node(1), 2: node(2, { reviewDecision: null }), 3: node(3, { headRepository: { nameWithOwner: "o/b" } }) } });
+    const { pulls, published } = setup({ hits: [hit(1), hit(2), hit(3, "o/b")], nodes: { 1: node(1), 2: node(2, { reviewDecision: "REVIEW_REQUIRED" }), 3: node(3, { headRepository: { nameWithOwner: "o/b" } }) } });
     const snapshot = await pulls.pollOnce();
     expect(snapshot.error).toBeNull();
     expect(snapshot.polledAt).not.toBeNull();
@@ -119,7 +119,7 @@ describe("GitHubPulls.pollOnce", () => {
 
 describe("GitHubPulls.merge", () => {
   it("refuses a PR outside Ready to merge, squashes a ready one, and polls again", async () => {
-    const world: World = { hits: [hit(1), hit(2)], nodes: { 1: node(1), 2: node(2, { reviewDecision: null }) } };
+    const world: World = { hits: [hit(1), hit(2)], nodes: { 1: node(1), 2: node(2, { reviewDecision: "REVIEW_REQUIRED" }) } };
     const { pulls, calls } = setup(world);
     await pulls.pollOnce();
     await expect(pulls.merge("o/a", 2)).rejects.toThrow(NotReadyError);
