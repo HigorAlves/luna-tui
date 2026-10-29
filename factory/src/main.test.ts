@@ -113,7 +113,7 @@ describe("factory main (dry run)", () => {
     expect(prompt).not.toContain("{{");
     expect(prompt).toContain("`datadog-triager` role running the `datadog_triage` stage");
     expect(prompt).toContain("env:prod");
-    expect(prompt).toContain("1. id inc:812 · incident");
+    expect(prompt).toContain("1. id \"inc:812\" · incident");
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     expect(options).toMatchObject({ agent: "datadog-triager", agents: ["datadog-triager"], model: "haiku", effort: "low", maxTurns: 5, tools: [], allowedTools: [] });
     expect(StageOutput.safeParse(result).error).toBeUndefined();

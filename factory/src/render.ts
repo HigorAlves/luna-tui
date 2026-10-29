@@ -75,10 +75,11 @@ const slackText = (slack: StageInput["context"]["slack"]) => {
 const datadogText = (datadog: StageInput["context"]["datadog"]) => {
   if (!datadog) return { scope: NONE, items: NONE };
   const items = datadog.items.map((item, i) => {
+    // id, service and env come from facet values and error kinds, which whoever can log can write: fenced like the title.
     const facts = [
       item.source,
-      item.service ? `service ${item.service}` : null,
-      `env ${item.env ?? "(none)"}`,
+      item.service ? `service ${JSON.stringify(item.service)}` : null,
+      `env ${item.env === null ? "(none)" : JSON.stringify(item.env)}`,
       `status ${item.status}`,
       item.severity ? `severity ${item.severity}` : null,
       item.count !== null ? `${item.count} in the window` : null,
@@ -87,7 +88,7 @@ const datadogText = (datadog: StageInput["context"]["datadog"]) => {
       item.floor ? `floor ${item.floor}` : null,
       item.reopened ? "reopened" : null,
     ].filter(Boolean);
-    return [`${i + 1}. id ${item.id} · ${facts.join(" · ")}`, `   title: ${JSON.stringify(item.title)}`, ...item.samples.map((s) => `   sample: ${JSON.stringify(s)}`)].join("\n");
+    return [`${i + 1}. id ${JSON.stringify(item.id)} · ${facts.join(" · ")}`, `   title: ${JSON.stringify(item.title)}`, ...item.samples.map((s) => `   sample: ${JSON.stringify(s)}`)].join("\n");
   });
   return { scope: datadog.scope.trim() === "" ? NONE : datadog.scope.trim(), items: items.length > 0 ? items.join("\n") : NONE };
 };
