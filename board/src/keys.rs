@@ -573,6 +573,7 @@ const PULLS: &[Binding] = &[
     b("c", "CI fix: an agent repairs the red run", Group::Ticket, Scope::Pulls, |app| pr_key(app, PrKey::CiFix), 85),
     b("v", "review: an agent posts line comments", Group::Ticket, Scope::Pulls, |app| pr_key(app, PrKey::Review), 84),
     b("t", "threads: an agent answers every one", Group::Ticket, Scope::Pulls, |app| pr_key(app, PrKey::Address), 83),
+    b("X", "close the PR, unmerged (asks first)", Group::Ticket, Scope::Pulls, |app| pr_key(app, PrKey::Close), 60),
     b("j / k", "previous / next PR", Group::Move, Scope::Pulls, on, 30),
     b("h / l", "previous / next split", Group::Move, Scope::Pulls, on, 29),
     b("1-6", "jump to that split", Group::Move, Scope::Pulls, on, 10),

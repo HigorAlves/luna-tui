@@ -19,6 +19,7 @@ function stub(answers: Record<string, unknown>) {
       teams: { listForAuthenticatedUser: "teams.listForAuthenticatedUser" },
       search: { issuesAndPullRequests: endpoint("search.issuesAndPullRequests") },
       pulls: {
+        update: endpoint("pulls.update"),
         get: endpoint("pulls.get"),
         list: endpoint("pulls.list"),
         create: endpoint("pulls.create"),
@@ -105,6 +106,12 @@ describe("OctokitGitHub", () => {
     expect(await methodOf({ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false })).toBe("squash");
     expect(await methodOf(new Error("no admin"))).toBe("squash");
     expect(await methodOf({})).toBe("squash");
+  });
+
+  it("closes a PR by updating its state and leaves the branch alone", async () => {
+    const { github, calls } = stub({ "pulls.update": {} });
+    await github.closePr("o/a", 7);
+    expect(calls).toEqual([["pulls.update", { owner: "o", repo: "a", pull_number: 7, state: "closed" }]]);
   });
 
   it("posts a review as one call, finds a PR by head, opens one against the default branch, and marks ready through GraphQL", async () => {

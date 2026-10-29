@@ -19,6 +19,7 @@ const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
   fromFork: false,
   reviewDecision: null,
   mergeable: "MERGEABLE",
+  mergeState: "CLEAN",
   checks: { state: "failure", passed: 1, total: 2, failed: [{ name: "lint", state: "FAILURE", url: null }], all: [{ name: "build", state: "SUCCESS", url: null }, { name: "lint", state: "FAILURE", url: null }] },
   unresolvedThreads: 0,
   split: "review_requested",
