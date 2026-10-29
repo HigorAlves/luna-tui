@@ -36,9 +36,10 @@ pub struct Retries {
     pub total: u32,
 }
 
-/// Where a task came from, when it was created from an outside issue or a Slack message.
-/// `kind` stays a plain string so kinds this board does not know still load; an issue has
-/// `repo`, `number` and `url`, a Slack message `channel`, `ts` and `permalink`.
+/// Where a task came from, when it was created from an outside issue, a Slack message or a
+/// Jira issue. `kind` stays a plain string so kinds this board does not know still load; an
+/// issue has `repo`, `number` and `url`, a Slack message `channel`, `ts` and `permalink`, a
+/// Jira issue `key`, `url` and `issueType`.
 #[derive(Deserialize, Clone, Debug)]
 pub struct TaskSource {
     pub kind: String,
@@ -55,18 +56,25 @@ pub struct TaskSource {
     pub ts: Option<String>,
     #[serde(default)]
     pub permalink: Option<String>,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default, rename = "issueType")]
+    #[allow(dead_code)] // part of the contract; the link carries the type once synced
+    pub issue_type: Option<String>,
 }
 
 impl TaskSource {
-    /// The link to open for the source: the issue's URL or the Slack permalink.
+    /// The link to open for the source: the issue's URL (GitHub or Jira) or the Slack permalink.
     pub fn link(&self) -> Option<&str> {
         self.url.as_deref().or(self.permalink.as_deref())
     }
 
-    /// `GitHub     acme/app#42 · url` or `Slack      #channel · permalink`, for the ticket popup.
+    /// `GitHub     acme/app#42 · url`, `Jira       PLAT-123 · url` or `Slack      #channel ·
+    /// permalink`, for the ticket popup.
     pub fn detail_line(&self) -> String {
         match (self.repo.as_deref(), self.number) {
             (Some(repo), Some(number)) => format!("GitHub     {repo}#{number} · {}", self.url.as_deref().unwrap_or("")),
+            _ if self.kind == "jira" => format!("Jira       {} · {}", self.key.as_deref().unwrap_or("?"), self.url.as_deref().unwrap_or("")),
             _ => format!(
                 "Slack      {} · {}",
                 self.channel.as_deref().unwrap_or("?"),
@@ -118,6 +126,226 @@ pub struct Task {
     /// Absent on tasks made by hand, and from machines that predate it.
     #[serde(default)]
     pub source: Option<TaskSource>,
+    /// The Jira issue the ticket is linked to, as the machine last synced it; None when unlinked.
+    #[serde(default)]
+    pub jira: Option<JiraLink>,
+    /// The ticket's SLA clocks, computed by the machine at snapshot time; None from machines
+    /// that predate them.
+    #[serde(default)]
+    pub sla: Option<TaskSla>,
+}
+
+/// The last declared transition Jira refused, until the next one succeeds.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct JiraBlocked {
+    pub wanted: String,
+    #[serde(default)]
+    pub current: Option<String>,
+    #[serde(default)]
+    pub why: String,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; the Activity section carries the time
+    pub at: String,
+}
+
+impl JiraBlocked {
+    /// `no transition to "In Review" from "Blocked"`, with Jira's own words after a dash when
+    /// it gave any.
+    pub fn line(&self) -> String {
+        let head = format!("no transition to \"{}\" from \"{}\"", self.wanted, self.current.as_deref().unwrap_or("?"));
+        if self.why.trim().is_empty() { head } else { format!("{head} — {}", self.why.trim()) }
+    }
+}
+
+/// The linked issue as the machine last saw it (contracts/src/jira.ts `JiraLink`).
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct JiraLink {
+    pub key: String,
+    pub url: String,
+    #[serde(default)]
+    pub issue_type: Option<String>,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    pub due_at: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; the board trusts the snapshot's freshness
+    pub synced_at: Option<String>,
+    #[serde(default)]
+    pub blocked: Option<JiraBlocked>,
+}
+
+impl JiraLink {
+    /// `PLAT-123 · In Progress · due Fri · High`: the parts the issue has, for the Overview.
+    pub fn summary(&self, now: u64) -> String {
+        let mut parts = vec![self.key.clone()];
+        parts.extend(self.status.clone());
+        parts.extend(self.due_at.as_deref().map(|due| format!("due {}", due_day(due, now))));
+        parts.extend(self.priority.clone());
+        parts.join(" · ")
+    }
+}
+
+/// One SLA clock (contracts/src/jira.ts `SlaClock`): when it is due, whether it has passed,
+/// and what it allows. The gate clock also says `since` when and at which `state`; the stage
+/// clock which `stage` and whether it is past 80% (`warn`).
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlaClock {
+    pub due_at: String,
+    #[serde(default)]
+    pub overdue: bool,
+    #[serde(default)]
+    pub target_secs: u64,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; the label counts from due − target
+    pub since: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; the status line already names the gate
+    pub state: Option<String>,
+    #[serde(default)]
+    pub stage: Option<String>,
+    #[serde(default)]
+    pub warn: bool,
+}
+
+/// How a clock reads: inside its target, past 80% of it, or past it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    Plain,
+    Warn,
+    Over,
+}
+
+impl SlaClock {
+    /// Seconds left until the clock is due; negative once it is past.
+    pub fn left(&self, now: u64) -> i64 {
+        unix_secs(&self.due_at).map_or(0, |due| due as i64 - now as i64)
+    }
+
+    /// `12m of 1h` while it runs, `overdue 40m` once it is past (by the flag, or by the clock).
+    pub fn label(&self, now: u64) -> String {
+        let left = self.left(now);
+        if self.overdue || left < 0 {
+            format!("overdue {}", age_secs(left.unsigned_abs()))
+        } else {
+            let elapsed = (self.target_secs as i64 - left).max(0) as u64;
+            format!("{} of {}", age_secs(elapsed), age_secs(self.target_secs))
+        }
+    }
+
+    pub fn tone(&self, now: u64) -> Tone {
+        if self.overdue || self.left(now) < 0 {
+            Tone::Over
+        } else if self.warn {
+            Tone::Warn
+        } else {
+            Tone::Plain
+        }
+    }
+}
+
+/// The ticket's clocks (contracts/src/jira.ts `TaskSla`); each is null while its condition
+/// does not hold (no gate open, no stage running, no Jira due date).
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSla {
+    #[serde(default)]
+    pub gate: Option<SlaClock>,
+    #[serde(default)]
+    pub stage: Option<SlaClock>,
+    #[serde(default)]
+    pub cycle: Option<SlaClock>,
+    #[serde(default)]
+    pub jira_due: Option<SlaClock>,
+}
+
+impl TaskSla {
+    /// The Overview's `SLA` row, one part per clock the ticket has, each with its tone:
+    /// `gate 12m of 1h`, `stage implementing 42m of 4h`, `cycle 1d 3h of 3d`, `jira due Fri`.
+    pub fn parts(&self, now: u64) -> Vec<(String, Tone)> {
+        let mut parts = Vec::new();
+        if let Some(gate) = &self.gate {
+            parts.push((format!("gate {}", gate.label(now)), gate.tone(now)));
+        }
+        if let Some(stage) = &self.stage {
+            parts.push((format!("stage {} {}", stage.stage.as_deref().unwrap_or("running"), stage.label(now)), stage.tone(now)));
+        }
+        if let Some(cycle) = &self.cycle {
+            parts.push((format!("cycle {}", cycle.label(now)), cycle.tone(now)));
+        }
+        if let Some(due) = &self.jira_due {
+            parts.push((format!("jira due {}", due_day(&due.due_at, now)), due.tone(now)));
+        }
+        parts
+    }
+
+    /// Any clock past its target: the card and the Overview go red.
+    pub fn any_overdue(&self) -> bool {
+        [&self.gate, &self.stage, &self.cycle, &self.jira_due].into_iter().flatten().any(|c| c.overdue)
+    }
+
+    pub fn gate_overdue(&self) -> bool {
+        self.gate.as_ref().is_some_and(|g| g.overdue)
+    }
+
+    pub fn stage_overdue(&self) -> bool {
+        self.stage.as_ref().is_some_and(|s| s.overdue)
+    }
+
+    /// The running stage is past 80% of its target but not over it: the card's age turns yellow.
+    pub fn stage_warn(&self) -> bool {
+        self.stage.as_ref().is_some_and(|s| s.warn && !s.overdue)
+    }
+}
+
+/// `today`, `tomorrow`, the weekday inside a week, else `MM-DD`: how a due date reads.
+pub fn due_day(iso: &str, now: u64) -> String {
+    let Some(due) = unix_secs(iso) else {
+        return iso.chars().take(10).collect();
+    };
+    let (due_day, today) = ((due / 86_400) as i64, (now / 86_400) as i64);
+    const DAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    match due_day - today {
+        0 => "today".to_string(),
+        1 => "tomorrow".to_string(),
+        2..=6 => DAYS[((due_day + 4).rem_euclid(7)) as usize].to_string(),
+        _ => iso.get(5..10).unwrap_or(iso).to_string(),
+    }
+}
+
+/// `GET /jira/search?q=`: one issue the query matched.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct JiraIssueHit {
+    pub key: String,
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub status: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; the picker row keeps to key, status, summary
+    pub issue_type: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; linking goes by key
+    pub url: String,
+}
+
+/// `GET /jira/status`: whether Jira is configured and reachable.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct JiraStatus {
+    pub configured: bool,
+    #[serde(default)]
+    pub site: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; the machine raises the expiry warning
+    pub token_expires_at: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
 }
 
 /// Verifying's verdict on one of test_design's cases, by title.
@@ -1075,6 +1303,16 @@ impl RepoMetrics {
     }
 }
 
+/// Gates answered within their SLA over gates answered, and the median wait per gate state.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GateMetrics {
+    pub within_sla: Option<f64>,
+    pub answered: u64,
+    #[serde(default)]
+    pub wait_ms: BTreeMap<String, Stats>,
+}
+
 /// `GET /metrics?since=7d|30d`. Unknown keys are ignored so a newer machine still loads.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -1096,6 +1334,9 @@ pub struct Metrics {
     pub retries: RetryStats,
     pub cost: Cost,
     pub queue: QueueStats,
+    /// Absent from machines that predate the gate SLA.
+    #[serde(default)]
+    pub gates: GateMetrics,
 }
 
 const NONE: &str = "–";
@@ -1186,14 +1427,34 @@ impl Task {
         short_id(&self.id)
     }
 
-    /// `#42 ` when the task came from an issue, `⌁ ` when it came from a Slack message, else
-    /// empty. The card shows it dim.
+    /// `#42 ` when the task came from an issue, `⌁ ` when it came from a Slack message,
+    /// `PLAT-123 ` when it came from a Jira issue, else empty. The card shows it dim.
     pub fn issue_prefix(&self) -> String {
         match self.source.as_ref() {
             Some(TaskSource { number: Some(number), .. }) => format!("#{number} "),
             Some(TaskSource { kind, .. }) if kind == "slack" => "⌁ ".to_string(),
+            Some(TaskSource { kind, key: Some(key), .. }) if kind == "jira" => format!("{key} "),
             _ => String::new(),
         }
+    }
+
+    /// The linked Jira issue's key, if any.
+    pub fn jira_key(&self) -> Option<&str> {
+        self.jira.as_ref().map(|j| j.key.as_str())
+    }
+
+    /// Any SLA clock past its target.
+    pub fn overdue(&self) -> bool {
+        self.sla.as_ref().is_some_and(TaskSla::any_overdue)
+    }
+
+    /// Waiting on you past the gate SLA: sorts first in its column.
+    pub fn gate_overdue(&self) -> bool {
+        self.sla.as_ref().is_some_and(TaskSla::gate_overdue)
+    }
+
+    pub fn stage_warn(&self) -> bool {
+        self.sla.as_ref().is_some_and(TaskSla::stage_warn)
     }
 
     #[allow(dead_code)] // the card renders the prefix dim, so it builds from `issue_prefix`
@@ -1590,7 +1851,7 @@ pub fn age_secs(secs: u64) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -1753,6 +2014,87 @@ mod tests {
         assert_eq!(source.link(), Some("https://acme.slack.com/archives/C0123/p1730112345000100"));
         assert!(source.detail_line().starts_with("Slack      #payments-oncall · https://"));
         assert_eq!(task.card_label(), "⌁ Login page");
+    }
+
+    #[test]
+    fn task_with_a_jira_source_deserialises_and_wears_the_key() {
+        let json = task_json(r#","source":{"kind":"jira","key":"PLAT-123","url":"https://acme.atlassian.net/browse/PLAT-123","issueType":"Story"}"#);
+        let task: Task = serde_json::from_str(&json).unwrap();
+        let source = task.source.clone().expect("source present");
+        assert_eq!(source.kind, "jira");
+        assert_eq!(source.key.as_deref(), Some("PLAT-123"));
+        assert_eq!(source.issue_type.as_deref(), Some("Story"));
+        assert_eq!(source.link(), Some("https://acme.atlassian.net/browse/PLAT-123"));
+        assert_eq!(source.detail_line(), "Jira       PLAT-123 · https://acme.atlassian.net/browse/PLAT-123");
+        assert_eq!(task.issue_prefix(), "PLAT-123 ");
+        assert_eq!(task.card_label(), "PLAT-123 Login page");
+    }
+
+    /// A task linked to PLAT-123, waiting at the plan gate 40 minutes past its hour, its stage
+    /// clock warning, a cycle clock and the issue's own due date two days out.
+    pub(crate) fn jira_task_json() -> String {
+        task_json(
+            r#","jira":{"key":"PLAT-123","url":"https://acme.atlassian.net/browse/PLAT-123","issueType":"Story","status":"In Progress",
+              "priority":"High","dueAt":"2026-10-30T17:00:00Z","syncedAt":"2026-10-28T09:00:00Z",
+              "blocked":{"wanted":"In Review","current":"Blocked","why":"transition not allowed","at":"2026-10-28T08:00:00Z"}},
+            "sla":{"gate":{"dueAt":"2026-10-28T09:20:00Z","overdue":true,"targetSecs":3600,"since":"2026-10-28T08:20:00Z","state":"awaiting_approval"},
+                   "stage":{"dueAt":"2026-10-28T13:00:00Z","overdue":false,"targetSecs":14400,"stage":"implementing","warn":true},
+                   "cycle":{"dueAt":"2026-10-31T00:00:00Z","overdue":false,"targetSecs":259200},
+                   "jiraDue":{"dueAt":"2026-10-30T17:00:00Z","overdue":false,"targetSecs":0}}"#,
+        )
+    }
+
+    #[test]
+    fn a_task_carries_its_jira_link_and_sla_clocks_and_an_older_machine_leaves_them_out() {
+        let task: Task = serde_json::from_str(&jira_task_json()).unwrap();
+        let now = unix_secs("2026-10-28T10:00:00Z").unwrap();
+        let jira = task.jira.clone().expect("linked");
+        assert_eq!(jira.key, "PLAT-123");
+        assert_eq!(jira.status.as_deref(), Some("In Progress"));
+        assert_eq!(jira.summary(now), "PLAT-123 · In Progress · due Fri · High");
+        assert_eq!(jira.blocked.as_ref().unwrap().line(), "no transition to \"In Review\" from \"Blocked\" — transition not allowed");
+        assert_eq!(task.jira_key(), Some("PLAT-123"));
+
+        let sla = task.sla.clone().expect("clocks");
+        assert!(sla.gate_overdue() && task.gate_overdue() && task.overdue());
+        assert!(sla.stage_warn() && task.stage_warn());
+        assert!(!sla.stage_overdue());
+        let parts = sla.parts(now);
+        assert_eq!(parts[0], ("gate overdue 40m".to_string(), Tone::Over));
+        assert_eq!(parts[1], ("stage implementing 1h of 4h".to_string(), Tone::Warn));
+        assert_eq!(parts[2], ("cycle 10h of 3d".to_string(), Tone::Plain));
+        assert_eq!(parts[3], ("jira due Fri".to_string(), Tone::Plain));
+
+        let sparse: Task = serde_json::from_str(&task_json(r#","jira":null,"sla":{"gate":null,"stage":null,"cycle":null,"jiraDue":null}"#)).unwrap();
+        assert!(sparse.jira.is_none() && !sparse.overdue() && sparse.sla.unwrap().parts(now).is_empty());
+        let old: Task = serde_json::from_str(&task_json("")).unwrap();
+        assert!(old.jira.is_none() && old.sla.is_none());
+        let bare: JiraLink = serde_json::from_str(r#"{"key":"X-1","url":"u"}"#).unwrap();
+        assert_eq!(bare.summary(now), "X-1");
+        assert_eq!(JiraBlocked { wanted: "Done".into(), current: None, why: String::new(), at: String::new() }.line(), "no transition to \"Done\" from \"?\"");
+    }
+
+    #[test]
+    fn a_due_date_reads_as_today_tomorrow_a_weekday_or_a_date() {
+        let now = unix_secs("2026-10-28T10:00:00Z").unwrap(); // a Wednesday
+        assert_eq!(due_day("2026-10-28T23:00:00Z", now), "today");
+        assert_eq!(due_day("2026-10-29T01:00:00Z", now), "tomorrow");
+        assert_eq!(due_day("2026-10-30T17:00:00Z", now), "Fri");
+        assert_eq!(due_day("2026-11-03T17:00:00Z", now), "Tue");
+        assert_eq!(due_day("2026-11-04T17:00:00Z", now), "11-04");
+        assert_eq!(due_day("2026-10-20T17:00:00Z", now), "10-20", "a past date is a date");
+        assert_eq!(due_day("garbage", now), "garbage");
+    }
+
+    #[test]
+    fn jira_search_hits_and_the_status_deserialise_with_their_nulls() {
+        let hits: Vec<JiraIssueHit> = serde_json::from_str(r#"[{"key":"PLAT-123","summary":"Login page","status":"In Progress","issueType":null,"url":"u"}]"#).unwrap();
+        assert_eq!(hits[0].key, "PLAT-123");
+        assert_eq!(hits[0].status.as_deref(), Some("In Progress"));
+        let status: JiraStatus = serde_json::from_str(r#"{"configured":true,"site":"https://acme.atlassian.net","tokenExpiresAt":null,"error":null}"#).unwrap();
+        assert!(status.configured && status.error.is_none());
+        let off: JiraStatus = serde_json::from_str(r#"{"configured":false,"site":null,"tokenExpiresAt":null,"error":"no token"}"#).unwrap();
+        assert_eq!(off.error.as_deref(), Some("no token"));
     }
 
     #[test]
@@ -1921,6 +2263,7 @@ mod tests {
       "retries":{"perTask":{"median":1,"p90":3},"byLoop":{"verify":2,"e2e":0,"ci":1}},
       "cost":{"totalUsd":12.5,"perTaskUsd":{"median":1.234,"p90":null},"byStage":{"verifying":2.5}},
       "queue":{"depth":2,"slots":{"max":4,"active":1},"utilisation":null},
+      "gates":{"withinSla":0.75,"answered":8,"waitMs":{"awaiting_approval":{"median":1800000,"p90":5400000},"awaiting_ship":{"median":null,"p90":null}}},
       "futureKey":{"anything":true}
     }"#;
 
@@ -1936,6 +2279,11 @@ mod tests {
         assert_eq!(m.cost.by_stage["verifying"], 2.5);
         assert_eq!(m.queue.slots.max, 4);
         assert_eq!(m.queue.utilisation, None);
+        assert_eq!(m.gates.answered, 8);
+        assert_eq!(m.gates.within_sla, Some(0.75));
+        assert_eq!(m.gates.wait_ms["awaiting_approval"].median, Some(1_800_000.0));
+        let old: Metrics = serde_json::from_str(&METRICS_JSON.replace(r#""gates":{"withinSla":0.75,"answered":8,"waitMs":{"awaiting_approval":{"median":1800000,"p90":5400000},"awaiting_ship":{"median":null,"p90":null}}},"#, "")).unwrap();
+        assert_eq!(old.gates.answered, 0, "a machine without the gate SLA still loads");
     }
 
     #[test]

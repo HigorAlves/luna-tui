@@ -5,6 +5,7 @@ import { z } from "zod";
 import type { Column, TaskState } from "./index.ts";
 import type { PrSnapshot } from "./github.ts";
 import type { SlackSnapshot } from "./slack.ts";
+import type { JiraLink, TaskSla } from "./jira.ts";
 import { type ArtifactKind, StageOutcome, type TaskRoute, TaskSource, TestCase } from "./stage.ts";
 
 export const NewTaskInput = z.object({
@@ -143,6 +144,10 @@ export interface Task {
   diff: { added: number; removed: number } | null;
   /** Verifying's results, passed over total, from its latest run. */
   tests: { passed: number; total: number } | null;
+  /** The linked Jira issue, as the machine last saw it; null when the task has none. */
+  jira: JiraLink | null;
+  /** The ticket's SLA clocks, computed at snapshot time; null when none applies. */
+  sla: TaskSla | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -286,6 +291,8 @@ export interface Metrics {
     /** Started to ended, for passed and failed stage runs started in the window. */
     perStage: Record<string, Stats & { runs: number }>;
   };
+  /** Gates answered within their SLA over gates answered, and the median wait per gate (ms). */
+  gates: { withinSla: number | null; answered: number; waitMs: Record<string, Stats> };
   /** Share of tasks whose first run of the stage passed. */
   firstPassRate: {
     verifying: number | null;

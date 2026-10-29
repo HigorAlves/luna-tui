@@ -1,6 +1,6 @@
 // Plain domain types for a task and everything attached to it. No TypeORM here — see
 // ../adapters/persistence/schemas.ts for the persistence mapping of these same shapes.
-import type { ArtifactKind, StageRunCase, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
+import type { ArtifactKind, JiraLink, StageRunCase, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
 
 import type { Retries } from "./transition.ts";
 
@@ -32,6 +32,10 @@ export interface TaskRow {
   /** Verifying's results, passed over total, from its latest run; null until it ran. */
   testsPassed: number | null;
   testsTotal: number | null;
+  /** The linked Jira issue as last seen; null when the task has none. */
+  jira: JiraLink | null;
+  /** When the task entered its current state (its latest transition; creation for a draft). Null only on rows older than the column. */
+  stateSince: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }

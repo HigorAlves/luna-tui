@@ -36,6 +36,8 @@ export const TaskEntity = new EntitySchema<TaskRow>({
     diffRemoved: { name: "diff_removed", type: "integer", nullable: true },
     testsPassed: { name: "tests_passed", type: "integer", nullable: true },
     testsTotal: { name: "tests_total", type: "integer", nullable: true },
+    jira: { type: "jsonb", nullable: true },
+    stateSince: { name: "state_since", type: "timestamptz", nullable: true },
     createdAt: { name: "created_at", type: "timestamptz", createDate: true },
     updatedAt: { name: "updated_at", type: "timestamptz", updateDate: true },
   },

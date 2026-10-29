@@ -104,6 +104,23 @@ describe("factory main (dry run)", () => {
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
+  it("jira_intake: runs over the repo checkout read-only with Read, Glob and Grep, renders the issue and leaves a valid result", () => {
+    const task = { id: "jira-intake", title: "Login page", description: "Users sign in.", criteria: [], repoPath: "/r/a", branch: "", source: null };
+    const jira = { key: "PLAT-123", url: "https://acme.atlassian.net/browse/PLAT-123", summary: "Login page", description: "Users sign in.", issueType: "Story", priority: "High", labels: ["luna"], dueAt: null, comments: ["Marta: please"], repoPath: "/r/a" };
+    const { code, stdout, out, result } = run(stageInput("jira_intake", { task, plan: null, context: { projectContext: null, jira } }));
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`jira-triager` role running the `jira_intake` stage");
+    expect(prompt).toContain("PLAT-123 · Story · priority High · labels luna");
+    expect(prompt).toContain("- Marta: please");
+    expect(prompt).toContain("Keep it small.");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "jira-triager", agents: ["jira-triager"], model: "sonnet", effort: "low", tools: ["Read", "Glob", "Grep"], allowedTools: ["Read", "Glob", "Grep"] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
   it("takes a structured answer through the test seam and maps its kind to the outcome", () => {
     const answer = { kind: "questions", summary: "which?", questions: [{ question: "db?", recommended: "sqlite" }] };
     const { result } = run(stageInput("triage"), { LUNA_STAGE_DRY_STRUCTURED: JSON.stringify(answer) });

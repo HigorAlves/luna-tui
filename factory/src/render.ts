@@ -69,6 +69,22 @@ const slackText = (slack: StageInput["context"]["slack"]) => {
   };
 };
 
+/** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
+const jiraText = (jira: StageInput["context"]["jira"]) => {
+  if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE };
+  const facts = [
+    `${jira.key} · ${jira.issueType ?? "no type"} · priority ${jira.priority ?? "none"}`,
+    jira.labels.length > 0 ? `labels ${jira.labels.join(", ")}` : null,
+    jira.dueAt ? `due ${jira.dueAt}` : null,
+  ].filter(Boolean);
+  return {
+    issue: `${jira.summary}\n${facts.join(" · ")}\n${jira.url}`,
+    description: jira.description.trim() === "" ? NONE : jira.description.trim(),
+    comments: jira.comments.length > 0 ? jira.comments.map((c) => `- ${c}`).join("\n") : NONE,
+    repoPath: jira.repoPath ?? "(unknown: /work is empty)",
+  };
+};
+
 /** The rules every stage runs under; appended to the system prompt and restated in the header. */
 export const FACTORY_RULES = [
   "You are running in factory mode (LUNA_FACTORY=1): no human is present. A controller wrote /in/stage.json and reads your final answer as the stage result.",
@@ -93,6 +109,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
   const agent = pack.agent ?? "script";
   const context = input.context.projectContext ?? projectContext ?? null;
   const slack = slackText(input.context.slack);
+  const jira = jiraText(input.context.jira);
   const subs: Record<string, string> = {
     "{{task.title}}": txt(input.task.title),
     "{{task.description}}": txt(input.task.description),
@@ -134,6 +151,10 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{context.slack.watches}}": slack.watches,
     "{{context.slack.rules}}": slack.rules,
     "{{context.slack.items}}": slack.items,
+    "{{context.jira.issue}}": jira.issue,
+    "{{context.jira.description}}": jira.description,
+    "{{context.jira.comments}}": jira.comments,
+    "{{context.jira.repoPath}}": jira.repoPath,
     "{{attempt}}": txt(input.attempt),
     "{{agent}}": agent,
     "{{skills}}": pack.skills.length > 0 ? pack.skills.join(", ") : NONE,

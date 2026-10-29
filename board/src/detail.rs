@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, BorderType, Clear, Padding, Paragraph, Wrap},
 };
 use crate::model::{
-    Approval, CriterionRow, PullRequest, StageRun, Task, TaskDetail, TaskDiff, TestCase, age, criteria_summary, now_secs,
+    Approval, CriterionRow, PullRequest, StageRun, Task, TaskDetail, TaskDiff, TestCase, Tone, age, criteria_summary, now_secs,
     plan_history, questions_of,
 };
 use crate::ui::{
@@ -478,6 +478,7 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     if let Some(source) = &task.source {
         lines.push(muted(source.detail_line()));
     }
+    lines.extend(jira_lines(task, now));
     if let Some(stage) = &task.resume_to {
         lines.push(muted(format!("Continues  {}", continues_line(&task.state, stage).trim_start_matches("Continues at: "))));
     }
@@ -540,6 +541,41 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
         lines.push(muted("  (none yet, e adds them)".into()));
     } else {
         lines.extend(bullets(&task.criteria));
+    }
+    lines
+}
+
+/// The Overview's Jira and SLA facts: `Jira       PLAT-123 · In Progress · due Fri · High`
+/// (muted `—  J links an issue` while unlinked), a red `⚠ blocked: …` line under it when the
+/// last transition was refused, and `SLA        gate 12m of 1h · stage implementing 42m of 4h`
+/// with each clock in its tone; no SLA row at all on a machine without the clocks.
+fn jira_lines(task: &Task, now: u64) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    match &task.jira {
+        Some(jira) => {
+            lines.push(Line::from(vec![Span::from("Jira       ").fg(c(SUBTEXT0)), Span::from(jira.summary(now))]));
+            if let Some(blocked) = &jira.blocked {
+                lines.push(Line::from(Span::from(format!("           ⚠ blocked: {}", blocked.line())).fg(c(RED)).bold()));
+            }
+        }
+        None => lines.push(muted("Jira       —  J links an issue".to_string())),
+    }
+    if let Some(sla) = &task.sla {
+        let parts = sla.parts(now);
+        if !parts.is_empty() {
+            let mut spans = vec![Span::from("SLA        ").fg(c(SUBTEXT0))];
+            for (i, (text, tone)) in parts.into_iter().enumerate() {
+                if i > 0 {
+                    spans.push(Span::from(" · ").fg(c(SUBTEXT0)));
+                }
+                spans.push(match tone {
+                    Tone::Over => Span::from(text).fg(c(RED)).bold(),
+                    Tone::Warn => Span::from(text).fg(c(YELLOW)),
+                    Tone::Plain => Span::from(text),
+                });
+            }
+            lines.push(Line::from(spans));
+        }
     }
     lines
 }
@@ -1227,6 +1263,55 @@ mod tests {
         assert!(text.contains("✗ lint: pnpm lint"), "{text}");
         assert!(text.contains("3 problems"), "a failed check shows its tail: {text}");
         assert!(text.contains("no e2e surface"), "{text}");
+    }
+
+    #[test]
+    fn the_overview_shows_the_jira_link_its_block_and_the_sla_clocks_in_their_tones() {
+        let now = crate::model::unix_secs("2026-10-28T10:00:00Z").unwrap();
+        let (_, detail) = fixture();
+        let task: Task = serde_json::from_str(&crate::model::tests::jira_task_json()).unwrap();
+        let lines = jira_lines(&task, now);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        assert_eq!(text[0], "Jira       PLAT-123 · In Progress · due Fri · High");
+        assert!(text[1].contains("⚠ blocked: no transition to \"In Review\" from \"Blocked\""), "{}", text[1]);
+        assert!(lines[1].spans.iter().all(|s| s.style.fg == Some(c(RED))), "the block is red");
+        assert_eq!(text[2], "SLA        gate overdue 40m · stage implementing 1h of 4h · cycle 10h of 3d · jira due Fri");
+        let gate = lines[2].spans.iter().find(|s| s.content.contains("gate")).unwrap();
+        assert_eq!(gate.style.fg, Some(c(RED)), "an overdue gate is red");
+        let stage = lines[2].spans.iter().find(|s| s.content.contains("stage")).unwrap();
+        assert_eq!(stage.style.fg, Some(c(YELLOW)), "a warning stage is yellow");
+        let cycle = lines[2].spans.iter().find(|s| s.content.contains("cycle")).unwrap();
+        assert_eq!(cycle.style.fg, None, "a clock inside its target is plain");
+
+        let rows = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
+        assert!(rows.contains("Jira       PLAT-123 · In Progress") && rows.contains("SLA        gate overdue"), "{rows}");
+
+        let (unlinked, _) = fixture();
+        let text: Vec<String> = jira_lines(&unlinked, now).iter().map(|l| l.to_string()).collect();
+        assert_eq!(text, vec!["Jira       —  J links an issue"], "no clocks, no SLA row");
+        let mut fine = task.clone();
+        fine.jira.as_mut().unwrap().blocked = None;
+        fine.sla.as_mut().unwrap().gate = None;
+        fine.sla.as_mut().unwrap().jira_due = None;
+        let text: Vec<String> = jira_lines(&fine, now).iter().map(|l| l.to_string()).collect();
+        assert_eq!(text.len(), 2);
+        assert_eq!(text[1], "SLA        stage implementing 1h of 4h · cycle 10h of 3d", "null clocks are left out");
+    }
+
+    #[test]
+    fn the_activity_section_names_the_jira_events() {
+        let (task, mut detail) = fixture();
+        let events: Vec<crate::model::TaskEvent> = serde_json::from_str(
+            r#"[{"taskId":"abcdef123456","kind":"jira.transitioned","payload":{"from":"To Do","to":"In Progress"},"at":"2026-10-22T09:41:00.000Z"},
+                {"taskId":"abcdef123456","kind":"jira.blocked","payload":{"wanted":"In Review","current":"Blocked","why":"not allowed"},"at":"2026-10-22T10:02:00.000Z"},
+                {"taskId":"abcdef123456","kind":"jira.moved","payload":{"status":"Done"},"at":"2026-10-22T10:30:00.000Z"}]"#,
+        )
+        .unwrap();
+        detail.events.extend(events);
+        let text = render(120, 30, &task, Some(&detail), Section::Activity, 0).join("\n");
+        assert!(text.contains("09:41:00  jira → In Progress"), "{text}");
+        assert!(text.contains("10:02:00  jira blocked: no transition to \"In Review\" from \"Blocked\" — not allowed"), "{text}");
+        assert!(text.contains("10:30:00  jira moved to Done"), "{text}");
     }
 
     #[test]

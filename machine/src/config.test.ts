@@ -35,6 +35,8 @@ describe("loadConfig", () => {
       threadReplies: true,
       slack: null,
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null },
+      jira: null,
+      sla: { gateSecs: 3600, cycleSecs: null },
     });
   });
 
@@ -156,5 +158,24 @@ describe("loadConfig", () => {
   it("rejects a retention window that is not a non-negative integer", () => {
     expect(() => loadConfig({ MACHINE_RETENTION_DAYS: "-1" })).toThrow(/MACHINE_RETENTION_DAYS/);
     expect(() => loadConfig({ MACHINE_RETENTION_DAYS: "abc" })).toThrow(/MACHINE_RETENTION_DAYS/);
+  });
+
+  it("reads Jira when all three variables are set, refuses a partial set, and honours the off switch and the cloud id", () => {
+    expect(loadConfig({}).jira).toBeNull();
+    const env = { MACHINE_JIRA_SITE: "https://acme.atlassian.net/", MACHINE_JIRA_EMAIL: "me@acme.com", MACHINE_JIRA_TOKEN: "tok" };
+    expect(loadConfig(env).jira).toEqual({ site: "https://acme.atlassian.net", email: "me@acme.com", token: "tok", cloudId: null, tokenExpiresAt: null });
+    expect(loadConfig({ ...env, MACHINE_JIRA_TOKEN_EXPIRES: "2027-01-31" }).jira?.tokenExpiresAt).toBe("2027-01-31");
+    expect(() => loadConfig({ ...env, MACHINE_JIRA_TOKEN_EXPIRES: "next year" })).toThrow(/MACHINE_JIRA_TOKEN_EXPIRES must be an ISO date/);
+    expect(loadConfig({ ...env, MACHINE_JIRA_CLOUD_ID: "1111-2222" }).jira?.cloudId).toBe("1111-2222");
+    expect(loadConfig({ ...env, MACHINE_JIRA: "off" }).jira).toBeNull();
+    expect(() => loadConfig({ MACHINE_JIRA_SITE: "https://acme.atlassian.net" })).toThrow(/go together/);
+    expect(() => loadConfig({ ...env, MACHINE_JIRA_SITE: "acme.atlassian.net" })).toThrow(/MACHINE_JIRA_SITE must be the site's https url/);
+  });
+
+  it("reads the SLA defaults: a one-hour gate unless told otherwise, no cycle unless told, off for none", () => {
+    expect(loadConfig({}).sla).toEqual({ gateSecs: 3600, cycleSecs: null });
+    expect(loadConfig({ MACHINE_SLA_GATE: "30m", MACHINE_SLA_CYCLE: "3d" }).sla).toEqual({ gateSecs: 1800, cycleSecs: 259_200 });
+    expect(loadConfig({ MACHINE_SLA_GATE: "off" }).sla.gateSecs).toBeNull();
+    expect(() => loadConfig({ MACHINE_SLA_GATE: "soon" })).toThrow(/MACHINE_SLA_GATE must be a duration/);
   });
 });

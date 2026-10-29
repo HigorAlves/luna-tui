@@ -3,6 +3,25 @@
 // matter only ever set the knobs below). Pure: parsing only.
 import type { CheckSpec, ServiceSpec } from "@hardness/contracts";
 
+import type { SlaTargets } from "./sla.ts";
+
+/** How a repo's tasks talk to Jira, after its luna.yaml `jira` block (luna-config.ts validates it). */
+export interface JiraPolicy {
+  /** The project `J` creates issues in and intake's default; null when the repo names none. */
+  project: string | null;
+  intake: { jql: string; everySecs: number } | null;
+  /** Task state to the Jira status name the issue moves to on entering it; only known states survive parsing. */
+  on: Partial<Record<string, string>>;
+  comments: "none" | "milestones" | "gates";
+  /** Per task state, the Jira fields to set with the transition; values may use `{pr_url}`, `{task_id}`, `{branch}`, `{board_url}`. */
+  fields: Partial<Record<string, Record<string, string>>>;
+  /** The branch pattern for a linked task: `{type}`, `{key}`, `{slug}`, `{route}`, `{id}`. */
+  branch: string;
+}
+
+export const DEFAULT_JIRA_BRANCH = "{type}/{key}";
+export const DEFAULT_JIRA_COMMENTS: JiraPolicy["comments"] = "milestones";
+
 export interface Policy {
   /** `web` runs the e2e stage when the change renders something; `none` never runs it. */
   qa: "web" | "none";
@@ -23,6 +42,10 @@ export interface Policy {
   services: Record<string, ServiceSpec>;
   /** What the repo says it builds with, by tool; recorded by setup, read by nothing yet. */
   toolchains: Record<string, string>;
+  /** The repo's Jira block; null when it has none (its tasks still link by hand, nothing syncs). */
+  jira: JiraPolicy | null;
+  /** The repo's SLA targets; a field left undefined falls back to the machine's env defaults. */
+  sla: Partial<SlaTargets>;
 }
 
 /** `qa_target: <name> <base url> [credential ref]`, one line per target; the ref is `env:NAME`. */
@@ -42,6 +65,8 @@ export const DEFAULT_POLICY: Policy = {
   checks: null,
   services: {},
   toolchains: {},
+  jira: null,
+  sla: {},
 };
 
 export class PolicyParseError extends Error {
@@ -96,7 +121,7 @@ const qaTarget = (key: string, raw: string): QaTarget => {
 
 /** The policy a PIPELINE.md declares; unknown keys are ignored, a bad value throws. */
 export function parsePolicy(text: string): Policy {
-  const policy: Policy = { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {} };
+  const policy: Policy = { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {} };
   for (const { key, value } of frontMatter(text)) {
     switch (key) {
       case "qa":

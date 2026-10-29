@@ -26,7 +26,7 @@ export interface PolicyStoreOptions {
   warn?: (message: string) => void;
 }
 
-const fresh = (): Policy => ({ ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {} });
+const fresh = (): Policy => ({ ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {} });
 
 export class PolicyStore {
   private readonly cache = new Map<string, Cached>();
@@ -52,7 +52,8 @@ export class PolicyStore {
     if (found.stamp === cached.stamp || found.stamp === cached.badStamp) return { ...cached.policy };
     try {
       const text = await readFile(found.file, "utf8");
-      const policy = found.name === CONFIG_FILE ? parseLunaConfig(text) : parsePolicy(text);
+      // A dropped key (an unknown task state under `jira.on`, say) is said once per version too.
+      const policy = found.name === CONFIG_FILE ? parseLunaConfig(text, (message) => this.warn(`${found.file}: ${message}`)) : parsePolicy(text);
       this.cache.set(repoPath, { ...cached, stamp: found.stamp, policy, badStamp: null });
       return { ...policy };
     } catch (error) {

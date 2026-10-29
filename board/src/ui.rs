@@ -23,7 +23,7 @@ use crate::slack::{self, SlackKey, SlackSplit, SlackState};
 use crate::{
     app::{ACTIONS, App, Density, FloorState, GroupBy, HelpFor, Mode},
     model::{
-        COLUMNS, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
+        COLUMNS, JiraIssueHit, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
         fmt_usd, repo_colour_slot, sla_targets, spend_p90, now_secs, unix_secs,
     },
 };
@@ -313,6 +313,17 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
         }
         Mode::ConfirmMany { action, ids } => render_note(frame, " Marked tickets ", &format!("{}  y / n", action.question(ids.len()))),
+        Mode::JiraLink { id, query, hits, cursor } => {
+            if let Some(task) = app.task(id) {
+                render_jira_link(frame, task, query, hits, *cursor);
+            }
+        }
+        Mode::ConfirmJiraUnlink(id) => {
+            if let Some(task) = app.task(id) {
+                let key = task.jira_key().unwrap_or("the issue");
+                render_confirm(frame, task, &format!(" unlink {key}? "), "The ticket forgets the issue; nothing changes in Jira.");
+            }
+        }
         Mode::Help(ctx) => {
             let max = render_help(frame, *ctx, app.help_scroll.get());
             app.help_max.set(max);
@@ -352,6 +363,10 @@ fn header_line(app: &App) -> Line<'static> {
             .fg(c(RED))
             .bold(),
         );
+    }
+    let overdue = app.overdue_count();
+    if app.online && overdue > 0 {
+        spans.push(Span::from(format!("  ‼ {overdue} overdue")).fg(c(RED)).bold());
     }
     if app.slots.as_ref().is_some_and(|s| s.draining) {
         spans.push(Span::from("  [DRAINING]").fg(c(PEACH)).bold());
@@ -488,6 +503,8 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::Actions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
         Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
         Mode::ConfirmMerge { .. } => hint(&[("y", "merge"), ("n", "cancel")]),
+        Mode::JiraLink { .. } => hint(&[("type", "search from 3 chars"), ("↑/↓", "move"), ("enter", "link (row 0 creates)"), ("ctrl+n", "create"), ("esc", "cancel")]),
+        Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
         Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
         Mode::PrActions { .. } | Mode::SlackActions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
         Mode::SlackSnooze { .. } => hint(&[("j/k 1-4", "pick"), ("enter", "snooze"), ("esc", "cancel")]),
@@ -649,7 +666,8 @@ fn repo_separator(repo: Option<&str>, count: usize, width: usize) -> ListItem<'s
 const REPO_COLOURS: [Color; REPO_COLOUR_SLOTS] = [BLUE, GREEN, PEACH, LAVENDER, YELLOW, RED];
 
 /// The card's first line: the marks, a repo-coloured bar, the issue number, the title. The
-/// title leads so a narrow column cuts the identifiers, never the words.
+/// title leads so a narrow column cuts the identifiers, never the words. A ticket past one of
+/// its SLA clocks leads with `‼` and goes red, like an overdue Slack row.
 fn card_head(task: &Task, marked: bool, is_new: bool) -> Line<'static> {
     let mut spans = Vec::new();
     if marked {
@@ -661,11 +679,15 @@ fn card_head(task: &Task, marked: bool, is_new: bool) -> Line<'static> {
     if let Some(repo) = task.repo_name() {
         spans.push(Span::from("▌").fg(c(REPO_COLOURS[repo_colour_slot(repo)])));
     }
+    if task.overdue() {
+        spans.push(Span::from("‼ ").fg(c(RED)).bold());
+    }
     if task.route == "setup" {
         spans.push(Span::from("⚙ ").fg(c(SUBTEXT0)));
     }
     spans.push(Span::from(task.issue_prefix()).fg(c(SUBTEXT0)));
-    spans.push(Span::from(task.title.clone()).bold());
+    let title = Span::from(task.title.clone()).bold();
+    spans.push(if task.overdue() { title.fg(c(RED)) } else { title });
     Line::from(spans)
 }
 
@@ -679,6 +701,14 @@ fn card(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, density
 fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, density: Density, width: usize) -> Vec<Line<'static>> {
     let look = task.look();
     let age = age(&task.updated_at, now_secs());
+    // Red once a clock is past; yellow while the running stage is past 80% of its target.
+    let age_colour = if task.overdue() {
+        RED
+    } else if task.stage_warn() {
+        YELLOW
+    } else {
+        SUBTEXT0
+    };
     if density == Density::Compact {
         let mut spans = Vec::new();
         if marked {
@@ -687,10 +717,14 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
         if is_new {
             spans.push(Span::from("• ").fg(c(YELLOW)).bold());
         }
+        if task.overdue() {
+            spans.push(Span::from("‼ ").fg(c(RED)).bold());
+        }
         spans.push(Span::from(format!("{} ", look_glyph(look))).fg(look_color(look)));
         let used: usize = spans.iter().map(Span::width).sum::<usize>() + age.chars().count() + 1;
-        spans.push(Span::from(truncate(&task.title, width.saturating_sub(used).max(4))).bold());
-        spans.push(Span::from(format!(" {age}")).fg(c(SUBTEXT0)));
+        let title = Span::from(truncate(&task.title, width.saturating_sub(used).max(4))).bold();
+        spans.push(if task.overdue() { title.fg(c(RED)) } else { title });
+        spans.push(Span::from(format!(" {age}")).fg(c(age_colour)));
         return vec![Line::from(spans)];
     }
     let head = card_head(task, marked, is_new);
@@ -702,12 +736,15 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
     if let Some(number) = task.source.as_ref().and_then(|s| s.number) {
         ids.push_str(&format!(" · gh#{number}"));
     }
+    if let Some(key) = task.jira_key() {
+        ids.push_str(&format!(" · {key}"));
+    }
     let ids = Line::from(Span::from(ids).fg(c(SUBTEXT0)));
 
     let mut meta = vec![
         Span::raw("  "),
         Span::from(format!("{} {}", look_glyph(look), task.status_label())).fg(look_color(look)).bold(),
-        Span::from(format!(" · {age}")).fg(c(SUBTEXT0)),
+        Span::from(format!(" · {age}")).fg(c(age_colour)),
     ];
     if task.worktree_path.is_some() {
         meta.push(Span::from(" ⎇").fg(c(ACCENT)));
@@ -844,6 +881,12 @@ pub(crate) fn describe(event: &TaskEvent) -> String {
         "task.created" => "created".to_string(),
         "task.edited" => "edited".to_string(),
         "loop.crashed" => format!("stage loop stopped: {}", s("error")),
+        "jira.transitioned" => format!("jira → {}", s("to")),
+        "jira.blocked" => {
+            let why = p["why"].as_str().map(|w| format!(" — {w}")).unwrap_or_default();
+            format!("jira blocked: no transition to \"{}\" from \"{}\"{why}", s("wanted"), s("current"))
+        }
+        "jira.moved" => format!("jira moved to {}", s("status")),
         other => other.to_string(),
     };
     format!("{time}  {what}")
@@ -911,6 +954,15 @@ fn floor_rows(floor: &FloorState) -> Vec<(String, String, String)> {
         "Cycle time median / p90",
         both(floor, |m| median_p90(m.cycle_time_ms.task.median, m.cycle_time_ms.task.p90, fmt_ms)),
     );
+    add("Gates answered · within SLA", both(floor, |m| format!("{} · {}", m.gates.answered, fmt_pct(m.gates.within_sla))));
+    let mut gate_states: Vec<String> = [&floor.d7, &floor.d30].iter().filter_map(|m| m.as_ref()).flat_map(|m| m.gates.wait_ms.keys().cloned()).collect();
+    gate_states.sort();
+    gate_states.dedup();
+    for state in gate_states {
+        let label = format!("  wait {} median", state.trim_start_matches("awaiting_").replace('_', " "));
+        let wait = |m: &Metrics| fmt_ms(m.gates.wait_ms.get(&state).and_then(|s| s.median));
+        add(&label, both(floor, wait));
+    }
     add("First-pass verifying", both(floor, |m| fmt_pct(m.first_pass_rate.verifying)));
     add("  ci_watch", both(floor, |m| fmt_pct(m.first_pass_rate.ci_watch)));
     add("  implementing", both(floor, |m| fmt_pct(m.first_pass_rate.implementing)));
@@ -1984,6 +2036,49 @@ fn render_repo_picker(frame: &mut Frame, task: &Task, query: &str, all: &[String
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
+/// `J`'s prompt: the query, then `+ create an issue from this ticket` and one row per hit as
+/// `PLAT-123  In Progress  summary`, the cursor's row in the accent colour.
+fn render_jira_link(frame: &mut Frame, task: &Task, query: &str, hits: &[JiraIssueHit], cursor: usize) {
+    const VISIBLE_ROWS: usize = 10;
+    let width = 90.min(frame.area().width.saturating_sub(2));
+    let area = centered(frame.area(), width, VISIBLE_ROWS as u16 + 7);
+    frame.render_widget(Clear, area);
+
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" Jira issue for #{} {} ", task.short_id(), task.title)).bold());
+    let row_style = |selected: bool| if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+    let mut lines = vec![
+        Line::from(vec![Span::from(" search: ").fg(c(ACCENT)).bold(), Span::from(format!("{query}▏"))]),
+        Line::default(),
+        Line::from(vec![
+            Span::from(if cursor == 0 { "▌ " } else { "  " }).fg(c(ACCENT)),
+            Span::from("+ create an issue from this ticket (ctrl+n)").style(row_style(cursor == 0)),
+        ]),
+    ];
+    if hits.is_empty() {
+        let hint = if query.trim().chars().count() < 3 { "type a key or three letters to search" } else { "no matches" };
+        lines.push(Line::from(Span::from(format!("  {hint}")).fg(c(SUBTEXT0))));
+    }
+    let room = usize::from(width).saturating_sub(6 + 11 + 2 + 14 + 2).max(8);
+    let start = cursor.saturating_sub(VISIBLE_ROWS / 2).min(hits.len().saturating_sub(VISIBLE_ROWS));
+    for (i, hit) in hits.iter().enumerate().skip(start).take(VISIBLE_ROWS) {
+        let selected = i + 1 == cursor;
+        lines.push(Line::from(vec![
+            Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+            Span::from(format!("{:<11}", truncate(&hit.key, 11))).style(row_style(selected)),
+            Span::from(format!("{:<14}", truncate(hit.status.as_deref().unwrap_or("–"), 14))).fg(c(SUBTEXT0)),
+            Span::from(truncate(&hit.summary, room)).style(row_style(selected)),
+        ]));
+    }
+    if hits.len() > VISIBLE_ROWS {
+        lines.push(Line::from(Span::from(format!("  … {} of {} issues", cursor.max(1), hits.len())).fg(c(SUBTEXT0))));
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
 /// The keys of the view `?` was pressed in; the board's sheet also lists the `:` commands.
 /// Draws the sheet scrolled by `scroll` rows (clamped) and returns the furthest it can scroll.
 fn render_help(frame: &mut Frame, ctx: HelpFor, scroll: u16) -> u16 {
@@ -2251,7 +2346,8 @@ mod tests {
           "escalations":{"rate":0.25,"topReasons":[{"reason":"a very long escalation reason that cannot fit","count":2}]},
           "retries":{"perTask":{"median":1,"p90":3},"byLoop":{"verify":2,"e2e":0,"ci":1}},
           "cost":{"totalUsd":12.5,"perTaskUsd":{"median":1.234,"p90":null},"byStage":{"verifying":2.5,"shipping":0.4}},
-          "queue":{"depth":2,"slots":{"max":4,"active":1},"utilisation":null}}"#;
+          "queue":{"depth":2,"slots":{"max":4,"active":1},"utilisation":null},
+          "gates":{"withinSla":0.75,"answered":8,"waitMs":{"awaiting_approval":{"median":1800000,"p90":5400000},"awaiting_ship":{"median":null,"p90":null}}}}"#;
         let m: Metrics = serde_json::from_str(json).unwrap();
         FloorState { d7: Some(m.clone()), d30: Some(m), ..FloorState::default() }
     }
@@ -2535,6 +2631,58 @@ mod tests {
         assert!(text.contains("2 · 1/4 · –"));
         assert!(text.contains("verifying"));
         assert!(!text.contains("a very long escalation reason that cannot fit"));
+    }
+
+    #[test]
+    fn the_floor_lists_the_gates_answered_within_sla_and_the_wait_per_gate() {
+        let text = render(80, 24, &floor());
+        assert!(text.contains("Gates answered · within SLA"), "{text}");
+        assert!(text.contains("8 · 75%"), "{text}");
+        assert!(text.contains("wait approval median") && text.contains("30m"), "{text}");
+        assert!(text.contains("wait ship median"), "a gate with no median still has its row: {text}");
+    }
+
+    #[test]
+    fn an_overdue_ticket_s_card_leads_with_a_red_bang_names_its_issue_and_a_warning_stage_turns_the_age_yellow() {
+        let task: Task = serde_json::from_str(&crate::model::tests::jira_task_json()).unwrap();
+        let lines = card_lines(&task, None, false, false, Density::Cozy, 60);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        assert!(text[0].contains("‼ Login page"), "{}", text[0]);
+        let bang = lines[0].spans.iter().find(|s| s.content.contains('‼')).unwrap();
+        assert_eq!(bang.style.fg, Some(c(RED)));
+        assert!(bang.style.add_modifier.contains(Modifier::BOLD));
+        let title = lines[0].spans.iter().find(|s| s.content == "Login page").unwrap();
+        assert_eq!(title.style.fg, Some(c(RED)), "the head line is red");
+        assert_eq!(text[1], "  #abcdef12 · PLAT-123");
+        let age = lines[2].spans.iter().find(|s| s.content.starts_with(" · ")).unwrap();
+        assert_eq!(age.style.fg, Some(c(RED)), "an overdue card's age is red too");
+        let compact = card_lines(&task, None, false, false, Density::Compact, 40);
+        assert!(compact[0].to_string().starts_with("‼ "), "{}", compact[0]);
+
+        let mut warn = task.clone();
+        warn.sla.as_mut().unwrap().gate = None;
+        let lines = card_lines(&warn, None, false, false, Density::Cozy, 60);
+        assert!(!lines[0].to_string().contains('‼'), "no clock past: no bang");
+        let age = lines[2].spans.iter().find(|s| s.content.starts_with(" · ")).unwrap();
+        assert_eq!(age.style.fg, Some(c(YELLOW)), "the stage past 80% turns the age yellow");
+        let mut unlinked = warn.clone();
+        unlinked.jira = None;
+        assert_eq!(card_lines(&unlinked, None, false, false, Density::Cozy, 60)[1].to_string(), "  #abcdef12");
+    }
+
+    #[test]
+    fn the_header_counts_the_overdue_tickets_with_a_red_bang() {
+        let mut app = App::new(crate::Machine::from_env());
+        app.online = true;
+        let task: Task = serde_json::from_str(&crate::model::tests::jira_task_json()).unwrap();
+        app.tasks.push(task);
+        let line = header_line(&app);
+        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(text.contains("‼ 1 overdue"), "{text}");
+        assert_eq!(line.spans.iter().find(|s| s.content.contains('‼')).unwrap().style.fg, Some(c(RED)));
+        app.tasks[0].sla = None;
+        let text: String = header_line(&app).spans.iter().map(|s| s.content.to_string()).collect();
+        assert!(!text.contains('‼'), "no count at zero: {text}");
     }
 
     #[test]

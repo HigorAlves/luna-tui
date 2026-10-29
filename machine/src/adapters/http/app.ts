@@ -10,7 +10,10 @@ import {
   type PullRequest,
   EditCasesInput,
   EditPlanInput,
+  JiraCreateInput,
+  JiraLinkInput,
   type TaskDiff,
+  type TaskSla,
   NewTaskInput,
   SetupRepoInput,
   SlackItemPatch,
@@ -39,6 +42,8 @@ import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../appli
 import { CloneError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
 import { AlreadyTaskError, BuiltinWatchError, NoItemError, NoWatchError, type SlackInboxPort } from "../../application/slack-inbox.ts";
 import { NoSlackTokenError } from "../../application/slack.ts";
+import { NoJiraTokenError } from "../../application/jira.ts";
+import { AlreadyLinkedElsewhereError, AlreadyLinkedError, HasWorktreeError, type JiraTasksPort, NoIssueError, NoProjectError } from "../../application/jira-tasks.ts";
 import type { StubStages } from "../../application/stages/stubs.ts";
 import type { Bus } from "./bus.ts";
 import { InvalidSince, parseSince } from "./metrics.ts";
@@ -64,6 +69,12 @@ export interface AppDeps {
   taskDiff?: (worktreePath: string, repoPath: string | null, file?: string) => Promise<TaskDiff>;
   /** The Slack inbox; without it the `/slack/*` routes are absent. */
   slack?: SlackInboxPort;
+  /** Jira by hand (link, unlink, create, search, status); without it the `/jira/*` and `/tasks/:id/jira*` routes are absent. */
+  jira?: JiraTasksPort;
+  /** The ticket's SLA clocks, computed when a task is answered or published; without it every task shows `sla: null`. */
+  sla?: (task: TaskRow) => Promise<TaskSla | null>;
+  /** The same for a whole list at once (`GET /tasks`); falls back to `sla` per task. */
+  slaAll?: (tasks: TaskRow[]) => Promise<Map<string, TaskSla | null>>;
 }
 
 class BadRequest extends Error {}
@@ -99,8 +110,10 @@ function prParams(c: Context): { owner: string; name: string; number: number } {
   return { owner, name, number };
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll }: AppDeps): Hono {
   const app = new Hono();
+  /** A task row as the board reads it, clocks included. */
+  const serialize = async (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null) => toTask(row, usage, sla ? await sla(row) : null);
 
   app.onError((error, c) => {
     if (error instanceof TaskNotFoundError) return fail(c, 404, "not_found", error.message);
@@ -121,6 +134,12 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof NoSlackTokenError) return fail(c, 409, "no_token", error.message);
     if (error instanceof AlreadyTaskError) return fail(c, 409, "already_task", error.message);
     if (error instanceof BuiltinWatchError) return fail(c, 409, "builtin", error.message);
+    if (error instanceof NoJiraTokenError) return fail(c, 409, "no_token", error.message);
+    if (error instanceof NoIssueError) return fail(c, 404, "no_issue", error.message);
+    if (error instanceof AlreadyLinkedElsewhereError) return fail(c, 409, "already_linked_elsewhere", error.message);
+    if (error instanceof HasWorktreeError) return fail(c, 409, "has_worktree", error.message);
+    if (error instanceof AlreadyLinkedError) return fail(c, 409, "already_linked", error.message);
+    if (error instanceof NoProjectError) return fail(c, 409, "no_project", error.message);
     if (error instanceof ZodError) return fail(c, 400, "invalid_request", z.prettifyError(error));
     if (error instanceof BadRequest) return fail(c, 400, "invalid_request", error.message);
     console.error(error);
@@ -162,12 +181,16 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
 
   app.get("/tasks", async (c) => {
     const [rows, usage] = await Promise.all([pipeline.list(), pipeline.usageByTask()]);
-    return c.json(rows.map((row) => toTask(row, usage.get(row.id) ?? null)));
+    if (slaAll) {
+      const clocks = await slaAll(rows);
+      return c.json(rows.map((row) => toTask(row, usage.get(row.id) ?? null, clocks.get(row.id) ?? null)));
+    }
+    return c.json(await Promise.all(rows.map((row) => serialize(row, usage.get(row.id) ?? null))));
   });
 
   app.post("/tasks", async (c) => {
     const input = await body(c, NewTaskInput);
-    return c.json(toTask(await pipeline.createTask(input)), 201);
+    return c.json(await serialize(await pipeline.createTask(input)), 201);
   });
 
   app.get("/tasks/:id", async (c) => {
@@ -181,7 +204,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
       pipeline.taskUsage(id),
     ]);
     return c.json({
-      task: toTask(task, usage),
+      task: await serialize(task, usage),
       stageRuns: stageRuns.map(toStageRun),
       approvals: approvals.map(toApproval),
       events: events.slice(-RECENT_EVENTS).map(toEvent),
@@ -192,7 +215,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   app.patch("/tasks/:id", async (c) => {
     const id = taskId(c);
     const patch = await body(c, UpdateTaskInput);
-    const task = toTask(await pipeline.update(id, patch));
+    const task = await serialize(await pipeline.update(id, patch));
     bus.publish({ type: "task.updated", task });
     return c.json(task);
   });
@@ -200,7 +223,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   app.patch("/tasks/:id/plan", async (c) => {
     const id = taskId(c);
     const patch = await body(c, EditPlanInput);
-    const task = toTask(await pipeline.editPlan(id, patch));
+    const task = await serialize(await pipeline.editPlan(id, patch));
     bus.publish({ type: "task.updated", task });
     return c.json(task);
   });
@@ -208,7 +231,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   app.patch("/tasks/:id/cases", async (c) => {
     const id = taskId(c);
     const { cases } = await body(c, EditCasesInput);
-    const task = toTask(await pipeline.editCases(id, cases));
+    const task = await serialize(await pipeline.editCases(id, cases));
     bus.publish({ type: "task.updated", task });
     return c.json(task);
   });
@@ -231,17 +254,17 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     return c.body(null, 204);
   });
 
-  app.post("/tasks/:id/start", async (c) => c.json(toTask(await pipeline.start(taskId(c)))));
+  app.post("/tasks/:id/start", async (c) => c.json(await serialize(await pipeline.start(taskId(c)))));
 
   app.post("/repos/setup", async (c) => {
     const { repoPath } = await body(c, SetupRepoInput);
-    return c.json(toTask(await pipeline.setupRepo(repoPath)), 201);
+    return c.json(await serialize(await pipeline.setupRepo(repoPath)), 201);
   });
 
   app.post("/tasks/:id/answers", async (c) => {
     const id = taskId(c);
     const { answers } = await body(c, AnswersInput);
-    return c.json(toTask(await pipeline.answer(id, answers)));
+    return c.json(await serialize(await pipeline.answer(id, answers)));
   });
 
   /** Approves or sends back whatever the task is waiting on, including an escalation. */
@@ -249,16 +272,16 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     const id = taskId(c);
     const { decision, reason, applyRules } = await body(c, DecisionInput);
     const response = applyRules === undefined ? undefined : { applyRules };
-    return c.json(toTask(await pipeline.decide(id, decision, reason ?? undefined, response)));
+    return c.json(await serialize(await pipeline.decide(id, decision, reason ?? undefined, response)));
   });
 
-  app.post("/tasks/:id/abort", async (c) => c.json(toTask(await pipeline.abort(taskId(c)))));
+  app.post("/tasks/:id/abort", async (c) => c.json(await serialize(await pipeline.abort(taskId(c)))));
 
   /** Re-runs the stage a task paused in after a usage limit. */
-  app.post("/tasks/:id/resume", async (c) => c.json(toTask(await pipeline.windowReset(taskId(c)))));
+  app.post("/tasks/:id/resume", async (c) => c.json(await serialize(await pipeline.windowReset(taskId(c)))));
 
   /** Removes the task's worktree from disk; the task and its branch stay. */
-  app.post("/tasks/:id/worktree/remove", async (c) => c.json(toTask(await pipeline.removeWorktree(taskId(c)))));
+  app.post("/tasks/:id/worktree/remove", async (c) => c.json(await serialize(await pipeline.removeWorktree(taskId(c)))));
 
   if (pulls) {
     // The PR inbox: what the last poll saw, a poll on demand, a merge, and a clone for a repo
@@ -277,7 +300,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
         const slug = `${owner}/${name}`.toLowerCase();
         const pr = pulls.snapshot.prs.find((p) => p.repo.toLowerCase() === slug && p.number === number);
         if (!pr) throw new TaskNotFoundError(`${owner}/${name}#${number}`);
-        return c.json(toTask(await prTasks.dispatch(pr, action)), 201);
+        return c.json(await serialize(await prTasks.dispatch(pr, action)), 201);
       });
     }
     app.post("/github/clone", async (c) => {
@@ -297,7 +320,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
       const { text, nudge } = await body(c, SlackReplyInput);
       return c.json(await slack.reply(c.req.param("id"), text, nudge ?? false));
     });
-    app.post("/slack/items/:id/task", async (c) => c.json(toTask(await slack.toTask(c.req.param("id"), await body(c, SlackTaskInput))), 201));
+    app.post("/slack/items/:id/task", async (c) => c.json(await serialize(await slack.toTask(c.req.param("id"), await body(c, SlackTaskInput))), 201));
     app.get("/slack/watches", async (c) => c.json(await slack.watches()));
     app.post("/slack/watches", async (c) => c.json(await slack.addWatch(await body(c, SlackWatchInput)), 201));
     app.patch("/slack/watches/:id", async (c) => c.json(await slack.patchWatch(c.req.param("id"), await body(c, SlackWatchPatch))));
@@ -318,6 +341,29 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     app.get("/slack/triage-runs", async (c) => c.json(await slack.triageRuns(sinceOf(c.req.query("since")))));
     app.get("/slack/usergroups", async (c) => c.json(await slack.usergroups()));
     app.get("/slack/channels", async (c) => c.json(await slack.channels()));
+  }
+
+  if (jira) {
+    // Jira by hand (`J` on a ticket): link an issue, unlink it, create one from the ticket, search
+    // issues to pick from, and whether the token works. The automatic part (JiraSync, JiraIntake,
+    // JiraWatch) needs no route.
+    app.get("/jira/status", async (c) => c.json(await jira.status()));
+    app.get("/jira/search", async (c) => c.json(await jira.search(c.req.query("q") ?? "")));
+    const linked = async (c: Context, task: TaskRow, status: 200 | 201 = 200) => {
+      const out = await serialize(task, await pipeline.taskUsage(task.id));
+      bus.publish({ type: "task.updated", task: out });
+      return c.json(out, status);
+    };
+    app.post("/tasks/:id/jira", async (c) => {
+      const id = taskId(c);
+      const { key } = await body(c, JiraLinkInput);
+      return linked(c, await jira.link(id, key));
+    });
+    app.delete("/tasks/:id/jira", async (c) => linked(c, await jira.unlink(taskId(c))));
+    app.post("/tasks/:id/jira/create", async (c) => {
+      const id = taskId(c);
+      return linked(c, await jira.create(id, await body(c, JiraCreateInput)), 201);
+    });
   }
 
   if (stubs) {

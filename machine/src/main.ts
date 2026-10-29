@@ -29,6 +29,17 @@ import { prFollowUpRunner } from "./application/stages/pr-address.ts";
 import { postVerdictRunner } from "./application/stages/pr-review.ts";
 import { RepoMap } from "./application/repo-map.ts";
 import { ThreadReplies } from "./application/threads.ts";
+import { noTokenJira } from "./application/jira.ts";
+import { createJira } from "./adapters/jira/rest.ts";
+import { JiraIntake, reposUnder } from "./application/jira-intake.ts";
+import { JiraSync } from "./application/jira-sync.ts";
+import { JiraTasks, TokenExpiry } from "./application/jira-tasks.ts";
+import { JiraWatch } from "./application/jira-watch.ts";
+import { SlaClocks } from "./application/sla.ts";
+import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
+import { MINUTE_MS, Ticker } from "./application/ticker.ts";
+import { existsSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { Pipeline } from "./application/pipeline.ts";
 import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
@@ -177,14 +188,19 @@ function scheduleMetrics(): void {
 
 /** Replies in the thread each task came from, on the moments that matter. */
 let replies: ThreadReplies;
+/** Moves the linked Jira issue as the task moves, per the repo's luna.yaml. */
+let jiraSync: JiraSync;
+/** The ticket clocks, computed whenever a task is serialized. */
+let slaClocks: SlaClocks;
 
-/** Streams each logged event, plus the whole task whenever its state may have changed. */
+/** Streams each logged event, plus the whole task whenever its state (or its Jira link) may have changed. */
 function publish(event: EventRow): void {
   bus.publish({ type: "task.event", event: toEvent(event) });
   void replies.handle(event);
-  if (event.kind === "transition" || event.kind === "task.created") {
+  void jiraSync.handle(event);
+  if (event.kind === "transition" || event.kind === "task.created" || event.kind.startsWith("jira.")) {
     pipeline.get(event.taskId).then(
-      async (task) => bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id)) }),
+      async (task) => bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id), await slaClocks.for(task)) }),
       (error: unknown) => console.error("could not publish task update", error),
     );
   }
@@ -200,12 +216,18 @@ pipeline = new Pipeline(db, runnerFor, {
   restartPolicy: config.restartPolicy,
   closeDeps: { exec, worktreeRemove: false, watcher },
   policies,
+  jiraSite: config.jira?.site ?? null,
   onAlert: (alert) => {
     console.warn(`budget: ${alert.scope} at ${alert.pct}% ($${alert.spentUsd.toFixed(2)} of $${alert.limitUsd.toFixed(2)})${alert.repo ? ` · ${alert.repo}` : ""}`);
     bus.publish({ type: "budget.alert", alert });
   },
 });
 replies = new ThreadReplies({ pipeline, github, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}) });
+/** One Jira client for every call; without the three variables each call says so and nothing syncs. */
+const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
+const jiraExpiry = new TokenExpiry(config.jira?.tokenExpiresAt ?? null);
+jiraSync = new JiraSync({ pipeline, jira: jiraApi, enabled: config.jira !== null, boardUrl: `http://${config.host}:${config.port}` });
+slaClocks = new SlaClocks({ pipeline, defaults: { gate: config.sla.gateSecs, cycle: config.sla.cycleSecs } });
 const recovered = await pipeline.recover();
 if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by the last run`);
 pipeline.startSupervisor(SUPERVISOR_MS);
@@ -252,7 +274,21 @@ const slackInbox = new SlackInbox({
   socketToken: config.slackInbox.appToken,
   retentionDays: config.retentionDays,
 });
-const app = createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, slack: slackInbox, taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file) });
+const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
+const app = createApp({
+  db,
+  pipeline,
+  bus,
+  watcher,
+  stubs,
+  pulls,
+  prTasks,
+  slack: slackInbox,
+  ...(jiraTasks ? { jira: jiraTasks } : {}),
+  sla: (task) => slaClocks.for(task),
+  slaAll: (tasks) => slaClocks.forAll(tasks),
+  taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file),
+});
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
   const agents = [...new Set([...Object.keys(real), "verifying", "delivering", "shipping"])];
   console.log(
@@ -306,8 +342,55 @@ if (config.githubPoll.repos.length > 0) {
   intake.start();
 }
 
+/** Jira: the linked issues refreshed every five minutes, and each repo's intake JQL polled at its own `every`. */
+let jiraWatch: JiraWatch | undefined;
+let jiraIntake: JiraIntake | undefined;
+if (config.jira) {
+  jiraWatch = new JiraWatch({
+    pipeline,
+    jira: jiraApi,
+    intervalMs: 5 * MINUTE_MS,
+    expiry: jiraExpiry,
+    retryBlocked: (task) => jiraSync.retry(task),
+    publish: (task) => void slaClocks.for(task).then((sla) => bus.publish({ type: "task.updated", task: toTask(task, null, sla) })),
+  });
+  jiraWatch.start();
+  const jiraTriager = agentDeps ? createJiraTriager(agentDeps) : null;
+  jiraIntake = new JiraIntake({
+    pipeline,
+    jira: jiraApi,
+    policies,
+    triager: jiraTriager,
+    // Every checkout the machine knows: the repo map, the repos dir, and the repos of existing tasks.
+    repos: async () => {
+      const known = [...Object.values(config.repoMap), ...(await reposUnder(config.reposDir, { readdir, exists: existsSync }))];
+      for (const task of await pipeline.list()) if (task.repoPath) known.push(task.repoPath);
+      return [...new Set(known)];
+    },
+  });
+  jiraIntake.start();
+  console.log(`jira: ${config.jira.site} · linked issues refreshed every 5m · intake per repo's luna.yaml${jiraTriager ? " through the jira_intake pack (sonnet)" : " (agents off: issues imported as written)"}`);
+} else {
+  console.log("jira: off until MACHINE_JIRA_SITE, MACHINE_JIRA_EMAIL and MACHINE_JIRA_TOKEN are set");
+}
+
+/** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
+const slaTicker = new Ticker(() => {
+  void pipeline
+    .list()
+    .then((tasks) => slaClocks.flipped(tasks))
+    .then(async (flipped) => {
+      for (const { task, sla } of flipped) bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id), sla) });
+    })
+    .catch((error: unknown) => console.warn("sla tick failed", error));
+}, MINUTE_MS);
+slaTicker.start();
+
 async function shutdown(): Promise<void> {
   intake?.stop();
+  jiraWatch?.stop();
+  jiraIntake?.stop();
+  slaTicker.stop();
   pulls.stop();
   slackInbox.stop();
   socket?.stop();
