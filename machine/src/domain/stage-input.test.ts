@@ -2,7 +2,7 @@ import { PACKS, type PackId, StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
-import { PACK_LIMITS, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
+import { PACK_LIMITS, buildDatadogTriageInput, buildJiraIntakeInput, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
 
 const task = {
   id: "t1",
@@ -121,6 +121,13 @@ describe("buildStageInput", () => {
       ["addressing", "ci_watch", "datadog_triage", "e2e", "evidence", "implementing", "jira_intake", "reviewing", "reviewing_memory", "setup", "slack_triage", "test_design", "triage", "verifying"],
     );
     expect(Object.keys(PACK_LIMITS)).toHaveLength(14);
+  });
+
+  it("builds datadog_triage's input around a synthetic task with the batch in context.datadog and the pack's limits", () => {
+    const datadog = { scope: "env:prod", items: [] };
+    const input = StageInput.parse(buildDatadogTriageInput(datadog));
+    expect(input).toMatchObject({ schema: 3, pack: "datadog_triage", stage: "datadog_triage", plan: null, task: { id: "datadog-triage", title: "Datadog triage", branch: "", repoPath: "", source: null }, limits: { maxTurns: PACK_LIMITS.datadog_triage.maxTurns, timeoutMs: PACK_LIMITS.datadog_triage.timeoutMs } });
+    expect(input.context).toEqual({ projectContext: null, datadog });
   });
 
   it("builds slack_triage's input around a synthetic task: the batch in context.slack, no plan, no branch, the pack's limits", () => {
