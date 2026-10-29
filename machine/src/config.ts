@@ -44,6 +44,8 @@ export interface Config {
   slack: { token: string; channel: string } | null;
   /** The Slack inbox: your user token, the optional app-level token for Socket Mode, and its knobs. */
   slackInbox: SlackInboxConfig;
+  /** The Datadog inbox: your API and application keys, the site and its knobs. */
+  datadog: DatadogConfig;
   /** Jira Cloud: the site, your Atlassian email and API token. Null means Jira is off (unset, or `MACHINE_JIRA=off`). */
   jira: JiraConfig | null;
   /** The ticket SLAs a repo's luna.yaml does not set: the gate target (`MACHINE_SLA_GATE`, 1h) and the cycle target (`MACHINE_SLA_CYCLE`, none), in seconds. */
@@ -75,6 +77,18 @@ export interface SlackInboxConfig {
   rulesPath: string;
   /** `HH:MM` local time for the morning digest DM; null means none. */
   digestAt: { hour: number; minute: number } | null;
+}
+
+export interface DatadogConfig {
+  /** `MACHINE_DATADOG_INBOX=off` stops polling; the routes still answer the empty snapshot. */
+  enabled: boolean;
+  apiKey: string;
+  appKey: string;
+  /** `MACHINE_DATADOG_SITE`: `datadoghq.com`, `datadoghq.eu`, `us5.datadoghq.com` … */
+  site: string;
+  intervalMs: number;
+  /** `MACHINE_DATADOG_SCOPE`: appended to every monitor, log and Error Tracking query, e.g. `env:prod team:payments`. */
+  scope: string;
 }
 
 export interface JiraConfig {
@@ -196,6 +210,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     if (!match || hour > 23 || minute > 59) throw new Error(`MACHINE_SLACK_DIGEST_AT must be HH:MM, got "${env.MACHINE_SLACK_DIGEST_AT}"`);
     digestAt = { hour, minute };
   }
+  const ddApiKey = env.MACHINE_DATADOG_API_KEY ?? "";
+  const ddAppKey = env.MACHINE_DATADOG_APP_KEY ?? "";
+  if ((ddApiKey === "") !== (ddAppKey === "")) throw new Error("MACHINE_DATADOG_API_KEY and MACHINE_DATADOG_APP_KEY go together; set both or neither");
+  const ddSeconds = env.MACHINE_DATADOG_INTERVAL === undefined ? 120 : Number(env.MACHINE_DATADOG_INTERVAL);
+  if (!Number.isInteger(ddSeconds) || ddSeconds <= 0) throw new Error(`MACHINE_DATADOG_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_DATADOG_INTERVAL}"`);
   let jira: JiraConfig | null = null;
   if (env.MACHINE_JIRA !== "off") {
     const site = env.MACHINE_JIRA_SITE?.trim().replace(/\/+$/, "") ?? "";
@@ -242,6 +261,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       markRead: env.MACHINE_SLACK_MARK_READ === "on",
       rulesPath: rules ? resolve(REPO_ROOT, rules) : join(stateDir, "slack-triage.md"),
       digestAt,
+    },
+    datadog: {
+      enabled: env.MACHINE_DATADOG_INBOX !== "off",
+      apiKey: ddApiKey,
+      appKey: ddAppKey,
+      site: (env.MACHINE_DATADOG_SITE ?? "datadoghq.com").replace(/^https?:\/\/(api\.|app\.)?/, ""),
+      intervalMs: ddSeconds * 1000,
+      scope: (env.MACHINE_DATADOG_SCOPE ?? "").trim(),
     },
     jira,
     sla,
