@@ -21,6 +21,8 @@ Assumptions:
 Slices (in order; seed the ledger from these):
 {{plan.slices}}
 
+No plan above (a PR task fixing CI or a review thread): the ticket and the prior findings are the plan. Seed the ledger with one slice per prior finding, in order, and stay on the current branch, which is the PR's own.
+
 ## Decisions so far
 {{decisions}}
 
@@ -48,11 +50,9 @@ These are the suite: "the full suite" and "lint/type-check if configured" below 
 7. On success answer `kind: "done"` with `summary`, `commit` (output of `git rev-parse HEAD`), and `slices: {done, total}`.
 
 ## Locked tests
-Tests present when your run starts (from a prior verifying attempt, or already in the repo) are locked: every test that was there must still pass, unchanged. You may add cases to an existing test file (and widen its imports); the controller replays the original file against your code and resets your commit if it no longer passes. Never delete, rename, rewrite or weaken an existing test. If a locked test is wrong, stop and answer `kind: "test_change"` with `request`.
+Tests present when your run starts (from a prior verifying attempt, or already in the repo) are locked: every test that was there must still pass, unchanged. You may add cases to an existing test file (and widen its imports); the machine replays the original file against your code and resets your commit if it no longer passes. Never delete, rename, rewrite or weaken an existing test. If a locked test is wrong, stop and answer `kind: "test_change"` with `request`.
 
 ## Rules
-- Never call AskUserQuestion. Escalation and questions end the stage.
-- Never `gh pr create`, never push, never post reviews or tracker writes.
-- Never write outside `/work` and `/out`. Stay inside the plan's touchpoints.
+- Escalation ends the stage: there is no one to ask, so an open question is `kind: "escalated"` with your pick in `options[]`.
+- Stay inside the plan's touchpoints: a slice that needs a file outside them is an escalation (step 5), not a wider diff.
 
-Answer ONLY with the JSON object matching the schema above. No text before or after.

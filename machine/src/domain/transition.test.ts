@@ -1,4 +1,4 @@
-import { TaskState } from "@hardness/contracts";
+import { type TaskRoute, TaskState } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -16,8 +16,12 @@ const at = (state: TaskState, overrides: Partial<Snapshot> = {}): Snapshot => ({
   state,
   retries: { ...NO_RETRIES },
   resumeTo: null,
+  route: "feature",
   ...overrides,
 });
+
+/** The route a state is only reachable on; everything else walks the feature pipeline. */
+const routeOf = (state: TaskState): TaskRoute => (state === "reviewing" ? "review" : state === "addressing" ? "address" : "feature");
 
 /** Applies events in order and returns every step, so tests can check the whole path. */
 function play(start: Snapshot, events: PipelineEvent[]): Step[] {
@@ -313,7 +317,7 @@ describe("graph coverage", () => {
 
   it("lets every state except closed move forward", () => {
     for (const state of TaskState.options.filter((s) => s !== "closed")) {
-      const task = at(state, { resumeTo: state === "paused_rate_limit" ? "triage" : null });
+      const task = at(state, { resumeTo: state === "paused_rate_limit" ? "triage" : null, route: routeOf(state) });
       const moves = candidates.filter((event) => {
         try {
           transition(task, event);
@@ -324,5 +328,74 @@ describe("graph coverage", () => {
       });
       expect(moves.length, `no way forward from ${state}`).toBeGreaterThan(0);
     }
+  });
+});
+
+describe("PR task routes", () => {
+  const verdict: PipelineEvent = { type: "stage_done", outcome: "pass", reason: "verdict" };
+
+  it("ci_fix: a green poll closes; a red one loops through implementing, checks and a push back to ci_watch", () => {
+    const green = play(at("draft", { route: "ci_fix" }), [{ type: "start" }, pass]);
+    expect(green.map((s) => s.state)).toEqual(["ci_watch", "closed"]);
+    expect(green.at(-1)?.effect).toEqual({ kind: "done" });
+
+    const red = play(at("draft", { route: "ci_fix" }), [{ type: "start" }, fail, pass, pass, pass, pass]);
+    expect(red.map((s) => s.state)).toEqual(["ci_watch", "implementing", "verifying", "delivering", "ci_watch", "closed"]);
+    expect(red[1]?.retries).toEqual({ ...NO_RETRIES, ci: 1, total: 1 });
+  });
+
+  it(`ci_fix escalates after ${LOOP_CAP} red runs, and a failed push escalates at once`, () => {
+    const start = at("ci_watch", { route: "ci_fix", retries: { ...NO_RETRIES, ci: LOOP_CAP - 1, total: 2 } });
+    const step = transition(start, fail);
+    expect(step.state).toBe("escalated");
+    expect(step.reason).toMatch(/ci failed 3 times/);
+    const push = transition(at("delivering", { route: "ci_fix" }), fail);
+    expect(push.state).toBe("escalated");
+    expect(push.resumeTo).toBe("delivering");
+  });
+
+  it("review: a comment verdict closes; approve or request changes waits, then a posts it or r closes", () => {
+    const comment = play(at("draft", { route: "review" }), [{ type: "start" }, pass]);
+    expect(comment.map((s) => s.state)).toEqual(["reviewing", "closed"]);
+
+    const gated = play(at("draft", { route: "review" }), [{ type: "start" }, verdict]);
+    expect(gated.map((s) => s.state)).toEqual(["reviewing", "awaiting_ship"]);
+    expect(gated.at(-1)?.effect).toEqual({ kind: "wait", gate: "awaiting_ship" });
+
+    const posted = play(gated.at(-1)!, [approved, pass]);
+    expect(posted.map((s) => s.state)).toEqual(["shipping", "closed"]);
+    const dropped = transition(gated.at(-1)!, sentBack);
+    expect(dropped.state).toBe("closed");
+    expect(dropped.effect).toEqual({ kind: "done" });
+  });
+
+  it("review: a failed review or a failed post escalates back to where it was", () => {
+    expect(transition(at("reviewing", { route: "review" }), fail)).toMatchObject({ state: "escalated", resumeTo: "reviewing" });
+    expect(transition(at("shipping", { route: "review" }), fail)).toMatchObject({ state: "escalated", resumeTo: "shipping" });
+  });
+
+  it("address: addressing, checks, push, then ci_watch closes on green and loops like ci_fix on red", () => {
+    const steps = play(at("draft", { route: "address" }), [{ type: "start" }, pass, pass, pass, pass]);
+    expect(steps.map((s) => s.state)).toEqual(["addressing", "verifying", "delivering", "ci_watch", "closed"]);
+    const red = play(at("ci_watch", { route: "address" }), [fail, pass, pass, pass, pass]);
+    expect(red.map((s) => s.state)).toEqual(["implementing", "verifying", "delivering", "ci_watch", "closed"]);
+    expect(transition(at("addressing", { route: "address" }), fail)).toMatchObject({ state: "escalated", resumeTo: "addressing" });
+  });
+
+  it("the running PR states pause, abort, crash and escalate like any other", () => {
+    for (const [state, route] of [["reviewing", "review"], ["addressing", "address"]] as const) {
+      const task = at(state, { route });
+      expect(transition(task, { type: "rate_limited" })).toMatchObject({ state: "paused_rate_limit", resumeTo: state });
+      expect(transition(task, { type: "abort" })).toMatchObject({ state: "escalated", resumeTo: state });
+      expect(transition(task, { type: "crash", error: "boom" })).toMatchObject({ state: "escalated", resumeTo: state });
+      expect(transition(task, { type: "stage_done", outcome: "escalated", reason: "stuck" })).toMatchObject({ state: "escalated", reason: "stuck" });
+      expect(transition(transition(task, { type: "abort" }), approved).state).toBe(state);
+    }
+  });
+
+  it("a feature task never enters a PR state, and a PR task never enters triage", () => {
+    expect(() => transition(at("reviewing"), pass)).toThrow(TransitionError);
+    expect(transition(at("draft", { route: "review" }), { type: "start" }).state).toBe("reviewing");
+    expect(() => transition(at("awaiting_approval", { route: "ci_fix" }), approved)).toThrow(TransitionError);
   });
 });

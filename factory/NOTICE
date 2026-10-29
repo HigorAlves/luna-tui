@@ -4,5 +4,9 @@ copied on 2026-10-27 from https://github.com/HigorAlves/orc at commit
 for factory mode. They are maintained in this repository from now on; the
 upstream copies are not tracked.
 
+On 2026-10-28 three more roles (security-reviewer, reply-drafter, code-fixer)
+and two more skills (inline-review, receiving-code-review) were copied from the
+same repository at its 0.31.0 release and adapted the same way.
+
 Individual skills keep their own upstream attribution in the `metadata.source`
 line of their SKILL.md frontmatter where one was present.

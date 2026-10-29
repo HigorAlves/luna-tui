@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import type { CiContext, Ledger, PackId, RunSummary, ServiceSpec, TaskState } from "@hardness/contracts";
+import type { CiContext, Ledger, PackId, ReviewContext, RunSummary, ServiceSpec, TaskState, ThreadsContext } from "@hardness/contracts";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -13,14 +13,16 @@ import {
   diffNameStatus,
   ensureWorktree,
   headCommit,
+  defaultBranch,
   dirtyFiles,
+  ownedWorkspace,
   resetWorktree,
   restoreFiles,
-  workspaceFor,
 } from "../../adapters/git/worktree.ts";
 import type { Credential } from "../../adapters/docker/credentials.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
+import { PROTECTED_BRANCHES, jiraOf } from "../../domain/jira-link.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
 import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
@@ -66,8 +68,12 @@ const MINUTE = 60_000;
 const GIT_READ_ONLY = ["hooks", "config"];
 
 export interface AgentExtra {
-  /** ci_watch: what the host fetched about the PR's CI, since the sandbox has no gh credential. */
+  /** ci_watch: what the host fetched about the PR's CI, since the sandbox has no GitHub credential. */
   ci?: CiContext | null;
+  /** reviewing: the PR's diff, files and comments, fetched by the host. */
+  review?: ReviewContext | null;
+  /** addressing: the PR's unresolved threads, fetched by the host. */
+  threads?: ThreadsContext | null;
   /** reviewing_memory: the last implementing ledger and every earlier run, from the machine's records. */
   history?: { ledger: Ledger | null; runs: RunSummary[] } | null;
   /** setup: run over the repo checkout itself, read-only, no task worktree or branch. */
@@ -81,17 +87,30 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   }
   const limits = PACK_LIMITS[pack];
   if (extra.checkout && limits.writable) throw new Error(`${pack} is writable; a checkout run must be read-only`);
-  const workspace: Workspace = extra.checkout
-    ? { branch: "", path: task.repoPath }
-    : task.branch && task.worktreePath
-      ? { branch: task.branch, path: task.worktreePath }
-      : workspaceFor(task, task.repoPath, deps.worktreesDir);
-  // The branch prefix is a structural gate: whatever a task row says, a writable stage only
-  // ever commits to a branch the pipeline owns.
-  if (limits.writable && !workspace.branch.startsWith(TASK_BRANCH_PREFIX)) {
+  const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
+  // The branch the pipeline would give this task today: `task/<id>-<slug>`, or the repo's
+  // `jira.branch` pattern for a linked task (with the id appended when the repo already has
+  // that branch). A task that already works somewhere keeps that branch: it was named and
+  // checked when the worktree was made, and the link cannot change while the worktree exists,
+  // so a later issue-type change in Jira does not rename what is already pushed.
+  const owned = await ownedWorkspace(task, task.repoPath, deps.worktreesDir, policy.jira?.branch);
+  const persisted = Boolean(task.branch && task.worktreePath) && !extra.checkout;
+  const workspace: Workspace = extra.checkout ? { branch: "", path: task.repoPath } : persisted ? { branch: task.branch!, path: task.worktreePath! } : owned;
+  // The branch is a structural gate: whatever a task row says, a writable stage only ever
+  // commits to a branch the pipeline owns: a `task/` branch, the one it named for a linked
+  // task (the branch it persisted carries the issue key or the task id, never a protected
+  // name), or, for a PR task, the PR's own head branch.
+  const prBranch = task.source?.kind === "github_pr" ? task.source.headRef : null;
+  const link = jiraOf(task);
+  const ownsPersisted = (branch: string): boolean => persisted && link !== null && (branch.includes(link.key) || branch.includes(task.id.slice(0, 8)));
+  const protectedBranch = limits.writable && !extra.checkout && (PROTECTED_BRANCHES.has(workspace.branch) || workspace.branch === (await defaultBranch(task.repoPath)));
+  if (
+    limits.writable &&
+    (protectedBranch || (!workspace.branch.startsWith(TASK_BRANCH_PREFIX) && workspace.branch !== prBranch && workspace.branch !== owned.branch && !ownsPersisted(workspace.branch)))
+  ) {
     return {
       outcome: "fail",
-      detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches` },
+      detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches (or the branch it named for a Jira-linked task)` },
     };
   }
   if (!extra.checkout) await ensureWorktree(task.repoPath, workspace);
@@ -104,7 +123,6 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   const runDir = join(deps.stateDir, "runs", context.runId);
   if (!resume) await context.started?.({ container, inputCommit });
 
-  const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
@@ -113,6 +131,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
     baseCommit: await branchBase(workspace.path, task.repoPath),
     ci: extra.ci ?? null,
+    review: extra.review ?? null,
+    threads: extra.threads ?? null,
     holdoutCases: policy.holdoutCases,
     qaTargets: policy.qaTargets,
     checks: policy.checks,

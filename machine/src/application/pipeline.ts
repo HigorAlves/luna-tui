@@ -2,14 +2,14 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type BudgetAlert, type Finding, RUNNING, type TaskSource, type TaskState } from "@hardness/contracts";
+import { type BudgetAlert, type Finding, type JiraLink, RUNNING, type StageRunCase, type TaskRoute, type TaskSource, type TaskState, type TestCase } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
 import type { TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+import { NoCasesToEditError, NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
@@ -23,7 +23,10 @@ import { basename, join } from "node:path";
 import type { Policy } from "../domain/policy.ts";
 import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 
-export { NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+import { bareLink } from "../domain/jira-link.ts";
+import { findJiraKey, issueUrl } from "./jira.ts";
+
+export { NoCasesToEditError, NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -40,12 +43,19 @@ export interface NewTask {
   criteria?: string[];
   repoPath?: string | null;
   source?: TaskSource | null;
-  kind?: TaskRow["kind"];
+  /** Defaults to `feature`. A PR task also names the PR's branch and its prepared worktree. */
+  route?: TaskRoute;
+  branch?: string | null;
+  worktreePath?: string | null;
+  /** The Jira issue to link from the start; absent, a key in the title or description links by itself. */
+  jira?: JiraLink | null;
 }
 
 export interface PipelineOptions {
   /** Called after each event is stored; the API streams these to the board. */
   onEvent?: (event: EventRow) => void;
+  /** The Jira site (`https://acme.atlassian.net`): with it, a `PLAT-123` in a new ticket's text links the issue. Null: no detection. */
+  jiraSite?: string | null;
   /** Whether the repo already has a luna.yaml; a task on one without runs setup first. Tests pass a fake. */
   hasConfig?: (repoPath: string) => boolean;
   /** Writes the approved luna.yaml into the checkout. Tests pass a fake. */
@@ -129,6 +139,17 @@ const STUCK_REPEATS = 3;
 /** How long one rate-limit result holds every claim when it names no reset time. */
 const LATCH_FALLBACK_MS = 5 * 60_000;
 
+/** Verifying's per-case verdicts from its detail (`cases: [{title, ok}]`), or null when it gave none. */
+function casesOf(detail: Record<string, unknown> | undefined): StageRunCase[] | null {
+  const cases = detail?.cases;
+  if (!Array.isArray(cases)) return null;
+  const rows = cases.flatMap((c) => {
+    const row = c as { title?: unknown; ok?: unknown };
+    return typeof row.title === "string" && typeof row.ok === "boolean" ? [{ title: row.title, ok: row.ok }] : [];
+  });
+  return rows.length > 0 ? rows : null;
+}
+
 export class Pipeline {
   private readonly store: TaskStore;
   private readonly onEvent: (event: EventRow) => void;
@@ -153,6 +174,7 @@ export class Pipeline {
   private readonly restartPolicy: RestartPolicy;
   private readonly policies: Pick<PolicyStore, "for">;
   private readonly onAlert: (alert: BudgetAlert) => void;
+  private readonly jiraSite: string | null;
   /** The highest threshold already raised per scope key (`task:<id>`, `repo:<path>:<month>`, `day:<date>`). */
   private readonly alerted = new Map<string, number>();
   /** Set by shutdown(): no slot is filled and no loop started from here on. */
@@ -186,6 +208,7 @@ export class Pipeline {
     this.restartPolicy = options.restartPolicy ?? "requeue";
     this.policies = options.policies ?? new PolicyStore();
     this.onAlert = options.onAlert ?? (() => {});
+    this.jiraSite = options.jiraSite ?? null;
   }
 
   /** The repo's policy, from its luna.yaml. */
@@ -222,16 +245,40 @@ export class Pipeline {
   }
 
   async createTask(input: NewTask): Promise<TaskRow> {
+    const source = input.source ?? null;
     const task = await this.store.createTask({
       title: input.title,
       description: input.description ?? "",
       criteria: input.criteria ?? [],
       repoPath: input.repoPath ?? null,
-      source: input.source ?? null,
-      kind: input.kind ?? "feature",
+      source,
+      ...(input.route ? { route: input.route } : {}),
+      ...(input.branch !== undefined ? { branch: input.branch } : {}),
+      ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
+      jira: input.jira ?? this.detectJira(input.title, input.description ?? "", source),
     });
-    await this.log(task.id, "task.created", { title: task.title });
+    await this.log(task.id, "task.created", { title: task.title, ...(input.route && input.route !== "feature" ? { route: input.route } : {}) });
     return this.get(task.id);
+  }
+
+  /** The link a new ticket starts with: its intake source's issue, else the first key in its text when Jira is set up. */
+  private detectJira(title: string, description: string, source: TaskSource | null): JiraLink | null {
+    if (source?.kind === "jira") return bareLink(source.key, source.url, source.issueType);
+    if (!this.jiraSite) return null;
+    const key = findJiraKey(title) ?? findJiraKey(description);
+    return key ? bareLink(key, issueUrl(this.jiraSite, key)) : null;
+  }
+
+  /** The latest task linked to a Jira issue, by its link or its intake source, if any. */
+  findByJiraKey(key: string): Promise<TaskRow | null> {
+    return this.store.findTaskByJiraKey(key);
+  }
+
+  /** Replaces the task's Jira link (null unlinks). The caller logs why. */
+  async setJira(id: string, jira: JiraLink | null): Promise<TaskRow> {
+    await this.get(id);
+    await this.store.updateTask(id, { jira });
+    return this.get(id);
   }
 
   /** `:setup <repo>`: a setup-only task for the checkout, started at once. Its one gate is the
@@ -241,7 +288,7 @@ export class Pipeline {
       title: `Set up ${basename(repoPath)}`,
       description: `Propose the ${CONFIG_FILE} for ${repoPath}: its checks, the services its code needs, its toolchains and policy.`,
       repoPath,
-      kind: "setup",
+      route: "setup",
     });
     return this.dispatch(task.id, { type: "start", setup: true });
   }
@@ -317,9 +364,9 @@ export class Pipeline {
     return this.log(taskId, kind, payload);
   }
 
-  /** The task created from this external issue, if any. */
-  findBySource(repo: string, number: number): Promise<TaskRow | null> {
-    return this.store.findTaskBySource(repo, number);
+  /** The task created from this external issue (or, with `github_pr`, the latest from this PR), if any. */
+  findBySource(repo: string, number: number, kind: "github" | "github_pr" = "github"): Promise<TaskRow | null> {
+    return this.store.findTaskBySource(repo, number, kind);
   }
 
   /** Edits the ticket's text. Stages started after this see the new text. */
@@ -338,21 +385,57 @@ export class Pipeline {
     return this.get(id);
   }
 
-  /** Edits triage's proposed plan before you approve it: only the fields given change,
-   *  the rest (including slices) stay as triage wrote them. */
+  /** Edits triage's plan while it awaits your approval, or at the test check (the plan is
+   *  approved then, but nothing is built yet, so the latest plan approval still moves). Only the
+   *  fields given change; the rest (including slices) stay as triage wrote them. Each edit is
+   *  kept as a revision on the approval and logged as `plan.edited`. */
   async editPlan(
     id: string,
     patch: { brief?: string; criteria?: string[]; assumptions?: string[] },
   ): Promise<TaskRow> {
-    return this.store.withTaskLock(id, async (task, tx) => {
+    const { fields, gate } = await this.store.withTaskLock(id, async (task, tx) => {
       const open = await tx.findOpenApproval(id);
-      if (!open || open.kind !== "awaiting_approval") throw new NoPlanToEditError(id);
-      const changes = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
-      if (Object.keys(changes).length > 0) {
-        await tx.updateApprovalRequested(open, { ...open.requested, ...changes });
+      let plan: ApprovalRow | undefined;
+      if (open?.kind === "awaiting_approval") plan = open;
+      else if (open?.kind === "awaiting_test_check") {
+        plan = (await this.store.listApprovals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
       }
-      return task;
+      if (!open || !plan) throw new NoPlanToEditError(id);
+      const before: Record<string, unknown> = {};
+      const after: Record<string, unknown> = {};
+      for (const [field, value] of Object.entries(patch)) {
+        if (value === undefined || JSON.stringify(value) === JSON.stringify(plan.requested[field])) continue;
+        if (plan.requested[field] !== undefined) before[field] = plan.requested[field];
+        after[field] = value;
+      }
+      const fields = Object.keys(after);
+      if (fields.length > 0) {
+        const revisions = Array.isArray(plan.requested.revisions) ? plan.requested.revisions : [];
+        await tx.updateApprovalRequested(plan, {
+          ...plan.requested,
+          ...after,
+          revisions: [...revisions, { at: new Date().toISOString(), before, after }],
+        });
+        // Approving the plan adopted its criteria onto the ticket; an edit after that follows them.
+        if (plan.decision === "approved" && Array.isArray(after.criteria) && after.criteria.length > 0) {
+          await tx.updateTask(id, { criteria: after.criteria.map(String) });
+        }
+      }
+      return { fields, gate: open.kind };
     });
+    if (fields.length > 0) await this.log(id, "plan.edited", { fields, gate });
+    return this.get(id);
+  }
+
+  /** Replaces test_design's cases while the test check is open; everything else on the gate stays. */
+  async editCases(id: string, cases: TestCase[]): Promise<TaskRow> {
+    await this.store.withTaskLock(id, async (_task, tx) => {
+      const open = await tx.findOpenApproval(id);
+      if (!open || open.kind !== "awaiting_test_check") throw new NoCasesToEditError(id);
+      await tx.updateApprovalRequested(open, { ...open.requested, cases });
+    });
+    await this.log(id, "cases.edited", { count: cases.length });
+    return this.get(id);
   }
 
   /** Deletes a task with its runs, approvals and events. Its worktree is kept. */
@@ -385,7 +468,7 @@ export class Pipeline {
   /** Starts the pipeline; a repo with no luna.yaml yet gets the setup gate before triage. */
   async start(id: string): Promise<TaskRow> {
     const task = await this.get(id);
-    const setup = task.kind === "setup" || (task.repoPath !== null && !this.hasConfig(task.repoPath));
+    const setup = task.route === "setup" || (task.repoPath !== null && !this.hasConfig(task.repoPath));
     return this.dispatch(id, { type: "start", setup });
   }
 
@@ -624,6 +707,11 @@ export class Pipeline {
 
   stageRuns(id: string): Promise<StageRunRow[]> {
     return this.store.listStageRuns(id);
+  }
+
+  /** When each task's running stage run started, for every task that has one, in one query. */
+  runningStageStarts(): Promise<Map<string, Date>> {
+    return this.store.runningStageStarts();
   }
 
   approvals(id: string): Promise<ApprovalRow[]> {
@@ -947,8 +1035,22 @@ export class Pipeline {
       // Approving the plan adopts triage's criteria: the ticket's, refined and added to.
       const planned = task.state === "awaiting_approval" && event.type === "approved" ? open?.requested.criteria : undefined;
       const criteria = Array.isArray(planned) && planned.length > 0 ? planned.map(String) : undefined;
+      const logged = await tx.recordEvent({
+        taskId: id,
+        kind: "transition",
+        stageRunId: null,
+        payload: {
+          event: event.type,
+          ...(event.type === "stage_done" ? { outcome: event.outcome } : {}),
+          from: task.state,
+          to: step.state,
+          ...(step.reason ? { reason: step.reason } : {}),
+        },
+      });
+      // The row says when it entered this state, stamped like the event, so the clocks need no event scan.
       await tx.updateTask(id, {
         state: step.state,
+        stateSince: logged.at,
         retries: step.retries,
         resumeTo: step.resumeTo,
         reason: step.reason ?? null,
@@ -969,19 +1071,6 @@ export class Pipeline {
           requested: { ...extra.detail, ...(step.reason ? { reason: step.reason } : {}) },
         });
       }
-
-      const logged = await tx.recordEvent({
-        taskId: id,
-        kind: "transition",
-        stageRunId: null,
-        payload: {
-          event: event.type,
-          ...(event.type === "stage_done" ? { outcome: event.outcome } : {}),
-          from: task.state,
-          to: step.state,
-          ...(step.reason ? { reason: step.reason } : {}),
-        },
-      });
       return { step, logged };
     });
 
@@ -1121,6 +1210,7 @@ export class Pipeline {
       transcriptPath: result.run?.transcriptPath ?? null,
       outputCommit: result.run?.outputCommit ?? null,
       ...(result.usage ? { turns: result.usage.turns, costUsd: result.usage.costUsd?.toString() ?? null } : {}),
+      ...(stage === "verifying" ? { cases: casesOf(result.detail) } : {}),
     });
     if (result.usage?.costUsd) await this.raiseAlerts(id);
     for (const artifact of result.artifacts ?? []) {

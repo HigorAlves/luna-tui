@@ -1,7 +1,7 @@
 // Everything Pipeline needs from storage. Every method here is plain CRUD except
 // `withTaskLock`, whose Postgres implementation takes a row lock inside a transaction —
 // the one seam where the transition engine's correctness depends on the storage layer.
-import type { TaskState } from "@hardness/contracts";
+import type { JiraLink, StageRunCase, TaskRoute, TaskState } from "@hardness/contracts";
 
 import type { ApprovalRow, ArtifactRow, Decision, EventRow, StageRunRow, StageRunStatus, TaskRow } from "../domain/task.ts";
 
@@ -12,7 +12,12 @@ export interface NewTaskRow {
   repoPath: string | null;
   source: TaskRow["source"];
   /** Defaults to `feature`. */
-  kind?: TaskRow["kind"];
+  route?: TaskRoute;
+  /** A PR task starts on the PR's own branch, in a worktree prepared before the task exists. */
+  branch?: string | null;
+  worktreePath?: string | null;
+  /** The Jira issue the task links to from the start (detected in its text, or its intake source). */
+  jira?: JiraLink | null;
 }
 
 export interface DecideApprovalInput {
@@ -43,6 +48,7 @@ export interface UpdateStageRunInput {
   outputCommit: string | null;
   turns?: number | null;
   costUsd?: string | null;
+  cases?: StageRunCase[] | null;
   /** Marks the run as ended now (`clock_timestamp()` on Postgres — not a value the caller computes). */
   ended: true;
 }
@@ -81,7 +87,10 @@ export interface TaskStore {
   createTask(input: NewTaskRow): Promise<TaskRow>;
   listTasks(): Promise<TaskRow[]>;
   getTask(id: string): Promise<TaskRow | null>;
-  findTaskBySource(repo: string, number: number): Promise<TaskRow | null>;
+  /** The task made from an issue (`github`) or a PR (`github_pr`) of this repo and number. */
+  findTaskBySource(repo: string, number: number, kind?: "github" | "github_pr"): Promise<TaskRow | null>;
+  /** The latest task linked to a Jira issue, by its `jira` column or its intake source. */
+  findTaskByJiraKey(key: string): Promise<TaskRow | null>;
   updateTask(id: string, patch: Partial<TaskRow>): Promise<void>;
   deleteTask(id: string): Promise<void>;
   findStuckTasks(running: ReadonlySet<TaskState>): Promise<TaskRow[]>;
@@ -99,6 +108,8 @@ export interface TaskStore {
   withTaskLock<T>(id: string, fn: (task: TaskRow, tx: TaskTx) => Promise<T>): Promise<T>;
 
   listStageRuns(taskId: string): Promise<StageRunRow[]>;
+  /** When the stage run still `running` started, per task that has one; one query for a whole list. */
+  runningStageStarts(): Promise<Map<string, Date>>;
   /** What the task's stage runs have cost so far, in USD. */
   taskSpendUsd(taskId: string): Promise<number>;
   /** Spend and worked time per task, for the tasks that have any run; one query for a whole list. */

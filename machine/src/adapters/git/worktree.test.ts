@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { branchBase, commitAll, ensureWorktree, workspaceFor } from "./worktree.ts";
+import { branchBase, commitAll, ensureCleanCheckout, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -79,6 +79,44 @@ describe("host-side git", () => {
     expect(git(repo, "rev-parse", "HEAD")).not.toBe(tip);
   });
 
+  it("keeps a clean detached checkout of origin's default branch for intake, reset to the tip on every call", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "intake-")));
+    const upstream = join(root, "upstream");
+    mkdirSync(upstream);
+    git(upstream, "init", "-q", "-b", "main");
+    writeFileSync(join(upstream, "a.txt"), "a\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-q", "-m", "init");
+    const repo = join(root, "repo");
+    git(root, "clone", "-q", upstream, repo);
+    // Your live checkout is dirty and behind; neither must show in what the pack reads.
+    writeFileSync(join(repo, "secret.env"), "TOKEN=x\n");
+    writeFileSync(join(upstream, "b.txt"), "b\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-q", "-m", "upstream moved on");
+    const tip = git(upstream, "rev-parse", "HEAD");
+
+    const path = intakeCheckoutPath(repo, join(root, "wt"));
+    expect(path).toBe(join(root, "wt", "repo", "jira-intake"));
+    expect(await ensureCleanCheckout(repo, path)).toBe(path);
+    expect(git(path, "rev-parse", "HEAD")).toBe(tip);
+    expect(git(path, "branch", "--show-current")).toBe("");
+    expect(existsSync(join(path, "secret.env"))).toBe(false);
+    expect(existsSync(join(path, "b.txt"))).toBe(true);
+
+    // A later run: whatever was left there goes, and the upstream's new tip is checked out.
+    writeFileSync(join(path, "left-over.txt"), "x\n");
+    writeFileSync(join(path, "a.txt"), "edited\n");
+    writeFileSync(join(upstream, "c.txt"), "c\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-q", "-m", "and again");
+    await ensureCleanCheckout(repo, path);
+    expect(git(path, "rev-parse", "HEAD")).toBe(git(upstream, "rev-parse", "HEAD"));
+    expect(existsSync(join(path, "left-over.txt"))).toBe(false);
+    expect(existsSync(join(path, "c.txt"))).toBe(true);
+    expect(git(repo, "rev-parse", "HEAD")).not.toBe(tip);
+  });
+
   it("recreates a worktree whose directory went missing, instead of failing on the stale registration", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "prune-")));
     const repo = join(root, "repo");
@@ -115,5 +153,67 @@ describe("host-side git", () => {
     expect(existsSync(lock)).toBe(false);
     writeFileSync(join(workspace.path, "b.txt"), "b\n");
     expect(await commitAll(workspace.path, "feat: b")).toMatch(/^[0-9a-f]{40}$/);
+  });
+});
+
+describe("a PR task's worktree", () => {
+  it("checks the PR's head branch out from origin, and a second call only reuses it", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "pr-wt-")));
+    const upstream = join(root, "upstream");
+    mkdirSync(upstream);
+    git(upstream, "init", "-q", "-b", "main");
+    writeFileSync(join(upstream, "a.txt"), "a\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-q", "-m", "init");
+    git(upstream, "switch", "-q", "-c", "feat/export");
+    writeFileSync(join(upstream, "b.txt"), "b\n");
+    git(upstream, "add", "-A");
+    git(upstream, "commit", "-q", "-m", "feat: export");
+    const tip = git(upstream, "rev-parse", "HEAD");
+    git(upstream, "switch", "-q", "main");
+    const repo = join(root, "repo");
+    git(root, "clone", "-q", upstream, repo);
+
+    const path = prWorktreePath(repo, join(root, "wt"), 12, "feat/export");
+    expect(path).toBe(join(root, "wt", "repo", "pr-12-feat-export"));
+    await ensurePrWorktree(repo, "feat/export", path);
+    expect(git(path, "rev-parse", "HEAD")).toBe(tip);
+    expect(git(path, "branch", "--show-current")).toBe("feat/export");
+    expect(git(path, "rev-parse", "--abbrev-ref", "@{u}")).toBe("origin/feat/export");
+    await ensurePrWorktree(repo, "feat/export", path);
+    expect(existsSync(join(path, "b.txt"))).toBe(true);
+  });
+});
+
+describe("workspaceFor", () => {
+  const task = { id: "a1b2c3d4-0000-0000-0000-000000000000", title: "Login page!", route: "feature" };
+  const link = { key: "PLAT-123", url: "u", issueType: "Bug", status: null, priority: null, dueAt: null, syncedAt: null, blocked: null };
+
+  it("names task/<id8>-<slug> for an unlinked task and the repo's jira.branch pattern for a linked one, the folder being the branch with / as -", () => {
+    expect(workspaceFor(task, "/repos/app", "/wt")).toEqual({ branch: "task/a1b2c3d4-login-page", path: "/wt/app/task-a1b2c3d4-login-page" });
+    expect(workspaceFor({ ...task, jira: link }, "/repos/app", "/wt")).toEqual({ branch: "bug/PLAT-123", path: "/wt/app/bug-PLAT-123" });
+    expect(workspaceFor({ ...task, jira: { ...link, issueType: "Tech Debt" } }, "/repos/app", "/wt").branch).toBe("tech-debt/PLAT-123");
+    expect(workspaceFor({ ...task, jira: { ...link, issueType: null } }, "/repos/app", "/wt").branch).toBe("task/PLAT-123");
+    expect(workspaceFor({ ...task, jira: link }, "/repos/app", "/wt", "task/{key}-{slug}-{route}-{id}").branch).toBe("task/PLAT-123-login-page-feature-a1b2c3d4");
+    // An intake import links through its source before JiraWatch fills the column.
+    expect(workspaceFor({ ...task, source: { kind: "jira", key: "PLAT-9", url: "u", issueType: "Story" } }, "/repos/app", "/wt").branch).toBe("story/PLAT-9");
+  });
+
+  it("appends the task id when the repo already has the branch the pattern names (and the pattern has no {id} or {slug})", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "owned-")));
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "main");
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "init");
+    const linked = { ...task, jira: link };
+    expect((await ownedWorkspace(linked, repo, join(root, "wt"))).branch).toBe("bug/PLAT-123");
+    // An older task (or a person) left a bug/PLAT-123 behind: this task gets its own.
+    git(repo, "branch", "bug/PLAT-123");
+    expect(await ownedWorkspace(linked, repo, join(root, "wt"))).toEqual({ branch: "bug/PLAT-123-a1b2c3d4", path: join(root, "wt", "repo", "bug-PLAT-123-a1b2c3d4") });
+    expect((await ownedWorkspace(linked, repo, join(root, "wt"), "{type}/{key}-{slug}")).branch).toBe("bug/PLAT-123-login-page");
+    git(repo, "branch", "task/a1b2c3d4-login-page");
+    expect((await ownedWorkspace(task, repo, join(root, "wt"))).branch).toBe("task/a1b2c3d4-login-page");
   });
 });

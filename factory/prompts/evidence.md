@@ -8,7 +8,7 @@ This stage runs no model: the pack has `agent: null`, so the runner does the wor
 ## What the runner does
 1. Scans `/out/files/` and lists every file as an artifact with its `sha256` (kinds: qa-manifest, screenshot, video, har, report, rules).
 2. Reads `files/qa/qa-manifest.json`. Outcome is `pass` when its `verdict` is `pass` or `skipped`; `fail` for `fail`, `partial`, a missing manifest or an unreadable one.
-3. Writes `/out/result.json`. The Hardness side attaches the artifacts to the task and publishes.
+3. Writes `/out/result.json`. The machine attaches the artifacts to the task and publishes.
 
 ## Rules
 - No model call, no AskUserQuestion, no network.

@@ -1,7 +1,7 @@
 // The pipeline as a pure function: given a task's state and an event, return the next
 // state and what the machine should do next. No database, no I/O, so every path is
 // unit tested. The graph is documented in docs/architecture.md.
-import { RUNNING, type TaskState } from "@hardness/contracts";
+import { RUNNING, type TaskRoute, type TaskState } from "@hardness/contracts";
 
 /** Failures allowed in one retry loop (verify, e2e, ci) before asking you. */
 export const LOOP_CAP = 3;
@@ -25,8 +25,8 @@ export interface Snapshot {
   retries: Retries;
   /** Where a paused or escalated task goes when it continues. */
   resumeTo: TaskState | null;
-  /** A setup-only task closes once its config is approved; a feature goes on to triage. */
-  kind?: "feature" | "setup";
+  /** Which graph the task walks: the feature pipeline, setup only, or one of the PR task routes. */
+  route: TaskRoute;
 }
 
 export type StageOutcome = "pass" | "fail" | "needs_input" | "test_change" | "escalated";
@@ -61,6 +61,9 @@ export interface Step extends Snapshot {
   reason?: string;
 }
 
+/** A step before the route is stamped on it: what the graph functions build. */
+type Move = Omit<Step, "route">;
+
 export class TransitionError extends Error {
   constructor(task: Snapshot, event: PipelineEvent) {
     super(`cannot apply "${event.type}" while the task is ${task.state}`);
@@ -68,42 +71,44 @@ export class TransitionError extends Error {
   }
 }
 
-const run = (stage: TaskState, retries: Retries): Step => ({
+const run = (stage: TaskState, retries: Retries): Move => ({
   state: stage,
   retries,
   resumeTo: null,
   effect: { kind: "run", stage },
 });
 
-const wait = (gate: TaskState, retries: Retries): Step => ({
+const wait = (gate: TaskState, retries: Retries): Move => ({
   state: gate,
   retries,
   resumeTo: null,
   effect: { kind: "wait", gate },
 });
 
-const move = (state: TaskState, retries: Retries): Step => ({
+const move = (state: TaskState, retries: Retries): Move => ({
   state,
   retries,
   resumeTo: null,
   effect: { kind: "move" },
 });
 
+const done = (retries: Retries): Move => ({ state: "closed", retries, resumeTo: null, effect: { kind: "done" } });
+
 /** Stops and asks you. On guidance, the task continues at `resumeTo`. */
-const escalate = (reason: string, resumeTo: TaskState, retries: Retries): Step => ({
+const escalate = (reason: string, resumeTo: TaskState, retries: Retries): Move => ({
   ...wait("escalated", retries),
   resumeTo,
   reason,
 });
 
-function enterImplementing(retries: Retries): Step {
+function enterImplementing(retries: Retries): Move {
   if (retries.total >= IMPLEMENTER_CAP) {
     return escalate(`implementer used all ${IMPLEMENTER_CAP} runs`, "implementing", retries);
   }
   return run("implementing", { ...retries, total: retries.total + 1 });
 }
 
-function loopFailed(task: Snapshot, loop: Loop): Step {
+function loopFailed(task: Snapshot, loop: Loop): Move {
   const retries = { ...task.retries, [loop]: task.retries[loop] + 1 };
   if (retries[loop] >= LOOP_CAP) {
     return escalate(`${loop} failed ${retries[loop]} times`, "implementing", retries);
@@ -111,7 +116,7 @@ function loopFailed(task: Snapshot, loop: Loop): Step {
   return enterImplementing(retries);
 }
 
-function testChangeRequested(task: Snapshot): Step {
+function testChangeRequested(task: Snapshot): Move {
   const retries = { ...task.retries, total: task.retries.total + 1 };
   if (retries.total >= IMPLEMENTER_CAP) {
     return escalate(`implementer used all ${IMPLEMENTER_CAP} runs`, "test_design", retries);
@@ -120,12 +125,16 @@ function testChangeRequested(task: Snapshot): Step {
 }
 
 /** Continues an escalated task with a fresh retry budget. */
-function resume(task: Snapshot): Step {
+function resume(task: Snapshot): Move {
   const target = task.resumeTo ?? "implementing";
   return target === "implementing" ? enterImplementing(NO_RETRIES) : run(target, NO_RETRIES);
 }
 
 export function transition(task: Snapshot, event: PipelineEvent): Step {
+  return { ...next(task, event), route: task.route };
+}
+
+function next(task: Snapshot, event: PipelineEvent): Move {
   const { state, retries } = task;
 
   switch (event.type) {
@@ -150,7 +159,8 @@ export function transition(task: Snapshot, event: PipelineEvent): Step {
       if (state === "paused_rate_limit" && task.resumeTo) return run(task.resumeTo, retries);
       break;
     case "start":
-      if (state === "draft") return run(event.setup ? "setup" : "triage", retries);
+      // A feature on a repo with no luna.yaml yet runs the setup gate before its own entry.
+      if (state === "draft") return run(task.route === "feature" && event.setup ? "setup" : ENTRY[task.route], retries);
       break;
     case "answered":
       if (state === "awaiting_answers") return run("triage", retries);
@@ -159,6 +169,9 @@ export function transition(task: Snapshot, event: PipelineEvent): Step {
       return approved(task, event);
     case "sent_back":
       if (state === "awaiting_setup") return run("setup", retries);
+      // A review verdict sent back is dropped: the comment review already went out.
+      if (task.route === "review" && state === "awaiting_ship") return done(retries);
+      if (task.route !== "feature") break;
       if (state === "awaiting_approval") return run("triage", retries);
       if (state === "awaiting_test_check") return run("test_design", retries);
       break;
@@ -168,12 +181,27 @@ export function transition(task: Snapshot, event: PipelineEvent): Step {
   throw new TransitionError(task, event);
 }
 
-function approved(task: Snapshot, event: PipelineEvent): Step {
+/** The first stage each route runs when a task starts. */
+const ENTRY: Record<TaskRoute, TaskState> = {
+  feature: "triage",
+  setup: "setup",
+  ci_fix: "ci_watch",
+  review: "reviewing",
+  address: "addressing",
+};
+
+function approved(task: Snapshot, event: PipelineEvent): Move {
   const { state, retries } = task;
+  if (state === "escalated") return resume(task);
+  if (task.route === "review") {
+    // The verdict gate: `a` posts the APPROVE / REQUEST_CHANGES review.
+    if (state === "awaiting_ship") return run("shipping", retries);
+    throw new TransitionError(task, event);
+  }
+  // The setup gate: a setup-only task is done; a feature goes on to its own entry.
+  if (state === "awaiting_setup") return task.route === "setup" ? done(retries) : run("triage", retries);
+  if (task.route !== "feature") throw new TransitionError(task, event);
   switch (state) {
-    case "awaiting_setup":
-      if (task.kind === "setup") return { state: "closed", retries, resumeTo: null, effect: { kind: "done" } };
-      return run("triage", retries);
     case "awaiting_approval":
       return run("test_design", retries);
     case "awaiting_test_check":
@@ -181,15 +209,59 @@ function approved(task: Snapshot, event: PipelineEvent): Step {
     case "awaiting_ship":
       return run("shipping", retries);
     case "reviewing_memory":
-      return { state: "closed", retries, resumeTo: null, effect: { kind: "done" } };
-    case "escalated":
-      return resume(task);
+      return done(retries);
     default:
       throw new TransitionError(task, event);
   }
 }
 
-function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_done" }>): Step {
+/**
+ * The PR routes. `ci_fix` and `address` share one loop once a fix is on its way: implementing,
+ * the project's checks, a push, then the PR's CI again. `review` posts a comment review and
+ * closes, unless it has a verdict to post, which waits at `awaiting_ship` for you.
+ */
+function prStageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_done" }>): Move {
+  const { state, retries } = task;
+  const { outcome } = event;
+  if (task.route === "review") {
+    switch (state) {
+      case "reviewing":
+        if (outcome === "pass") return event.reason === "verdict" ? wait("awaiting_ship", retries) : done(retries);
+        if (outcome === "fail") return escalate("review failed", "reviewing", retries);
+        break;
+      case "shipping":
+        if (outcome === "pass") return done(retries);
+        if (outcome === "fail") return escalate("posting the verdict failed", "shipping", retries);
+        break;
+    }
+    throw new TransitionError(task, event);
+  }
+  switch (state) {
+    case "addressing":
+      if (outcome === "pass") return run("verifying", retries);
+      if (outcome === "fail") return escalate("addressing the threads failed", "addressing", retries);
+      break;
+    case "ci_watch":
+      if (outcome === "pass") return done(retries);
+      if (outcome === "fail") return loopFailed(task, "ci");
+      break;
+    case "implementing":
+      if (outcome === "pass") return run("verifying", retries);
+      if (outcome === "fail") return enterImplementing(retries);
+      break;
+    case "verifying":
+      if (outcome === "pass") return run("delivering", retries);
+      if (outcome === "fail") return loopFailed(task, "verify");
+      break;
+    case "delivering":
+      if (outcome === "pass") return run("ci_watch", retries);
+      if (outcome === "fail") return escalate("push failed", "delivering", retries);
+      break;
+  }
+  throw new TransitionError(task, event);
+}
+
+function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_done" }>): Move {
   const { state, retries } = task;
   const { outcome } = event;
 
@@ -197,6 +269,7 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
   if (outcome === "escalated" && RUNNING.has(state)) {
     return escalate(event.reason || `${state} escalated`, state, retries);
   }
+  if (task.route !== "feature" && task.route !== "setup") return prStageDone(task, event);
 
   switch (state) {
     case "setup":

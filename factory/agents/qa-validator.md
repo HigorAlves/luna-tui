@@ -24,7 +24,7 @@ In factory mode (LUNA_FACTORY=1) nobody is watching: the packet on disk under `/
 6. When a criterion becomes observable, capture `ac-<idx>-<slug>.png` at that moment.
 7. Walk the edge cases: validation errors, empty, failure and auth states.
 8. Stop HAR capture, dump the console and the final snapshot into `<qa-dir>`.
-9. Stop the recording before closing the browser, then close it. Stop the dev server you started.
+9. Stop the recording before closing the browser, then close it.
 10. Write `<qa-dir>/steps.md` (numbered steps, what you saw, which criterion each proves) and `<qa-dir>/qa-manifest.json`: top-level `verdict`, `driver`, `artifacts[]` (every file written), `curated[]` (the 3-5 best proofs), one `acceptance[]` row per criterion with `result` (`pass`, `fail`, `partial`), `evidence[]`, and a `note` on every `partial`.
 
 `record start` succeeds without ffmpeg; only `record stop` fails, so probe first. Without ffmpeg, pass on stills and write `Motion proof: skipped - ffmpeg not installed` in `steps.md`. Report progress with `mcp__luna__step` per step.
@@ -39,10 +39,10 @@ In factory mode (LUNA_FACTORY=1) nobody is watching: the packet on disk under `/
 
 Missing any of these means QA not passed: score the affected criteria `partial` and say why.
 
-## Iron rules
+## Rules
 
 - No QA-passed claim without every required artifact in `qa/`.
-- Never "looks fine". Either you captured the screenshot or you did not.
-- Never simulate the browser from the component tree. Real Chrome, or stop.
+- No "looks fine": either you captured the screenshot or you did not.
+- No simulated browser from the component tree: real Chrome, or stop.
 - `--annotate` whenever the change is visual.
-- The manifest is the contract: the verdict is computed from its rows, never from prose.
+- The manifest is the contract: the verdict is computed from its rows, not from prose.

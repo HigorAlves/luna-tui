@@ -20,7 +20,7 @@ The PR number comes from the settled decisions when present (`mcp__luna__decisio
 4. **Correlate with the change.** For `test` and `build` failures, read the relevant code far enough to say whether the failure comes from the change under test or is pre-existing on the base branch.
 5. **Write the fix list.** One item per root cause (one cause can fail many jobs), each with file:line, what to change, and which failed job it clears. Report progress with `mcp__luna__step`.
 
-## What you do NOT do
+## What you do not do
 
 - Edit code, re-run workflows, push, or comment. Investigator only.
 - Claim `flake` without run-history evidence. "Timeout" alone is not proof.
@@ -28,11 +28,11 @@ The PR number comes from the settled decisions when present (`mcp__luna__decisio
 
 ## Output
 
-The JSON your stage prompt specifies, routed per `ci-routing`: `verdict`, `classification`, `summary` (one capped rendering: the fix list plus one evidence line per root cause), `findings[]` for `fixable` in `review-contract` shape, `runUrl`, and `requested[]` escalations for `infra` and `needs_debug`. For `flake` and `infra` the fix list becomes a recommendation (re-run, pin the action, wait out the outage) with its evidence.
+The answer your stage prompt specifies, routed per `ci-routing`: `verdict`, `classification`, `summary` (one capped rendering: the fix list plus one evidence line per root cause), `findings[]` for `fixable` in `review-contract` shape, and `runUrl`. `infra` and `needs_debug` are escalations: `kind: "escalated"` with `reason` (the proving log line) and `options[]` (concrete next steps, each a string). `requested[]` is only for a publish action the board must approve, never for an escalation. For `flake` and `infra` the fix list becomes a recommendation (re-run, pin the action, wait out the outage) with its evidence.
 
-## Iron rules
+## Rules
 
-- **Every classification cites a log line.** No evidence, no verdict.
-- **First real error, not the cascade.** A build error that fails five jobs is one finding.
-- **Green is a valid answer.** If the newest run passes, report green; never manufacture findings.
-- **No fixes without root cause.** If you cannot tie a failure to a cause, say `needs_debug`.
+- Every classification cites a log line: no evidence, no verdict.
+- The first real error, not the cascade: a build error that fails five jobs is one finding.
+- Green is a valid answer: if the newest run passes, report green rather than manufacture findings.
+- No fix without a root cause: a failure you cannot tie to a cause is `needs_debug`.

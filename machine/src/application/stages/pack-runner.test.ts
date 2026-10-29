@@ -156,10 +156,31 @@ describe("agent stages through packs", () => {
     const sandbox = vi.fn(fakeSandbox(output()));
     const tampered = { ...context("implementing"), task: { ...context("implementing").task, branch: "main", worktreePath: repo } };
     const result = await runners(sandbox).implementing!(tampered);
-    expect(result).toMatchObject({ outcome: "fail", detail: { error: "refusing to run implementing on branch main: the pipeline only writes task/* branches" } });
+    expect(result).toMatchObject({ outcome: "fail", detail: { error: "refusing to run implementing on branch main: the pipeline only writes task/* branches (or the branch it named for a Jira-linked task)" } });
     expect(sandbox).not.toHaveBeenCalled();
     // A read-only pack on the same branch is fine: it changes nothing.
     await runners(fakeSandbox(output())).triage!({ ...tampered, stage: "triage" });
+  });
+
+  it("keeps a linked task on the branch it already works on, even after Jira renamed the issue type", async () => {
+    // The first run named bug/PLAT-123; the issue is a Story now, so the pattern would say story/PLAT-123.
+    const linked = {
+      ...context("implementing"),
+      task: {
+        ...context("implementing").task,
+        branch: "bug/PLAT-123",
+        worktreePath: join(root, "worktrees", "repo", "bug-PLAT-123"),
+        jira: { key: "PLAT-123", url: "u", issueType: "Story", status: null, priority: null, dueAt: null, syncedAt: null, blocked: null },
+      },
+    };
+    const result = await runners(fakeSandbox(output())).implementing!(linked);
+    expect(result.outcome).toBe("pass");
+    expect(result.workspace).toEqual({ branch: "bug/PLAT-123", worktreePath: linked.task.worktreePath });
+    expect(seen!.worktree).toBe(linked.task.worktreePath);
+    expect(git(seen!.worktree, "branch", "--show-current")).toBe("bug/PLAT-123");
+    // A persisted branch that is none of the pipeline's is still refused.
+    const main = { ...linked, task: { ...linked.task, branch: "main", worktreePath: repo } };
+    expect(await runners(fakeSandbox(output())).implementing!(main)).toMatchObject({ outcome: "fail", detail: { error: expect.stringContaining("refusing to run implementing on branch main") } });
   });
 
   it("gives the sandbox the repo's cache volume, so a retry or the next task of the repo installs warm", async () => {

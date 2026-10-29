@@ -1,7 +1,7 @@
 import type { HookInput, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
 
-import { guardBash, guardWrite, preToolUseGuards } from "./guards.ts";
+import { branchPrefixFor, guardBash, guardWrite, preToolUseGuards } from "./guards.ts";
 import type { GuardContext } from "./guards.ts";
 
 const WRITABLE: GuardContext = { writable: true, branch: "task/abc" };
@@ -181,11 +181,16 @@ describe("guardBash", () => {
       ["main", "feat/"],
     ])("refuses a commit on branch %s with prefix %s", (branch, branchPrefix) => {
       const ctx: GuardContext = branchPrefix === undefined ? { writable: true, branch } : { writable: true, branch, branchPrefix };
-      expect(guardBash('git commit -m "feat: x"', ctx)).toMatch(/commits must go on a ".+" branch: the current branch is/);
+      expect(guardBash('git commit -m "feat: x"', ctx)).toMatch(/commits must go on (a|the) ".+" branch: the current branch is/);
     });
 
-    it("honours a custom branch prefix", () => {
-      expect(guardBash('git commit -m "feat: x"', { writable: true, branch: "feat/abc", branchPrefix: "feat/" })).toBeNull();
+    it("matches a branch outside task/ exactly: the branch the machine named, nothing that merely starts like it", () => {
+      expect(guardBash('git commit -m "feat: x"', { writable: true, branch: "bug/PLAT-123", branchPrefix: "bug/PLAT-123" })).toBeNull();
+      expect(guardBash('git commit -m "feat: x"', { writable: true, branch: "bug/PLAT-1234", branchPrefix: "bug/PLAT-123" })).toMatch(/commits must go on the "bug\/PLAT-123" branch/);
+      expect(guardBash('git commit -m "feat: x"', { writable: true, branch: "bug/PLAT-123-and-more", branchPrefix: "bug/PLAT-123" })).toMatch(/commits must go on the "bug\/PLAT-123" branch/);
+      // Only task/ is a prefix; a bare "feat/" names a branch called feat/, not a family.
+      expect(guardBash('git commit -m "feat: x"', { writable: true, branch: "feat/abc", branchPrefix: "feat/" })).toMatch(/commits must go on the "feat\/" branch/);
+      expect(guardBash('git commit -m "feat: x"', { writable: true, branch: "task/abc-def", branchPrefix: "task/" })).toBeNull();
     });
 
     it.each([
@@ -500,5 +505,20 @@ describe("guardWrite with moved roots", () => {
     expect(guardWrite("/srv/spike/work/.git/hooks/pre-commit", ctx)).toMatch(/never written/);
     expect(guardWrite("/work/src/cart.js", ctx)).toMatch(/outside the writable roots/);
     expect(guardWrite("/srv/spike/work/src/cart.js", { ...ctx, writable: false })).toMatch(/read-only stage/);
+  });
+});
+
+describe("branchPrefixFor", () => {
+  it("lets a PR task commit on the PR's own branch and keeps every other task on task/", () => {
+    expect(branchPrefixFor({ branch: "feat/export", source: { kind: "github_pr", repo: "o/a", number: 1, url: "u", headRef: "feat/export", baseRef: "main" } })).toBe("feat/export");
+    expect(branchPrefixFor({ branch: "task/t1-fix", source: null })).toBe("task/");
+    expect(branchPrefixFor({ branch: "task/t1-fix", source: { kind: "github", repo: "o/a", number: 1, url: "u" } })).toBe("task/");
+    // A Jira-linked task works on the branch its repo's pattern named; the guard accepts exactly that branch.
+    expect(branchPrefixFor({ branch: "bug/PLAT-123", source: null })).toBe("bug/PLAT-123");
+    expect(branchPrefixFor({ branch: "bug/PLAT-123", source: { kind: "jira", key: "PLAT-123", url: "u", issueType: "Bug" } })).toBe("bug/PLAT-123");
+    expect(guardBash('git commit -m "fix: login"', { writable: true, branch: "bug/PLAT-123", branchPrefix: branchPrefixFor({ branch: "bug/PLAT-123", source: null }) })).toBeNull();
+    expect(guardBash('git commit -m "fix: login"', { writable: true, branch: "main", branchPrefix: branchPrefixFor({ branch: "bug/PLAT-123", source: null }) })).toMatch(/commits must go on the "bug\/PLAT-123" branch/);
+    expect(branchPrefixFor({ branch: "", source: null })).toBe("task/");
+    expect(guardBash('git commit -m "fix: lint"', { writable: true, branch: "feat/export", branchPrefix: branchPrefixFor({ branch: "feat/export", source: { kind: "github_pr", repo: "o/a", number: 1, url: "u", headRef: "feat/export", baseRef: "main" } }) })).toBeNull();
   });
 });

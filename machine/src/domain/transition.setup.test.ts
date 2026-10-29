@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { NO_RETRIES, type Snapshot, transition } from "./transition.ts";
 
-const at = (state: Snapshot["state"], overrides: Partial<Snapshot> = {}): Snapshot => ({ state, retries: { ...NO_RETRIES }, resumeTo: null, ...overrides });
+const at = (state: Snapshot["state"], overrides: Partial<Snapshot> = {}): Snapshot => ({ state, retries: { ...NO_RETRIES }, resumeTo: null, route: "feature", ...overrides });
 
 describe("the setup gate", () => {
   it("starts with setup instead of triage when the start says the repo needs one", () => {
@@ -18,7 +18,7 @@ describe("the setup gate", () => {
 
   it("goes on to triage once the config is approved, or closes a setup-only task", () => {
     expect(transition(at("awaiting_setup"), { type: "approved" })).toMatchObject({ state: "triage", effect: { kind: "run", stage: "triage" } });
-    expect(transition(at("awaiting_setup", { kind: "setup" }), { type: "approved" })).toMatchObject({ state: "closed", effect: { kind: "done" } });
+    expect(transition(at("awaiting_setup", { route: "setup" }), { type: "approved" })).toMatchObject({ state: "closed", effect: { kind: "done" } });
   });
 
   it("resumes an escalated setup at setup", () => {

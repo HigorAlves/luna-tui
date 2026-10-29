@@ -3,11 +3,10 @@
 import { z } from "zod";
 
 import type { Column, TaskState } from "./index.ts";
-import { type ArtifactKind, StageOutcome, TaskSource } from "./stage.ts";
-
-/** `feature` is a ticket through the whole pipeline; `setup` only proposes the repo's luna.yaml and closes. */
-export const TaskKind = z.enum(["feature", "setup"]);
-export type TaskKind = z.infer<typeof TaskKind>;
+import type { PrSnapshot } from "./github.ts";
+import type { SlackSnapshot } from "./slack.ts";
+import type { JiraLink, TaskSla } from "./jira.ts";
+import { type ArtifactKind, StageOutcome, type TaskRoute, TaskSource, TestCase } from "./stage.ts";
 
 export const NewTaskInput = z.object({
   title: z.string().trim().min(1),
@@ -15,7 +14,6 @@ export const NewTaskInput = z.object({
   criteria: z.array(z.string().trim().min(1)).optional(),
   repoPath: z.string().nullable().optional(),
   source: TaskSource.nullable().optional(),
-  kind: TaskKind.optional(),
 });
 
 /** `POST /repos/setup`: have the setup pack propose a luna.yaml for the checkout at `repoPath`. */
@@ -33,8 +31,10 @@ export const UpdateTaskInput = z.object({
 });
 export type UpdateTaskInput = z.infer<typeof UpdateTaskInput>;
 
-/** `PATCH /tasks/:id/plan`: edits triage's proposed plan before you approve it. Every
- * field is optional, but at least one must be given — the slices stay untouched either way. */
+/** `PATCH /tasks/:id/plan`: edits triage's plan while it awaits your approval, or later at
+ * the test check (nothing is built yet, so the approved plan may still move). Every field is
+ * optional, but at least one must be given — the slices stay untouched either way. Each edit
+ * appends a `PlanRevision` to the approval's `requested.revisions` instead of overwriting silently. */
 export const EditPlanInput = z
   .object({
     brief: z.string().optional(),
@@ -43,6 +43,39 @@ export const EditPlanInput = z
   })
   .refine((input) => Object.keys(input).length > 0, { message: "give at least one field to edit" });
 export type EditPlanInput = z.infer<typeof EditPlanInput>;
+
+/** One plan edit, kept on the approval's `requested.revisions`: only the fields that changed. */
+export interface PlanRevision {
+  at: string;
+  before: EditPlanInput;
+  after: EditPlanInput;
+}
+
+/** `PATCH /tasks/:id/cases`: replaces test_design's cases while the test check is open. */
+export const EditCasesInput = z.object({
+  cases: z.array(TestCase).min(1),
+});
+export type EditCasesInput = z.infer<typeof EditCasesInput>;
+
+/** `GET /tasks/:id/diff`: the task branch against its base, one row per file; `patch` only with `?file=`. */
+export interface TaskDiff {
+  /** The merge base the branch is diffed against. */
+  base: string;
+  /** The worktree's HEAD. */
+  head: string;
+  files: TaskDiffFile[];
+  /** The one file's patch; at most 512 KB of it. */
+  patch?: string;
+  /** Set when `patch` was cut at the cap. */
+  truncated?: boolean;
+}
+
+export interface TaskDiffFile {
+  path: string;
+  status: "A" | "M" | "D" | "R";
+  added: number;
+  removed: number;
+}
 
 export const DecisionInput = z.object({
   decision: z.enum(["approved", "sent_back"]),
@@ -86,10 +119,10 @@ export interface Task {
   description: string;
   criteria: string[];
   repoPath: string | null;
-  /** The tracker item this task came from, if any. */
+  /** The tracker item or PR this task came from, if any. */
   source: TaskSource | null;
-  /** A ticket (`feature`) or a one-off that proposes the repo's luna.yaml (`setup`). */
-  kind: TaskKind;
+  /** The graph the task walks; `feature` is the full pipeline. */
+  route: TaskRoute;
   branch: string | null;
   worktreePath: string | null;
   state: TaskState;
@@ -111,6 +144,10 @@ export interface Task {
   diff: { added: number; removed: number } | null;
   /** Verifying's results, passed over total, from its latest run. */
   tests: { passed: number; total: number } | null;
+  /** The linked Jira issue, as the machine last saw it; null when the task has none. */
+  jira: JiraLink | null;
+  /** The ticket's SLA clocks, computed at snapshot time; null when none applies. */
+  sla: TaskSla | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -124,8 +161,15 @@ export interface StageRun {
   /** Null until a stage run reports usage. */
   costUsd: number | null;
   turns: number | null;
+  /** Verifying only: one verdict per approved case, when the run reported them; null otherwise. */
+  cases: StageRunCase[] | null;
   startedAt: string;
   endedAt: string | null;
+}
+
+export interface StageRunCase {
+  title: string;
+  ok: boolean;
 }
 
 /** A file a stage run produced, e.g. a screenshot or the QA manifest. */
@@ -178,6 +222,8 @@ export interface TaskDetail {
  *   already-open tab at it.
  * - `task.closed`: the task is done or deleted; the board closes its watch tab.
  * - `budget.alert`: a spend crossed 80, 90 or 100% of a ceiling (a task's, a repo's month's, the day's).
+ * - `github.prs`: the PR inbox changed; carries the whole snapshot.
+ * - `slack.items`: the Slack inbox changed; carries the whole snapshot, watches included.
  */
 export type StreamMessage =
   | { type: "task.updated"; task: Task }
@@ -186,7 +232,9 @@ export type StreamMessage =
   | { type: "task.deleted"; id: string }
   | { type: "task.metrics"; metrics: Metrics }
   | { type: "stage.started"; taskId: string; label: string; cwd: string; container: string }
-  | { type: "task.closed"; id: string };
+  | { type: "task.closed"; id: string }
+  | { type: "github.prs"; snapshot: PrSnapshot }
+  | { type: "slack.items"; snapshot: SlackSnapshot };
 
 /** A spend passing a threshold of a ceiling; raised once per scope and threshold. */
 export interface BudgetAlert {
@@ -244,6 +292,8 @@ export interface Metrics {
     /** Started to ended, for passed and failed stage runs started in the window. */
     perStage: Record<string, Stats & { runs: number }>;
   };
+  /** Gates answered within their SLA over gates answered, and the median wait per gate (ms). */
+  gates: { withinSla: number | null; answered: number; waitMs: Record<string, Stats> };
   /** Share of tasks whose first run of the stage passed. */
   firstPassRate: {
     verifying: number | null;

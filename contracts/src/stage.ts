@@ -7,14 +7,27 @@ import { z } from "zod";
 export const StageOutcome = z.enum(["pass", "fail", "needs_input", "test_change", "escalated"]);
 export type StageOutcome = z.infer<typeof StageOutcome>;
 
-/** The tracker item a task came from. */
-export const TaskSource = z.object({
-  kind: z.literal("github"),
-  repo: z.string(),
-  number: z.number().int(),
-  url: z.string(),
-});
+/** Where a task came from: a tracker issue, or an open PR acted on from the PR inbox. */
+export const TaskSource = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("github"), repo: z.string(), number: z.number().int(), url: z.string() }),
+  z.object({
+    kind: z.literal("github_pr"),
+    repo: z.string(),
+    number: z.number().int(),
+    url: z.string(),
+    headRef: z.string(),
+    baseRef: z.string(),
+  }),
+  /** A ticket made from a Slack message (`t` in the board's Slack inbox). */
+  z.object({ kind: z.literal("slack"), channel: z.string(), ts: z.string(), permalink: z.string() }),
+  /** A ticket imported from a Jira issue by intake. `issueType` is Jira's type name, e.g. `Bug`. */
+  z.object({ kind: z.literal("jira"), key: z.string(), url: z.string(), issueType: z.string().nullable() }),
+]);
 export type TaskSource = z.infer<typeof TaskSource>;
+
+/** Which graph a task walks: `feature` is the full pipeline; the others are PR tasks. */
+export const TaskRoute = z.enum(["feature", "setup", "ci_fix", "review", "address"]);
+export type TaskRoute = z.infer<typeof TaskRoute>;
 
 /** A question the stage could not answer alone, with the answer it would pick. */
 export const NeedsInputItem = z.object({
@@ -81,6 +94,12 @@ export const PackId = z.enum([
   "evidence",
   "ci_watch",
   "reviewing_memory",
+  "reviewing",
+  "addressing",
+  // Not a task stage: the Slack inbox's triage, run as a pack with no worktree.
+  "slack_triage",
+  // Not a task stage either: reads a Jira issue before it becomes a ticket (read-only on the repo).
+  "jira_intake",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -111,6 +130,66 @@ export const CiContext = z.object({
   logs: z.string().nullable(),
 });
 export type CiContext = z.infer<typeof CiContext>;
+
+const PrFacts = z.object({
+  repo: z.string(),
+  number: z.number().int(),
+  url: z.string(),
+  title: z.string(),
+  body: z.string().nullable(),
+  author: z.string(),
+  baseRef: z.string(),
+  headRef: z.string(),
+});
+
+/** For reviewing (a PR task): what the host fetched about someone's PR. */
+export const ReviewContext = z.object({
+  pr: PrFacts,
+  /** `gh pr diff` output, tail-capped by the host. */
+  diff: z.string(),
+  files: z.array(z.object({ path: z.string(), additions: z.number().int(), deletions: z.number().int() })),
+  existingComments: z.array(
+    z.object({ path: z.string().nullable(), line: z.number().int().nullable(), author: z.string(), body: z.string() }),
+  ),
+});
+export type ReviewContext = z.infer<typeof ReviewContext>;
+
+/** For addressing (a PR task): the unresolved review threads on your PR, with the ids the host resolves them by. */
+export const ThreadsContext = z.object({
+  pr: PrFacts,
+  threads: z.array(
+    z.object({
+      id: z.string(),
+      path: z.string().nullable(),
+      line: z.number().int().nullable(),
+      comments: z.array(z.object({ author: z.string(), body: z.string(), at: z.string() })),
+    }),
+  ),
+});
+export type ThreadsContext = z.infer<typeof ThreadsContext>;
+
+/** For slack_triage: one person's inbox batch, as the machine gathered it. `rules` is the
+ *  text of the rules file's VIPs, Notes and Learned sections; a watch counts as the person. */
+export const SlackTriageContext = z.object({
+  me: z.object({ id: z.string(), name: z.string() }),
+  watches: z.array(z.object({ label: z.string(), kind: z.string() })),
+  rules: z.string(),
+  items: z.array(
+    z.object({
+      id: z.string(),
+      channel: z.string(),
+      author: z.string(),
+      isBot: z.boolean(),
+      text: z.string(),
+      /** Earlier messages of the thread, oldest first. */
+      context: z.array(z.object({ user: z.string(), text: z.string() })),
+      /** Why it is in the inbox: `me`, `usergroup:S…`, `broadcast:here`, `keyword:…`, `channel:C…`, `dm`. */
+      matched: z.array(z.string()),
+      threadReplies: z.number().int(),
+    }),
+  ),
+});
+export type SlackTriageContext = z.infer<typeof SlackTriageContext>;
 
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
@@ -161,6 +240,45 @@ export type ServiceSpec = z.infer<typeof ServiceSpec>;
 
 /** A repo's `luna.yaml` as data: what the setup pack proposes and what the machine reads.
  *  Unknown keys are ignored, so a newer file loads on an older machine. */
+/** A duration in luna.yaml: `30m`, `4h`, `3d`, or `off`. */
+export const Duration = z.string().regex(/^(\d+[mhd]|off)$/, "a duration like 30m, 4h, 3d, or off");
+
+/**
+ * How a repo's tasks talk to Jira. `on` maps a task state to the Jira status name the issue is
+ * transitioned to when the task enters that state; states left out are never touched.
+ */
+export const JiraConfig = z.object({
+  /** The project `J` creates issues in, and intake's default. */
+  project: z.string().min(1).optional(),
+  intake: z
+    .object({
+      jql: z.string().min(1),
+      every: Duration.optional(),
+    })
+    .optional(),
+  /** Keys are task states (`implementing`, `awaiting_ship`, `closed`, …); the machine rejects unknown ones. */
+  on: z.record(z.string().min(1), z.string().min(1)).optional(),
+  /** What the machine writes back: nothing, the milestones (picked up, PR, closed), or every gate too. */
+  comments: z.enum(["none", "milestones", "gates"]).optional(),
+  /** Per task state, Jira fields to set; values may use `{pr_url}`, `{task_id}`, `{branch}`, `{board_url}`. */
+  fields: z.record(z.string().min(1), z.record(z.string().min(1), z.string())).optional(),
+  /** The branch name for a linked task: `{type}` (Jira issue type, lowercased), `{key}`, `{slug}`, `{route}`, `{id}`. */
+  branch: z.string().min(1).optional(),
+});
+export type JiraConfig = z.infer<typeof JiraConfig>;
+
+/** SLAs on the tickets themselves; the machine's defaults apply where a repo says nothing. */
+export const SlaConfig = z.object({
+  /** How long a task may wait on you at a gate. */
+  gate: Duration.optional(),
+  /** Per running stage, how long it may take. */
+  /** Keyed by running stage name. */
+  stage: z.record(z.string().min(1), Duration).optional(),
+  /** Created to closed. */
+  cycle: Duration.optional(),
+});
+export type SlaConfig = z.infer<typeof SlaConfig>;
+
 export const LunaConfig = z.object({
   policy: z
     .object({
@@ -186,6 +304,8 @@ export const LunaConfig = z.object({
   checks: z.array(CheckSpec).optional(),
   services: z.record(z.string().min(1), ServiceSpec).optional(),
   toolchains: z.record(z.string().min(1), z.union([z.string(), z.number()])).optional(),
+  jira: JiraConfig.optional(),
+  sla: SlaConfig.optional(),
 });
 export type LunaConfig = z.infer<typeof LunaConfig>;
 
@@ -196,6 +316,24 @@ export const QaTarget = z.object({
   credential: z.string().nullable().optional(),
 });
 export type QaTarget = z.infer<typeof QaTarget>;
+
+/** What the jira_intake pack reads: the issue, as Jira gives it, plus where it would land. */
+export const JiraIntakeContext = z.object({
+  key: z.string(),
+  url: z.string(),
+  summary: z.string(),
+  /** The description as markdown (converted from ADF by the adapter). */
+  description: z.string(),
+  issueType: z.string().nullable(),
+  priority: z.string().nullable(),
+  labels: z.array(z.string()),
+  dueAt: z.string().nullable(),
+  /** The issue's comments, oldest first, as `author: text`. */
+  comments: z.array(z.string()),
+  /** The repo the ticket would use, when known, so the agent can check the ask against the code. */
+  repoPath: z.string().nullable(),
+});
+export type JiraIntakeContext = z.infer<typeof JiraIntakeContext>;
 
 /** Schema 2 adds `context.testCases`; schema 3 renames its `test` field to `approach`. */
 export const StageInput = z.object({
@@ -244,8 +382,16 @@ export const StageInput = z.object({
     runs: z.array(RunSummary).optional(),
     /** For e2e: where QA runs, from the repo's luna.yaml. Credentials are references, never values. */
     qaTargets: z.array(QaTarget).optional(),
+    /** For reviewing (a PR task): the PR's diff and comments, fetched by the host. */
+    review: ReviewContext.nullable().optional(),
+    /** For addressing (a PR task): the unresolved threads, fetched by the host. */
+    threads: ThreadsContext.nullable().optional(),
     /** For implementing and verifying: the repo's own checks from its luna.yaml; absent means detect them. */
     checks: z.array(CheckSpec).optional(),
+    /** For slack_triage: the inbox batch; the task is synthetic and there is no worktree. */
+    slack: SlackTriageContext.nullable().optional(),
+    /** For the jira_intake pack: the issue to read before it becomes a ticket. */
+    jira: JiraIntakeContext.nullable().optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),

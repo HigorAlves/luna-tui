@@ -4,6 +4,9 @@ import { z } from "zod";
 export * from "./api.ts";
 export * from "./stage.ts";
 export * from "./packs.ts";
+export * from "./github.ts";
+export * from "./slack.ts";
+export * from "./jira.ts";
 
 /** Board columns, named after the harness stages. Same order as the Rust board. */
 export const COLUMNS = [
@@ -40,6 +43,9 @@ export const TaskState = z.enum([
   "shipping",
   "reviewing_memory",
   "closed",
+  // PR tasks: a code review of someone's PR, and addressing the review threads on yours.
+  "reviewing",
+  "addressing",
 ]);
 export type TaskState = z.infer<typeof TaskState>;
 
@@ -65,6 +71,8 @@ export const COLUMN_OF: Record<TaskState, Column> = {
   shipping: "Ship",
   reviewing_memory: "Ship",
   closed: "Done",
+  reviewing: "Verify",
+  addressing: "Build",
 };
 
 /** States where an agent or script is running a stage. */
@@ -79,6 +87,8 @@ export const RUNNING: ReadonlySet<TaskState> = new Set([
   "ci_watch",
   "evidence",
   "shipping",
+  "reviewing",
+  "addressing",
 ]);
 
 /** States where the pipeline waits for the user. The board shows these as "needs you". */

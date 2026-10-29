@@ -18,6 +18,13 @@ pub enum Outcome {
     Cancel,
 }
 
+/// Every key `normal` matches, plus the named ones both modes take, for the registry's parity
+/// test: the Editor scope may only name keys from this list.
+#[cfg(test)]
+pub const HANDLED: &[&str] = &[
+    "q", "h", "l", "k", "j", "0", "$", "w", "b", "e", "G", "x", "D", "u", "p", "i", "a", "A", "I", "o", "O", "gg", "dd", "^r", "ctrl+s", "esc",
+];
+
 /// Normal/insert mode state for one `TextArea`. Starts in normal mode, like opening a file
 /// in vim.
 pub struct Vim {

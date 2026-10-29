@@ -1,7 +1,10 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { RUNNING, type TaskState } from "@hardness/contracts";
+
+import { DEFAULT_GATE_SECS, parseDuration } from "./domain/sla.ts";
 
 /** Settings read from the environment. Defaults match compose.dev.yml and herdr's config. */
 export interface Config {
@@ -27,6 +30,10 @@ export interface Config {
   stateDir: string;
   /** Poll GitHub issues carrying `label` in `repos` (`owner/name`) and create tasks. No repos: off. */
   githubPoll: { repos: string[]; intervalMs: number; label: string };
+  /** The token every GitHub call uses (`GITHUB_TOKEN`, else `GH_TOKEN`); null means GitHub is off. */
+  githubToken: string | null;
+  /** The PR inbox: poll every open PR involving you. `MACHINE_GITHUB_PRS=off` turns it off. */
+  githubPrs: { enabled: boolean; intervalMs: number };
   /** `owner/name` to the checkout's path, for issues GitHub intake imports. */
   repoMap: Record<string, string>;
   /** Checkouts one level under here are matched to `owner/name` by their origin remote. */
@@ -35,6 +42,12 @@ export interface Config {
   threadReplies: boolean;
   /** A Slack bot token and channel: one thread per task is opened there. Both or neither. */
   slack: { token: string; channel: string } | null;
+  /** The Slack inbox: your user token, the optional app-level token for Socket Mode, and its knobs. */
+  slackInbox: SlackInboxConfig;
+  /** Jira Cloud: the site, your Atlassian email and API token. Null means Jira is off (unset, or `MACHINE_JIRA=off`). */
+  jira: JiraConfig | null;
+  /** The ticket SLAs a repo's luna.yaml does not set: the gate target (`MACHINE_SLA_GATE`, 1h) and the cycle target (`MACHINE_SLA_CYCLE`, none), in seconds. */
+  sla: { gateSecs: number | null; cycleSecs: number | null };
   /** Days to keep a closed task's events/stage runs before pruning them. 0 disables pruning. */
   retentionDays: number;
   /** Days after a task closes before its worktree is removed and its merged branch deleted. 0 disables it. */
@@ -46,6 +59,33 @@ export interface Config {
   /** What happens to a task mid-stage when the machine stops: back to the queue (its stage re-runs
    *  on boot, no approval needed) or escalated for you to resume, as before. */
   restartPolicy: RestartPolicy;
+}
+
+export interface SlackInboxConfig {
+  /** `MACHINE_SLACK_INBOX=off` stops polling; the routes still answer the empty snapshot. */
+  enabled: boolean;
+  /** The user token (`xoxp-…`) the inbox reads and posts with; null means every call says so. */
+  userToken: string | null;
+  /** The app-level token (`xapp-…`) for Socket Mode; null leaves the socket off. */
+  appToken: string | null;
+  intervalMs: number;
+  /** `MACHINE_SLACK_MARK_READ=on`: done also moves your read cursor in Slack. */
+  markRead: boolean;
+  /** The rules file (`<stateDir>/slack-triage.md` unless `MACHINE_SLACK_RULES` says otherwise); created from the template when missing. */
+  rulesPath: string;
+  /** `HH:MM` local time for the morning digest DM; null means none. */
+  digestAt: { hour: number; minute: number } | null;
+}
+
+export interface JiraConfig {
+  /** `https://acme.atlassian.net`, where issue urls point. */
+  site: string;
+  email: string;
+  token: string;
+  /** Set for a scoped API token: calls go through `https://api.atlassian.com/ex/jira/<cloudId>`. */
+  cloudId: string | null;
+  /** When the token expires (`MACHINE_JIRA_TOKEN_EXPIRES`, an ISO date you copy from id.atlassian.com); the machine warns daily in the last two weeks. */
+  tokenExpiresAt: string | null;
 }
 
 export type RestartPolicy = "requeue" | "escalate";
@@ -66,6 +106,9 @@ function optionalUsd(env: NodeJS.ProcessEnv, key: string): number | null {
   if (!Number.isFinite(value) || value <= 0) throw new Error(`${key} must be a positive amount in USD, got "${raw}"`);
   return value;
 }
+
+/** The repository root (this file is machine/src/config.ts): a relative `MACHINE_SLACK_RULES` is taken from here. */
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 
 export const DEFAULT_DATABASE_URL = "postgres://hardness:hardness@127.0.0.1:5433/hardness";
 export const DEFAULT_PORT = 4317;
@@ -98,6 +141,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!Number.isInteger(pollSeconds) || pollSeconds < 1) {
     throw new Error(
       `MACHINE_GITHUB_POLL_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_GITHUB_POLL_INTERVAL}"`,
+    );
+  }
+  const prsSeconds = env.MACHINE_GITHUB_PRS_INTERVAL === undefined ? 60 : Number(env.MACHINE_GITHUB_PRS_INTERVAL);
+  if (!Number.isInteger(prsSeconds) || prsSeconds < 1) {
+    throw new Error(
+      `MACHINE_GITHUB_PRS_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_GITHUB_PRS_INTERVAL}"`,
     );
   }
   const retentionDays =
@@ -135,7 +184,39 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if ((slackToken === "") !== (slackChannel === "")) {
     throw new Error("MACHINE_SLACK_TOKEN and MACHINE_SLACK_CHANNEL go together; set both or neither");
   }
+  const inboxSeconds = env.MACHINE_SLACK_INBOX_INTERVAL === undefined ? 60 : Number(env.MACHINE_SLACK_INBOX_INTERVAL);
+  if (!Number.isInteger(inboxSeconds) || inboxSeconds < 1) {
+    throw new Error(`MACHINE_SLACK_INBOX_INTERVAL must be a positive integer (seconds), got "${env.MACHINE_SLACK_INBOX_INTERVAL}"`);
+  }
+  let digestAt: SlackInboxConfig["digestAt"] = null;
+  if (env.MACHINE_SLACK_DIGEST_AT !== undefined && env.MACHINE_SLACK_DIGEST_AT !== "") {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(env.MACHINE_SLACK_DIGEST_AT);
+    const hour = Number(match?.[1]);
+    const minute = Number(match?.[2]);
+    if (!match || hour > 23 || minute > 59) throw new Error(`MACHINE_SLACK_DIGEST_AT must be HH:MM, got "${env.MACHINE_SLACK_DIGEST_AT}"`);
+    digestAt = { hour, minute };
+  }
+  let jira: JiraConfig | null = null;
+  if (env.MACHINE_JIRA !== "off") {
+    const site = env.MACHINE_JIRA_SITE?.trim().replace(/\/+$/, "") ?? "";
+    const email = env.MACHINE_JIRA_EMAIL?.trim() ?? "";
+    const token = env.MACHINE_JIRA_TOKEN?.trim() ?? "";
+    const set = [site, email, token].filter((v) => v !== "").length;
+    if (set > 0 && set < 3) throw new Error("MACHINE_JIRA_SITE, MACHINE_JIRA_EMAIL and MACHINE_JIRA_TOKEN go together; set all three or none");
+    if (set === 3) {
+      if (!/^https:\/\/[^/\s]+$/.test(site)) throw new Error(`MACHINE_JIRA_SITE must be the site's https url, like https://acme.atlassian.net, got "${env.MACHINE_JIRA_SITE}"`);
+      const expires = env.MACHINE_JIRA_TOKEN_EXPIRES?.trim() || null;
+      if (expires !== null && Number.isNaN(Date.parse(expires))) throw new Error(`MACHINE_JIRA_TOKEN_EXPIRES must be an ISO date like 2027-01-31, got "${env.MACHINE_JIRA_TOKEN_EXPIRES}"`);
+      jira = { site, email, token, cloudId: env.MACHINE_JIRA_CLOUD_ID?.trim() || null, tokenExpiresAt: expires };
+    }
+  }
+  const sla = {
+    gateSecs: env.MACHINE_SLA_GATE === undefined || env.MACHINE_SLA_GATE === "" ? DEFAULT_GATE_SECS : parseDuration(env.MACHINE_SLA_GATE, "MACHINE_SLA_GATE"),
+    cycleSecs: env.MACHINE_SLA_CYCLE === undefined || env.MACHINE_SLA_CYCLE === "" ? null : parseDuration(env.MACHINE_SLA_CYCLE, "MACHINE_SLA_CYCLE"),
+  };
   const home = env.HOME ?? homedir();
+  const stateDir = env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness");
+  const rules = env.MACHINE_SLACK_RULES?.trim();
   return {
     databaseUrl: env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
     port,
@@ -145,12 +226,25 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     runnerImage: env.RUNNER_IMAGE ?? "hardness-runner:dev",
     runnerQaImage: env.RUNNER_QA_IMAGE ?? "hardness-runner-qa:dev",
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
-    stateDir: env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness"),
+    stateDir,
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
+    githubPrs: { enabled: env.MACHINE_GITHUB_PRS !== "off", intervalMs: prsSeconds * 1000 },
+    githubToken: env.GITHUB_TOKEN?.trim() || env.GH_TOKEN?.trim() || null,
     repoMap,
     reposDir: env.MACHINE_REPOS_DIR ?? join(home, "Developer"),
     threadReplies: env.MACHINE_THREAD_REPLIES !== "off",
     slack: slackToken === "" ? null : { token: slackToken, channel: slackChannel },
+    slackInbox: {
+      enabled: env.MACHINE_SLACK_INBOX !== "off",
+      userToken: env.MACHINE_SLACK_USER_TOKEN?.trim() || null,
+      appToken: env.MACHINE_SLACK_APP_TOKEN?.trim() || null,
+      intervalMs: inboxSeconds * 1000,
+      markRead: env.MACHINE_SLACK_MARK_READ === "on",
+      rulesPath: rules ? resolve(REPO_ROOT, rules) : join(stateDir, "slack-triage.md"),
+      digestAt,
+    },
+    jira,
+    sla,
     retentionDays,
     worktreeRetentionDays,
     maxPerRepo: optionalPositiveInt(env, "MACHINE_MAX_PER_REPO"),

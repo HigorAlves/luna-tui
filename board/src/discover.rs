@@ -86,3 +86,68 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 }
+
+/// Where a clone could go: `root` itself and the folders under it that are not repos, two
+/// levels deep, so a repo grouped under a project folder has somewhere to land beside its
+/// siblings. Sorted, root first.
+pub fn discover_folders(root: &Path) -> Vec<String> {
+    let mut found = vec![root.to_string_lossy().into_owned()];
+    walk_folders(root, 0, &mut found);
+    found[1..].sort();
+    found
+}
+
+const FOLDER_DEPTH: usize = 2;
+
+fn walk_folders(dir: &Path, depth: usize, found: &mut Vec<String>) {
+    if depth >= FOLDER_DEPTH {
+        return;
+    }
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else { continue };
+        if !file_type.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with('.') || SKIP.contains(&name.as_ref()) {
+            continue;
+        }
+        let path = entry.path();
+        if path.join(".git").exists() {
+            continue;
+        }
+        found.push(path.to_string_lossy().into_owned());
+        walk_folders(&path, depth + 1, found);
+    }
+}
+
+#[cfg(test)]
+mod folder_tests {
+    use std::fs;
+
+    use super::discover_folders;
+
+    #[test]
+    fn lists_the_root_and_the_project_folders_but_never_a_repo() {
+        let root = std::env::temp_dir().join(format!("hardness-folders-test-{}", std::process::id()));
+        fs::create_dir_all(root.join("solo-repo/.git")).unwrap();
+        fs::create_dir_all(root.join("a-project/backend/.git")).unwrap();
+        fs::create_dir_all(root.join("a-project/sub/deeper")).unwrap();
+        fs::create_dir_all(root.join("node_modules/x")).unwrap();
+
+        let found = discover_folders(&root);
+        assert_eq!(
+            found,
+            vec![
+                root.to_string_lossy().into_owned(),
+                root.join("a-project").to_string_lossy().into_owned(),
+                root.join("a-project/sub").to_string_lossy().into_owned(),
+            ]
+        );
+        fs::remove_dir_all(&root).unwrap();
+    }
+}

@@ -10,30 +10,37 @@ use std::{
 };
 
 use ratatui::{
-    crossterm::event::{KeyCode, KeyEvent},
+    crossterm::event::{KeyCode, KeyEvent, KeyModifiers},
     layout::Rect,
 };
 use tui_textarea::TextArea;
 
 use std::collections::BTreeSet;
 
+use crate::detail::Section;
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
+use crate::keys::{self, Scope};
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
+use crate::pulls::{self, PrKey, PrSplit, PullsState};
+use crate::slack::{self, SlackKey, SlackSplit, SlackState, WatchesState};
 use crate::{
     client::{Incoming, Machine},
-    discover::{discover_repos, repos_root},
+    discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, Look, Metrics, RepoMetrics, StreamMessage, Task, TaskDetail, TicketText, answers_markdown, parse_answers,
-        parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown, Slots,
+        COLUMNS, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
+        StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of,
+        plan_markdown, priority_step, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
     store,
     vim::Vim,
 };
 
 const INFO_TOAST_FOR: Duration = Duration::from_secs(3);
+/// How long a prefix key (`g`, `z`) waits before the footer lists its second keys.
+pub const WHICH_KEY_DELAY: Duration = Duration::from_millis(400);
 /// The platform's "open this URL" program and its arguments.
 fn opener_command(url: &str) -> (&'static str, Vec<String>) {
     let program = if cfg!(target_os = "macos") {
@@ -44,148 +51,41 @@ fn opener_command(url: &str) -> (&'static str, Vec<String>) {
     (program, vec![url.to_string()])
 }
 
+/// The local zone's seconds east of UTC, from `date +%z` (`+0100` → 3600); 0 when it cannot
+/// be read. Snooze times are typed as local 9:00 and sent as UTC.
+fn local_offset_secs() -> i64 {
+    let out = Command::new("date").arg("+%z").output().ok();
+    let text = out.and_then(|o| String::from_utf8(o.stdout).ok()).unwrap_or_default();
+    parse_offset(text.trim()).unwrap_or(0)
+}
+
+/// `+0100` → 3600, `-0330` → -12600.
+fn parse_offset(text: &str) -> Option<i64> {
+    let (sign, digits) = text.split_at_checked(1)?;
+    let sign = match sign {
+        "+" => 1,
+        "-" => -1,
+        _ => return None,
+    };
+    if digits.len() != 4 {
+        return None;
+    }
+    let hours: i64 = digits[..2].parse().ok()?;
+    let minutes: i64 = digits[2..].parse().ok()?;
+    Some(sign * (hours * 3600 + minutes * 60))
+}
+
+/// Where a section's cursor starts: Runs and Evidence on their latest row (`usize::MAX`
+/// resolves to the last once the rows are known), everything else on the first.
+fn start_cursor(section: Section) -> usize {
+    match section {
+        Section::Runs | Section::Evidence => usize::MAX,
+        _ => 0,
+    }
+}
+
 /// Rows one card takes on the board, including its spacer line.
 pub const CARD_HEIGHT: usize = 3;
-
-/// Actions in the `x` menu for the selected ticket, as the key each one is.
-pub const ACTIONS: [(char, &str); 14] = [
-    ('P', "resume every ticket paused on the usage window"),
-    ('D', "drain / carry on: take no new work, or pick the queue back up"),
-    ('+', "one more slot"),
-    ('-', "one slot fewer"),
-    ('a', "advance: start, approve, answer, retry, resume"),
-    ('S', "ship: approve the Ship gate and open the PR"),
-    ('r', "send back with a reason"),
-    ('e', "edit the ticket"),
-    ('R', "search for its repo"),
-    ('f', "open or focus the agent's watch tab"),
-    ('o', "open the linked GitHub issue"),
-    ('X', "abort the running stage"),
-    ('w', "kill its worktree"),
-    ('d', "delete"),
-];
-
-/// Which view `?` was pressed in: the sheet shows that view's keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum HelpFor {
-    Board,
-    Floor,
-    Inbox,
-    Digest,
-    Detail,
-}
-
-impl HelpFor {
-    pub fn title(self) -> &'static str {
-        match self {
-            HelpFor::Board => " Keys · any key closes ",
-            HelpFor::Floor => " Floor keys · any key closes ",
-            HelpFor::Inbox => " Inbox keys · any key closes ",
-            HelpFor::Digest => " Digest keys · any key closes ",
-            HelpFor::Detail => " Ticket keys · any key closes ",
-        }
-    }
-
-    /// The keys that work in this view, as (keys, what they do).
-    pub fn keys(self) -> &'static [(&'static str, &'static str)] {
-        match self {
-            HelpFor::Board => HELP,
-            HelpFor::Floor => FLOOR_HELP,
-            HelpFor::Inbox => INBOX_HELP,
-            HelpFor::Digest => DIGEST_HELP,
-            HelpFor::Detail => DETAIL_HELP,
-        }
-    }
-}
-
-pub const FLOOR_HELP: &[(&str, &str)] = &[
-    ("tab / shift+tab", "focus the next / previous repo; the numbers follow"),
-    ("r", "refresh"),
-    ("esc", "close"),
-];
-
-pub const INBOX_HELP: &[(&str, &str)] = &[
-    ("j / k", "previous / next ticket"),
-    ("h / l", "previous / next split (1-5 jump)"),
-    ("a", "advance: approve, answer, retry"),
-    ("r", "send back with a reason"),
-    ("e", "edit in place"),
-    ("A", "approve every ticket in the split, after one yes"),
-    ("enter", "open the ticket"),
-    ("esc", "close"),
-];
-
-pub const DIGEST_HELP: &[(&str, &str)] = &[
-    ("j / k", "previous / next entry"),
-    ("enter", "jump to the ticket"),
-    ("o", "open its PR or issue in the browser"),
-    ("esc", "close"),
-];
-
-pub const DETAIL_HELP: &[(&str, &str)] = &[
-    ("j / k", "scroll"),
-    ("a", "advance: start, approve, answer, retry, resume"),
-    ("S", "ship"),
-    ("r", "send back with a reason"),
-    ("e", "edit in place"),
-    ("X / w / d", "abort / kill the worktree / delete (each asks)"),
-    ("f", "open or focus its herdr watch tab"),
-    ("o", "open the linked issue"),
-    ("esc", "close"),
-];
-
-/// What `:` understands. Typed as `:name args`.
-pub const COMMANDS: &[(&str, &str)] = &[
-    ("q", "quit"),
-    ("new <title>", "new ticket, then edit it in place"),
-    ("filter <text>", "filter by title, #id or repo (bare: clear)"),
-    ("repo <name>", "show only that repo"),
-    ("open <#id>", "open a ticket by id prefix"),
-    ("group stage|repo|age", "order columns"),
-    ("fold / unfold", "fold / unfold the focused column"),
-    ("setup <repo>", "propose the repo's luna.yaml (a name under HARDNESS_REPOS_DIR, or a path)"),
-    ("slots <n>", "resize the pool"),
-    ("drain / resume", "take no new work / carry on"),
-    ("floor / inbox / digest", "open that view"),
-    ("help", "this sheet"),
-];
-
-/// Keys shown in the help overlay, as (keys, what they do).
-pub const HELP: &[(&str, &str)] = &[
-    ("h / l", "previous / next column"),
-    ("j / k", "previous / next ticket"),
-    ("gg / G", "first / last ticket in the column"),
-    ("1 … 8", "jump to that column"),
-    ("] / [", "next / previous ticket that needs you, across the board"),
-    ("enter", "open details"),
-    ("n", "new ticket, then edit it in place"),
-    ("e", "edit title, description and criteria in place (ctrl+s saves)"),
-    ("R", "search for its repo under HARDNESS_REPOS_DIR / ~/Developer"),
-    ("a", "advance: start, approve, answer triage in place (ctrl+s sends), retry an escalation, resume"),
-    ("S", "ship: approve the Ship gate and open the PR (same as a there)"),
-    ("A", "memory review: approve without applying the proposed rules"),
-    ("r", "send the plan or tests back, with a reason"),
-    ("X", "abort the running stage (asks first)"),
-    ("w", "kill its worktree once you are done with it (asks first)"),
-    ("d", "delete (asks first)"),
-    ("f", "open or focus the agent's watch tab in herdr"),
-    ("o", "open the linked GitHub issue in the browser"),
-    ("/", "filter by title, #id or repo"),
-    ("!", "show only tickets that need you"),
-    ("@", "show only tickets for this repo"),
-    ("zc / zo", "fold / unfold the focused column (Done starts folded)"),
-    ("zz", "fold every column but the focused one"),
-    ("gs / gr / ga", "order columns by stage, by repo, by age"),
-    ("F", "Floor: 7d and 30d metrics, a row per repo (tab focuses one, r refreshes, esc closes)"),
-    ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
-    ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
-    ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
-    ("x", "actions for the selected ticket (P resumes every paused one)"),
-    (":", "command palette: q, new, filter, repo, open, group, fold, slots, drain, floor, inbox, digest"),
-    ("esc", "clear the filter"),
-    ("?", "this help"),
-    ("q", "quit"),
-];
 
 /// The Floor view's numbers, one window each. A window stays `None` until its first fetch
 /// succeeds; a failed refresh keeps what was there.
@@ -197,6 +97,8 @@ pub struct FloorState {
     pub repos: Vec<RepoMetrics>,
     /// 0 is every repo; `i` is `repos[i - 1]`, and the numbers above are that repo's.
     pub cursor: usize,
+    /// How fast you answer on Slack, 7d and 30d; None until both fetches succeed.
+    pub slack: Option<(SlackMetrics, SlackMetrics)>,
 }
 
 impl FloorState {
@@ -270,6 +172,36 @@ pub fn paused_ids(tasks: &[Task]) -> Vec<String> {
 
 /// A burst of events for the open ticket becomes one detail refetch, not one per event.
 const DETAIL_DEBOUNCE: Duration = Duration::from_millis(300);
+/// How long the `J` prompt waits after a keystroke before asking the machine to search.
+const JIRA_SEARCH_DEBOUNCE: Duration = Duration::from_millis(250);
+
+/// How tall a card is: three lines (title; id and repo; status), four with the worked / diff /
+/// tests line, or one (glyph, title, age) so a busy column shows twice the tickets.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Density {
+    #[default]
+    Cozy,
+    Comfortable,
+    Compact,
+}
+
+impl Density {
+    pub fn next(self) -> Density {
+        match self {
+            Density::Cozy => Density::Comfortable,
+            Density::Comfortable => Density::Compact,
+            Density::Compact => Density::Cozy,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Density::Cozy => "3 lines",
+            Density::Comfortable => "4 lines with worked · diff · tests",
+            Density::Compact => "1 line",
+        }
+    }
+}
 
 /// How the tickets inside a column are ordered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -288,8 +220,8 @@ pub enum Mode {
     Adding(String),
     /// Typing the filter. The text lives in `App::filter`.
     Filter,
-    /// Typing a `:` command; enter runs it, esc closes.
-    Command(String),
+    /// Typing a `:` command; `pick` is the highlighted completion (tab cycles), enter runs.
+    Command { text: String, pick: Option<usize> },
     Detail(String),
     /// Editing a ticket's markdown in place: title, description, criteria, repo.
     EditTicket {
@@ -308,6 +240,13 @@ pub enum Mode {
         focus: PlanPane,
         plan_vim: Vim,
         ticket_vim: Vim,
+    },
+    /// Editing test_design's cases in place while they wait for your check, as the markdown
+    /// `cases_markdown` writes; ctrl+s saves.
+    EditCases {
+        id: String,
+        area: TextArea<'static>,
+        vim: Vim,
     },
     /// Answering triage's questions in place: the same markdown `$EDITOR` used to get,
     /// one `## Q:` heading per question with the recommended answer under it; ctrl+s sends.
@@ -340,7 +279,54 @@ pub enum Mode {
         all: Vec<String>,
         cursor: usize,
     },
-    Help(HelpFor),
+    /// `m` on a ready PR: one yes, then the machine squash-merges it.
+    ConfirmMerge { repo: String, number: u64 },
+    /// A dispatch on a PR the machine has no checkout of: pick the folder to clone it into
+    /// (the same filter-as-you-type list `R` uses, over folders); `then` runs once it lands.
+    ClonePrompt {
+        repo: String,
+        query: String,
+        all: Vec<String>,
+        cursor: usize,
+        then: PrAction,
+    },
+    /// `x` in the PR view: the keys for the selected PR, each with why it is off when it is.
+    PrActions { cursor: usize },
+    /// `s` on a Slack item: pick how long it sleeps.
+    SlackSnooze { id: String, cursor: usize },
+    /// `r` (or `n`) on a Slack item: the reply, pre-filled with triage's draft (or a nudge);
+    /// ctrl+s posts it as you. `nudge`: the machine prefixes a mention of the author.
+    SlackReply {
+        id: String,
+        area: TextArea<'static>,
+        vim: Vim,
+        nudge: bool,
+    },
+    /// `t` on a Slack item: one yes, then a Backlog ticket with `title`, in `repo` when guessed.
+    SlackTask { id: String, title: String, repo: Option<String> },
+    /// `n` in Watches: type `@handle`, `#channel` or a word; the first two complete from Slack.
+    SlackWatchAdd { query: String, cursor: usize },
+    /// `x` in the Slack view: the keys for the selected item, each with why it is off when it is.
+    SlackActions { cursor: usize },
+    /// `J` on a ticket with no Jira issue: type a key or words, the machine searches from three
+    /// characters on, `hits` are what it found; row 0 creates an issue from the ticket, the
+    /// rest link one. `cursor` indexes rows, create row included.
+    JiraLink {
+        id: String,
+        query: String,
+        hits: Vec<JiraIssueHit>,
+        cursor: usize,
+    },
+    /// `J` on a linked ticket: one yes, then the link is dropped (the issue stays).
+    ConfirmJiraUnlink(String),
+    /// The `?` sheet for `scope`: `long` shows every group as rows, `query` is the `/` search
+    /// while typing, `cursor` the row enter runs. How far it is scrolled lives in `help_scroll`.
+    Help {
+        scope: Scope,
+        long: bool,
+        query: Option<String>,
+        cursor: usize,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -353,6 +339,18 @@ pub enum PlanPane {
 /// opens the two-pane plan editor instead of the plain ticket editor.
 fn has_open_plan(task: &Task, detail: Option<&TaskDetail>) -> bool {
     task.state == "awaiting_approval" && detail.is_some_and(|d| d.task.id == task.id && d.open_approval().is_some())
+}
+
+/// Whether the plan may still be edited: at its own gate, or at the test check, before anything
+/// is built. The machine refuses the edit after that.
+fn plan_editable(task: &Task, detail: Option<&TaskDetail>) -> bool {
+    matches!(task.state.as_str(), "awaiting_approval" | "awaiting_test_check")
+        && detail.is_some_and(|d| d.task.id == task.id && d.latest_approval("awaiting_approval").is_some())
+}
+
+/// Whether the cases may be edited: only while they wait for your check.
+fn cases_editable(task: &Task, detail: Option<&TaskDetail>) -> bool {
+    task.state == "awaiting_test_check" && detail.is_some_and(|d| d.task.id == task.id && !d.cases().is_empty())
 }
 
 /// What the event loop must do after a key press.
@@ -400,6 +398,20 @@ pub struct App {
     pub floor: Option<FloorState>,
     /// The Inbox view, open while this is `Some`.
     pub inbox: Option<InboxState>,
+    /// The PR inbox as the machine last sent it; empty until the first `github.prs` event.
+    pub prs: PrSnapshot,
+    /// The PR view, open while this is `Some`.
+    pub pulls: Option<PullsState>,
+    /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
+    pending_dispatch: Option<(String, PrAction)>,
+    /// The Slack inbox as the machine last sent it; empty until the first `slack.items` event.
+    pub slack_snapshot: SlackSnapshot,
+    /// The Slack view, open while this is `Some`.
+    pub slack: Option<SlackState>,
+    /// The watch picker's completions (user groups, channels), fetched once per session, off the UI thread.
+    slack_catalog: Option<(Vec<SlackOption>, Vec<SlackOption>)>,
+    /// A catalogue fetch is in flight; the picker says "loading…" meanwhile.
+    slack_catalog_pending: bool,
     /// Tickets marked with `v`/`V`: `a`, `X`, `d`, `w` act on all of them.
     pub marked: BTreeSet<String>,
     /// The stage pool as `/health` last reported it; None until the first answer.
@@ -410,8 +422,12 @@ pub struct App {
     pub folded: BTreeSet<usize>,
     /// How tickets are ordered inside a column (`gs`/`gr`/`ga`).
     pub group: GroupBy,
-    /// A two-key sequence in flight: `z` (fold) or `g` (group).
+    /// How tall the cards are (`=` cycles).
+    pub density: Density,
+    /// A two-key sequence in flight: `z` (fold) or `g` (group), and when it started: after
+    /// `WHICH_KEY_DELAY` the footer lists the second keys.
     prefix: Option<char>,
+    prefix_at: Option<Instant>,
     /// When the board was last open (unix seconds): the Digest's since, the cards' new dot.
     pub last_seen_secs: Option<u64>,
     /// The repo this board defaults new tickets to, for the `@` filter. `None` if it
@@ -422,6 +438,33 @@ pub struct App {
     /// How far the open ticket's detail popup is scrolled. `ui` clamps it to the content's
     /// actual height, which only it knows (it depends on the terminal width).
     pub detail_scroll: Cell<u16>,
+    /// The pane's height on the last frame, for the page keys; and whether the next frame
+    /// should bring the selected row into view (set when the cursor moves, cleared by `ui`).
+    pub detail_viewport: Cell<u16>,
+    pub detail_follow: Cell<bool>,
+    /// Which section of the workspace popup is open, and the selected row in sections that
+    /// have one (runs, files). `usize::MAX` means the last row, resolved against the rows
+    /// once they are known (`detail_row`). `+` toggles the popup between most of the screen
+    /// and all of it.
+    pub detail_section: Section,
+    pub detail_cursor: usize,
+    pub detail_full: bool,
+    /// The branch diff of the ticket whose popup is open, once fetched: (task id, diff).
+    pub diff: Option<(String, TaskDiff)>,
+    diff_pending: Option<(String, Option<String>)>,
+    /// Bumped whenever `diff` is reset; an answer tagged with an older one is dropped.
+    pub diff_generation: u64,
+    /// A diff fetch that failed for this ticket; no retry until the section is reopened.
+    diff_failed: Option<String>,
+    /// The `J` prompt's query waiting to be searched, and when it was typed; see `ensure_jira_search`.
+    jira_search_due: Option<(String, Instant)>,
+    /// How far the help sheet is scrolled, the furthest `ui` found it can scroll, and how many
+    /// rows it showed last frame (the page the ctrl+d / ctrl+u keys move by).
+    pub help_scroll: Cell<u16>,
+    pub help_max: Cell<u16>,
+    pub help_viewport: Cell<u16>,
+    /// The ticket whose Detail `?` was pressed in; closing the help returns to it.
+    help_return: Option<String>,
     imported: bool,
     /// The latest stage container per task id, for `f` to open a watch tab on.
     stages: std::collections::HashMap<String, herdr::Stage>,
@@ -458,16 +501,39 @@ impl App {
             fold: false,
             floor: None,
             inbox: None,
+            prs: PrSnapshot::default(),
+            pulls: None,
+            pending_dispatch: None,
+            slack_snapshot: SlackSnapshot::default(),
+            slack: None,
+            slack_catalog: None,
+            slack_catalog_pending: false,
             marked: BTreeSet::new(),
             slots: None,
             digest: None,
             folded: COLUMNS.iter().position(|c| *c == "Done").into_iter().collect(),
             group: GroupBy::default(),
+            density: Density::default(),
             prefix: None,
+            prefix_at: None,
             last_seen_secs: store::last_seen_secs_at(&store::state_path()),
             home_repo: herdr::workspace_repo(),
             column_rects: RefCell::new(Vec::new()),
             detail_scroll: Cell::new(0),
+            detail_viewport: Cell::new(0),
+            detail_follow: Cell::new(false),
+            detail_section: Section::Overview,
+            detail_cursor: 0,
+            detail_full: false,
+            diff: None,
+            diff_pending: None,
+            diff_generation: 0,
+            diff_failed: None,
+            jira_search_due: None,
+            help_scroll: Cell::new(0),
+            help_max: Cell::new(0),
+            help_viewport: Cell::new(0),
+            help_return: None,
             imported: false,
             stages: std::collections::HashMap::new(),
             scan_tx,
@@ -557,6 +623,13 @@ impl App {
             self.stages.entry(id).or_insert(stage);
         }
         while let Ok(incoming) = self.stream.try_recv() {
+            self.take_incoming(incoming);
+        }
+    }
+
+    /// Applies one message from the stream thread or a background fetch.
+    fn take_incoming(&mut self, incoming: Incoming) {
+        {
             match incoming {
                 Incoming::Online => {
                     // Containers seen before the outage may have finished; the scan
@@ -578,15 +651,56 @@ impl App {
                         self.detail = detail;
                     }
                 }
+                Incoming::Diff { id, file, diff, generation } => {
+                    if generation != self.diff_generation {
+                        // The branch moved while this was in flight; the next frame asks again.
+                        return;
+                    }
+                    if self.diff_pending.as_ref().is_some_and(|(pending, _)| *pending == id) {
+                        self.diff_pending = None;
+                    }
+                    match diff {
+                        Ok(mut diff) => {
+                            diff.file = file;
+                            self.diff = Some((id, diff));
+                        }
+                        Err(error) => {
+                            self.diff_failed = Some(id);
+                            self.notify(format!("diff: {error}"), true);
+                        }
+                    }
+                }
+                Incoming::JiraHits { query, hits } => {
+                    // An answer for what the prompt still says; anything typed since makes it stale.
+                    let Mode::JiraLink { query: current, hits: shown, cursor, .. } = &mut self.mode else { return };
+                    if current.trim() != query {
+                        return;
+                    }
+                    match hits {
+                        Ok(found) => {
+                            *cursor = (*cursor).min(found.len());
+                            *shown = found;
+                        }
+                        Err(error) => self.notify(format!("jira search: {error}"), true),
+                    }
+                }
                 Incoming::Message(StreamMessage::Updated { task }) => {
                     if self.shows_detail_of(&task.id) {
                         self.detail_stale = true;
+                    }
+                    let diff_of_it = self.diff.as_ref().is_some_and(|(id, _)| *id == task.id) || self.diff_pending.as_ref().is_some_and(|(id, _)| *id == task.id);
+                    if diff_of_it && task.running != self.task(&task.id).is_some_and(|t| t.running) {
+                        // A stage started or ended: the branch may have moved.
+                        self.reset_diff();
                     }
                     self.upsert(task);
                 }
                 Incoming::Message(StreamMessage::Event { event }) => {
                     if self.shows_detail_of(&event.task_id) {
                         self.detail_stale = true;
+                    }
+                    if let Some(notice) = self.task(&event.task_id).and_then(|t| notify::jira_moved_notice(t, &event)) {
+                        self.notices.push(notice);
                     }
                 }
                 Incoming::Message(StreamMessage::Deleted { id }) => self.forget(&id),
@@ -605,8 +719,146 @@ impl App {
                     self.notices.push(Notice { title: "Budget".to_string(), body: line.clone() });
                     self.notify(format!("budget: {line}"), alert.pct >= 100);
                 }
+                Incoming::Message(StreamMessage::Prs { snapshot }) => self.take_prs(snapshot),
+                Incoming::Message(StreamMessage::Slack { snapshot }) => self.take_slack(snapshot),
+                Incoming::SlackCatalog { groups, channels } => {
+                    self.slack_catalog = Some((groups, channels));
+                    self.slack_catalog_pending = false;
+                }
             }
         }
+    }
+
+    /// A fresh Slack snapshot: notices for the P0/P1 items that moved into Needs reply or
+    /// Decide, for items that went past their reply SLA and for threads that came back after
+    /// you cleared them (a P0's only, inside the rules file's quiet hours); the view's cursors
+    /// kept inside their lists.
+    fn take_slack(&mut self, snapshot: SlackSnapshot) {
+        let before: std::collections::HashMap<&str, (Option<SlackSplit>, Option<&str>, bool)> =
+            self.slack_snapshot.items.iter().map(|i| (i.id.as_str(), (i.split_enum(), i.reopened_at.as_deref(), i.overdue))).collect();
+        let mut notices = Vec::new();
+        for item in &snapshot.items {
+            if notify::muted_by_quiet_hours(snapshot.quiet, item) {
+                continue;
+            }
+            let old = before.get(item.id.as_str());
+            if let Some(notice) = notify::slack_notice(old.and_then(|o| o.0), old.and_then(|o| o.1), old.is_some_and(|o| o.2), item) {
+                notices.push(notice);
+            }
+        }
+        self.notices.extend(notices);
+        self.slack_snapshot = snapshot;
+        self.clamp_slack_cursor();
+    }
+
+    fn clamp_slack_cursor(&mut self) {
+        let items = self.slack.as_ref().map(|s| slack::items(&self.slack_snapshot.items, s.split).len()).unwrap_or(0);
+        let watches = self.slack_snapshot.watches.len();
+        if let Some(state) = self.slack.as_mut() {
+            state.cursor = state.cursor.min(items.saturating_sub(1));
+            if let Some(open) = state.watches.as_mut() {
+                open.cursor = open.cursor.min(watches.saturating_sub(1));
+            }
+        }
+    }
+
+    /// The item under the cursor of the open Slack view.
+    pub fn slack_under_cursor(&self) -> Option<&SlackItem> {
+        let state = self.slack.as_ref()?;
+        let items = slack::items(&self.slack_snapshot.items, state.split);
+        items.get(state.cursor.min(items.len().saturating_sub(1))).map(|&i| &self.slack_snapshot.items[i])
+    }
+
+    pub fn slack_item(&self, id: &str) -> Option<&SlackItem> {
+        self.slack_snapshot.items.iter().find(|i| i.id == id)
+    }
+
+    fn slack_item_mut(&mut self, id: &str) -> Option<&mut SlackItem> {
+        self.slack_snapshot.items.iter_mut().find(|i| i.id == id)
+    }
+
+    /// True while the watch picker's catalogue is still on its way from the machine.
+    pub fn slack_catalog_loading(&self) -> bool {
+        self.slack_catalog.is_none()
+    }
+
+    /// Fetches the user groups and channels the watch picker completes from, off the UI
+    /// thread, once per session: started when the Slack view opens so `n` finds them ready.
+    fn prefetch_slack_catalog(&mut self) {
+        if self.slack_catalog.is_some() || self.slack_catalog_pending {
+            return;
+        }
+        self.slack_catalog_pending = true;
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let groups = machine.slack_usergroups().unwrap_or_default();
+            let channels = machine.slack_channels().unwrap_or_default();
+            let _ = tx.send(Incoming::SlackCatalog { groups, channels });
+        });
+    }
+
+    /// The watch picker's completions for `query`: user groups for `@…`, channels for `#…`,
+    /// nothing for a keyword. Case-insensitive, in the machine's order.
+    pub fn slack_watch_matches(&self, query: &str) -> Vec<&SlackOption> {
+        let (kind, text) = slack::watch_kind_of(query);
+        let Some((groups, channels)) = self.slack_catalog.as_ref() else {
+            return Vec::new();
+        };
+        let pool = match kind {
+            "usergroup" => groups,
+            "channel" => channels,
+            _ => return Vec::new(),
+        };
+        let needle = text.to_lowercase();
+        pool.iter().filter(|o| o.label.to_lowercase().contains(&needle) || o.id.to_lowercase() == needle).collect()
+    }
+
+    /// A fresh PR snapshot: notices for the PRs that moved into a split that needs you, the
+    /// dispatch a clone was holding, and the view's cursor kept inside its split.
+    fn take_prs(&mut self, snapshot: PrSnapshot) {
+        let before: std::collections::HashMap<String, Option<PrSplit>> =
+            self.prs.prs.iter().map(|p| (p.key(), p.split_enum())).collect();
+        for pr in &snapshot.prs {
+            if let Some(notice) = notify::pr_notice(before.get(&pr.key()).copied().flatten(), pr) {
+                self.notices.push(notice);
+            }
+        }
+        self.prs = snapshot;
+        if let Some(state) = self.pulls.as_mut() {
+            state.cursor = state.cursor.min(pulls::items(&self.prs.prs, state.split).len().saturating_sub(1));
+        }
+        if let Some((key, action)) = self.pending_dispatch.clone()
+            && let Some(pr) = self.prs.prs.iter().find(|p| p.key() == key && p.local_path.is_some()).cloned()
+        {
+            self.pending_dispatch = None;
+            self.dispatch_pr(&pr, action);
+        }
+    }
+
+    /// The PR under the cursor of the open PR view.
+    pub fn pr_under_cursor(&self) -> Option<PullRequest> {
+        let state = self.pulls.as_ref()?;
+        let items = pulls::items(&self.prs.prs, state.split);
+        items.get(state.cursor.min(items.len().saturating_sub(1))).map(|&i| self.prs.prs[i].clone())
+    }
+
+    /// Opens the workspace popup on `id`, on the section its open gate concerns.
+    pub fn open_detail(&mut self, id: String) {
+        self.detail_stale = true;
+        self.detail_scroll.set(0);
+        self.diff_failed = None;
+        self.detail_section = self.task(&id).map(Section::for_task).unwrap_or_default();
+        self.detail_cursor = start_cursor(self.detail_section);
+        self.detail_follow.set(true);
+        self.mode = Mode::Detail(id);
+    }
+
+    /// Forgets the open ticket's diff and any fetch in flight; a late answer is then stale.
+    fn reset_diff(&mut self) {
+        self.diff = None;
+        self.diff_pending = None;
+        self.diff_generation += 1;
     }
 
     fn shows_detail_of(&self, id: &str) -> bool {
@@ -617,10 +869,13 @@ impl App {
     /// re-sorts its column, so the next key never lands on a different ticket.
     fn upsert(&mut self, task: Task) {
         let selected = self.selected_id();
-        let before = self.tasks.iter().find(|t| t.id == task.id).map(Task::look);
+        let previous = self.tasks.iter().find(|t| t.id == task.id);
+        let before = previous.map(Task::look);
+        let sla_before = previous.and_then(|t| t.sla.clone());
         if let Some(notice) = notify::notice_for(before, &task) {
             self.notices.push(notice);
         }
+        self.notices.extend(notify::sla_notices(sla_before.as_ref(), &task));
         match self.tasks.iter_mut().find(|t| t.id == task.id) {
             Some(existing) => *existing = task,
             None => self.tasks.push(task),
@@ -645,9 +900,27 @@ impl App {
         std::mem::take(&mut self.notices)
     }
 
-    /// How many tickets wait on you right now: the Board tab's badge.
+    /// How many tickets wait on you right now: the Board tab's badge. On Slack that is every
+    /// P0/P1 in Needs reply or Decide plus every open item past its reply SLA, each once.
     pub fn needs_you_count(&self) -> usize {
-        self.tasks.iter().filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated)).count()
+        let tickets = self.tasks.iter().filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated)).count();
+        let prs = self.prs.prs.iter().filter(|p| p.split_enum().is_some_and(PrSplit::needs_me)).count();
+        let slack = self
+            .slack_snapshot
+            .items
+            .iter()
+            .filter(|i| {
+                let split = i.split_enum();
+                (i.urgent() && split.is_some_and(SlackSplit::needs_me)) || (i.overdue && split.is_some_and(SlackSplit::open))
+            })
+            .count();
+        tickets + prs + slack
+    }
+
+    /// Tickets past one of their SLA clocks: the header's `‼ N` and the badge's second number.
+    /// They already count above when they wait on you; this only adds the bang.
+    pub fn overdue_count(&self) -> usize {
+        self.tasks.iter().filter(|t| t.overdue()).count()
     }
 
     /// Highlights a ticket. With `follow`, the board also moves to the ticket's column.
@@ -755,8 +1028,196 @@ impl App {
         self.detail_stale = false;
     }
 
+    /// Fetches the open ticket's diff while its Diff section shows: the file list first, then
+    /// the selected file's patch, one request at a time, off the UI thread.
+    pub fn ensure_diff(&mut self) {
+        let Mode::Detail(id) = &self.mode else { return };
+        if self.detail_section != Section::Diff || !self.online || self.diff_pending.is_some() {
+            return;
+        }
+        let id = id.clone();
+        if self.diff_failed.as_deref() == Some(id.as_str()) || self.task(&id).is_none_or(|t| t.branch.is_none()) {
+            return;
+        }
+        let have = self.diff.as_ref().filter(|(for_id, _)| *for_id == id).map(|(_, d)| d);
+        let file = match have {
+            None => None,
+            Some(diff) => {
+                let wanted = diff.files.get(self.detail_row()).map(|f| f.path.clone());
+                if wanted.is_none() || (diff.file == wanted && diff.patch.is_some()) {
+                    return;
+                }
+                wanted
+            }
+        };
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        let (fetching, wanted, generation) = (id.clone(), file.clone(), self.diff_generation);
+        thread::spawn(move || {
+            let diff = machine.diff(&fetching, wanted.as_deref());
+            let _ = tx.send(Incoming::Diff { id: fetching, file: wanted, diff, generation });
+        });
+        self.diff_pending = Some((id, file));
+    }
+
     pub fn task(&self, id: &str) -> Option<&Task> {
         self.tasks.iter().find(|t| t.id == id)
+    }
+
+    /// The ticket a key would act on: the open popup's (also under its `?` sheet), the Inbox
+    /// row's, else the board's selection. The registry's predicates read it.
+    pub fn focus_task(&self) -> Option<&Task> {
+        match &self.mode {
+            Mode::Detail(id) => return self.task(id),
+            Mode::Help { .. } if self.help_return.is_some() => return self.task(self.help_return.as_deref().unwrap_or_default()),
+            _ => {}
+        }
+        if let Some(state) = &self.inbox {
+            let ids = inbox::items(&self.tasks, state.split, now_secs());
+            return ids.get(state.cursor.min(ids.len().saturating_sub(1))).map(|&i| &self.tasks[i]);
+        }
+        self.selected_task()
+    }
+
+    /// The vim state of the editor that has the keyboard, if one is open.
+    pub fn editor_vim(&self) -> Option<&Vim> {
+        match &self.mode {
+            Mode::EditTicket { vim, .. } | Mode::EditCases { vim, .. } | Mode::Answer { vim, .. } | Mode::SlackReply { vim, .. } => Some(vim),
+            Mode::EditPlan { focus: PlanPane::Plan, plan_vim, .. } => Some(plan_vim),
+            Mode::EditPlan { focus: PlanPane::Ticket, ticket_vim, .. } => Some(ticket_vim),
+            _ => None,
+        }
+    }
+
+    /// The watch under the cursor of the open Watches popup.
+    pub fn watch_under_cursor(&self) -> Option<&SlackWatch> {
+        let open = self.slack.as_ref()?.watches.as_ref()?;
+        let count = self.slack_snapshot.watches.len();
+        self.slack_snapshot.watches.get(open.cursor.min(count.saturating_sub(1)))
+    }
+
+    /// The which-key strip: the prefix in flight and its second keys, once it has waited
+    /// `WHICH_KEY_DELAY` for one. Read every frame; the 200 ms poll makes the frame.
+    pub fn which_key(&self) -> Option<(char, Vec<(char, &'static str)>)> {
+        let prefix = self.prefix?;
+        if self.prefix_at.is_some_and(|at| at.elapsed() >= WHICH_KEY_DELAY) { Some((prefix, keys::which_key(prefix))) } else { None }
+    }
+
+    /// Tests: makes the prefix in flight old enough for the strip.
+    #[cfg(test)]
+    pub fn age_prefix(&mut self) {
+        self.prefix_at = self.prefix_at.map(|at| at - WHICH_KEY_DELAY);
+    }
+
+    /// `?`: the sheet for whatever has the keyboard, scrolled to the top.
+    fn open_help(&mut self) {
+        let scope = keys::active_scope(self);
+        self.help_scroll.set(0);
+        self.mode = Mode::Help { scope, long: true, query: None, cursor: 0 };
+    }
+
+    /// Closes the sheet: back to the popup it was opened over, else the view under it.
+    fn close_help(&mut self) {
+        self.help_scroll.set(0);
+        self.mode = match self.help_return.take() {
+            Some(id) => Mode::Detail(id),
+            None => Mode::Normal,
+        };
+    }
+
+    /// The keys `handle_help` matches, besides the view's own that it passes on.
+    #[cfg(test)]
+    pub(crate) const HANDLED_HELP: &[&str] = &["j", "k", "ctrl+d", "ctrl+u", "/", "?", "enter", "esc", "q"];
+
+    /// The sheet's keys. `j`/`k` and ctrl+d/ctrl+u move the cursor, `/` searches every view's
+    /// keys, `?` toggles the long form, enter runs the row (in its own view only), esc and `q`
+    /// close. Any other key that is bright in the sheet closes it and runs as if pressed on the
+    /// view; a dim or unknown one only says why.
+    fn handle_help(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::Help { scope, long, query, .. } = &self.mode else {
+            return Outcome::Continue;
+        };
+        let scope = *scope;
+        let rows = keys::help_rows_for(self, scope, *long, query.as_deref());
+        let runnable = rows.iter().filter(|r| matches!(r, keys::HelpRow::Key { .. })).count();
+        let Mode::Help { long, query, cursor, .. } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let page = usize::from(self.help_viewport.get() / 2).max(1);
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('d') => *cursor = (*cursor + page).min(runnable.saturating_sub(1)),
+                KeyCode::Char('u') => *cursor = cursor.saturating_sub(page),
+                _ => {}
+            }
+            return Outcome::Continue;
+        }
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => *cursor = (*cursor + 1).min(runnable.saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => *cursor = cursor.saturating_sub(1),
+            KeyCode::PageDown => *cursor = (*cursor + page).min(runnable.saturating_sub(1)),
+            KeyCode::PageUp => *cursor = cursor.saturating_sub(page),
+            KeyCode::Esc if query.is_some() => {
+                *query = None;
+                *cursor = 0;
+            }
+            KeyCode::Esc => self.close_help(),
+            KeyCode::Backspace => {
+                if let Some(q) = query.as_mut() {
+                    if q.pop().is_none() {
+                        *query = None;
+                    }
+                    *cursor = 0;
+                }
+            }
+            KeyCode::Char(c) if query.is_some() => {
+                if let Some(q) = query.as_mut() {
+                    q.push(c);
+                }
+                *cursor = 0;
+            }
+            KeyCode::Char('q') => self.close_help(),
+            KeyCode::Char('/') => {
+                *query = Some(String::new());
+                *cursor = 0;
+            }
+            KeyCode::Char('?') => {
+                *long = !*long;
+                *cursor = 0;
+            }
+            KeyCode::Enter => {
+                let at = *cursor;
+                let row = rows.iter().filter(|r| matches!(r, keys::HelpRow::Key { .. })).nth(at);
+                if let Some(keys::HelpRow::Key { binding, avail, .. }) = row {
+                    let (binding, avail) = (*binding, *avail);
+                    if binding.scope != scope {
+                        self.notify(format!("open {} first", binding.scope.name()), false);
+                    } else if let keys::Avail::Off(why) = avail {
+                        self.notify(why, false);
+                    } else {
+                        self.close_help();
+                        for event in keys::key_events(binding.first()) {
+                            if let Outcome::Quit = self.handle_key(event) {
+                                return Outcome::Quit;
+                            }
+                        }
+                    }
+                }
+            }
+            KeyCode::Char(c) => {
+                let hit = keys::bindings_for(self, scope).into_iter().find(|(b, _)| b.menu_key().is_none() && b.group != keys::Group::Commands && b.matches_char(c));
+                match hit {
+                    Some((_, keys::Avail::On)) => {
+                        self.close_help();
+                        return self.handle_key(key);
+                    }
+                    Some((_, keys::Avail::Off(why))) => self.notify(why, false),
+                    _ => self.notify(format!("{c} is not a key here; esc closes"), false),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
     }
 
     /// Repos from `all` whose path contains `query`, case-insensitively.
@@ -808,7 +1269,7 @@ impl App {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
         for t in &self.tasks {
-            (&t.id, &t.updated_at, &t.state, t.queued, t.running, t.waiting_on_you, &t.column, &t.repo_path, &t.created_at, &t.title).hash(&mut h);
+            (&t.id, &t.updated_at, &t.state, t.queued, t.running, t.waiting_on_you, &t.column, &t.repo_path, &t.created_at, &t.title, t.gate_overdue()).hash(&mut h);
         }
         (&self.filter, self.needs_only, self.this_repo_only, &self.home_repo, self.group as u8).hash(&mut h);
         h.finish()
@@ -829,10 +1290,12 @@ impl App {
             if Some(column) == done {
                 return b.created_at.cmp(&a.created_at);
             }
+            // A gate past its SLA sorts first whatever the order: it has waited longest on you.
+            let (late_a, late_b) = (!a.gate_overdue(), !b.gate_overdue());
             match self.group {
-                GroupBy::Stage => (a.look(), &a.created_at).cmp(&(b.look(), &b.created_at)),
-                GroupBy::Repo => (a.repo_name(), a.look(), &a.created_at).cmp(&(b.repo_name(), b.look(), &b.created_at)),
-                GroupBy::Age => a.created_at.cmp(&b.created_at),
+                GroupBy::Stage => (late_a, a.look(), &a.created_at).cmp(&(late_b, b.look(), &b.created_at)),
+                GroupBy::Repo => (a.repo_name(), late_a, a.look(), &a.created_at).cmp(&(b.repo_name(), late_b, b.look(), &b.created_at)),
+                GroupBy::Age => (late_a, &a.created_at).cmp(&(late_b, &b.created_at)),
             }
         });
         found
@@ -945,7 +1408,7 @@ impl App {
         let Some(task) = self.task(id).cloned() else {
             return;
         };
-        let Some(requested) = self.detail.as_ref().and_then(TaskDetail::open_approval).map(|a| a.requested.clone()) else {
+        let Some(requested) = self.detail.as_ref().and_then(|d| d.latest_approval("awaiting_approval")).map(|a| a.requested.clone()) else {
             return;
         };
         let plan_edit = plan_edit_of(&requested);
@@ -980,6 +1443,59 @@ impl App {
             plan_vim: Vim::new(),
             ticket_vim: Vim::new(),
         };
+    }
+
+    /// Opens test_design's cases for editing, as markdown grouped by the criterion each proves.
+    fn open_cases_editor(&mut self, id: &str) {
+        let Some(task) = self.task(id) else {
+            return;
+        };
+        let Some(cases) = self.detail.as_ref().filter(|d| d.task.id == id).map(TaskDetail::cases) else {
+            return;
+        };
+        let mut area = TextArea::new(cases_markdown(&cases).lines().map(str::to_string).collect());
+        area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+        area.set_block(
+            ratatui::widgets::Block::bordered()
+                .padding(ratatui::widgets::Padding::new(2, 2, 1, 1))
+                .title(format!(" cases for #{} {} — ## criterion, - case, its approach under it ", task.short_id(), task.title)),
+        );
+        self.mode = Mode::EditCases { id: id.to_string(), area, vim: Vim::new() };
+    }
+
+    fn handle_edit_cases(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::EditCases { id, area, vim } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match vim.handle(area, key) {
+            crate::vim::Outcome::Continue => {}
+            crate::vim::Outcome::Cancel => self.mode = Mode::Detail(id.clone()),
+            crate::vim::Outcome::Save => {
+                let id = id.clone();
+                let markdown = area.lines().join("\n");
+                self.mode = Mode::Detail(id.clone());
+                // The baseline is what the editor opened with, read back the same way, so
+                // whitespace the markdown never carried does not count as a change.
+                let before: Vec<crate::model::TestCase> =
+                    self.detail.as_ref().filter(|d| d.task.id == id).map(|d| parse_cases(&cases_markdown(&d.cases()))).unwrap_or_default();
+                let edited = parse_cases(&markdown);
+                if edited.is_empty() {
+                    self.notify("keep at least one case; r sends the whole set back instead", true);
+                } else if edited != before {
+                    match self.machine.edit_cases(&id, &edited) {
+                        Ok(task) => {
+                            self.upsert(task);
+                            self.detail_stale = true;
+                            self.notify("cases saved", false);
+                        }
+                        Err(error) => self.notify(error, true),
+                    }
+                } else {
+                    self.notify("nothing changed", false);
+                }
+            }
+        }
+        Outcome::Continue
     }
 
     /// Opens the repo search for `id`: type to filter, enter to set it on the ticket.
@@ -1044,7 +1560,11 @@ impl App {
                 self.notify("nothing waiting to ship on this ticket", false);
             }
             'e' => {
-                if has_open_plan(&task, self.detail.as_ref()) {
+                let in_popup = matches!(&self.mode, Mode::Detail(open) if open == id);
+                let section = self.detail_section;
+                if in_popup && section == Section::Tests && cases_editable(&task, self.detail.as_ref()) {
+                    self.open_cases_editor(id);
+                } else if (in_popup && section == Section::Plan && plan_editable(&task, self.detail.as_ref())) || has_open_plan(&task, self.detail.as_ref()) {
                     self.open_plan_editor(id);
                 } else {
                     self.open_ticket_editor(id);
@@ -1080,16 +1600,153 @@ impl App {
             }
             'd' => self.mode = Mode::ConfirmDelete(id.to_string()),
             'f' => self.watch(&task),
-            'o' => match &task.source {
-                Some(source) => {
-                    let (program, args) = opener_command(&source.url);
+            'o' => match task.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| task.jira.as_ref().map(|j| j.url.clone())) {
+                Some(url) => {
+                    let (program, args) = opener_command(&url);
                     // Detached: spawn and move on, never wait on the browser.
                     if Command::new(program).args(args).spawn().is_err() {
-                        self.notify(format!("could not open {}", source.url), true);
+                        self.notify(format!("could not open {url}"), true);
                     }
                 }
                 None => self.notify("no issue linked", false),
             },
+            'J' => match task.jira_key() {
+                Some(_) => self.mode = Mode::ConfirmJiraUnlink(id.to_string()),
+                None => self.open_jira_link(id),
+            },
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The Jira search for a ticket: empty until three characters are typed. A machine with no
+    /// Jira configured says so in the footer instead.
+    fn open_jira_link(&mut self, id: &str) {
+        match self.machine.jira_status() {
+            Ok(status) if !status.configured => {
+                let why = status.error.unwrap_or_else(|| "set MACHINE_JIRA_SITE, _EMAIL and _TOKEN".to_string());
+                self.notify(format!("Jira is not configured on the machine: {why}"), true);
+                return;
+            }
+            Err(error) => self.notify(format!("jira status: {error}"), true),
+            Ok(_) => {}
+        }
+        self.mode = Mode::JiraLink { id: id.to_string(), query: String::new(), hits: Vec::new(), cursor: 0 };
+    }
+
+    /// Links `key` to the ticket; a bad key is refused here, before the machine sees it.
+    fn link_jira(&mut self, id: &str, key: &str) {
+        let key = key.trim().to_uppercase();
+        if !looks_like_jira_key(&key) {
+            self.notify(format!("{key:?} is not a Jira key like PLAT-123"), true);
+            return;
+        }
+        self.act(|m| m.link_jira(id, &key), &format!("linked {key}"));
+    }
+
+    /// Type to search, `enter` links the row (row 0 creates an issue instead), `ctrl+n` creates
+    /// one straight away, `esc` backs out. From three characters on the machine is asked, off the
+    /// UI thread and a quarter second after the last keystroke (`ensure_jira_search`); a failed
+    /// search shows in the footer and keeps the last hits.
+    fn handle_jira_link(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::JiraLink { id, query, hits, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        match key.code {
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.mode = Mode::Normal;
+                self.jira_search_due = None;
+                self.act(|m| m.create_jira(&id, None), "Jira issue created and linked");
+            }
+            KeyCode::Char(_) | KeyCode::Backspace => {
+                match key.code {
+                    KeyCode::Char(c) => query.push(c),
+                    _ => {
+                        query.pop();
+                    }
+                }
+                *cursor = 0;
+                if query.trim().chars().count() >= 3 {
+                    self.jira_search_due = Some((query.trim().to_string(), Instant::now()));
+                } else {
+                    hits.clear();
+                    self.jira_search_due = None;
+                }
+            }
+            KeyCode::Down => *cursor = (*cursor + 1).min(hits.len()),
+            KeyCode::Up => *cursor = cursor.saturating_sub(1),
+            KeyCode::Esc => {
+                self.mode = Mode::Normal;
+                self.jira_search_due = None;
+            }
+            KeyCode::Enter => {
+                let chosen = cursor.checked_sub(1).and_then(|i| hits.get(i)).map(|h| h.key.clone());
+                let typed = query.trim().to_uppercase();
+                self.mode = Mode::Normal;
+                self.jira_search_due = None;
+                match chosen {
+                    Some(key) => self.link_jira(&id, &key),
+                    // Row 0 is "create", unless what was typed is itself a key: then link that.
+                    None if looks_like_jira_key(&typed) => self.link_jira(&id, &typed),
+                    None => self.act(|m| m.create_jira(&id, None), "Jira issue created and linked"),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// Runs the `J` prompt's search once the typing has paused, on a background thread; the
+    /// answer comes back through the stream as `Incoming::JiraHits` and is dropped if the
+    /// query has changed by then. Called every frame.
+    pub fn ensure_jira_search(&mut self) {
+        if !matches!(self.mode, Mode::JiraLink { .. }) {
+            self.jira_search_due = None;
+            return;
+        }
+        let Some((query, at)) = self.jira_search_due.as_ref() else { return };
+        if at.elapsed() < JIRA_SEARCH_DEBOUNCE {
+            return;
+        }
+        let query = query.clone();
+        self.jira_search_due = None;
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let hits = machine.jira_search(&query);
+            let _ = tx.send(Incoming::JiraHits { query, hits });
+        });
+    }
+
+    /// Tests: runs a due search now and waits for its answer.
+    #[cfg(test)]
+    fn settle_jira_search(&mut self) {
+        if let Some((query, _)) = self.jira_search_due.take() {
+            self.jira_search_due = Some((query, Instant::now() - JIRA_SEARCH_DEBOUNCE));
+        }
+        self.ensure_jira_search();
+        loop {
+            let incoming = self.stream.recv_timeout(Duration::from_secs(5)).expect("the search answers");
+            let done = matches!(incoming, Incoming::JiraHits { .. });
+            self.take_incoming(incoming);
+            if done {
+                return;
+            }
+        }
+    }
+
+    fn handle_confirm_jira_unlink(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::ConfirmJiraUnlink(id) = &self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.mode = Mode::Normal;
+                self.act(|m| m.unlink_jira(&id), "Jira issue unlinked");
+            }
+            KeyCode::Char('n') | KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
             _ => {}
         }
         Outcome::Continue
@@ -1108,6 +1765,12 @@ impl App {
         if self.digest.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_digest(key);
         }
+        if self.pulls.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_pulls(key);
+        }
+        if self.slack.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_slack(key);
+        }
         match &self.mode {
             Mode::Normal => self.handle_normal(key),
             Mode::Detail(id) => {
@@ -1116,10 +1779,11 @@ impl App {
             }
             Mode::Adding(_) => self.handle_adding(key),
             Mode::EditTicket { .. } => self.handle_edit_ticket(key),
+            Mode::EditCases { .. } => self.handle_edit_cases(key),
             Mode::Answer { .. } => self.handle_answer(key),
             Mode::EditPlan { .. } => self.handle_edit_plan(key),
             Mode::Filter => self.handle_filter(key),
-            Mode::Command(_) => self.handle_command(key),
+            Mode::Command { .. } => self.handle_command(key),
             Mode::Reason { .. } => self.handle_reason(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
@@ -1129,10 +1793,17 @@ impl App {
             Mode::ConfirmMany { .. } => self.handle_confirm_many(key),
             Mode::Actions { .. } => self.handle_actions(key),
             Mode::RepoPicker { .. } => self.handle_repo_picker(key),
-            Mode::Help(_) => {
-                self.mode = Mode::Normal;
-                Outcome::Continue
-            }
+            Mode::ConfirmMerge { .. } => self.handle_confirm_merge(key),
+            Mode::ClonePrompt { .. } => self.handle_clone_prompt(key),
+            Mode::PrActions { .. } => self.handle_pr_actions(key),
+            Mode::SlackSnooze { .. } => self.handle_slack_snooze(key),
+            Mode::SlackReply { .. } => self.handle_slack_reply(key),
+            Mode::SlackTask { .. } => self.handle_slack_task(key),
+            Mode::SlackWatchAdd { .. } => self.handle_slack_watch_add(key),
+            Mode::SlackActions { .. } => self.handle_slack_actions(key),
+            Mode::JiraLink { .. } => self.handle_jira_link(key),
+            Mode::ConfirmJiraUnlink(_) => self.handle_confirm_jira_unlink(key),
+            Mode::Help { .. } => self.handle_help(key),
         }
     }
 
@@ -1149,9 +1820,12 @@ impl App {
         let d30 = self.machine.metrics_for("30d", repo.as_ref().map(|r| r.as_deref()), false);
         // The rows are the 7d answer's when it covers every repo; one more call otherwise.
         let rows = if focused { Some(self.machine.metrics_for("7d", None, true)) } else { None };
+        // The Slack block is a bonus: a machine without the inbox leaves it out, nothing else changes.
+        let slack = self.machine.slack_metrics("7d").and_then(|d7| self.machine.slack_metrics("30d").map(|d30| (d7, d30))).ok();
         let Some(floor) = self.floor.as_mut() else {
             return;
         };
+        floor.slack = slack;
         match d7 {
             Ok(m) => {
                 if let Some(by_repo) = m.by_repo.clone() {
@@ -1178,11 +1852,15 @@ impl App {
         }
     }
 
+    /// The keys `handle_floor` matches; the registry's Floor scope must list exactly these.
+    #[cfg(test)]
+    pub(crate) const HANDLED_FLOOR: &[&str] = &["esc", "F", "q", "?", "R", "tab", "shift+tab"];
+
     fn handle_floor(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Esc | KeyCode::Char('F') | KeyCode::Char('q') => self.floor = None,
-            KeyCode::Char('?') => self.mode = Mode::Help(HelpFor::Floor),
-            KeyCode::Char('r') => self.refresh_floor(),
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('R') => self.refresh_floor(),
             KeyCode::Tab | KeyCode::BackTab => {
                 if let Some(floor) = self.floor.as_mut() {
                     floor.cycle(if key.code == KeyCode::Tab { 1 } else { -1 });
@@ -1255,6 +1933,10 @@ impl App {
         digest::is_new(task, self.last_seen_secs)
     }
 
+    /// The keys `handle_digest` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_DIGEST: &[&str] = &["esc", "D", "q", "?", "j", "k", "enter", "o"];
+
     /// The Digest's keys: move, jump to the ticket, open its PR, close.
     fn handle_digest(&mut self, key: KeyEvent) -> Outcome {
         let Some(state) = self.digest.clone() else {
@@ -1269,7 +1951,7 @@ impl App {
                 return Outcome::Continue;
             }
             KeyCode::Char('?') => {
-                self.mode = Mode::Help(HelpFor::Digest);
+                self.open_help();
                 return Outcome::Continue;
             }
             KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(entries.len().saturating_sub(1)),
@@ -1278,9 +1960,7 @@ impl App {
                 if let Some(id) = under_cursor {
                     self.digest = None;
                     self.select(&id, true);
-                    self.detail_stale = true;
-                    self.detail_scroll.set(0);
-                    self.mode = Mode::Detail(id);
+                    self.open_detail(id);
                 }
                 return Outcome::Continue;
             }
@@ -1303,7 +1983,7 @@ impl App {
             .detail(id)
             .ok()
             .and_then(|d| d.approvals.iter().find_map(|a| a.requested["prUrl"].as_str().map(String::from)));
-        let issue = self.task(id).and_then(|t| t.source.as_ref().map(|s| s.url.clone()));
+        let issue = self.task(id).and_then(|t| t.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| t.jira.as_ref().map(|j| j.url.clone())));
         match pr.or(issue) {
             Some(url) => {
                 let (program, args) = opener_command(&url);
@@ -1314,6 +1994,12 @@ impl App {
             None => self.notify("no PR or issue linked to this ticket yet", false),
         }
     }
+
+    /// The keys `handle_inbox` matches: its own, then everything `ticket_key` takes (`A` is its
+    /// own: the split's approval, not the memory review).
+    #[cfg(test)]
+    pub(crate) const HANDLED_INBOX: &[&str] =
+        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "X", "w", "d", "f", "o", "J"];
 
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
     fn handle_inbox(&mut self, key: KeyEvent) -> Outcome {
@@ -1330,7 +2016,7 @@ impl App {
                 return Outcome::Continue;
             }
             KeyCode::Char('?') => {
-                self.mode = Mode::Help(HelpFor::Inbox);
+                self.open_help();
                 return Outcome::Continue;
             }
             KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(ids.len().saturating_sub(1)),
@@ -1351,9 +2037,7 @@ impl App {
                 if let Some(id) = under_cursor {
                     self.inbox = None;
                     self.select(&id, true);
-                    self.detail_stale = true;
-                    self.detail_scroll.set(0);
-                    self.mode = Mode::Detail(id);
+                    self.open_detail(id);
                 }
                 return Outcome::Continue;
             }
@@ -1374,6 +2058,677 @@ impl App {
             _ => {}
         }
         self.inbox = Some(next);
+        Outcome::Continue
+    }
+
+    /// Opens the PR view, refreshing the snapshot from the machine when the stream has not sent one yet.
+    fn open_pulls(&mut self) {
+        if self.prs.polled_at.is_none()
+            && let Ok(snapshot) = self.machine.prs()
+        {
+            self.take_prs(snapshot);
+        }
+        self.pulls = Some(PullsState::default());
+    }
+
+    /// The keys `handle_pulls` matches, `PrKey::ALL` included.
+    #[cfg(test)]
+    pub(crate) const HANDLED_PULLS: &[&str] = &["esc", "P", "q", "?", "j", "k", "l", "h", "1-6", "R", "o", "enter", "x", "m", "c", "v", "t"];
+
+    /// The PR view's keys: move, switch split, open, merge, dispatch an agent, refresh.
+    fn handle_pulls(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.pulls.clone() else {
+            return Outcome::Continue;
+        };
+        let count = pulls::items(&self.prs.prs, state.split).len();
+        let under = self.pr_under_cursor();
+        let mut next = state.clone();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('P') | KeyCode::Char('q') => {
+                self.pulls = None;
+                return Outcome::Continue;
+            }
+            KeyCode::Char('?') => {
+                self.open_help();
+                return Outcome::Continue;
+            }
+            KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(count.saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => next.cursor = state.cursor.saturating_sub(1),
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => {
+                next.split = state.split.next();
+                next.cursor = 0;
+            }
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => {
+                next.split = state.split.prev();
+                next.cursor = 0;
+            }
+            KeyCode::Char(d @ '1'..='6') => {
+                next.split = PrSplit::ALL[(d as usize) - ('1' as usize)];
+                next.cursor = 0;
+            }
+            KeyCode::Char('R') => {
+                match self.machine.refresh_prs() {
+                    Ok(snapshot) => {
+                        self.take_prs(snapshot);
+                        self.notify("polled GitHub", false);
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('o') => {
+                if let Some(pr) = under {
+                    self.open_url(&pr.url);
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Enter => {
+                if let Some(pr) = under {
+                    match pr.task.as_ref().map(|t| t.id.clone()) {
+                        Some(id) if self.task(&id).is_some() => {
+                            self.pulls = None;
+                            self.select(&id, true);
+                            self.open_detail(id);
+                        }
+                        _ => self.open_url(&pr.url),
+                    }
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('x') => {
+                if under.is_some() {
+                    self.mode = Mode::PrActions { cursor: 0 };
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char(c) => {
+                if let (Some(pr), Some(key)) = (under, PrKey::ALL.iter().copied().find(|k| k.key() == c)) {
+                    self.pr_key(key, &pr);
+                }
+                return Outcome::Continue;
+            }
+            _ => {}
+        }
+        self.pulls = Some(next);
+        Outcome::Continue
+    }
+
+    /// Opens a URL in the browser, detached; says so when it cannot.
+    fn open_url(&mut self, url: &str) {
+        let (program, args) = opener_command(url);
+        if Command::new(program).args(args).spawn().is_err() {
+            self.notify(format!("could not open {url}"), true);
+        }
+    }
+
+    /// One of `m`, `c`, `v`, `t` on a PR: the blocker as a toast, a merge confirm, or a dispatch
+    /// (through the clone prompt when the machine has no checkout of the repo).
+    fn pr_key(&mut self, key: PrKey, pr: &PullRequest) {
+        if key != PrKey::Merge && pr.local_path.is_none() && pr.task.is_none() {
+            if let Some(action) = key.action() {
+                self.open_clone_prompt(pr, action);
+            }
+            return;
+        }
+        if let Some(why) = pulls::blocker(pr, key) {
+            self.notify(why, false);
+            return;
+        }
+        match key.action() {
+            None => self.mode = Mode::ConfirmMerge { repo: pr.repo.clone(), number: pr.number },
+            Some(action) => self.dispatch_pr(pr, action),
+        }
+    }
+
+    fn dispatch_pr(&mut self, pr: &PullRequest, action: PrAction) {
+        match self.machine.pr_action(&pr.repo, pr.number, action) {
+            Ok(task) => {
+                let id = task.id.clone();
+                self.upsert(task);
+                self.notify(format!("dispatched {} on {}: #{}", action.wire(), pr.key(), short_id(&id)), false);
+            }
+            Err(error) => self.notify(error, true),
+        }
+    }
+
+    fn open_clone_prompt(&mut self, pr: &PullRequest, then: PrAction) {
+        let all = repos_root().map(|root| discover_folders(&root)).unwrap_or_default();
+        if all.is_empty() {
+            self.notify(format!("no checkout of {}, and no HARDNESS_REPOS_DIR to clone into", pr.repo), true);
+            return;
+        }
+        self.mode = Mode::ClonePrompt { repo: pr.repo.clone(), query: String::new(), all, cursor: 0, then };
+    }
+
+    fn handle_confirm_merge(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') => {
+                let Mode::ConfirmMerge { repo, number } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                match self.machine.merge_pr(&repo, number) {
+                    Ok(()) => self.notify(format!("merged {repo}#{number}"), false),
+                    Err(error) => self.notify(error, true),
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The clone prompt: filter the folders, enter clones `<folder>/<name>` and holds the
+    /// dispatch until the next snapshot shows the checkout, esc leaves the PR read-only.
+    fn handle_clone_prompt(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::ClonePrompt { repo, query, all, cursor, then } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char(c) => {
+                query.push(c);
+                *cursor = 0;
+            }
+            KeyCode::Backspace => {
+                query.pop();
+                *cursor = 0;
+            }
+            KeyCode::Down => {
+                let len = Self::matching_repos(all, query).len();
+                if len > 0 {
+                    *cursor = (*cursor + 1).min(len - 1);
+                }
+            }
+            KeyCode::Up => *cursor = cursor.saturating_sub(1),
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let matches = Self::matching_repos(all, query);
+                let Some(folder) = matches.get(*cursor).map(|f| f.to_string()) else {
+                    return Outcome::Continue;
+                };
+                let (repo, then) = (repo.clone(), *then);
+                let name = repo.rsplit('/').next().unwrap_or(&repo).to_string();
+                let dest = format!("{}/{name}", folder.trim_end_matches('/'));
+                self.mode = Mode::Normal;
+                match self.machine.clone_repo(&repo, &dest) {
+                    Ok(()) => {
+                        self.pending_dispatch = Some((repo.clone(), then));
+                        self.notify(format!("cloning {repo} into {dest}; {} runs when it lands", then.wire()), false);
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// `x` in the PR view: a menu of the four keys, each line saying why it is off when it is.
+    fn handle_pr_actions(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::PrActions { cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let mut chosen = None;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(PrKey::ALL.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(PrKey::ALL[*cursor]),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Char(c) => chosen = PrKey::ALL.iter().copied().find(|k| k.key() == c),
+            _ => {}
+        }
+        if let Some(key) = chosen {
+            self.mode = Mode::Normal;
+            if let Some(pr) = self.pr_under_cursor() {
+                self.pr_key(key, &pr);
+            }
+        }
+        Outcome::Continue
+    }
+
+    /// Opens the Slack view, fetching the snapshot when the stream has not sent one yet.
+    fn open_slack(&mut self) {
+        if self.slack_snapshot.polled_at.is_none()
+            && let Ok(snapshot) = self.machine.slack()
+        {
+            self.take_slack(snapshot);
+        }
+        self.slack = Some(SlackState::default());
+        self.prefetch_slack_catalog();
+    }
+
+    /// The keys `handle_slack` matches, `SlackKey::ALL` included.
+    #[cfg(test)]
+    pub(crate) const HANDLED_SLACK: &[&str] = &["esc", "S", "q", "?", "j", "k", "l", "h", "1-6", "R", "W", "enter", "x", "r", "t", "d", "s", "o", "N", "!", "-"];
+
+    /// The Slack view's keys: move, switch split, open, act on the item, Watches, refresh.
+    fn handle_slack(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.slack.clone() else {
+            return Outcome::Continue;
+        };
+        if state.watches.is_some() {
+            return self.handle_slack_watches(key);
+        }
+        let count = slack::items(&self.slack_snapshot.items, state.split).len();
+        let under = self.slack_under_cursor().cloned();
+        let mut next = state.clone();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('S') | KeyCode::Char('q') => {
+                self.slack = None;
+                return Outcome::Continue;
+            }
+            KeyCode::Char('?') => {
+                self.open_help();
+                return Outcome::Continue;
+            }
+            KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(count.saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => next.cursor = state.cursor.saturating_sub(1),
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => {
+                next.split = state.split.next();
+                next.cursor = 0;
+            }
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => {
+                next.split = state.split.prev();
+                next.cursor = 0;
+            }
+            KeyCode::Char(d @ '1'..='6') => {
+                next.split = SlackSplit::ALL[(d as usize) - ('1' as usize)];
+                next.cursor = 0;
+            }
+            KeyCode::Char('R') => {
+                match self.machine.refresh_slack() {
+                    Ok(snapshot) => {
+                        self.take_slack(snapshot);
+                        self.notify("polled Slack", false);
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('W') => {
+                // The popup edits them, so it opens on the machine's current list, not a stale snapshot.
+                if let Ok(watches) = self.machine.slack_watches() {
+                    self.slack_snapshot.watches = watches;
+                }
+                next.watches = Some(WatchesState::default());
+            }
+            KeyCode::Enter => {
+                if let Some(item) = under {
+                    match item.task_id() {
+                        Some(id) if self.task(id).is_some() => {
+                            let id = id.to_string();
+                            self.slack = None;
+                            self.select(&id, true);
+                            self.open_detail(id);
+                        }
+                        _ => self.open_url(&item.permalink),
+                    }
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('x') => {
+                if under.is_some() {
+                    self.mode = Mode::SlackActions { cursor: 0 };
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char(c) => {
+                if let (Some(item), Some(key)) = (under, SlackKey::from_char(c)) {
+                    self.slack_key(key, &item);
+                }
+                return Outcome::Continue;
+            }
+            _ => {}
+        }
+        self.slack = Some(next);
+        Outcome::Continue
+    }
+
+    /// One of the item keys: the blocker as a toast, else the popup or the call it stands for.
+    fn slack_key(&mut self, key: SlackKey, item: &SlackItem) {
+        if let Some(why) = slack::blocker(item, key) {
+            self.notify(why, false);
+            return;
+        }
+        let id = item.id.clone();
+        match key {
+            SlackKey::Open => self.open_url(&item.permalink),
+            SlackKey::Reply => self.open_slack_reply(item, item.triage.as_ref().and_then(|t| t.draft.clone()).unwrap_or_default(), false),
+            // The mention itself is built on the machine, by id; the editor shows the words only.
+            SlackKey::Nudge => self.open_slack_reply(item, "gentle nudge on this one: any news?".to_string(), true),
+            SlackKey::Snooze => self.mode = Mode::SlackSnooze { id, cursor: 0 },
+            SlackKey::Task => {
+                let title = item.summary().to_string();
+                let repo = self.guess_repo(&item.channel.name);
+                self.mode = Mode::SlackTask { id, title, repo };
+            }
+            SlackKey::Done => {
+                let now = iso_of(now_secs());
+                self.patch_slack(&id, serde_json::json!({ "done": true }), "done", move |item| {
+                    item.split = SlackSplit::Done.wire().to_string();
+                    item.done_at = Some(now);
+                });
+            }
+            SlackKey::Bump | SlackKey::Lower => {
+                let Some(next) = item.priority().and_then(|p| priority_step(p, key == SlackKey::Bump)) else {
+                    return;
+                };
+                let toast = format!("{} → {next}", item.priority().unwrap_or("?"));
+                self.patch_slack(&id, serde_json::json!({ "priority": next }), &toast, move |item| {
+                    if let Some(triage) = item.triage.as_mut() {
+                        triage.priority = next.to_string();
+                        triage.overridden = true;
+                    }
+                });
+            }
+        }
+    }
+
+    /// PATCHes one item and, when the machine took it, applies the same change to the local
+    /// snapshot so the view moves at once instead of on the next poll.
+    fn patch_slack(&mut self, id: &str, patch: serde_json::Value, toast: &str, apply: impl FnOnce(&mut SlackItem)) {
+        match self.machine.patch_slack_item(id, patch) {
+            Ok(_) => {
+                if let Some(item) = self.slack_item_mut(id) {
+                    apply(item);
+                }
+                self.clamp_slack_cursor();
+                self.notify(toast, false);
+            }
+            Err(error) => self.notify(error, true),
+        }
+    }
+
+    /// The repo a channel most likely belongs to: a repo of a ticket on the board whose name
+    /// and the channel's share a word. None when nothing matches.
+    fn guess_repo(&self, channel: &str) -> Option<String> {
+        let channel = channel.to_lowercase();
+        let mut repos: Vec<&str> = self.tasks.iter().filter_map(|t| t.repo_path.as_deref()).collect();
+        repos.sort_unstable();
+        repos.dedup();
+        repos
+            .into_iter()
+            .find(|path| {
+                let name = path.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_lowercase();
+                !name.is_empty() && (channel.contains(&name) || name.contains(&channel))
+            })
+            .map(str::to_string)
+    }
+
+    /// The reply editor over `item`, pre-filled with `text`; the same vim keys as every editor.
+    /// `nudge` asks the machine to open the message with a mention of the author.
+    fn open_slack_reply(&mut self, item: &SlackItem, text: String, nudge: bool) {
+        let lines: Vec<String> = if text.is_empty() { vec![String::new()] } else { text.lines().map(str::to_string).collect() };
+        let mut area = TextArea::new(lines);
+        area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+        self.mode = Mode::SlackReply { id: item.id.clone(), area, vim: Vim::new(), nudge };
+    }
+
+    fn handle_slack_reply(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::SlackReply { id, area, vim, nudge } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match vim.handle(area, key) {
+            crate::vim::Outcome::Continue => {}
+            crate::vim::Outcome::Cancel => self.mode = Mode::Normal,
+            crate::vim::Outcome::Save => {
+                let id = id.clone();
+                let nudge = *nudge;
+                let text = area.lines().join("\n").trim().to_string();
+                if text.is_empty() {
+                    self.notify("nothing to send", true);
+                    return Outcome::Continue;
+                }
+                self.mode = Mode::Normal;
+                match self.machine.slack_reply(&id, &text, nudge) {
+                    Ok(()) => {
+                        let now = iso_of(now_secs());
+                        if let Some(item) = self.slack_item_mut(&id) {
+                            item.split = SlackSplit::Done.wire().to_string();
+                            item.you_replied = true;
+                            item.done_at = Some(now);
+                        }
+                        self.clamp_slack_cursor();
+                        self.notify("sent", false);
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+            }
+        }
+        Outcome::Continue
+    }
+
+    /// The snooze picker: j/k or 1-4 pick, enter sets `snoozedUntil`, esc leaves it awake.
+    fn handle_slack_snooze(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::SlackSnooze { id, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        let mut chosen = None;
+        let mut close = false;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(slack::SNOOZE_OPTIONS.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(*cursor),
+            KeyCode::Char(d @ '1'..='4') => chosen = Some((d as usize) - ('1' as usize)),
+            KeyCode::Esc | KeyCode::Char('q') => close = true,
+            _ => {}
+        }
+        if close {
+            self.mode = Mode::Normal;
+        }
+        if let Some(option) = chosen {
+            self.mode = Mode::Normal;
+            let until = iso_of(slack::snooze_until(option, now_secs(), local_offset_secs()));
+            let toast = format!("snoozed until {}", slack::SNOOZE_OPTIONS[option]);
+            let stored = until.clone();
+            self.patch_slack(&id, serde_json::json!({ "snoozedUntil": until }), &toast, move |item| {
+                item.split = SlackSplit::Snoozed.wire().to_string();
+                item.snoozed_until = Some(stored);
+            });
+        }
+        Outcome::Continue
+    }
+
+    /// `t`'s confirm: y creates the ticket and opens it (the repo picker follows when none was
+    /// guessed), n / esc keeps the message where it is.
+    fn handle_slack_task(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                let Mode::SlackTask { id, title, repo } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                match self.machine.slack_task(&id, &title, repo.as_deref()) {
+                    Ok(task) => {
+                        let task_id = task.id.clone();
+                        let no_repo = task.repo_path.is_none();
+                        self.upsert(task);
+                        if let Some(item) = self.slack_item_mut(&id) {
+                            item.linked.task_id = Some(task_id.clone());
+                        }
+                        self.slack = None;
+                        self.select(&task_id, true);
+                        self.open_detail(task_id.clone());
+                        if no_repo {
+                            self.notify(format!("ticket #{} created; pick its repo", short_id(&task_id)), false);
+                            self.open_repo_picker(&task_id);
+                        } else {
+                            self.notify(format!("ticket #{} created", short_id(&task_id)), false);
+                        }
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The keys `handle_slack_watches` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_WATCHES: &[&str] = &["esc", "W", "q", "?", "j", "k", "n", "space", "e", "d"];
+
+    /// The Watches popup: j/k move, space toggles, d deletes (not a built-in), e cycles the
+    /// priority floor, n adds, esc / W closes.
+    fn handle_slack_watches(&mut self, key: KeyEvent) -> Outcome {
+        let Some(open) = self.slack.as_ref().and_then(|s| s.watches.clone()) else {
+            return Outcome::Continue;
+        };
+        let count = self.slack_snapshot.watches.len();
+        let under = self.slack_snapshot.watches.get(open.cursor.min(count.saturating_sub(1))).cloned();
+        let mut cursor = open.cursor;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('W') | KeyCode::Char('q') => {
+                if let Some(state) = self.slack.as_mut() {
+                    state.watches = None;
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('?') => {
+                self.open_help();
+                return Outcome::Continue;
+            }
+            KeyCode::Char('j') | KeyCode::Down => cursor = (cursor + 1).min(count.saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => cursor = cursor.saturating_sub(1),
+            KeyCode::Char('n') => {
+                // The catalogue was asked for when the view opened; the picker says "loading…" until it lands.
+                self.prefetch_slack_catalog();
+                self.mode = Mode::SlackWatchAdd { query: String::new(), cursor: 0 };
+                return Outcome::Continue;
+            }
+            KeyCode::Char(' ') => {
+                if let Some(watch) = under {
+                    let enabled = !watch.enabled;
+                    self.patch_slack_watch(&watch.id, serde_json::json!({ "enabled": enabled }), if enabled { "on" } else { "off" });
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('e') => {
+                if let Some(watch) = under {
+                    let floor = match watch.priority.as_deref() {
+                        None => Some("P0"),
+                        Some("P0") => Some("P1"),
+                        Some("P1") => Some("P2"),
+                        _ => None,
+                    };
+                    let toast = floor.map_or("no priority floor".to_string(), |p| format!("at least {p}"));
+                    self.patch_slack_watch(&watch.id, serde_json::json!({ "priority": floor }), &toast);
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('d') => {
+                if let Some(watch) = under {
+                    if watch.builtin {
+                        self.notify("built-in; switch it off instead", false);
+                    } else {
+                        match self.machine.delete_slack_watch(&watch.id) {
+                            Ok(()) => {
+                                self.slack_snapshot.watches.retain(|w| w.id != watch.id);
+                                self.clamp_slack_cursor();
+                                self.notify(format!("removed {}", watch.label), false);
+                            }
+                            Err(error) => self.notify(error, true),
+                        }
+                    }
+                }
+                return Outcome::Continue;
+            }
+            _ => {}
+        }
+        if let Some(state) = self.slack.as_mut()
+            && let Some(open) = state.watches.as_mut()
+        {
+            open.cursor = cursor;
+        }
+        Outcome::Continue
+    }
+
+    /// PATCHes one watch and keeps the local copy in step with the machine's answer.
+    fn patch_slack_watch(&mut self, id: &str, patch: serde_json::Value, toast: &str) {
+        match self.machine.patch_slack_watch(id, patch) {
+            Ok(updated) => {
+                if let Some(watch) = self.slack_snapshot.watches.iter_mut().find(|w| w.id == id) {
+                    *watch = updated;
+                }
+                self.notify(toast, false);
+            }
+            Err(error) => self.notify(error, true),
+        }
+    }
+
+    /// Type `@handle`, `#channel` or a word; up/down pick a completion; enter saves the watch.
+    fn handle_slack_watch_add(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::SlackWatchAdd { query, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char(c) => {
+                query.push(c);
+                *cursor = 0;
+            }
+            KeyCode::Backspace => {
+                query.pop();
+                *cursor = 0;
+            }
+            KeyCode::Down => *cursor += 1,
+            KeyCode::Up => *cursor = cursor.saturating_sub(1),
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let (query, cursor) = (query.trim().to_string(), *cursor);
+                let (kind, text) = slack::watch_kind_of(&query);
+                if text.is_empty() {
+                    return Outcome::Continue;
+                }
+                let matches = self.slack_watch_matches(&query);
+                let input = match kind {
+                    "keyword" => serde_json::json!({ "kind": "keyword", "value": text, "label": text }),
+                    _ => {
+                        let Some(pick) = matches.get(cursor.min(matches.len().saturating_sub(1))) else {
+                            self.notify(format!("no {kind} matches {query}"), true);
+                            return Outcome::Continue;
+                        };
+                        let sigil = if kind == "usergroup" { '@' } else { '#' };
+                        let label = if pick.label.starts_with(sigil) { pick.label.clone() } else { format!("{sigil}{}", pick.label) };
+                        serde_json::json!({ "kind": kind, "value": pick.id, "label": label })
+                    }
+                };
+                self.mode = Mode::Normal;
+                match self.machine.add_slack_watch(input) {
+                    Ok(watch) => {
+                        self.notify(format!("watching {}", watch.label), false);
+                        self.slack_snapshot.watches.push(watch);
+                        if let Some(open) = self.slack.as_mut().and_then(|s| s.watches.as_mut()) {
+                            open.cursor = self.slack_snapshot.watches.len() - 1;
+                        }
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// `x` in the Slack view: a menu of the item keys, each line saying why it is off when it is.
+    fn handle_slack_actions(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::SlackActions { cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let mut chosen = None;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(SlackKey::ALL.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(SlackKey::ALL[*cursor]),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Char(c) => chosen = SlackKey::from_char(c),
+            _ => {}
+        }
+        if let Some(key) = chosen {
+            self.mode = Mode::Normal;
+            if let Some(item) = self.slack_under_cursor().cloned() {
+                self.slack_key(key, &item);
+            }
+        }
         Outcome::Continue
     }
 
@@ -1398,6 +2753,14 @@ impl App {
         Outcome::Continue
     }
 
+    /// The keys `handle_normal` matches: its own, the second keys `prefixed` takes, then
+    /// everything `ticket_key` takes (`S` opens Slack here, so it is not ship).
+    #[cfg(test)]
+    pub(crate) const HANDLED_BOARD: &[&str] = &[
+        "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "S", "v", "V", "?", ":",
+        "esc", "enter", "R", "a", "A", "e", "r", "X", "w", "d", "f", "o", "J",
+    ];
+
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
         if let Some(prefix) = self.prefix.take() {
             if let KeyCode::Char(c) = key.code {
@@ -1414,6 +2777,10 @@ impl App {
             KeyCode::Char('n') => self.mode = Mode::Adding(String::new()),
             KeyCode::Char('x') => self.mode = Mode::Actions { cursor: 0 },
             KeyCode::Char('/') => self.mode = Mode::Filter,
+            KeyCode::Char('=') => {
+                self.density = self.density.next();
+                self.notify(format!("cards: {}", self.density.label()), false);
+            }
             KeyCode::Char('!') => {
                 self.needs_only = !self.needs_only;
                 self.clamp_selection();
@@ -1429,6 +2796,7 @@ impl App {
             KeyCode::Char('z') | KeyCode::Char('g') => {
                 if let KeyCode::Char(c) = key.code {
                     self.prefix = Some(c);
+                    self.prefix_at = Some(Instant::now());
                 }
             }
             KeyCode::Char('G') => {
@@ -1448,6 +2816,8 @@ impl App {
             }
             KeyCode::Char('I') => self.inbox = Some(InboxState::default()),
             KeyCode::Char('D') => self.digest = Some(DigestState::default()),
+            KeyCode::Char('P') => self.open_pulls(),
+            KeyCode::Char('S') => self.open_slack(),
             KeyCode::Char('v') => {
                 // Toggle: remove it if it was marked, else mark it.
                 if let Some(id) = self.selected_id().filter(|id| !self.marked.remove(id)) {
@@ -1464,8 +2834,19 @@ impl App {
                     self.marked.extend(ids);
                 }
             }
-            KeyCode::Char('?') => self.mode = Mode::Help(HelpFor::Board),
-            KeyCode::Char(':') => self.mode = Mode::Command(String::new()),
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char(':') => self.mode = Mode::Command { text: String::new(), pick: None },
+            // The repo search is the one key you need on a ticket without a repo; with one set,
+            // the deliberate paths are the menu and `:repo <name>`.
+            KeyCode::Char('R') => match self.selected_task().map(|t| t.repo_path.is_some()) {
+                Some(true) => self.notify("use :repo <name> or x", false),
+                Some(false) => {
+                    if let Some(id) = self.selected_id() {
+                        return self.ticket_key('R', &id);
+                    }
+                }
+                None => {}
+            },
             KeyCode::Esc => {
                 self.filter.clear();
                 self.needs_only = false;
@@ -1475,9 +2856,7 @@ impl App {
             }
             KeyCode::Enter => {
                 if let Some(id) = self.selected_id() {
-                    self.detail_stale = true;
-                    self.detail_scroll.set(0);
-                    self.mode = Mode::Detail(id);
+                    self.open_detail(id);
                 }
             }
             KeyCode::Char(c) => {
@@ -1594,16 +2973,117 @@ impl App {
         self.notify(format!("resumed {done} of {}", ids.len()), done < ids.len());
     }
 
+    /// The keys `handle_detail` matches: its own, then everything `ticket_key` takes (`J`
+    /// scrolls here, so the Jira link is not among them).
+    #[cfg(test)]
+    pub(crate) const HANDLED_DETAIL: &[&str] =
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-8", "+", "?", "o", "a", "A", "S", "e", "R", "r", "X", "w", "d", "f"];
+
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
+        let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            match key.code {
+                KeyCode::Char('d') => self.scroll_detail(half_page),
+                KeyCode::Char('u') => self.scroll_detail(-half_page),
+                _ => {}
+            }
+            return Outcome::Continue;
+        }
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.mode = Mode::Normal,
-            KeyCode::Char('j') | KeyCode::Down => self.scroll_detail(1),
-            KeyCode::Char('k') | KeyCode::Up => self.scroll_detail(-1),
-            KeyCode::Char('?') => self.mode = Mode::Help(HelpFor::Detail),
+            KeyCode::Char('j') | KeyCode::Down => self.move_in_detail(1),
+            KeyCode::Char('k') | KeyCode::Up => self.move_in_detail(-1),
+            KeyCode::Char('J') => self.scroll_detail(1),
+            KeyCode::Char('K') => self.scroll_detail(-1),
+            KeyCode::PageDown => self.scroll_detail(half_page),
+            KeyCode::PageUp => self.scroll_detail(-half_page),
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => self.set_section(self.detail_section.next()),
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.set_section(self.detail_section.prev()),
+            KeyCode::Char(digit @ '1'..='8') => {
+                if let Some(section) = Section::from_digit(digit) {
+                    self.set_section(section);
+                }
+            }
+            KeyCode::Char('+') => self.detail_full = !self.detail_full,
+            KeyCode::Char('?') => {
+                self.help_return = Some(id.to_string());
+                self.open_help();
+            }
+            KeyCode::Char('o') => match self.detail_open_target() {
+                Some(target) => self.open_url(&target),
+                None if self.detail_section.has_cursor() => self.notify("nothing to open here", false),
+                None => return self.ticket_key('o', id),
+            },
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
         }
         Outcome::Continue
+    }
+
+    /// Switches the popup's section; each starts at the top, Runs and Evidence on their
+    /// latest row, the others on their first.
+    fn set_section(&mut self, section: Section) {
+        if section != self.detail_section {
+            self.detail_section = section;
+            self.detail_scroll.set(0);
+            self.detail_cursor = start_cursor(section);
+            self.detail_follow.set(true);
+            self.diff_failed = None;
+        }
+    }
+
+    /// `j`/`k` in the popup: the next row where the section has rows, else a line of scroll.
+    fn move_in_detail(&mut self, delta: i16) {
+        if self.detail_section.has_cursor() {
+            let rows = self.detail_rows();
+            let next = (self.detail_row() as i64 + i64::from(delta)).clamp(0, rows.saturating_sub(1) as i64);
+            self.detail_cursor = next as usize;
+            self.detail_follow.set(true);
+        } else {
+            self.scroll_detail(delta);
+        }
+    }
+
+    /// The selected row of the open section, inside its rows (`usize::MAX` is the last).
+    pub fn detail_row(&self) -> usize {
+        self.detail_cursor.min(self.detail_rows().saturating_sub(1))
+    }
+
+    /// The open ticket's detail, when it is the one loaded.
+    fn open_detail_of(&self) -> Option<&TaskDetail> {
+        self.detail.as_ref().filter(|d| matches!(&self.mode, Mode::Detail(id) if *id == d.task.id))
+    }
+
+    /// How many rows the open section's cursor can land on.
+    fn detail_rows(&self) -> usize {
+        let detail = self.open_detail_of();
+        match self.detail_section {
+            Section::Runs => detail.map_or(0, |d| d.stage_runs.len()),
+            Section::Evidence => detail.map_or(0, |d| d.artifacts.len()),
+            Section::Diff => self.diff.as_ref().filter(|(id, _)| matches!(&self.mode, Mode::Detail(open) if open == id)).map_or(0, |(_, d)| d.files.len()),
+            _ => 0,
+        }
+    }
+
+    /// What `o` opens in the popup, by section: the selected file inside the worktree (Diff),
+    /// the selected artifact (Evidence), the PR's URL from the inbox or the ship gate (PR).
+    /// `None` elsewhere: `o` then means what it means on the board, the linked issue.
+    pub fn detail_open_target(&self) -> Option<String> {
+        let Mode::Detail(id) = &self.mode else { return None };
+        let task = self.task(id)?;
+        match self.detail_section {
+            Section::Diff => {
+                let (_, diff) = self.diff.as_ref().filter(|(for_id, _)| for_id == id)?;
+                let file = diff.files.get(self.detail_row())?;
+                let root = task.worktree_path.as_deref()?;
+                Some(format!("{}/{}", root.trim_end_matches('/'), file.path))
+            }
+            Section::Evidence => self.open_detail_of()?.artifacts.get(self.detail_row()).map(|a| a.path.clone()),
+            Section::Pr => crate::detail::pr_for(task, &self.prs.prs)
+                .map(|pr| pr.url.clone())
+                .or_else(|| self.open_detail_of().and_then(|d| d.latest_approval("awaiting_ship")).and_then(|a| a.requested["prUrl"].as_str().map(str::to_string))),
+            _ => None,
+        }
     }
 
     /// Scrolls the open detail popup. `ui` clamps this to the content's actual height on the
@@ -1662,7 +3142,7 @@ impl App {
         let before_plan = self
             .detail
             .as_ref()
-            .and_then(TaskDetail::open_approval)
+            .and_then(|d| d.latest_approval("awaiting_approval"))
             .map(|a| plan_edit_of(&a.requested))
             .unwrap_or_default();
         let edited_plan = parse_plan(&plan_markdown_text);
@@ -1788,21 +3268,43 @@ impl App {
         Outcome::Continue
     }
 
-    /// Typing a `:` command.
+    /// Typing a `:` command. The commands the text is a prefix of show under the prompt; tab
+    /// cycles them, enter runs the highlighted one, or the only one left, else the text as typed.
     fn handle_command(&mut self, key: KeyEvent) -> Outcome {
-        let Mode::Command(text) = &mut self.mode else {
+        let Mode::Command { text, pick } = &mut self.mode else {
             return Outcome::Continue;
         };
         match key.code {
-            KeyCode::Char(c) => text.push(c),
+            KeyCode::Char(c) => {
+                text.push(c);
+                *pick = None;
+            }
             KeyCode::Backspace => {
+                *pick = None;
                 if text.pop().is_none() {
                     self.mode = Mode::Normal;
                 }
             }
+            KeyCode::Tab | KeyCode::BackTab | KeyCode::Down | KeyCode::Up => {
+                let n = keys::completions(text).len();
+                if n > 0 {
+                    let back = matches!(key.code, KeyCode::BackTab | KeyCode::Up);
+                    *pick = Some(match (*pick, back) {
+                        (None, false) => 0,
+                        (None, true) => n - 1,
+                        (Some(p), false) => (p + 1) % n,
+                        (Some(p), true) => (p + n - 1) % n,
+                    });
+                }
+            }
             KeyCode::Esc => self.mode = Mode::Normal,
             KeyCode::Enter => {
-                let line = text.trim().to_string();
+                let matches = keys::completions(text);
+                let line = match (*pick, matches.as_slice()) {
+                    (Some(p), _) if p < matches.len() => matches[p].0.to_string(),
+                    (None, [(only, _)]) => only.to_string(),
+                    _ => text.trim().to_string(),
+                };
                 self.mode = Mode::Normal;
                 return self.run_command(&line);
             }
@@ -1810,6 +3312,13 @@ impl App {
         }
         Outcome::Continue
     }
+
+    /// The names `run_command` knows, aliases left out.
+    #[cfg(test)]
+    pub(crate) const HANDLED_COMMANDS: &[&str] = &[
+        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "slack", "jira",
+        "help",
+    ];
 
     /// Runs one palette command: `name` and whatever follows it.
     fn run_command(&mut self, line: &str) -> Outcome {
@@ -1827,18 +3336,21 @@ impl App {
                 self.needs_only = false;
                 self.clamp_selection();
             }
-            "repo" => {
-                self.filter = rest.to_string();
-                self.clamp_selection();
-            }
+            "repo" => match self.selected_id() {
+                None => self.notify("no ticket selected", true),
+                Some(id) if rest.is_empty() => self.open_repo_picker(&id),
+                Some(id) => self.set_repo_named(&id, rest),
+            },
+            "start" => match self.selected_id() {
+                Some(id) => return self.ticket_key('a', &id),
+                None => self.notify("no ticket selected", true),
+            },
             "open" => {
                 let wanted = rest.trim_start_matches('#');
                 match self.tasks.iter().find(|t| !wanted.is_empty() && t.id.starts_with(wanted)).map(|t| t.id.clone()) {
                     Some(id) => {
                         self.select(&id, true);
-                        self.detail_stale = true;
-                        self.detail_scroll.set(0);
-                        self.mode = Mode::Detail(id);
+                        self.open_detail(id);
                     }
                     None => self.notify(format!("no ticket starts with #{wanted}"), true),
                 }
@@ -1886,7 +3398,14 @@ impl App {
             }
             "inbox" => self.inbox = Some(InboxState::default()),
             "digest" => self.digest = Some(DigestState::default()),
-            "help" | "?" => self.mode = Mode::Help(HelpFor::Board),
+            "prs" | "pulls" => self.open_pulls(),
+            "slack" => self.open_slack(),
+            "jira" => match self.selected_id() {
+                Some(id) if rest.is_empty() => return self.ticket_key('J', &id),
+                Some(id) => self.link_jira(&id, rest),
+                None => self.notify("no ticket selected", true),
+            },
+            "help" | "?" => self.open_help(),
             other => self.notify(format!("unknown command: {other} (try :help)"), true),
         }
         self.clamp_selection();
@@ -1972,34 +3491,52 @@ impl App {
                 };
                 let id = id.clone();
                 self.mode = Mode::Normal;
-                let Some(task) = self.task(&id).cloned() else {
-                    return Outcome::Continue;
-                };
-                let text = TicketText {
-                    title: task.title,
-                    description: task.description,
-                    criteria: task.criteria,
-                    repo_path: Some(repo),
-                };
-                self.act(|m| m.update(&id, &text), "repo set");
+                self.set_repo(&id, repo);
             }
             _ => {}
         }
         Outcome::Continue
     }
 
-    /// Runs the chosen action as if its key were pressed on the selected ticket.
+    /// Sets `repo` on the ticket, keeping its text.
+    fn set_repo(&mut self, id: &str, repo: String) {
+        let Some(task) = self.task(id).cloned() else {
+            return;
+        };
+        let text = TicketText { title: task.title, description: task.description, criteria: task.criteria, repo_path: Some(repo) };
+        self.act(|m| m.update(id, &text), "repo set");
+    }
+
+    /// `:repo <name>`: the one repo under the repos root whose path holds `name` (a path as
+    /// given when it is one); says so when none or several match.
+    fn set_repo_named(&mut self, id: &str, name: &str) {
+        if name.starts_with('/') || name.starts_with('~') || name.starts_with('.') {
+            return self.set_repo(id, name.to_string());
+        }
+        let all = repos_root().map(|root| discover_repos(&root)).unwrap_or_default();
+        let hits = Self::matching_repos(&all, name);
+        let exact: Vec<&str> = hits.iter().copied().filter(|r| r.trim_end_matches('/').rsplit('/').next() == Some(name)).collect();
+        match (exact.as_slice(), hits.as_slice()) {
+            ([one], _) | (_, [one]) => self.set_repo(id, one.to_string()),
+            (_, []) => self.notify(format!("no repo under the repos root matches {name}; R searches"), true),
+            (_, many) => self.notify(format!("{} repos match {name}; R searches, or type more of the path", many.len()), true),
+        }
+    }
+
+    /// The `x` menu: the registry's rows for the ticket (`keys::menu`), run as if the key were
+    /// pressed on it. A dim row still runs: the key itself says why it does nothing.
     fn handle_actions(&mut self, key: KeyEvent) -> Outcome {
+        let rows: Vec<char> = keys::menu(self, Scope::Board).iter().filter_map(|(b, _)| keys::menu_char(b)).collect();
         let Mode::Actions { cursor } = &mut self.mode else {
             return Outcome::Continue;
         };
         let mut chosen = None;
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(ACTIONS.len() - 1),
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(rows.len().saturating_sub(1)),
             KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
-            KeyCode::Enter => chosen = Some(ACTIONS[*cursor].0),
+            KeyCode::Enter => chosen = rows.get(*cursor).copied(),
             KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
-            KeyCode::Char(c) if ACTIONS.iter().any(|(k, _)| *k == c) => chosen = Some(c),
+            KeyCode::Char(c) if rows.contains(&c) => chosen = Some(c),
             _ => {}
         }
         if let Some(c) = chosen {
@@ -2018,6 +3555,10 @@ impl App {
         }
         Outcome::Continue
     }
+
+    /// The chars the `x` menu runs: the pool keys, then every ticket key `ticket_key` takes.
+    #[cfg(test)]
+    pub(crate) const HANDLED_ACTIONS: &[&str] = &["P", "D", "+", "-", "S", "a", "A", "r", "e", "R", "f", "o", "J", "X", "w", "d"];
 
     /// Opens triage's questions in place, each with its recommended answer ready to edit.
     /// The questions come from the ticket's detail: the one already shown, or fetched now.
@@ -2072,8 +3613,39 @@ impl App {
     }
 }
 
+/// What each handler matches, for the registry's parity test: see each `HANDLED_*` next to its handler.
+#[cfg(test)]
+pub(crate) mod handled {
+    pub(crate) use super::App;
+    pub(crate) const BOARD: &[&str] = App::HANDLED_BOARD;
+    pub(crate) const DETAIL: &[&str] = App::HANDLED_DETAIL;
+    pub(crate) const INBOX: &[&str] = App::HANDLED_INBOX;
+    pub(crate) const PULLS: &[&str] = App::HANDLED_PULLS;
+    pub(crate) const SLACK: &[&str] = App::HANDLED_SLACK;
+    pub(crate) const WATCHES: &[&str] = App::HANDLED_WATCHES;
+    pub(crate) const DIGEST: &[&str] = App::HANDLED_DIGEST;
+    pub(crate) const FLOOR: &[&str] = App::HANDLED_FLOOR;
+    pub(crate) const HELP: &[&str] = App::HANDLED_HELP;
+    pub(crate) const ACTIONS: &[&str] = App::HANDLED_ACTIONS;
+    pub(crate) const COMMANDS: &[&str] = App::HANDLED_COMMANDS;
+}
+
 /// The checkout `:setup <repo>` means: a path as given when it is absolute (or starts with
 /// `~`, `.`), otherwise a name under the repos root. It must exist and hold a `.git`.
+/// `PLAT-123`: letters (digits and `_` after the first) a dash and a number, as the machine's
+/// `JiraLinkInput` accepts it.
+pub fn looks_like_jira_key(text: &str) -> bool {
+    let Some((project, number)) = text.split_once('-') else {
+        return false;
+    };
+    let mut chars = project.chars();
+    chars.next().is_some_and(|c| c.is_ascii_uppercase())
+        && !project[1..].is_empty()
+        && project[1..].chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+        && !number.is_empty()
+        && number.chars().all(|c| c.is_ascii_digit())
+}
+
 fn setup_repo_path(arg: &str, root: Option<std::path::PathBuf>) -> Result<std::path::PathBuf, String> {
     let arg = arg.trim();
     if arg.is_empty() {
@@ -2774,7 +4346,7 @@ mod tests {
 
     fn type_command(app: &mut App, text: &str) -> Outcome {
         app.handle_key(KeyEvent::from(KeyCode::Char(':')));
-        assert!(matches!(app.mode, Mode::Command(_)), "colon opens the palette");
+        assert!(matches!(app.mode, Mode::Command { .. }), "colon opens the palette");
         for ch in text.chars() {
             app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
         }
@@ -2809,7 +4381,7 @@ mod tests {
         assert!(app.digest.is_some());
         app.digest = None;
         type_command(&mut app, "help");
-        assert!(matches!(app.mode, Mode::Help(_)));
+        assert!(matches!(app.mode, Mode::Help { .. }));
         app.mode = Mode::Normal;
         type_command(&mut app, "slots x");
         assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("slots takes a number, e.g. :slots 3"));
@@ -2824,40 +4396,195 @@ mod tests {
     }
 
     #[test]
-    fn question_mark_shows_the_keys_of_the_view_you_are_in() {
+    fn closing_help_returns_to_the_ticket_detail() {
+        let mut app = App::new(Machine::from_env());
+        app.mode = Mode::Detail("aaaaaaaa0000".to_string());
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Detail, .. }));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"));
+        app.mode = Mode::Normal;
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('q')));
+        assert!(matches!(app.mode, Mode::Normal));
+    }
+
+    #[test]
+    fn help_cursor_moves_with_j_and_k_and_clamps() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.focus = app.tasks[0].column_index();
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        let rows = keys::help_rows_for(&app, Scope::Board, true, None).iter().filter(|r| matches!(r, keys::HelpRow::Key { .. })).count();
+        assert!(rows > 3);
+        for _ in 0..rows + 5 {
+            app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        }
+        assert!(matches!(app.mode, Mode::Help { cursor, .. } if cursor == rows - 1), "stops on the last row");
+        for _ in 0..rows + 5 {
+            app.handle_key(KeyEvent::from(KeyCode::Up));
+        }
+        assert!(matches!(app.mode, Mode::Help { cursor: 0, .. }));
+        app.help_viewport.set(10);
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Help { cursor: 5, .. }), "ctrl+d moves half the page");
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Help { cursor: 0, .. }));
+    }
+
+    #[test]
+    fn question_mark_opens_the_sheet_for_the_view_you_are_in() {
         let mut app = App::new(Machine::from_env());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Board)));
-        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
-        assert!(matches!(app.mode, Mode::Normal), "any key closes it");
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Board, .. }));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
 
         app.inbox = Some(InboxState::default());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Inbox)));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Inbox, .. }));
         app.handle_key(KeyEvent::from(KeyCode::Esc));
         assert!(app.inbox.is_some(), "closing the help keeps the view");
         app.inbox = None;
 
         app.digest = Some(DigestState::default());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Digest)));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Digest, .. }));
         app.mode = Mode::Normal;
         app.digest = None;
 
         app.floor = Some(FloorState::default());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Floor)));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Floor, .. }));
         app.mode = Mode::Normal;
         app.floor = None;
 
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.mode = Mode::Detail("aaaaaaaa0000".to_string());
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help(HelpFor::Detail)));
-        assert!(HelpFor::Inbox.keys().iter().any(|(k, _)| *k == "A"));
-        assert!(HelpFor::Floor.keys().iter().any(|(k, _)| k.starts_with("tab")));
-        assert!(HelpFor::Digest.keys().iter().any(|(k, _)| *k == "o"));
-        assert!(HelpFor::Detail.keys().iter().any(|(k, _)| *k == "j / k"));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Detail, .. }));
+    }
+
+    #[test]
+    fn a_bright_key_closes_the_sheet_and_runs_a_dim_or_unknown_one_only_says_why() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.focus = app.tasks[0].column_index();
+        app.toast = None;
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        assert!(matches!(app.mode, Mode::Actions { .. }), "x is bright: the sheet closes and the menu opens");
+        app.mode = Mode::Normal;
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('r')));
+        assert!(matches!(app.mode, Mode::Help { .. }), "a dim key keeps the sheet");
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("only a setup, plan or tests go back"));
+        app.handle_key(KeyEvent::from(KeyCode::Char('%')));
+        assert!(matches!(app.mode, Mode::Help { .. }));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("% is not a key here; esc closes"));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help { long: false, .. }), "? again folds to the short form");
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help { long: true, .. }));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('G')));
+        assert!(matches!(app.mode, Mode::Normal), "G is bright: the sheet closes and runs it");
+    }
+
+    #[test]
+    fn enter_runs_the_cursor_row_in_its_own_view_only() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.focus = app.tasks[0].column_index();
+        app.toast = None;
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        // The first row is the gate's `a`, dim while a stage runs.
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(app.mode, Mode::Help { .. }));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("a stage is running; X aborts it"));
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('/')));
+        for ch in "merge".chars() {
+            app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        assert!(matches!(&app.mode, Mode::Help { query: Some(q), .. } if q == "merge"));
+        let rows = keys::help_rows_for(&app, Scope::Board, false, Some("merge"));
+        assert!(rows.iter().any(|r| matches!(r, keys::HelpRow::Key { binding, foreign: true, .. } if binding.scope == Scope::Pulls)));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("open Pulls first"));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(&app.mode, Mode::Help { query: None, .. }), "esc leaves the search first");
+
+        // In the long form (how the sheet opens), down to `enter  open the ticket's workspace`, and run it.
+        let rows = keys::help_rows_for(&app, Scope::Board, true, None);
+        let at = rows.iter().filter(|r| matches!(r, keys::HelpRow::Key { .. })).position(|r| matches!(r, keys::HelpRow::Key { binding, .. } if binding.keys == "enter")).unwrap();
+        for _ in 0..at {
+            app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "aaaaaaaa0000"), "{:?}", app.toast.as_ref().map(|t| t.text.clone()));
+    }
+
+    #[test]
+    fn a_prefix_key_shows_its_second_keys_after_the_delay() {
+        let mut app = App::new(Machine::from_env());
+        app.handle_key(KeyEvent::from(KeyCode::Char('g')));
+        assert!(app.which_key().is_none(), "nothing before the delay");
+        app.age_prefix();
+        let (prefix, seconds) = app.which_key().expect("the strip");
+        assert_eq!(prefix, 'g');
+        assert_eq!(seconds.iter().map(|(c, _)| *c).collect::<Vec<_>>(), ['g', 's', 'r', 'a']);
+        app.handle_key(KeyEvent::from(KeyCode::Char('s')));
+        assert!(app.which_key().is_none(), "the second key ends it");
+        app.handle_key(KeyEvent::from(KeyCode::Char('z')));
+        app.age_prefix();
+        assert_eq!(app.which_key().unwrap().1.iter().map(|(c, _)| *c).collect::<Vec<_>>(), ['c', 'o', 'z']);
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(app.which_key().is_none());
+    }
+
+    #[test]
+    fn the_colon_prompt_completes_commands() {
+        let mut app = App::new(Machine::from_env());
+        app.handle_key(KeyEvent::from(KeyCode::Char(':')));
+        for ch in "fo".chars() {
+            app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(app.folded.contains(&app.focus), "the only completion runs");
+        app.handle_key(KeyEvent::from(KeyCode::Char(':')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('f')));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert!(matches!(&app.mode, Mode::Command { pick: Some(1), .. }));
+        app.handle_key(KeyEvent::from(KeyCode::Enter));
+        assert!(app.folded.contains(&app.focus), "tab tab picks fold");
+        type_command(&mut app, "unfo");
+        assert!(!app.folded.contains(&app.focus));
+        app.toast = None;
+        type_command(&mut app, "f");
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("unknown command: f (try :help)"), "several matches and no pick: as typed");
+    }
+
+    #[test]
+    fn capital_r_searches_only_on_a_ticket_without_a_repo() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "draft", false, false));
+        app.focus = app.tasks[0].column_index();
+        app.toast = None;
+        app.handle_key(KeyEvent::from(KeyCode::Char('R')));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("use :repo <name> or x"));
+        assert!(matches!(app.mode, Mode::Normal));
+        app.tasks[0].repo_path = None;
+        app.handle_key(KeyEvent::from(KeyCode::Char('R')));
+        let opened = matches!(app.mode, Mode::RepoPicker { .. }) || app.toast.as_ref().is_some_and(|t| t.text.starts_with("no repos found"));
+        assert!(opened, "without a repo R searches (or says there is nothing to search)");
+        app.mode = Mode::Normal;
+        app.tasks.clear();
+        app.toast = None;
+        type_command(&mut app, "repo luna");
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("no ticket selected"));
     }
 
     #[test]
@@ -2884,5 +4611,985 @@ mod tests {
             vec!["/Developer/project-x/backend", "/Developer/project-x/frontend"],
         );
         assert_eq!(App::matching_repos(&all, "nope"), Vec::<&str>::new());
+    }
+}
+
+#[cfg(test)]
+mod pr_tests {
+    use super::*;
+    use crate::model::{PrSnapshot, PullRequest};
+    use crate::pulls::PrSplit;
+
+    fn pr(number: u64, split: &str, mine: bool, local: bool) -> PullRequest {
+        let local = if local { "\"/r/app\"" } else { "null" };
+        let author = if mine { "me" } else { "them" };
+        serde_json::from_str(&format!(
+            r#"{{"repo":"acme/app","number":{number},"title":"PR {number}","url":"https://github.com/acme/app/pull/{number}",
+            "author":"{author}","mine":{mine},"reviewRequested":{},"isDraft":false,"headRef":"feat/{number}","baseRef":"main",
+            "fromFork":false,"reviewDecision":null,"mergeable":"MERGEABLE","checks":{{"state":"none","passed":0,"total":0,"failed":[]}},
+            "unresolvedThreads":0,"split":"{split}","localPath":{local},"task":null,"updatedAt":"2026-10-27T0{number}:00:00Z"}}"#,
+            !mine
+        ))
+        .unwrap()
+    }
+
+    fn type_command(app: &mut App, text: &str) -> Outcome {
+        app.handle_key(KeyEvent::from(KeyCode::Char(':')));
+        for ch in text.chars() {
+            app.handle_key(KeyEvent::from(KeyCode::Char(ch)));
+        }
+        app.handle_key(KeyEvent::from(KeyCode::Enter))
+    }
+
+    fn app_with(prs: Vec<PullRequest>) -> App {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.clear();
+        app.toast = None;
+        app.take_notices();
+        app.tx.send(Incoming::Message(StreamMessage::Prs { snapshot: PrSnapshot { prs, polled_at: None, error: None } })).unwrap();
+        app.pump();
+        app
+    }
+
+    #[test]
+    fn p_opens_the_pr_view_and_its_keys_move_between_splits_and_rows() {
+        let mut app = app_with(vec![pr(1, "ready_to_merge", true, true), pr(2, "ready_to_merge", true, true), pr(3, "review_requested", false, true)]);
+        app.handle_key(KeyEvent::from(KeyCode::Char('P')));
+        let state = app.pulls.clone().expect("the PR view opens");
+        assert_eq!(state.split, PrSplit::ReviewRequested);
+        app.handle_key(KeyEvent::from(KeyCode::Char('l')));
+        assert_eq!(app.pulls.as_ref().unwrap().split, PrSplit::ReadyToMerge);
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.pulls.as_ref().unwrap().cursor, 1);
+        assert_eq!(app.pr_under_cursor().map(|p| p.number), Some(2));
+        app.handle_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.pulls.as_ref().unwrap().cursor, 1, "stops at the last row");
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        assert_eq!(app.pulls.as_ref().unwrap().split, PrSplit::CiFailed);
+        assert_eq!(app.pulls.as_ref().unwrap().cursor, 0);
+        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Pulls, .. }));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(app.pulls.is_none());
+        type_command(&mut app, "prs");
+        assert!(app.pulls.is_some(), ":prs opens it too");
+    }
+
+    #[test]
+    fn m_asks_before_merging_a_ready_pr_and_refuses_the_rest() {
+        let mut app = app_with(vec![pr(1, "ready_to_merge", true, true), pr(2, "ci_running", true, true)]);
+        app.handle_key(KeyEvent::from(KeyCode::Char('P')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('2')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        assert!(matches!(&app.mode, Mode::ConfirmMerge { repo, number } if repo == "acme/app" && *number == 1));
+        app.handle_key(KeyEvent::from(KeyCode::Char('n')));
+        assert!(matches!(app.mode, Mode::Normal));
+        app.handle_key(KeyEvent::from(KeyCode::Char('4')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('m')));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("not ready to merge"));
+    }
+
+    #[test]
+    fn dispatch_keys_follow_the_blockers_and_a_missing_checkout_opens_the_clone_prompt() {
+        let mut app = app_with(vec![pr(1, "review_requested", false, false), pr(2, "ci_failed", true, true)]);
+        app.handle_key(KeyEvent::from(KeyCode::Char('P')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+        let Mode::ClonePrompt { repo, then, .. } = &app.mode else { panic!("no checkout opens the clone prompt: {:?}", app.toast.as_ref().map(|t| t.text.clone())) };
+        assert_eq!(repo, "acme/app");
+        assert_eq!(*then, PrAction::Review);
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal), "esc keeps the row read-only");
+        assert!(app.pulls.is_some());
+
+        app.handle_key(KeyEvent::from(KeyCode::Char('3')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('v')));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("review is for other people's PRs"));
+        app.handle_key(KeyEvent::from(KeyCode::Char('c')));
+        let toast = app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default();
+        assert!(toast.contains("machine unreachable") || toast.contains("unreachable"), "the dispatch reached the machine call: {toast}");
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        assert!(matches!(app.mode, Mode::PrActions { .. }));
+    }
+
+    #[test]
+    fn prs_that_need_you_count_on_the_badge_and_raise_a_notice_once() {
+        let mut app = app_with(vec![pr(1, "review_requested", false, true), pr(2, "mine", true, true)]);
+        assert_eq!(app.needs_you_count(), 1);
+        let notices = app.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].title, "Review requested");
+        app.tx.send(Incoming::Message(StreamMessage::Prs { snapshot: PrSnapshot { prs: vec![pr(1, "review_requested", false, true), pr(2, "ci_failed", true, true)], polled_at: None, error: None } })).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["CI failed"], "staying put is not news; a new split is");
+        assert_eq!(app.needs_you_count(), 2);
+    }
+}
+
+#[cfg(test)]
+mod slack_tests {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+    };
+
+    use ratatui::crossterm::event::KeyModifiers;
+
+    use super::*;
+    use crate::model::SlackOption;
+    use crate::slack::fixtures::{item, snapshot, watch_json};
+
+    /// A machine that says yes to everything: `{}` for any call it does not know, the fixture
+    /// watches for `/slack/watches`, Jira answers for `/jira/*` and `/tasks/:id/jira`, and an
+    /// `/events` stream it keeps open and silent.
+    pub(super) fn fake_machine() -> Machine {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let mut streams = Vec::new();
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    request.push_str(&line);
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let method = request.split_whitespace().next().unwrap_or("");
+                let path = request.split_whitespace().nth(1).unwrap_or("");
+                let mut stream = reader.into_inner();
+                let answer = match path {
+                    "/jira/status" => r#"{"configured":true,"site":"https://acme.atlassian.net","tokenExpiresAt":null,"error":null}"#.to_string(),
+                    p if p.starts_with("/jira/search?q=") => {
+                        let q = p.trim_start_matches("/jira/search?q=").to_uppercase();
+                        if q.starts_with("PL") {
+                            r#"[{"key":"PLAT-123","summary":"Login page","status":"In Progress","issueType":"Story","url":"https://acme.atlassian.net/browse/PLAT-123"},
+                                {"key":"PLAT-7","summary":"Password reset","status":"To Do","issueType":"Task","url":"https://acme.atlassian.net/browse/PLAT-7"}]"#.to_string()
+                        } else {
+                            "[]".to_string()
+                        }
+                    }
+                    p if p.ends_with("/jira") && p.starts_with("/tasks/") => {
+                        let id = p.trim_start_matches("/tasks/").trim_end_matches("/jira");
+                        let key = String::from_utf8_lossy(&body);
+                        let key = key.split('"').nth(3).unwrap_or("PLAT-123").to_string();
+                        super::jira_tests::linked_task_json(id, if method == "DELETE" { None } else { Some(&key) })
+                    }
+                    p if p.ends_with("/jira/create") => super::jira_tests::linked_task_json(p.trim_start_matches("/tasks/").trim_end_matches("/jira/create"), Some("PLAT-900")),
+                    "/events" => {
+                        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n");
+                        streams.push(stream);
+                        continue;
+                    }
+                    "/tasks" => "[]".to_string(),
+                    "/slack/watches" => format!("[{},{}]", watch_json("w1", "usergroup", "S04ABCD", "@platform-team", false), watch_json("w2", "broadcast", "here", "@here", true)),
+                    "/slack/usergroups" => r#"[{"id":"S04ABCD","label":"@platform-team"},{"id":"S05","label":"@data"}]"#.to_string(),
+                    "/slack/channels" => r##"[{"id":"C1","label":"#eng"}]"##.to_string(),
+                    p if p.ends_with("/reply") => format!(r#"{{"replied":{}}}"#, String::from_utf8_lossy(&body)),
+                    p if p.starts_with("/slack/watches/") => watch_json("w1", "usergroup", "S04ABCD", "@platform-team", false).replace("\"enabled\":true", "\"enabled\":false"),
+                    _ => "{}".to_string(),
+                };
+                // One request per connection: `Connection: close` keeps ureq from reusing it.
+                let _ = stream.write_all(
+                    format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{answer}", answer.len()).as_bytes(),
+                );
+            }
+        });
+        Machine::at(&format!("http://{addr}"))
+    }
+
+    fn app_with(snapshot: SlackSnapshot) -> App {
+        let mut app = App::new(fake_machine());
+        app.tasks.clear();
+        app.toast = None;
+        app.take_notices();
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot })).unwrap();
+        app.pump();
+        app
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn toast(app: &App) -> String {
+        app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    fn type_command(app: &mut App, text: &str) {
+        press(app, KeyCode::Char(':'));
+        for ch in text.chars() {
+            press(app, KeyCode::Char(ch));
+        }
+        press(app, KeyCode::Enter);
+    }
+
+    #[test]
+    fn s_opens_the_slack_view_and_its_keys_move_between_splits_and_rows() {
+        let mut snapshot = snapshot();
+        snapshot.items.push(item("C0123:3", "needs_reply", Some("P1"), "2026-10-28T08:00:00Z"));
+        let mut app = app_with(snapshot);
+        press(&mut app, KeyCode::Char('S'));
+        let state = app.slack.clone().expect("the Slack view opens");
+        assert_eq!(state.split, SlackSplit::NeedsReply);
+        assert_eq!(app.slack_under_cursor().map(|i| i.id.as_str()), Some("C0123:1730112345.0001"), "the P0 is on top");
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.slack_under_cursor().map(|i| i.id.as_str()), Some("C0123:3"));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.slack.as_ref().unwrap().cursor, 1, "stops at the last row");
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.slack.as_ref().unwrap().split, SlackSplit::WaitingOnThem);
+        assert_eq!(app.slack.as_ref().unwrap().cursor, 0);
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.slack.as_ref().unwrap().split, SlackSplit::Fyi);
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(app.slack.as_ref().unwrap().split, SlackSplit::Decide);
+        press(&mut app, KeyCode::Char('?'));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Slack, .. }));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal) && app.slack.is_some(), "closing the help keeps the view");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.slack.is_none());
+        type_command(&mut app, "slack");
+        assert!(app.slack.is_some(), ":slack opens it too");
+        press(&mut app, KeyCode::Char('S'));
+        assert!(app.slack.is_none(), "S closes it again");
+    }
+
+    #[test]
+    fn d_clears_the_row_at_once_and_the_priority_keys_step_one_at_a_time() {
+        let mut snapshot = snapshot();
+        snapshot.items.push(item("C0123:3", "needs_reply", Some("P1"), "2026-10-28T08:00:00Z"));
+        let mut app = app_with(snapshot);
+        press(&mut app, KeyCode::Char('S'));
+        assert_eq!(slack::items(&app.slack_snapshot.items, SlackSplit::NeedsReply).len(), 2);
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(toast(&app), "done");
+        assert_eq!(slack::items(&app.slack_snapshot.items, SlackSplit::NeedsReply).len(), 1, "the row leaves the split before the next poll");
+        let cleared = app.slack_item("C0123:1730112345.0001").unwrap();
+        assert_eq!(cleared.split_enum(), Some(SlackSplit::Done));
+        assert!(cleared.done_at.is_some());
+        assert_eq!(app.slack_under_cursor().map(|i| i.id.as_str()), Some("C0123:3"), "the cursor lands on the next row");
+
+        press(&mut app, KeyCode::Char('!'));
+        assert_eq!(toast(&app), "P1 → P0");
+        let bumped = app.slack_item("C0123:3").unwrap();
+        assert_eq!(bumped.priority(), Some("P0"));
+        assert!(bumped.triage.as_ref().unwrap().overridden);
+        press(&mut app, KeyCode::Char('!'));
+        assert_eq!(toast(&app), "already P0", "the blocker speaks before any call");
+        press(&mut app, KeyCode::Char('-'));
+        assert_eq!(toast(&app), "P0 → P1");
+        press(&mut app, KeyCode::Char('N'));
+        assert_eq!(toast(&app), "only while waiting on them");
+        press(&mut app, KeyCode::Char('6'));
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(toast(&app), "already done");
+    }
+
+    #[test]
+    fn s_picks_a_snooze_and_r_sends_the_edited_draft() {
+        let mut app = app_with(snapshot());
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('s'));
+        assert!(matches!(&app.mode, Mode::SlackSnooze { id, cursor: 0 } if id == "C0123:1730112345.0001"));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert!(matches!(&app.mode, Mode::SlackSnooze { cursor: 2, .. }));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(app.slack_item("C0123:1730112345.0001").unwrap().split, "needs_reply", "esc leaves it awake");
+        press(&mut app, KeyCode::Char('s'));
+        press(&mut app, KeyCode::Char('3'));
+        assert_eq!(toast(&app), "snoozed until tomorrow 9:00");
+        let snoozed = app.slack_item("C0123:1730112345.0001").unwrap();
+        assert_eq!(snoozed.split_enum(), Some(SlackSplit::Snoozed));
+        assert!(snoozed.snoozed_until.as_deref().is_some_and(|t| t.ends_with("Z")));
+
+        press(&mut app, KeyCode::Char('5'));
+        press(&mut app, KeyCode::Char('r'));
+        let Mode::SlackReply { id, area, .. } = &app.mode else { panic!("the reply editor opens: {}", toast(&app)) };
+        assert_eq!(id, "C0123:1730112345.0001");
+        assert_eq!(area.lines().join("\n"), "Approve the rollback, I'm on it.", "pre-filled with the draft");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal) && app.slack.is_some(), "esc backs out without sending");
+        press(&mut app, KeyCode::Char('r'));
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert_eq!(toast(&app), "sent");
+        let sent = app.slack_item("C0123:1730112345.0001").unwrap();
+        assert_eq!(sent.split_enum(), Some(SlackSplit::Done));
+        assert!(sent.you_replied);
+    }
+
+    #[test]
+    fn n_opens_a_nudge_the_machine_addresses_by_id_not_a_typed_at_name() {
+        let mut waiting = snapshot();
+        waiting.items.push(item("C0123:7", "waiting_on_them", Some("P1"), "2026-10-27T08:00:00Z"));
+        let mut app = app_with(waiting);
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('N'));
+        let Mode::SlackReply { area, nudge, .. } = &app.mode else { panic!("the reply editor opens: {}", toast(&app)) };
+        assert!(*nudge);
+        assert_eq!(area.lines().join("\n"), "gentle nudge on this one: any news?", "no @name typed into the text: the machine mentions the author by id");
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert_eq!(toast(&app), "sent");
+    }
+
+    #[test]
+    fn opening_the_slack_view_prefetches_the_watch_catalogue_off_the_ui_thread() {
+        let mut app = app_with(snapshot());
+        assert!(app.slack_catalog_loading());
+        press(&mut app, KeyCode::Char('S'));
+        assert!(app.slack_catalog_pending, "the fetch started when the view opened");
+        assert!(app.slack_catalog_loading(), "and has not landed yet");
+        let landed = app.stream.recv_timeout(std::time::Duration::from_secs(5)).expect("the catalogue arrives on the stream");
+        assert!(matches!(landed, Incoming::SlackCatalog { .. }));
+        app.tx.send(landed).unwrap();
+        app.pump();
+        assert!(!app.slack_catalog_loading() && !app.slack_catalog_pending);
+        assert_eq!(app.slack_watch_matches("@dat").iter().map(|o| o.id.as_str()).collect::<Vec<_>>(), vec!["S05"]);
+        assert_eq!(app.slack_watch_matches("#").len(), 1);
+    }
+
+    #[test]
+    fn quiet_hours_hold_back_every_notice_but_a_p0s() {
+        let mut quiet = snapshot();
+        quiet.quiet = true;
+        let mut app = app_with(quiet.clone());
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Needs reply"], "the P0 gets through; the overdue P2 waits");
+        let mut later = quiet.clone();
+        later.items[1].reopened_at = Some("2026-10-28T10:30:00Z".into());
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: later })).unwrap();
+        app.pump();
+        assert!(app.take_notices().is_empty(), "a P1 reopen is held during quiet hours");
+        let mut morning = quiet;
+        morning.quiet = false;
+        morning.items.push(item("C0123:9", "needs_reply", Some("P1"), "2026-10-28T10:00:00Z"));
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: morning })).unwrap();
+        app.pump();
+        assert_eq!(app.take_notices().iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Needs reply"], "outside the window a P1 entering Needs reply is news again");
+    }
+
+    #[test]
+    fn t_asks_first_with_the_title_it_will_use_and_w_runs_the_watches() {
+        let mut app = app_with(snapshot());
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('t'));
+        let Mode::SlackTask { title, repo, .. } = &app.mode else { panic!("the confirm opens: {}", toast(&app)) };
+        assert_eq!(title, "approve rollback");
+        assert!(repo.is_none(), "no ticket's repo matches the channel");
+        press(&mut app, KeyCode::Char('n'));
+        assert!(matches!(app.mode, Mode::Normal) && app.slack.is_some());
+        let mut linked = app.slack_snapshot.items[0].clone();
+        linked.linked.task_id = Some("t1".into());
+        app.slack_snapshot.items[0] = linked;
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(toast(&app), "already a ticket");
+
+        press(&mut app, KeyCode::Char('W'));
+        assert!(app.slack.as_ref().unwrap().watches.is_some());
+        assert_eq!(app.slack_snapshot.watches.len(), 2, "opens on the machine's list");
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.slack.as_ref().unwrap().watches.as_ref().unwrap().cursor, 1);
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(toast(&app), "built-in; switch it off instead");
+        assert_eq!(app.slack_snapshot.watches.len(), 2);
+        press(&mut app, KeyCode::Char('k'));
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(toast(&app), "off");
+        assert!(!app.slack_snapshot.watches[0].enabled, "the machine's answer replaces the row");
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(toast(&app), "removed @platform-team");
+        assert_eq!(app.slack_snapshot.watches.len(), 1);
+
+        app.slack_catalog = Some((
+            vec![SlackOption { id: "S04ABCD".into(), label: "@platform-team".into() }, SlackOption { id: "S05".into(), label: "@data".into() }],
+            vec![SlackOption { id: "C1".into(), label: "#eng".into() }],
+        ));
+        press(&mut app, KeyCode::Char('n'));
+        assert!(matches!(app.mode, Mode::SlackWatchAdd { .. }));
+        for ch in "@plat".chars() {
+            press(&mut app, KeyCode::Char(ch));
+        }
+        assert_eq!(app.slack_watch_matches("@plat").iter().map(|o| o.id.as_str()).collect::<Vec<_>>(), vec!["S04ABCD"]);
+        assert_eq!(app.slack_watch_matches("#E").iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), vec!["#eng"]);
+        assert!(app.slack_watch_matches("luna").is_empty(), "a keyword has nothing to complete");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal) && app.slack.as_ref().unwrap().watches.is_some(), "esc returns to the Watches");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.slack.as_ref().unwrap().watches.is_none() && app.slack.is_some(), "esc closes the popup, not the view");
+    }
+
+    #[test]
+    fn urgent_and_overdue_items_count_on_the_badge_and_raise_a_notice_once_and_a_reopen_always_does() {
+        let mut app = app_with(snapshot());
+        assert_eq!(app.needs_you_count(), 2, "the P0 in Needs reply and the overdue P2 in Decide; the FYI does not count");
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Needs reply", "Overdue"]);
+        assert_eq!(notices[0].body, "#payments-oncall @marta: approve rollback");
+
+        let mut next = snapshot();
+        next.items[1].reopened_at = Some("2026-10-28T10:30:00Z".into());
+        next.items.push(item("C0123:9", "decide", Some("P2"), "2026-10-28T10:00:00Z"));
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: next })).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Reopened"], "staying put or overdue is not news; a P2 in Decide is not either");
+        assert_eq!(app.needs_you_count(), 2);
+
+        let mut late = snapshot();
+        late.items[0].overdue = true;
+        late.items[2].split = "done".into();
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: late })).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Overdue"], "the P0 going past its SLA is news");
+        assert_eq!(app.needs_you_count(), 1, "the overdue P0 counts once; the done item no longer does");
+    }
+}
+
+#[cfg(test)]
+mod workspace_key_tests {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::*;
+
+    fn task(state: &str) -> Task {
+        serde_json::from_str(&format!(
+            r#"{{"id":"abcdef123456","title":"Add CSV export","description":"","criteria":[],
+            "repoPath":"/r/app","branch":"task/abcdef12","worktreePath":"/w","state":"{state}","column":"Build",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+        ))
+        .unwrap()
+    }
+
+    fn detail_with_runs(task: &Task, runs: usize) -> TaskDetail {
+        let runs: Vec<String> = (0..runs).map(|i| format!(r#"{{"stage":"implementing","attempt":{},"status":"passed"}}"#, i + 1)).collect();
+        serde_json::from_str(&format!(
+            r#"{{"task":{},"stageRuns":[{}],"approvals":[],"events":[]}}"#,
+            serde_json::to_string(&serde_json::json!({
+                "id": task.id, "title": task.title, "description": "", "criteria": [], "repoPath": "/r/app", "branch": "task/abcdef12",
+                "worktreePath": "/w", "state": task.state, "column": "Build", "waitingOnYou": false, "running": false, "queued": false,
+                "retries": {"verify":0,"e2e":0,"ci":0,"total":0}, "resumeTo": null, "reason": null,
+                "createdAt": "2026-10-22T23:24:22.089Z", "updatedAt": "2026-10-22T23:24:22.089Z"
+            }))
+            .unwrap(),
+            runs.join(",")
+        ))
+        .unwrap()
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn open(state: &str) -> App {
+        let mut app = App::new(crate::Machine::from_env());
+        let task = task(state);
+        app.tasks.push(task.clone());
+        app.open_detail(task.id);
+        app
+    }
+
+    #[test]
+    fn enter_opens_on_the_section_the_gate_concerns_and_h_l_digits_switch() {
+        let app = open("awaiting_approval");
+        assert_eq!(app.detail_section, Section::Plan);
+        let mut app = open("implementing");
+        assert_eq!(app.detail_section, Section::Overview);
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.detail_section, Section::Plan);
+        press(&mut app, KeyCode::Char('h'));
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(app.detail_section, Section::Activity, "h wraps around");
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.detail_section, Section::Runs);
+        press(&mut app, KeyCode::Tab);
+        assert_eq!(app.detail_section, Section::Diff);
+        assert!(matches!(app.mode, Mode::Detail(_)), "still open");
+    }
+
+    #[test]
+    fn j_k_pick_a_run_in_runs_and_scroll_elsewhere_and_plus_toggles_the_size() {
+        let mut app = open("implementing");
+        app.detail = Some(detail_with_runs(&app.tasks[0], 3));
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.detail_cursor, 2, "the cursor stops at the last run");
+        assert_eq!(app.detail_scroll.get(), 0, "picking does not scroll");
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.detail_cursor, 1);
+        press(&mut app, KeyCode::Char('2'));
+        assert_eq!(app.detail_cursor, 0, "a new section starts at its first row");
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.detail_scroll.get(), 1, "the Plan section scrolls");
+        assert!(!app.detail_full);
+        press(&mut app, KeyCode::Char('+'));
+        assert!(app.detail_full);
+        press(&mut app, KeyCode::Char('+'));
+        assert!(!app.detail_full);
+    }
+
+    #[test]
+    fn the_diff_is_fetched_only_while_its_section_shows_and_never_blocks() {
+        let mut app = open("implementing");
+        app.online = true;
+        app.ensure_diff();
+        assert!(app.diff_pending.is_none(), "Overview asks for no diff");
+        press(&mut app, KeyCode::Char('5'));
+        let before = std::time::Instant::now();
+        app.ensure_diff();
+        assert!(before.elapsed() < std::time::Duration::from_millis(100), "the fetch runs off the UI thread");
+        assert_eq!(app.diff_pending.as_ref().map(|(id, file)| (id.as_str(), file.is_none())), Some(("abcdef123456", true)));
+        app.ensure_diff();
+        assert!(app.diff_pending.is_some(), "one fetch at a time");
+        let files: TaskDiff = serde_json::from_str(r#"{"base":"b","head":"h","files":[{"path":"a.rs","status":"M","added":1,"removed":0},{"path":"b.rs","status":"A","added":2,"removed":0}]}"#).unwrap();
+        app.diff_pending = None;
+        app.diff = Some(("abcdef123456".into(), files));
+        app.ensure_diff();
+        assert_eq!(app.diff_pending.as_ref().and_then(|(_, f)| f.as_deref()), Some("a.rs"), "then the selected file's patch");
+        app.diff_pending = None;
+        let mut with_patch = app.diff.clone().unwrap().1;
+        with_patch.file = Some("a.rs".into());
+        with_patch.patch = Some("@@".into());
+        app.diff = Some(("abcdef123456".into(), with_patch));
+        app.ensure_diff();
+        assert!(app.diff_pending.is_none(), "nothing left to fetch for this file");
+        press(&mut app, KeyCode::Char('j'));
+        app.ensure_diff();
+        assert_eq!(app.diff_pending.as_ref().and_then(|(_, f)| f.as_deref()), Some("b.rs"), "moving the cursor asks for the next file");
+        let mut offline = open("implementing");
+        press(&mut offline, KeyCode::Char('5'));
+        offline.ensure_diff();
+        assert!(offline.diff_pending.is_none(), "offline: nothing to fetch from");
+    }
+
+    fn files() -> TaskDiff {
+        serde_json::from_str(r#"{"base":"b","head":"h","files":[{"path":"a.rs","status":"M","added":1,"removed":0},{"path":"b.rs","status":"A","added":2,"removed":0}]}"#).unwrap()
+    }
+
+    #[test]
+    fn a_diff_that_arrives_after_the_branch_moved_is_dropped() {
+        let mut app = open("implementing");
+        app.online = true;
+        press(&mut app, KeyCode::Char('5'));
+        app.ensure_diff();
+        let generation = app.diff_generation;
+        assert!(app.diff_pending.is_some());
+        // A stage starts while the fetch is in flight: the branch may move, so the answer is stale.
+        let mut moved = task("implementing");
+        moved.running = true;
+        app.tx.send(Incoming::Message(StreamMessage::Updated { task: moved })).unwrap();
+        app.pump();
+        assert!(app.diff_pending.is_none(), "the reset forgets the fetch in flight");
+        assert_ne!(app.diff_generation, generation);
+        app.tx.send(Incoming::Diff { id: "abcdef123456".into(), file: None, diff: Ok(files()), generation }).unwrap();
+        app.pump();
+        assert!(app.diff.is_none(), "the late answer is ignored");
+        app.tx.send(Incoming::Diff { id: "abcdef123456".into(), file: None, diff: Ok(files()), generation: app.diff_generation }).unwrap();
+        app.pump();
+        assert!(app.diff.is_some(), "a fresh answer lands");
+    }
+
+    #[test]
+    fn capital_j_k_and_the_page_keys_scroll_a_cursor_section_and_equals_is_not_size() {
+        let mut app = open("implementing");
+        app.detail = Some(detail_with_runs(&app.tasks[0], 3));
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('j'));
+        let cursor = app.detail_row();
+        press(&mut app, KeyCode::Char('J'));
+        assert_eq!(app.detail_scroll.get(), 1, "J scrolls the pane");
+        assert_eq!(app.detail_row(), cursor, "without moving the cursor");
+        press(&mut app, KeyCode::Char('K'));
+        assert_eq!(app.detail_scroll.get(), 0);
+        app.detail_viewport.set(20);
+        press(&mut app, KeyCode::PageDown);
+        assert_eq!(app.detail_scroll.get(), 10, "a page key scrolls half the pane");
+        app.handle_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert_eq!(app.detail_scroll.get(), 20);
+        app.handle_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+        press(&mut app, KeyCode::PageUp);
+        assert_eq!(app.detail_scroll.get(), 0);
+        press(&mut app, KeyCode::Char('='));
+        assert!(!app.detail_full, "= is the board's density key, not the popup's size");
+    }
+
+    #[test]
+    fn runs_and_evidence_open_on_their_latest_row() {
+        let mut app = open("escalated");
+        assert_eq!(app.detail_section, Section::Runs);
+        app.detail = Some(detail_with_runs(&app.tasks[0], 3));
+        assert_eq!(app.detail_row(), 2, "the latest run, not the oldest");
+        press(&mut app, KeyCode::Char('k'));
+        assert_eq!(app.detail_row(), 1);
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('5'));
+        assert_eq!(app.detail_row(), 0, "the Diff starts on the first file");
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.detail_row(), 2, "coming back to Runs lands on the latest run again");
+    }
+
+    #[test]
+    fn the_diff_rows_belong_to_the_open_ticket_only() {
+        let mut app = open("implementing");
+        press(&mut app, KeyCode::Char('5'));
+        app.diff = Some(("someone-else".into(), files()));
+        assert_eq!(app.detail_rows(), 0);
+        app.diff = Some(("abcdef123456".into(), files()));
+        assert_eq!(app.detail_rows(), 2);
+    }
+
+    #[test]
+    fn o_targets_the_selected_file_the_artifact_or_the_pr_by_section() {
+        let mut app = open("implementing");
+        assert_eq!(app.detail_open_target(), None, "Overview falls through to the linked issue");
+        press(&mut app, KeyCode::Char('5'));
+        app.diff = Some(("abcdef123456".into(), files()));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.detail_open_target().as_deref(), Some("/w/b.rs"), "the selected file inside the worktree");
+        press(&mut app, KeyCode::Char('6'));
+        let mut detail = detail_with_runs(&app.tasks[0], 1);
+        detail.artifacts = serde_json::from_str(r#"[{"id":"a1","stageRunId":"r1","kind":"log","path":"/out/files/verify.log","label":"verify","sha256":"x","createdAt":"2026-10-22T10:11:00Z"}]"#).unwrap();
+        detail.approvals = serde_json::from_str(r#"[{"id":"s1","kind":"awaiting_ship","requested":{"prUrl":"https://github.com/acme/app/pull/9"},"decision":null,"reason":null,"createdAt":"2026-10-22T10:11:00Z","decidedAt":null}]"#).unwrap();
+        app.detail = Some(detail);
+        assert_eq!(app.detail_open_target().as_deref(), Some("/out/files/verify.log"));
+        press(&mut app, KeyCode::Char('7'));
+        assert_eq!(app.detail_open_target().as_deref(), Some("https://github.com/acme/app/pull/9"), "the ship gate's URL when the inbox has no row");
+        let mut pr: PullRequest = serde_json::from_str(
+            r#"{"repo":"acme/app","number":412,"title":"t","url":"https://github.com/acme/app/pull/412","author":"me","mine":true,"reviewRequested":false,
+            "isDraft":false,"headRef":"task/abcdef12","baseRef":"main","fromFork":false,"reviewDecision":null,"mergeable":"MERGEABLE",
+            "checks":{"state":"none","passed":0,"total":0,"failed":[]},"unresolvedThreads":0,"split":"mine","localPath":null,"task":null,"updatedAt":"2026-10-27T09:00:00Z"}"#,
+        )
+        .unwrap();
+        pr.head_ref = "task/abcdef12".into();
+        app.prs.prs.push(pr);
+        assert_eq!(app.detail_open_target().as_deref(), Some("https://github.com/acme/app/pull/412"), "the inbox's PR first");
+    }
+
+    #[test]
+    fn saving_the_cases_editor_unchanged_patches_nothing_and_keeps_multi_line_approaches() {
+        let mut app = open("awaiting_test_check");
+        let mut detail = detail_with_runs(&app.tasks[0], 1);
+        detail.approvals = serde_json::from_str(
+            r#"[{"id":"t1","kind":"awaiting_test_check","requested":{"cases":[{"title":"rejects a bad password","criterion":"c1","approach":"run the suite\n\n  then read the log  "}]},
+            "decision":null,"reason":null,"createdAt":"2026-10-22T10:00:00Z","decidedAt":null}]"#,
+        )
+        .unwrap();
+        app.detail = Some(detail);
+        app.open_cases_editor("abcdef123456");
+        assert!(matches!(app.mode, Mode::EditCases { .. }));
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert!(matches!(app.mode, Mode::Detail(_)));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("nothing changed"), "an untouched editor sends no PATCH");
+    }
+}
+
+#[cfg(test)]
+mod edit_route_tests {
+    use ratatui::crossterm::event::{KeyCode, KeyEvent};
+
+    use super::*;
+
+    fn task(state: &str) -> Task {
+        serde_json::from_str(&format!(
+            r#"{{"id":"abcdef123456","title":"Add CSV export","description":"","criteria":["c1"],
+            "repoPath":"/r/app","branch":"task/abcdef12","worktreePath":"/w","state":"{state}","column":"Approved",
+            "waitingOnYou":true,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
+        ))
+        .unwrap()
+    }
+
+    fn detail(state: &str) -> TaskDetail {
+        let task = serde_json::to_string(&serde_json::json!({
+            "id":"abcdef123456","title":"Add CSV export","description":"","criteria":["c1"],"repoPath":"/r/app","branch":"task/abcdef12",
+            "worktreePath":"/w","state":state,"column":"Approved","waitingOnYou":true,"running":false,"queued":false,
+            "retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"
+        }))
+        .unwrap();
+        serde_json::from_str(&format!(
+            r#"{{"task":{task},"stageRuns":[],"approvals":[
+              {{"kind":"awaiting_approval","requested":{{"brief":"b","criteria":["c1"]}},"decision":"approved","decidedAt":"2026-10-22T09:58:00Z"}},
+              {{"kind":"awaiting_test_check","requested":{{"cases":[{{"title":"t1","criterion":"c1","approach":"run it"}}]}},"decision":null}}],
+              "events":[]}}"#
+        ))
+        .unwrap()
+    }
+
+    fn open(state: &str) -> App {
+        let mut app = App::new(crate::Machine::from_env());
+        let task = task(state);
+        app.tasks.push(task.clone());
+        app.detail = Some(detail(state));
+        app.open_detail(task.id);
+        app
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    #[test]
+    fn e_at_the_test_check_edits_the_cases_from_tests_and_the_plan_from_plan() {
+        let mut app = open("awaiting_test_check");
+        assert_eq!(app.detail_section, Section::Tests);
+        press(&mut app, KeyCode::Char('e'));
+        let Mode::EditCases { area, .. } = &app.mode else { panic!("the cases editor opens: {:?}", std::mem::discriminant(&app.mode)) };
+        let text = area.lines().join("\n");
+        assert!(text.contains("## c1") && text.contains("- t1") && text.contains("  run it"), "{text}");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "abcdef123456"), "esc returns to the popup");
+
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('e'));
+        assert!(matches!(app.mode, Mode::EditPlan { .. }), "the approved plan is still editable before Build");
+
+        app.mode = Mode::Detail("abcdef123456".into());
+        press(&mut app, KeyCode::Char('1'));
+        press(&mut app, KeyCode::Char('e'));
+        assert!(matches!(app.mode, Mode::EditTicket { .. }), "Overview edits the ticket's own text");
+    }
+
+    #[test]
+    fn once_build_started_e_in_plan_falls_back_to_the_ticket_editor() {
+        let mut app = open("implementing");
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('e'));
+        assert!(matches!(app.mode, Mode::EditTicket { .. }));
+    }
+}
+
+#[cfg(test)]
+mod jira_tests {
+    use ratatui::crossterm::event::KeyModifiers;
+
+    use super::slack_tests::fake_machine;
+    use super::*;
+
+    /// A ticket in Intake, linked to `key` when given. The fake machine answers `/tasks/:id/jira`
+    /// with this, so a link or unlink round-trips through it.
+    pub(super) fn linked_task_json(id: &str, key: Option<&str>) -> String {
+        let jira = match key {
+            Some(key) => format!(
+                r#"{{"key":"{key}","url":"https://acme.atlassian.net/browse/{key}","issueType":"Story","status":"To Do","priority":null,"dueAt":null,"syncedAt":null,"blocked":null}}"#
+            ),
+            None => "null".to_string(),
+        };
+        format!(
+            r#"{{"id":"{id}","title":"Login page","description":"","criteria":[],
+            "repoPath":"/r/luna-tui","branch":null,"worktreePath":null,"state":"draft","column":"Intake",
+            "waitingOnYou":false,"running":false,"queued":false,
+            "retries":{{"verify":0,"e2e":0,"ci":0,"total":0}},"resumeTo":null,"reason":null,
+            "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z","jira":{jira},"sla":null}}"#
+        )
+    }
+
+    fn app_with(tasks: &[Task]) -> App {
+        let mut app = App::new(fake_machine());
+        app.tasks = tasks.to_vec();
+        app.online = true;
+        app.toast = None;
+        app.take_notices();
+        app.clamp_selection();
+        app
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for ch in text.chars() {
+            press(app, KeyCode::Char(ch));
+        }
+    }
+
+    fn toast(app: &App) -> String {
+        app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    fn task(id: &str, key: Option<&str>) -> Task {
+        serde_json::from_str(&linked_task_json(id, key)).unwrap()
+    }
+
+    #[test]
+    fn j_searches_from_three_characters_enter_links_the_row_and_j_again_asks_before_unlinking() {
+        let mut app = app_with(&[task("abcdef123456", None)]);
+        press(&mut app, KeyCode::Char('J'));
+        assert!(matches!(&app.mode, Mode::JiraLink { id, query, hits, cursor: 0 } if id == "abcdef123456" && query.is_empty() && hits.is_empty()));
+        type_text(&mut app, "PL");
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.is_empty()), "two characters: no search yet");
+        type_text(&mut app, "A");
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.is_empty()), "the search waits for the typing to pause");
+        app.ensure_jira_search();
+        assert!(app.jira_search_due.is_some(), "a quarter second has not passed: nothing asked yet");
+        app.settle_jira_search();
+        let Mode::JiraLink { hits, .. } = &app.mode else { panic!("still in the prompt") };
+        assert_eq!(hits.iter().map(|h| h.key.as_str()).collect::<Vec<_>>(), vec!["PLAT-123", "PLAT-7"]);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        press(&mut app, KeyCode::Down);
+        assert!(matches!(&app.mode, Mode::JiraLink { cursor: 2, .. }), "the cursor stops on the last hit");
+        press(&mut app, KeyCode::Up);
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(app.tasks[0].jira_key(), Some("PLAT-123"), "the machine's answer replaced the task");
+        assert_eq!(toast(&app), "linked PLAT-123");
+
+        press(&mut app, KeyCode::Char('J'));
+        assert!(matches!(&app.mode, Mode::ConfirmJiraUnlink(id) if id == "abcdef123456"));
+        press(&mut app, KeyCode::Char('n'));
+        assert!(matches!(app.mode, Mode::Normal) && app.tasks[0].jira.is_some(), "n keeps the link");
+        press(&mut app, KeyCode::Char('J'));
+        press(&mut app, KeyCode::Char('y'));
+        assert!(app.tasks[0].jira.is_none(), "y drops it");
+        assert_eq!(toast(&app), "Jira issue unlinked");
+    }
+
+    #[test]
+    fn a_search_answer_for_an_older_query_is_dropped_and_a_failed_one_shows_in_the_footer() {
+        let mut app = app_with(&[task("abcdef123456", None)]);
+        press(&mut app, KeyCode::Char('J'));
+        type_text(&mut app, "PLAT");
+        let hit = |key: &str| JiraIssueHit { key: key.to_string(), summary: String::new(), status: None, issue_type: None, url: String::new() };
+        // The answer to "PLA" lands after "PLAT" was typed: stale, dropped.
+        app.tx.send(Incoming::JiraHits { query: "PLA".into(), hits: Ok(vec![hit("PLAT-1")]) }).unwrap();
+        app.pump();
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.is_empty()));
+        app.tx.send(Incoming::JiraHits { query: "PLAT".into(), hits: Ok(vec![hit("PLAT-1"), hit("PLAT-2")]) }).unwrap();
+        app.pump();
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.len() == 2));
+        app.tx.send(Incoming::JiraHits { query: "PLAT".into(), hits: Err("boom".into()) }).unwrap();
+        app.pump();
+        assert!(matches!(&app.mode, Mode::JiraLink { hits, .. } if hits.len() == 2), "a failed search keeps the last hits");
+        assert_eq!(toast(&app), "jira search: boom");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.jira_search_due.is_none());
+        app.tx.send(Incoming::JiraHits { query: "PLAT".into(), hits: Ok(vec![hit("PLAT-9")]) }).unwrap();
+        app.pump();
+        assert!(matches!(app.mode, Mode::Normal), "an answer after the prompt closed changes nothing");
+    }
+
+    #[test]
+    fn the_create_row_ctrl_n_and_the_colon_command_link_without_a_search() {
+        let mut app = app_with(&[task("abcdef123456", None)]);
+        press(&mut app, KeyCode::Char('J'));
+        type_text(&mut app, "zzz");
+        app.settle_jira_search();
+        let Mode::JiraLink { hits, .. } = &app.mode else { panic!("in the prompt") };
+        assert!(hits.is_empty(), "nothing matched");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tasks[0].jira_key(), Some("PLAT-900"), "enter on the create row makes an issue");
+        assert_eq!(toast(&app), "Jira issue created and linked");
+
+        let mut app = app_with(&[task("abcdef123456", None)]);
+        press(&mut app, KeyCode::Char('J'));
+        type_text(&mut app, "plat-7");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tasks[0].jira_key(), Some("PLAT-7"), "a typed key links as is, upper-cased, without picking a row");
+
+        let mut app = app_with(&[task("abcdef123456", None)]);
+        press(&mut app, KeyCode::Char('J'));
+        app.handle_key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert_eq!(app.tasks[0].jira_key(), Some("PLAT-900"));
+
+        let mut app = app_with(&[task("abcdef123456", None)]);
+        press(&mut app, KeyCode::Char(':'));
+        type_text(&mut app, "jira PLAT-42");
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(app.tasks[0].jira_key(), Some("PLAT-42"));
+        press(&mut app, KeyCode::Char(':'));
+        type_text(&mut app, "jira");
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::ConfirmJiraUnlink(_)), "bare :jira is J");
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char(':'));
+        type_text(&mut app, "jira not-a-key");
+        press(&mut app, KeyCode::Enter);
+        assert!(toast(&app).contains("is not a Jira key"), "{}", toast(&app));
+        assert_eq!(app.tasks[0].jira_key(), Some("PLAT-42"), "refused before the machine saw it");
+    }
+
+    #[test]
+    fn a_jira_key_is_a_project_a_dash_and_a_number() {
+        for ok in ["PLAT-123", "A1-1", "MY_TEAM-9"] {
+            assert!(looks_like_jira_key(ok), "{ok}");
+        }
+        for bad in ["plat-123", "PLAT", "PLAT-", "-1", "P-1a", "1P-1", "PLAT 123", ""] {
+            assert!(!looks_like_jira_key(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_overdue_gate_sorts_first_in_its_column_and_under_the_needs_you_filter() {
+        let mut early: Task = serde_json::from_str(&linked_task_json("aaaaaaaa0000", None)).unwrap();
+        early.state = "awaiting_approval".into();
+        early.waiting_on_you = true;
+        early.created_at = "2026-10-20T00:00:00Z".into();
+        let mut late: Task = serde_json::from_str(&crate::model::tests::jira_task_json()).unwrap();
+        late.id = "bbbbbbbb0000".into();
+        late.state = "awaiting_approval".into();
+        late.waiting_on_you = true;
+        let mut running: Task = serde_json::from_str(&linked_task_json("cccccccc0000", None)).unwrap();
+        running.state = "implementing".into();
+        running.running = true;
+        running.created_at = "2026-10-19T00:00:00Z".into();
+        let app = app_with(&[running, early, late]);
+        let ids = |app: &App| app.indices(0).iter().map(|&i| app.tasks[i].id.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&app), vec!["bbbbbbbb0000", "aaaaaaaa0000", "cccccccc0000"], "overdue gate, then the gate, then the stage");
+        let mut app = app;
+        press(&mut app, KeyCode::Char('!'));
+        assert_eq!(ids(&app), vec!["bbbbbbbb0000", "aaaaaaaa0000"], "the needs-you filter keeps the overdue first");
+        app.tasks[2].sla = None;
+        assert_eq!(ids(&app), vec!["aaaaaaaa0000", "bbbbbbbb0000"], "inside the SLA again, age decides and the cache saw the change");
+    }
+
+    #[test]
+    fn a_gate_going_overdue_is_news_once_and_a_jira_move_is_news_each_time() {
+        let mut app = app_with(&[]);
+        let fine: Task = serde_json::from_str(&linked_task_json("abcdef123456", Some("PLAT-123"))).unwrap();
+        app.tx.send(Incoming::Message(StreamMessage::Updated { task: fine })).unwrap();
+        app.pump();
+        assert!(app.take_notices().is_empty(), "a linked ticket inside its SLA is quiet");
+        assert_eq!((app.needs_you_count(), app.overdue_count()), (0, 0));
+
+        let late: Task = serde_json::from_str(&crate::model::tests::jira_task_json()).unwrap();
+        app.tx.send(Incoming::Message(StreamMessage::Updated { task: late.clone() })).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Gate overdue"]);
+        assert_eq!(notices[0].body, "#abcdef12 Login page: intake waited past 1h", "the fixture has no repo, so no repo prefix");
+        assert_eq!(app.overdue_count(), 1, "the header's bang counts it");
+        assert_eq!(app.needs_you_count(), 0, "a draft is not waiting on you: the badge count stays the needs-you count");
+        assert_eq!(notify::badge_label(app.needs_you_count(), app.overdue_count()), "Board ‼1");
+        app.tx.send(Incoming::Message(StreamMessage::Updated { task: late })).unwrap();
+        app.pump();
+        assert!(app.take_notices().is_empty(), "still overdue: not twice");
+
+        let moved: crate::model::TaskEvent = serde_json::from_str(r#"{"taskId":"abcdef123456","kind":"jira.moved","payload":{"status":"Done"},"at":"2026-10-28T10:30:00Z"}"#).unwrap();
+        app.tx.send(Incoming::Message(StreamMessage::Event { event: moved })).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!((notices[0].title.as_str(), notices[0].body.as_str()), ("Jira", "PLAT-123 moved to Done while #abcdef12 waits"));
     }
 }

@@ -1,17 +1,14 @@
-// Polls GitHub for labelled issues and turns each new one into a task in Intake. The `gh`
-// CLI does the talking, so auth is whatever `gh auth login` set up.
-import { defaultGh, type Gh, listReadyIssues } from "../adapters/github/gh.ts";
+// Polls GitHub for labelled issues and turns each new one into a task in Intake, through the
+// GitHub port.
+import type { GitHub } from "./github.ts";
 import type { Pipeline } from "./pipeline.ts";
-
-export type { Gh } from "../adapters/github/gh.ts";
 
 export interface GitHubIntakeOptions {
   pipeline: Pipeline;
   repos: string[];
   label: string;
   intervalMs: number;
-  /** Runs the gh CLI. Tests inject a fake. */
-  gh?: Gh;
+  github: GitHub;
   /** The local checkout for `owner/name`, so an imported issue needs no hand edit; null when unknown. */
   resolveRepo?: (repo: string) => Promise<string | null>;
 }
@@ -30,11 +27,8 @@ export function parseChecklist(body: string): string[] {
 export class GitHubIntake {
   private timer: NodeJS.Timeout | undefined;
   private warnedAuth = false;
-  private readonly gh: Gh;
 
-  constructor(private readonly options: GitHubIntakeOptions) {
-    this.gh = options.gh ?? defaultGh;
-  }
+  constructor(private readonly options: GitHubIntakeOptions) {}
 
   /** Polls now, then on every interval. Never throws. */
   start(): void {
@@ -63,10 +57,10 @@ export class GitHubIntake {
   private async pollRepo(repo: string): Promise<void> {
     let issues;
     try {
-      issues = await listReadyIssues(this.gh, repo, this.options.label);
+      issues = await this.options.github.listReadyIssues(repo, this.options.label);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      if (/auth/i.test(message)) {
+      if (/auth|token|401|403/i.test(message)) {
         if (this.warnedAuth) return;
         this.warnedAuth = true;
       }

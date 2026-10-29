@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type CiContext, type Finding, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type RunSummary, type StageInput, TestCase, type TaskState, type CheckSpec } from "@hardness/contracts";
+import { type CheckSpec, type CiContext, type Finding, type JiraIntakeContext, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -36,11 +36,17 @@ export function approvedPlan(approvals: ApprovalRow[]): StageInput["plan"] {
   };
 }
 
-/** The test cases approved at the last test check; anything malformed is dropped. */
+/** The test cases approved at the last test check; anything malformed is dropped. A case
+ *  recorded under schema 2 (`test` for `approach`) is read as today's shape. */
 function checkedCases(approvals: ApprovalRow[]): TestCase[] {
   const approval = approvals.findLast((a) => a.kind === "awaiting_test_check" && a.decision === "approved");
   const cases = approval?.requested.cases;
-  return Array.isArray(cases) ? cases.flatMap((c) => (TestCase.safeParse(c).success ? [c as TestCase] : [])) : [];
+  if (!Array.isArray(cases)) return [];
+  return cases.flatMap((c) => {
+    const legacy = c as { approach?: unknown; test?: unknown };
+    const parsed = TestCase.safeParse(legacy.approach === undefined && typeof legacy.test === "string" ? { ...c, approach: legacy.test } : c);
+    return parsed.success ? [parsed.data] : [];
+  });
 }
 
 export function buildStageInput(opts: {
@@ -63,6 +69,10 @@ export function buildStageInput(opts: {
   checks?: CheckSpec[] | null;
   /** For reviewing_memory: the last implementing ledger and every earlier run of the task. */
   history?: { ledger: Ledger | null; runs: RunSummary[] } | null;
+  /** For reviewing (a PR task): the PR's diff and comments the host fetched. */
+  review?: ReviewContext | null;
+  /** For addressing (a PR task): the unresolved threads the host fetched. */
+  threads?: ThreadsContext | null;
 }): StageInput {
   const { task, stage, attempt, approvals } = opts;
   const pack = stage as PackId;
@@ -101,10 +111,56 @@ export function buildStageInput(opts: {
       ci: opts.ci ?? null,
       ...(pack === "e2e" && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
       ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),
+      ...(pack === "reviewing" && opts.review ? { review: opts.review } : {}),
+      ...(pack === "addressing" && opts.threads ? { threads: opts.threads } : {}),
       ...(pack === "reviewing_memory" && opts.history ? { ledger: opts.history.ledger, runs: opts.history.runs } : {}),
       // A retry continues the ledger the last attempt left: committed slices are not redone.
       ...(pack === "implementing" && opts.history?.ledger ? { ledger: opts.history.ledger } : {}),
     },
+    limits: { maxTurns, timeoutMs },
+    env: { LUNA_FACTORY: "1" },
+  };
+}
+
+/** The id of the synthetic task every slack_triage input carries: the pack is not a task stage. */
+export const SLACK_TRIAGE_TASK_ID = "slack-triage";
+
+/** The /in/stage.json the slack_triage pack reads: no task of its own, no plan, no worktree;
+ *  the inbox batch rides in `context.slack` and the answer goes back to the inbox. */
+export function buildSlackTriageInput(slack: SlackTriageContext): StageInput {
+  const { maxTurns, timeoutMs } = PACK_LIMITS.slack_triage;
+  return {
+    schema: 3,
+    stage: "slack_triage",
+    pack: "slack_triage",
+    attempt: 1,
+    task: { id: SLACK_TRIAGE_TASK_ID, title: "Slack triage", description: "", criteria: [], repoPath: "", branch: "", source: null },
+    plan: null,
+    decisions: [],
+    priorFindings: [],
+    context: { projectContext: null, slack },
+    limits: { maxTurns, timeoutMs },
+    env: { LUNA_FACTORY: "1" },
+  };
+}
+
+/** The id of the synthetic task every jira_intake input carries: the pack runs before a ticket exists. */
+export const JIRA_INTAKE_TASK_ID = "jira-intake";
+
+/** The /in/stage.json the jira_intake pack reads: the issue in `context.jira`, the repo it would
+ *  land in as the (read-only) worktree, no plan, no branch; the answer decides whether a ticket is made. */
+export function buildJiraIntakeInput(jira: JiraIntakeContext): StageInput {
+  const { maxTurns, timeoutMs } = PACK_LIMITS.jira_intake;
+  return {
+    schema: 3,
+    stage: "jira_intake",
+    pack: "jira_intake",
+    attempt: 1,
+    task: { id: JIRA_INTAKE_TASK_ID, title: jira.summary, description: jira.description, criteria: [], repoPath: jira.repoPath ?? "", branch: "", source: null },
+    plan: null,
+    decisions: [],
+    priorFindings: [],
+    context: { projectContext: null, jira },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

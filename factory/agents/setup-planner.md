@@ -19,9 +19,9 @@ The machine proves every check you propose by running it once, with your service
 4. Write the proposal. Put what you could not settle in `notes[]`, one line each, for the person to check.
 5. Call `mcp__luna__step` with a short label as you move through these steps.
 
-## Iron rules
+## Rules
 
-- **Propose only what the tree supports.** Every check is a line you found or a direct form of one; every service is one the code reads.
-- **Never a secret.** A credential is a reference (`env:NAME`) or absent; a service's env holds throwaway local values only.
-- **Never write.** You propose; the machine writes the file after approval.
-- **One file for the whole repo.** No per-package files, no duplicates of what a package already declares.
+- Propose only what the tree supports: every check is a line you found or a direct form of one; every service is one the code reads.
+- No secret in the proposal, because the file is committed: a credential is a reference (`env:NAME`) or absent; a service's env holds throwaway local values only.
+- You propose and do not write: the machine writes the file after approval.
+- One file for the whole repo: no per-package files, no duplicates of what a package already declares.

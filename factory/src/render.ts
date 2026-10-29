@@ -1,6 +1,8 @@
-// Renders a pack's prompt: the factory header, the answer schema, then the template with
-// its {{placeholders}} filled from the stage input. Pure: the caller passes the template and
-// the project context, so a test needs no files.
+// Renders a pack's prompt: the factory header (the role, the stage and how this stage ends when
+// it cannot settle something), then the template with its {{placeholders}} filled from the
+// stage input. The answer's shape is not in the prompt: the SDK's structured output enforces it
+// (main.ts, `outputFormat`). Pure: the caller passes the template and the project context, so a
+// test needs no files.
 import type { Pack, StageInput } from "@hardness/contracts";
 import { answerJsonSchema } from "@hardness/contracts";
 import { createHash } from "node:crypto";
@@ -27,16 +29,86 @@ const ciText = (ci: StageInput["context"]["ci"]): string => {
   return `${pr}\nChecks:\n${checks}\n${logs}`;
 };
 
-/** The rules every stage runs under; appended to the system prompt and restated in the header. */
+const prLine = (pr: NonNullable<StageInput["context"]["review"]>["pr"]): string =>
+  `PR #${pr.number} ${pr.title} by @${pr.author}: ${pr.headRef} into ${pr.baseRef} (${pr.url})`;
+
+/** The PR, its files, the comments already on it and the diff, as reviewing reads them. */
+const reviewText = (review: StageInput["context"]["review"]): string => {
+  if (!review) return NONE;
+  const body = review.pr.body && review.pr.body.trim() !== "" ? review.pr.body.trim() : "(no description)";
+  const files = review.files.length > 0 ? review.files.map((f) => `- ${f.path} (+${f.additions} -${f.deletions})`).join("\n") : "- (none)";
+  const comments =
+    review.existingComments.length > 0
+      ? review.existingComments.map((c) => `- ${c.path ?? "(general)"}${c.line !== null ? `:${c.line}` : ""} @${c.author}: ${c.body}`).join("\n")
+      : "- (none)";
+  return `${prLine(review.pr)}\n\n${body}\n\nFiles:\n${files}\n\nComments already on the PR:\n${comments}\n\nDiff:\n\`\`\`diff\n${review.diff}\n\`\`\``;
+};
+
+/** The unresolved threads, each under its GraphQL id, as addressing reads them. */
+const threadsText = (threads: StageInput["context"]["threads"]): string => {
+  if (!threads) return NONE;
+  const list = threads.threads.map((t) => {
+    const where = t.path ? `${t.path}${t.line !== null ? `:${t.line}` : ""}` : "the PR as a whole";
+    const comments = t.comments.map((c) => `- @${c.author} (${c.at}): ${c.body}`).join("\n");
+    return `### Thread ${t.id} at ${where}\n${comments}`;
+  });
+  return `${prLine(threads.pr)}\n\n${list.join("\n\n") || "(no unresolved threads)"}`;
+};
+
+/** The inbox batch, as slack_triage reads it: one block per item, context and matches inline. */
+const slackText = (slack: StageInput["context"]["slack"]) => {
+  if (!slack) return { me: NONE, watches: NONE, rules: NONE, items: NONE };
+  const items = slack.items.map((item, i) => {
+    const head = `${i + 1}. id ${item.id} · ${item.channel} · ${item.author}${item.isBot ? " (app)" : ""} · matched ${item.matched.join(", ") || "(none)"}${item.threadReplies > 0 ? ` · ${item.threadReplies} thread repl${item.threadReplies === 1 ? "y" : "ies"}` : ""}`;
+    const context = item.context.map((m) => `   earlier · ${m.user}: ${m.text}`);
+    return [head, ...context, `   text: ${item.text}`].join("\n");
+  });
+  return {
+    me: `${slack.me.name} (${slack.me.id})`,
+    watches: slack.watches.length > 0 ? slack.watches.map((w) => `- ${w.label} (${w.kind})`).join("\n") : NONE,
+    rules: slack.rules.trim() === "" ? NONE : slack.rules.trim(),
+    items: items.length > 0 ? items.join("\n") : NONE,
+  };
+};
+
+/** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
+const jiraText = (jira: StageInput["context"]["jira"]) => {
+  if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE };
+  const facts = [
+    `${jira.key} · ${jira.issueType ?? "no type"} · priority ${jira.priority ?? "none"}`,
+    jira.labels.length > 0 ? `labels ${jira.labels.join(", ")}` : null,
+    jira.dueAt ? `due ${jira.dueAt}` : null,
+  ].filter(Boolean);
+  return {
+    issue: `${jira.summary}\n${facts.join(" · ")}\n${jira.url}`,
+    description: jira.description.trim() === "" ? NONE : jira.description.trim(),
+    comments: jira.comments.length > 0 ? jira.comments.map((c) => `- ${c}`).join("\n") : NONE,
+    repoPath: jira.repoPath ?? "(unknown: /work is empty)",
+  };
+};
+
+/** The rules every stage runs under, appended to the system prompt. This is the one place they
+ *  are stated: the templates and the role bodies add only what is specific to their stage. */
 export const FACTORY_RULES = [
-  "You are running in factory mode (LUNA_FACTORY=1): no human is present. A controller wrote /in/stage.json and reads your final answer as the stage result.",
-  "Never call AskUserQuestion. A question you cannot settle from the stage input ends the stage: answer with kind \"questions\" (at most three, each with a recommended answer).",
-  "Never push, never open or edit pull requests, never post reviews or write to a tracker. An outward action goes in requested[] for the board to approve.",
-  "Never write outside /work and /out. Never touch /work/.git directly.",
+  "You are running in factory mode (LUNA_FACTORY=1): no person is present. The machine wrote /in/stage.json and reads your structured answer as the stage result; it reads nothing else you write.",
+  "Never call AskUserQuestion: nobody would answer it. A question you cannot settle from the stage input ends the stage, in the shape this stage's answer allows (your prompt names it).",
+  "Never push, never open or edit pull requests, never post reviews or write to a tracker: the machine does those after a person approves. A stage whose answer has requested[] puts the outward action it needs there.",
+  "Never write outside /work and /out, and never touch /work/.git directly: everything else is mounted read-only and a hook denies the write.",
   "Bash runs only the commands on this stage's allow-list, and a chained command (&&, ;, |) runs only when every part is allowed: one simple command per call, no cd, and Read/Glob/Grep for files. A denied command is not a finding; use an allowed one.",
   "Report progress with the mcp__luna__step tool when it is available; it is a label for the board, not a gate.",
-  "Answer ONLY with the JSON object matching the stage's output schema. No text before or after.",
 ].join("\n");
+
+/** How this stage ends when it cannot settle something: the pack's own answer shape, read from
+ *  its schema, so the header never promises a `kind: "questions"` a pack cannot give. */
+export function escalationLine(pack: Pack): string {
+  const properties = (answerJsonSchema(pack).properties ?? {}) as Record<string, { enum?: unknown[] }>;
+  const kinds = properties.kind?.enum ?? [];
+  const verdicts = properties.verdict?.enum ?? [];
+  if (kinds.includes("questions")) return 'A question you cannot settle from the stage input ends the stage: answer kind "questions" (at most three, each with a recommended answer).';
+  if (kinds.includes("escalated")) return 'What you cannot settle from the stage input ends the stage: answer kind "escalated" with reason and options[].';
+  if (verdicts.includes("needs_brief")) return 'What you cannot settle from the issue ends the stage: verdict "needs_brief" with reason and questions[] (at most three, each with a recommended answer).';
+  return "This stage has no escalation: settle what the input leaves open with the rules in your prompt.";
+}
 
 export interface RenderInput {
   pack: Pack;
@@ -50,6 +122,8 @@ export interface RenderInput {
 export function renderPrompt({ pack, input, template, projectContext }: RenderInput): string {
   const agent = pack.agent ?? "script";
   const context = input.context.projectContext ?? projectContext ?? null;
+  const slack = slackText(input.context.slack);
+  const jira = jiraText(input.context.jira);
   const subs: Record<string, string> = {
     "{{task.title}}": txt(input.task.title),
     "{{task.description}}": txt(input.task.description),
@@ -75,6 +149,8 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     ),
     "{{context.baseCommit}}": txt(input.context.baseCommit),
     "{{context.ci}}": ciText(input.context.ci),
+    "{{context.review}}": reviewText(input.context.review),
+    "{{context.threads}}": threadsText(input.context.threads),
     "{{context.checks}}": input.context.checks
       ? bullets(
           input.context.checks.map((c) => {
@@ -85,17 +161,21 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
         )
       : "(none declared; detect the suite from the tree)",
     "{{context.qaTargets}}": bullets((input.context.qaTargets ?? []).map((t) => `${t.name}: ${t.baseUrl}${t.credential ? ` (credential: ${t.credential})` : ""}`)),
+    "{{context.slack.me}}": slack.me,
+    "{{context.slack.watches}}": slack.watches,
+    "{{context.slack.rules}}": slack.rules,
+    "{{context.slack.items}}": slack.items,
+    "{{context.jira.issue}}": jira.issue,
+    "{{context.jira.description}}": jira.description,
+    "{{context.jira.comments}}": jira.comments,
+    "{{context.jira.repoPath}}": jira.repoPath,
     "{{attempt}}": txt(input.attempt),
     "{{agent}}": agent,
     "{{skills}}": pack.skills.length > 0 ? pack.skills.join(", ") : NONE,
   };
   let body = template;
   for (const [key, value] of Object.entries(subs)) body = body.split(key).join(value);
-  const header = [
-    `You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1). ${FACTORY_RULES.split("\n")[1]} Outward actions go to requested[]. Answer with JSON matching this schema:`,
-    JSON.stringify(answerJsonSchema(pack)),
-    "",
-  ].join("\n");
+  const header = [`You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1); no person is present. ${escalationLine(pack)}`, ""].join("\n");
   return header + body;
 }
 

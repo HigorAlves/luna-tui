@@ -13,7 +13,10 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use ureq::{Agent, Body, http::Response};
 
-use crate::model::{Metrics, PlanEdit, StreamMessage, Task, TaskDetail, TicketText, Health, Slots};
+use crate::model::{
+    Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
+    StreamMessage, Task, TaskDetail, TaskDiff, TestCase, TicketText,
+};
 
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
@@ -31,6 +34,14 @@ pub enum Incoming {
     Message(StreamMessage),
     /// A `/tasks/:id` answer, fetched off the UI thread.
     Detail { id: String, detail: Option<TaskDetail> },
+    /// A `/tasks/:id/diff` answer: the files, and `file`'s patch when one was asked for.
+    /// `generation` is the app's diff generation when the fetch left; an answer from an
+    /// older one is stale (the branch moved meanwhile) and is dropped.
+    Diff { id: String, file: Option<String>, diff: Result<TaskDiff, String>, generation: u64 },
+    /// The watch picker's completions (user groups, channels), fetched off the UI thread when the Slack view opens.
+    SlackCatalog { groups: Vec<SlackOption>, channels: Vec<SlackOption> },
+    /// A `/jira/search` answer for `query`, fetched off the UI thread; dropped when the prompt has moved on.
+    JiraHits { query: String, hits: Result<Vec<JiraIssueHit>, String> },
 }
 
 #[derive(Clone)]
@@ -54,6 +65,13 @@ impl Machine {
             .build()
             .into();
         Self { base: Arc::new(RwLock::new(base)), candidates, agent }
+    }
+
+    /// A machine at a known address, for tests that stand up their own.
+    #[cfg(test)]
+    pub fn at(base: &str) -> Self {
+        let agent = Agent::config_builder().http_status_as_error(false).timeout_global(Some(REQUEST_TIMEOUT)).build().into();
+        Self { base: Arc::new(RwLock::new(base.to_string())), candidates: vec![base.to_string()], agent }
     }
 
     pub fn base(&self) -> String {
@@ -135,6 +153,12 @@ impl Machine {
         Self::typed(self.agent.get(self.url(&format!("/tasks/{id}"))).call())
     }
 
+    /// The task branch against its base; with `file`, that file's patch too.
+    pub fn diff(&self, id: &str, file: Option<&str>) -> Result<TaskDiff, String> {
+        let query = file.map(|f| format!("?file={}", urlencoding(f))).unwrap_or_default();
+        Self::typed(self.agent.get(self.url(&format!("/tasks/{id}/diff{query}"))).call())
+    }
+
     pub fn create(&self, text: &TicketText) -> Result<Task, String> {
         self.post(
             "/tasks",
@@ -162,6 +186,15 @@ impl Machine {
     pub fn edit_plan(&self, id: &str, edit: &PlanEdit) -> Result<Task, String> {
         let body = json!({ "brief": edit.brief, "criteria": edit.criteria, "assumptions": edit.assumptions });
         Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/plan"))).send_json(body))
+    }
+
+    /// Replaces test_design's cases while they wait for your check.
+    pub fn edit_cases(&self, id: &str, cases: &[TestCase]) -> Result<Task, String> {
+        let cases: Vec<Value> = cases
+            .iter()
+            .map(|c| json!({ "title": c.title, "criterion": c.criterion, "approach": c.approach }))
+            .collect();
+        Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/cases"))).send_json(json!({ "cases": cases })))
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
@@ -215,6 +248,130 @@ impl Machine {
     pub fn remove_worktree(&self, id: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/worktree/remove"), json!({}))
     }
+
+    /// The PR inbox as the machine last polled it.
+    pub fn prs(&self) -> Result<PrSnapshot, String> {
+        Self::typed(self.agent.get(self.url("/github/prs")).call())
+    }
+
+    /// Polls GitHub now and answers the fresh snapshot.
+    pub fn refresh_prs(&self) -> Result<PrSnapshot, String> {
+        Self::typed(self.agent.post(self.url("/github/prs/refresh")).send_json(json!({})))
+    }
+
+    /// Dispatches a PR task; answers the task the machine started.
+    pub fn pr_action(&self, repo: &str, number: u64, action: PrAction) -> Result<Task, String> {
+        self.post(&pr_path(repo, number, "actions"), json!({ "action": action.wire() }))
+    }
+
+    /// Squash-merges a PR the machine shows as ready.
+    pub fn merge_pr(&self, repo: &str, number: u64) -> Result<(), String> {
+        Self::json(self.agent.post(self.url(&pr_path(repo, number, "merge"))).send_json(json!({}))).map(|_| ())
+    }
+
+    /// Asks the machine to clone `owner/name` into `dest`; the next snapshot shows the checkout.
+    pub fn clone_repo(&self, repo: &str, dest: &str) -> Result<(), String> {
+        Self::json(self.agent.post(self.url("/github/clone")).send_json(json!({ "repo": repo, "dest": dest }))).map(|_| ())
+    }
+
+    /// The Slack inbox as the machine last polled it, watches included.
+    pub fn slack(&self) -> Result<SlackSnapshot, String> {
+        Self::typed(self.agent.get(self.url("/slack/items")).call())
+    }
+
+    /// Polls Slack now and answers the fresh snapshot.
+    pub fn refresh_slack(&self) -> Result<SlackSnapshot, String> {
+        Self::typed(self.agent.post(self.url("/slack/refresh")).send_json(json!({})))
+    }
+
+    /// `done`, `snoozedUntil`, `seen` or `priority` on one item; answers the item as the
+    /// machine now has it, which the next snapshot repeats.
+    pub fn patch_slack_item(&self, id: &str, patch: Value) -> Result<Value, String> {
+        Self::json(self.agent.patch(self.url(&slack_item_path(id, ""))).send_json(patch))
+    }
+
+    /// Posts `text` as you, in the item's thread (or channel). Nothing is added to it.
+    /// Posts `text` in the item's thread as you; `nudge` has the machine prefix a mention of the item's author.
+    pub fn slack_reply(&self, id: &str, text: &str, nudge: bool) -> Result<(), String> {
+        Self::json(self.agent.post(self.url(&slack_item_path(id, "/reply"))).send_json(json!({ "text": text, "nudge": nudge }))).map(|_| ())
+    }
+
+    /// A Backlog ticket from the item; `repo_path` None leaves the repo to set later.
+    pub fn slack_task(&self, id: &str, title: &str, repo_path: Option<&str>) -> Result<Task, String> {
+        self.post(&slack_item_path(id, "/task"), json!({ "title": title, "repoPath": repo_path }))
+    }
+
+    pub fn slack_watches(&self) -> Result<Vec<SlackWatch>, String> {
+        Self::typed(self.agent.get(self.url("/slack/watches")).call())
+    }
+
+    /// `{kind, value, label?, channels?, priority?}`; answers the watch the machine stored.
+    pub fn add_slack_watch(&self, input: Value) -> Result<SlackWatch, String> {
+        Self::typed(self.agent.post(self.url("/slack/watches")).send_json(input))
+    }
+
+    /// `{label?, channels?, priority?, enabled?}`; answers the watch as it now is.
+    pub fn patch_slack_watch(&self, id: &str, patch: Value) -> Result<SlackWatch, String> {
+        Self::typed(self.agent.patch(self.url(&format!("/slack/watches/{}", urlencoding(id)))).send_json(patch))
+    }
+
+    pub fn delete_slack_watch(&self, id: &str) -> Result<(), String> {
+        Self::json(self.agent.delete(self.url(&format!("/slack/watches/{}", urlencoding(id)))).call()).map(|_| ())
+    }
+
+    /// How fast you answer, over `7d` or `30d`.
+    pub fn slack_metrics(&self, since: &str) -> Result<SlackMetrics, String> {
+        Self::typed(self.agent.get(self.url(&format!("/slack/metrics?since={since}"))).call())
+    }
+
+    /// The workspace's user groups, for the watch picker's `@` completions.
+    pub fn slack_usergroups(&self) -> Result<Vec<SlackOption>, String> {
+        Self::typed(self.agent.get(self.url("/slack/usergroups")).call())
+    }
+
+    /// The channels you are in, for the watch picker's `#` completions.
+    pub fn slack_channels(&self) -> Result<Vec<SlackOption>, String> {
+        Self::typed(self.agent.get(self.url("/slack/channels")).call())
+    }
+
+    /// Links an existing Jira issue to the ticket; answers the task with its `jira` set.
+    pub fn link_jira(&self, id: &str, key: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/jira"), json!({ "key": key }))
+    }
+
+    /// Drops the ticket's Jira link; the issue itself is not touched.
+    pub fn unlink_jira(&self, id: &str) -> Result<Task, String> {
+        Self::typed(self.agent.delete(self.url(&format!("/tasks/{id}/jira"))).call())
+    }
+
+    /// Creates a Jira issue from the ticket, in the repo's project or `project`, and links it.
+    pub fn create_jira(&self, id: &str, project: Option<&str>) -> Result<Task, String> {
+        let body = match project {
+            Some(project) => json!({ "project": project }),
+            None => json!({}),
+        };
+        self.post(&format!("/tasks/{id}/jira/create"), body)
+    }
+
+    /// Issues matching a key or free text, your open ones first.
+    pub fn jira_search(&self, q: &str) -> Result<Vec<JiraIssueHit>, String> {
+        Self::typed(self.agent.get(self.url(&format!("/jira/search?q={}", urlencoding(q)))).call())
+    }
+
+    /// Whether Jira is configured and reachable.
+    pub fn jira_status(&self) -> Result<JiraStatus, String> {
+        Self::typed(self.agent.get(self.url("/jira/status")).call())
+    }
+}
+
+/// `/slack/items/<id><verb>`; the id carries `:` and `.`, so it travels percent-encoded.
+fn slack_item_path(id: &str, verb: &str) -> String {
+    format!("/slack/items/{}{verb}", urlencoding(id))
+}
+
+/// `/github/prs/<owner>/<name>/<number>/<verb>`.
+fn pr_path(repo: &str, number: u64, verb: &str) -> String {
+    format!("/github/prs/{repo}/{number}/{verb}")
 }
 
 /// `HARDNESS_MACHINE_URL` alone when set, else the dev machine, then the Docker one.
@@ -277,7 +434,7 @@ fn spawn_stream(shared: Arc<RwLock<String>>, candidates: Vec<String>, tx: Sender
 /// snapshot does not say which window it covers. Unknown event types are never an error.
 fn parse_stream_event(event: &str, data: &str) -> Option<StreamMessage> {
     match event {
-        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed" | "budget.alert" => {
+        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed" | "budget.alert" | "github.prs" | "slack.items" => {
             serde_json::from_str(data).ok()
         }
         _ => None,
@@ -360,5 +517,29 @@ mod tests {
     fn with_nothing_up_the_dev_machine_is_assumed_and_an_override_is_the_only_candidate() {
         assert_eq!(pick(&candidates(None), |_| false), DEV_URL);
         assert_eq!(candidates(Some("http://box:9000/".into())), vec!["http://box:9000".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod pr_tests {
+    use super::*;
+
+    #[test]
+    fn the_pr_routes_are_built_from_the_repo_and_number() {
+        assert_eq!(pr_path("o/a", 12, "merge"), "/github/prs/o/a/12/merge");
+        assert_eq!(pr_path("o/a", 12, "actions"), "/github/prs/o/a/12/actions");
+        let event = parse_stream_event("github.prs", r#"{"type":"github.prs","snapshot":{"prs":[],"polledAt":null,"error":"x"}}"#);
+        assert!(matches!(event, Some(StreamMessage::Prs { ref snapshot }) if snapshot.error.as_deref() == Some("x")));
+    }
+
+    #[test]
+    fn the_slack_routes_encode_the_item_id_and_the_stream_event_is_parsed() {
+        assert_eq!(slack_item_path("C0123:1730112345.0001", ""), "/slack/items/C0123%3A1730112345.0001");
+        assert_eq!(slack_item_path("C0123:1.2", "/reply"), "/slack/items/C0123%3A1.2/reply");
+        let data = format!(r#"{{"type":"slack.items","snapshot":{}}}"#, crate::slack::fixtures::snapshot_json());
+        let event = parse_stream_event("slack.items", &data);
+        assert!(matches!(event, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.len() == 3 && snapshot.socket == "connected"));
+        let bare = parse_stream_event("slack.items", r#"{"type":"slack.items","snapshot":{"items":[],"watches":[],"me":null,"polledAt":null,"error":null,"socket":"off"}}"#);
+        assert!(matches!(bare, Some(StreamMessage::Slack { ref snapshot }) if snapshot.items.is_empty()));
     }
 }

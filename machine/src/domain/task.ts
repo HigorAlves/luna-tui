@@ -1,6 +1,6 @@
 // Plain domain types for a task and everything attached to it. No TypeORM here — see
 // ../adapters/persistence/schemas.ts for the persistence mapping of these same shapes.
-import type { ArtifactKind, TaskSource, TaskState } from "@hardness/contracts";
+import type { ArtifactKind, JiraLink, StageRunCase, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
 
 import type { Retries } from "./transition.ts";
 
@@ -10,10 +10,10 @@ export interface TaskRow {
   description: string;
   criteria: string[];
   repoPath: string | null;
-  /** The tracker item the task came from. */
+  /** The tracker item or PR the task came from. */
   source: TaskSource | null;
-  /** A ticket, or a one-off that proposes the repo's luna.yaml and closes. */
-  kind: "feature" | "setup";
+  /** The graph the task walks; `feature` is the full pipeline. */
+  route: TaskRoute;
   branch: string | null;
   worktreePath: string | null;
   state: TaskState;
@@ -32,6 +32,10 @@ export interface TaskRow {
   /** Verifying's results, passed over total, from its latest run; null until it ran. */
   testsPassed: number | null;
   testsTotal: number | null;
+  /** The linked Jira issue as last seen; null when the task has none. */
+  jira: JiraLink | null;
+  /** When the task entered its current state (its latest transition; creation for a draft). Null only on rows older than the column. */
+  stateSince: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -52,6 +56,8 @@ export interface StageRunRow {
   inputCommit: string | null;
   outputCommit: string | null;
   transcriptPath: string | null;
+  /** Verifying only: one verdict per approved case, when the run reported them. */
+  cases: StageRunCase[] | null;
   startedAt: Date;
   endedAt: Date | null;
 }
@@ -109,10 +115,18 @@ export class TaskBusyError extends Error {
   }
 }
 
-/** No open `awaiting_approval` gate to edit, so there is no plan on the ticket right now. */
+/** No plan to edit: the ticket is neither awaiting the plan's approval nor at the test check. */
 export class NoPlanToEditError extends Error {
   constructor(id: string) {
     super(`task ${id} has no plan awaiting approval`);
     this.name = "NoPlanToEditError";
+  }
+}
+
+/** No open `awaiting_test_check` gate, so there are no test cases to edit right now. */
+export class NoCasesToEditError extends Error {
+  constructor(id: string) {
+    super(`task ${id} has no test cases awaiting your check`);
+    this.name = "NoCasesToEditError";
   }
 }

@@ -1,6 +1,6 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
-import { Ledger } from "@hardness/contracts";
+import { Ledger, PrAction, type PullRequest } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -14,14 +14,38 @@ import { loadConfig } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns } from "./adapters/persistence/prune.ts";
-import { sweepImages, sweepRunFolders, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
+import { sweepImages, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
+import { GitHubPulls } from "./application/pulls.ts";
+import { SlackInbox } from "./application/slack-inbox.ts";
+import { noTokenSlack } from "./application/slack.ts";
+import { createSlackTriager } from "./application/stages/slack-triage-runner.ts";
+import { PgSlackStore } from "./adapters/persistence/slack-store.ts";
+import { SocketMode } from "./adapters/slack/socket-mode.ts";
+import { createSlack } from "./adapters/slack/web-api.ts";
+import { createPrTask } from "./application/pr-tasks.ts";
+import { prFollowUpRunner } from "./application/stages/pr-address.ts";
+import { postVerdictRunner } from "./application/stages/pr-review.ts";
 import { RepoMap } from "./application/repo-map.ts";
 import { ThreadReplies } from "./application/threads.ts";
+import { noTokenJira } from "./application/jira.ts";
+import { createJira } from "./adapters/jira/rest.ts";
+import { JiraIntake, reposUnder } from "./application/jira-intake.ts";
+import { JiraSync } from "./application/jira-sync.ts";
+import { JiraTasks, TokenExpiry } from "./application/jira-tasks.ts";
+import { JiraWatch } from "./application/jira-watch.ts";
+import { SlaClocks } from "./application/sla.ts";
+import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
+import { MINUTE_MS, Ticker } from "./application/ticker.ts";
+import { existsSync } from "node:fs";
+import { readdir } from "node:fs/promises";
 import { Pipeline } from "./application/pipeline.ts";
 import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
+import { createGitHub } from "./adapters/github/octokit.ts";
+import { taskDiff } from "./adapters/git/diff.ts";
+import { noTokenGitHub } from "./application/github.ts";
 import { realDeliverRunner } from "./application/stages/deliver.ts";
 import { shipRunner } from "./application/stages/ship.ts";
 import { StubStages } from "./application/stages/stubs.ts";
@@ -63,6 +87,10 @@ async function sweep(): Promise<void> {
     const removed = await sweepTaskState(db, config.stateDir);
     return removed > 0 ? `removed ${removed} per-task state dir(s) whose task is gone` : null;
   });
+  await step("slack triage runs", async () => {
+    const removed = await sweepSlackTriageRuns(config.stateDir, config.retentionDays);
+    return removed > 0 ? `removed ${removed} failed slack triage run folder(s)` : null;
+  });
   await step("images", async () => {
     const removed = await sweepImages();
     return removed.length > 0 ? `untagged ${removed.join(", ")}` : null;
@@ -71,6 +99,10 @@ async function sweep(): Promise<void> {
 // A transient hiccup here must not stop the machine from serving; tomorrow's pass retries.
 await sweep();
 setInterval(() => void sweep(), 24 * 60 * 60 * 1000).unref();
+
+/** One GitHub client for every call the machine makes; without a token each call says so. */
+const github = config.githubToken ? createGitHub(config.githubToken) : noTokenGitHub();
+if (!config.githubToken) console.warn("no GITHUB_TOKEN (or GH_TOKEN): every GitHub call will fail with that reason until one is set");
 
 const bus = new Bus();
 const stubs = new StubStages();
@@ -81,7 +113,7 @@ const watcher = new StreamWatcher(bus);
 let pipeline: Pipeline;
 /** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
 const policies = new PolicyStore();
-const { real, verifyPack, checksExec } = await buildRealStages(
+const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   config,
   watcher,
   (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
@@ -98,6 +130,7 @@ const { real, verifyPack, checksExec } = await buildRealStages(
     }));
     return { ledger: ledger.success ? ledger.data : null, runs };
   },
+  github,
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
@@ -114,10 +147,20 @@ const realVerifyRunner = verifyRunner({
 /** Delivering and shipping need only git and gh, not a Claude credential, so they always run for real. */
 const runnerFor = buildRunnerFor({
   real,
-  realDeliverRunner,
+  realDeliverRunner: realDeliverRunner(github),
   realVerifyRunner,
-  shipRunner,
+  shipRunner: shipRunner(github),
   stubRunnerFor: (stage) => stubs.runnerFor(stage),
+  pr: {
+    // A PR task runs the project's checks before pushing, never the review pack.
+    checksOnlyVerifyRunner: verifyRunner({ exec: checksExec ?? exec, runPack: null, stateDir: config.stateDir }),
+    followUpRunner: prFollowUpRunner({
+      github,
+      exec,
+      latestAnswer: async (taskId) => (await pipeline.latestStageFinish(taskId, "addressing"))?.detail?.answer,
+    }),
+    postVerdictRunner: postVerdictRunner({ github }),
+  },
 });
 
 const METRICS_DEBOUNCE_MS = 2_000;
@@ -145,14 +188,19 @@ function scheduleMetrics(): void {
 
 /** Replies in the thread each task came from, on the moments that matter. */
 let replies: ThreadReplies;
+/** Moves the linked Jira issue as the task moves, per the repo's luna.yaml. */
+let jiraSync: JiraSync;
+/** The ticket clocks, computed whenever a task is serialized. */
+let slaClocks: SlaClocks;
 
-/** Streams each logged event, plus the whole task whenever its state may have changed. */
+/** Streams each logged event, plus the whole task whenever its state (or its Jira link) may have changed. */
 function publish(event: EventRow): void {
   bus.publish({ type: "task.event", event: toEvent(event) });
   void replies.handle(event);
-  if (event.kind === "transition" || event.kind === "task.created") {
+  void jiraSync.handle(event);
+  if (event.kind === "transition" || event.kind === "task.created" || event.kind.startsWith("jira.")) {
     pipeline.get(event.taskId).then(
-      async (task) => bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id)) }),
+      async (task) => bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id), await slaClocks.for(task)) }),
       (error: unknown) => console.error("could not publish task update", error),
     );
   }
@@ -168,17 +216,79 @@ pipeline = new Pipeline(db, runnerFor, {
   restartPolicy: config.restartPolicy,
   closeDeps: { exec, worktreeRemove: false, watcher },
   policies,
+  jiraSite: config.jira?.site ?? null,
   onAlert: (alert) => {
     console.warn(`budget: ${alert.scope} at ${alert.pct}% ($${alert.spentUsd.toFixed(2)} of $${alert.limitUsd.toFixed(2)})${alert.repo ? ` · ${alert.repo}` : ""}`);
     bus.publish({ type: "budget.alert", alert });
   },
 });
-replies = new ThreadReplies({ pipeline, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}) });
+replies = new ThreadReplies({ pipeline, github, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}) });
+/** One Jira client for every call; without the three variables each call says so and nothing syncs. */
+const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
+const jiraExpiry = new TokenExpiry(config.jira?.tokenExpiresAt ?? null);
+jiraSync = new JiraSync({ pipeline, jira: jiraApi, enabled: config.jira !== null, boardUrl: `http://${config.host}:${config.port}` });
+slaClocks = new SlaClocks({ pipeline, defaults: { gate: config.sla.gateSecs, cycle: config.sla.cycleSecs } });
 const recovered = await pipeline.recover();
 if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by the last run`);
 pipeline.startSupervisor(SUPERVISOR_MS);
 
-const app = createApp({ db, pipeline, bus, watcher, stubs });
+/** Where each `owner/name` lives on this machine, for GitHub intake and the PR inbox alike. */
+const repoMap = new RepoMap({ map: config.repoMap, reposDir: config.reposDir });
+const pulls = new GitHubPulls({
+  github,
+  intervalMs: config.githubPrs.intervalMs,
+  resolveRepo: (repo) => repoMap.resolve(repo),
+  rememberRepo: (repo, path) => repoMap.remember(repo, path),
+  findTask: async (repo, number) => {
+    const task = await pipeline.findBySource(repo, number, "github_pr");
+    const route = task ? PrAction.safeParse(task.route) : null;
+    return task && route?.success && task.state !== "closed" ? { id: task.id, state: task.state, route: route.data } : null;
+  },
+  publish: (snapshot) => bus.publish({ type: "github.prs", snapshot }),
+});
+const prTasks = {
+  dispatch: (pr: PullRequest, action: PrAction) => createPrTask({ worktreesDir: config.worktreesDir, pipeline }, pr, action),
+};
+/** The Slack inbox: your user token reads and posts; the slack_triage pack triages in the stage
+ *  container with the same image and credential as the stages, so it is off when they are. */
+const slackApi = config.slackInbox.userToken ? createSlack(config.slackInbox.userToken) : noTokenSlack();
+const slackStore = new PgSlackStore(db);
+const triager = agentDeps ? createSlackTriager({ ...agentDeps, store: slackStore }) : null;
+const slackInbox = new SlackInbox({
+  slack: slackApi,
+  triager,
+  store: slackStore,
+  intervalMs: config.slackInbox.intervalMs,
+  publish: (snapshot) => bus.publish({ type: "slack.items", snapshot }),
+  findTask: (id) => pipeline.get(id).catch(() => null),
+  linkPr: (refs) => {
+    for (const ref of refs) {
+      const pr = pulls.find(ref.repo, ref.number);
+      if (pr) return { repo: pr.repo, number: pr.number, split: pr.split };
+    }
+    return null;
+  },
+  createTask: (input) => pipeline.createTask(input),
+  markRead: config.slackInbox.markRead,
+  rulesPath: config.slackInbox.rulesPath,
+  socketToken: config.slackInbox.appToken,
+  retentionDays: config.retentionDays,
+});
+const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
+const app = createApp({
+  db,
+  pipeline,
+  bus,
+  watcher,
+  stubs,
+  pulls,
+  prTasks,
+  slack: slackInbox,
+  ...(jiraTasks ? { jira: jiraTasks } : {}),
+  sla: (task) => slaClocks.for(task),
+  slaAll: (tasks) => slaClocks.forAll(tasks),
+  taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file),
+});
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
   const agents = [...new Set([...Object.keys(real), "verifying", "delivering", "shipping"])];
   console.log(
@@ -186,17 +296,105 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
   );
 });
 
+if (config.githubPrs.enabled) {
+  console.log(`github prs: polling every open PR involving you every ${config.githubPrs.intervalMs / 1000}s`);
+  pulls.start();
+}
+
+let socket: SocketMode | undefined;
+let digestTimer: NodeJS.Timeout | undefined;
+if (config.slackInbox.enabled && config.slackInbox.userToken) {
+  const { intervalMs, appToken, digestAt } = config.slackInbox;
+  console.log(`slack inbox: polling mentions, DMs, threads and watches every ${intervalMs / 1000}s${triager ? " · triage by the slack_triage pack (haiku)" : " · agents off, no triage"}${appToken ? " · Socket Mode on" : ""}`);
+  slackInbox.start();
+  if (appToken) {
+    socket = new SocketMode({
+      openSocket: () => slackApi.openSocket(appToken),
+      onEvent: (event) => slackInbox.handleSocketEvent(event),
+      onState: (state) => slackInbox.setSocketState(state),
+    });
+    void socket.start();
+  }
+  if (digestAt) {
+    /** Posts the digest to your own DM at `HH:MM` local time, every day. */
+    const scheduleDigest = () => {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(digestAt.hour, digestAt.minute, 0, 0);
+      if (next <= now) next.setDate(next.getDate() + 1);
+      digestTimer = setTimeout(() => {
+        slackInbox.postDigest().catch((error: unknown) => console.warn("slack inbox: digest failed", error));
+        scheduleDigest();
+      }, next.getTime() - now.getTime());
+      digestTimer.unref();
+    };
+    scheduleDigest();
+  }
+} else if (config.slackInbox.enabled) {
+  console.log("slack inbox: off until MACHINE_SLACK_USER_TOKEN is set");
+}
+
 let intake: GitHubIntake | undefined;
 if (config.githubPoll.repos.length > 0) {
   const { repos, intervalMs, label } = config.githubPoll;
-  const repoMap = new RepoMap({ map: config.repoMap, reposDir: config.reposDir });
-  intake = new GitHubIntake({ pipeline, repos, label, intervalMs, resolveRepo: (repo) => repoMap.resolve(repo) });
+  intake = new GitHubIntake({ pipeline, github, repos, label, intervalMs, resolveRepo: (repo) => repoMap.resolve(repo) });
   console.log(`github intake: polling ${repos.join(", ")} every ${intervalMs / 1000}s for ${label}`);
   intake.start();
 }
 
+/** Jira: the linked issues refreshed every five minutes, and each repo's intake JQL polled at its own `every`. */
+let jiraWatch: JiraWatch | undefined;
+let jiraIntake: JiraIntake | undefined;
+if (config.jira) {
+  jiraWatch = new JiraWatch({
+    pipeline,
+    jira: jiraApi,
+    intervalMs: 5 * MINUTE_MS,
+    expiry: jiraExpiry,
+    retryBlocked: (task) => jiraSync.retry(task),
+    publish: (task) => void slaClocks.for(task).then((sla) => bus.publish({ type: "task.updated", task: toTask(task, null, sla) })),
+  });
+  jiraWatch.start();
+  const jiraTriager = agentDeps ? createJiraTriager(agentDeps) : null;
+  jiraIntake = new JiraIntake({
+    pipeline,
+    jira: jiraApi,
+    policies,
+    triager: jiraTriager,
+    // Every checkout the machine knows: the repo map, the repos dir, and the repos of existing tasks.
+    repos: async () => {
+      const known = [...Object.values(config.repoMap), ...(await reposUnder(config.reposDir, { readdir, exists: existsSync }))];
+      for (const task of await pipeline.list()) if (task.repoPath) known.push(task.repoPath);
+      return [...new Set(known)];
+    },
+  });
+  jiraIntake.start();
+  console.log(`jira: ${config.jira.site} · linked issues refreshed every 5m · intake per repo's luna.yaml${jiraTriager ? " through the jira_intake pack (sonnet)" : " (agents off: issues imported as written)"}`);
+} else {
+  console.log("jira: off until MACHINE_JIRA_SITE, MACHINE_JIRA_EMAIL and MACHINE_JIRA_TOKEN are set");
+}
+
+/** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
+const slaTicker = new Ticker(() => {
+  void pipeline
+    .list()
+    .then((tasks) => slaClocks.flipped(tasks))
+    .then(async (flipped) => {
+      for (const { task, sla } of flipped) bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id), sla) });
+    })
+    .catch((error: unknown) => console.warn("sla tick failed", error));
+}, MINUTE_MS);
+slaTicker.start();
+
 async function shutdown(): Promise<void> {
   intake?.stop();
+  jiraWatch?.stop();
+  jiraIntake?.stop();
+  slaTicker.stop();
+  pulls.stop();
+  slackInbox.stop();
+  socket?.stop();
+  if (digestTimer) clearTimeout(digestTimer);
   pipeline.stopSupervisor();
   server.close();
   await pipeline.shutdown();

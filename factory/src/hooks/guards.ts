@@ -9,11 +9,12 @@
 import { posix } from "node:path";
 
 import type { HookCallbackMatcher, HookInput, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
+import type { StageInput } from "@hardness/contracts";
 
 export interface GuardContext {
   /** Whether this stage may edit the worktree and commit. */
   writable: boolean;
-  /** Branches the stage may commit to must start with this (default "task/"). */
+  /** The branches the stage may commit to: `task/` (the default) is a prefix; any other value is one exact branch. */
   branchPrefix?: string;
   /** The current branch, when known, so a commit on the wrong branch is refused before git runs. */
   branch?: string | null;
@@ -26,6 +27,15 @@ const WORK = "/work";
 const OUT = "/out";
 const TMP = "/tmp";
 const DEFAULT_BRANCH_PREFIX = "task/";
+
+/** The branches a stage may commit to: a PR task owns the PR's own head branch; a task the
+ *  machine gave a branch outside `task/` (a Jira-linked one, `bug/PLAT-123` by its repo's
+ *  pattern) owns exactly that branch; every other task a `task/` branch. */
+export function branchPrefixFor(task: Pick<StageInput["task"], "branch" | "source">): string {
+  if (task.source?.kind === "github_pr" && task.source.headRef) return task.source.headRef;
+  if (task.branch && !task.branch.startsWith(DEFAULT_BRANCH_PREFIX)) return task.branch;
+  return DEFAULT_BRANCH_PREFIX;
+}
 
 // ---------------------------------------------------------------------------------------
 // Command parsing. A quote-aware scanner rather than a regex split: the attribution check
@@ -305,9 +315,12 @@ function guardCommit(args: string[], ctx: GuardContext): string | null {
   }
   if (amend) return "git commit --amend is not allowed in a stage: history is never rewritten; make a new commit";
   if (noVerify) return "git commit --no-verify is not allowed in a stage: the repository's hooks must run";
+  // `task/` names a family of branches; anything else (the branch named for a Jira-linked task,
+  // a PR's head) is one exact branch, so `bug/PLAT-1234` never passes as `bug/PLAT-123`.
   const prefix = ctx.branchPrefix ?? DEFAULT_BRANCH_PREFIX;
-  if (typeof ctx.branch === "string" && ctx.branch !== "" && !ctx.branch.startsWith(prefix)) {
-    return `commits must go on a "${prefix}" branch: the current branch is "${ctx.branch}"`;
+  if (typeof ctx.branch === "string" && ctx.branch !== "") {
+    const allowed = prefix === DEFAULT_BRANCH_PREFIX ? ctx.branch.startsWith(prefix) : ctx.branch === prefix;
+    if (!allowed) return prefix === DEFAULT_BRANCH_PREFIX ? `commits must go on a "${prefix}" branch: the current branch is "${ctx.branch}"` : `commits must go on the "${prefix}" branch: the current branch is "${ctx.branch}"`;
   }
   for (const message of messages) {
     if (ATTRIBUTION_TRAILER.test(message)) {

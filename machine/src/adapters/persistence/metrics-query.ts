@@ -15,6 +15,8 @@ export interface MetricsOptions {
   repo?: string | null;
   /** Adds one slim row per repo to the answer. */
   groupBy?: "repo";
+  /** The gate SLA a wait is judged by, in seconds (the machine's default; a repo's own is approximated by it). */
+  gateSlaSecs?: number | null;
 }
 
 /** The window's numbers for one repo, slimmed to what a per-repo table shows. */
@@ -29,6 +31,25 @@ function slim(repo: string | null, m: Metrics): RepoMetrics {
 }
 
 const FIRST_PASS_STAGES = ["verifying", "ci_watch", "implementing"] as const;
+const DEFAULT_GATE_SLA_SECS = 3600;
+
+/** Every gate answered in the window: the wait from entering a waiting state to leaving it, by gate. */
+export function gateWaits(
+  transitions: Array<{ task_id: string; from: string | null; to: string | null; at: Date }>,
+  window: [Date, Date],
+): Array<{ state: string; ms: number }> {
+  const open = new Map<string, { state: string; at: Date }>();
+  const waits: Array<{ state: string; ms: number }> = [];
+  for (const t of [...transitions].sort((a, b) => a.at.getTime() - b.at.getTime())) {
+    const waiting = open.get(t.task_id);
+    if (waiting && t.from === waiting.state) {
+      open.delete(t.task_id);
+      if (t.at >= window[0] && t.at <= window[1] && t.to !== waiting.state) waits.push({ state: waiting.state, ms: t.at.getTime() - waiting.at.getTime() });
+    }
+    if (t.to && WAITING_ON_USER.has(t.to as never) && t.to !== t.from) open.set(t.task_id, { state: t.to, at: t.at });
+  }
+  return waits;
+}
 
 export async function computeMetrics(db: DataSource, options: MetricsOptions): Promise<Metrics> {
   const { since, slots } = options;
@@ -62,6 +83,13 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
   const escalations: { task_id: string; reason: string | null }[] = await db.query(
     `select e.task_id, e.payload->>'reason' as reason from events e join tasks t on t.id = e.task_id
       where e.kind = 'transition' and e.payload->>'to' = 'escalated' and e.at >= $1 and e.at <= $2 and ${inScope}`,
+    params,
+  );
+  const transitions: { task_id: string; from: string | null; to: string | null; at: Date }[] = await db.query(
+    `select e.task_id, e.payload->>'from' as "from", e.payload->>'to' as "to", e.at
+       from events e join tasks t on t.id = e.task_id
+      where e.kind = 'transition' and $1::timestamptz is not null and e.at <= $2 and ${inScope}
+      order by e.at`,
     params,
   );
   const touched: { retries: { verify: number; e2e: number; ci: number; total: number } }[] = await db.query(
@@ -108,6 +136,17 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
     .sort((a, b) => b.count - a.count || a.reason.localeCompare(b.reason))
     .slice(0, 5);
 
+  // Gates: how long each one waited on you, and how many were answered inside the SLA.
+  const waits = gateWaits(transitions.map((t) => ({ ...t, at: new Date(t.at) })), [since, until]);
+  const gateSla = options.gateSlaSecs === undefined ? DEFAULT_GATE_SLA_SECS : options.gateSlaSecs;
+  const byGate = new Map<string, number[]>();
+  for (const w of waits) byGate.set(w.state, [...(byGate.get(w.state) ?? []), w.ms]);
+  const gates: Metrics["gates"] = {
+    answered: waits.length,
+    withinSla: gateSla === null ? null : ratio(waits.filter((w) => w.ms <= gateSla * 1000).length, waits.length),
+    waitMs: Object.fromEntries([...byGate].map(([state, ms]) => [state, stats(ms)])),
+  };
+
   // Retries.
   const byLoop = { verify: 0, e2e: 0, ci: 0 };
   for (const t of touched) {
@@ -145,6 +184,7 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
     ...(grouped ? { byRepo: grouped } : {}),
     tasks,
     cycleTimeMs: { task: stats(closedRows.map((r) => Number(r.ms))), perStage },
+    gates,
     firstPassRate,
     escalations: { rate: ratio(escalatedTasks.size, started.size), topReasons },
     retries: { perTask: stats(touched.map((t) => t.retries.total)), byLoop },

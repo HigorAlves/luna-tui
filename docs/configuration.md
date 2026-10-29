@@ -16,14 +16,29 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `MACHINE_MAX_CONCURRENT` | `4` | tasks driving a stage at once, across every repo |
 | `MACHINE_MAX_PER_REPO` | unset | running tasks one repo may hold at once, so it cannot take every slot; unset means no cap. Claims go oldest-queued first, the repo with the fewest running tasks first. A repo's own `PIPELINE.md` (`max_concurrent`) overrides it for that repo |
 | `MACHINE_MAX_PER_STAGE` | unset | `stage=n` pairs, e.g. `implementing=2,e2e=1`: tasks that may drive one stage at once. A task whose next stage is at cap waits in the queue, state kept (`stage.held`). `ci_watch` never holds a slot: it polls GitHub outside the pool and takes a slot again (or queues) for the stage after |
-| `MACHINE_AGENTS` | on | set to `off` to make every stage a stub (no credential or Docker needed) |
-| `MACHINE_GITHUB_POLL` | empty, off | comma-separated `owner/name` repos whose open issues labelled `MACHINE_GITHUB_LABEL` land in Intake as tasks; needs the `gh` CLI signed in |
+| `MACHINE_AGENTS` | on | set to `off` to make every stage a stub (no credential or Docker needed); the Slack inbox's triage is a pack too (`slack_triage`), so it is off with them and items show no priority |
+| `MACHINE_GITHUB_POLL` | empty, off | comma-separated `owner/name` repos whose open issues labelled `MACHINE_GITHUB_LABEL` land in Intake as tasks; needs `GITHUB_TOKEN` |
 | `MACHINE_GITHUB_POLL_INTERVAL` | `300` | seconds between GitHub polls |
 | `MACHINE_GITHUB_LABEL` | `ready-for-agent` | the issue label GitHub intake looks for |
+| `MACHINE_GITHUB_PRS` | on | `off` stops the PR inbox from polling GitHub; the board's `P` view then shows nothing |
+| `MACHINE_GITHUB_PRS_INTERVAL` | `60` | seconds between PR inbox polls; a rate-limited answer backs the next poll off to five minutes |
 | `MACHINE_REPO_MAP` | unset | `owner/name=/abs/path` pairs: the checkout an imported issue's task works in. Without a match, the checkouts one level under `MACHINE_REPOS_DIR` are matched by their `origin` remote |
 | `MACHINE_REPOS_DIR` | `~/Developer` | where `MACHINE_REPO_MAP`'s fallback scan looks |
 | `MACHINE_THREAD_REPLIES` | on | set to `off` to stop the machine replying in the thread a task came from (a comment on its GitHub issue; a Slack thread when the pair below is set) when it is picked up, needs you, escalates, pauses, gets its PR and closes |
 | `MACHINE_SLACK_TOKEN` / `MACHINE_SLACK_CHANNEL` | unset | a bot token (`chat:write`) and a channel id: one Slack thread per task is opened there and every reply above lands in it. Both or neither |
+| `MACHINE_SLACK_USER_TOKEN` | unset | your User OAuth Token (`xoxp-…`) from the internal app in `slack/manifest.json`: the inbox reads what you see and replies as you. Unset: the inbox is off and every Slack call says so |
+| `MACHINE_SLACK_APP_TOKEN` | unset | the app-level token (`xapp-…`, `connections:write`) for Socket Mode: reactions and new messages arrive as they happen. Unset: the snapshot's `socket` is `off`; polling still covers everything but reactions |
+| `MACHINE_SLACK_INBOX` | on | `off` stops the scheduled polls, Socket Mode and the digest; the `/slack/*` routes stay up with an empty snapshot, so the board's `S` view shows nothing until you press `R`, which still polls once on demand |
+| `MACHINE_SLACK_INBOX_INTERVAL` | `60` | seconds between inbox polls; a rate-limited answer backs the next poll off to five minutes |
+| `MACHINE_SLACK_MARK_READ` | off | `on` makes `d` (done) also move your read cursor in Slack (`conversations.mark`, needs the `channels:write`, `groups:write`, `im:write`, `mpim:write` user scopes) |
+| `MACHINE_SLACK_RULES` | `MACHINE_STATE_DIR/slack-triage.md` | the triage rules file you edit (VIPs, muted channels, always-P0 keywords, quiet hours, the reply SLA, notes for the model). A missing file is written from the template, [`docs/agents/slack-triage.md`](./agents/slack-triage.md), which is only that: a template. A relative path is taken from the repo root. What the inbox learns from you goes to the machine-owned sibling `<rules>.learned.md`, so its writes never collide with your edits. Triage itself runs as the `slack_triage` pack in the stage container, with the same credential and Docker image as the stages; nothing else to set |
+| `MACHINE_SLACK_DIGEST_AT` | unset | `HH:MM` local time: the machine DMs you a ten-line digest (open P0/P1, what waits on others, yesterday's response time) every day at that time |
+| `MACHINE_JIRA_SITE` / `MACHINE_JIRA_EMAIL` / `MACHINE_JIRA_TOKEN` | unset | Jira Cloud: the site (`https://acme.atlassian.net`), your Atlassian account's email and an API token from [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens) (basic auth, up to a year). All three or none. Set, tickets link to issues (a `PLAT-123` in a new ticket's text, `J` on the board, intake), the linked issue follows the task per the repo's `luna.yaml` `jira` block, and the `/jira/*` routes exist. Unset: every Jira call says so and repos with a `jira` block still run |
+| `MACHINE_JIRA_TOKEN_EXPIRES` | unset | when the API token expires, as an ISO date (`2027-01-31`), copied from id.atlassian.com when you make it: Jira never tells the machine ahead of time, so this is what drives the once-a-day warning in the last two weeks and `tokenExpiresAt` in `GET /jira/status`. A 401 that names a date overrides it once the token has gone |
+| `MACHINE_JIRA_CLOUD_ID` | unset | for a *scoped* API token only: calls go through `https://api.atlassian.com/ex/jira/<cloud id>` instead of the site (the site is still where issue urls point). Find the id at `https://<site>/_edge/tenant_info`. An unscoped token needs nothing here |
+| `MACHINE_JIRA` | on | `off` turns everything Jira off even when the three variables are set |
+| `MACHINE_SLA_GATE` | `1h` | how long a task may wait on you at a gate (plan, test check, answers, ship, memory review, escalated) before its clock turns red, where the repo's `luna.yaml` `sla.gate` says nothing. `30m`, `4h`, `3d` or `off`. A Jira priority of Highest or High halves it, Lowest doubles it |
+| `MACHINE_SLA_CYCLE` | unset | created-to-closed target for every ticket, where the repo's `sla.cycle` says nothing; same durations |
 | `RUNNER_IMAGE` | `hardness-runner:dev` | the stage container image |
 | `RUNNER_QA_IMAGE` | `hardness-runner-qa:dev` | the QA stage image; without it e2e is skipped |
 | `WORKTREES_DIR` | `~/Developer/worktrees` | where task worktrees are created, as `<worktreesDir>/<repo>/<branch>` |
@@ -65,9 +80,31 @@ policy:
   holdout_cases: false                    # true keeps test_design's cases away from the implementer; verifying still judges by them
 qa_targets:                               # where e2e may drive the app; the credential is a reference, never a value
   - { name: staging, url: https://stg.example.com, credential: env:QA_PASSWORD }
+jira:                                     # how this repo's tasks talk to Jira (needs MACHINE_JIRA_SITE/EMAIL/TOKEN)
+  project: PLAT                           # where `J` creates issues; also the default for intake
+  intake:
+    jql: 'project = PLAT AND labels = luna AND status = Ready'
+    every: 5m                             # the poll; each new issue goes through the jira_intake pack first
+  on:                                     # task state → Jira status name, resolved to a transition when the task enters it
+    triage:        In Refinement
+    implementing:  In Progress
+    awaiting_ship: In Review
+    closed:        Done
+    escalated:     Blocked                # optional; states left out are never touched
+  comments: milestones                    # none | milestones (picked up, PR opened, closed) | gates (every "needs you" too)
+  branch: "{type}/{key}"                  # a linked task's branch; {type} is the issue type lowercased: bug/PLAT-123, story/PLAT-124
+  fields:                                 # optional: Jira fields set with the transition into a state
+    awaiting_ship:
+      customfield_10045: "{pr_url}"       # also {task_id}, {branch}, {board_url}
+sla:                                      # ticket clocks; the machine's env defaults apply where a key is missing
+  gate: 1h                                # any gate waiting on you (MACHINE_SLA_GATE)
+  stage:                                  # per running stage; yellow from 80%, red past it; the stage is not aborted
+    implementing: 4h
+    verifying: 1h
+  cycle: 3d                               # created → closed (MACHINE_SLA_CYCLE)
 ```
 
-Every key is optional and unknown keys are ignored. `auto_approve_plan_minutes` needs triage to report `confidence: high` and `risk: low` and to have asked nothing; anything less waits for you as always, and the approval it does make is logged as `plan.auto_approved` with the reason on the approval.
+Every key is optional and unknown keys are ignored. Under `jira.on`, `jira.fields` and `sla.stage` the keys must be task states (`sla.stage`: running ones); an unknown one is dropped with one warning per version of the file, the rest applies. Durations are `30m`, `4h`, `3d` or `off`. `jira.on` works by status *name*, matched without regard to case against the transitions Jira offers from the issue's current status: already there, nothing happens; no transition leads there, the task gets a `jira.blocked` event (with Jira's own words when it refused), the board shows it, and the pipeline goes on. Comments and created issues are posted as Atlassian Document Format built from markdown (paragraphs, `#` headings, `- ` bullets, `- [ ]`/`- [x]` task lists, `1.` ordered lists, `**bold**`, `` `code` ``, bare urls as links), so a ticket's criteria arrive as checkboxes. `branch` also takes `{slug}`, `{route}` and `{id}`, and must contain `{key}` or `{id}` (a pattern without either is dropped with a warning and the default used, so two tasks never share a branch and no render is ever `main`); when the repo already has the branch the pattern names (an older task on the same issue), `-<id8>` is appended for patterns without `{id}` or `{slug}`. Once a task works on its branch that branch stays, whatever the issue's type becomes, and its link cannot be changed or removed until it closes. An unknown issue type renders `{type}` as `task`; unlinked tasks keep `task/<id>-<slug>`; a writable stage never runs on `main`, `master`, `develop` or the repo's default branch. `auto_approve_plan_minutes` needs triage to report `confidence: high` and `risk: low` and to have asked nothing; anything less waits for you as always, and the approval it does make is logged as `plan.auto_approved` with the reason on the approval.
 
 Each `services` entry runs as its own container beside every stage that runs the repo's code (implementing, verifying, e2e) and every check run, on a private docker network for that run, reachable by its key as hostname; the `exports` become env in the stage or check container. They are torn down with it, so two tasks of one repo never share a database. A service whose `ready` line does not exit 0 within a minute escalates the stage with the service's log tail.
 
@@ -90,7 +127,7 @@ Every stage and check container mounts a docker volume named `hardness-cache-<re
 | `MACHINE_DOCKER_PORT` | `4318` | host port for the machine container (`pnpm dev` keeps `4317`) |
 | `LUNA_REPOS_DIR` | `~/Developer` | where your repos live; task repo paths must be inside it, and so must `WORKTREES_DIR` |
 | `MACHINE_STATE_DIR` | `~/.local/state/hardness` | run folders, mounted into stage containers |
-| `GH_TOKEN` | `gh auth token` (via `pnpm start`) | lets `gh` and `git push` reach GitHub over https; `git@github.com:` and `ssh://` remotes are rewritten to https in the container |
+| `GITHUB_TOKEN` / `GH_TOKEN` | unset (`pnpm start` passes `gh auth token` as `GH_TOKEN`) | the token every GitHub API call uses (PRs, checks, reviews, the PR inbox); `GITHUB_TOKEN` wins when both are set. In the container it also lets `git push` reach GitHub over https; `git@github.com:` and `ssh://` remotes are rewritten to https there |
 | `LUNA_GIT_NAME`, `LUNA_GIT_EMAIL` | your `git config` (via `pnpm start`) | identity for commits the machine makes itself (the approved memory rules) |
 
 `~/.config/hardness` is mounted read-only for the Claude credential. The other variables in the table above pass through to the container as well.

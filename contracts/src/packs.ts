@@ -5,9 +5,10 @@
 // may give is one the machine ingests.
 import { z } from "zod";
 
+import { SlackCategory, SlackPriority } from "./slack.ts";
 import { Finding, LunaConfig, PackId, TestCase, VerifyResult } from "./stage.ts";
 
-/** The eight agent roles. A pack names one; the runner looks its definition up by this. */
+/** The agent roles. A pack names one; the runner looks its definition up by this. */
 export const AgentRole = z.enum([
   "setup-planner",
   "triage-planner",
@@ -17,6 +18,15 @@ export const AgentRole = z.enum([
   "qa-validator",
   "ci-investigator",
   "retro-reviewer",
+  "pr-reviewer",
+  // The Slack inbox's triage: no tools, no worktree, a batch of messages in and verdicts out.
+  "slack-triager",
+  // Jira intake: reads an issue (and, read-only, the repo) before it becomes a ticket.
+  "jira-triager",
+  // Helpers a PR task's role dispatches through the Agent tool; never a pack's own role.
+  "security-reviewer",
+  "reply-drafter",
+  "code-fixer",
 ]);
 export type AgentRole = z.infer<typeof AgentRole>;
 
@@ -48,6 +58,20 @@ export const SetupAnswer = z.object({
   options: z.array(z.string()).optional(),
 });
 
+/** The jira_intake pack's verdict on one issue. */
+export const JiraIntakeAnswer = z.object({
+  verdict: z.enum(["ready", "needs_brief", "not_for_agent"]),
+  /** One line for the board and the Jira comment. */
+  reason: z.string(),
+  /** The ticket as it should read; set for `ready` only (the machine reads none of these for `needs_brief`). */
+  title: z.string().optional(),
+  description: z.string().optional(),
+  criteria: z.array(z.string()).optional(),
+  /** What is missing, for `needs_brief`: asked back on the issue as a comment, with the answer the agent would pick. */
+  questions: z.array(Question).max(3).optional(),
+});
+export type JiraIntakeAnswer = z.infer<typeof JiraIntakeAnswer>;
+
 export const TriageAnswer = z.object({
   kind: z.enum(["brief", "questions"]),
   summary: z.string(),
@@ -63,7 +87,6 @@ export const TriageAnswer = z.object({
 export const TestDesignAnswer = z.object({
   kind: z.enum(["done", "questions"]),
   summary: z.string(),
-  tests: z.array(z.string()).optional(),
   questions: z.array(Question).max(3).optional(),
   cases: z.array(TestCase).optional(),
 });
@@ -122,10 +145,58 @@ export const ReviewingMemoryAnswer = z.object({
   rulesMarkdown: z.string().optional(),
 });
 
+/** reviewing (PR task): a comment review the host posts at once; approve / request_changes wait for you. */
+export const PrReviewAnswer = z.object({
+  kind: z.enum(["done", "escalated"]).optional(),
+  verdict: z.enum(["approve", "request_changes", "comment"]),
+  summary: z.string(),
+  findings: z.array(Finding),
+  /** Line-anchored comments the host posts as one COMMENT review. */
+  comments: z.array(
+    z.object({ path: z.string(), line: z.number().int(), side: z.enum(["RIGHT", "LEFT"]).default("RIGHT"), body: z.string() }),
+  ),
+  reason: z.string().optional(),
+  options: z.array(z.string()).optional(),
+});
+
+/** addressing (PR task): one commit per thread; the host posts each reply and resolves the threads marked. */
+export const PrAddressAnswer = z.object({
+  kind: z.enum(["done", "escalated"]),
+  summary: z.string(),
+  commit: z.string().nullable().optional(),
+  replies: z.array(z.object({ threadId: z.string(), body: z.string(), resolve: z.boolean() })),
+  reason: z.string().optional(),
+  options: z.array(z.string()).optional(),
+});
+
+/** slack_triage: one verdict per inbox item id; the inbox ingests it, not the pipeline. */
+export const SlackTriageAnswer = z.object({
+  items: z.array(
+    z.object({
+      id: z.string(),
+      priority: SlackPriority,
+      category: SlackCategory,
+      /** The text asks the person for something nobody has answered yet. */
+      expectsReply: z.boolean(),
+      /** At most 90 characters: what they want from the person, not what they said. */
+      summary: z.string().max(90),
+      why: z.string(),
+      /** Only when expectsReply: at most two sentences in the person's voice. */
+      draft: z.string().nullable(),
+      refs: z.array(z.object({ kind: z.enum(["pr", "issue", "jira", "url"]), ref: z.string() })),
+      /** An ISO date the text names, else null. */
+      deadline: z.string().nullable(),
+    }),
+  ),
+});
+export type SlackTriageAnswer = z.infer<typeof SlackTriageAnswer>;
+
 export interface Pack {
   id: PackId;
   /** The role the stage runs as; null for a script-only pack that calls no model. */
   agent: AgentRole | null;
+  /** Roles the pack's agent may dispatch as subagents (the SDK's Agent tool); each gets its own body, model and read-only tools. */
+  helpers: AgentRole[];
   /** Skills the role may invoke, by the name the plugin folder gives them. */
   skills: string[];
   /** The tool allow-list, verbatim for the SDK. */
@@ -144,10 +215,11 @@ export interface Pack {
 }
 
 // Every agent pack carries Skill: an explicit `tools` list hides it otherwise, and the role's skills
-// (`luna-factory:<name>`) are only reachable through it.
-const READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "Skill", ...["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse"].map((c) => `Bash(${c}:*)`)];
+// (`luna-factory:<name>`) are only reachable through it. It also carries `mcp__luna__step`: every
+// role reports progress with it, and the runner serves the luna server to every agent pack.
+const READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "Skill", "mcp__luna__step", ...["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse"].map((c) => `Bash(${c}:*)`)];
 const CHECK_COMMANDS = ["npm", "pnpm", "yarn", "npx", "go", "cargo", "pip", "pytest", "make"].map((c) => `Bash(${c}:*)`);
-const LEDGER_TOOLS = ["mcp__luna__step", "mcp__luna__slice_init", "mcp__luna__slice_set", "mcp__luna__slice_list", "mcp__luna__decision_get"];
+const LEDGER_TOOLS = ["mcp__luna__slice_init", "mcp__luna__slice_set", "mcp__luna__slice_list", "mcp__luna__decision_get"];
 
 /** What the setup planner may run to learn a repo: version prints and listings, nothing that builds. */
 const PROBE_COMMANDS = ["which", "command -v", "find", "node", "npm", "pnpm", "yarn", "go", "cargo", "rustc", "python", "python3", "pip", "make", "docker", "git log", "git ls-files"].map((c) => `Bash(${c}:*)`);
@@ -156,6 +228,7 @@ export const PACKS: Record<PackId, Pack> = {
   setup: {
     id: "setup",
     agent: "setup-planner",
+    helpers: [],
     skills: ["code-discovery"],
     // Read-only over the repo checkout itself (not a worktree), with network: it may fetch a
     // tool's docs. It proposes; the machine proves the checks and writes the file on approval.
@@ -171,6 +244,7 @@ export const PACKS: Record<PackId, Pack> = {
   triage: {
     id: "triage",
     agent: "triage-planner",
+    helpers: [],
     skills: ["writing-plans", "code-discovery"],
     tools: [...READ_ONLY_TOOLS, "WebFetch", "Bash(gh issue view:*)", "mcp__luna__decision_get"],
     writable: false,
@@ -184,6 +258,7 @@ export const PACKS: Record<PackId, Pack> = {
   test_design: {
     id: "test_design",
     agent: "test-designer",
+    helpers: [],
     skills: ["tdd"],
     // Read-only: test_design designs the cases the implementer then writes as tests (the
     // approved cases reach implementing and verifying as `context.testCases`).
@@ -199,6 +274,7 @@ export const PACKS: Record<PackId, Pack> = {
   implementing: {
     id: "implementing",
     agent: "implementer",
+    helpers: [],
     skills: ["tdd", "verification-before-completion", "code-discovery"],
     tools: [
       ...READ_ONLY_TOOLS,
@@ -223,6 +299,7 @@ export const PACKS: Record<PackId, Pack> = {
   verifying: {
     id: "verifying",
     agent: "verifier",
+    helpers: [],
     skills: ["review-contract", "caveman-review"],
     tools: [
       ...READ_ONLY_TOOLS,
@@ -250,6 +327,7 @@ export const PACKS: Record<PackId, Pack> = {
   e2e: {
     id: "e2e",
     agent: "qa-validator",
+    helpers: [],
     skills: ["browser-qa", "playwright-qa", "agent-browser", "qa-targets"],
     tools: [
       ...READ_ONLY_TOOLS,
@@ -269,13 +347,15 @@ export const PACKS: Record<PackId, Pack> = {
     maxTurns: 60,
     timeoutMs: 20 * MINUTE,
     model: "sonnet",
-    effort: "low",
+    // A 60-turn browser job: low effort drops steps and misreads screens; medium holds the thread.
+    effort: "medium",
     answer: E2eAnswer,
     template: "e2e.md",
   },
   evidence: {
     id: "evidence",
     agent: null,
+    helpers: [],
     skills: [],
     tools: [],
     writable: false,
@@ -289,6 +369,7 @@ export const PACKS: Record<PackId, Pack> = {
   ci_watch: {
     id: "ci_watch",
     agent: "ci-investigator",
+    helpers: [],
     skills: ["ci-routing", "review-contract"],
     tools: [
       ...READ_ONLY_TOOLS,
@@ -298,6 +379,8 @@ export const PACKS: Record<PackId, Pack> = {
       "Bash(gh pr view:*)",
       "Bash(git log:*)",
       "Bash(git diff:*)",
+      // The PR number comes from the settled decisions when the machine recorded one.
+      "mcp__luna__decision_get",
     ],
     writable: false,
     maxTurns: 30,
@@ -310,6 +393,7 @@ export const PACKS: Record<PackId, Pack> = {
   reviewing_memory: {
     id: "reviewing_memory",
     agent: "retro-reviewer",
+    helpers: [],
     skills: [],
     tools: [...READ_ONLY_TOOLS, "Bash(git log:*)", "Bash(git blame:*)", "mcp__luna__slice_list"],
     writable: false,
@@ -319,6 +403,81 @@ export const PACKS: Record<PackId, Pack> = {
     effort: "high",
     answer: ReviewingMemoryAnswer,
     template: "reviewing_memory.md",
+  },
+  reviewing: {
+    id: "reviewing",
+    agent: "pr-reviewer",
+    // The security pass runs as a subagent when the diff touches a sensitive path.
+    helpers: ["security-reviewer"],
+    skills: ["review-contract", "caveman-review", "inline-review", "code-discovery"],
+    tools: [...READ_ONLY_TOOLS, "Agent", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git merge-base:*)"],
+    writable: false,
+    maxTurns: 40,
+    timeoutMs: 15 * MINUTE,
+    model: "opus",
+    effort: "high",
+    answer: PrReviewAnswer,
+    template: "reviewing.md",
+  },
+  addressing: {
+    id: "addressing",
+    // The code fixer applies what each thread asks for; the reply drafter writes the thread replies.
+    agent: "code-fixer",
+    helpers: ["reply-drafter"],
+    skills: ["receiving-code-review", "verification-before-completion", "tdd", "code-discovery"],
+    tools: [
+      ...READ_ONLY_TOOLS,
+      "Agent",
+      "Write",
+      "Edit",
+      ...LEDGER_TOOLS,
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git diff:*)",
+      "Bash(git status:*)",
+      "Bash(git log:*)",
+      ...CHECK_COMMANDS,
+    ],
+    writable: true,
+    maxTurns: 60,
+    timeoutMs: 25 * MINUTE,
+    model: "sonnet",
+    effort: "medium",
+    answer: PrAddressAnswer,
+    template: "addressing.md",
+  },
+  jira_intake: {
+    id: "jira_intake",
+    // Reads one Jira issue before intake turns it into a ticket: ready, needs a brief, or not
+    // for an agent; with the title, description and criteria the ticket should carry. It may
+    // read the repo to check the ask against the code, nothing more.
+    agent: "jira-triager",
+    helpers: [],
+    skills: [],
+    tools: ["Read", "Glob", "Grep"],
+    writable: false,
+    maxTurns: 8,
+    timeoutMs: 5 * MINUTE,
+    model: "sonnet",
+    effort: "low",
+    answer: JiraIntakeAnswer,
+    template: "jira_intake.md",
+  },
+  slack_triage: {
+    id: "slack_triage",
+    // The Slack inbox's batch triage: not a task stage. No tools at all, no worktree; the
+    // batch is in the input and the answer is the whole job. Haiku, low effort, three turns.
+    agent: "slack-triager",
+    helpers: [],
+    skills: [],
+    tools: [],
+    writable: false,
+    maxTurns: 3,
+    timeoutMs: 3 * MINUTE,
+    model: "haiku",
+    effort: "low",
+    answer: SlackTriageAnswer,
+    template: "slack_triage.md",
   },
 };
 

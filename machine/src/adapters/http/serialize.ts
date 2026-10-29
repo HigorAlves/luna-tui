@@ -7,21 +7,24 @@ import {
   type StageRun,
   type Task,
   type TaskEvent,
+  type TaskSla,
   WAITING_ON_USER,
 } from "@hardness/contracts";
 
+import { jiraOf } from "../../domain/jira-link.ts";
 import type { ApprovalRow, ArtifactRow, EventRow, StageRunRow, TaskRow } from "../../domain/task.ts";
 
 const iso = (date: Date | null) => (date ? date.toISOString() : null);
 
-export const toTask = (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null): Task => ({
+/** The clocks are computed by the caller (application/sla.ts) when it has the task's history; a plain call shows none. */
+export const toTask = (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null, sla: TaskSla | null = null): Task => ({
   id: row.id,
   title: row.title,
   description: row.description,
   criteria: row.criteria,
   repoPath: row.repoPath,
   source: row.source,
-  kind: row.kind,
+  route: row.route,
   branch: row.branch,
   worktreePath: row.worktreePath,
   state: row.state,
@@ -36,6 +39,8 @@ export const toTask = (row: TaskRow, usage: { spentUsd: number; workedMs: number
   workedMs: usage?.workedMs ?? null,
   diff: row.diffAdded !== null && row.diffRemoved !== null ? { added: row.diffAdded, removed: row.diffRemoved } : null,
   tests: row.testsPassed !== null && row.testsTotal !== null ? { passed: row.testsPassed, total: row.testsTotal } : null,
+  jira: jiraOf(row),
+  sla,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });
@@ -49,6 +54,7 @@ export const toStageRun = (row: StageRunRow): StageRun => ({
   // numeric comes back from pg as a string.
   costUsd: row.costUsd === null ? null : Number(row.costUsd),
   turns: row.turns,
+  cases: row.cases,
   startedAt: row.startedAt.toISOString(),
   endedAt: iso(row.endedAt),
 });

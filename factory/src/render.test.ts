@@ -1,7 +1,7 @@
 import { PACKS, type StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { FACTORY_RULES, callLine, renderPrompt } from "./render.ts";
+import { FACTORY_RULES, callLine, escalationLine, renderPrompt } from "./render.ts";
 
 const input: StageInput = {
   schema: 3,
@@ -57,15 +57,24 @@ describe("renderPrompt", () => {
     expect(prompt).toContain("context: (none)");
   });
 
-  it("opens with the role, the stage, the factory rules and the answer schema", () => {
+  it("opens with the role, the stage and how this stage ends when it cannot settle something; no schema dump", () => {
     const prompt = renderPrompt({ pack: PACKS.triage, input: { ...input, pack: "triage", stage: "triage" }, template: "body" });
-    const [header, schema] = prompt.split("\n");
+    const [header, rest] = prompt.split("\n");
     expect(header).toContain("`triage-planner` role running the `triage` stage in factory mode (LUNA_FACTORY=1)");
-    expect(header).toContain("Never call AskUserQuestion");
-    const parsed = JSON.parse(schema!);
-    expect(parsed.properties.kind.enum).toEqual(["brief", "questions"]);
-    expect(parsed.$schema).toBeUndefined();
+    expect(header).toContain('answer kind "questions" (at most three');
+    expect(rest).toBe("body");
+    expect(prompt).not.toContain('"properties"');
+    expect(prompt).not.toContain("Answer ONLY");
     expect(prompt.endsWith("\nbody")).toBe(true);
+  });
+
+  it("names each pack's own escalation shape: questions, escalated, needs_brief, or none", () => {
+    expect(escalationLine(PACKS.test_design)).toContain('kind "questions"');
+    for (const id of ["setup", "implementing", "verifying", "e2e", "ci_watch", "reviewing", "addressing"] as const) expect(escalationLine(PACKS[id])).toContain('kind "escalated" with reason and options[]');
+    expect(escalationLine(PACKS.jira_intake)).toContain('verdict "needs_brief"');
+    expect(escalationLine(PACKS.slack_triage)).toContain("no escalation");
+    expect(escalationLine(PACKS.reviewing_memory)).toContain("no escalation");
+    expect(renderPrompt({ pack: PACKS.implementing, input, template: "x" })).not.toContain("questions");
   });
 
   it("renders the CI facts, the base commit and the QA targets for the packs that read them", () => {
@@ -89,14 +98,70 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.implementing, input, template })).toContain("checks:\n(none declared; detect the suite from the tree)");
   });
 
+  it("renders the PR's diff and comments for reviewing, and each thread with its id for addressing", () => {
+    const pr = { repo: "o/a", number: 12, url: "https://github.com/o/a/pull/12", title: "Export CSV", body: "Adds it.", author: "them", baseRef: "main", headRef: "feat/export" };
+    const review = { pr, diff: "diff --git a/a.ts b/a.ts\n+x", files: [{ path: "a.ts", additions: 1, deletions: 0 }], existingComments: [{ path: "a.ts", line: 3, author: "x", body: "old note" }] };
+    const reviewed = renderPrompt({ pack: PACKS.reviewing, input: { ...input, pack: "reviewing", stage: "reviewing", context: { projectContext: null, review } }, template: "{{context.review}}" });
+    expect(reviewed).toContain("PR #12 Export CSV by @them: feat/export into main (https://github.com/o/a/pull/12)");
+    expect(reviewed).toContain("Adds it.");
+    expect(reviewed).toContain("- a.ts (+1 -0)");
+    expect(reviewed).toContain("- a.ts:3 @x: old note");
+    expect(reviewed).toContain("```diff\ndiff --git a/a.ts b/a.ts\n+x\n```");
+    const threads = { pr, threads: [{ id: "PRRT_1", path: "a.ts", line: 4, comments: [{ author: "them", body: "why?", at: "2026-10-27T10:00:00Z" }] }] };
+    const addressed = renderPrompt({ pack: PACKS.addressing, input: { ...input, pack: "addressing", stage: "addressing", context: { projectContext: null, threads } }, template: "{{context.threads}}" });
+    expect(addressed).toContain("### Thread PRRT_1 at a.ts:4");
+    expect(addressed).toContain("- @them (2026-10-27T10:00:00Z): why?");
+    expect(renderPrompt({ pack: PACKS.reviewing, input, template: "{{context.review}}|{{context.threads}}" })).toMatch(/\n\(none\)\|\(none\)$/);
+  });
+
+  it("renders the inbox batch for slack_triage: the person, the watches, the rules and one block per item", () => {
+    const template = "me {{context.slack.me}}\nwatches:\n{{context.slack.watches}}\nrules:\n{{context.slack.rules}}\nitems:\n{{context.slack.items}}";
+    const slack = {
+      me: { id: "U1", name: "higor" },
+      watches: [{ label: "@platform-team", kind: "usergroup" }],
+      rules: "## Notes\n- short replies\n",
+      items: [
+        { id: "C1:1", channel: "#eng", author: "@marta", isBot: false, text: "can you review o/a#212?", context: [{ user: "@lee", text: "earlier" }], matched: ["me"], threadReplies: 2 },
+        { id: "C2:9", channel: "dm with @ana", author: "@deploybot", isBot: true, text: "deploy done", context: [], matched: [], threadReplies: 0 },
+      ],
+    };
+    const prompt = renderPrompt({ pack: PACKS.slack_triage, input: { ...input, pack: "slack_triage", stage: "slack_triage", context: { projectContext: null, slack } }, template });
+    expect(prompt).toContain("me higor (U1)");
+    expect(prompt).toContain("watches:\n- @platform-team (usergroup)");
+    expect(prompt).toContain("rules:\n## Notes\n- short replies");
+    expect(prompt).toContain("1. id C1:1 · #eng · @marta · matched me · 2 thread replies\n   earlier · @lee: earlier\n   text: can you review o/a#212?");
+    expect(prompt).toContain("2. id C2:9 · dm with @ana · @deploybot (app) · matched (none)\n   text: deploy done");
+    expect(prompt).toContain("`slack-triager` role running the `slack_triage` stage");
+    expect(renderPrompt({ pack: PACKS.slack_triage, input, template })).toContain("me (none)\nwatches:\n(none)\nrules:\n(none)\nitems:\n(none)");
+  });
+
+  it("renders the issue for jira_intake: the facts line, the description, the comments and the repo", () => {
+    const template = "issue:\n{{context.jira.issue}}\ndescription:\n{{context.jira.description}}\ncomments:\n{{context.jira.comments}}\nrepo: {{context.jira.repoPath}}";
+    const jira = { key: "PLAT-123", url: "https://acme.atlassian.net/browse/PLAT-123", summary: "Login page", description: "Users sign in.\n\n- bad password errors", issueType: "Story", priority: "High", labels: ["luna"], dueAt: "2026-10-31", comments: ["Marta: please", "Lee: by Friday"], repoPath: "/work" };
+    const prompt = renderPrompt({ pack: PACKS.jira_intake, input: { ...input, pack: "jira_intake", stage: "jira_intake", context: { projectContext: null, jira } }, template });
+    expect(prompt).toContain("issue:\nLogin page\nPLAT-123 · Story · priority High · labels luna · due 2026-10-31\nhttps://acme.atlassian.net/browse/PLAT-123");
+    expect(prompt).toContain("description:\nUsers sign in.\n\n- bad password errors");
+    expect(prompt).toContain("comments:\n- Marta: please\n- Lee: by Friday");
+    expect(prompt).toContain("repo: /work");
+    expect(prompt).toContain("`jira-triager` role running the `jira_intake` stage");
+    const bare = renderPrompt({ pack: PACKS.jira_intake, input: { ...input, pack: "jira_intake", stage: "jira_intake", context: { projectContext: null, jira: { ...jira, labels: [], dueAt: null, description: "", comments: [], repoPath: null } } }, template });
+    expect(bare).toContain("PLAT-123 · Story · priority High\nhttps");
+    expect(bare).toContain("description:\n(none)\ncomments:\n(none)\nrepo: (unknown: /work is empty)");
+    expect(renderPrompt({ pack: PACKS.jira_intake, input, template })).toContain("issue:\n(none)\ndescription:\n(none)");
+  });
+
   it("names a script pack's agent as script", () => {
     expect(renderPrompt({ pack: PACKS.evidence, input: { ...input, pack: "evidence", stage: "evidence" }, template: "{{agent}}" })).toMatch(/\nscript$/);
   });
 
-  it("states the rules a stage runs under", () => {
+  it("states the rules a stage runs under, once, without promising an answer shape", () => {
     expect(FACTORY_RULES).toContain("Never call AskUserQuestion");
     expect(FACTORY_RULES).toContain("requested[]");
     expect(FACTORY_RULES).toContain("Never write outside /work and /out");
+    expect(FACTORY_RULES).toContain("chained command");
+    expect(FACTORY_RULES).not.toContain('kind "questions"');
+    expect(FACTORY_RULES).not.toContain("Answer ONLY");
+    expect(FACTORY_RULES).not.toMatch(/human|controller/);
   });
 });
 

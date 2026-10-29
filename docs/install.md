@@ -13,15 +13,64 @@
 ```sh
 pnpm install
 pnpm start            # builds the stage images, then Postgres + the machine on http://127.0.0.1:4318, in Docker
-pnpm board:build      # the board; then `herdr plugin link ./board` once
+pnpm board:link       # builds the board and links it into herdr once; `pnpm board:build` alone rebuilds it after that
 ```
 
 ## Two ways to run
 
-- **`pnpm start`** (or `docker compose up -d`): Postgres and the machine both run in Docker, so there's no server to keep open in a terminal. It passes your `gh auth token` and git identity to the machine; `pnpm stop` stops both and keeps the data. Stage containers still run on your Docker, so repos, worktrees and run folders are mounted at the same paths as on your host (see [configuration.md](./configuration.md#compose)).
+- **`pnpm start`** (or `docker compose up -d`): Postgres and the machine both run in Docker, so there's no server to keep open in a terminal. It passes your `gh auth token` (as `GH_TOKEN`, the one credential the machine's GitHub calls use) and git identity to the machine; `pnpm stop` stops both and keeps the data. Stage containers still run on your Docker, so repos, worktrees and run folders are mounted at the same paths as on your host (see [configuration.md](./configuration.md#compose)).
 - **`pnpm dev`**: for working on the harness itself. It stops the machine container, starts only Postgres (`docker compose up postgres`), and runs the machine on your host at http://127.0.0.1:4317 with hot reload, loading `machine/.env` if one exists. `pnpm db:down` stops Postgres and keeps its data.
 
 Both use the same database, so tasks carry over when you switch. For board usage and keys, see [`board/README.md`](../board/README.md).
+
+## Slack inbox
+
+`S` on the board is your Slack Activity tab, triaged. It needs a small Slack app of your own, installed only in your workspace, created once from the manifest in this repo:
+
+1. Open <https://api.slack.com/apps> → **Create New App** → **From a manifest** → pick your workspace → paste [`slack/manifest.json`](../slack/manifest.json) → **Create**.
+2. **Install to Workspace** and allow it. On the app's **OAuth & Permissions** page copy the **User OAuth Token** (`xoxp-…`).
+3. On **Basic Information → App-Level Tokens**, generate one with the `connections:write` scope and copy it (`xapp-…`). It feeds the live socket that brings reactions and replies in as they happen; without it the inbox polls once a minute and shows no reactions.
+4. Put both where the machine reads them: `machine/.env` for `pnpm dev`, a root `.env` (or the shell) for `pnpm start`:
+
+   ```sh
+   MACHINE_SLACK_USER_TOKEN=xoxp-...
+   MACHINE_SLACK_APP_TOKEN=xapp-...
+   ```
+
+5. Start the machine, press `S` on the board, then `W` to add the team handles (`@platform-team`), keywords or channels it should treat as addressed to you.
+
+The token is yours, so replies sent from the board post as you. Nothing is posted without `ctrl+s` in the reply editor. `d` clears an item on the board only; `MACHINE_SLACK_MARK_READ=on` also marks it read in Slack. Priorities and drafts come from the `slack_triage` pack: a harness agent (Haiku, low effort, no tools) that runs in the stage container with your Claude Code credential, the same way every stage does, one short run per batch of new messages after the poll has published; without Docker or a credential (or with `MACHINE_AGENTS=off`) the inbox still fills, sorted by time, with no priorities. The rules the triage follows (VIPs, muted channels, quiet hours, always-P0 keywords, your notes) live in `~/.local/state/hardness/slack-triage.md` (`MACHINE_STATE_DIR`; the machine writes it from the template in [`docs/agents/slack-triage.md`](./agents/slack-triage.md) on first run, and `MACHINE_SLACK_RULES` moves it); its `## SLA` section sets how long you give yourself to reply by priority (10m for P0, 30m for P1, 1h for P2 and P3 unless you change it), and an item past its target turns red on the board. Inside its `## Quiet hours` window the board raises notices for P0 only. What the inbox learns from what you clear and answer is kept next to it in `slack-triage.learned.md`. Every variable is in [configuration.md](./configuration.md).
+
+## Jira
+
+Tickets stay on the board; a linked Jira issue follows them. One token and one block per repo:
+
+1. Open <https://id.atlassian.com/manage-profile/security/api-tokens> → **Create API token** (unscoped, up to a year) → copy it.
+2. Put the site, your Atlassian email and the token where the machine reads them (`machine/.env` for `pnpm dev`, a root `.env` or the shell for `pnpm start`):
+
+   ```sh
+   MACHINE_JIRA_SITE=https://acme.atlassian.net
+   MACHINE_JIRA_EMAIL=you@acme.com
+   MACHINE_JIRA_TOKEN=...
+   ```
+
+3. In each repo's `luna.yaml`, say what the machine does in Jira; at least `on:` with the statuses you care about (names as your project's workflow spells them):
+
+   ```yaml
+   jira:
+     project: PLAT
+     on:
+       implementing: In Progress
+       awaiting_ship: In Review
+       closed: Done
+       escalated: Blocked
+     intake:
+       jql: 'project = PLAT AND labels = luna AND status = Ready'
+   ```
+
+4. Press `J` on a ticket to link an issue (a key, or a text search) or to create one from the ticket; a `PLAT-123` in a new ticket's title or description links by itself; label an issue `luna` and intake picks it up after the `jira_intake` agent has read it.
+
+The issue moves when the task enters a mapped state, gets a comment when the task is picked up, opens its PR and closes, and shows its status, priority and due date on the ticket. A transition Jira will not allow shows on the ticket as blocked and is tried again every few minutes while the issue answers; the pipeline is never held up by Jira. The token expires after at most a year and Jira does not say when ahead of time: set `MACHINE_JIRA_TOKEN_EXPIRES` to the date you chose when making it and the machine warns once a day in the last two weeks. A scoped token also works through `MACHINE_JIRA_CLOUD_ID`; see [configuration.md](./configuration.md).
 
 ## Checks
 

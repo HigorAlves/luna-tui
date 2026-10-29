@@ -11,7 +11,7 @@ import { TaskEntity } from "../adapters/persistence/schemas.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { NO_RETRIES } from "../domain/transition.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { sweepImages, sweepRunFolders, sweepTaskState, sweepWorktrees } from "./sweep.ts";
+import { sweepImages, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./sweep.ts";
 
 let db: DataSource;
 beforeAll(async () => {
@@ -148,5 +148,25 @@ describe("sweepTaskState", () => {
     expect(existsSync(join(stateDir, "tasks", task.id))).toBe(true);
     expect(existsSync(join(stateDir, "tasks", "11111111-2222-3333-4444-555555555555"))).toBe(false);
     expect(await sweepTaskState(db, join(stateDir, "nowhere"))).toBe(0);
+  });
+});
+
+describe("sweepSlackTriageRuns", () => {
+  it("removes failed slack_triage run folders older than the window by their stamp, keeps the rest, and is off at 0", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "sweep-slack-"));
+    const dir = join(stateDir, "slack-triage");
+    for (const name of ["2026-07-01T12-00-00-000Z", "2026-07-01T12-00-00-000Z-2", "2026-10-27T09-30-00-000Z", "notes"]) {
+      mkdirSync(join(dir, name), { recursive: true });
+      writeFileSync(join(dir, name, "t.log"), "x");
+    }
+    const now = new Date("2026-10-28T12:00:00Z");
+    expect(await sweepSlackTriageRuns(stateDir, 0, now)).toBe(0);
+    expect(await sweepSlackTriageRuns(stateDir, 90, now)).toBe(2);
+    expect(existsSync(join(dir, "2026-07-01T12-00-00-000Z"))).toBe(false);
+    expect(existsSync(join(dir, "2026-07-01T12-00-00-000Z-2"))).toBe(false);
+    expect(existsSync(join(dir, "2026-10-27T09-30-00-000Z"))).toBe(true);
+    // A folder with no stamp goes by its mtime: just written, so it stays.
+    expect(existsSync(join(dir, "notes"))).toBe(true);
+    expect(await sweepSlackTriageRuns(join(stateDir, "nowhere"), 90, now)).toBe(0);
   });
 });
