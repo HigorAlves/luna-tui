@@ -2626,6 +2626,39 @@ mod tests {
     }
 
     #[test]
+    fn a_later_stage_replaces_the_recorded_one_so_f_opens_the_newest_container() {
+        let mut app = App::new(Machine::from_env());
+        let task = ticket("aaaaaaaa0000", "implementing", true, true);
+        app.tasks.push(task.clone());
+        for container in ["c1", "c2"] {
+            let started = format!(
+                r##"{{"type":"stage.started","taskId":"aaaaaaaa0000","label":"#aaaaaaaa app · t","cwd":"/wt","container":"{container}"}}"##
+            );
+            app.tx.send(Incoming::Message(serde_json::from_str(&started).unwrap())).unwrap();
+        }
+        app.pump();
+        assert_eq!(app.stages.len(), 1, "one entry per task, not per stage");
+        let want = herdr::Stage { label: "#aaaaaaaa app · t".into(), cwd: "/wt".into(), container: "c2".into() };
+        assert_eq!(herdr::watch_action(false, app.stages.get(&task.id)), herdr::WatchAction::OpenAndFocus(want));
+    }
+
+    #[test]
+    fn f_with_an_existing_tab_only_focuses_and_says_nothing() {
+        if herdr::available() {
+            return;
+        }
+        let mut app = App::new(Machine::from_env());
+        let task = ticket("aaaaaaaa0000", "implementing", true, true);
+        app.tasks.push(task.clone());
+        let stage = herdr::Stage { label: "#aaaaaaaa app · t".into(), cwd: "/wt".into(), container: "c1".into() };
+        app.stages.insert(task.id.clone(), stage);
+        app.toast = None;
+        app.watch_with(&task, true);
+        assert!(app.toast.is_none(), "focusing an existing tab is silent: {:?}", app.toast.as_ref().map(|t| &t.text));
+        assert!(app.stages.contains_key(&task.id), "the stage stays recorded");
+    }
+
+    #[test]
     fn a_budget_alert_becomes_a_notice_and_a_toast_that_turns_red_at_the_ceiling() {
         let mut app = App::new(Machine::from_env());
         let alert = |pct: u8| {
