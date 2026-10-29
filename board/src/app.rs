@@ -1057,7 +1057,7 @@ impl App {
     fn open_help(&mut self) {
         let scope = keys::active_scope(self);
         self.help_scroll.set(0);
-        self.mode = Mode::Help { scope, long: false, query: None, cursor: 0 };
+        self.mode = Mode::Help { scope, long: true, query: None, cursor: 0 };
     }
 
     /// Closes the sheet: back to the popup it was opened over, else the view under it.
@@ -4206,7 +4206,7 @@ mod tests {
         app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
         app.focus = app.tasks[0].column_index();
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        let rows = keys::help_rows_for(&app, Scope::Board, false, None).iter().filter(|r| matches!(r, keys::HelpRow::Key { .. })).count();
+        let rows = keys::help_rows_for(&app, Scope::Board, true, None).iter().filter(|r| matches!(r, keys::HelpRow::Key { .. })).count();
         assert!(rows > 3);
         for _ in 0..rows + 5 {
             app.handle_key(KeyEvent::from(KeyCode::Char('j')));
@@ -4275,9 +4275,9 @@ mod tests {
         assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("% is not a key here; esc closes"));
 
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help { long: true, .. }), "? again shows the long form");
+        assert!(matches!(app.mode, Mode::Help { long: false, .. }), "? again folds to the short form");
         app.handle_key(KeyEvent::from(KeyCode::Char('?')));
-        assert!(matches!(app.mode, Mode::Help { long: false, .. }));
+        assert!(matches!(app.mode, Mode::Help { long: true, .. }));
 
         app.handle_key(KeyEvent::from(KeyCode::Char('G')));
         assert!(matches!(app.mode, Mode::Normal), "G is bright: the sheet closes and runs it");
@@ -4307,8 +4307,7 @@ mod tests {
         app.handle_key(KeyEvent::from(KeyCode::Esc));
         assert!(matches!(&app.mode, Mode::Help { query: None, .. }), "esc leaves the search first");
 
-        // In the long form, down to `enter  open the ticket's workspace`, and run it.
-        app.handle_key(KeyEvent::from(KeyCode::Char('?')));
+        // In the long form (how the sheet opens), down to `enter  open the ticket's workspace`, and run it.
         let rows = keys::help_rows_for(&app, Scope::Board, true, None);
         let at = rows.iter().filter(|r| matches!(r, keys::HelpRow::Key { .. })).position(|r| matches!(r, keys::HelpRow::Key { binding, .. } if binding.keys == "enter")).unwrap();
         for _ in 0..at {

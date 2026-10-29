@@ -409,22 +409,29 @@ fn footer_line(app: &App) -> Line<'static> {
             Span::from(format!("{buf}▏")),
             Span::from("   enter create and edit · esc cancel").fg(c(SUBTEXT0)),
         ]),
-        Mode::EditTicket { .. } | Mode::Answer { .. } | Mode::EditCases { .. } | Mode::SlackReply { .. } | Mode::EditPlan { .. } => {
+        Mode::EditTicket { vim, .. } | Mode::Answer { vim, .. } | Mode::EditCases { vim, .. } | Mode::SlackReply { vim, .. } => {
             let save = match app.mode {
                 Mode::Answer { .. } => "send answers",
                 Mode::SlackReply { .. } => "send",
-                Mode::EditPlan { .. } => "save both",
                 _ => "save",
             };
-            let mut keys: Vec<(String, String)> = Vec::new();
-            if let Mode::EditPlan { .. } = app.mode {
-                keys.push(("tab".to_string(), "switch pane".to_string()));
+            match vim.mode() {
+                crate::vim::Mode::Normal => hint(&[("i/a/o", "insert"), ("hjkl", "move"), ("dd/x", "delete"), ("ctrl+s", save), ("esc", "cancel")]),
+                crate::vim::Mode::Insert => hint(&[("esc", "normal mode"), ("ctrl+s", save)]),
             }
-            for b in keys::footer_keys(app, Scope::Editor, 8) {
-                let label = if b.keys == "ctrl+s" { save.to_string() } else { b.label.to_string() };
-                keys.push((b.short_keys(), label));
+        }
+        Mode::EditPlan { focus, plan_vim, ticket_vim, .. } => {
+            let (vim, pane) = match focus {
+                crate::app::PlanPane::Plan => (plan_vim, "plan"),
+                crate::app::PlanPane::Ticket => (ticket_vim, "ticket"),
+            };
+            match vim.mode() {
+                crate::vim::Mode::Normal => hint(&[("tab", "switch pane"), ("i/a/o", "insert"), ("hjkl", "move"), ("ctrl+s", "save both"), ("esc", "cancel")]),
+                crate::vim::Mode::Insert => Line::from(vec![
+                    Span::from(format!(" editing the {pane} ")).fg(c(ACCENT)).bold(),
+                    Span::from("   esc normal mode · ctrl+s save both").fg(c(SUBTEXT0)),
+                ]),
             }
-            hint_owned(&keys)
         }
         Mode::Filter => Line::from(vec![
             Span::from(" filter: ").fg(c(ACCENT)).bold(),
@@ -463,8 +470,39 @@ fn footer_line(app: &App) -> Line<'static> {
             Span::from("   tab completes · enter runs · esc closes").fg(c(SUBTEXT0)),
         ]),
         Mode::Help { .. } => scope_footer(app, Scope::Help),
-        // Every view, the ticket popup and the Watches popup: the registry's heaviest keys.
-        _ => scope_footer(app, keys::active_scope(app)),
+        // The views, the ticket popup and the Watches popup: a few short words, as before the
+        // key registry. The sheet behind `?` lists the rest.
+        _ => view_footer(app),
+    }
+}
+
+fn view_footer(app: &App) -> Line<'static> {
+    match keys::active_scope(app) {
+        Scope::Floor => hint(&[("tab", "next repo"), ("r", "refresh"), ("esc", "close")]),
+        Scope::Digest => hint(&[("j/k", "move"), ("enter", "jump to the ticket"), ("o", "open the PR"), ("esc", "close")]),
+        Scope::Inbox => hint(&[("j/k", "move"), ("h/l", "split"), ("a/r/e", "act"), ("A", "approve all"), ("enter", "open"), ("esc", "close")]),
+        Scope::Pulls => hint(&[("j/k", "move"), ("h/l", "split"), ("m", "merge"), ("c/v/t", "CI fix / review / threads"), ("o", "open"), ("R", "poll"), ("x", "menu"), ("esc", "close")]),
+        Scope::Watches => hint(&[("j/k", "move"), ("n", "add"), ("e", "floor"), ("d", "delete"), ("space", "on/off"), ("esc", "close")]),
+        Scope::Slack => hint(&[
+            ("j/k", "move"),
+            ("h/l 1-6", "split"),
+            ("r", "reply"),
+            ("t", "ticket"),
+            ("d", "done"),
+            ("s", "snooze"),
+            ("! -", "priority"),
+            ("W", "watches"),
+            ("o", "open"),
+            ("R", "poll"),
+            ("esc", "close"),
+        ]),
+        Scope::Detail => {
+            let shippable = matches!(&app.mode, Mode::Detail(id) if app.task(id).is_some_and(|t| t.state == "awaiting_ship"));
+            let (rows, scroll) = if app.detail_section.has_cursor() { (("jk", "pick"), ("JK", "scroll")) } else { (("jk", "scroll"), ("^d/^u", "page")) };
+            let act = if shippable { ("S", "ship") } else { ("a", "advance") };
+            hint(&[("h/l 1-8", "section"), rows, scroll, act, ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
+        }
+        _ => hint(&[("?", "help"), ("n", "new"), ("a", "advance"), ("enter", "open"), ("x", "actions"), ("=", "density"), ("/", "filter"), ("q", "quit")]),
     }
 }
 
@@ -2978,6 +3016,7 @@ mod help_sheet_tests {
     fn the_sheet_names_the_ticket_and_its_state_and_dims_what_does_not_apply() {
         let mut app = app_with("awaiting_approval", true);
         press(&mut app, KeyCode::Char('?'));
+        press(&mut app, KeyCode::Char('?'));
         let text = screen(&app, 120, 40).join("\n");
         assert!(text.contains(" Keys · ticket #a1b2c3d4 Login page · approve plan "), "{text}");
         assert!(text.contains("/ search"), "{text}");
@@ -2999,6 +3038,7 @@ mod help_sheet_tests {
     #[test]
     fn the_sheet_is_two_columns_from_100_and_one_below_and_the_popup_folds_the_board() {
         let mut app = app_with("draft", false);
+        press(&mut app, KeyCode::Char('?'));
         press(&mut app, KeyCode::Char('?'));
         let wide = screen(&app, 120, 50);
         let col = |rows: &[String], needle: &str| rows.iter().find_map(|r| r.find(needle).map(|i| r[..i].chars().count()));
@@ -3130,22 +3170,18 @@ mod help_sheet_tests {
     }
 
     #[test]
-    fn the_footer_derives_from_the_registry_and_follows_the_ticket() {
-        let approval = app_with("awaiting_approval", true);
-        let line = footer(&approval);
-        assert!(line.starts_with("  ?  keys   a  approve the plan   r  send back with a reason  "), "{line}");
-        let draft = app_with("draft", false);
-        let line = footer(&draft);
-        assert!(line.contains(" a  start  ") && line.contains(" R  set the repo") && !line.contains(" r  "), "{line}");
+    fn the_footer_is_a_few_short_words_per_view() {
+        let board = footer(&app_with("awaiting_approval", true));
+        assert!(board.starts_with("  ?  help   n  new   a  advance   enter  open   x  actions   =  density   /  filter   q  quit"), "{board}");
         let mut pulls = App::new(Machine::from_env());
         pulls.pulls = Some(PullsState::default());
         pulls.toast = None;
         let line = footer(&pulls);
-        assert!(line.starts_with("  ?  keys ") && line.contains(" R  poll GitHub now ") && !line.contains(" m "), "no PR under the cursor, m is off: {line}");
+        assert!(line.contains(" m  merge ") && line.contains(" c/v/t  CI fix / review / threads ") && line.contains(" R  poll "), "{line}");
         let mut floor = App::new(Machine::from_env());
         floor.floor = Some(FloorState::default());
         floor.toast = None;
-        assert!(footer(&floor).contains(" R  refresh the numbers "), "{}", footer(&floor));
+        assert!(footer(&floor).contains(" r  refresh "), "{}", footer(&floor));
         let mut help = app_with("draft", true);
         press(&mut help, KeyCode::Char('?'));
         let line = footer(&help);
