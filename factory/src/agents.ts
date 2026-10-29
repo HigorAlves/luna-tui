@@ -19,6 +19,7 @@ export const ROLE_DESCRIPTION: Record<AgentRole, string> = {
   "retro-reviewer": "Looks back at a finished task and proposes rules for the project context from incidents and patterns.",
   "pr-reviewer": "Reviews someone else's open pull request from its diff and returns line-anchored comments and a mechanical verdict; never posts, never edits.",
   "slack-triager": "Triages a batch of the person's Slack inbox items: priority, category, whether a reply is expected, a one-line summary and a draft; no tools, no worktree.",
+  "datadog-triager": "Triages a batch of Datadog signals (incidents, alerting monitors, Error Tracking issues, error-log clusters): priority, category, a one-line summary, a suspected cause and the first step; no tools, no worktree.",
   "jira-triager": "Reads one Jira issue and, read-only, the repo it would land in; decides ready, needs a brief or not for an agent, and writes the ticket's title, description and testable criteria.",
   "security-reviewer": "Reviews a diff for exploitable security issues and returns review-contract findings with a concrete exploit each; never edits.",
   "reply-drafter": "Drafts one short reply per review thread from the thread, the code and what changed; text only, never edits.",

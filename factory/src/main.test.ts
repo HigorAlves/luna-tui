@@ -65,8 +65,8 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
   return { code, stdout, out, result };
 }
 
-// slack_triage has no worktree and reads no project context; its dry run is below.
-const agentPacks = Object.values(PACKS).filter((p) => p.agent !== null && p.id !== "slack_triage").map((p) => p.id);
+// slack_triage and datadog_triage have no worktree and read no project context; their dry runs are below.
+const agentPacks = Object.values(PACKS).filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "datadog_triage").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -100,6 +100,22 @@ describe("factory main (dry run)", () => {
     expect(prompt).toContain("id C1:1 · #eng · @marta · matched me");
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     expect(options).toMatchObject({ agent: "slack-triager", agents: ["slack-triager"], model: "haiku", effort: "low", maxTurns: 5, tools: [], allowedTools: [] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
+  it("datadog_triage: runs over an empty /work with no tools, renders the signals and leaves a valid result", () => {
+    const task = { id: "datadog-triage", title: "Datadog triage", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const datadog = { scope: "env:prod", items: [{ id: "inc:812", source: "incident", title: "Checkout failing", service: null, env: null, status: "active", severity: "SEV-2", count: null, firstSeen: "2026-10-29T11:00:00Z", lastSeen: "2026-10-29T11:30:00Z", samples: [], floor: "P0", reopened: false }] };
+    const { code, stdout, out, result } = run(stageInput("datadog_triage", { task, plan: null, context: { projectContext: null, datadog } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`datadog-triager` role running the `datadog_triage` stage");
+    expect(prompt).toContain("env:prod");
+    expect(prompt).toContain("1. id inc:812 · incident");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "datadog-triager", agents: ["datadog-triager"], model: "haiku", effort: "low", maxTurns: 5, tools: [], allowedTools: [] });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });

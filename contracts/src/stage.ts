@@ -22,6 +22,8 @@ export const TaskSource = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("slack"), channel: z.string(), ts: z.string(), permalink: z.string() }),
   /** A ticket imported from a Jira issue by intake. `issueType` is Jira's type name, e.g. `Bug`. */
   z.object({ kind: z.literal("jira"), key: z.string(), url: z.string(), issueType: z.string().nullable() }),
+  /** A ticket made from a Datadog signal (`t` in the board's Datadog view). */
+  z.object({ kind: z.literal("datadog"), source: z.enum(["incident", "monitor", "error_tracking", "error_logs"]), id: z.string(), url: z.string() }),
 ]);
 export type TaskSource = z.infer<typeof TaskSource>;
 
@@ -100,6 +102,8 @@ export const PackId = z.enum([
   "slack_triage",
   // Not a task stage either: reads a Jira issue before it becomes a ticket (read-only on the repo).
   "jira_intake",
+  // Not a task stage: the Datadog inbox's triage, run as a pack with no worktree.
+  "datadog_triage",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -190,6 +194,30 @@ export const SlackTriageContext = z.object({
   ),
 });
 export type SlackTriageContext = z.infer<typeof SlackTriageContext>;
+
+/** For datadog_triage: one batch of signals, incidents first, as the machine gathered them. */
+export const DatadogTriageContext = z.object({
+  scope: z.string(),
+  items: z.array(
+    z.object({
+      id: z.string(),
+      source: z.enum(["incident", "monitor", "error_tracking", "error_logs"]),
+      title: z.string(),
+      service: z.string().nullable(),
+      env: z.string().nullable(),
+      status: z.string(),
+      severity: z.string().nullable(),
+      count: z.number().int().nullable(),
+      firstSeen: z.string(),
+      lastSeen: z.string(),
+      samples: z.array(z.string()),
+      /** The priority rules already require; the answer may raise it, never lower it. */
+      floor: z.enum(["P0", "P1", "P2", "P3"]).nullable(),
+      reopened: z.boolean(),
+    }),
+  ),
+});
+export type DatadogTriageContext = z.infer<typeof DatadogTriageContext>;
 
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
@@ -392,6 +420,8 @@ export const StageInput = z.object({
     slack: SlackTriageContext.nullable().optional(),
     /** For the jira_intake pack: the issue to read before it becomes a ticket. */
     jira: JiraIntakeContext.nullable().optional(),
+    /** For datadog_triage: the batch; the task is synthetic and there is no worktree. */
+    datadog: DatadogTriageContext.nullable().optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),
