@@ -9,6 +9,7 @@
 //! `a approve the plan` instead of `a advance`.
 
 use crate::app::{App, Mode};
+use crate::datadog::{self, DatadogKey};
 use crate::model::Task;
 use crate::pulls::{self, PrKey};
 use crate::slack::{self, SlackKey};
@@ -612,18 +613,30 @@ const SLACK: &[Binding] = &[
     cmd(b("?", "keys", Group::App, Scope::Slack, on, 100), "help"),
 ];
 
-/// `On` while the Datadog view has an item under the cursor.
-fn datadog_selected(app: &App) -> Avail {
-    if app.datadog_under_cursor().is_some() { Avail::On } else { Avail::Off("no signal selected") }
+fn datadog_key(app: &App, key: DatadogKey) -> Avail {
+    match app.datadog_under_cursor() {
+        None => Avail::Off("no signal selected"),
+        Some(item) => match datadog::blocker(item, key) {
+            Some(why) => Avail::Off(why),
+            None => Avail::On,
+        },
+    }
 }
 
 const DATADOG: &[Binding] = &[
-    b("o", "open it in Datadog", Group::Ticket, Scope::Datadog, datadog_selected, 60),
+    b("t", "ticket: a Backlog task from the signal", Group::Ticket, Scope::Datadog, |app| datadog_key(app, DatadogKey::Task), 85),
+    b("J", "Jira: the ticket, then a Jira issue", Group::Ticket, Scope::Datadog, |app| datadog_key(app, DatadogKey::Jira), 82),
+    b("d", "done: clear it here", Group::Ticket, Scope::Datadog, |app| datadog_key(app, DatadogKey::Done), 80),
+    b("s", "snooze: 1h, 3h, tomorrow or Monday", Group::Ticket, Scope::Datadog, |app| datadog_key(app, DatadogKey::Snooze), 75),
+    b("o", "open it in Datadog", Group::Ticket, Scope::Datadog, |app| datadog_key(app, DatadogKey::Open), 60),
+    b("!", "priority up one step", Group::Ticket, Scope::Datadog, |app| datadog_key(app, DatadogKey::Bump), 40),
+    b("-", "priority down one step", Group::Ticket, Scope::Datadog, |app| datadog_key(app, DatadogKey::Lower), 39),
     b("j / k", "previous / next signal", Group::Move, Scope::Datadog, on, 30),
     b("h / l", "previous / next split", Group::Move, Scope::Datadog, on, 29),
     b("1-6", "jump to that split", Group::Move, Scope::Datadog, on, 10),
     b("esc / O / q", "close", Group::Move, Scope::Datadog, on, 20),
     b("R", "poll Datadog now", Group::App, Scope::Datadog, on, 50),
+    b("x", "the same actions as a menu", Group::App, Scope::Datadog, |app| if app.datadog_under_cursor().is_some() { Avail::On } else { Avail::Off("no signal selected") }, 65),
     cmd(b("?", "keys", Group::App, Scope::Datadog, on, 100), "help"),
 ];
 
@@ -1201,6 +1214,11 @@ mod tests {
         let slack: Vec<String> = menu(&app, Scope::Slack).iter().map(|(b, _)| b.keys.to_string()).collect();
         assert_eq!(slack, SlackKey::ALL.iter().map(|k| k.key().to_string()).collect::<Vec<_>>());
         assert_eq!(slack[5], "N", "the nudge moved to N");
+        let mut app = approval_app();
+        app.datadog_snapshot = crate::datadog::fixtures::snapshot();
+        app.datadog = Some(Default::default());
+        let datadog: Vec<String> = menu(&app, Scope::Datadog).iter().map(|(b, _)| b.keys.to_string()).collect();
+        assert_eq!(datadog, crate::datadog::DatadogKey::ALL.iter().map(|k| k.key().to_string()).collect::<Vec<_>>());
     }
 
     #[test]

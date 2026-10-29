@@ -106,6 +106,90 @@ pub fn counts(all: &[DatadogItem]) -> [usize; 6] {
     out
 }
 
+/// The split a priority puts an open item in, as the machine's `splitOf` does: what a `!` or
+/// `-` moves the row to before the next snapshot says so.
+pub fn split_of_priority(priority: &str) -> DatadogSplit {
+    match priority {
+        "P0" => DatadogSplit::ActNow,
+        "P2" => DatadogSplit::Watch,
+        "P3" => DatadogSplit::Noise,
+        _ => DatadogSplit::Investigate,
+    }
+}
+
+/// What a key does to an item, in the order the actions menu lists them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DatadogKey {
+    Task,
+    Jira,
+    Done,
+    Snooze,
+    Open,
+    Bump,
+    Lower,
+}
+
+impl DatadogKey {
+    pub const ALL: [DatadogKey; 7] = [
+        DatadogKey::Task,
+        DatadogKey::Jira,
+        DatadogKey::Done,
+        DatadogKey::Snooze,
+        DatadogKey::Open,
+        DatadogKey::Bump,
+        DatadogKey::Lower,
+    ];
+
+    pub fn key(self) -> char {
+        match self {
+            DatadogKey::Task => 't',
+            DatadogKey::Jira => 'J',
+            DatadogKey::Done => 'd',
+            DatadogKey::Snooze => 's',
+            DatadogKey::Open => 'o',
+            DatadogKey::Bump => '!',
+            DatadogKey::Lower => '-',
+        }
+    }
+
+    pub fn from_char(c: char) -> Option<DatadogKey> {
+        DatadogKey::ALL.iter().copied().find(|k| k.key() == c)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DatadogKey::Task => "ticket: a Backlog task from the signal and its samples",
+            DatadogKey::Jira => "Jira: the ticket, then a Jira issue from it",
+            DatadogKey::Done => "done: clear it here; it comes back if Datadog reports it again",
+            DatadogKey::Snooze => "snooze: 1h, 3h, tomorrow or Monday at 9",
+            DatadogKey::Open => "open: the signal in Datadog",
+            DatadogKey::Bump => "priority up one step",
+            DatadogKey::Lower => "priority down one step",
+        }
+    }
+
+    /// The word before the colon: what the pane's key block shows.
+    pub fn short(self) -> &'static str {
+        self.label().split([':', ' ']).next().unwrap_or("")
+    }
+}
+
+/// Why a key is off for this item, or None when it works. Settled here so a greyed key never
+/// has to round-trip to learn the machine would refuse it.
+pub fn blocker(item: &DatadogItem, key: DatadogKey) -> Option<&'static str> {
+    match key {
+        DatadogKey::Open | DatadogKey::Snooze => None,
+        DatadogKey::Task | DatadogKey::Jira => item.task_id().is_some().then_some("already a ticket"),
+        DatadogKey::Done => (item.split_enum() == Some(DatadogSplit::Done)).then_some("already done"),
+        DatadogKey::Bump | DatadogKey::Lower => match item.priority() {
+            None => Some("not triaged yet"),
+            Some("P0") if key == DatadogKey::Bump => Some("already P0"),
+            Some("P3") if key == DatadogKey::Lower => Some("already P3"),
+            _ => None,
+        },
+    }
+}
+
 /// The open Datadog view: which split, and where the cursor is in it.
 #[derive(Clone, Debug, Default)]
 pub struct DatadogState {
@@ -172,7 +256,7 @@ pub(crate) mod fixtures {
 mod tests {
     use super::fixtures::{item, snapshot};
     use super::*;
-    use crate::model::DatadogSnapshot;
+    use crate::model::{DatadogItem, DatadogSnapshot};
 
     #[test]
     fn a_snapshot_deserialises_with_every_field_and_counts_by_split() {
@@ -219,6 +303,30 @@ mod tests {
         let ids = |ix: Vec<usize>| ix.iter().map(|&i| all[i].id.as_str()).collect::<Vec<_>>();
         assert_eq!(ids(items(&all, DatadogSplit::ActNow)), vec!["c", "d", "a", "b", "e"], "P0 incidents, then P0 newest first, then P1, untriaged last");
         assert_eq!(ids(items(&all, DatadogSplit::Done)), vec!["g", "f"], "Done newest first");
+    }
+
+    #[test]
+    fn blockers_grey_the_keys_the_machine_would_refuse() {
+        let keys = |i: &DatadogItem| DatadogKey::ALL.iter().filter(|k| blocker(i, **k).is_none()).map(|k| k.key()).collect::<String>();
+        let open = item("inc:412", "incident", "investigate", Some("P1"), "t");
+        assert_eq!(keys(&open), "tJdso!-", "every key on an open, triaged item");
+        assert_eq!(blocker(&open, DatadogKey::Done), None);
+        let mut ticketed = open.clone();
+        ticketed.task_id = Some("t1".into());
+        assert_eq!(blocker(&ticketed, DatadogKey::Task), Some("already a ticket"));
+        assert_eq!(blocker(&ticketed, DatadogKey::Jira), Some("already a ticket"));
+        assert_eq!(blocker(&ticketed, DatadogKey::Done), None, "a ticket can still be cleared here");
+        assert_eq!(blocker(&item("a", "incident", "done", Some("P2"), "t"), DatadogKey::Done), Some("already done"));
+        assert_eq!(blocker(&item("b", "incident", "act_now", Some("P0"), "t"), DatadogKey::Bump), Some("already P0"));
+        assert_eq!(blocker(&item("c", "error_logs", "noise", Some("P3"), "t"), DatadogKey::Lower), Some("already P3"));
+        assert_eq!(blocker(&item("d", "error_logs", "investigate", None, "t"), DatadogKey::Bump), Some("not triaged yet"));
+        assert_eq!(DatadogKey::from_char('J'), Some(DatadogKey::Jira));
+        assert_eq!(DatadogKey::from_char('r'), None);
+        assert_eq!(DatadogKey::Task.short(), "ticket");
+        assert_eq!(DatadogKey::Jira.short(), "Jira");
+        assert_eq!(DatadogKey::Lower.short(), "priority");
+        assert_eq!(split_of_priority("P0"), DatadogSplit::ActNow);
+        assert_eq!(split_of_priority("P3"), DatadogSplit::Noise);
     }
 
     #[test]

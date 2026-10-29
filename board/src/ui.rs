@@ -15,7 +15,7 @@ use ratatui::{
 use serde_json::Value;
 use tui_textarea::TextArea;
 
-use crate::datadog::{self, DatadogSplit, DatadogState};
+use crate::datadog::{self, DatadogKey, DatadogSplit, DatadogState};
 use crate::detail::{self, DetailView};
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
@@ -187,11 +187,17 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
-    if let Some(state) = app.datadog.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
+    if let Some(state) = app.datadog.as_ref().filter(|_| {
+        matches!(app.mode, Mode::Normal | Mode::DatadogSnooze { .. } | Mode::DatadogTask { .. } | Mode::DatadogActions { .. } | Mode::Help { .. })
+    }) {
         render_datadog(frame, body, app, state);
         frame.render_widget(footer_line(app), footer);
-        if matches!(app.mode, Mode::Help { .. }) {
-            render_help(frame, app);
+        match &app.mode {
+            Mode::DatadogSnooze { cursor, .. } => render_slack_snooze(frame, *cursor),
+            Mode::DatadogTask { id, title, repo, jira } => render_datadog_task(frame, app, id, title, repo.as_deref(), *jira),
+            Mode::DatadogActions { cursor } => render_datadog_actions(frame, app, *cursor),
+            Mode::Help { .. } => render_help(frame, app),
+            _ => {}
         }
         return;
     }
@@ -468,15 +474,16 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::ConfirmDelete(_) | Mode::ConfirmAbort(_) | Mode::ConfirmWorktree(_) => {
             hint(&[("y", "yes"), ("n", "no")])
         }
-        Mode::Actions { .. } | Mode::PrActions { .. } | Mode::SlackActions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
+        Mode::Actions { .. } | Mode::PrActions { .. } | Mode::SlackActions { .. } | Mode::DatadogActions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
         Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
         Mode::ConfirmMerge { .. } => hint(&[("y", "merge"), ("n", "cancel")]),
         Mode::ConfirmClose { .. } => hint(&[("y", "close the PR"), ("n", "cancel")]),
         Mode::JiraLink { .. } => hint(&[("type", "search from 3 chars"), ("↑/↓", "move"), ("enter", "link (row 0 creates)"), ("ctrl+n", "create"), ("esc", "cancel")]),
         Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
         Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
-        Mode::SlackSnooze { .. } => hint(&[("j/k 1-4", "pick"), ("enter", "snooze"), ("esc", "cancel")]),
+        Mode::SlackSnooze { .. } | Mode::DatadogSnooze { .. } => hint(&[("j/k 1-4", "pick"), ("enter", "snooze"), ("esc", "cancel")]),
         Mode::SlackTask { .. } => hint(&[("y", "create the ticket"), ("n", "cancel")]),
+        Mode::DatadogTask { jira, .. } => hint(&[("y", if *jira { "create the ticket and the Jira issue" } else { "create the ticket" }), ("n", "cancel")]),
         Mode::SlackWatchAdd { .. } => hint(&[("type", "@handle, #channel or a word"), ("↑/↓", "pick"), ("enter", "watch"), ("esc", "cancel")]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
         Mode::ConfirmMany { .. } => hint(&[("y", "do it to all of them"), ("n", "cancel")]),
@@ -512,7 +519,18 @@ fn view_footer(app: &App) -> Line<'static> {
             ("R", "poll"),
             ("esc", "close"),
         ]),
-        Scope::Datadog => hint(&[("j/k", "move"), ("h/l 1-6", "split"), ("o", "open in Datadog"), ("R", "poll"), ("esc", "close")]),
+        Scope::Datadog => hint(&[
+            ("j/k", "move"),
+            ("h/l 1-6", "split"),
+            ("t", "ticket"),
+            ("J", "Jira"),
+            ("d", "done"),
+            ("s", "snooze"),
+            ("! -", "priority"),
+            ("o", "open"),
+            ("R", "poll"),
+            ("esc", "close"),
+        ]),
         Scope::Detail => {
             let shippable = matches!(&app.mode, Mode::Detail(id) if app.task(id).is_some_and(|t| t.state == "awaiting_ship"));
             let (rows, scroll) = if app.detail_section.has_cursor() { (("jk", "pick"), ("JK", "scroll")) } else { (("jk", "scroll"), ("^d/^u", "page")) };
@@ -1983,12 +2001,69 @@ fn datadog_widget(item: &DatadogItem, now: u64) -> Vec<Line<'static>> {
     lines
 }
 
-/// The widget, then where `o` goes.
+/// The widget, where `o` goes, then every key with whether it is on and why not.
 fn datadog_detail_lines(item: &DatadogItem, now: u64) -> Vec<Line<'static>> {
     let mut lines = datadog_widget(item, now);
     lines.push(Line::default());
     lines.push(Line::from(Span::from(item.url.clone()).fg(c(SUBTEXT0))));
+    lines.push(Line::default());
+    for key in DatadogKey::ALL {
+        let label = key.short();
+        match datadog::blocker(item, key) {
+            None => lines.push(Line::from(vec![
+                Span::from(format!("{} ", key.key())).fg(c(BASE)).bg(c(ACCENT)),
+                Span::from(format!(" {label:<8}")).bold(),
+                Span::from("  ready").fg(c(GREEN)),
+            ])),
+            Some(why) => lines.push(Line::from(vec![
+                Span::from(format!("{} ", key.key())).fg(c(BASE)).bg(c(MUTED)),
+                Span::from(format!(" {label:<8}")).fg(c(SUBTEXT0)),
+                Span::from(format!("  off: {why}")).fg(c(SUBTEXT0)),
+            ])),
+        }
+    }
     lines
+}
+
+/// `x` in the Datadog view: the item drawn by the widget, then its keys; an off key says why
+/// under it. On a terminal too narrow for the pane this is where the detail shows.
+fn render_datadog_actions(frame: &mut Frame, app: &App, cursor: usize) {
+    let Some(item) = app.datadog_under_cursor() else { return };
+    let widget = datadog_widget(item, now_secs());
+    render_menu(frame, format!(" {} ", item.id), widget, &keys::menu(app, Scope::Datadog), cursor, 0);
+}
+
+/// `t` / `J`: the ticket about to be made, with the title and repo it gets, and whether a Jira
+/// issue follows.
+fn render_datadog_task(frame: &mut Frame, app: &App, id: &str, title: &str, repo: Option<&str>, jira: bool) {
+    let width = 80.min(frame.area().width.saturating_sub(2));
+    let area = centered(frame.area(), width, if jira { 9 } else { 8 });
+    frame.render_widget(Clear, area);
+    let source = app.datadog_snapshot.items.iter().find(|i| i.id == id).map(|i| i.source_label().to_string()).unwrap_or_default();
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" ticket from this {source}? ")).bold());
+    let field = |name: &str, text: String| Line::from(vec![Span::from(format!("{name:<7}")).fg(c(SUBTEXT0)), Span::from(text)]);
+    let mut lines = vec![
+        field("title", title.to_string()),
+        field("repo", repo.map_or("none guessed; the machine tries Datadog's repository, else you pick".to_string(), str::to_string)),
+    ];
+    if jira {
+        lines.push(field("jira", "then an issue in the repo's project, linked".to_string()));
+    }
+    lines.extend([
+        Line::from(Span::from("the signal, its samples and triage become the description; the ticket links back").fg(c(SUBTEXT0))),
+        Line::default(),
+        Line::from(vec![
+            Span::from(" y ").fg(c(BASE)).bg(c(ACCENT)),
+            Span::from(" create  ").fg(c(SUBTEXT0)),
+            Span::from(" n ").fg(c(BASE)).bg(c(ACCENT)),
+            Span::from(" cancel").fg(c(SUBTEXT0)),
+        ]),
+    ]);
+    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
 }
 
 /// The Floor's Slack block: items and replies by priority over 7d / 30d, how many of the 7d
@@ -3284,12 +3359,29 @@ mod datadog_render_tests {
         assert!(text.contains("next     roll back checkout-api"), "{text}");
         assert!(text.contains("sample   POST /checkout 500: upstream"), "the first sample only: {text}");
         assert!(!text.contains("pool exhausted"), "{text}");
+        assert!(text.contains("t  ticket    ready") && text.contains("J  Jira      ready"), "the keys, each ready or why not: {text}");
+        assert!(text.contains("!  priority  off: already P0"), "{text}");
 
         let text = render(80, 30, &app);
         assert!(text.contains("Act 1") && text.contains("Inv 0") && text.contains("Snz 0"), "short labels under 100 columns: {text}");
         assert!(!text.contains("cause    "), "no pane under 100 columns: {text}");
         let row = text.lines().find(|l| l.contains("checkout 5xx")).unwrap_or_default().to_string();
         assert!(row.contains("P0") && row.contains("incident") && row.contains("checkout-api"), "{row}");
+    }
+
+    #[test]
+    fn a_ticketed_item_greys_t_and_j_and_x_shows_the_menu() {
+        let mut ticketed = snapshot();
+        ticketed.items[0].task_id = Some("abcdef123456".into());
+        let mut app = app_with(ticketed);
+        let text = render(120, 40, &app);
+        let row = text.lines().find(|l| l.contains("checkout 5xx")).unwrap_or_default().to_string();
+        assert!(row.contains("⚙"), "already a ticket: {row}");
+        assert!(text.contains("t  ticket    off: already a ticket") && text.contains("J  Jira      off: already a ticket"), "{text}");
+        assert!(text.contains("ticket   #abcdef12"), "{text}");
+        app.mode = Mode::DatadogActions { cursor: 0 };
+        let text = render(80, 30, &app);
+        assert!(text.contains("↳ already a ticket") && text.contains("done: clear it here"), "{text}");
     }
 
     #[test]
@@ -3301,6 +3393,7 @@ mod datadog_render_tests {
         let text = render(120, 40, &app);
         let row = text.lines().find(|l| l.contains("checkout 5xx")).unwrap_or_default().to_string();
         assert!(row.contains("resolved"), "Datadog no longer reports it: {row}");
+        assert!(text.contains("t  ticket    ready"), "{text}");
         assert!(text.contains("resolved: Datadog no longer reports it"), "the pane says so too: {text}");
         app.datadog = Some(DatadogState { split: DatadogSplit::Noise, cursor: 0 });
         let text = render(120, 40, &app);

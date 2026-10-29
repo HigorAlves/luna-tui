@@ -361,6 +361,18 @@ impl Machine {
         Self::typed(self.slow.post(self.url("/datadog/refresh")).send_json(json!({})))
     }
 
+    /// `done`, `snoozedUntil` or `priority` on one item; answers the item as the machine now
+    /// has it, which the next snapshot repeats.
+    pub fn patch_datadog_item(&self, id: &str, patch: Value) -> Result<Value, String> {
+        Self::json(self.agent.patch(self.url(&datadog_item_path(id, ""))).send_json(patch))
+    }
+
+    /// A Backlog ticket from the item, its samples and triage in the description; `repo_path`
+    /// None lets the machine resolve the repository Datadog names, else leaves it to set later.
+    pub fn datadog_task(&self, id: &str, title: &str, repo_path: Option<&str>) -> Result<Task, String> {
+        self.post(&datadog_item_path(id, "/task"), datadog_task_body(title, repo_path))
+    }
+
     /// Links an existing Jira issue to the ticket; answers the task with its `jira` set.
     pub fn link_jira(&self, id: &str, key: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/jira"), json!({ "key": key }))
@@ -397,9 +409,18 @@ fn slack_item_path(id: &str, verb: &str) -> String {
 }
 
 /// `/datadog/items/<id><verb>`; the fingerprint carries `:`, so it travels percent-encoded.
-#[cfg_attr(not(test), allow(dead_code))] // the item actions use it
 fn datadog_item_path(id: &str, verb: &str) -> String {
     format!("/datadog/items/{}{verb}", urlencoding(id))
+}
+
+/// The `/task` body: `repoPath` only when the board guessed one, since an explicit null tells
+/// the machine not to resolve the item's repository itself.
+fn datadog_task_body(title: &str, repo_path: Option<&str>) -> Value {
+    let mut body = json!({ "title": title });
+    if let Some(repo) = repo_path {
+        body["repoPath"] = json!(repo);
+    }
+    body
 }
 
 /// `/github/prs/<owner>/<name>/<number>/<verb>`.
@@ -572,6 +593,12 @@ mod pr_tests {
         let data = format!(r#"{{"type":"datadog.items","snapshot":{}}}"#, crate::datadog::fixtures::snapshot_json());
         let event = parse_stream_event("datadog.items", &data);
         assert!(matches!(event, Some(StreamMessage::Datadog { ref snapshot }) if snapshot.items.len() == 2 && snapshot.polled_at.is_some()));
+    }
+
+    #[test]
+    fn a_datadog_ticket_leaves_the_repo_to_the_machine_unless_the_board_guessed_one() {
+        assert_eq!(datadog_task_body("checkout 5xx", None), json!({ "title": "checkout 5xx" }), "no repoPath: the machine resolves Datadog's repository");
+        assert_eq!(datadog_task_body("checkout 5xx", Some("/r/checkout")), json!({ "title": "checkout 5xx", "repoPath": "/r/checkout" }));
     }
 
     #[test]

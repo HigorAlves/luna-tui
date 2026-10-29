@@ -496,7 +496,13 @@ A watch is anything beyond your own handle the inbox should treat as addressed t
 
 | Key | Does |
 |---|---|
+| `t` | ticket: a Backlog task from the signal |
+| `J` | Jira: the ticket, then a Jira issue |
+| `d` | done: clear it here |
+| `s` | snooze: 1h, 3h, tomorrow or Monday |
 | `o` | open it in Datadog |
+| `!` | priority up one step |
+| `-` | priority down one step |
 
 **Move**
 
@@ -512,9 +518,12 @@ A watch is anything beyond your own handle the inbox should treat as addressed t
 | Key | Does |
 |---|---|
 | `R` | poll Datadog now |
+| `x` | the same actions as a menu |
 | `?` | keys |
 
 <!-- keys:end -->
+
+`t` makes a Backlog ticket from the signal (`POST /datadog/items/:id/task`): titled with triage's summary, its samples and triage's verdict in the description, in the repo Datadog names (or the service) when it matches a repo on the board, else in whichever repo the machine resolves from Datadog's `git.repository_url`; one `y` first, and the repo picker follows when neither found one. `J` does the same and then runs the Jira create flow on the new ticket (`POST /tasks/:id/jira/create`, what `J` then `ctrl+n` does on a ticket), so the issue lands in the repo's project and is linked; with no repo guessed it stops at the picker and `J` on the ticket files the issue once the repo is set, and a machine without Jira says so before any ticket is made. Both are off once the item is a ticket. `d` clears the item here at once (Datadog is not touched; it comes back, re-triaged, if Datadog reports it again), `s` snoozes it with Slack's choices (1h, 3h, tomorrow 9:00, next Monday 9:00), `!` / `-` move the priority one step and the row to that priority's split (re-triage keeps your value), `o` opens it in Datadog, and `x` lists the same keys with why each is off. A P0 in an open split raises one herdr notice (`Datadog P0`) the first time the board sees it, and again only when it comes back after you cleared it (`Datadog P0 reopened`); lowering and raising it again is not news twice, and nothing below P0 is.
 
 A row reads `P0 · incident · summary · service  age` in fixed columns: the priority (`P0` red, `P1` yellow, `P3` muted), the source (`incident`, `monitor`, `error` for Error Tracking, `logs` for a log cluster), triage's one-line summary (the title until triage ran; `×N` for a count; the only column ever cut), the service and how long since it was last seen. `resolved` (green) leads the summary once Datadog no longer reports the item (an incident resolved, a monitor recovered); it stays until you clear it. `reopened` (yellow) leads it when it came back after you cleared it, and `⚙` ends the row once it is a ticket. From 100 columns the pane beside the list shows the source, service, env, severity and status, the title, triage's verdict, why, the suspected cause, the next step, the first sample and the link `o` opens. The strip says when Datadog was last polled and whether triage is running; a source whose last poll failed says why on the line under it (`⚠ error_tracking: …`), and without keys the view says `Datadog off: set MACHINE_DATADOG_API_KEY and MACHINE_DATADOG_APP_KEY`. `R` polls now, in the background like Pulls' and Slack's.
 

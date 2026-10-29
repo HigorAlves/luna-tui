@@ -36,10 +36,10 @@ pub struct Retries {
     pub total: u32,
 }
 
-/// Where a task came from, when it was created from an outside issue, a Slack message or a
-/// Jira issue. `kind` stays a plain string so kinds this board does not know still load; an
-/// issue has `repo`, `number` and `url`, a Slack message `channel`, `ts` and `permalink`, a
-/// Jira issue `key`, `url` and `issueType`.
+/// Where a task came from, when it was created from an outside issue, a Slack message, a
+/// Jira issue or a Datadog signal. `kind` stays a plain string so kinds this board does not
+/// know still load; an issue has `repo`, `number` and `url`, a Slack message `channel`, `ts`
+/// and `permalink`, a Jira issue `key`, `url` and `issueType`, a Datadog signal `id` and `url`.
 #[derive(Deserialize, Clone, Debug)]
 pub struct TaskSource {
     pub kind: String,
@@ -61,6 +61,9 @@ pub struct TaskSource {
     #[serde(default, rename = "issueType")]
     #[allow(dead_code)] // part of the contract; the link carries the type once synced
     pub issue_type: Option<String>,
+    /// A Datadog signal's fingerprint (`inc:412`).
+    #[serde(default)]
+    pub id: Option<String>,
 }
 
 impl TaskSource {
@@ -69,12 +72,13 @@ impl TaskSource {
         self.url.as_deref().or(self.permalink.as_deref())
     }
 
-    /// `GitHub     acme/app#42 · url`, `Jira       PLAT-123 · url` or `Slack      #channel ·
-    /// permalink`, for the ticket popup.
+    /// `GitHub     acme/app#42 · url`, `Jira       PLAT-123 · url`, `Datadog    inc:412 · url`
+    /// or `Slack      #channel · permalink`, for the ticket popup.
     pub fn detail_line(&self) -> String {
         match (self.repo.as_deref(), self.number) {
             (Some(repo), Some(number)) => format!("GitHub     {repo}#{number} · {}", self.url.as_deref().unwrap_or("")),
             _ if self.kind == "jira" => format!("Jira       {} · {}", self.key.as_deref().unwrap_or("?"), self.url.as_deref().unwrap_or("")),
+            _ if self.kind == "datadog" => format!("Datadog    {} · {}", self.id.as_deref().unwrap_or("?"), self.url.as_deref().unwrap_or("")),
             _ => format!(
                 "Slack      {} · {}",
                 self.channel.as_deref().unwrap_or("?"),
@@ -2199,6 +2203,15 @@ pub(crate) mod tests {
         assert_eq!(source.url.as_deref(), Some("https://github.com/acme/app/issues/42"));
         assert_eq!(source.link(), Some("https://github.com/acme/app/issues/42"));
         assert_eq!(source.detail_line(), "GitHub     acme/app#42 · https://github.com/acme/app/issues/42");
+    }
+
+    #[test]
+    fn task_with_a_datadog_source_names_the_signal_and_links_to_datadog() {
+        let json = task_json(r#","source":{"kind":"datadog","source":"incident","id":"inc:412","url":"https://app.datadoghq.com/incidents/412"}"#);
+        let task: Task = serde_json::from_str(&json).unwrap();
+        let source = task.source.clone().expect("source present");
+        assert_eq!(source.link(), Some("https://app.datadoghq.com/incidents/412"));
+        assert_eq!(source.detail_line(), "Datadog    inc:412 · https://app.datadoghq.com/incidents/412");
     }
 
     #[test]

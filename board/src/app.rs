@@ -17,13 +17,13 @@ use tui_textarea::TextArea;
 
 use std::collections::BTreeSet;
 
-use crate::datadog::{self, DatadogSplit, DatadogState};
+use crate::datadog::{self, DatadogKey, DatadogSplit, DatadogState};
 use crate::detail::Section;
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::keys::{self, Scope};
 use crate::model::now_secs;
-use crate::notify::{self, Notice};
+use crate::notify::{self, DatadogNoticed, Notice};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState, WatchesState};
 use crate::{
@@ -311,6 +311,13 @@ pub enum Mode {
     SlackWatchAdd { query: String, cursor: usize },
     /// `x` in the Slack view: the keys for the selected item, each with why it is off when it is.
     SlackActions { cursor: usize },
+    /// `s` on a Datadog item: pick how long it sleeps (Slack's choices).
+    DatadogSnooze { id: String, cursor: usize },
+    /// `t` (or `J`) on a Datadog item: one yes, then a Backlog ticket with `title`, in `repo` when
+    /// guessed; with `jira`, the Jira create flow runs on the new ticket straight after.
+    DatadogTask { id: String, title: String, repo: Option<String>, jira: bool },
+    /// `x` in the Datadog view: the keys for the selected item, each with why it is off when it is.
+    DatadogActions { cursor: usize },
     /// `J` on a ticket with no Jira issue: type a key or words, the machine searches from three
     /// characters on, `hits` are what it found; row 0 creates an issue from the ticket, the
     /// rest link one. `cursor` indexes rows, create row included.
@@ -425,6 +432,8 @@ pub struct App {
     pub datadog_snapshot: DatadogSnapshot,
     /// The Datadog view, open while this is `Some`.
     pub datadog: Option<DatadogState>,
+    /// The Datadog P0s already told about, so each raises one notice.
+    datadog_noticed: DatadogNoticed,
     /// Tickets marked with `v`/`V`: `a`, `X`, `d`, `w` act on all of them.
     pub marked: BTreeSet<String>,
     /// The stage pool as `/health` last reported it; None until the first answer.
@@ -526,6 +535,7 @@ impl App {
             slack_catalog_pending: false,
             datadog_snapshot: DatadogSnapshot::default(),
             datadog: None,
+            datadog_noticed: DatadogNoticed::default(),
             marked: BTreeSet::new(),
             slots: None,
             digest: None,
@@ -800,8 +810,11 @@ impl App {
         self.clamp_slack_cursor();
     }
 
-    /// A fresh Datadog snapshot: the view's cursor kept inside its split.
+    /// A fresh Datadog snapshot: a notice for each P0 not told yet (or come back after done),
+    /// the view's cursor kept inside its split.
     fn take_datadog(&mut self, snapshot: DatadogSnapshot) {
+        let notices = self.datadog_noticed.notices(&snapshot.items);
+        self.notices.extend(notices);
         self.datadog_snapshot = snapshot;
         self.clamp_datadog_cursor();
     }
@@ -818,6 +831,10 @@ impl App {
         let state = self.datadog.as_ref()?;
         let items = datadog::items(&self.datadog_snapshot.items, state.split);
         items.get(state.cursor.min(items.len().saturating_sub(1))).map(|&i| &self.datadog_snapshot.items[i])
+    }
+
+    fn datadog_item_mut(&mut self, id: &str) -> Option<&mut DatadogItem> {
+        self.datadog_snapshot.items.iter_mut().find(|i| i.id == id)
     }
 
     /// `R` in Datadog: a poll of every source, off the UI thread like the others.
@@ -1914,6 +1931,9 @@ impl App {
             Mode::SlackTask { .. } => self.handle_slack_task(key),
             Mode::SlackWatchAdd { .. } => self.handle_slack_watch_add(key),
             Mode::SlackActions { .. } => self.handle_slack_actions(key),
+            Mode::DatadogSnooze { .. } => self.handle_datadog_snooze(key),
+            Mode::DatadogTask { .. } => self.handle_datadog_task(key),
+            Mode::DatadogActions { .. } => self.handle_datadog_actions(key),
             Mode::JiraLink { .. } => self.handle_jira_link(key),
             Mode::ConfirmJiraUnlink(_) => self.handle_confirm_jira_unlink(key),
             Mode::Help { .. } => self.handle_help(key),
@@ -2861,11 +2881,11 @@ impl App {
         self.datadog = Some(DatadogState::default());
     }
 
-    /// The keys `handle_datadog` matches.
+    /// The keys `handle_datadog` matches, `DatadogKey::ALL` included.
     #[cfg(test)]
-    pub(crate) const HANDLED_DATADOG: &[&str] = &["esc", "O", "q", "?", "j", "k", "l", "h", "1-6", "R", "o"];
+    pub(crate) const HANDLED_DATADOG: &[&str] = &["esc", "O", "q", "?", "j", "k", "l", "h", "1-6", "R", "x", "t", "J", "d", "s", "o", "!", "-"];
 
-    /// The Datadog view's keys: move, switch split, open the item in Datadog, refresh.
+    /// The Datadog view's keys: move, switch split, act on the item, refresh.
     fn handle_datadog(&mut self, key: KeyEvent) -> Outcome {
         let Some(state) = self.datadog.clone() else {
             return Outcome::Continue;
@@ -2899,16 +2919,180 @@ impl App {
                 self.poll_datadog();
                 return Outcome::Continue;
             }
-            KeyCode::Char('o') => {
-                match self.datadog_under_cursor().map(|i| i.url.clone()) {
-                    Some(url) => self.open_url(&url),
-                    None => self.notify("no signal selected", false),
+            KeyCode::Char('x') => {
+                if self.datadog_under_cursor().is_some() {
+                    self.mode = Mode::DatadogActions { cursor: 0 };
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char(c) => {
+                if let (Some(item), Some(key)) = (self.datadog_under_cursor().cloned(), DatadogKey::from_char(c)) {
+                    self.datadog_key(key, &item);
                 }
                 return Outcome::Continue;
             }
             _ => {}
         }
         self.datadog = Some(next);
+        Outcome::Continue
+    }
+
+    /// One of the item keys: the blocker as a toast, else the popup or the call it stands for.
+    fn datadog_key(&mut self, key: DatadogKey, item: &DatadogItem) {
+        if let Some(why) = datadog::blocker(item, key) {
+            self.notify(why, false);
+            return;
+        }
+        let id = item.id.clone();
+        match key {
+            DatadogKey::Open => self.open_url(&item.url),
+            DatadogKey::Snooze => self.mode = Mode::DatadogSnooze { id, cursor: 0 },
+            DatadogKey::Task | DatadogKey::Jira => {
+                let jira = key == DatadogKey::Jira;
+                // `J` on a ticket refuses the same way when the machine has no Jira; ask before making the ticket.
+                if jira && let Ok(status) = self.machine.jira_status()
+                    && !status.configured
+                {
+                    let why = status.error.unwrap_or_else(|| "set MACHINE_JIRA_SITE, _EMAIL and _TOKEN".to_string());
+                    self.notify(format!("Jira is not configured on the machine: {why}"), true);
+                    return;
+                }
+                let title = item.summary().to_string();
+                // The repo Datadog names (`acme/checkout`), else the service, matched against the board's repos.
+                let hint = item.repository.as_deref().and_then(|r| r.rsplit('/').next()).or(item.service.as_deref()).unwrap_or("");
+                let repo = if hint.is_empty() { None } else { self.guess_repo(hint) };
+                self.mode = Mode::DatadogTask { id, title, repo, jira };
+            }
+            DatadogKey::Done => {
+                let now = iso_of(now_secs());
+                self.patch_datadog(&id, serde_json::json!({ "done": true }), "done", move |item| {
+                    item.split = DatadogSplit::Done.wire().to_string();
+                    item.done_at = Some(now);
+                });
+            }
+            DatadogKey::Bump | DatadogKey::Lower => {
+                let Some(next) = item.priority().and_then(|p| priority_step(p, key == DatadogKey::Bump)) else {
+                    return;
+                };
+                let toast = format!("{} → {next}", item.priority().unwrap_or("?"));
+                self.patch_datadog(&id, serde_json::json!({ "priority": next }), &toast, move |item| {
+                    if let Some(triage) = item.triage.as_mut() {
+                        triage.priority = next.to_string();
+                        triage.overridden = true;
+                    }
+                    // Snoozed and Done keep it put away; an open item moves to its priority's split.
+                    if item.split_enum().is_some_and(DatadogSplit::open) {
+                        item.split = datadog::split_of_priority(next).wire().to_string();
+                    }
+                });
+            }
+        }
+    }
+
+    /// PATCHes one item and, when the machine took it, applies the same change to the local
+    /// snapshot so the view moves at once instead of on the next poll.
+    fn patch_datadog(&mut self, id: &str, patch: serde_json::Value, toast: &str, apply: impl FnOnce(&mut DatadogItem)) {
+        match self.machine.patch_datadog_item(id, patch) {
+            Ok(_) => {
+                if let Some(item) = self.datadog_item_mut(id) {
+                    apply(item);
+                }
+                self.clamp_datadog_cursor();
+                self.notify(toast, false);
+            }
+            Err(error) => self.notify(error, true),
+        }
+    }
+
+    /// The snooze picker over a Datadog item: the same choices and keys as Slack's.
+    fn handle_datadog_snooze(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::DatadogSnooze { id, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        let mut chosen = None;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(slack::SNOOZE_OPTIONS.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(*cursor),
+            KeyCode::Char(d @ '1'..='4') => chosen = Some((d as usize) - ('1' as usize)),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
+        }
+        if let Some(option) = chosen {
+            self.mode = Mode::Normal;
+            let until = iso_of(slack::snooze_until(option, now_secs(), local_offset_secs()));
+            let toast = format!("snoozed until {}", slack::SNOOZE_OPTIONS[option]);
+            let stored = until.clone();
+            self.patch_datadog(&id, serde_json::json!({ "snoozedUntil": until }), &toast, move |item| {
+                item.split = DatadogSplit::Snoozed.wire().to_string();
+                item.snoozed_until = Some(stored);
+            });
+        }
+        Outcome::Continue
+    }
+
+    /// `t`'s (and `J`'s) confirm: y creates the ticket and opens it; with `J` the Jira create flow
+    /// (`POST /tasks/:id/jira/create`, what `J` then `ctrl+n` does on a ticket) runs on it next.
+    /// The repo picker follows when none was guessed; `J` then waits for it, since the issue's
+    /// project comes from the repo. n / esc keeps the signal where it is.
+    fn handle_datadog_task(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                let Mode::DatadogTask { id, title, repo, jira } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                match self.machine.datadog_task(&id, &title, repo.as_deref()) {
+                    Ok(task) => {
+                        let task_id = task.id.clone();
+                        let no_repo = task.repo_path.is_none();
+                        self.upsert(task);
+                        if let Some(item) = self.datadog_item_mut(&id) {
+                            item.task_id = Some(task_id.clone());
+                        }
+                        self.datadog = None;
+                        self.select(&task_id, true);
+                        self.open_detail(task_id.clone());
+                        let made = format!("ticket #{} created", short_id(&task_id));
+                        if no_repo {
+                            let then = if jira { "; pick its repo, then J files the Jira issue" } else { "; pick its repo" };
+                            self.notify(format!("{made}{then}"), false);
+                            self.open_repo_picker(&task_id);
+                        } else if jira {
+                            self.act(|m| m.create_jira(&task_id, None), &format!("{made}; Jira issue created and linked"));
+                        } else {
+                            self.notify(made, false);
+                        }
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// `x` in the Datadog view: a menu of the item keys, each line saying why it is off when it is.
+    fn handle_datadog_actions(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::DatadogActions { cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let mut chosen = None;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(DatadogKey::ALL.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(DatadogKey::ALL[*cursor]),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Char(c) => chosen = DatadogKey::from_char(c),
+            _ => {}
+        }
+        if let Some(key) = chosen {
+            self.mode = Mode::Normal;
+            if let Some(item) = self.datadog_under_cursor().cloned() {
+                self.datadog_key(key, &item);
+            }
+        }
         Outcome::Continue
     }
 
@@ -5023,6 +5207,7 @@ mod slack_tests {
                     "/slack/usergroups" => r#"[{"id":"S04ABCD","label":"@platform-team"},{"id":"S05","label":"@data"}]"#.to_string(),
                     "/slack/channels" => r##"[{"id":"C1","label":"#eng"}]"##.to_string(),
                     p if p.ends_with("/reply") => format!(r#"{{"replied":{}}}"#, String::from_utf8_lossy(&body)),
+                    p if p.starts_with("/datadog/items/") && p.ends_with("/task") => super::jira_tests::linked_task_json("dd-task-1", None),
                     p if p.starts_with("/slack/watches/") => watch_json("w1", "usergroup", "S04ABCD", "@platform-team", false).replace("\"enabled\":true", "\"enabled\":false"),
                     _ => "{}".to_string(),
                 };
@@ -5355,6 +5540,103 @@ mod datadog_tests {
         press(&mut app, KeyCode::Char('O'));
         press(&mut app, KeyCode::Char('q'));
         assert!(app.datadog.is_none(), "q closes it, not the board");
+    }
+
+    fn toast(app: &App) -> String {
+        app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    #[test]
+    fn d_clears_the_row_at_once_and_the_priority_keys_move_it_between_splits() {
+        let mut snapshot = snapshot();
+        snapshot.items.push(item("mon:7:host:web-1", "monitor", "act_now", Some("P0"), "2026-10-28T09:58:00Z"));
+        let mut app = app_with(snapshot);
+        press(&mut app, KeyCode::Char('O'));
+        assert_eq!(datadog::items(&app.datadog_snapshot.items, DatadogSplit::ActNow).len(), 2);
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(toast(&app), "done");
+        let cleared = app.datadog_snapshot.items.iter().find(|i| i.id == "inc:412").unwrap();
+        assert_eq!(cleared.split_enum(), Some(DatadogSplit::Done), "the row leaves the split before the next poll");
+        assert!(cleared.done_at.is_some());
+        assert_eq!(under(&app), Some("mon:7:host:web-1"), "the cursor lands on the next row");
+
+        press(&mut app, KeyCode::Char('!'));
+        assert_eq!(toast(&app), "already P0", "the blocker speaks before any call");
+        press(&mut app, KeyCode::Char('-'));
+        assert_eq!(toast(&app), "P0 → P1");
+        let lowered = app.datadog_snapshot.items.iter().find(|i| i.id == "mon:7:host:web-1").unwrap();
+        assert_eq!(lowered.priority(), Some("P1"));
+        assert!(lowered.triage.as_ref().unwrap().overridden);
+        assert_eq!(lowered.split_enum(), Some(DatadogSplit::Investigate), "a P1 sits in Investigate");
+
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('s'));
+        assert!(matches!(&app.mode, Mode::DatadogSnooze { id, cursor: 0 } if id == "mon:7:host:web-1"));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal) && app.datadog.is_some(), "esc leaves it awake");
+        press(&mut app, KeyCode::Char('s'));
+        press(&mut app, KeyCode::Char('3'));
+        assert_eq!(toast(&app), "snoozed until tomorrow 9:00");
+        let snoozed = app.datadog_snapshot.items.iter().find(|i| i.id == "mon:7:host:web-1").unwrap();
+        assert_eq!(snoozed.split_enum(), Some(DatadogSplit::Snoozed));
+        assert!(snoozed.snoozed_until.is_some());
+
+        press(&mut app, KeyCode::Char('4'));
+        press(&mut app, KeyCode::Char('x'));
+        assert!(matches!(app.mode, Mode::DatadogActions { cursor: 0 }));
+        press(&mut app, KeyCode::Char('d'));
+        assert!(matches!(app.mode, Mode::Normal), "a menu key runs and closes");
+        assert_eq!(toast(&app), "done");
+    }
+
+    #[test]
+    fn t_asks_first_then_makes_the_ticket_and_j_files_the_jira_issue_too() {
+        let mut app = app_with(snapshot());
+        press(&mut app, KeyCode::Char('O'));
+        press(&mut app, KeyCode::Char('t'));
+        let Mode::DatadogTask { title, repo, jira, .. } = &app.mode else { panic!("the confirm opens: {}", toast(&app)) };
+        assert_eq!(title, "checkout 5xx since the 14:02 deploy");
+        assert!(repo.is_none(), "no ticket's repo matches acme/checkout");
+        assert!(!jira);
+        press(&mut app, KeyCode::Char('n'));
+        assert!(matches!(app.mode, Mode::Normal) && app.datadog.is_some());
+        press(&mut app, KeyCode::Char('t'));
+        press(&mut app, KeyCode::Char('y'));
+        assert!(app.datadog.is_none(), "the view closes on the new ticket");
+        assert!(matches!(&app.mode, Mode::Detail(id) if id == "dd-task-1"), "{}", toast(&app));
+        assert_eq!(app.datadog_snapshot.items[0].task_id(), Some("dd-task-1"));
+        assert_eq!(toast(&app), "ticket #dd-task- created");
+        press(&mut app, KeyCode::Esc);
+        press(&mut app, KeyCode::Char('O'));
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(toast(&app), "already a ticket");
+        press(&mut app, KeyCode::Char('J'));
+        assert_eq!(toast(&app), "already a ticket");
+
+        let mut app = app_with(snapshot());
+        press(&mut app, KeyCode::Char('O'));
+        press(&mut app, KeyCode::Char('J'));
+        assert!(matches!(&app.mode, Mode::DatadogTask { jira: true, .. }), "J asks the same question first: {}", toast(&app));
+        press(&mut app, KeyCode::Enter);
+        let task = app.task("dd-task-1").expect("the ticket is on the board");
+        assert_eq!(task.jira_key(), Some("PLAT-900"), "then the Jira create flow runs on it");
+        assert!(toast(&app).contains("Jira issue created and linked"), "{}", toast(&app));
+    }
+
+    #[test]
+    fn a_p0_raises_one_notice_however_often_the_snapshot_repeats_it() {
+        let mut app = app_with(snapshot());
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Datadog P0"], "the P0 incident; the P3 log cluster is quiet");
+        app.tx.send(Incoming::Message(StreamMessage::Datadog { snapshot: snapshot() })).unwrap();
+        app.pump();
+        assert!(app.take_notices().is_empty(), "the same P0 again is not news");
+        let mut back = snapshot();
+        back.items[0].reopened_at = Some("2026-10-28T10:05:00.000Z".into());
+        app.tx.send(Incoming::Message(StreamMessage::Datadog { snapshot: back })).unwrap();
+        app.pump();
+        assert_eq!(app.take_notices().iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Datadog P0 reopened"]);
     }
 
     #[test]

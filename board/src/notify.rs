@@ -1,7 +1,7 @@
 //! What the board tells you when you are elsewhere: a herdr notification on the transitions
 //! that need you, a live count on the Board tab, a terminal BEL when herdr is not there.
 //! `HARDNESS_BOARD_QUIET=1` silences all of it.
-use crate::model::{Look, PullRequest, SlackItem, Task, TaskEvent, TaskSla};
+use crate::model::{DatadogItem, Look, PullRequest, SlackItem, Task, TaskEvent, TaskSla};
 use crate::pulls::PrSplit;
 use crate::slack::SlackSplit;
 
@@ -98,6 +98,40 @@ pub fn slack_notice(old_split: Option<SlackSplit>, old_reopened_at: Option<&str>
 /// Inside the rules file's quiet hours (the snapshot's `quiet`) every notice but a P0's is held back.
 pub fn muted_by_quiet_hours(quiet: bool, item: &SlackItem) -> bool {
     quiet && item.priority() != Some("P0")
+}
+
+/// The Datadog P0s already told, so each is news once: a P0 by its id, one that came back after
+/// done by its id and when it came back. Lowering it and raising it again is not news twice.
+#[derive(Debug, Default)]
+pub struct DatadogNoticed(std::collections::HashSet<String>);
+
+impl DatadogNoticed {
+    /// The notices `items` are worth: `Datadog P0` for a P0 in an open split not told yet,
+    /// `Datadog P0 reopened` for one that came back after you cleared it. Untriaged items, lower
+    /// priorities and anything snoozed or done are not news. There are no quiet hours to honour:
+    /// only P0s are told, and a P0 gets through Slack's quiet hours too.
+    pub fn notices(&mut self, items: &[DatadogItem]) -> Vec<Notice> {
+        let mut out = Vec::new();
+        for item in items {
+            if item.priority() != Some("P0") || !item.split_enum().is_some_and(crate::datadog::DatadogSplit::open) {
+                continue;
+            }
+            let key = match &item.reopened_at {
+                Some(at) => format!("{}@{at}", item.id),
+                None => item.id.clone(),
+            };
+            if !self.0.insert(key) {
+                continue;
+            }
+            let title = if item.reopened_at.is_some() { "Datadog P0 reopened" } else { "Datadog P0" };
+            let place = match &item.service {
+                Some(service) => format!("{} · {service}", item.source),
+                None => item.source.clone(),
+            };
+            out.push(Notice { title: title.to_string(), body: format!("{place}: {}", item.summary()) });
+        }
+        out
+    }
 }
 
 /// The notice for losing the machine.
@@ -277,5 +311,40 @@ mod slack_tests {
         let mut fine = late;
         fine.overdue = false;
         assert_eq!(slack_notice(Some(SlackSplit::NeedsReply), None, true, &fine), None, "coming back inside the SLA is not news");
+    }
+}
+
+#[cfg(test)]
+mod datadog_tests {
+    use super::*;
+    use crate::datadog::fixtures::item;
+
+    #[test]
+    fn a_p0_is_news_once_per_item_and_again_only_when_it_comes_back() {
+        let mut told = DatadogNoticed::default();
+        let p0 = item("inc:412", "incident", "act_now", Some("P0"), "2026-10-28T09:55:00Z");
+        let notices = told.notices(std::slice::from_ref(&p0));
+        assert_eq!(notices.len(), 1, "first sight counts");
+        assert_eq!(notices[0].title, "Datadog P0");
+        assert_eq!(notices[0].body, "incident · checkout-api: checkout 5xx since the 14:02 deploy");
+        assert!(told.notices(std::slice::from_ref(&p0)).is_empty(), "the same P0 seen twice is news once");
+        let mut lowered = p0.clone();
+        lowered.triage.as_mut().unwrap().priority = "P1".into();
+        assert!(told.notices(&[lowered]).is_empty());
+        assert!(told.notices(std::slice::from_ref(&p0)).is_empty(), "back to P0 is not news twice");
+
+        let mut back = p0.clone();
+        back.reopened_at = Some("2026-10-28T10:00:00Z".into());
+        let notices = told.notices(std::slice::from_ref(&back));
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Datadog P0 reopened"], "coming back after done is");
+        assert!(told.notices(&[back]).is_empty(), "once");
+
+        let quiet = [
+            item("a", "incident", "investigate", Some("P1"), "t"),
+            item("b", "incident", "investigate", None, "t"),
+            item("c", "incident", "done", Some("P0"), "t"),
+            item("d", "incident", "snoozed", Some("P0"), "t"),
+        ];
+        assert!(told.notices(&quiet).is_empty(), "a P1, an untriaged item and a P0 put away are not news");
     }
 }
