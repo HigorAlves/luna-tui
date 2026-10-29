@@ -559,6 +559,9 @@ impl App {
         while let Ok(incoming) = self.stream.try_recv() {
             match incoming {
                 Incoming::Online => {
+                    // Containers seen before the outage may have finished; the scan
+                    // below refills `stages` with what is running now.
+                    self.stages.clear();
                     self.reload();
                     self.catch_up_watch_tabs();
                 }
@@ -2579,6 +2582,16 @@ mod tests {
         app.pump();
         assert_eq!(app.stages["t1"].container, "new");
         assert_eq!(app.stages["t2"].container, "c2");
+    }
+
+    #[test]
+    fn reconnecting_drops_stages_recorded_before_the_outage() {
+        let mut app = App::new(Machine::from_env());
+        let stage = herdr::Stage { label: "#a".into(), cwd: "/w".into(), container: "finished".into() };
+        app.stages.insert("t1".into(), stage);
+        app.tx.send(Incoming::Online).unwrap();
+        app.pump();
+        assert!(!app.stages.contains_key("t1"), "the scan refills it with what is really running");
     }
 
     #[test]
