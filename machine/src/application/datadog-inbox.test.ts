@@ -85,7 +85,7 @@ describe("DatadogInbox.pollOnce", () => {
     const { inbox, datadog, advance } = make();
     await inbox.pollOnce(true);
     expect(datadog.calls.errorTrackingIssues![0]).toEqual(["env:prod", "2026-10-28T11:00:00.000Z", "2026-10-28T12:00:00.000Z"]);
-    expect(datadog.calls.errorLogClusters![0]).toEqual(["env:prod", "2026-10-28T11:00:00.000Z", "2026-10-28T12:00:00.000Z", 15]);
+    expect(datadog.calls.errorLogClusters![0]).toEqual(["env:prod", "2026-10-28T11:00:00.000Z", "2026-10-28T12:00:00.000Z", 10]);
     expect(datadog.calls.alertingMonitors![0]).toEqual(["env:prod"]);
     advance(5 * 60_000);
     await inbox.pollOnce(true);
@@ -273,6 +273,31 @@ describe("DatadogInbox resolved marking", () => {
     advance(60_000);
     await inbox.pollOnce(true);
     expect(inbox.snapshot.items.find((i) => i.id === "inc:812")!.resolvedAt).toBe("2026-10-28T12:02:00.000Z");
+  });
+
+  it("does not mark incidents or monitors resolved when their list came back incomplete", async () => {
+    let list: unknown[] = [incident];
+    let partial = false;
+    const tagged = <T,>(items: T[]) => Object.assign([...items], { incomplete: partial });
+    const { inbox, store, advance } = make({ datadog: fakeDatadog({ incidents: async () => tagged(list as (typeof incident)[]), alertingMonitors: async () => tagged(list.length ? [monitor] : []) }) });
+    await inbox.pollOnce(true);
+    list = [];
+    partial = true;
+    advance(60_000);
+    await inbox.pollOnce(true);
+    expect(store.rows.get("inc:812")!.resolvedAt).toBeNull();
+    expect(store.rows.get("mon:7:service:api,env:prod")!.resolvedAt).toBeNull();
+    partial = false;
+    advance(60_000);
+    await inbox.pollOnce(true);
+    expect(store.rows.get("inc:812")!.resolvedAt).not.toBeNull();
+    expect(store.rows.get("mon:7:service:api,env:prod")!.resolvedAt).not.toBeNull();
+  });
+
+  it("asks for the ten largest error-log clusters", async () => {
+    const { inbox, datadog } = make();
+    await inbox.pollOnce(true);
+    expect(datadog.calls.errorLogClusters![0]![3]).toBe(10);
   });
 
   it("never marks Error Tracking issues or error-log clusters resolved, and leaves done items alone", async () => {

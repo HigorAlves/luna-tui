@@ -34,11 +34,18 @@ describe("Datadog REST", () => {
     const list = await createDatadog(options(fake(json(200, incidents)))).incidents();
     expect(list.map((i) => [i.publicId, i.state, i.severity])).toEqual([[812, "active", "SEV-2"], [813, "stable", "SEV-4"]]);
   });
-  it("waits out one 429, then gives up on the second", async () => {
+  it("waits out one short 429, then gives up on the second", async () => {
     const slept: number[] = [];
     const f = fake(json(429, {}, { "X-RateLimit-Reset": "3" }), json(429, {}, { "X-RateLimit-Reset": "3" }));
     await expect(createDatadog(options(f, slept)).incidents()).rejects.toMatchObject({ status: 429 });
     expect(slept).toEqual([3000]);
+  });
+  it("does not sleep through a long 429 reset: it throws at once", async () => {
+    const slept: number[] = [];
+    const f = fake(json(429, {}, { "X-RateLimit-Reset": "540" }));
+    await expect(createDatadog(options(f, slept)).incidents()).rejects.toMatchObject({ status: 429 });
+    expect(slept).toEqual([]);
+    expect(f.calls).toHaveLength(1);
   });
   it("retries a 5xx twice", async () => {
     const f = fake(json(502, {}), json(503, {}), json(200, incidents));
@@ -120,5 +127,74 @@ describe("Datadog REST", () => {
       firstSeen: "2025-10-01T00:00:00.000Z",
       lastSeen: "2025-10-29T11:48:00.000Z",
     });
+  });
+
+  const incidentPage = (from: number, n: number, nextOffset: number | null, state = "active") =>
+    json(200, {
+      data: Array.from({ length: n }, (_, i) => ({ id: `id${from + i}`, attributes: { public_id: from + i, title: `t${from + i}`, state, severity: "SEV-3", customer_impacted: false, created: "2026-10-28T08:00:00.000Z", modified: "2026-10-28T09:00:00.000Z" } })),
+      meta: { pagination: { offset: from, next_offset: nextOffset, size: n } },
+    });
+
+  it("follows next_offset through every incident page", async () => {
+    const f = fake(incidentPage(0, 50, 50), incidentPage(50, 3, null));
+    const list = await createDatadog(options(f)).incidents();
+    expect(list).toHaveLength(53);
+    expect(new URL(f.calls[1]!.url).searchParams.get("page[offset]")).toBe("50");
+    expect(list.incomplete).toBeFalsy();
+  });
+  it("marks the incident list incomplete when the page cap is hit", async () => {
+    const f = fake(...Array.from({ length: 10 }, (_, i) => incidentPage(i * 50, 50, (i + 1) * 50)));
+    const list = await createDatadog(options(f)).incidents();
+    expect(f.calls).toHaveLength(10);
+    expect(list).toHaveLength(500);
+    expect(list.incomplete).toBe(true);
+  });
+  it("pages monitor groups until page_count and marks the list incomplete at the cap", async () => {
+    const group = (id: number) => ({ monitor_id: id, monitor_name: `m${id}`, group: "*", status: "Alert", last_triggered_ts: null });
+    const f = fake(json(200, { groups: [group(1)], metadata: { page: 0, page_count: 2, per_page: 100 } }), json(200, { groups: [group(2)], metadata: { page: 1, page_count: 2, per_page: 100 } }));
+    const list = await createDatadog(options(f)).alertingMonitors("");
+    expect(list.map((g) => g.monitorId)).toEqual([1, 2]);
+    expect(new URL(f.calls[1]!.url).searchParams.get("page")).toBe("1");
+    expect(list.incomplete).toBeFalsy();
+    const many = fake(...Array.from({ length: 10 }, (_, i) => json(200, { groups: [group(i)], metadata: { page: i, page_count: 40, per_page: 100 } })));
+    const capped = await createDatadog(options(many)).alertingMonitors("");
+    expect(many.calls).toHaveLength(10);
+    expect(capped.incomplete).toBe(true);
+  });
+
+  const bigAggregate = (n: number) => ({ data: { buckets: Array.from({ length: n }, (_, i) => ({ by: { service: `svc${i}`, "@error.kind": "Boom" }, computes: { c0: 100 - i } })) } });
+  const range = ["2026-10-29T10:00:00Z", "2026-10-29T10:15:00Z"] as const;
+
+  it("runs at most three sample searches at once", async () => {
+    let live = 0;
+    let peak = 0;
+    const calls: string[] = [];
+    const fetch = async (url: string | URL | Request) => {
+      calls.push(String(url));
+      if (String(url).endsWith("aggregate")) return json(200, bigAggregate(8));
+      live++;
+      peak = Math.max(peak, live);
+      await new Promise((r) => setTimeout(r, 5));
+      live--;
+      return json(200, search);
+    };
+    const clusters = await createDatadog({ ...options(fake()), fetch: fetch as typeof globalThis.fetch }).errorLogClusters("", ...range, 8);
+    expect(clusters).toHaveLength(8);
+    expect(peak).toBe(3);
+  });
+  it("keeps a cluster whose sample search failed, with no samples", async () => {
+    const answers = [json(200, bigAggregate(2)), json(400, {}), json(200, search)];
+    const f = fake(...answers);
+    const clusters = await createDatadog(options(f)).errorLogClusters("", ...range, 2);
+    expect(clusters).toHaveLength(2);
+    expect(clusters.filter((c) => c.samples.length === 0)).toHaveLength(1);
+  });
+  it("normalises string timestamps and falls back for an invalid one", async () => {
+    const odd = JSON.parse(JSON.stringify(errorTracking));
+    odd.included[0].attributes.first_seen = "2025-10-01T02:00:00+02:00";
+    odd.included[0].attributes.last_seen = "not a date";
+    const issues = await createDatadog(options(fake(json(200, odd)))).errorTrackingIssues("", ...range);
+    expect(issues[0]!.firstSeen).toBe("2025-10-01T00:00:00.000Z");
+    expect(issues[0]!.lastSeen).toBe("2026-10-29T10:15:00Z");
   });
 });

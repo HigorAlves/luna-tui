@@ -1,6 +1,6 @@
 // The Datadog port over the REST API with plain `fetch`: `DD-API-KEY` and `DD-APPLICATION-KEY`
-// headers against `https://api.<site>`, JSON both ways. A 429 waits `X-RateLimit-Reset` seconds
-// once, then gives up with a `DatadogError` the pollers recognise; a 5xx or a network failure is
+// headers against `https://api.<site>`, JSON both ways. A 429 whose `X-RateLimit-Reset` is within 5s waits
+// once, a longer one gives up at once, and a second 429 gives up too, with a `DatadogError` the pollers recognise; a 5xx or a network failure is
 // retried twice with a growing pause; a 401/403 is a `DatadogAuthError` naming the path, since
 // Datadog answers a missing application-key scope the same way as a wrong key.
 import { z } from "zod";
@@ -13,6 +13,7 @@ import {
   type DdErrorTrackingIssue,
   type DdIncident,
   type DdMonitorGroup,
+  type Listing,
 } from "../../application/datadog.ts";
 
 export interface DatadogRestOptions {
@@ -32,6 +33,12 @@ export const RETRY_BACKOFF_MS = [500, 2_000] as const;
 export const INCIDENT_PAGE = 50;
 /** The most monitor groups one search asks for. */
 export const MONITOR_PAGE = 100;
+/** The most pages one incident or monitor listing follows before it reports itself incomplete. */
+export const MAX_PAGES = 10;
+/** A 429 whose reset is further off than this is not waited out: the poller backs off instead. */
+export const MAX_RATE_WAIT_S = 5;
+/** Sample searches running at once while building log clusters. */
+export const SAMPLE_CONCURRENCY = 3;
 
 const Incidents = z.object({
   data: z.array(
@@ -54,6 +61,7 @@ const Incidents = z.object({
         .passthrough(),
     }),
   ),
+  meta: z.object({ pagination: z.object({ next_offset: z.number().nullish() }).nullish() }).nullish(),
 });
 const OPEN_INCIDENT = new Set(["active", "stable"]);
 
@@ -69,6 +77,7 @@ const MonitorGroups = z.object({
       })
       .passthrough(),
   ),
+  metadata: z.object({ page: z.number().nullish(), page_count: z.number().nullish(), page_size: z.number().nullish(), total_count: z.number().nullish() }).nullish(),
 });
 
 const Time = z.union([z.number(), z.string()]);
@@ -137,8 +146,26 @@ function epochMs(iso: string, path: string): number {
 }
 const isoOf = (t: number | string | null | undefined, fallback: string): string => {
   if (t === null || t === undefined) return fallback;
-  return typeof t === "number" ? new Date(t).toISOString() : t;
+  const ms = typeof t === "number" ? t : Date.parse(t);
+  return Number.isNaN(ms) ? fallback : new Date(ms).toISOString();
 };
+
+/** Runs `task` over `items`, at most `limit` at a time, and keeps the results in order; a failure is its own result. */
+async function settledPool<T, R>(items: T[], limit: number, task: (item: T) => Promise<R>): Promise<PromiseSettledResult<R>[]> {
+  const results: PromiseSettledResult<R>[] = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const at = next++;
+      results[at] = await task(items[at]!).then(
+        (value): PromiseFulfilledResult<R> => ({ status: "fulfilled", value }),
+        (reason: unknown): PromiseRejectedResult => ({ status: "rejected", reason }),
+      );
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
 
 export function createDatadog(options: DatadogRestOptions): Datadog {
   const doFetch = options.fetch ?? fetch;
@@ -175,7 +202,9 @@ export function createDatadog(options: DatadogRestOptions): Datadog {
     }
     if (response.status === 429) {
       const reset = Number(response.headers.get("X-RateLimit-Reset") ?? "1");
-      await sleep((Number.isFinite(reset) ? reset : 1) * 1000);
+      const wait = Number.isFinite(reset) ? reset : 1;
+      if (wait > MAX_RATE_WAIT_S) throw new DatadogError(`Datadog rate limit on ${method} ${path}: retry after ${wait}s`, 429);
+      await sleep(wait * 1000);
       response = await request();
       if (response.status === 429) throw new DatadogError(`Datadog rate limit on ${method} ${path}: retry after ${reset}s`, 429);
     }
@@ -196,14 +225,16 @@ export function createDatadog(options: DatadogRestOptions): Datadog {
   }
 
   return {
-    async incidents(): Promise<DdIncident[]> {
-      const page = await call("GET", "api/v2/incidents", Incidents, undefined, { "page[size]": String(INCIDENT_PAGE) });
-      return page.data.flatMap((raw): DdIncident[] => {
-        const a = raw.attributes;
-        const state = a.state ?? a.fields?.state?.value ?? "unknown";
-        if (!OPEN_INCIDENT.has(state.toLowerCase())) return [];
-        return [
-          {
+    async incidents(): Promise<Listing<DdIncident>> {
+      const out: Listing<DdIncident> = [];
+      let offset = 0;
+      for (let pages = 0; ; pages++) {
+        const page = await call("GET", "api/v2/incidents", Incidents, undefined, { "page[size]": String(INCIDENT_PAGE), "page[offset]": String(offset) });
+        for (const raw of page.data) {
+          const a = raw.attributes;
+          const state = a.state ?? a.fields?.state?.value ?? "unknown";
+          if (!OPEN_INCIDENT.has(state.toLowerCase())) continue;
+          out.push({
             id: raw.id,
             publicId: a.public_id,
             title: a.title,
@@ -212,22 +243,43 @@ export function createDatadog(options: DatadogRestOptions): Datadog {
             customerImpacted: a.customer_impacted ?? false,
             created: a.created,
             modified: a.modified,
-          },
-        ];
-      });
+          });
+        }
+        const next = page.meta?.pagination?.next_offset;
+        if (page.data.length < INCIDENT_PAGE || next === null || next === undefined || next <= offset) break;
+        if (pages + 1 >= MAX_PAGES) {
+          out.incomplete = true;
+          break;
+        }
+        offset = next;
+      }
+      return out;
     },
 
-    async alertingMonitors(scope: string): Promise<DdMonitorGroup[]> {
+    async alertingMonitors(scope: string): Promise<Listing<DdMonitorGroup>> {
       const query = ['status:(alert OR warn OR "no data")', scope].filter(Boolean).join(" ");
-      const result = await call("GET", "api/v1/monitor/groups/search", MonitorGroups, undefined, { query, per_page: String(MONITOR_PAGE) });
-      return result.groups.map((g) => ({
-        monitorId: g.monitor_id,
-        monitorName: g.monitor_name,
-        group: g.group,
-        status: g.status,
-        priority: null,
-        lastTriggered: g.last_triggered_ts ? new Date(g.last_triggered_ts * 1000).toISOString() : null,
-      }));
+      const out: Listing<DdMonitorGroup> = [];
+      for (let pageNo = 0; ; pageNo++) {
+        const result = await call("GET", "api/v1/monitor/groups/search", MonitorGroups, undefined, { query, per_page: String(MONITOR_PAGE), page: String(pageNo) });
+        for (const g of result.groups) {
+          out.push({
+            monitorId: g.monitor_id,
+            monitorName: g.monitor_name,
+            group: g.group,
+            status: g.status,
+            priority: null,
+            lastTriggered: g.last_triggered_ts ? new Date(g.last_triggered_ts * 1000).toISOString() : null,
+          });
+        }
+        const m = result.metadata;
+        const pageCount = m?.page_count ?? (m?.total_count != null ? Math.ceil(m.total_count / (m.page_size ?? MONITOR_PAGE)) : 1);
+        if (pageNo + 1 >= pageCount || result.groups.length === 0) break;
+        if (pageNo + 1 >= MAX_PAGES) {
+          out.incomplete = true;
+          break;
+        }
+      }
+      return out;
     },
 
     async errorTrackingIssues(scope: string, from: string, to: string): Promise<DdErrorTrackingIssue[]> {
@@ -284,28 +336,29 @@ export function createDatadog(options: DatadogRestOptions): Datadog {
         .map((b) => ({ service: String(b.by.service ?? "unknown"), kind: String(b.by["@error.kind"] ?? MISSING_KIND), count: Number(b.computes.c0 ?? 0) }))
         .sort((x, y) => y.count - x.count)
         .slice(0, top);
-      return Promise.all(
-        buckets.map(async (b): Promise<DdErrorLogCluster> => {
-          const q = joinQuery(base, `service:${term(b.service)}`, b.kind === MISSING_KIND ? "-@error.kind:*" : `@error.kind:${quote(b.kind)}`);
-          const page = await call("POST", "api/v2/logs/events/search", LogEvents, { filter: { query: q, from, to }, sort: "-timestamp", page: { limit: LOG_SAMPLES } });
-          const events = page.data;
-          const tag = (name: string) =>
-            events
-              .flatMap((e) => e.attributes.tags ?? [])
-              .find((t) => t.startsWith(`${name}:`))
-              ?.slice(name.length + 1) ?? null;
-          return {
-            service: b.service,
-            errorKind: b.kind === MISSING_KIND ? "-" : b.kind,
-            env: tag("env"),
-            count: b.count,
-            firstSeen: events.at(-1)?.attributes.timestamp ?? from,
-            lastSeen: events[0]?.attributes.timestamp ?? to,
-            samples: events.map((e) => String(e.attributes.attributes?.error?.message ?? e.attributes.message ?? "").slice(0, SAMPLE_CHARS)).filter(Boolean),
-            repositoryUrl: tag("git.repository_url"),
-          };
-        }),
-      );
+      const results = await settledPool(buckets, SAMPLE_CONCURRENCY, async (b) => {
+        const q = joinQuery(base, `service:${term(b.service)}`, b.kind === MISSING_KIND ? "-@error.kind:*" : `@error.kind:${quote(b.kind)}`);
+        return (await call("POST", "api/v2/logs/events/search", LogEvents, { filter: { query: q, from, to }, sort: "-timestamp", page: { limit: LOG_SAMPLES } })).data;
+      });
+      return buckets.map((b, i): DdErrorLogCluster => {
+        // A failed sample search keeps the cluster, without samples, rather than losing the whole poll.
+        const events = results[i]!.status === "fulfilled" ? results[i]!.value : [];
+        const tag = (name: string) =>
+          events
+            .flatMap((e) => e.attributes.tags ?? [])
+            .find((t) => t.startsWith(`${name}:`))
+            ?.slice(name.length + 1) ?? null;
+        return {
+          service: b.service,
+          errorKind: b.kind === MISSING_KIND ? "-" : b.kind,
+          env: tag("env"),
+          count: b.count,
+          firstSeen: isoOf(events.at(-1)?.attributes.timestamp, from),
+          lastSeen: isoOf(events[0]?.attributes.timestamp, to),
+          samples: events.map((e) => String(e.attributes.attributes?.error?.message ?? e.attributes.message ?? "").slice(0, SAMPLE_CHARS)).filter(Boolean),
+          repositoryUrl: tag("git.repository_url"),
+        };
+      });
     },
 
     webUrl: (path) => `https://app.${site}/${path.replace(/^\/+/, "")}`,

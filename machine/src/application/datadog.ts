@@ -17,6 +17,9 @@ export class DatadogAuthError extends DatadogError {
   }
 }
 
+/** A list that may have stopped at the adapter's page cap: `incomplete` then says "more exist than you got". */
+export type Listing<T> = T[] & { incomplete?: boolean };
+
 export interface DdIncident {
   id: string;
   publicId: number;
@@ -72,9 +75,9 @@ export interface DdErrorLogCluster {
 
 export interface Datadog {
   /** Incidents not yet resolved (`active`, `stable`). */
-  incidents(): Promise<DdIncident[]>;
+  incidents(): Promise<Listing<DdIncident>>;
   /** Monitor groups in Alert, Warn or No Data, narrowed by `scope` (e.g. `env:prod`). */
-  alertingMonitors(scope: string): Promise<DdMonitorGroup[]>;
+  alertingMonitors(scope: string): Promise<Listing<DdMonitorGroup>>;
   /** Error Tracking issues seen between `from` and `to` (ISO), open ones only. */
   errorTrackingIssues(scope: string, from: string, to: string): Promise<DdErrorTrackingIssue[]>;
   /** `status:error` logs between `from` and `to`, grouped by service and error kind, the `top` largest with samples. */

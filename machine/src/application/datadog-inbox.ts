@@ -63,7 +63,7 @@ const OVERLAP_MS = MINUTE_MS;
 /** Done items stay listed (and stored) this long. */
 const KEEP_DONE_MS = 30 * DAY_MS;
 /** Error-log clusters fetched per poll. */
-const TOP_CLUSTERS = 15;
+const TOP_CLUSTERS = 10;
 const TICK_MS = MINUTE_MS;
 /** The pause before each retry of an item the pack failed or skipped; past the last one it keeps its floor until it changes. */
 const TRIAGE_RETRY_MS = [MINUTE_MS, 5 * MINUTE_MS, 15 * MINUTE_MS];
@@ -160,9 +160,19 @@ export class DatadogInbox implements DatadogInboxPort {
     const windows = new Map(SOURCES.map((source) => [source, fromOf(source)]));
     const query = scope.trim();
     const webUrl = (path: string) => datadog.webUrl(path);
+    /** Sources whose list stopped at the page cap: what is missing from it is unknown, not resolved. */
+    const incomplete = new Set<DatadogSource>();
     const calls: Record<DatadogSource, () => Promise<DatadogItem[]>> = {
-      incident: async () => (await datadog.incidents()).map((raw) => fromIncident(raw, webUrl)),
-      monitor: async () => (await datadog.alertingMonitors(query)).map((raw) => fromMonitor(raw, webUrl)),
+      incident: async () => {
+        const list = await datadog.incidents();
+        if (list.incomplete) incomplete.add("incident");
+        return list.map((raw) => fromIncident(raw, webUrl));
+      },
+      monitor: async () => {
+        const list = await datadog.alertingMonitors(query);
+        if (list.incomplete) incomplete.add("monitor");
+        return list.map((raw) => fromMonitor(raw, webUrl));
+      },
       error_tracking: async () => (await datadog.errorTrackingIssues(query, windows.get("error_tracking")!, to)).map((raw) => fromIssue(raw, webUrl)),
       error_logs: async () => (await datadog.errorLogClusters(query, windows.get("error_logs")!, to, TOP_CLUSTERS)).map((raw) => fromCluster(raw, webUrl)),
     };
@@ -211,7 +221,7 @@ export class DatadogInbox implements DatadogInboxPort {
       }
       // Incidents and monitors are full lists of what is active: one that is gone, from a call that succeeded, is resolved.
       for (const source of ["incident", "monitor"] as const) {
-        if (settled[SOURCES.indexOf(source)]!.status !== "fulfilled") continue;
+        if (settled[SOURCES.indexOf(source)]!.status !== "fulfilled" || incomplete.has(source)) continue;
         for (const row of stored.values()) {
           if (row.source === source && !row.doneAt && row.resolvedAt === null && !merged.has(row.id)) merged.set(row.id, { ...row, resolvedAt: now.toISOString() });
         }
