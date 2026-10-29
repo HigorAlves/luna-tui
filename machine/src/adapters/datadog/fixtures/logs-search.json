@@ -1,0 +1,44 @@
+{
+  "data": [
+    {
+      "id": "log-3",
+      "type": "log",
+      "attributes": {
+        "timestamp": "2026-10-29T10:14:30.000Z",
+        "message": "upstream timed out after 30s",
+        "status": "error",
+        "service": "billing",
+        "host": "billing-7",
+        "tags": ["env:prod", "service:billing", "git.repository_url:https://github.com/acme/billing"],
+        "attributes": { "error": { "kind": "TimeoutError", "message": "request to ledger timed out", "stack": "TimeoutError: ..." } }
+      }
+    },
+    {
+      "id": "log-2",
+      "type": "log",
+      "attributes": {
+        "timestamp": "2026-10-29T10:10:02.000Z",
+        "message": "upstream timed out after 30s",
+        "status": "error",
+        "service": "billing",
+        "host": "billing-3",
+        "tags": ["env:prod", "service:billing"],
+        "attributes": {}
+      }
+    },
+    {
+      "id": "log-1",
+      "type": "log",
+      "attributes": {
+        "timestamp": "2026-10-29T10:01:00.000Z",
+        "message": "x",
+        "status": "error",
+        "service": "billing",
+        "tags": ["env:prod"],
+        "attributes": { "error": { "kind": "TimeoutError", "message": "request to ledger timed out" } }
+      }
+    }
+  ],
+  "meta": { "page": { "after": "c3" } },
+  "links": { "next": "https://api.datadoghq.com/api/v2/logs/events/search?page[cursor]=c3" }
+}

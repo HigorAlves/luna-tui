@@ -71,6 +71,75 @@ const MonitorGroups = z.object({
   ),
 });
 
+const Time = z.union([z.number(), z.string()]);
+const ErrorTracking = z.object({
+  data: z.array(
+    z.object({
+      attributes: z.object({ total_count: z.number().nullish() }).passthrough(),
+      relationships: z.object({ issue: z.object({ data: z.object({ id: z.string() }) }) }).passthrough(),
+    }),
+  ),
+  included: z
+    .array(
+      z.object({
+        id: z.string(),
+        type: z.string(),
+        attributes: z
+          .object({
+            error_message: z.string().nullish(),
+            error_type: z.string().nullish(),
+            first_seen: Time.nullish(),
+            last_seen: Time.nullish(),
+            regression: z.unknown().optional(),
+            service: z.string().nullish(),
+            state: z.string().nullish(),
+          })
+          .passthrough(),
+      }),
+    )
+    .nullish(),
+});
+const CLOSED_ISSUE = new Set(["RESOLVED", "IGNORED"]);
+
+const Aggregate = z.object({
+  data: z.object({
+    buckets: z.array(z.object({ by: z.record(z.string(), z.unknown()), computes: z.record(z.string(), z.unknown()) })),
+  }),
+});
+const LogEvents = z.object({
+  data: z.array(
+    z.object({
+      attributes: z
+        .object({
+          timestamp: z.string(),
+          message: z.string().nullish(),
+          tags: z.array(z.string()).nullish(),
+          attributes: z.object({ error: z.object({ message: z.string().nullish() }).passthrough().nullish() }).passthrough().nullish(),
+        })
+        .passthrough(),
+    }),
+  ),
+});
+
+/** Stands for a log with no `@error.kind` in the aggregate; it is searched as `-@error.kind:*` and shown as `-`. */
+const MISSING_KIND = "__none__";
+/** The most sample messages one log cluster carries. */
+export const LOG_SAMPLES = 3;
+const SAMPLE_CHARS = 500;
+const quote = (v: string) => `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+const term = (v: string) => (/^[\w.\-:/]+$/.test(v) ? v : quote(v));
+const joinQuery = (...parts: string[]) => parts.filter(Boolean).join(" ");
+
+function epochMs(iso: string, path: string): number {
+  const ms = Date.parse(iso);
+  if (Number.isNaN(ms)) throw new DatadogError(`${path}: "${iso}" is not a timestamp`);
+  return ms;
+}
+const isoOf = (t: number | string | null | undefined, fallback: string): string => {
+  if (t === null || t === undefined) return fallback;
+  return typeof t === "number" ? new Date(t).toISOString() : t;
+};
+
 export function createDatadog(options: DatadogRestOptions): Datadog {
   const doFetch = options.fetch ?? fetch;
   const sleep = options.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -161,12 +230,82 @@ export function createDatadog(options: DatadogRestOptions): Datadog {
       }));
     },
 
-    async errorTrackingIssues(): Promise<DdErrorTrackingIssue[]> {
-      throw new DatadogError("not implemented yet");
+    async errorTrackingIssues(scope: string, from: string, to: string): Promise<DdErrorTrackingIssue[]> {
+      const path = "api/v2/error-tracking/issues/search";
+      const answer = await call(
+        "POST",
+        path,
+        ErrorTracking,
+        {
+          data: {
+            type: "search_request",
+            attributes: { query: scope || "*", from: epochMs(from, path), to: epochMs(to, path), persona: "ALL", order_by: "TOTAL_COUNT", states: ["OPEN", "ACKNOWLEDGED"] },
+          },
+        },
+        { include: "issue" },
+      );
+      const issues = new Map((answer.included ?? []).filter((i) => i.type === "issue").map((i) => [i.id, i.attributes]));
+      return answer.data.flatMap((result): DdErrorTrackingIssue[] => {
+        const id = result.relationships.issue.data.id;
+        const a = issues.get(id);
+        if (!a) return [];
+        const state = a.state ?? "OPEN";
+        if (CLOSED_ISSUE.has(state.toUpperCase())) return [];
+        return [
+          {
+            id,
+            errorType: a.error_type ?? "Error",
+            errorMessage: a.error_message ?? "",
+            service: a.service ?? null,
+            env: null,
+            state,
+            isRegression: Boolean(a.regression),
+            count: result.attributes.total_count ?? 0,
+            firstSeen: isoOf(a.first_seen, from),
+            lastSeen: isoOf(a.last_seen, to),
+            repositoryUrl: null,
+          },
+        ];
+      });
     },
 
-    async errorLogClusters(): Promise<DdErrorLogCluster[]> {
-      throw new DatadogError("not implemented yet");
+    async errorLogClusters(scope: string, from: string, to: string, top: number): Promise<DdErrorLogCluster[]> {
+      const base = joinQuery("status:error", scope);
+      // A `timeout` status in `meta` still carries the buckets counted so far, so they are kept.
+      const agg = await call("POST", "api/v2/logs/analytics/aggregate", Aggregate, {
+        filter: { query: base, from, to },
+        compute: [{ aggregation: "count", type: "total" }],
+        group_by: [
+          { facet: "service", limit: top, sort: { type: "measure", aggregation: "count", order: "desc" } },
+          { facet: "@error.kind", limit: 3, missing: MISSING_KIND, sort: { type: "measure", aggregation: "count", order: "desc" } },
+        ],
+      });
+      const buckets = agg.data.buckets
+        .map((b) => ({ service: String(b.by.service ?? "unknown"), kind: String(b.by["@error.kind"] ?? MISSING_KIND), count: Number(b.computes.c0 ?? 0) }))
+        .sort((x, y) => y.count - x.count)
+        .slice(0, top);
+      return Promise.all(
+        buckets.map(async (b): Promise<DdErrorLogCluster> => {
+          const q = joinQuery(base, `service:${term(b.service)}`, b.kind === MISSING_KIND ? "-@error.kind:*" : `@error.kind:${quote(b.kind)}`);
+          const page = await call("POST", "api/v2/logs/events/search", LogEvents, { filter: { query: q, from, to }, sort: "-timestamp", page: { limit: LOG_SAMPLES } });
+          const events = page.data;
+          const tag = (name: string) =>
+            events
+              .flatMap((e) => e.attributes.tags ?? [])
+              .find((t) => t.startsWith(`${name}:`))
+              ?.slice(name.length + 1) ?? null;
+          return {
+            service: b.service,
+            errorKind: b.kind === MISSING_KIND ? "-" : b.kind,
+            env: tag("env"),
+            count: b.count,
+            firstSeen: events.at(-1)?.attributes.timestamp ?? from,
+            lastSeen: events[0]?.attributes.timestamp ?? to,
+            samples: events.map((e) => String(e.attributes.attributes?.error?.message ?? e.attributes.message ?? "").slice(0, SAMPLE_CHARS)).filter(Boolean),
+            repositoryUrl: tag("git.repository_url"),
+          };
+        }),
+      );
     },
 
     webUrl: (path) => `https://app.${site}/${path.replace(/^\/+/, "")}`,

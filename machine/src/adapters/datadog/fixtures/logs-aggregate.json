@@ -1,0 +1,10 @@
+{
+  "data": {
+    "buckets": [
+      { "by": { "service": "billing", "@error.kind": "TimeoutError" }, "computes": { "c0": 1200 } },
+      { "by": { "service": "worker", "@error.kind": "__none__" }, "computes": { "c0": 300 } },
+      { "by": { "service": "billing", "@error.kind": "ValidationError" }, "computes": { "c0": 40 } }
+    ]
+  },
+  "meta": { "elapsed": 112, "page": {}, "request_id": "req-1", "status": "done", "warnings": [] }
+}
