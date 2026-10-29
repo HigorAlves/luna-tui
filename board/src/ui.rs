@@ -1079,6 +1079,10 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     let now = now_secs();
     let counts = pulls::counts(&app.prs.prs);
     let mut head = vec![Span::from(" Pulls ").fg(c(ACCENT)).bold()];
+    if app.prs_polling {
+        // Up front, where a narrow terminal still shows it.
+        head.push(Span::from(format!("{} polling GitHub… ", spinner())).fg(c(YELLOW)).bold());
+    }
     for (i, split) in PrSplit::ALL.iter().enumerate() {
         if i > 0 {
             head.push(Span::from("│").fg(c(MUTED)));
@@ -1090,11 +1094,13 @@ fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
             Span::from(label).fg(c(SUBTEXT0))
         });
     }
-    let polled = match app.prs.polled_at.as_deref().and_then(unix_secs) {
-        Some(at) => format!("polled {} ago", age_secs(now.saturating_sub(at))),
-        None => "not polled yet".to_string(),
-    };
-    head.push(Span::from(format!("  {polled}")).fg(c(SUBTEXT0)));
+    if !app.prs_polling {
+        let polled = match app.prs.polled_at.as_deref().and_then(unix_secs) {
+            Some(at) => format!("polled {} ago", age_secs(now.saturating_sub(at))),
+            None => "not polled yet".to_string(),
+        };
+        head.push(Span::from(format!("  {polled}")).fg(c(SUBTEXT0)));
+    }
     let mut top = vec![Line::from(head)];
     if let Some(error) = &app.prs.error {
         top.push(Line::from(Span::from(format!(" ⚠ {error}")).fg(c(RED))));
@@ -1320,6 +1326,9 @@ fn render_slack(frame: &mut Frame, area: Rect, app: &App, state: &SlackState) {
     let counts = slack::counts(&snapshot.items);
     let narrow = area.width < SLACK_DETAIL_FROM;
     let mut head = vec![Span::from(" Slack ").fg(c(ACCENT)).bold()];
+    if app.slack_polling {
+        head.push(Span::from(format!("{} polling Slack… ", spinner())).fg(c(YELLOW)).bold());
+    }
     for (i, split) in SlackSplit::ALL.iter().enumerate() {
         if i > 0 {
             head.push(Span::from("│").fg(c(MUTED)));
@@ -1332,11 +1341,13 @@ fn render_slack(frame: &mut Frame, area: Rect, app: &App, state: &SlackState) {
             Span::from(label).fg(c(SUBTEXT0))
         });
     }
-    let polled = match snapshot.polled_at.as_deref().and_then(unix_secs) {
-        Some(at) => format!("polled {} ago", age_secs(now.saturating_sub(at))),
-        None => "not polled yet".to_string(),
-    };
-    head.push(Span::from(format!("  {polled}")).fg(c(SUBTEXT0)));
+    if !app.slack_polling {
+        let polled = match snapshot.polled_at.as_deref().and_then(unix_secs) {
+            Some(at) => format!("polled {} ago", age_secs(now.saturating_sub(at))),
+            None => "not polled yet".to_string(),
+        };
+        head.push(Span::from(format!("  {polled}")).fg(c(SUBTEXT0)));
+    }
     match snapshot.socket.as_str() {
         "connected" => head.push(Span::from("  ⚡ live").fg(c(GREEN))),
         "disconnected" => head.push(Span::from("  ⚡ socket down").fg(c(YELLOW))),
@@ -2778,6 +2789,15 @@ mod pr_tests {
         let mut owner_less = app_with(vec![pr(7, "Bare", "review_requested", "success", true, false)]);
         owner_less.prs.prs[0].repo = "app".into();
         assert!(render(80, 14, &owner_less).contains("▌app "), "a repo without an owner prints whole");
+    }
+
+    #[test]
+    fn the_header_says_it_is_polling_while_a_poll_runs() {
+        let mut app = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, false)]);
+        assert!(!render(100, 14, &app).contains("polling GitHub"));
+        app.prs_polling = true;
+        let text = render(100, 14, &app);
+        assert!(text.contains("polling GitHub…") && !text.contains("polled "), "{text}");
     }
 
     #[test]

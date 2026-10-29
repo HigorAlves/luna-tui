@@ -159,24 +159,24 @@ export class GitHubPulls implements PullsPort {
   private async fetchAll(): Promise<PullRequest[]> {
     const me = await this.whoAmI();
     const hits = await this.options.github.searchMyPrs();
-    const prs: PullRequest[] = [];
-    for (const hit of hits) {
+    // One GraphQL call per PR, a few at a time: a long list otherwise takes half a minute.
+    const found = await mapLimit(hits, FETCH_AT_ONCE, async (hit): Promise<PullRequest | null> => {
       let node;
       try {
         node = await this.options.github.prFacts(hit.repo, hit.number);
       } catch (error) {
         console.warn(`github prs: ${hit.repo}#${hit.number}: ${messageOf(error)}`);
-        continue;
+        return null;
       }
-      if (!node) continue;
+      if (!node) return null;
       const facts = fromGraphQl(node, hit.repo, me.login, me.teams);
       const [localPath, task] = await Promise.all([
         this.options.resolveRepo(hit.repo).catch(() => null),
         this.options.findTask(hit.repo, hit.number).catch(() => null),
       ]);
-      prs.push({ ...facts, split: splitOf(facts), localPath, task });
-    }
-    return prs;
+      return { ...facts, split: splitOf(facts), localPath, task };
+    });
+    return found.filter((pr): pr is PullRequest => pr !== null);
   }
 
   /** The PR as the last poll saw it. */
@@ -239,4 +239,21 @@ async function isCheckoutRoot(exec: typeof realExec, dir: string): Promise<boole
   if (top.code !== 0) return false;
   const [a, b] = await Promise.all([realpath(top.stdout.trim()), realpath(dir)]).catch(() => [null, null]);
   return a !== null && a === b;
+}
+
+/** How many PRs are read from GitHub at once. */
+const FETCH_AT_ONCE = 6;
+
+/** `fn` over `items`, at most `limit` at a time, results in the order of `items`. */
+async function mapLimit<T, R>(items: readonly T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const at = next++;
+      out[at] = await fn(items[at]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
 }

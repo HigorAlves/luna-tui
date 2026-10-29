@@ -379,6 +379,8 @@ verdict waits at the Ship gate for `a`. `t` dispatches an agent that answers eve
 review thread on your PR, pushes, posts the replies and resolves the threads it settled. `enter`
 jumps to the PR's task on the board when one is running, else opens the PR.
 
+`R` polls GitHub now. A poll reads every PR, so it runs in the background: the header says `◐ polling GitHub…` until the answer lands, then a toast says `polled GitHub`, and a second `R` meanwhile only says it is already polling. Slack's `R` does the same.
+
 From 100 columns the view is a list beside a detail pane. A row reads `✓ ▌repo  #n  title  age  tag` in fixed columns, the checks glyph first (`✓` green, `✗` red, `◐` running), the repo's colour bar and name next (the name after the owner's `/`, the same colour its cards wear), a spinner and the work (`◐ ci fix`, `◐ review`, `◐ threads`, in bold yellow) while a task runs for it, and `⌂` when the machine has no clone of the repo; only the title is ever cut; the list scrolls to keep the selected row in view. The pane shows the selected PR: author and branches, every check by name, the review state and unresolved threads, the task in flight, and the keys with why each is off. Under 100 columns the pane hides and `x` shows the same detail over the list. A dispatch on such a PR opens the clone prompt: the same filter-as-you-type search `R` uses, over the folders under `HARDNESS_REPOS_DIR`; `enter` clones into `<folder>/<name>` and runs the action once it lands, `esc` leaves the row read-only. `c` and `t` are off on a fork head (nothing can push to it), `v` is off on your own PRs, and all three are off while a task already runs for the PR.
 
 ## Slack

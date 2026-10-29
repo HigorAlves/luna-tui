@@ -20,6 +20,8 @@ use crate::model::{
 
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
+/// A poll asks GitHub or Slack about every item, so it may take far longer than a click.
+const POLL_TIMEOUT: Duration = Duration::from_secs(120);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Where `pnpm dev` runs the machine, on the host.
@@ -42,6 +44,10 @@ pub enum Incoming {
     SlackCatalog { groups: Vec<SlackOption>, channels: Vec<SlackOption> },
     /// A `/jira/search` answer for `query`, fetched off the UI thread; dropped when the prompt has moved on.
     JiraHits { query: String, hits: Result<Vec<JiraIssueHit>, String> },
+    /// The answer to `R` in Pulls, polled off the UI thread.
+    PrsPolled(Result<PrSnapshot, String>),
+    /// The answer to `R` in Slack, polled off the UI thread.
+    SlackPolled(Result<SlackSnapshot, String>),
 }
 
 #[derive(Clone)]
@@ -50,6 +56,8 @@ pub struct Machine {
     base: Arc<RwLock<String>>,
     candidates: Vec<String>,
     agent: Agent,
+    /// For the calls that wait on a poll of GitHub or Slack.
+    slow: Agent,
 }
 
 type Reply = Result<Response<Body>, ureq::Error>;
@@ -64,14 +72,16 @@ impl Machine {
             .timeout_global(Some(REQUEST_TIMEOUT))
             .build()
             .into();
-        Self { base: Arc::new(RwLock::new(base)), candidates, agent }
+        let slow = Agent::config_builder().http_status_as_error(false).timeout_global(Some(POLL_TIMEOUT)).build().into();
+        Self { base: Arc::new(RwLock::new(base)), candidates, agent, slow }
     }
 
     /// A machine at a known address, for tests that stand up their own.
     #[cfg(test)]
     pub fn at(base: &str) -> Self {
         let agent = Agent::config_builder().http_status_as_error(false).timeout_global(Some(REQUEST_TIMEOUT)).build().into();
-        Self { base: Arc::new(RwLock::new(base.to_string())), candidates: vec![base.to_string()], agent }
+        let slow = Agent::config_builder().http_status_as_error(false).timeout_global(Some(POLL_TIMEOUT)).build().into();
+        Self { base: Arc::new(RwLock::new(base.to_string())), candidates: vec![base.to_string()], agent, slow }
     }
 
     pub fn base(&self) -> String {
@@ -256,7 +266,7 @@ impl Machine {
 
     /// Polls GitHub now and answers the fresh snapshot.
     pub fn refresh_prs(&self) -> Result<PrSnapshot, String> {
-        Self::typed(self.agent.post(self.url("/github/prs/refresh")).send_json(json!({})))
+        Self::typed(self.slow.post(self.url("/github/prs/refresh")).send_json(json!({})))
     }
 
     /// Dispatches a PR task; answers the task the machine started.
@@ -286,7 +296,7 @@ impl Machine {
 
     /// Polls Slack now and answers the fresh snapshot.
     pub fn refresh_slack(&self) -> Result<SlackSnapshot, String> {
-        Self::typed(self.agent.post(self.url("/slack/refresh")).send_json(json!({})))
+        Self::typed(self.slow.post(self.url("/slack/refresh")).send_json(json!({})))
     }
 
     /// `done`, `snoozedUntil`, `seen` or `priority` on one item; answers the item as the
