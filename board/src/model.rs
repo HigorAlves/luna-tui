@@ -374,8 +374,18 @@ pub struct StageRun {
     #[serde(default)]
     pub ended_at: Option<String>,
     /// Verifying's per-case verdicts, when the run could tell them apart.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_empty")]
     pub cases: Vec<CaseResult>,
+}
+
+/// The machine sends `"cases": null` for a run with no verdicts; that is an empty list, not
+/// an error that blanks the whole ticket.
+fn null_as_empty<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
 }
 
 impl StageRun {
@@ -1853,6 +1863,15 @@ pub fn age_secs(secs: u64) -> String {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn a_run_with_null_cases_still_parses_so_the_ticket_detail_loads() {
+        let run: StageRun = serde_json::from_str(
+            r#"{"id":"r1","stage":"triage","attempt":1,"status":"passed","outcome":"pass","costUsd":0.5,"turns":20,"cases":null,"startedAt":"2026-10-28T01:43:39.559Z","endedAt":"2026-10-28T01:44:55.266Z"}"#,
+        )
+        .expect("null cases is an empty list");
+        assert!(run.cases.is_empty());
+    }
 
     #[test]
     fn iso_timestamps_parse_to_unix_seconds() {
