@@ -134,7 +134,9 @@ export function fromIssue(raw: RawIssue, webUrl: WebUrl): DatadogItem {
 }
 
 export function fromCluster(raw: RawCluster, webUrl: WebUrl): DatadogItem {
-  const query = `status:error service:${raw.service} @error.kind:"${raw.errorKind}"`;
+  const quoted = (v: string) => `"${v.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  const kind = raw.errorKind === "-" ? "-@error.kind:*" : `@error.kind:${quoted(raw.errorKind)}`;
+  const query = `status:error service:${quoted(raw.service)} ${kind}`;
   return build({
     id: `log:${raw.service}:${raw.errorKind}`,
     source: "error_logs",

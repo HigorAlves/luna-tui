@@ -2,6 +2,8 @@
 // application keys. The REST adapter implements it; tests pass a fake. Every method throws a
 // `DatadogError` when a call fails; the poller records it per source and backs off on a 429.
 
+import { webHost } from "../domain/datadog-site.ts";
+
 export class DatadogError extends Error {
   constructor(message: string, readonly status: number | null = null) {
     super(message);
@@ -102,6 +104,6 @@ export function noTokenDatadog(site = "datadoghq.com"): Datadog {
     alertingMonitors: refuse,
     errorTrackingIssues: refuse,
     errorLogClusters: refuse,
-    webUrl: (path) => `https://app.${site}/${path.replace(/^\/+/, "")}`,
+    webUrl: (path) => `https://${webHost(site)}/${path.replace(/^\/+/, "")}`,
   };
 }

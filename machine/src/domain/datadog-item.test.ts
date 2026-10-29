@@ -23,6 +23,11 @@ describe("datadog items", () => {
     expect(fromIssue(issue, web).floor).toBe("P1");
     expect(fromCluster(cluster, web).floor).toBeNull();
   });
+  it("builds the log link for a cluster without an error kind and quotes the service", () => {
+    const query = (c: typeof cluster) => decodeURIComponent(new URL(fromCluster(c, web).url).searchParams.get("query")!);
+    expect(query({ ...cluster, errorKind: "-" })).toBe('status:error service:"billing" -@error.kind:*');
+    expect(query({ ...cluster, service: 'my svc"x' })).toBe('status:error service:"my svc\\"x" @error.kind:"TimeoutError"');
+  });
   it("takes the repository from a GitHub url", () => {
     expect(fromIssue(issue, web).repository).toBe("acme/web");
   });

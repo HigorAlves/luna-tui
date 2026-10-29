@@ -15,6 +15,7 @@ import {
   type DdMonitorGroup,
   type Listing,
 } from "../../application/datadog.ts";
+import { normaliseSite, webHost } from "../../domain/datadog-site.ts";
 
 export interface DatadogRestOptions {
   apiKey: string;
@@ -170,7 +171,7 @@ async function settledPool<T, R>(items: T[], limit: number, task: (item: T) => P
 export function createDatadog(options: DatadogRestOptions): Datadog {
   const doFetch = options.fetch ?? fetch;
   const sleep = options.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const site = options.site.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  const site = normaliseSite(options.site);
   const base = `https://api.${site}`;
 
   async function call<T extends z.ZodType>(method: string, path: string, shape: T, body?: unknown, query?: Record<string, string>): Promise<z.infer<T>> {
@@ -361,6 +362,6 @@ export function createDatadog(options: DatadogRestOptions): Datadog {
       });
     },
 
-    webUrl: (path) => `https://app.${site}/${path.replace(/^\/+/, "")}`,
+    webUrl: (path) => `https://${webHost(site)}/${path.replace(/^\/+/, "")}`,
   };
 }

@@ -64,6 +64,19 @@ describe("Datadog REST", () => {
     expect(new URL(f.calls[0]!.url).searchParams.get("query")).toBe('status:(alert OR warn OR "no data") env:prod');
     expect(list[0]).toMatchObject({ monitorId: 4411, group: "service:api-gateway,env:prod", status: "Alert" });
   });
+  it("links to the web app host of each site", () => {
+    const link = (site: string) => createDatadog({ ...options(fake()), site }).webUrl("monitors/1");
+    expect(link("datadoghq.com")).toBe("https://app.datadoghq.com/monitors/1");
+    expect(link("datadoghq.eu")).toBe("https://app.datadoghq.eu/monitors/1");
+    for (const regional of ["us3", "us5", "ap1", "ap2", "uk1"]) expect(link(`${regional}.datadoghq.com`)).toBe(`https://${regional}.datadoghq.com/monitors/1`);
+    expect(link("ddog-gov.com")).toBe("https://app.ddog-gov.com/monitors/1");
+    expect(link("https://api.datadoghq.eu/")).toBe("https://app.datadoghq.eu/monitors/1");
+  });
+  it("calls the api host whatever prefix the site was given with", async () => {
+    const f = fake(json(200, incidents));
+    await createDatadog({ ...options(f), site: "app.us5.datadoghq.com" }).incidents();
+    expect(f.calls[0]!.url).toMatch(/^https:\/\/api\.us5\.datadoghq\.com\//);
+  });
   it("a non-JSON answer is a DatadogError", async () => {
     const f = fake(new Response("<html>", { status: 200 }));
     await expect(createDatadog(options(f)).incidents()).rejects.toBeInstanceOf(DatadogError);

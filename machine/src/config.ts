@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 
 import { RUNNING, type TaskState } from "@hardness/contracts";
 
+import { normaliseSite } from "./domain/datadog-site.ts";
 import { DEFAULT_GATE_SECS, parseDuration } from "./domain/sla.ts";
 
 /** Settings read from the environment. Defaults match compose.dev.yml and herdr's config. */
@@ -266,7 +267,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       enabled: env.MACHINE_DATADOG_INBOX !== "off",
       apiKey: ddApiKey,
       appKey: ddAppKey,
-      site: (env.MACHINE_DATADOG_SITE ?? "datadoghq.com").replace(/^https?:\/\/(api\.|app\.)?/, ""),
+      site: normaliseSite(env.MACHINE_DATADOG_SITE ?? "datadoghq.com"),
       intervalMs: ddSeconds * 1000,
       scope: (env.MACHINE_DATADOG_SCOPE ?? "").trim(),
     },

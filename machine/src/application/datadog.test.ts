@@ -13,5 +13,6 @@ describe("noTokenDatadog", () => {
   it("still builds links to the site's web app", () => {
     expect(noTokenDatadog().webUrl("/incidents/42")).toBe("https://app.datadoghq.com/incidents/42");
     expect(noTokenDatadog("datadoghq.eu").webUrl("monitors/1")).toBe("https://app.datadoghq.eu/monitors/1");
+    expect(noTokenDatadog("us5.datadoghq.com").webUrl("monitors/1")).toBe("https://us5.datadoghq.com/monitors/1");
   });
 });

@@ -76,6 +76,9 @@ describe("loadConfig", () => {
     expect(
       loadConfig({ HOME: "/h", MACHINE_DATADOG_INBOX: "off", MACHINE_DATADOG_SITE: "https://api.datadoghq.eu", MACHINE_DATADOG_INTERVAL: "30", MACHINE_DATADOG_SCOPE: " env:prod team:payments " }).datadog,
     ).toEqual({ enabled: false, apiKey: "", appKey: "", site: "datadoghq.eu", intervalMs: 30_000, scope: "env:prod team:payments" });
+    for (const [given, site] of [["app.datadoghq.eu", "datadoghq.eu"], ["api.us5.datadoghq.com", "us5.datadoghq.com"], ["https://app.datadoghq.com/", "datadoghq.com"], ["us3.datadoghq.com", "us3.datadoghq.com"]] as const) {
+      expect(loadConfig({ HOME: "/h", MACHINE_DATADOG_SITE: given }).datadog.site).toBe(site);
+    }
     expect(() => loadConfig({ HOME: "/h", MACHINE_DATADOG_INTERVAL: "x" })).toThrow(/MACHINE_DATADOG_INTERVAL/);
     expect(() => loadConfig({ HOME: "/h", MACHINE_DATADOG_INTERVAL: "1.5" })).toThrow(/MACHINE_DATADOG_INTERVAL/);
   });

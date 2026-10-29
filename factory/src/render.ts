@@ -87,7 +87,7 @@ const datadogText = (datadog: StageInput["context"]["datadog"]) => {
       item.floor ? `floor ${item.floor}` : null,
       item.reopened ? "reopened" : null,
     ].filter(Boolean);
-    return [`${i + 1}. id ${item.id} · ${facts.join(" · ")}`, `   title: ${item.title}`, ...item.samples.map((s) => `   sample: ${s}`)].join("\n");
+    return [`${i + 1}. id ${item.id} · ${facts.join(" · ")}`, `   title: ${JSON.stringify(item.title)}`, ...item.samples.map((s) => `   sample: ${JSON.stringify(s)}`)].join("\n");
   });
   return { scope: datadog.scope.trim() === "" ? NONE : datadog.scope.trim(), items: items.length > 0 ? items.join("\n") : NONE };
 };
