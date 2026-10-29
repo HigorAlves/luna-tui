@@ -22,3 +22,6 @@ machine/runner/vendor/
 site/.next/
 site/next-env.d.ts
 site/*.tsbuildinfo
+
+# orc state and worktrees
+.orc/
