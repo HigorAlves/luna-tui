@@ -40,6 +40,7 @@ import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
+import { join } from "node:path";
 import { Pipeline } from "./application/pipeline.ts";
 import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
@@ -233,7 +234,7 @@ if (recovered > 0) console.log(`escalated ${recovered} task(s) left mid-stage by
 pipeline.startSupervisor(SUPERVISOR_MS);
 
 /** Where each `owner/name` lives on this machine, for GitHub intake and the PR inbox alike. */
-const repoMap = new RepoMap({ map: config.repoMap, reposDir: config.reposDir });
+const repoMap = new RepoMap({ map: config.repoMap, reposDir: config.reposDir, file: join(config.stateDir, "repo-links.json") });
 const pulls = new GitHubPulls({
   github,
   intervalMs: config.githubPrs.intervalMs,

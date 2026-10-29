@@ -3,7 +3,7 @@
 // speaks through the GitHub port (Octokit, one token). Merging and cloning
 // live here too, since both change what the next poll shows.
 import { isAbsolute, dirname } from "node:path";
-import { stat } from "node:fs/promises";
+import { realpath, stat } from "node:fs/promises";
 
 import type { PrAction, PrSnapshot, PullRequest } from "@hardness/contracts";
 
@@ -190,8 +190,17 @@ export class GitHubPulls implements PullsPort {
     if (!isAbsolute(dest)) throw new CloneError(`dest must be an absolute path, got "${dest}"`);
     const parent = await stat(dirname(dest)).catch(() => null);
     if (!parent?.isDirectory()) throw new CloneError(`the parent of "${dest}" does not exist`);
-    if (await stat(dest).catch(() => null)) throw new CloneError(`"${dest}" already exists`);
     const exec = this.options.exec ?? realExec;
+    if (await stat(dest).catch(() => null)) {
+      // The folder you picked already holds the repo (a renamed remote, a checkout the scan
+      // never looked in): link it rather than refuse, and never clone over it.
+      if (!(await isCheckoutRoot(exec, dest))) throw new CloneError(`"${dest}" already exists and is not a git checkout`);
+      this.options.rememberRepo?.(repo, dest);
+      this.cloning = this.cloning.then(async () => {
+        await this.pollOnce();
+      });
+      return;
+    }
     this.cloning = this.cloning.then(async () => {
       // A clone is git with your own credentials, like every push the machine makes.
       const cloned = await exec("git", [...HOST_GIT, "clone", `https://github.com/${repo}.git`, dest]);
@@ -203,4 +212,12 @@ export class GitHubPulls implements PullsPort {
       await this.pollOnce();
     });
   }
+}
+
+/** True when `dir` is itself the top of a git working tree (not just a folder inside one). */
+async function isCheckoutRoot(exec: typeof realExec, dir: string): Promise<boolean> {
+  const top = await exec("git", ["-C", dir, "rev-parse", "--show-toplevel"]);
+  if (top.code !== 0) return false;
+  const [a, b] = await Promise.all([realpath(top.stdout.trim()), realpath(dir)]).catch(() => [null, null]);
+  return a !== null && a === b;
 }
