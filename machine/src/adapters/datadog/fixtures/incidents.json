@@ -1,0 +1,46 @@
+{
+  "data": [
+    {
+      "id": "00000000-0000-4a1b-8000-000000000812",
+      "type": "incidents",
+      "attributes": {
+        "public_id": 812,
+        "title": "Checkout failing for EU customers",
+        "state": "active",
+        "severity": "SEV-2",
+        "customer_impacted": true,
+        "created": "2026-10-28T08:14:03.221Z",
+        "modified": "2026-10-28T09:02:47.510Z"
+      }
+    },
+    {
+      "id": "00000000-0000-4a1b-8000-000000000813",
+      "type": "incidents",
+      "attributes": {
+        "public_id": 813,
+        "title": "Elevated latency on the search API",
+        "customer_impacted": false,
+        "created": "2026-10-27T15:40:11.004Z",
+        "modified": "2026-10-28T07:31:09.882Z",
+        "fields": {
+          "state": { "type": "dropdown", "value": "stable" },
+          "severity": { "type": "dropdown", "value": "SEV-4" }
+        }
+      }
+    },
+    {
+      "id": "00000000-0000-4a1b-8000-000000000700",
+      "type": "incidents",
+      "attributes": {
+        "public_id": 700,
+        "title": "Stale CDN cache for static assets",
+        "state": "resolved",
+        "severity": "SEV-3",
+        "customer_impacted": false,
+        "created": "2026-10-20T11:00:00.000Z",
+        "modified": "2026-10-20T13:25:41.337Z"
+      }
+    }
+  ],
+  "meta": { "pagination": { "offset": 0, "next_offset": 50, "size": 50 } }
+}
