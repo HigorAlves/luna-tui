@@ -146,10 +146,10 @@ pub fn draw(frame: &mut Frame, app: &App) {
         frame.render_widget(footer_line(app), footer);
         match &app.mode {
             Mode::ConfirmMerge { repo, number } => {
-                render_note(frame, " Merge? ", &format!("{repo}#{number} is merged (the repo's method) and its branch deleted.  y / n"));
+                render_confirm_pr(frame, app, repo, *number, " Merge? ", "Merged the way the repo allows, and its branch is deleted.", GREEN);
             }
             Mode::ConfirmClose { repo, number } => {
-                render_note(frame, " Close PR? ", &format!("{repo}#{number} is closed without merging; its branch stays.  y / n"));
+                render_confirm_pr(frame, app, repo, *number, " Close PR? ", "Closed without merging. Its branch stays.", RED);
             }
             Mode::ClonePrompt { repo, query, all, cursor, .. } => render_clone_prompt(frame, repo, query, all, *cursor),
             Mode::PrActions { cursor } => render_pr_actions(frame, app, *cursor),
@@ -893,20 +893,31 @@ pub(crate) fn describe(event: &TaskEvent) -> String {
 
 /// Popup asking to confirm a delete or an abort.
 fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
+    render_confirm_box(frame, &format!("#{} {}", task.short_id(), task.title), title, note, RED);
+}
+
+/// Popup asking to confirm a PR merge or close, in the same box as a ticket delete: the
+/// item's name in bold, what happens in muted text, then the yes / no chips.
+fn render_confirm_pr(frame: &mut Frame, app: &App, repo: &str, number: u64, title: &str, note: &str, accent: Color) {
+    let name = app.prs.prs.iter().find(|p| p.repo == repo && p.number == number).map_or(String::new(), |p| format!("  {}", p.title));
+    render_confirm_box(frame, &format!("{repo}#{number}{name}"), title, note, accent);
+}
+
+fn render_confirm_box(frame: &mut Frame, heading: &str, title: &str, note: &str, accent: Color) {
     let area = centered(frame.area(), 68, 7);
     frame.render_widget(Clear, area);
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(c(RED)))
+        .border_style(Style::new().fg(c(accent)))
         .padding(Padding::horizontal(2))
-        .title(Line::from(title).fg(c(RED)).bold());
+        .title(Line::from(title).fg(c(accent)).bold());
     let lines = vec![
-        Line::from(Span::from(format!("#{} {}", task.short_id(), task.title)).bold()),
+        Line::from(Span::from(truncate(heading, 62)).bold()),
         Line::from(Span::from(note).fg(c(SUBTEXT0))),
         Line::default(),
         Line::from(vec![
-            Span::from(" y ").fg(c(BASE)).bg(c(RED)),
+            Span::from(" y ").fg(c(BASE)).bg(c(accent)),
             Span::from(" yes   ").fg(c(SUBTEXT0)),
             Span::from(" n ").fg(c(BASE)).bg(c(ACCENT)),
             Span::from(" no").fg(c(SUBTEXT0)),
@@ -2774,10 +2785,12 @@ mod pr_tests {
         let mut app = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, false)]);
         app.pulls = Some(PullsState { split: PrSplit::ReadyToMerge, cursor: 0 });
         app.mode = Mode::ConfirmMerge { repo: "acme/app".into(), number: 14 };
-        assert!(render(100, 14, &app).contains("acme/app#14 is merged"));
+        let merge = render(100, 14, &app);
+        assert!(merge.contains(" Merge? ") && merge.contains("acme/app#14  Ready one") && merge.contains("Merged the way the repo allows"), "{merge}");
+        assert!(merge.contains(" y ") && merge.contains(" yes ") && merge.contains(" n ") && merge.contains(" no"), "the same yes / no chips as a delete: {merge}");
         app.mode = Mode::ConfirmClose { repo: "acme/app".into(), number: 14 };
         let text = render(100, 14, &app);
-        assert!(text.contains(" Close PR? ") && text.contains("acme/app#14 is closed without merging; its branch stays."), "{text}");
+        assert!(text.contains(" Close PR? ") && text.contains("acme/app#14  Ready one") && text.contains("Closed without merging. Its branch stays."), "{text}");
         app.mode = Mode::ClonePrompt { repo: "acme/app".into(), query: "proj".into(), all: vec!["/r".into(), "/r/projects".into()], cursor: 0, then: crate::model::PrAction::Review };
         let text = render(100, 20, &app);
         assert!(text.contains("clone acme/app into") && text.contains("/r/projects/app") && !text.contains("▌ /r/app"), "{text}");
