@@ -400,6 +400,10 @@ pub struct App {
     pub inbox: Option<InboxState>,
     /// The PR inbox as the machine last sent it; empty until the first `github.prs` event.
     pub prs: PrSnapshot,
+    /// `R` asked GitHub for a fresh poll and the answer has not come back yet.
+    pub prs_polling: bool,
+    /// The same for Slack.
+    pub slack_polling: bool,
     /// The PR view, open while this is `Some`.
     pub pulls: Option<PullsState>,
     /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
@@ -502,6 +506,8 @@ impl App {
             floor: None,
             inbox: None,
             prs: PrSnapshot::default(),
+            prs_polling: false,
+            slack_polling: false,
             pulls: None,
             pending_dispatch: None,
             slack_snapshot: SlackSnapshot::default(),
@@ -670,6 +676,26 @@ impl App {
                         }
                     }
                 }
+                Incoming::PrsPolled(result) => {
+                    self.prs_polling = false;
+                    match result {
+                        Ok(snapshot) => {
+                            self.take_prs(snapshot);
+                            self.notify("polled GitHub", false);
+                        }
+                        Err(error) => self.notify(error, true),
+                    }
+                }
+                Incoming::SlackPolled(result) => {
+                    self.slack_polling = false;
+                    match result {
+                        Ok(snapshot) => {
+                            self.take_slack(snapshot);
+                            self.notify("polled Slack", false);
+                        }
+                        Err(error) => self.notify(error, true),
+                    }
+                }
                 Incoming::JiraHits { query, hits } => {
                     // An answer for what the prompt still says; anything typed since makes it stale.
                     let Mode::JiraLink { query: current, hits: shown, cursor, .. } = &mut self.mode else { return };
@@ -816,6 +842,33 @@ impl App {
 
     /// A fresh PR snapshot: notices for the PRs that moved into a split that needs you, the
     /// dispatch a clone was holding, and the view's cursor kept inside its split.
+    /// `R` in Pulls: asks the machine to poll GitHub now. A poll reads every PR, so it runs off the
+    /// UI thread and the view says `polling GitHub…` until the answer comes back.
+    fn poll_prs(&mut self) {
+        if self.prs_polling {
+            self.notify("already polling GitHub", false);
+            return;
+        }
+        self.prs_polling = true;
+        let (machine, tx) = (self.machine.clone(), self.tx.clone());
+        thread::spawn(move || {
+            let _ = tx.send(Incoming::PrsPolled(machine.refresh_prs()));
+        });
+    }
+
+    /// `R` in Slack, the same way.
+    fn poll_slack(&mut self) {
+        if self.slack_polling {
+            self.notify("already polling Slack", false);
+            return;
+        }
+        self.slack_polling = true;
+        let (machine, tx) = (self.machine.clone(), self.tx.clone());
+        thread::spawn(move || {
+            let _ = tx.send(Incoming::SlackPolled(machine.refresh_slack()));
+        });
+    }
+
     fn take_prs(&mut self, snapshot: PrSnapshot) {
         let before: std::collections::HashMap<String, Option<PrSplit>> =
             self.prs.prs.iter().map(|p| (p.key(), p.split_enum())).collect();
@@ -2107,13 +2160,7 @@ impl App {
                 next.cursor = 0;
             }
             KeyCode::Char('R') => {
-                match self.machine.refresh_prs() {
-                    Ok(snapshot) => {
-                        self.take_prs(snapshot);
-                        self.notify("polled GitHub", false);
-                    }
-                    Err(error) => self.notify(error, true),
-                }
+                self.poll_prs();
                 return Outcome::Continue;
             }
             KeyCode::Char('o') => {
@@ -2335,13 +2382,7 @@ impl App {
                 next.cursor = 0;
             }
             KeyCode::Char('R') => {
-                match self.machine.refresh_slack() {
-                    Ok(snapshot) => {
-                        self.take_slack(snapshot);
-                        self.notify("polled Slack", false);
-                    }
-                    Err(error) => self.notify(error, true),
-                }
+                self.poll_slack();
                 return Outcome::Continue;
             }
             KeyCode::Char('W') => {
@@ -4689,6 +4730,33 @@ mod pr_tests {
         app.handle_key(KeyEvent::from(KeyCode::Char('m')));
         assert!(matches!(app.mode, Mode::Normal));
         assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("not ready to merge"));
+    }
+
+    #[test]
+    fn r_starts_a_poll_in_the_background_and_a_second_r_waits_for_it() {
+        let mut app = app_with(vec![pr(1, "mine", true, true)]);
+        app.handle_key(KeyEvent::from(KeyCode::Char('P')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('R')));
+        assert!(app.prs_polling, "the view says it is polling the moment R is pressed");
+        app.toast = None;
+        app.handle_key(KeyEvent::from(KeyCode::Char('R')));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("already polling GitHub"));
+    }
+
+    #[test]
+    fn the_polled_snapshot_clears_the_flag_and_a_failed_poll_says_why() {
+        let mut app = app_with(vec![pr(1, "mine", true, true)]);
+        app.prs_polling = true;
+        let fresh = PrSnapshot { prs: Vec::new(), polled_at: Some("2026-10-27T11:00:00Z".to_string()), error: None };
+        app.tx.send(Incoming::PrsPolled(Ok(fresh))).unwrap();
+        app.pump();
+        assert!(!app.prs_polling && app.prs.prs.is_empty());
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("polled GitHub"));
+        app.prs_polling = true;
+        app.tx.send(Incoming::PrsPolled(Err("timed out".into()))).unwrap();
+        app.pump();
+        assert!(!app.prs_polling);
+        assert!(app.toast.as_ref().is_some_and(|t| t.error && t.text.contains("timed out")));
     }
 
     #[test]

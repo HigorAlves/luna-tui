@@ -35,6 +35,8 @@ interface World {
   searchError?: string;
   mergeError?: string;
   cloneError?: string;
+  /** When set, every `prFacts` call takes a few ms and this records how many ran at once. */
+  flight?: { now: number; max: number };
 }
 
 function setup(world: World, over: Partial<ConstructorParameters<typeof GitHubPulls>[0]> = {}) {
@@ -45,7 +47,14 @@ function setup(world: World, over: Partial<ConstructorParameters<typeof GitHubPu
       if (world.searchError) throw new Error(world.searchError);
       return world.hits.map((h) => ({ repo: h.repository.nameWithOwner, number: h.number, updatedAt: h.updatedAt }));
     },
-    prFacts: async (_repo, number) => (world.nodes[number] ?? null) as never,
+    prFacts: async (_repo, number) => {
+      if (world.flight) {
+        world.flight.max = Math.max(world.flight.max, ++world.flight.now);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        world.flight.now--;
+      }
+      return (world.nodes[number] ?? null) as never;
+    },
     mergePr: async (repo, number) => {
       calls.push(["merge", repo, String(number)]);
       if (world.mergeError) throw new Error(world.mergeError);
@@ -87,6 +96,16 @@ describe("GitHubPulls.pollOnce", () => {
     await pulls.pollOnce();
     expect(published).toHaveLength(1);
     expect(pulls.snapshot.prs).toHaveLength(3);
+  });
+
+  it("fetches the PRs side by side, a few at a time, and keeps GitHub's order", async () => {
+    const numbers = Array.from({ length: 14 }, (_, i) => i + 1);
+    const world: World = { hits: numbers.map((n) => hit(n)), nodes: Object.fromEntries(numbers.map((n) => [n, node(n)])), flight: { now: 0, max: 0 } };
+    const { pulls } = setup(world);
+    const snapshot = await pulls.pollOnce();
+    expect(snapshot.prs.map((p) => p.number)).toEqual(numbers);
+    expect(world.flight!.max).toBeGreaterThan(1);
+    expect(world.flight!.max).toBeLessThanOrEqual(6);
   });
 
   it("drops a PR GitHub no longer shows and keeps going when one PR's facts fail", async () => {
