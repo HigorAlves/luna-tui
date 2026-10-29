@@ -123,10 +123,11 @@ export function fromGraphQl(node: PrNode, repo: string, me: string, teams: strin
   };
 }
 
-/** Approved, green (or no checks), mergeable, not a draft, nothing left to resolve. */
+/** Approved (or the repo asks for no review, which GitHub reports as no decision at all), green
+ *  (or no checks), mergeable, not a draft, nothing left to resolve. */
 export function readyToMerge(pr: PrFacts): boolean {
   return (
-    pr.reviewDecision === "APPROVED" &&
+    (pr.reviewDecision === "APPROVED" || pr.reviewDecision === null) &&
     (pr.checks.state === "success" || pr.checks.state === "none") &&
     pr.mergeable === "MERGEABLE" &&
     !pr.isDraft &&

@@ -279,7 +279,7 @@ pub enum Mode {
         all: Vec<String>,
         cursor: usize,
     },
-    /// `m` on a ready PR: one yes, then the machine squash-merges it.
+    /// `m` on a ready PR: one yes, then the machine merges it the way the repo allows (squash, else merge, else rebase).
     ConfirmMerge { repo: String, number: u64 },
     /// A dispatch on a PR the machine has no checkout of: pick the folder to clone it into
     /// (the same filter-as-you-type list `R` uses, over folders); `then` runs once it lands.

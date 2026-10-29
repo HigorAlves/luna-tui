@@ -83,14 +83,28 @@ describe("OctokitGitHub", () => {
   });
 
   it("merges with squash and deletes the head branch only when it lives in the same repo", async () => {
-    const same = stub({ "pulls.get": { head: { ref: "feat/x", repo: { full_name: "o/a" } } }, "pulls.merge": {}, "git.deleteRef": {} });
+    const allowed = { allow_squash_merge: true, allow_merge_commit: true, allow_rebase_merge: true };
+    const same = stub({ "pulls.get": { head: { ref: "feat/x", repo: { full_name: "o/a" } } }, "repos.get": allowed, "pulls.merge": {}, "git.deleteRef": {} });
     await same.github.mergePr("o/a", 7);
-    expect(same.calls.map((c) => c[0])).toEqual(["pulls.get", "pulls.merge", "git.deleteRef"]);
-    expect(same.calls[1]![1]).toMatchObject({ owner: "o", repo: "a", pull_number: 7, merge_method: "squash" });
-    expect(same.calls[2]![1]).toMatchObject({ ref: "heads/feat/x" });
-    const fork = stub({ "pulls.get": { head: { ref: "feat/x", repo: { full_name: "them/a" } } }, "pulls.merge": {} });
+    expect(same.calls.map((c) => c[0])).toEqual(["pulls.get", "repos.get", "pulls.merge", "git.deleteRef"]);
+    expect(same.calls[2]![1]).toMatchObject({ owner: "o", repo: "a", pull_number: 7, merge_method: "squash" });
+    expect(same.calls[3]![1]).toMatchObject({ ref: "heads/feat/x" });
+    const fork = stub({ "pulls.get": { head: { ref: "feat/x", repo: { full_name: "them/a" } } }, "repos.get": allowed, "pulls.merge": {} });
     await fork.github.mergePr("o/a", 7);
-    expect(fork.calls.map((c) => c[0])).toEqual(["pulls.get", "pulls.merge"]);
+    expect(fork.calls.map((c) => c[0])).toEqual(["pulls.get", "repos.get", "pulls.merge"]);
+  });
+
+  it("merges the way the repo allows: squash first, then a merge commit, then rebase", async () => {
+    const methodOf = async (settings: Record<string, unknown> | Error) => {
+      const { github, calls } = stub({ "pulls.get": { head: { ref: "f", repo: { full_name: "them/a" } } }, "repos.get": settings, "pulls.merge": {} });
+      await github.mergePr("o/a", 1);
+      return (calls.find((c) => c[0] === "pulls.merge")![1] as { merge_method: string }).merge_method;
+    };
+    expect(await methodOf({ allow_squash_merge: false, allow_merge_commit: true, allow_rebase_merge: true })).toBe("merge");
+    expect(await methodOf({ allow_squash_merge: false, allow_merge_commit: false, allow_rebase_merge: true })).toBe("rebase");
+    expect(await methodOf({ allow_squash_merge: true, allow_merge_commit: false, allow_rebase_merge: false })).toBe("squash");
+    expect(await methodOf(new Error("no admin"))).toBe("squash");
+    expect(await methodOf({})).toBe("squash");
   });
 
   it("posts a review as one call, finds a PR by head, opens one against the default branch, and marks ready through GraphQL", async () => {

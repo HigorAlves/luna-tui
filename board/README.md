@@ -332,7 +332,7 @@ math). The real check is running it against the machine — see the repo root
 | Split | A PR lands here when |
 |---|---|
 | Review requested | a teammate's PR asks for your review |
-| Ready to merge | yours, approved, every check green, mergeable, no unresolved threads |
+| Ready to merge | yours, approved (or the repo asks for no review), every check green, mergeable, no unresolved threads |
 | CI failed | yours, a check failed |
 | CI running | yours, a check still running |
 | Changes requested | yours, changes requested or review threads still open |
@@ -345,7 +345,7 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 
 | Key | Does |
 |---|---|
-| `m` | merge: squash, delete the branch |
+| `m` | merge, delete the branch |
 | `c` | CI fix: an agent repairs the red run |
 | `v` | review: an agent posts line comments |
 | `t` | threads: an agent answers every one |
