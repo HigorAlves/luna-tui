@@ -29,7 +29,7 @@ impl Avail {
 }
 
 /// Where a key is read. The views are the full-screen ones (`Floor`, `Inbox`, `Digest`,
-/// `Pulls`, `Slack`), the popups over them (`Detail` over the board, `Watches` over Slack),
+/// `Pulls`, `Slack`, `Datadog`), the popups over them (`Detail` over the board, `Watches` over Slack),
 /// the vim editors and the sheet itself.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Scope {
@@ -37,6 +37,7 @@ pub enum Scope {
     Detail,
     Pulls,
     Slack,
+    Datadog,
     Watches,
     Inbox,
     Digest,
@@ -46,11 +47,12 @@ pub enum Scope {
 }
 
 impl Scope {
-    pub const ALL: [Scope; 10] = [
+    pub const ALL: [Scope; 11] = [
         Scope::Board,
         Scope::Detail,
         Scope::Pulls,
         Scope::Slack,
+        Scope::Datadog,
         Scope::Watches,
         Scope::Inbox,
         Scope::Digest,
@@ -66,6 +68,7 @@ impl Scope {
             Scope::Detail => "Ticket",
             Scope::Pulls => "Pulls",
             Scope::Slack => "Slack",
+            Scope::Datadog => "Datadog",
             Scope::Watches => "Watches",
             Scope::Inbox => "Inbox",
             Scope::Digest => "Digest",
@@ -82,6 +85,7 @@ impl Scope {
             Scope::Detail => "detail",
             Scope::Pulls => "pulls",
             Scope::Slack => "slack",
+            Scope::Datadog => "datadog",
             Scope::Watches => "watches",
             Scope::Inbox => "inbox",
             Scope::Digest => "digest",
@@ -124,6 +128,7 @@ impl Group {
             Group::Ticket => match scope {
                 Scope::Pulls => "Pull request",
                 Scope::Slack => "Message",
+                Scope::Datadog => "Signal",
                 Scope::Watches => "Watch",
                 _ => "Ticket",
             },
@@ -493,6 +498,7 @@ const BOARD: &[Binding] = &[
     cmd(b("D", "Digest: what changed since last time", Group::Views, Scope::Board, on, 20), "digest"),
     cmd(b("P", "Pulls: every open PR involving you", Group::Views, Scope::Board, on, 20), "prs"),
     cmd(b("S", "Slack: mentions, DMs and watches", Group::Views, Scope::Board, on, 20), "slack"),
+    cmd(b("O", "Datadog: incidents, monitors, errors", Group::Views, Scope::Board, on, 20), "datadog"),
     // Marks & bulk.
     b("v", "mark the ticket; a X d w act on marks", Group::Marks, Scope::Board, |app| with_task(app, |_| Avail::On), 25),
     b("V", "mark the whole column", Group::Marks, Scope::Board, on, 24),
@@ -522,6 +528,7 @@ const BOARD: &[Binding] = &[
     cmd(b(":digest", "open the Digest", Group::Commands, Scope::Board, on, 0), "digest"),
     cmd(b(":prs", "open Pulls", Group::Commands, Scope::Board, on, 0), "prs"),
     cmd(b(":slack", "open Slack", Group::Commands, Scope::Board, on, 0), "slack"),
+    cmd(b(":datadog", "open Datadog", Group::Commands, Scope::Board, on, 0), "datadog"),
     cmd(b(":jira <KEY>", "link that Jira issue (bare: the search)", Group::Commands, Scope::Board, on, 0), "jira"),
     cmd(b(":help", "this sheet", Group::Commands, Scope::Board, on, 0), "help"),
 ];
@@ -605,6 +612,21 @@ const SLACK: &[Binding] = &[
     cmd(b("?", "keys", Group::App, Scope::Slack, on, 100), "help"),
 ];
 
+/// `On` while the Datadog view has an item under the cursor.
+fn datadog_selected(app: &App) -> Avail {
+    if app.datadog_under_cursor().is_some() { Avail::On } else { Avail::Off("no signal selected") }
+}
+
+const DATADOG: &[Binding] = &[
+    b("o", "open it in Datadog", Group::Ticket, Scope::Datadog, datadog_selected, 60),
+    b("j / k", "previous / next signal", Group::Move, Scope::Datadog, on, 30),
+    b("h / l", "previous / next split", Group::Move, Scope::Datadog, on, 29),
+    b("1-6", "jump to that split", Group::Move, Scope::Datadog, on, 10),
+    b("esc / O / q", "close", Group::Move, Scope::Datadog, on, 20),
+    b("R", "poll Datadog now", Group::App, Scope::Datadog, on, 50),
+    cmd(b("?", "keys", Group::App, Scope::Datadog, on, 100), "help"),
+];
+
 const WATCHES: &[Binding] = &[
     b("n", "add: @handle, #channel or a word", Group::Ticket, Scope::Watches, on, 90),
     b(
@@ -659,7 +681,7 @@ const HELP: &[Binding] = &[
     b("esc / q", "close", Group::App, Scope::Help, on, 60),
 ];
 
-const TOTAL: usize = BOARD.len() + SHARED.len() + count_except(SHARED, "J") + count_except(SHARED, "A") + DETAIL.len() + INBOX.len() + PULLS.len() + SLACK.len() + WATCHES.len() + DIGEST.len() + FLOOR.len() + EDITOR.len() + HELP.len();
+const TOTAL: usize = BOARD.len() + SHARED.len() + count_except(SHARED, "J") + count_except(SHARED, "A") + DETAIL.len() + INBOX.len() + PULLS.len() + SLACK.len() + DATADOG.len() + WATCHES.len() + DIGEST.len() + FLOOR.len() + EDITOR.len() + HELP.len();
 
 /// Copies `rows` into `out` under `scope`, skipping the key `except` (the view handles it
 /// itself: `A` approves the Inbox split, `J` scrolls the popup).
@@ -716,6 +738,7 @@ const fn build() -> [Binding; TOTAL] {
     copy_into(INBOX, Scope::Inbox, "", &mut out, &mut at);
     copy_into(PULLS, Scope::Pulls, "", &mut out, &mut at);
     copy_into(SLACK, Scope::Slack, "", &mut out, &mut at);
+    copy_into(DATADOG, Scope::Datadog, "", &mut out, &mut at);
     copy_into(WATCHES, Scope::Watches, "", &mut out, &mut at);
     copy_into(DIGEST, Scope::Digest, "", &mut out, &mut at);
     copy_into(FLOOR, Scope::Floor, "", &mut out, &mut at);
@@ -751,6 +774,8 @@ pub fn active_scope(app: &App) -> Scope {
         Scope::Pulls
     } else if app.slack.is_some() {
         Scope::Slack
+    } else if app.datadog.is_some() {
+        Scope::Datadog
     } else {
         Scope::Board
     }
@@ -1179,6 +1204,19 @@ mod tests {
     }
 
     #[test]
+    fn o_opens_datadog_from_the_board_and_the_view_has_its_own_keys() {
+        let on_board = |keys: &str| BINDINGS.iter().any(|b| b.scope == Scope::Board && b.keys == keys);
+        assert!(on_board("O") && on_board(":datadog"), "O and :datadog open it");
+        assert!(Scope::ALL.contains(&Scope::Datadog));
+        assert_eq!((Scope::Datadog.name(), Scope::Datadog.slug()), ("Datadog", "datadog"));
+        let datadog: Vec<&str> = BINDINGS.iter().filter(|b| b.scope == Scope::Datadog).map(|b| b.keys).collect();
+        for keys in ["j / k", "h / l", "1-6", "o", "esc / O / q", "R", "?"] {
+            assert!(datadog.contains(&keys), "{keys} in {datadog:?}");
+        }
+        assert_eq!(completions("da").into_iter().map(|(n, _)| n).collect::<Vec<_>>(), ["datadog"]);
+    }
+
+    #[test]
     fn completions_narrow_by_prefix_and_stop_at_the_first_space() {
         let names = |typed: &str| completions(typed).into_iter().map(|(n, _)| n).collect::<Vec<_>>();
         assert_eq!(names("f"), ["filter", "fold", "floor"]);
@@ -1213,6 +1251,10 @@ mod tests {
         assert_eq!(active_scope(&app), Scope::Pulls);
         app.slack = Some(crate::slack::SlackState { watches: Some(Default::default()), ..Default::default() });
         assert_eq!(active_scope(&app), Scope::Watches, "the popup over Slack beats every view");
+        app.slack = None;
+        app.pulls = None;
+        app.datadog = Some(Default::default());
+        assert_eq!(active_scope(&app), Scope::Datadog);
         app.mode = Mode::Detail("t1".into());
         assert_eq!(active_scope(&app), Scope::Detail);
         app.mode = Mode::EditTicket { id: "t1".into(), area: tui_textarea::TextArea::default(), vim: vim::Vim::new() };
@@ -1243,6 +1285,7 @@ mod tests {
         parity(Scope::Inbox, handled::INBOX);
         parity(Scope::Pulls, handled::PULLS);
         parity(Scope::Slack, handled::SLACK);
+        parity(Scope::Datadog, handled::DATADOG);
         parity(Scope::Watches, handled::WATCHES);
         parity(Scope::Digest, handled::DIGEST);
         parity(Scope::Floor, handled::FLOOR);
@@ -1290,7 +1333,7 @@ mod tests {
     fn the_readme_blocks_are_what_the_registry_prints() {
         let readme = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md")).unwrap();
         assert_eq!(splice_markdown(&readme), readme, "run `pnpm board:keys` to regenerate the README's key tables");
-        for scope in [Scope::Board, Scope::Detail, Scope::Pulls, Scope::Slack, Scope::Watches, Scope::Inbox, Scope::Digest, Scope::Floor] {
+        for scope in [Scope::Board, Scope::Detail, Scope::Pulls, Scope::Slack, Scope::Datadog, Scope::Watches, Scope::Inbox, Scope::Digest, Scope::Floor] {
             assert!(readme.contains(&format!("<!-- keys:start {} -->", scope.slug())), "the README documents {scope:?}");
                 }
     }

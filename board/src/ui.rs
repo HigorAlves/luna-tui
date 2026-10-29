@@ -15,6 +15,7 @@ use ratatui::{
 use serde_json::Value;
 use tui_textarea::TextArea;
 
+use crate::datadog::{self, DatadogSplit, DatadogState};
 use crate::detail::{self, DetailView};
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
@@ -24,7 +25,7 @@ use crate::slack::{self, SlackKey, SlackSplit, SlackState};
 use crate::{
     app::{App, Density, FloorState, GroupBy, Mode},
     model::{
-        COLUMNS, JiraIssueHit, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
+        COLUMNS, DATADOG_SOURCES, DatadogItem, JiraIssueHit, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
         fmt_usd, repo_colour_slot, sla_targets, spend_p90, now_secs, unix_secs,
     },
 };
@@ -183,6 +184,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
             Mode::SlackActions { cursor } => render_slack_actions(frame, app, *cursor),
             Mode::Help { .. } => render_help(frame, app),
             _ => {}
+        }
+        return;
+    }
+    if let Some(state) = app.datadog.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
+        render_datadog(frame, body, app, state);
+        frame.render_widget(footer_line(app), footer);
+        if matches!(app.mode, Mode::Help { .. }) {
+            render_help(frame, app);
         }
         return;
     }
@@ -391,6 +400,9 @@ fn header_line(app: &App) -> Line<'static> {
     if app.slack.is_some() {
         spans.push(Span::from("  [slack]").fg(c(BLUE)).bold());
     }
+    if app.datadog.is_some() {
+        spans.push(Span::from("  [datadog]").fg(c(BLUE)).bold());
+    }
     if app.fold {
         spans.push(Span::from("  [folded]").fg(c(BLUE)).bold());
     }
@@ -500,6 +512,7 @@ fn view_footer(app: &App) -> Line<'static> {
             ("R", "poll"),
             ("esc", "close"),
         ]),
+        Scope::Datadog => hint(&[("j/k", "move"), ("h/l 1-6", "split"), ("o", "open in Datadog"), ("R", "poll"), ("esc", "close")]),
         Scope::Detail => {
             let shippable = matches!(&app.mode, Mode::Detail(id) if app.task(id).is_some_and(|t| t.state == "awaiting_ship"));
             let (rows, scroll) = if app.detail_section.has_cursor() { (("jk", "pick"), ("JK", "scroll")) } else { (("jk", "scroll"), ("^d/^u", "page")) };
@@ -1773,6 +1786,211 @@ fn render_slack_task(frame: &mut Frame, app: &App, id: &str, title: &str, repo: 
     frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
 }
 
+/// The Datadog view: a header strip of splits with their counts, when Datadog was last polled
+/// and whether triage is running, then what went wrong (the keys unset, the last poll, a source
+/// that failed); the split's items as a list on the left; the selected item's pane on the right
+/// (from 100 columns, like Slack's).
+fn render_datadog(frame: &mut Frame, area: Rect, app: &App, state: &DatadogState) {
+    let now = now_secs();
+    let snapshot = &app.datadog_snapshot;
+    let counts = datadog::counts(&snapshot.items);
+    let narrow = area.width < SLACK_DETAIL_FROM;
+    let mut head = vec![Span::from(" Datadog ").fg(c(ACCENT)).bold()];
+    if app.datadog_polling {
+        head.push(Span::from(format!("{} polling Datadog… ", spinner())).fg(c(YELLOW)).bold());
+    }
+    for (i, split) in DatadogSplit::ALL.iter().enumerate() {
+        if i > 0 {
+            head.push(Span::from("│").fg(c(MUTED)));
+        }
+        let name = if narrow { split.label_narrow() } else { split.label() };
+        let label = format!(" {name} {} ", counts[i]);
+        head.push(if *split == state.split {
+            Span::from(label).fg(c(BASE)).bg(c(ACCENT)).bold()
+        } else {
+            Span::from(label).fg(c(SUBTEXT0))
+        });
+    }
+    if !app.datadog_polling {
+        let polled = match snapshot.polled_at.as_deref().and_then(unix_secs) {
+            Some(at) => format!("polled {} ago", age_secs(now.saturating_sub(at))),
+            None => "not polled yet".to_string(),
+        };
+        head.push(Span::from(format!("  {polled}")).fg(c(SUBTEXT0)));
+    }
+    if snapshot.triaging {
+        head.push(Span::from(format!("  {} triaging", spinner())).fg(c(YELLOW)));
+    }
+    let mut top = vec![Line::from(head)];
+    match snapshot.error.as_deref() {
+        // The keys are unset: nothing polls, so say how to turn it on instead of every source failing.
+        Some("no_token") => top.push(Line::from(Span::from(" Datadog off: set MACHINE_DATADOG_API_KEY and MACHINE_DATADOG_APP_KEY").fg(c(YELLOW)).bold())),
+        Some(error) => top.push(Line::from(Span::from(format!(" ⚠ {error}")).fg(c(RED)))),
+        None => {}
+    }
+    if snapshot.error.as_deref() != Some("no_token") {
+        let failed: Vec<String> = DATADOG_SOURCES
+            .iter()
+            .filter_map(|name| snapshot.sources.get(*name).filter(|s| !s.ok).map(|s| format!("{name}: {}", s.error.as_deref().unwrap_or("failed"))))
+            .collect();
+        if !failed.is_empty() {
+            top.push(Line::from(Span::from(format!(" ⚠ {}", failed.join(" · "))).fg(c(RED))));
+        }
+    }
+    let [head_area, body] = Layout::vertical([Constraint::Length(top.len() as u16), Constraint::Min(0)]).areas(area);
+    frame.render_widget(Paragraph::new(top), head_area);
+
+    let items = datadog::items(&snapshot.items, state.split);
+    let selected = state.cursor.min(items.len().saturating_sub(1));
+    let wide = body.width >= SLACK_DETAIL_FROM;
+    let [list_area, detail_area] = if wide {
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(SLACK_DETAIL_WIDTH)]).areas(body)
+    } else {
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(0)]).areas(body)
+    };
+
+    let list_block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .title(Line::from(format!(" {} {} ", state.split.label(), items.len())).bold());
+    let inner = list_block.inner(list_area);
+    let mut lines = Vec::new();
+    if items.is_empty() {
+        lines.push(Line::from(Span::from("  ✓ nothing here").fg(c(GREEN))));
+    }
+    for (row, &i) in items.iter().enumerate() {
+        lines.push(datadog_row(&snapshot.items[i], row == selected, inner.width as usize, now));
+    }
+    frame.render_widget(Paragraph::new(lines).block(list_block), list_area);
+
+    if wide {
+        let item = items.get(selected).map(|&i| &snapshot.items[i]);
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(c(MUTED)))
+            .padding(Padding::horizontal(1))
+            .title(Line::from(item.map_or(" signal ".to_string(), |i| format!(" {} ", i.id))).bold());
+        let lines = match item {
+            Some(item) => datadog_detail_lines(item, now),
+            None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
+        };
+        frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), detail_area);
+    }
+}
+
+/// One item as a row: `P0 · incident · summary · service  age ⚙`. The summary is triage's (the
+/// title until it ran) and the only field ever cut; `resolved` (green) leads it once Datadog no
+/// longer reports the item, `reopened` (yellow) when it came back after you cleared it; `⚙` marks
+/// one that is already a ticket.
+fn datadog_row(item: &DatadogItem, selected: bool, width: usize, now: u64) -> Line<'static> {
+    let dot = || Span::from(" · ").fg(c(MUTED));
+    let marker = if item.resolved_at.is_some() {
+        Some(("resolved ", GREEN))
+    } else if item.reopened_at.is_some() {
+        Some(("reopened ", YELLOW))
+    } else {
+        None
+    };
+    let mut summary = item.summary().to_string();
+    if let Some(count) = item.count.filter(|n| *n > 1) {
+        summary.push_str(&format!(" ×{count}"));
+    }
+    let service = item.service.clone().unwrap_or_else(|| "–".to_string());
+    // sel(2) prio(2) dot(3) source(8) dot(3) [marker] summary dot(3) service(15) gap(2) age(3) gap(1) tag(1)
+    let fixed = 2 + 2 + 3 + 8 + 3 + 3 + 15 + 2 + 3 + 1 + 1 + marker.map_or(0, |(m, _)| m.chars().count());
+    let room = width.saturating_sub(fixed).max(4);
+    let mut spans = vec![
+        Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+        Span::from(format!("{:<2}", item.priority().unwrap_or("–"))).style(priority_style(item.priority())),
+        dot(),
+        Span::from(format!("{:<8}", truncate(item.source_label(), 8))).fg(c(SUBTEXT0)),
+        dot(),
+    ];
+    if let Some((word, colour)) = marker {
+        spans.push(Span::from(word).fg(c(colour)).bold());
+    }
+    spans.extend([
+        Span::from(format!("{:<room$}", truncate(&summary, room))).bold(),
+        dot(),
+        Span::from(format!("{:<15}", truncate(&service, 15))).fg(c(SUBTEXT0)),
+        Span::from(format!("  {:>3} ", item.age(now))).fg(c(SUBTEXT0)),
+        Span::from(if item.task_id().is_some() { "⚙" } else { " " }).fg(c(SUBTEXT0)),
+    ]);
+    if selected {
+        spans = spans.into_iter().map(|s| s.bg(c(SELECTED_BG))).collect();
+    }
+    Line::from(spans)
+}
+
+/// The item as the pane draws it: what and where, whether it resolved or came back, the title,
+/// triage's verdict with why, the suspected cause and the next step, the first sample, and the
+/// repo and ticket it is tied to.
+fn datadog_widget(item: &DatadogItem, now: u64) -> Vec<Line<'static>> {
+    let muted = |text: String| Line::from(Span::from(text).fg(c(SUBTEXT0)));
+    let field = |name: &str, text: String| Line::from(vec![Span::from(format!("{name:<9}")).fg(c(SUBTEXT0)), Span::from(text)]);
+    let mut head: Vec<String> = [Some(item.source.clone()), item.service.clone(), item.env.clone(), item.severity.clone(), Some(item.status.clone())]
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .collect();
+    head.push(format!("seen {} ago", item.age(now)));
+    if let Some(count) = item.count {
+        head.push(format!("×{count}"));
+    }
+    let mut lines = vec![muted(head.join(" · "))];
+    if item.resolved_at.is_some() {
+        lines.push(Line::from(Span::from("resolved: Datadog no longer reports it").fg(c(GREEN)).bold()));
+    }
+    if item.reopened_at.is_some() {
+        lines.push(Line::from(Span::from("came back after you cleared it").fg(c(YELLOW)).bold()));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::from(item.title.clone()).bold()));
+    lines.push(Line::default());
+    match &item.triage {
+        Some(triage) => {
+            let by = if triage.by == "rule" { " · by rule" } else { "" };
+            let hand = if triage.overridden { " · yours" } else { "" };
+            lines.push(Line::from(vec![
+                Span::from(format!("{:<9}", "triage")).fg(c(SUBTEXT0)),
+                Span::from(triage.priority.clone()).style(priority_style(Some(&triage.priority))),
+                Span::from(format!(" · {}{by}{hand}", triage.category.replace('_', " "))),
+            ]));
+            if !triage.why.is_empty() {
+                lines.push(field("why", triage.why.clone()));
+            }
+            if let Some(cause) = triage.suspected_cause.as_deref().filter(|c| !c.is_empty()) {
+                lines.push(field("cause", cause.to_string()));
+            }
+            if !triage.next_step.is_empty() {
+                lines.push(field("next", triage.next_step.clone()));
+            }
+            if !triage.refs.is_empty() {
+                lines.push(field("links", triage.refs.iter().map(|r| r.reference.clone()).collect::<Vec<_>>().join(" · ")));
+            }
+        }
+        None => lines.push(field("triage", "not yet".to_string())),
+    }
+    if let Some(sample) = item.samples.first() {
+        lines.push(field("sample", sample.clone()));
+    }
+    if let Some(repo) = &item.repository {
+        lines.push(field("repo", repo.clone()));
+    }
+    if let Some(task) = item.task_id() {
+        lines.push(field("ticket", format!("#{}", crate::model::short_id(task))));
+    }
+    lines
+}
+
+/// The widget, then where `o` goes.
+fn datadog_detail_lines(item: &DatadogItem, now: u64) -> Vec<Line<'static>> {
+    let mut lines = datadog_widget(item, now);
+    lines.push(Line::default());
+    lines.push(Line::from(Span::from(item.url.clone()).fg(c(SUBTEXT0))));
+    lines
+}
+
 /// The Floor's Slack block: items and replies by priority over 7d / 30d, how many of the 7d
 /// replies came inside their SLA (count and share), how long a reply took (7d), the share
 /// answered within an hour, and the SLA targets in force.
@@ -3015,6 +3233,90 @@ mod slack_render_tests {
         let buffer = terminal.backend().buffer().clone();
         let text: String = (0..40).map(|y| (0..140).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect();
         assert!(!text.contains("Slack ·"), "nothing without the metrics");
+    }
+}
+
+#[cfg(test)]
+mod datadog_render_tests {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    use super::*;
+    use crate::client::Machine;
+    use crate::datadog::{DatadogState, fixtures::snapshot};
+    use crate::model::DatadogSnapshot;
+
+    fn app_with(snapshot: DatadogSnapshot) -> App {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.clear();
+        app.datadog_snapshot = snapshot;
+        app.datadog = Some(DatadogState::default());
+        app.online = true;
+        app.toast = None;
+        app
+    }
+
+    fn render(width: u16, height: u16, app: &App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_wide_view_is_a_strip_a_list_and_a_pane_and_the_narrow_one_shortens_the_strip() {
+        let app = app_with(snapshot());
+        let text = render(120, 40, &app);
+        assert!(text.contains("Act now 1") && text.contains("Investigate 0") && text.contains("Noise 1") && text.contains("Done 0"), "{text}");
+        assert!(text.contains("polled") && text.contains("[datadog]"), "{text}");
+        assert!(text.contains("⚠ error_tracking: app key lacks error_tracking_read"), "a source that failed says why: {text}");
+        let row = text.lines().find(|l| l.contains("checkout 5xx")).unwrap_or_default().to_string();
+        assert!(row.starts_with("│▌ P0 · incident · checkout 5xx since the"), "selected, the priority, the source, the summary: {row}");
+        assert!(row.contains("checkout-api"), "the service: {row}");
+        assert!(!row.contains("resolved") && !row.contains("reopened"), "{row}");
+        assert!(text.contains("incident · checkout-api · prod · SEV-1"), "the pane's head: {text}");
+        assert!(text.contains("Checkout returns 500s"), "the title: {text}");
+        assert!(text.contains("P0 · outage"), "{text}");
+        assert!(text.contains("why      SEV-1 incident"), "{text}");
+        assert!(text.contains("cause    the 14:02 deploy"), "{text}");
+        assert!(text.contains("next     roll back checkout-api"), "{text}");
+        assert!(text.contains("sample   POST /checkout 500: upstream"), "the first sample only: {text}");
+        assert!(!text.contains("pool exhausted"), "{text}");
+
+        let text = render(80, 30, &app);
+        assert!(text.contains("Act 1") && text.contains("Inv 0") && text.contains("Snz 0"), "short labels under 100 columns: {text}");
+        assert!(!text.contains("cause    "), "no pane under 100 columns: {text}");
+        let row = text.lines().find(|l| l.contains("checkout 5xx")).unwrap_or_default().to_string();
+        assert!(row.contains("P0") && row.contains("incident") && row.contains("checkout-api"), "{row}");
+    }
+
+    #[test]
+    fn resolved_and_reopened_items_say_so_and_no_keys_say_how_to_turn_it_on() {
+        let mut marked = snapshot();
+        marked.items[0].resolved_at = Some("2026-10-28T09:59:00.000Z".into());
+        marked.items[1].reopened_at = Some("2026-10-28T09:50:00.000Z".into());
+        let mut app = app_with(marked);
+        let text = render(120, 40, &app);
+        let row = text.lines().find(|l| l.contains("checkout 5xx")).unwrap_or_default().to_string();
+        assert!(row.contains("resolved"), "Datadog no longer reports it: {row}");
+        assert!(text.contains("resolved: Datadog no longer reports it"), "the pane says so too: {text}");
+        app.datadog = Some(DatadogState { split: DatadogSplit::Noise, cursor: 0 });
+        let text = render(120, 40, &app);
+        let row = text.lines().find(|l| l.contains("· logs")).unwrap_or_default().to_string();
+        assert!(row.contains("reopened"), "it came back after done: {row}");
+        assert!(text.contains("came back after you cleared it"), "{text}");
+
+        let off: DatadogSnapshot = serde_json::from_str(r#"{"items":[],"polledAt":null,"sources":{},"triaging":false,"error":"no_token"}"#).unwrap();
+        let text = render(120, 30, &app_with(off));
+        assert!(text.contains("Datadog off: set MACHINE_DATADOG_API_KEY and MACHINE_DATADOG_APP_KEY"), "{text}");
+        assert!(!text.contains("no_token"), "the raw code stays out: {text}");
+        let mut failing = snapshot();
+        failing.error = Some("Datadog answered 500".into());
+        failing.triaging = true;
+        let text = render(120, 30, &app_with(failing));
+        assert!(text.contains("⚠ Datadog answered 500") && text.contains("triaging"), "{text}");
     }
 }
 

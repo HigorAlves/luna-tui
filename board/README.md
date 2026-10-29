@@ -53,7 +53,7 @@ tickets are created on the machine once, then the file is renamed to
 ## Keys
 
 Press `?` anywhere for the keys of what has the keyboard: the board, the ticket popup, the
-Inbox, the Digest, the Floor, Pulls, Slack or its Watches. The sheet is read from one registry
+Inbox, the Digest, the Floor, Pulls, Slack or its Watches, Datadog. The sheet is read from one registry
 (`src/keys.rs`) that the `x` menus, the `:` completion and the tables in this file
 derive from too, so they cannot disagree. It knows the ticket under the cursor: the title names
 it and its state, a key that works right now is bright with what it does (`a  approve the plan`
@@ -142,6 +142,7 @@ and a test fails when they drift from the registry.
 | `D` | Digest: what changed since last time |
 | `P` | Pulls: every open PR involving you |
 | `S` | Slack: mentions, DMs and watches |
+| `O` | Datadog: incidents, monitors, errors |
 
 **Marks & bulk**
 
@@ -187,6 +188,7 @@ and a test fails when they drift from the registry.
 | `:digest` | open the Digest |
 | `:prs` | open Pulls |
 | `:slack` | open Slack |
+| `:datadog` | open Datadog |
 | `:jira <KEY>` | link that Jira issue (bare: the search) |
 | `:help` | this sheet |
 
@@ -475,6 +477,46 @@ A watch is anything beyond your own handle the inbox should treat as addressed t
 | `?` | keys |
 
 <!-- keys:end -->
+
+## Datadog
+
+`O` opens the Datadog inbox (`:datadog` too; `D` is the Digest): active incidents, alerting monitors, Error Tracking issues and clustered error logs, as the machine polls them and the `datadog_triage` pack sorts them, incidents first. Six splits, `h`/`l` or `1`–`6` between them, `j`/`k` down the rows. The open splits go P0 first, incidents ahead of the other sources, then the most recently seen; Snoozed and Done newest first.
+
+| Split | An item lands here when |
+|---|---|
+| Act now | triage says P0 (a SEV-1/2 or customer-impacting incident is at least that) |
+| Investigate | P1, or not triaged yet |
+| Watch | P2 |
+| Noise | P3 |
+| Snoozed | you snoozed it; it returns when the timer ends |
+| Done | you cleared it; it comes back, re-triaged, if Datadog reports it again |
+
+<!-- keys:start datadog -->
+**Signal**
+
+| Key | Does |
+|---|---|
+| `o` | open it in Datadog |
+
+**Move**
+
+| Key | Does |
+|---|---|
+| `j / k` | previous / next signal |
+| `h / l` | previous / next split |
+| `1-6` | jump to that split |
+| `esc / O / q` | close |
+
+**App**
+
+| Key | Does |
+|---|---|
+| `R` | poll Datadog now |
+| `?` | keys |
+
+<!-- keys:end -->
+
+A row reads `P0 · incident · summary · service  age` in fixed columns: the priority (`P0` red, `P1` yellow, `P3` muted), the source (`incident`, `monitor`, `error` for Error Tracking, `logs` for a log cluster), triage's one-line summary (the title until triage ran; `×N` for a count; the only column ever cut), the service and how long since it was last seen. `resolved` (green) leads the summary once Datadog no longer reports the item (an incident resolved, a monitor recovered); it stays until you clear it. `reopened` (yellow) leads it when it came back after you cleared it, and `⚙` ends the row once it is a ticket. From 100 columns the pane beside the list shows the source, service, env, severity and status, the title, triage's verdict, why, the suspected cause, the next step, the first sample and the link `o` opens. The strip says when Datadog was last polled and whether triage is running; a source whose last poll failed says why on the line under it (`⚠ error_tracking: …`), and without keys the view says `Datadog off: set MACHINE_DATADOG_API_KEY and MACHINE_DATADOG_APP_KEY`. `R` polls now, in the background like Pulls' and Slack's.
 
 ## Jira
 

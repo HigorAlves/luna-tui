@@ -1093,6 +1093,177 @@ pub struct SlackOption {
     pub label: String,
 }
 
+/// What the `datadog_triage` pack (or a floor rule) decided about a Datadog item.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DatadogTriage {
+    /// `P0` … `P3`.
+    pub priority: String,
+    /// `outage`, `degradation`, `regression`, `new_error`, `recurring_error`, `noise` or `known`.
+    pub category: String,
+    /// At most 90 characters: what is wrong and where.
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub why: String,
+    #[serde(default)]
+    pub suspected_cause: Option<String>,
+    /// The first thing to do or look at.
+    #[serde(default)]
+    pub next_step: String,
+    /// Deploys, traces, PRs, Jira keys or URLs it points at; the same shape as Slack's.
+    #[serde(default)]
+    pub refs: Vec<SlackRef>,
+    /// `model`, or `rule` when a floor settled it without the model.
+    #[serde(default)]
+    pub by: String,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract
+    pub triaged_at: String,
+    /// You moved the priority by hand; re-triage keeps it.
+    #[serde(default)]
+    pub overridden: bool,
+}
+
+/// One signal in the Datadog inbox: an incident, a monitor group, an Error Tracking issue or a
+/// cluster of error logs, fingerprinted so it is the same item across polls.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DatadogItem {
+    /// The fingerprint: `inc:<public_id>`, `mon:<monitor>:<group>`, `et:<issue>`, `log:<service>:<kind>`.
+    pub id: String,
+    /// `incident`, `monitor`, `error_tracking` or `error_logs`.
+    pub source: String,
+    pub title: String,
+    #[serde(default)]
+    pub service: Option<String>,
+    #[serde(default)]
+    pub env: Option<String>,
+    /// The source's own state: `active`, `Alert`, `OPEN`, `error`.
+    #[serde(default)]
+    pub status: String,
+    /// `SEV-1`…, a monitor's priority `P1`…, or None.
+    #[serde(default)]
+    pub severity: Option<String>,
+    /// Error logs in the window, or the issue's count; None for incidents and monitors.
+    #[serde(default)]
+    pub count: Option<u64>,
+    #[serde(default)]
+    pub first_seen: String,
+    pub last_seen: String,
+    #[serde(default)]
+    pub url: String,
+    /// Up to three lines, each at most 500 characters.
+    #[serde(default)]
+    pub samples: Vec<String>,
+    /// `owner/name` when Datadog knows the repository.
+    #[serde(default)]
+    pub repository: Option<String>,
+    /// The lowest priority triage may give it; set by rules.
+    #[serde(default)]
+    #[allow(dead_code)] // the machine applies it; triage already reflects it
+    pub floor: Option<String>,
+    #[serde(default)]
+    pub triage: Option<DatadogTriage>,
+    /// The machine's split name; `split_enum` reads it.
+    pub split: String,
+    #[serde(default)]
+    pub snoozed_until: Option<String>,
+    #[serde(default)]
+    pub done_at: Option<String>,
+    /// Set when it came back after done.
+    #[serde(default)]
+    pub reopened_at: Option<String>,
+    /// Datadog no longer reports it (an incident resolved, a monitor recovered); it stays until you clear it.
+    #[serde(default)]
+    pub resolved_at: Option<String>,
+    /// The ticket made from this item, if any.
+    #[serde(default)]
+    pub task_id: Option<String>,
+}
+
+/// The order the machine polls and triages the sources in: incidents first.
+pub const DATADOG_SOURCES: [&str; 4] = ["incident", "monitor", "error_tracking", "error_logs"];
+
+impl DatadogItem {
+    pub fn split_enum(&self) -> Option<crate::datadog::DatadogSplit> {
+        crate::datadog::DatadogSplit::from_wire(&self.split)
+    }
+
+    /// Triage's priority, `P0` … `P3`; None until triage ran.
+    pub fn priority(&self) -> Option<&str> {
+        self.triage.as_ref().map(|t| t.priority.as_str())
+    }
+
+    /// 0 for P0 … 3 for P3, 4 when untriaged: lower sorts first.
+    pub fn priority_rank(&self) -> usize {
+        self.priority().and_then(|p| SLACK_PRIORITIES.iter().position(|x| *x == p)).unwrap_or(SLACK_PRIORITIES.len())
+    }
+
+    /// 0 for an incident … 3 for a log cluster: the order triage takes them in.
+    pub fn source_rank(&self) -> usize {
+        DATADOG_SOURCES.iter().position(|s| *s == self.source).unwrap_or(DATADOG_SOURCES.len())
+    }
+
+    /// `incident`, `monitor`, `error` (Error Tracking) or `logs`: the row's source column.
+    pub fn source_label(&self) -> &str {
+        match self.source.as_str() {
+            "error_tracking" => "error",
+            "error_logs" => "logs",
+            other => other,
+        }
+    }
+
+    /// Triage's one-line summary, or the title until triage ran.
+    pub fn summary(&self) -> &str {
+        match self.triage.as_ref().map(|t| t.summary.as_str()).filter(|s| !s.is_empty()) {
+            Some(summary) => summary,
+            None => &self.title,
+        }
+    }
+
+    /// Since it was last seen.
+    pub fn age(&self, now: u64) -> String {
+        age(&self.last_seen, now)
+    }
+
+    pub fn task_id(&self) -> Option<&str> {
+        self.task_id.as_deref()
+    }
+}
+
+/// One source's last poll.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DatadogSourceState {
+    pub ok: bool,
+    #[serde(default)]
+    pub error: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; the strip counts by split
+    pub count: u64,
+}
+
+/// `GET /datadog/items` and the `datadog.items` stream event: the items and how each source's
+/// last poll went.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DatadogSnapshot {
+    #[serde(default)]
+    pub items: Vec<DatadogItem>,
+    #[serde(default)]
+    pub polled_at: Option<String>,
+    /// By source name (`incident`, `monitor`, `error_tracking`, `error_logs`).
+    #[serde(default)]
+    pub sources: BTreeMap<String, DatadogSourceState>,
+    /// A triage batch is running.
+    #[serde(default)]
+    pub triaging: bool,
+    /// `no_token` when the keys are unset, else the last poll's failure, else None.
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
 /// One day of the Slack metrics window.
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 pub struct SlackDay {
@@ -1179,6 +1350,9 @@ pub enum StreamMessage {
     /// The Slack inbox changed; the whole snapshot rides along, watches included.
     #[serde(rename = "slack.items")]
     Slack { snapshot: SlackSnapshot },
+    /// The Datadog inbox changed; the whole snapshot rides along.
+    #[serde(rename = "datadog.items")]
+    Datadog { snapshot: DatadogSnapshot },
 }
 
 /// `budget.alert`: a task's, a repo's month's or the day's spend passing a threshold.

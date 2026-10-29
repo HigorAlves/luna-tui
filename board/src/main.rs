@@ -7,6 +7,7 @@
 
 mod app;
 mod client;
+mod datadog;
 mod detail;
 mod digest;
 mod discover;

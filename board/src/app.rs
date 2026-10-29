@@ -17,6 +17,7 @@ use tui_textarea::TextArea;
 
 use std::collections::BTreeSet;
 
+use crate::datadog::{self, DatadogSplit, DatadogState};
 use crate::detail::Section;
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
@@ -30,7 +31,7 @@ use crate::{
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
+        COLUMNS, DatadogItem, DatadogSnapshot, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
         StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of,
         plan_markdown, priority_step, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
@@ -406,6 +407,8 @@ pub struct App {
     pub prs_polling: bool,
     /// The same for Slack.
     pub slack_polling: bool,
+    /// The same for Datadog.
+    pub datadog_polling: bool,
     /// The PR view, open while this is `Some`.
     pub pulls: Option<PullsState>,
     /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
@@ -418,6 +421,10 @@ pub struct App {
     slack_catalog: Option<(Vec<SlackOption>, Vec<SlackOption>)>,
     /// A catalogue fetch is in flight; the picker says "loading…" meanwhile.
     slack_catalog_pending: bool,
+    /// The Datadog inbox as the machine last sent it; empty until the first `datadog.items` event.
+    pub datadog_snapshot: DatadogSnapshot,
+    /// The Datadog view, open while this is `Some`.
+    pub datadog: Option<DatadogState>,
     /// Tickets marked with `v`/`V`: `a`, `X`, `d`, `w` act on all of them.
     pub marked: BTreeSet<String>,
     /// The stage pool as `/health` last reported it; None until the first answer.
@@ -510,12 +517,15 @@ impl App {
             prs: PrSnapshot::default(),
             prs_polling: false,
             slack_polling: false,
+            datadog_polling: false,
             pulls: None,
             pending_dispatch: None,
             slack_snapshot: SlackSnapshot::default(),
             slack: None,
             slack_catalog: None,
             slack_catalog_pending: false,
+            datadog_snapshot: DatadogSnapshot::default(),
+            datadog: None,
             marked: BTreeSet::new(),
             slots: None,
             digest: None,
@@ -698,6 +708,16 @@ impl App {
                         Err(error) => self.notify(error, true),
                     }
                 }
+                Incoming::DatadogPolled(result) => {
+                    self.datadog_polling = false;
+                    match result {
+                        Ok(snapshot) => {
+                            self.take_datadog(snapshot);
+                            self.notify("polled Datadog", false);
+                        }
+                        Err(error) => self.notify(error, true),
+                    }
+                }
                 Incoming::JiraHits { query, hits } => {
                     // An answer for what the prompt still says; anything typed since makes it stale.
                     let Mode::JiraLink { query: current, hits: shown, cursor, .. } = &mut self.mode else { return };
@@ -749,6 +769,7 @@ impl App {
                 }
                 Incoming::Message(StreamMessage::Prs { snapshot }) => self.take_prs(snapshot),
                 Incoming::Message(StreamMessage::Slack { snapshot }) => self.take_slack(snapshot),
+                Incoming::Message(StreamMessage::Datadog { snapshot }) => self.take_datadog(snapshot),
                 Incoming::SlackCatalog { groups, channels } => {
                     self.slack_catalog = Some((groups, channels));
                     self.slack_catalog_pending = false;
@@ -777,6 +798,39 @@ impl App {
         self.notices.extend(notices);
         self.slack_snapshot = snapshot;
         self.clamp_slack_cursor();
+    }
+
+    /// A fresh Datadog snapshot: the view's cursor kept inside its split.
+    fn take_datadog(&mut self, snapshot: DatadogSnapshot) {
+        self.datadog_snapshot = snapshot;
+        self.clamp_datadog_cursor();
+    }
+
+    fn clamp_datadog_cursor(&mut self) {
+        let count = self.datadog.as_ref().map(|s| datadog::items(&self.datadog_snapshot.items, s.split).len()).unwrap_or(0);
+        if let Some(state) = self.datadog.as_mut() {
+            state.cursor = state.cursor.min(count.saturating_sub(1));
+        }
+    }
+
+    /// The item under the cursor of the open Datadog view.
+    pub fn datadog_under_cursor(&self) -> Option<&DatadogItem> {
+        let state = self.datadog.as_ref()?;
+        let items = datadog::items(&self.datadog_snapshot.items, state.split);
+        items.get(state.cursor.min(items.len().saturating_sub(1))).map(|&i| &self.datadog_snapshot.items[i])
+    }
+
+    /// `R` in Datadog: a poll of every source, off the UI thread like the others.
+    fn poll_datadog(&mut self) {
+        if self.datadog_polling {
+            self.notify("already polling Datadog", false);
+            return;
+        }
+        self.datadog_polling = true;
+        let (machine, tx) = (self.machine.clone(), self.tx.clone());
+        thread::spawn(move || {
+            let _ = tx.send(Incoming::DatadogPolled(machine.refresh_datadog()));
+        });
     }
 
     fn clamp_slack_cursor(&mut self) {
@@ -1826,6 +1880,9 @@ impl App {
         if self.slack.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_slack(key);
         }
+        if self.datadog.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_datadog(key);
+        }
         match &self.mode {
             Mode::Normal => self.handle_normal(key),
             Mode::Detail(id) => {
@@ -2794,6 +2851,67 @@ impl App {
         Outcome::Continue
     }
 
+    /// Opens the Datadog view, fetching the snapshot when the stream has not sent one yet.
+    fn open_datadog(&mut self) {
+        if self.datadog_snapshot.polled_at.is_none()
+            && let Ok(snapshot) = self.machine.datadog()
+        {
+            self.take_datadog(snapshot);
+        }
+        self.datadog = Some(DatadogState::default());
+    }
+
+    /// The keys `handle_datadog` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_DATADOG: &[&str] = &["esc", "O", "q", "?", "j", "k", "l", "h", "1-6", "R", "o"];
+
+    /// The Datadog view's keys: move, switch split, open the item in Datadog, refresh.
+    fn handle_datadog(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.datadog.clone() else {
+            return Outcome::Continue;
+        };
+        let count = datadog::items(&self.datadog_snapshot.items, state.split).len();
+        let mut next = state.clone();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('O') | KeyCode::Char('q') => {
+                self.datadog = None;
+                return Outcome::Continue;
+            }
+            KeyCode::Char('?') => {
+                self.open_help();
+                return Outcome::Continue;
+            }
+            KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(count.saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => next.cursor = state.cursor.saturating_sub(1),
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => {
+                next.split = state.split.next();
+                next.cursor = 0;
+            }
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => {
+                next.split = state.split.prev();
+                next.cursor = 0;
+            }
+            KeyCode::Char(d @ '1'..='6') => {
+                next.split = DatadogSplit::ALL[(d as usize) - ('1' as usize)];
+                next.cursor = 0;
+            }
+            KeyCode::Char('R') => {
+                self.poll_datadog();
+                return Outcome::Continue;
+            }
+            KeyCode::Char('o') => {
+                match self.datadog_under_cursor().map(|i| i.url.clone()) {
+                    Some(url) => self.open_url(&url),
+                    None => self.notify("no signal selected", false),
+                }
+                return Outcome::Continue;
+            }
+            _ => {}
+        }
+        self.datadog = Some(next);
+        Outcome::Continue
+    }
+
     fn handle_confirm_approve_all(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Char('y') => {
@@ -2819,7 +2937,7 @@ impl App {
     /// everything `ticket_key` takes (`S` opens Slack here, so it is not ship).
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
-        "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "S", "v", "V", "?", ":",
+        "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "S", "O", "v", "V", "?", ":",
         "esc", "enter", "R", "a", "A", "e", "r", "X", "w", "d", "f", "o", "J",
     ];
 
@@ -2880,6 +2998,7 @@ impl App {
             KeyCode::Char('D') => self.digest = Some(DigestState::default()),
             KeyCode::Char('P') => self.open_pulls(),
             KeyCode::Char('S') => self.open_slack(),
+            KeyCode::Char('O') => self.open_datadog(),
             KeyCode::Char('v') => {
                 // Toggle: remove it if it was marked, else mark it.
                 if let Some(id) = self.selected_id().filter(|id| !self.marked.remove(id)) {
@@ -3378,7 +3497,7 @@ impl App {
     /// The names `run_command` knows, aliases left out.
     #[cfg(test)]
     pub(crate) const HANDLED_COMMANDS: &[&str] = &[
-        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "slack", "jira",
+        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "slack", "datadog", "jira",
         "help",
     ];
 
@@ -3462,6 +3581,7 @@ impl App {
             "digest" => self.digest = Some(DigestState::default()),
             "prs" | "pulls" => self.open_pulls(),
             "slack" => self.open_slack(),
+            "datadog" => self.open_datadog(),
             "jira" => match self.selected_id() {
                 Some(id) if rest.is_empty() => return self.ticket_key('J', &id),
                 Some(id) => self.link_jira(&id, rest),
@@ -3684,6 +3804,7 @@ pub(crate) mod handled {
     pub(crate) const INBOX: &[&str] = App::HANDLED_INBOX;
     pub(crate) const PULLS: &[&str] = App::HANDLED_PULLS;
     pub(crate) const SLACK: &[&str] = App::HANDLED_SLACK;
+    pub(crate) const DATADOG: &[&str] = App::HANDLED_DATADOG;
     pub(crate) const WATCHES: &[&str] = App::HANDLED_WATCHES;
     pub(crate) const DIGEST: &[&str] = App::HANDLED_DIGEST;
     pub(crate) const FLOOR: &[&str] = App::HANDLED_FLOOR;
@@ -5163,6 +5284,96 @@ mod slack_tests {
         let notices = app.take_notices();
         assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Overdue"], "the P0 going past its SLA is news");
         assert_eq!(app.needs_you_count(), 1, "the overdue P0 counts once; the done item no longer does");
+    }
+}
+
+#[cfg(test)]
+mod datadog_tests {
+    use super::slack_tests::fake_machine;
+    use super::*;
+    use crate::datadog::fixtures::{item, snapshot};
+    use crate::model::DatadogSnapshot;
+
+    fn app_with(snapshot: DatadogSnapshot) -> App {
+        let mut app = App::new(fake_machine());
+        app.tasks.clear();
+        app.toast = None;
+        app.take_notices();
+        app.tx.send(Incoming::Message(StreamMessage::Datadog { snapshot })).unwrap();
+        app.pump();
+        app
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn type_command(app: &mut App, text: &str) {
+        press(app, KeyCode::Char(':'));
+        for ch in text.chars() {
+            press(app, KeyCode::Char(ch));
+        }
+        press(app, KeyCode::Enter);
+    }
+
+    fn under(app: &App) -> Option<&str> {
+        app.datadog_under_cursor().map(|i| i.id.as_str())
+    }
+
+    #[test]
+    fn o_opens_the_datadog_view_and_its_keys_move_between_splits_and_rows() {
+        let mut snapshot = snapshot();
+        snapshot.items.push(item("mon:7:host:web-1", "monitor", "act_now", Some("P1"), "2026-10-28T09:58:00Z"));
+        let mut app = app_with(snapshot);
+        press(&mut app, KeyCode::Char('O'));
+        let state = app.datadog.clone().expect("the Datadog view opens");
+        assert_eq!(state.split, DatadogSplit::ActNow);
+        assert_eq!(under(&app), Some("inc:412"), "the P0 incident is on top");
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(under(&app), Some("mon:7:host:web-1"));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.datadog.as_ref().unwrap().cursor, 1, "stops at the last row");
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.datadog.as_ref().unwrap().split, DatadogSplit::Investigate);
+        assert_eq!(app.datadog.as_ref().unwrap().cursor, 0);
+        assert_eq!(under(&app), None);
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.datadog.as_ref().unwrap().split, DatadogSplit::Noise);
+        assert_eq!(under(&app), Some("log:payments-worker:TimeoutError"));
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(app.datadog.as_ref().unwrap().split, DatadogSplit::Watch);
+        press(&mut app, KeyCode::Char('?'));
+        assert!(matches!(app.mode, Mode::Help { scope: Scope::Datadog, .. }));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal) && app.datadog.is_some(), "closing the help keeps the view");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.datadog.is_none());
+        type_command(&mut app, "datadog");
+        assert!(app.datadog.is_some(), ":datadog opens it too");
+        press(&mut app, KeyCode::Char('O'));
+        assert!(app.datadog.is_none(), "O closes it again");
+        press(&mut app, KeyCode::Char('O'));
+        press(&mut app, KeyCode::Char('q'));
+        assert!(app.datadog.is_none(), "q closes it, not the board");
+    }
+
+    #[test]
+    fn a_datadog_items_event_replaces_the_snapshot_and_keeps_the_cursor_inside_the_split() {
+        let mut first = snapshot();
+        first.items.push(item("mon:7:host:web-1", "monitor", "act_now", Some("P1"), "2026-10-28T09:58:00Z"));
+        let mut app = app_with(first);
+        press(&mut app, KeyCode::Char('O'));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(under(&app), Some("mon:7:host:web-1"));
+        let mut next = snapshot();
+        next.items.truncate(1);
+        next.triaging = true;
+        app.tx.send(Incoming::Message(StreamMessage::Datadog { snapshot: next })).unwrap();
+        app.pump();
+        assert_eq!(app.datadog_snapshot.items.len(), 1, "the event replaces the snapshot whole");
+        assert!(app.datadog_snapshot.triaging);
+        assert_eq!(app.datadog.as_ref().unwrap().cursor, 0, "the cursor stays inside the shorter split");
+        assert_eq!(under(&app), Some("inc:412"));
     }
 }
 
