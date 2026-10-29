@@ -4,6 +4,7 @@
 import { EntitySchema } from "typeorm";
 
 import type { ApprovalRow, ArtifactRow, EventRow, StageRunRow, TaskRow } from "../../domain/task.ts";
+import type { DatadogItemEntityRow, DatadogTriageRunEntityRow } from "./datadog-store.ts";
 import type { SlackItemEntityRow, SlackTriageRunEntityRow, SlackWatchEntityRow } from "./slack-store.ts";
 
 const taskRelation = {
@@ -193,4 +194,36 @@ export const SlackTriageRunEntity = new EntitySchema<SlackTriageRunEntityRow>({
   indices: [{ columns: ["startedAt"] }],
 });
 
-export const ENTITIES = [TaskEntity, StageRunEntity, EventEntity, ApprovalEntity, ArtifactEntity, SlackItemEntity, SlackWatchEntity, SlackTriageRunEntity];
+/** A Datadog inbox item: the whole item as jsonb, with the columns the filters need copied out. */
+export const DatadogItemEntity = new EntitySchema<DatadogItemEntityRow>({
+  name: "DatadogItem",
+  tableName: "datadog_items",
+  columns: {
+    id: { type: "text", primary: true },
+    row: { type: "jsonb" },
+    lastSeen: { name: "last_seen", type: "timestamptz" },
+    doneAt: { name: "done_at", type: "timestamptz", nullable: true },
+    updatedAt: { name: "updated_at", type: "timestamptz", updateDate: true },
+  },
+  indices: [{ name: "datadog_items_done_at_idx", columns: ["doneAt"] }],
+});
+
+/** One run of the datadog_triage pack: what a batch cost, for the Floor. */
+export const DatadogTriageRunEntity = new EntitySchema<DatadogTriageRunEntityRow>({
+  name: "DatadogTriageRun",
+  tableName: "datadog_triage_runs",
+  columns: {
+    id: { type: "uuid", primary: true, generated: "uuid" },
+    startedAt: { name: "started_at", type: "timestamptz" },
+    endedAt: { name: "ended_at", type: "timestamptz" },
+    items: { type: "integer", default: 0 },
+    model: { type: "text", default: "" },
+    turns: { type: "integer", default: 0 },
+    costUsd: { name: "cost_usd", type: "numeric", precision: 10, scale: 4, nullable: true },
+    ok: { type: "boolean", default: false },
+    error: { type: "text", nullable: true },
+  },
+  indices: [{ columns: ["startedAt"] }],
+});
+
+export const ENTITIES = [TaskEntity, StageRunEntity, EventEntity, ApprovalEntity, ArtifactEntity, SlackItemEntity, SlackWatchEntity, SlackTriageRunEntity, DatadogItemEntity, DatadogTriageRunEntity];
