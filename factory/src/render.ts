@@ -53,6 +53,22 @@ const threadsText = (threads: StageInput["context"]["threads"]): string => {
   return `${prLine(threads.pr)}\n\n${list.join("\n\n") || "(no unresolved threads)"}`;
 };
 
+/** The inbox batch, as slack_triage reads it: one block per item, context and matches inline. */
+const slackText = (slack: StageInput["context"]["slack"]) => {
+  if (!slack) return { me: NONE, watches: NONE, rules: NONE, items: NONE };
+  const items = slack.items.map((item, i) => {
+    const head = `${i + 1}. id ${item.id} · ${item.channel} · ${item.author}${item.isBot ? " (app)" : ""} · matched ${item.matched.join(", ") || "(none)"}${item.threadReplies > 0 ? ` · ${item.threadReplies} thread repl${item.threadReplies === 1 ? "y" : "ies"}` : ""}`;
+    const context = item.context.map((m) => `   earlier · ${m.user}: ${m.text}`);
+    return [head, ...context, `   text: ${item.text}`].join("\n");
+  });
+  return {
+    me: `${slack.me.name} (${slack.me.id})`,
+    watches: slack.watches.length > 0 ? slack.watches.map((w) => `- ${w.label} (${w.kind})`).join("\n") : NONE,
+    rules: slack.rules.trim() === "" ? NONE : slack.rules.trim(),
+    items: items.length > 0 ? items.join("\n") : NONE,
+  };
+};
+
 /** The rules every stage runs under; appended to the system prompt and restated in the header. */
 export const FACTORY_RULES = [
   "You are running in factory mode (LUNA_FACTORY=1): no human is present. A controller wrote /in/stage.json and reads your final answer as the stage result.",
@@ -76,6 +92,7 @@ export interface RenderInput {
 export function renderPrompt({ pack, input, template, projectContext }: RenderInput): string {
   const agent = pack.agent ?? "script";
   const context = input.context.projectContext ?? projectContext ?? null;
+  const slack = slackText(input.context.slack);
   const subs: Record<string, string> = {
     "{{task.title}}": txt(input.task.title),
     "{{task.description}}": txt(input.task.description),
@@ -113,6 +130,10 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
         )
       : "(none declared; detect the suite from the tree)",
     "{{context.qaTargets}}": bullets((input.context.qaTargets ?? []).map((t) => `${t.name}: ${t.baseUrl}${t.credential ? ` (credential: ${t.credential})` : ""}`)),
+    "{{context.slack.me}}": slack.me,
+    "{{context.slack.watches}}": slack.watches,
+    "{{context.slack.rules}}": slack.rules,
+    "{{context.slack.items}}": slack.items,
     "{{attempt}}": txt(input.attempt),
     "{{agent}}": agent,
     "{{skills}}": pack.skills.length > 0 ? pack.skills.join(", ") : NONE,

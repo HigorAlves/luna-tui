@@ -105,6 +105,27 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.reviewing, input, template: "{{context.review}}|{{context.threads}}" })).toMatch(/\n\(none\)\|\(none\)$/);
   });
 
+  it("renders the inbox batch for slack_triage: the person, the watches, the rules and one block per item", () => {
+    const template = "me {{context.slack.me}}\nwatches:\n{{context.slack.watches}}\nrules:\n{{context.slack.rules}}\nitems:\n{{context.slack.items}}";
+    const slack = {
+      me: { id: "U1", name: "higor" },
+      watches: [{ label: "@platform-team", kind: "usergroup" }],
+      rules: "## Notes\n- short replies\n",
+      items: [
+        { id: "C1:1", channel: "#eng", author: "@marta", isBot: false, text: "can you review o/a#212?", context: [{ user: "@lee", text: "earlier" }], matched: ["me"], threadReplies: 2 },
+        { id: "C2:9", channel: "dm with @ana", author: "@deploybot", isBot: true, text: "deploy done", context: [], matched: [], threadReplies: 0 },
+      ],
+    };
+    const prompt = renderPrompt({ pack: PACKS.slack_triage, input: { ...input, pack: "slack_triage", stage: "slack_triage", context: { projectContext: null, slack } }, template });
+    expect(prompt).toContain("me higor (U1)");
+    expect(prompt).toContain("watches:\n- @platform-team (usergroup)");
+    expect(prompt).toContain("rules:\n## Notes\n- short replies");
+    expect(prompt).toContain("1. id C1:1 · #eng · @marta · matched me · 2 thread replies\n   earlier · @lee: earlier\n   text: can you review o/a#212?");
+    expect(prompt).toContain("2. id C2:9 · dm with @ana · @deploybot (app) · matched (none)\n   text: deploy done");
+    expect(prompt).toContain("`slack-triager` role running the `slack_triage` stage");
+    expect(renderPrompt({ pack: PACKS.slack_triage, input, template })).toContain("me (none)\nwatches:\n(none)\nrules:\n(none)\nitems:\n(none)");
+  });
+
   it("names a script pack's agent as script", () => {
     expect(renderPrompt({ pack: PACKS.evidence, input: { ...input, pack: "evidence", stage: "evidence" }, template: "{{agent}}" })).toMatch(/\nscript$/);
   });

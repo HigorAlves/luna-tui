@@ -19,11 +19,12 @@ use crate::detail::{self, DetailView};
 use crate::digest::{self, DigestState};
 use crate::inbox::{self, InboxState, Split};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
+use crate::slack::{self, SlackKey, SlackSplit, SlackState};
 use crate::{
     app::{ACTIONS, App, Density, FloorState, GroupBy, HelpFor, Mode},
     model::{
-        COLUMNS, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, Task, TaskEvent, age, fmt_ms, fmt_pct, fmt_usd, repo_colour_slot, spend_p90,
-        now_secs, unix_secs,
+        COLUMNS, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
+        fmt_usd, repo_colour_slot, sla_targets, spend_p90, now_secs, unix_secs,
     },
 };
 
@@ -144,6 +145,37 @@ pub fn draw(frame: &mut Frame, app: &App) {
             }
             Mode::ClonePrompt { repo, query, all, cursor, .. } => render_clone_prompt(frame, repo, query, all, *cursor),
             Mode::PrActions { cursor } => render_pr_actions(frame, app, *cursor),
+            Mode::Help(ctx) => {
+                let max = render_help(frame, *ctx, app.help_scroll.get());
+                app.help_scroll.set(app.help_scroll.get().min(max));
+            }
+            _ => {}
+        }
+        return;
+    }
+    if let Some(state) = app.slack.as_ref().filter(|_| {
+        matches!(
+            app.mode,
+            Mode::Normal
+                | Mode::SlackSnooze { .. }
+                | Mode::SlackReply { .. }
+                | Mode::SlackTask { .. }
+                | Mode::SlackWatchAdd { .. }
+                | Mode::SlackActions { .. }
+                | Mode::Help(_)
+        )
+    }) {
+        render_slack(frame, body, app, state);
+        frame.render_widget(footer_line(app), footer);
+        if state.watches.is_some() {
+            render_slack_watches(frame, app, state);
+        }
+        match &app.mode {
+            Mode::SlackSnooze { cursor, .. } => render_slack_snooze(frame, *cursor),
+            Mode::SlackReply { id, area, vim, nudge } => render_slack_reply(frame, app, id, area, vim, *nudge),
+            Mode::SlackTask { id, title, repo } => render_slack_task(frame, app, id, title, repo.as_deref()),
+            Mode::SlackWatchAdd { query, cursor } => render_slack_watch_add(frame, app, query, *cursor),
+            Mode::SlackActions { cursor } => render_slack_actions(frame, app, *cursor),
             Mode::Help(ctx) => {
                 let max = render_help(frame, *ctx, app.help_scroll.get());
                 app.help_scroll.set(app.help_scroll.get().min(max));
@@ -339,6 +371,9 @@ fn header_line(app: &App) -> Line<'static> {
     if app.pulls.is_some() {
         spans.push(Span::from("  [pulls]").fg(c(BLUE)).bold());
     }
+    if app.slack.is_some() {
+        spans.push(Span::from("  [slack]").fg(c(BLUE)).bold());
+    }
     if app.fold {
         spans.push(Span::from("  [folded]").fg(c(BLUE)).bold());
     }
@@ -363,6 +398,24 @@ fn footer_line(app: &App) -> Line<'static> {
     if app.pulls.is_some() && matches!(app.mode, Mode::Normal) {
         return hint(&[("j/k", "move"), ("h/l", "split"), ("m", "merge"), ("c/v/t", "CI fix / review / threads"), ("o", "open"), ("R", "poll"), ("x", "menu"), ("esc", "close")]);
     }
+    if let Some(state) = app.slack.as_ref().filter(|_| matches!(app.mode, Mode::Normal)) {
+        if state.watches.is_some() {
+            return hint(&[("j/k", "move"), ("n", "add"), ("e", "floor"), ("d", "delete"), ("space", "on/off"), ("esc", "close")]);
+        }
+        return hint(&[
+            ("j/k", "move"),
+            ("h/l 1-6", "split"),
+            ("r", "reply"),
+            ("t", "ticket"),
+            ("d", "done"),
+            ("s", "snooze"),
+            ("! -", "priority"),
+            ("W", "watches"),
+            ("o", "open"),
+            ("R", "poll"),
+            ("esc", "close"),
+        ]);
+    }
 
     match &app.mode {
         Mode::Adding(buf) => Line::from(vec![
@@ -370,8 +423,12 @@ fn footer_line(app: &App) -> Line<'static> {
             Span::from(format!("{buf}▏")),
             Span::from("   enter create and edit · esc cancel").fg(c(SUBTEXT0)),
         ]),
-        Mode::EditTicket { vim, .. } | Mode::Answer { vim, .. } | Mode::EditCases { vim, .. } => {
-            let save = if matches!(app.mode, Mode::Answer { .. }) { "send answers" } else { "save" };
+        Mode::EditTicket { vim, .. } | Mode::Answer { vim, .. } | Mode::EditCases { vim, .. } | Mode::SlackReply { vim, .. } => {
+            let save = match app.mode {
+                Mode::Answer { .. } => "send answers",
+                Mode::SlackReply { .. } => "send",
+                _ => "save",
+            };
             match vim.mode() {
                 crate::vim::Mode::Normal => hint(&[
                     ("i/a/o", "insert"),
@@ -432,7 +489,10 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
         Mode::ConfirmMerge { .. } => hint(&[("y", "merge"), ("n", "cancel")]),
         Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
-        Mode::PrActions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
+        Mode::PrActions { .. } | Mode::SlackActions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
+        Mode::SlackSnooze { .. } => hint(&[("j/k 1-4", "pick"), ("enter", "snooze"), ("esc", "cancel")]),
+        Mode::SlackTask { .. } => hint(&[("y", "create the ticket"), ("n", "cancel")]),
+        Mode::SlackWatchAdd { .. } => hint(&[("type", "@handle, #channel or a word"), ("↑/↓", "pick"), ("enter", "watch"), ("esc", "cancel")]),
         Mode::ConfirmApproveAll(_) => hint(&[("y", "approve them all"), ("n", "cancel")]),
         Mode::ConfirmMany { .. } => hint(&[("y", "do it to all of them"), ("n", "cancel")]),
         Mode::Help(_) => Line::from(Span::from(" j/k scroll · any key closes ").fg(c(SUBTEXT0))),
@@ -639,8 +699,8 @@ fn card_lines(task: &Task, spend_p90: Option<f64>, marked: bool, is_new: bool, d
     if let Some(repo) = task.repo_name() {
         ids.push_str(&format!(" · {repo}"));
     }
-    if let Some(source) = &task.source {
-        ids.push_str(&format!(" · gh#{}", source.number));
+    if let Some(number) = task.source.as_ref().and_then(|s| s.number) {
+        ids.push_str(&format!(" · gh#{number}"));
     }
     let ids = Line::from(Span::from(ids).fg(c(SUBTEXT0)));
 
@@ -1165,6 +1225,528 @@ fn render_pr_actions(frame: &mut Frame, app: &App, cursor: usize) {
     frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
 }
 
+/// The Slack view: a header strip of splits with their counts, when Slack was last polled and
+/// how the socket is; the split's items as an aligned list on the left; the selected item's
+/// pane on the right (from 100 columns; `x` shows it narrower).
+fn render_slack(frame: &mut Frame, area: Rect, app: &App, state: &SlackState) {
+    let now = now_secs();
+    let snapshot = &app.slack_snapshot;
+    let counts = slack::counts(&snapshot.items);
+    let narrow = area.width < SLACK_DETAIL_FROM;
+    let mut head = vec![Span::from(" Slack ").fg(c(ACCENT)).bold()];
+    for (i, split) in SlackSplit::ALL.iter().enumerate() {
+        if i > 0 {
+            head.push(Span::from("│").fg(c(MUTED)));
+        }
+        let name = if narrow { split.label_narrow() } else { split.label() };
+        let label = format!(" {name} {} ", counts[i]);
+        head.push(if *split == state.split {
+            Span::from(label).fg(c(BASE)).bg(c(ACCENT)).bold()
+        } else {
+            Span::from(label).fg(c(SUBTEXT0))
+        });
+    }
+    let polled = match snapshot.polled_at.as_deref().and_then(unix_secs) {
+        Some(at) => format!("polled {} ago", age_secs(now.saturating_sub(at))),
+        None => "not polled yet".to_string(),
+    };
+    head.push(Span::from(format!("  {polled}")).fg(c(SUBTEXT0)));
+    match snapshot.socket.as_str() {
+        "connected" => head.push(Span::from("  ⚡ live").fg(c(GREEN))),
+        "disconnected" => head.push(Span::from("  ⚡ socket down").fg(c(YELLOW))),
+        _ => {}
+    }
+    let overdue = slack::overdue_count(&snapshot.items);
+    if overdue > 0 {
+        head.push(Span::from(format!("  ‼ {overdue} overdue")).fg(c(RED)).bold());
+    }
+    let mut top = vec![Line::from(head)];
+    if let Some(error) = &snapshot.error {
+        top.push(Line::from(Span::from(format!(" ⚠ {error}")).fg(c(RED))));
+    }
+    let [head_area, body] = Layout::vertical([Constraint::Length(top.len() as u16), Constraint::Min(0)]).areas(area);
+    frame.render_widget(Paragraph::new(top), head_area);
+
+    let items = slack::items(&snapshot.items, state.split);
+    let selected = state.cursor.min(items.len().saturating_sub(1));
+    let wide = body.width >= SLACK_DETAIL_FROM;
+    let [list_area, detail_area] = if wide {
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(SLACK_DETAIL_WIDTH)]).areas(body)
+    } else {
+        Layout::horizontal([Constraint::Min(0), Constraint::Length(0)]).areas(body)
+    };
+
+    let list_block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .title(Line::from(format!(" {} {} ", state.split.label(), items.len())).bold());
+    let inner = list_block.inner(list_area);
+    let mut lines = Vec::new();
+    if items.is_empty() {
+        lines.push(Line::from(Span::from("  ✓ nothing here").fg(c(GREEN))));
+    }
+    for (row, &i) in items.iter().enumerate() {
+        lines.push(slack_row(&snapshot.items[i], row == selected, inner.width as usize, now));
+    }
+    frame.render_widget(Paragraph::new(lines).block(list_block), list_area);
+
+    if wide {
+        let item = items.get(selected).map(|&i| &snapshot.items[i]);
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::new().fg(c(MUTED)))
+            .padding(Padding::horizontal(1))
+            .title(Line::from(item.map_or(" message ".to_string(), |i| format!(" {} ", i.channel_label()))).bold());
+        let lines = match item {
+            Some(item) => slack_detail_lines(item, snapshot.sla_for(item.priority()), now),
+            None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
+        };
+        frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), detail_area);
+    }
+}
+
+/// From this width the Slack view keeps a detail pane beside the list.
+const SLACK_DETAIL_FROM: u16 = 100;
+const SLACK_DETAIL_WIDTH: u16 = 48;
+
+/// `P0` red, `P1` yellow, `P2` plain, `P3` and untriaged muted.
+fn priority_style(priority: Option<&str>) -> Style {
+    match priority {
+        Some("P0") => Style::new().fg(c(RED)).bold(),
+        Some("P1") => Style::new().fg(c(YELLOW)),
+        Some("P2") => Style::new(),
+        _ => Style::new().fg(c(SUBTEXT0)),
+    }
+}
+
+/// The tag after the age, two glyphs from `↺` came back after you cleared it, `⚙` already a
+/// ticket, `⎇` inside a thread; an overdue item puts `‼` in front of them and takes a third.
+fn slack_tag(item: &SlackItem) -> String {
+    let mut tag = String::new();
+    let room = if item.overdue { 3 } else { 2 };
+    for (on, glyph) in [(item.overdue, '‼'), (item.reopened_at.is_some(), '↺'), (item.task_id().is_some(), '⚙'), (item.thread_ts.is_some(), '⎇')] {
+        if on && tag.chars().count() < room {
+            tag.push(glyph);
+        }
+    }
+    while tag.chars().count() < room {
+        tag.push(' ');
+    }
+    tag
+}
+
+/// One item as a row of fixed columns: the priority, the channel's colour bar and name, the
+/// author, triage's summary (the only field ever cut, `×N` when a thread collapsed into it),
+/// the age, and the tag. Everything else lives in the detail pane. Past its reply SLA the
+/// summary and the age go red and the tag leads with `‼`; inside five minutes of it the age
+/// goes yellow.
+fn slack_row(item: &SlackItem, selected: bool, width: usize, now: u64) -> Line<'static> {
+    let channel = item.channel_label();
+    let channel_colour = REPO_COLOURS[repo_colour_slot(&item.channel.name)];
+    let author = format!("@{}", item.author.name);
+    let mut summary = item.summary().to_string();
+    if item.count > 1 {
+        summary.push_str(&format!(" ×{}", item.count));
+    }
+    let tag = slack_tag(item);
+    let tag_colour = if item.overdue {
+        RED
+    } else if item.reopened_at.is_some() {
+        YELLOW
+    } else {
+        SUBTEXT0
+    };
+    let (summary_style, age_style) = if item.overdue {
+        (Style::new().fg(c(RED)).bold(), Style::new().fg(c(RED)).bold())
+    } else if item.due_soon(now) {
+        (Style::new().bold(), Style::new().fg(c(YELLOW)))
+    } else {
+        (Style::new().bold(), Style::new().fg(c(SUBTEXT0)))
+    };
+    // sel(2) prio(3) bar(1) channel(16) gap(1) author(9) gap(1) summary gap(2) age(3) gap(1) tag(2, 3 overdue)
+    let fixed = 2 + 3 + 1 + 16 + 1 + 9 + 1 + 2 + 3 + 1 + tag.chars().count();
+    let room = width.saturating_sub(fixed).max(4);
+    let mut spans = vec![
+        Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+        Span::from(format!("{:<3}", item.priority().unwrap_or("·"))).style(priority_style(item.priority())),
+        Span::from("▌").fg(c(channel_colour)),
+        Span::from(format!("{:<16} ", truncate(&channel, 16))).fg(c(channel_colour)),
+        Span::from(format!("{:<9} ", truncate(&author, 9))).fg(c(SUBTEXT0)),
+        Span::from(format!("{:<room$}", truncate(&summary, room))).style(summary_style),
+        Span::from(format!("  {:>3} ", item.age(now))).style(age_style),
+        Span::from(tag).fg(c(tag_colour)),
+    ];
+    if selected {
+        spans = spans.into_iter().map(|s| s.bg(c(SELECTED_BG))).collect();
+    }
+    Line::from(spans)
+}
+
+/// The item as the pane and the actions menu draw it: where and who, when the reply is due
+/// under `sla` (its priority's, in seconds; 0 for none), the context, the message, and
+/// triage's verdict with why, links and draft.
+fn slack_widget(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
+    let muted = |text: String| Line::from(Span::from(text).fg(c(SUBTEXT0)));
+    let field = |name: &str, text: String| {
+        Line::from(vec![Span::from(format!("{name:<9}")).fg(c(SUBTEXT0)), Span::from(text)])
+    };
+    let mut head = format!("{} · @{} · {} ago", item.channel_label(), item.author.name, item.age(now));
+    if item.thread_ts.is_some() {
+        head.push_str(&format!(" · thread ({} replies)", item.replies));
+    }
+    if item.count > 1 {
+        head.push_str(&format!(" · {} messages", item.count));
+    }
+    let mut lines = vec![muted(head)];
+    if let Some(due) = item.due_label(now) {
+        let target = match (item.priority(), sla) {
+            (Some(p), 0) => format!(" ({p})"),
+            (Some(p), secs) => format!(" ({p} · {} SLA)", age_secs(secs)),
+            (None, _) => String::new(),
+        };
+        let style = if item.overdue { Style::new().fg(c(RED)).bold() } else { Style::new() };
+        lines.push(Line::from(vec![Span::from(format!("{:<9}", "due")).fg(c(SUBTEXT0)), Span::from(format!("{due}{target}")).style(style)]));
+    }
+    if item.reopened_at.is_some() {
+        lines.push(Line::from(Span::from("new since you cleared it").fg(c(YELLOW)).bold()));
+    }
+    lines.push(Line::default());
+    for message in &item.context {
+        lines.push(muted(format!("@{}  {}", message.user.name, message.text)));
+    }
+    lines.push(Line::from(Span::from(item.text.clone()).bold()));
+    lines.push(Line::default());
+    match &item.triage {
+        Some(triage) => {
+            let expects = if triage.expects_reply { " · reply expected" } else { "" };
+            let by = if triage.by == "rules" { " · by rule" } else { "" };
+            let hand = if triage.overridden { " · yours" } else { "" };
+            lines.push(Line::from(vec![
+                Span::from(format!("{:<9}", "triage")).fg(c(SUBTEXT0)),
+                Span::from(triage.priority.clone()).style(priority_style(Some(&triage.priority))),
+                Span::from(format!(" · {}{expects}{by}{hand}", triage.category)),
+            ]));
+            if !triage.why.is_empty() {
+                lines.push(field("why", triage.why.clone()));
+            }
+            let mut links: Vec<String> = Vec::new();
+            if let Some(pr) = &item.linked.pr {
+                links.push(format!("{}#{} ({})", pr.repo, pr.number, pr.split.replace('_', " ")));
+            }
+            for r in &triage.refs {
+                if !links.iter().any(|l| l.starts_with(&r.reference)) {
+                    links.push(r.reference.clone());
+                }
+            }
+            if !links.is_empty() {
+                lines.push(field("links", links.join(" · ")));
+            }
+            if let Some(deadline) = &triage.deadline {
+                lines.push(field("deadline", deadline.clone()));
+            }
+            if let Some(draft) = triage.draft.as_deref().filter(|d| !d.is_empty()) {
+                lines.push(Line::default());
+                lines.push(field("draft", draft.to_string()));
+            }
+        }
+        None => lines.push(field("triage", "not yet".to_string())),
+    }
+    if let Some(task) = item.task_id() {
+        lines.push(field("ticket", format!("#{}", crate::model::short_id(task))));
+    }
+    lines
+}
+
+/// The widget, then every key with whether it is on and why not.
+fn slack_detail_lines(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
+    let mut lines = slack_widget(item, sla, now);
+    lines.push(Line::default());
+    for key in SlackKey::ALL {
+        let label = key.short();
+        match slack::blocker(item, key) {
+            None => lines.push(Line::from(vec![
+                Span::from(format!("{} ", key.key())).fg(c(BASE)).bg(c(ACCENT)),
+                Span::from(format!(" {label:<8}")).bold(),
+                Span::from("  ready").fg(c(GREEN)),
+            ])),
+            Some(why) => lines.push(Line::from(vec![
+                Span::from(format!("{} ", key.key())).fg(c(BASE)).bg(c(MUTED)),
+                Span::from(format!(" {label:<8}")).fg(c(SUBTEXT0)),
+                Span::from(format!("  off: {why}")).fg(c(SUBTEXT0)),
+            ])),
+        }
+    }
+    lines
+}
+
+/// `x` in the Slack view: the item drawn by the widget, then its keys; an off key says why
+/// under it. On a terminal too narrow for the pane this is where the detail shows.
+fn render_slack_actions(frame: &mut Frame, app: &App, cursor: usize) {
+    let Some(item) = app.slack_under_cursor() else { return };
+    let now = now_secs();
+    let blockers: Vec<Option<&str>> = SlackKey::ALL.iter().map(|k| slack::blocker(item, *k)).collect();
+    let widget = slack_widget(item, app.slack_snapshot.sla_for(item.priority()), now);
+    let longest = SlackKey::ALL
+        .iter()
+        .map(|k| k.label().chars().count())
+        .chain(blockers.iter().flatten().map(|w| w.chars().count() + 4))
+        .chain(widget.iter().map(|l| l.width().min(70)))
+        .max()
+        .unwrap_or(40);
+    let rows = widget.len() + 2 + SlackKey::ALL.len() + blockers.iter().flatten().count();
+    let width = (longest as u16 + 12).min(frame.area().width.saturating_sub(2));
+    let area = centered(frame.area(), width, (rows as u16 + 4).min(frame.area().height));
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" {} · @{} ", item.channel_label(), item.author.name)).bold());
+    let mut lines: Vec<Line> = widget;
+    lines.push(Line::default());
+    for (i, key) in SlackKey::ALL.iter().enumerate() {
+        let selected = i == cursor;
+        let blocked = blockers[i];
+        let style = match (selected, blocked) {
+            (_, Some(_)) => Style::new().fg(c(MUTED)),
+            (true, None) => Style::new().fg(c(ACCENT)).bold(),
+            (false, None) => Style::new(),
+        };
+        lines.push(Line::from(vec![
+            Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+            Span::from(format!("{:<4}", key.key())).fg(c(SUBTEXT0)),
+            Span::from(key.label()).style(style),
+        ]));
+        if let Some(why) = blocked {
+            lines.push(Line::from(Span::from(format!("      ↳ {why}")).fg(c(MUTED))));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
+}
+
+/// The reply editor: the text on top, the thread's last messages under a `context` rule, so
+/// what you answer stays in view. ctrl+s posts it as you.
+fn render_slack_reply(frame: &mut Frame, app: &App, id: &str, area: &TextArea<'static>, vim: &crate::vim::Vim, nudge: bool) {
+    let rect = centered(frame.area(), frame.area().width * 9 / 10, frame.area().height * 8 / 10);
+    frame.render_widget(Clear, rect);
+    let item = app.slack_item(id);
+    let (label, mode_color) = match vim.mode() {
+        crate::vim::Mode::Normal => (" NORMAL ", ACCENT),
+        crate::vim::Mode::Insert => (" INSERT ", GREEN),
+    };
+    let verb = if nudge { "nudge" } else { "reply" };
+    let title = match item {
+        Some(item) if nudge => format!(" nudge · {} · opens with @{} ", item.channel_label(), item.author.name),
+        Some(item) if item.thread_ts.is_some() => format!(" reply · {} · thread with @{} ", item.channel_label(), item.author.name),
+        Some(item) => format!(" reply · {} · to @{} ", item.channel_label(), item.author.name),
+        None => format!(" {verb} "),
+    };
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(mode_color)))
+        .padding(Padding::horizontal(1))
+        .title(Line::from(title).bold())
+        .title_top(Line::from(" ctrl+s send  esc back ").fg(c(SUBTEXT0)).right_aligned())
+        .title_bottom(Line::from(label).bold().fg(c(mode_color)).left_aligned());
+    let inner = block.inner(rect);
+    frame.render_widget(block, rect);
+
+    let context: Vec<&crate::model::SlackMessage> = item.map(|i| i.context.iter().rev().take(3).rev().collect()).unwrap_or_default();
+    let context_rows = if context.is_empty() { 0 } else { (context.len() as u16 + 1).min(inner.height / 2) };
+    let [text_area, context_area] = Layout::vertical([Constraint::Min(1), Constraint::Length(context_rows)]).areas(inner);
+
+    let mut area = area.clone();
+    area.set_block(Block::default());
+    area.set_cursor_line_style(Style::new().bg(c(SURFACE0)));
+    area.set_selection_style(Style::new().bg(c(SURFACE1)));
+    area.set_cursor_style(Style::new().bg(c(mode_color)).fg(c(BASE)));
+    frame.render_widget(&area, text_area);
+
+    if context_rows > 0 {
+        let rule = format!("─ context {}", "─".repeat((context_area.width as usize).saturating_sub(10)));
+        let mut lines = vec![Line::from(Span::from(rule).fg(c(MUTED)))];
+        for message in context {
+            lines.push(Line::from(Span::from(format!("@{:<7} {}", message.user.name, message.text)).fg(c(SUBTEXT0))));
+        }
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), context_area);
+    }
+}
+
+/// `W`: the handles, broadcasts, keywords and channels the inbox treats as addressed to you.
+fn render_slack_watches(frame: &mut Frame, app: &App, state: &SlackState) {
+    let watches = &app.slack_snapshot.watches;
+    let cursor = state.watches.as_ref().map_or(0, |w| w.cursor).min(watches.len().saturating_sub(1));
+    let width = 96.min(frame.area().width.saturating_sub(2));
+    let height = (watches.len().max(1) as u16 + 6).min(frame.area().height.saturating_sub(2));
+    let area = centered(frame.area(), width, height);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(1))
+        .title(Line::from(" Watches ").bold())
+        .title_bottom(Line::from(" n add  e floor  d delete  space on/off  esc ").fg(c(SUBTEXT0)).right_aligned());
+    let mut lines = Vec::new();
+    if watches.is_empty() {
+        lines.push(Line::from(Span::from("  nothing watched yet").fg(c(SUBTEXT0))));
+    }
+    for (i, watch) in watches.iter().enumerate() {
+        let selected = i == cursor;
+        let (state_label, state_colour) = if watch.enabled { ("on ", GREEN) } else { ("off", SUBTEXT0) };
+        let label_style = match (selected, watch.enabled) {
+            (true, _) => Style::new().fg(c(ACCENT)).bold(),
+            (false, true) => Style::new(),
+            (false, false) => Style::new().fg(c(SUBTEXT0)),
+        };
+        let builtin = if watch.builtin { " · built-in" } else { "" };
+        lines.push(Line::from(vec![
+            Span::from(if selected { "› " } else { "  " }).fg(c(ACCENT)),
+            Span::from(format!("{state_label}  ")).fg(c(state_colour)),
+            Span::from(format!("{:<22}", truncate(&watch.label, 22))).style(label_style),
+            Span::from(format!("{:<11}", watch.kind)).fg(c(SUBTEXT0)),
+            Span::from(format!("{:<10}", truncate(&watch.value, 10))).fg(c(SUBTEXT0)),
+            Span::from(format!("{}{builtin}", slack::watch_scope(watch))).fg(c(SUBTEXT0)),
+        ]));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(
+        Span::from("n: type @handle, #channel or a word · usergroups and channels autocomplete from Slack").fg(c(SUBTEXT0)),
+    ));
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `n` in Watches: the query, what kind of watch it makes, and the completions it matches.
+fn render_slack_watch_add(frame: &mut Frame, app: &App, query: &str, cursor: usize) {
+    const VISIBLE_ROWS: usize = 8;
+    let area = centered(frame.area(), 70.min(frame.area().width.saturating_sub(2)), VISIBLE_ROWS as u16 + 6);
+    frame.render_widget(Clear, area);
+    let (kind, text) = slack::watch_kind_of(query);
+    let matches = app.slack_watch_matches(query);
+    let cursor = cursor.min(matches.len().saturating_sub(1));
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(" add a watch ").bold());
+    let what = match kind {
+        "usergroup" => "a user group: mentions of it count as mentions of you",
+        "channel" => "a channel: every message in it, as FYI",
+        _ if text.is_empty() => "@handle, #channel, or a word to watch for",
+        _ => "a keyword, matched case-insensitively everywhere",
+    };
+    let mut lines = vec![
+        Line::from(vec![Span::from(" watch: ").fg(c(ACCENT)).bold(), Span::from(format!("{query}▏"))]),
+        Line::from(Span::from(format!(" {what}")).fg(c(SUBTEXT0))),
+        Line::default(),
+    ];
+    if kind == "keyword" {
+        if !text.is_empty() {
+            lines.push(Line::from(vec![Span::from("▌ ").fg(c(ACCENT)), Span::from(text.to_string()).fg(c(ACCENT)).bold()]));
+        }
+    } else if matches.is_empty() {
+        lines.push(Line::from(Span::from(if app.slack_catalog_loading() { "  loading…" } else { "  no matches" }).fg(c(SUBTEXT0))));
+    } else {
+        let start = cursor.saturating_sub(VISIBLE_ROWS / 2).min(matches.len().saturating_sub(VISIBLE_ROWS));
+        for (i, option) in matches.iter().enumerate().skip(start).take(VISIBLE_ROWS) {
+            let selected = i == cursor;
+            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            lines.push(Line::from(vec![
+                Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+                Span::from(format!("{:<28}", option.label)).style(style),
+                Span::from(option.id.clone()).fg(c(SUBTEXT0)),
+            ]));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `s`: how long the item sleeps.
+fn render_slack_snooze(frame: &mut Frame, cursor: usize) {
+    let area = centered(frame.area(), 36, slack::SNOOZE_OPTIONS.len() as u16 + 4);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(" snooze until ").bold());
+    let lines: Vec<Line> = slack::SNOOZE_OPTIONS
+        .iter()
+        .enumerate()
+        .map(|(i, option)| {
+            let selected = i == cursor;
+            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            Line::from(vec![
+                Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+                Span::from(format!("{}  ", i + 1)).fg(c(SUBTEXT0)),
+                Span::from(*option).style(style),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `t`: the ticket about to be made, with the title and repo it gets.
+fn render_slack_task(frame: &mut Frame, app: &App, id: &str, title: &str, repo: Option<&str>) {
+    let width = 80.min(frame.area().width.saturating_sub(2));
+    let area = centered(frame.area(), width, 8);
+    frame.render_widget(Clear, area);
+    let channel = app.slack_item(id).map(SlackItem::channel_label).unwrap_or_default();
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" ticket from {channel}? ")).bold());
+    let field = |name: &str, text: String| Line::from(vec![Span::from(format!("{name:<7}")).fg(c(SUBTEXT0)), Span::from(text)]);
+    let lines = vec![
+        field("title", title.to_string()),
+        field("repo", repo.map_or("none guessed; you pick one right after".to_string(), str::to_string)),
+        Line::from(Span::from("the message and its thread become the description; the ticket links back").fg(c(SUBTEXT0))),
+        Line::default(),
+        Line::from(vec![
+            Span::from(" y ").fg(c(BASE)).bg(c(ACCENT)),
+            Span::from(" create  ").fg(c(SUBTEXT0)),
+            Span::from(" n ").fg(c(BASE)).bg(c(ACCENT)),
+            Span::from(" cancel").fg(c(SUBTEXT0)),
+        ]),
+    ];
+    frame.render_widget(Paragraph::new(lines).block(block).wrap(Wrap { trim: false }), area);
+}
+
+/// The Floor's Slack block: items and replies by priority over 7d / 30d, how many of the 7d
+/// replies came inside their SLA (count and share), how long a reply took (7d), the share
+/// answered within an hour, and the SLA targets in force.
+fn slack_metric_lines(d7: &SlackMetrics, d30: &SlackMetrics, head_style: Style, label_style: Style) -> Vec<Line<'static>> {
+    let pair = |a: u64, b: u64| format!("{a} / {b}");
+    let seconds = |v: Option<f64>| fmt_ms(v.map(|s| s * 1000.0));
+    let mut out = vec![Line::from(
+        Span::from(format!(" {:<14}{:>8}{:>8}{:>12}{:>16}", "Slack · 7d / 30d", "items", "replied", "within SLA", "median / p90")).style(head_style),
+    )];
+    for p in SLACK_PRIORITIES {
+        let stats = d7.time_to_reply.get(p);
+        let (within, share) = d7.within_sla_of(p);
+        out.push(Line::from(vec![
+            Span::from(format!(" {p:<14}")).style(priority_style(Some(p))),
+            Span::from(format!(
+                "{:>8}{:>8}{:>12}{:>16}",
+                pair(d7.items.get(p).copied().unwrap_or(0), d30.items.get(p).copied().unwrap_or(0)),
+                pair(d7.replied.get(p).copied().unwrap_or(0), d30.replied.get(p).copied().unwrap_or(0)),
+                format!("{within} · {}", fmt_pct(share)),
+                format!("{} / {}", seconds(stats.and_then(|s| s.median)), seconds(stats.and_then(|s| s.p90))),
+            )),
+        ]));
+    }
+    out.push(Line::from(vec![
+        Span::from(format!(" {:<14}", "within 1h")).style(label_style),
+        Span::from(format!("{:>8}{:>8}", fmt_pct(d7.within_hour_rate()), fmt_pct(d30.within_hour_rate()))),
+        Span::from(format!("{:>28}", format!("{} / {} items", d7.total_items(), d30.total_items()))).style(label_style),
+    ]));
+    out.push(Line::from(vec![
+        Span::from(format!(" {:<14}", "SLA targets")).style(label_style),
+        Span::from(format!("{} (P0/P1/P2/P3)", sla_targets(&d7.sla))).style(label_style),
+    ]));
+    out
+}
+
 /// The Digest: what changed since the board was last open, by group, newest first.
 fn render_digest(frame: &mut Frame, area: Rect, app: &App, digest: &DigestState) {
     let now = now_secs();
@@ -1203,16 +1785,6 @@ fn render_digest(frame: &mut Frame, area: Rect, app: &App, digest: &DigestState)
         lines.push(Line::from(line));
     }
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// `3h`, `2d`: a duration in seconds, in the largest unit that fits.
-fn age_secs(secs: u64) -> String {
-    match secs {
-        s if s < 60 => format!("{s}s"),
-        s if s < 3600 => format!("{}m", s / 60),
-        s if s < 86_400 => format!("{}h", s / 3600),
-        s => format!("{}d", s / 86_400),
-    }
 }
 
 /// A small centered box with one line of text, for a yes/no that has no single ticket.
@@ -1269,6 +1841,18 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
     };
     let which = if floor.d7.is_some() { "7d" } else { "30d" };
     let stages = stage_rows(window);
+    // The Slack block takes the bottom of the stage area when there is one and it fits.
+    let slack_lines = floor.slack.as_ref().map(|(d7, d30)| slack_metric_lines(d7, d30, head_style, label_style)).unwrap_or_default();
+    let slack_height = slack_lines.len() as u16 + 1;
+    let [stage_area, slack_area] = if !slack_lines.is_empty() && stage_area.height >= slack_height + 4 {
+        Layout::vertical([Constraint::Min(0), Constraint::Length(slack_height)]).areas(stage_area)
+    } else {
+        Layout::vertical([Constraint::Min(0), Constraint::Length(0)]).areas(stage_area)
+    };
+    if slack_area.height > 0 {
+        let [_, slack_body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(slack_area);
+        frame.render_widget(Paragraph::new(slack_lines), slack_body);
+    }
     let room = (stage_area.height as usize).saturating_sub(1);
     let mut out = vec![Line::from(
         Span::from(format!(" {:<14}{:>5}{:>8}{:>8}{:>9}", format!("stage · {which}"), "runs", "median", "p90", "cost"))
@@ -1657,7 +2241,7 @@ mod tests {
         text.lines().enumerate().find_map(|(row, line)| line.find(needle).map(|col| (row, col)))
     }
 
-    fn floor() -> FloorState {
+    pub(super) fn floor() -> FloorState {
         let json = r#"{"since":"2026-10-16T00:00:00.000Z","until":"2026-10-23T00:00:00.000Z",
           "tasks":{"created":9,"closed":6,"open":3,"waitingOnYou":1,"running":1,"queued":0},
           "cycleTimeMs":{"task":{"median":5400000,"p90":null},"perStage":{
@@ -2115,6 +2699,202 @@ mod pr_tests {
 }
 
 #[cfg(test)]
+mod slack_render_tests {
+    use ratatui::{Terminal, backend::TestBackend};
+
+    use super::*;
+    use crate::client::Machine;
+    use crate::model::{SlackMetrics, SlackSnapshot, unix_secs};
+    use crate::slack::{WatchesState, fixtures::snapshot};
+
+    fn app_with(snapshot: SlackSnapshot) -> App {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.clear();
+        app.slack_snapshot = snapshot;
+        app.slack = Some(SlackState::default());
+        app.online = true;
+        app.toast = None;
+        app
+    }
+
+    fn render(width: u16, height: u16, app: &App) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|f| draw(f, app)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..height)
+            .map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_wide_view_is_a_strip_a_list_and_a_pane_and_the_narrow_one_shortens_the_strip() {
+        let mut snapshot = snapshot();
+        snapshot.items[0].count = 3;
+        let app = app_with(snapshot);
+        let text = render(120, 40, &app);
+        assert!(text.contains("Needs reply 1") && text.contains("Waiting on them 0") && text.contains("FYI 1") && text.contains("Done 0"), "{text}");
+        assert!(text.contains("polled") && text.contains("⚡") && text.contains("live") && text.contains("[slack]"), "{text}");
+        let row = text.lines().find(|l| l.contains("approve rollback") && l.contains("@marta")).unwrap_or_default().to_string();
+        assert!(row.starts_with("│▌ P0 ▌#payments-oncall"), "selected, the priority, the channel bar then the name: {row}");
+        assert!(row.contains("approve rollback ×3") && row.contains("⎇"), "a collapsed thread says how many, a thread wears its tag: {row}");
+        assert!(!row.contains("checkout is returning"), "the message text stays in the pane: {row}");
+        assert!(text.contains("#payments-oncall · @marta") && text.contains("· thread") && text.contains("(3 replies) · 3 messages"), "{text}");
+        assert!(text.contains("@joão  I can run the rollback"), "the context, muted: {text}");
+        assert!(text.contains("P0 · blocker · reply expected"), "{text}");
+        assert!(text.contains("why      production incident"), "{text}");
+        assert!(text.contains("acme/app#212 (ci failed) · INC-4411"), "the linked PR's split and the refs: {text}");
+        assert!(text.contains("draft    Approve the rollback"), "{text}");
+        assert!(text.contains("r  reply     ready") && text.contains("n  nudge     off: only while waiting on them"), "{text}");
+        assert!(text.contains("off: already P0"), "{text}");
+
+        let text = render(80, 30, &app);
+        assert!(text.contains("Reply 1") && text.contains("Wait 0") && text.contains("Snz 0"), "short labels under 100 columns: {text}");
+        assert!(!text.contains("Waiting on them"), "the strip drops the long labels; the list keeps its title: {text}");
+        assert!(!text.contains("· @marta ·"), "no pane under 100 columns: {text}");
+        let row = text.lines().find(|l| l.contains("approve rollback")).unwrap_or_default().to_string();
+        assert!(row.contains("P0") && row.contains("#payments-oncall") && row.contains("@marta"), "{row}");
+        assert!(!text.contains("\u{2588}"), "nothing overflows: {text}");
+    }
+
+    #[test]
+    fn a_reopened_item_a_socket_outage_and_an_error_all_show() {
+        let mut broken = snapshot();
+        broken.items[0].reopened_at = Some("2026-10-28T10:00:00Z".into());
+        broken.items[0].linked.task_id = Some("abcdef123456".into());
+        broken.socket = "disconnected".into();
+        broken.error = Some("rate limited".into());
+        let app = app_with(broken);
+        let text = render(120, 40, &app);
+        assert!(text.contains("⚡") && text.contains("socket down") && text.contains("⚠ rate limited"), "{text}");
+        assert!(text.contains("new since you cleared it"), "{text}");
+        let row = text.lines().find(|l| l.contains("approve rollback")).unwrap_or_default().to_string();
+        assert!(row.contains("↺⚙"), "reopened and already a ticket: {row}");
+        assert!(text.contains("off: already a ticket") && text.contains("ticket   #abcdef12"), "{text}");
+        let mut off = app_with(snapshot());
+        off.slack_snapshot.socket = "off".into();
+        assert!(!render(120, 40, &off).contains("⚡"), "no socket indicator without an app token");
+    }
+
+    #[test]
+    fn an_overdue_item_is_red_with_its_tag_leads_its_split_and_is_counted_on_the_strip() {
+        let now = unix_secs("2026-10-28T10:00:00Z").unwrap();
+        let app = app_with(snapshot());
+        let text = render(120, 40, &app);
+        assert!(text.contains("‼ 1 overdue"), "the strip counts the overdue Decide item: {text}");
+        let row = text.lines().find(|l| l.contains("approve rollback")).unwrap_or_default().to_string();
+        assert!(!row.contains('‼'), "the P0 in Needs reply is due, not overdue: {row}");
+        assert!(text.contains("due      in") || text.contains("due      overdue"), "the pane says when the reply is due: {text}");
+
+        let mut app = app;
+        app.slack.as_mut().unwrap().split = SlackSplit::Decide;
+        app.slack.as_mut().unwrap().cursor = 0;
+        let text = render(120, 40, &app);
+        let row = text.lines().find(|l| l.contains("approve rollback") && l.contains("@marta")).unwrap_or_default().to_string();
+        assert!(row.contains("‼⎇"), "the overdue tag leads the thread's: {row}");
+        assert!(row.contains("P2 ▌#payments-oncall"), "the priority cell keeps its own text: {row}");
+        assert!(text.contains("due      overdue") && text.contains("(P2 · 1h SLA)"), "{text}");
+
+        let items = &app.slack_snapshot.items;
+        let late = slack_row(&items[2], false, 110, now);
+        let red: Vec<&Span> = late.spans.iter().filter(|s| s.style.fg == Some(c(RED))).collect();
+        assert!(red.iter().any(|s| s.content.contains("approve rollback")), "the summary is red: {late:?}");
+        assert!(red.iter().any(|s| s.content.contains("2h")), "the age is red: {late:?}");
+        assert!(red.iter().any(|s| s.content.contains('‼')), "the tag is red: {late:?}");
+        assert!(late.spans.iter().any(|s| s.content.starts_with("P2") && s.style.fg != Some(c(RED))), "the prio cell keeps its colour: {late:?}");
+        let soon = slack_row(&items[0], false, 110, now - 180);
+        assert!(soon.spans.iter().any(|s| s.content.contains("9m") && s.style.fg == Some(c(YELLOW))), "due in a minute, the age is yellow: {soon:?}");
+        let calm = slack_row(&items[0], false, 110, now - 600);
+        assert!(calm.spans.iter().any(|s| s.content.contains("2m") && s.style.fg == Some(c(SUBTEXT0))), "eight minutes out it is plain: {calm:?}");
+        assert_eq!(slack_tag(&items[0]).chars().count(), 2);
+        assert_eq!(slack_tag(&items[2]).chars().count(), 3);
+
+        let lines = slack_detail_lines(&items[0], 600, now - 300);
+        let due = lines.iter().find(|l| l.to_string().starts_with("due")).map(|l| l.to_string()).unwrap_or_default();
+        assert_eq!(due, "due      due in 3m (P0 · 10m SLA)");
+        let lines = slack_detail_lines(&items[2], 3600, now);
+        let due = lines.iter().find(|l| l.to_string().starts_with("due")).map(|l| l.to_string()).unwrap_or_default();
+        assert_eq!(due, "due      overdue 1h (P2 · 1h SLA)");
+        let lines = slack_detail_lines(&items[2], 0, now);
+        assert!(lines.iter().any(|l| l.to_string() == "due      overdue 1h (P2)"), "no SLA figure when the machine has none");
+        let lines = slack_detail_lines(&items[1], 3600, now);
+        assert!(!lines.iter().any(|l| l.to_string().starts_with("due")), "nothing due, no line");
+
+        let mut none = app_with(snapshot());
+        none.slack_snapshot.items[2].overdue = false;
+        let strip = render(120, 40, &none).lines().next().unwrap_or_default().to_string();
+        assert!(!strip.contains('‼'), "no count at zero: {strip}");
+    }
+
+    #[test]
+    fn the_popups_draw_over_the_view() {
+        let mut app = app_with(snapshot());
+        app.slack.as_mut().unwrap().watches = Some(WatchesState { cursor: 1 });
+        let text = render(120, 40, &app);
+        assert!(text.contains(" Watches "), "{text}");
+        assert!(text.contains("@platform-team") && text.contains("usergroup") && text.contains("S04ABCD") && text.contains("as mention"), "{text}");
+        let here = text.lines().find(|l| l.contains("@here")).unwrap_or_default().to_string();
+        assert!(here.contains("› on") && here.contains("broadcast") && here.contains("P2 · built-in"), "{here}");
+        assert!(text.contains("n add  e floor  d delete  space on/off  esc"), "{text}");
+        app.slack.as_mut().unwrap().watches = None;
+
+        app.mode = Mode::SlackReply { id: "C0123:1730112345.0001".into(), area: TextArea::new(vec!["Approve the rollback, I'm on it.".into()]), vim: crate::vim::Vim::new(), nudge: false };
+        let text = render(120, 40, &app);
+        assert!(text.contains(" reply · #payments-oncall · thread with @marta "), "{text}");
+        assert!(text.contains("ctrl+s send  esc back") && text.contains(" NORMAL "), "{text}");
+        assert!(text.contains("─ context ─") && text.contains("@marta   checkout is returning 500s") && text.contains("@joão"), "{text}");
+        assert!(text.contains("Approve the rollback, I'm on it."), "{text}");
+
+        app.mode = Mode::SlackSnooze { id: "C0123:1730112345.0001".into(), cursor: 2 };
+        let text = render(120, 40, &app);
+        assert!(text.contains(" snooze until ") && text.contains("▌ 3  tomorrow 9:00") && text.contains("next Monday 9:00"), "{text}");
+
+        app.mode = Mode::SlackTask { id: "C0123:1730112345.0001".into(), title: "approve rollback".into(), repo: None };
+        let text = render(120, 40, &app);
+        assert!(text.contains(" ticket from #payments-oncall? ") && text.contains("title  approve rollback") && text.contains("none guessed"), "{text}");
+
+        app.mode = Mode::SlackWatchAdd { query: "@pl".into(), cursor: 0 };
+        let text = render(120, 40, &app);
+        assert!(text.contains(" add a watch ") && text.contains("@pl▏") && text.contains("a user group") && text.contains("loading…"), "{text}");
+        app.mode = Mode::SlackWatchAdd { query: "luna-tui".into(), cursor: 0 };
+        assert!(render(120, 40, &app).contains("a keyword"));
+
+        app.mode = Mode::SlackActions { cursor: 0 };
+        let text = render(80, 40, &app);
+        assert!(text.contains("reply: edit the draft") && text.contains("↳ only while waiting on them"), "{text}");
+        assert!(text.contains("checkout is returning 500s since the 14:02"), "the menu carries the item under 100 columns: {text}");
+    }
+
+    #[test]
+    fn the_floor_gains_a_slack_block_when_the_metrics_came() {
+        let metrics: SlackMetrics = serde_json::from_str(
+            r#"{"since":"2026-10-21T00:00:00.000Z","items":{"P0":1,"P1":4,"P2":10,"P3":20},"replied":{"P0":1,"P1":3,"P2":2,"P3":0},
+            "withinHour":3,"withinSla":{"P0":1,"P1":2,"P2":0,"P3":0},"sla":{"P0":600,"P1":1800,"P2":3600,"P3":3600},
+            "timeToReply":{"P0":{"median":600,"p90":600},"P1":{"median":3600,"p90":7200},"P2":{"median":null,"p90":null},"P3":{"median":null,"p90":null}},"byDay":[]}"#,
+        )
+        .unwrap();
+        let mut floor = super::tests::floor();
+        floor.slack = Some((metrics.clone(), metrics));
+        let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+        terminal.draw(|f| render_floor(f, f.area(), &floor)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let text: String = (0..40).map(|y| (0..140).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>() + "\n").collect();
+        assert!(text.contains("Slack · 7d / 30d") && text.contains("within SLA") && text.contains("median / p90"), "{text}");
+        let p1 = text.lines().find(|l| l.trim_start().starts_with("P1")).unwrap_or_default().to_string();
+        assert!(p1.contains("4 / 4") && p1.contains("3 / 3") && p1.contains("2 · 67%") && p1.contains("1h / 2h"), "{p1}");
+        let p3 = text.lines().find(|l| l.trim_start().starts_with("P3")).unwrap_or_default().to_string();
+        assert!(p3.contains("0 · –"), "nothing replied, no share: {p3}");
+        assert!(text.contains("within 1h") && text.contains("50%"), "{text}");
+        assert!(text.contains("SLA targets") && text.contains("10m/30m/1h/1h (P0/P1/P2/P3)"), "{text}");
+        floor.slack = None;
+        terminal.draw(|f| render_floor(f, f.area(), &floor)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let text: String = (0..40).map(|y| (0..140).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect();
+        assert!(!text.contains("Slack ·"), "nothing without the metrics");
+    }
+}
+
+#[cfg(test)]
 mod help_sheet_tests {
     use ratatui::{
         Terminal,
@@ -2124,7 +2904,7 @@ mod help_sheet_tests {
 
     use super::*;
 
-    const VIEWS: [HelpFor; 6] = [HelpFor::Board, HelpFor::Floor, HelpFor::Inbox, HelpFor::Digest, HelpFor::Detail, HelpFor::Pulls];
+    const VIEWS: [HelpFor; 7] = [HelpFor::Board, HelpFor::Floor, HelpFor::Inbox, HelpFor::Digest, HelpFor::Detail, HelpFor::Pulls, HelpFor::Slack];
 
     fn cells(terminal: &Terminal<TestBackend>) -> Vec<Vec<char>> {
         let buffer = terminal.backend().buffer().clone();

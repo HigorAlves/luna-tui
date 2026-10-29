@@ -23,13 +23,15 @@ use crate::inbox::{self, InboxState, Split};
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
+use crate::slack::{self, SlackKey, SlackSplit, SlackState, WatchesState};
 use crate::{
     client::{Incoming, Machine},
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, parse_answers,
-        parse_cases, parse_plan, parse_ticket, plan_edit_of, plan_markdown, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
+        COLUMNS, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, StreamMessage, Task,
+        TaskDetail, TaskDiff, TicketText, answers_markdown, iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of, plan_markdown,
+        priority_step, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
     store,
     vim::Vim,
@@ -44,6 +46,30 @@ fn opener_command(url: &str) -> (&'static str, Vec<String>) {
         "xdg-open"
     };
     (program, vec![url.to_string()])
+}
+
+/// The local zone's seconds east of UTC, from `date +%z` (`+0100` → 3600); 0 when it cannot
+/// be read. Snooze times are typed as local 9:00 and sent as UTC.
+fn local_offset_secs() -> i64 {
+    let out = Command::new("date").arg("+%z").output().ok();
+    let text = out.and_then(|o| String::from_utf8(o.stdout).ok()).unwrap_or_default();
+    parse_offset(text.trim()).unwrap_or(0)
+}
+
+/// `+0100` → 3600, `-0330` → -12600.
+fn parse_offset(text: &str) -> Option<i64> {
+    let (sign, digits) = text.split_at_checked(1)?;
+    let sign = match sign {
+        "+" => 1,
+        "-" => -1,
+        _ => return None,
+    };
+    if digits.len() != 4 {
+        return None;
+    }
+    let hours: i64 = digits[..2].parse().ok()?;
+    let minutes: i64 = digits[2..].parse().ok()?;
+    Some(sign * (hours * 3600 + minutes * 60))
 }
 
 /// Where a section's cursor starts: Runs and Evidence on their latest row (`usize::MAX`
@@ -85,6 +111,7 @@ pub enum HelpFor {
     Digest,
     Detail,
     Pulls,
+    Slack,
 }
 
 impl HelpFor {
@@ -96,6 +123,7 @@ impl HelpFor {
             HelpFor::Digest => " Digest keys · any key closes ",
             HelpFor::Detail => " Ticket keys · any key closes ",
             HelpFor::Pulls => " Pulls keys · any key closes ",
+            HelpFor::Slack => " Slack keys · any key closes ",
         }
     }
 
@@ -109,6 +137,7 @@ impl HelpFor {
             HelpFor::Digest => DIGEST_HELP,
             HelpFor::Detail => DETAIL_HELP,
             HelpFor::Pulls => PULLS_HELP,
+            HelpFor::Slack => SLACK_HELP,
         }
     }
 
@@ -121,6 +150,7 @@ impl HelpFor {
             HelpFor::Digest => DIGEST_SECTIONS,
             HelpFor::Detail => DETAIL_SECTIONS,
             HelpFor::Pulls => PULLS_SECTIONS,
+            HelpFor::Slack => SLACK_SECTIONS,
         }
     }
 }
@@ -155,7 +185,6 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
             ("e", "edit title, description and criteria in place (ctrl+s saves)"),
             ("R", "search for its repo under HARDNESS_REPOS_DIR / ~/Developer"),
             ("a", "advance: start, approve, answer triage in place (ctrl+s sends), retry an escalation, resume"),
-            ("S", "ship: approve the Ship gate and open the PR (same as a there)"),
             ("A", "memory review: approve without applying the proposed rules"),
             ("r", "send the plan or tests back, with a reason"),
             ("X", "abort the running stage (asks first)"),
@@ -184,6 +213,7 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
             ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
             ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
             ("P", "Pulls: every open PR involving you, split by what you do; m merges, c/v/t dispatch an agent"),
+            ("S", "Slack: your mentions, DMs and watched handles, triaged and split by what you do; r replies, t makes a ticket"),
         ],
     ),
     section(
@@ -196,7 +226,7 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
     section(
         "App",
         &[
-            (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs"),
+            (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs, slack"),
             ("esc", "clear the filter"),
             ("?", "this help"),
             ("q", "quit"),
@@ -215,7 +245,7 @@ pub const BOARD_SECTIONS: &[HelpSection] = &[
             ("setup <repo>", "propose the repo's luna.yaml (a name under HARDNESS_REPOS_DIR, or a path)"),
             ("slots <n>", "resize the pool"),
             ("drain / resume", "take no new work / carry on"),
-            ("floor / inbox / digest / prs", "open that view"),
+            ("floor / inbox / digest / prs / slack", "open that view"),
             ("help", "this sheet"),
         ],
     ),
@@ -284,6 +314,45 @@ pub const PULLS_SECTIONS: &[HelpSection] = &[
     section("Other", &[("R", "poll GitHub now"), ("esc", "close")]),
 ];
 
+pub const SLACK_SECTIONS: &[HelpSection] = &[
+    section(
+        "Move",
+        &[
+            ("j / k", "previous / next item"),
+            ("h / l", "previous / next split (1-6 jump)"),
+            ("enter", "jump to its ticket on the board, else open the message in Slack"),
+            ("o", "open the message in Slack"),
+        ],
+    ),
+    section(
+        "Act",
+        &[
+            ("r", "reply: edit the drafted answer, ctrl+s posts it as you in the thread"),
+            ("t", "ticket: a Backlog task from the message and its thread, after a yes"),
+            ("d", "done: clear it; it comes back, re-triaged, if the thread moves"),
+            ("s", "snooze: 1h, 3h, tomorrow 9:00 or next Monday 9:00"),
+            ("n", "nudge: a one-line reminder in a thread you are waiting on"),
+            ("! / -", "priority up / down one step; re-triage keeps your value"),
+            ("x", "the same actions as a menu, with why a key is off"),
+        ],
+    ),
+    section(
+        "Watches",
+        &[
+            ("W", "the handles, broadcasts, keywords and channels the inbox treats as you"),
+            ("n / d / space / e", "in Watches: add (@handle, #channel or a word), delete, on / off, priority floor"),
+        ],
+    ),
+    section(
+        "Other",
+        &[
+            ("‼ red row", "overdue: past its reply SLA (rules file `## SLA`); sorted first, counted on the badge"),
+            ("R", "poll Slack now"),
+            ("esc", "close"),
+        ],
+    ),
+];
+
 pub const DETAIL_SECTIONS: &[HelpSection] = &[
     section(
         "Read",
@@ -344,6 +413,26 @@ pub const PULLS_HELP: &[(&str, &str)] = &[
 ];
 
 #[cfg(test)]
+pub const SLACK_HELP: &[(&str, &str)] = &[
+    ("j / k", "previous / next item"),
+    ("h / l", "previous / next split (1-6 jump)"),
+    ("enter", "jump to its ticket on the board, else open the message in Slack"),
+    ("o", "open the message in Slack"),
+    ("r", "reply: edit the drafted answer, ctrl+s posts it as you in the thread"),
+    ("t", "ticket: a Backlog task from the message and its thread, after a yes"),
+    ("d", "done: clear it; it comes back, re-triaged, if the thread moves"),
+    ("s", "snooze: 1h, 3h, tomorrow 9:00 or next Monday 9:00"),
+    ("n", "nudge: a one-line reminder in a thread you are waiting on"),
+    ("! / -", "priority up / down one step; re-triage keeps your value"),
+    ("x", "the same actions as a menu, with why a key is off"),
+    ("W", "the handles, broadcasts, keywords and channels the inbox treats as you"),
+    ("n / d / space / e", "in Watches: add (@handle, #channel or a word), delete, on / off, priority floor"),
+    ("‼ red row", "overdue: past its reply SLA (rules file `## SLA`); sorted first, counted on the badge"),
+    ("R", "poll Slack now"),
+    ("esc", "close"),
+];
+
+#[cfg(test)]
 pub const DIGEST_HELP: &[(&str, &str)] = &[
     ("j / k", "previous / next entry"),
     ("enter", "jump to the ticket"),
@@ -380,7 +469,7 @@ pub const COMMANDS: &[(&str, &str)] = &[
     ("setup <repo>", "propose the repo's luna.yaml (a name under HARDNESS_REPOS_DIR, or a path)"),
     ("slots <n>", "resize the pool"),
     ("drain / resume", "take no new work / carry on"),
-    ("floor / inbox / digest / prs", "open that view"),
+    ("floor / inbox / digest / prs / slack", "open that view"),
     ("help", "this sheet"),
 ];
 
@@ -397,7 +486,6 @@ pub const HELP: &[(&str, &str)] = &[
     ("e", "edit title, description and criteria in place (ctrl+s saves)"),
     ("R", "search for its repo under HARDNESS_REPOS_DIR / ~/Developer"),
     ("a", "advance: start, approve, answer triage in place (ctrl+s sends), retry an escalation, resume"),
-    ("S", "ship: approve the Ship gate and open the PR (same as a there)"),
     ("A", "memory review: approve without applying the proposed rules"),
     ("r", "send the plan or tests back, with a reason"),
     ("X", "abort the running stage (asks first)"),
@@ -416,9 +504,10 @@ pub const HELP: &[(&str, &str)] = &[
     ("I", "Inbox: what needs you, split by why; a/r/e act in place, A approves the split, enter opens"),
     ("D", "Digest: what changed since you last had the board open; enter jumps, o opens the PR"),
     ("P", "Pulls: every open PR involving you, split by what you do; m merges, c/v/t dispatch an agent"),
+    ("S", "Slack: your mentions, DMs and watched handles, triaged and split by what you do; r replies, t makes a ticket"),
     ("v / V", "mark the ticket / the column; a, X, d, w then act on the marked set"),
     ("x", "actions for the selected ticket (P resumes every paused one)"),
-    (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs"),
+    (":", "command palette: q, new, filter, repo, open, group, fold, setup, slots, drain, floor, inbox, digest, prs, slack"),
     ("esc", "clear the filter"),
     ("?", "this help"),
     ("q", "quit"),
@@ -434,6 +523,8 @@ pub struct FloorState {
     pub repos: Vec<RepoMetrics>,
     /// 0 is every repo; `i` is `repos[i - 1]`, and the numbers above are that repo's.
     pub cursor: usize,
+    /// How fast you answer on Slack, 7d and 30d; None until both fetches succeed.
+    pub slack: Option<(SlackMetrics, SlackMetrics)>,
 }
 
 impl FloorState {
@@ -625,6 +716,22 @@ pub enum Mode {
     },
     /// `x` in the PR view: the keys for the selected PR, each with why it is off when it is.
     PrActions { cursor: usize },
+    /// `s` on a Slack item: pick how long it sleeps.
+    SlackSnooze { id: String, cursor: usize },
+    /// `r` (or `n`) on a Slack item: the reply, pre-filled with triage's draft (or a nudge);
+    /// ctrl+s posts it as you. `nudge`: the machine prefixes a mention of the author.
+    SlackReply {
+        id: String,
+        area: TextArea<'static>,
+        vim: Vim,
+        nudge: bool,
+    },
+    /// `t` on a Slack item: one yes, then a Backlog ticket with `title`, in `repo` when guessed.
+    SlackTask { id: String, title: String, repo: Option<String> },
+    /// `n` in Watches: type `@handle`, `#channel` or a word; the first two complete from Slack.
+    SlackWatchAdd { query: String, cursor: usize },
+    /// `x` in the Slack view: the keys for the selected item, each with why it is off when it is.
+    SlackActions { cursor: usize },
     Help(HelpFor),
 }
 
@@ -703,6 +810,14 @@ pub struct App {
     pub pulls: Option<PullsState>,
     /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
     pending_dispatch: Option<(String, PrAction)>,
+    /// The Slack inbox as the machine last sent it; empty until the first `slack.items` event.
+    pub slack_snapshot: SlackSnapshot,
+    /// The Slack view, open while this is `Some`.
+    pub slack: Option<SlackState>,
+    /// The watch picker's completions (user groups, channels), fetched once per session, off the UI thread.
+    slack_catalog: Option<(Vec<SlackOption>, Vec<SlackOption>)>,
+    /// A catalogue fetch is in flight; the picker says "loading…" meanwhile.
+    slack_catalog_pending: bool,
     /// Tickets marked with `v`/`V`: `a`, `X`, `d`, `w` act on all of them.
     pub marked: BTreeSet<String>,
     /// The stage pool as `/health` last reported it; None until the first answer.
@@ -783,6 +898,10 @@ impl App {
             prs: PrSnapshot::default(),
             pulls: None,
             pending_dispatch: None,
+            slack_snapshot: SlackSnapshot::default(),
+            slack: None,
+            slack_catalog: None,
+            slack_catalog_pending: false,
             marked: BTreeSet::new(),
             slots: None,
             digest: None,
@@ -955,8 +1074,98 @@ impl App {
                     self.notify(format!("budget: {line}"), alert.pct >= 100);
                 }
                 Incoming::Message(StreamMessage::Prs { snapshot }) => self.take_prs(snapshot),
+                Incoming::Message(StreamMessage::Slack { snapshot }) => self.take_slack(snapshot),
+                Incoming::SlackCatalog { groups, channels } => {
+                    self.slack_catalog = Some((groups, channels));
+                    self.slack_catalog_pending = false;
+                }
             }
         }
+    }
+
+    /// A fresh Slack snapshot: notices for the P0/P1 items that moved into Needs reply or
+    /// Decide, for items that went past their reply SLA and for threads that came back after
+    /// you cleared them (a P0's only, inside the rules file's quiet hours); the view's cursors
+    /// kept inside their lists.
+    fn take_slack(&mut self, snapshot: SlackSnapshot) {
+        let before: std::collections::HashMap<&str, (Option<SlackSplit>, Option<&str>, bool)> =
+            self.slack_snapshot.items.iter().map(|i| (i.id.as_str(), (i.split_enum(), i.reopened_at.as_deref(), i.overdue))).collect();
+        let mut notices = Vec::new();
+        for item in &snapshot.items {
+            if notify::muted_by_quiet_hours(snapshot.quiet, item) {
+                continue;
+            }
+            let old = before.get(item.id.as_str());
+            if let Some(notice) = notify::slack_notice(old.and_then(|o| o.0), old.and_then(|o| o.1), old.is_some_and(|o| o.2), item) {
+                notices.push(notice);
+            }
+        }
+        self.notices.extend(notices);
+        self.slack_snapshot = snapshot;
+        self.clamp_slack_cursor();
+    }
+
+    fn clamp_slack_cursor(&mut self) {
+        let items = self.slack.as_ref().map(|s| slack::items(&self.slack_snapshot.items, s.split).len()).unwrap_or(0);
+        let watches = self.slack_snapshot.watches.len();
+        if let Some(state) = self.slack.as_mut() {
+            state.cursor = state.cursor.min(items.saturating_sub(1));
+            if let Some(open) = state.watches.as_mut() {
+                open.cursor = open.cursor.min(watches.saturating_sub(1));
+            }
+        }
+    }
+
+    /// The item under the cursor of the open Slack view.
+    pub fn slack_under_cursor(&self) -> Option<&SlackItem> {
+        let state = self.slack.as_ref()?;
+        let items = slack::items(&self.slack_snapshot.items, state.split);
+        items.get(state.cursor.min(items.len().saturating_sub(1))).map(|&i| &self.slack_snapshot.items[i])
+    }
+
+    pub fn slack_item(&self, id: &str) -> Option<&SlackItem> {
+        self.slack_snapshot.items.iter().find(|i| i.id == id)
+    }
+
+    fn slack_item_mut(&mut self, id: &str) -> Option<&mut SlackItem> {
+        self.slack_snapshot.items.iter_mut().find(|i| i.id == id)
+    }
+
+    /// True while the watch picker's catalogue is still on its way from the machine.
+    pub fn slack_catalog_loading(&self) -> bool {
+        self.slack_catalog.is_none()
+    }
+
+    /// Fetches the user groups and channels the watch picker completes from, off the UI
+    /// thread, once per session: started when the Slack view opens so `n` finds them ready.
+    fn prefetch_slack_catalog(&mut self) {
+        if self.slack_catalog.is_some() || self.slack_catalog_pending {
+            return;
+        }
+        self.slack_catalog_pending = true;
+        let machine = self.machine.clone();
+        let tx = self.tx.clone();
+        thread::spawn(move || {
+            let groups = machine.slack_usergroups().unwrap_or_default();
+            let channels = machine.slack_channels().unwrap_or_default();
+            let _ = tx.send(Incoming::SlackCatalog { groups, channels });
+        });
+    }
+
+    /// The watch picker's completions for `query`: user groups for `@…`, channels for `#…`,
+    /// nothing for a keyword. Case-insensitive, in the machine's order.
+    pub fn slack_watch_matches(&self, query: &str) -> Vec<&SlackOption> {
+        let (kind, text) = slack::watch_kind_of(query);
+        let Some((groups, channels)) = self.slack_catalog.as_ref() else {
+            return Vec::new();
+        };
+        let pool = match kind {
+            "usergroup" => groups,
+            "channel" => channels,
+            _ => return Vec::new(),
+        };
+        let needle = text.to_lowercase();
+        pool.iter().filter(|o| o.label.to_lowercase().contains(&needle) || o.id.to_lowercase() == needle).collect()
     }
 
     /// A fresh PR snapshot: notices for the PRs that moved into a split that needs you, the
@@ -1042,11 +1251,21 @@ impl App {
         std::mem::take(&mut self.notices)
     }
 
-    /// How many tickets wait on you right now: the Board tab's badge.
+    /// How many tickets wait on you right now: the Board tab's badge. On Slack that is every
+    /// P0/P1 in Needs reply or Decide plus every open item past its reply SLA, each once.
     pub fn needs_you_count(&self) -> usize {
         let tickets = self.tasks.iter().filter(|t| matches!(t.look(), Look::NeedsYou | Look::Escalated)).count();
         let prs = self.prs.prs.iter().filter(|p| p.split_enum().is_some_and(PrSplit::needs_me)).count();
-        tickets + prs
+        let slack = self
+            .slack_snapshot
+            .items
+            .iter()
+            .filter(|i| {
+                let split = i.split_enum();
+                (i.urgent() && split.is_some_and(SlackSplit::needs_me)) || (i.overdue && split.is_some_and(SlackSplit::open))
+            })
+            .count();
+        tickets + prs + slack
     }
 
     /// Highlights a ticket. With `follow`, the board also moves to the ticket's column.
@@ -1535,12 +1754,12 @@ impl App {
                     self.notify(format!("no watch tab for #{} yet; it opens when an agent runs", task.short_id()), false);
                 }
             }
-            'o' => match &task.source {
-                Some(source) => {
-                    let (program, args) = opener_command(&source.url);
+            'o' => match task.source.as_ref().and_then(|s| s.link().map(str::to_string)) {
+                Some(url) => {
+                    let (program, args) = opener_command(&url);
                     // Detached: spawn and move on, never wait on the browser.
                     if Command::new(program).args(args).spawn().is_err() {
-                        self.notify(format!("could not open {}", source.url), true);
+                        self.notify(format!("could not open {url}"), true);
                     }
                 }
                 None => self.notify("no issue linked", false),
@@ -1565,6 +1784,9 @@ impl App {
         }
         if self.pulls.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_pulls(key);
+        }
+        if self.slack.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_slack(key);
         }
         match &self.mode {
             Mode::Normal => self.handle_normal(key),
@@ -1591,6 +1813,11 @@ impl App {
             Mode::ConfirmMerge { .. } => self.handle_confirm_merge(key),
             Mode::ClonePrompt { .. } => self.handle_clone_prompt(key),
             Mode::PrActions { .. } => self.handle_pr_actions(key),
+            Mode::SlackSnooze { .. } => self.handle_slack_snooze(key),
+            Mode::SlackReply { .. } => self.handle_slack_reply(key),
+            Mode::SlackTask { .. } => self.handle_slack_task(key),
+            Mode::SlackWatchAdd { .. } => self.handle_slack_watch_add(key),
+            Mode::SlackActions { .. } => self.handle_slack_actions(key),
             Mode::Help(_) => {
                 let scroll = self.help_scroll.get();
                 match key.code {
@@ -1624,9 +1851,12 @@ impl App {
         let d30 = self.machine.metrics_for("30d", repo.as_ref().map(|r| r.as_deref()), false);
         // The rows are the 7d answer's when it covers every repo; one more call otherwise.
         let rows = if focused { Some(self.machine.metrics_for("7d", None, true)) } else { None };
+        // The Slack block is a bonus: a machine without the inbox leaves it out, nothing else changes.
+        let slack = self.machine.slack_metrics("7d").and_then(|d7| self.machine.slack_metrics("30d").map(|d30| (d7, d30))).ok();
         let Some(floor) = self.floor.as_mut() else {
             return;
         };
+        floor.slack = slack;
         match d7 {
             Ok(m) => {
                 if let Some(by_repo) = m.by_repo.clone() {
@@ -1776,7 +2006,7 @@ impl App {
             .detail(id)
             .ok()
             .and_then(|d| d.approvals.iter().find_map(|a| a.requested["prUrl"].as_str().map(String::from)));
-        let issue = self.task(id).and_then(|t| t.source.as_ref().map(|s| s.url.clone()));
+        let issue = self.task(id).and_then(|t| t.source.as_ref().and_then(|s| s.link().map(str::to_string)));
         match pr.or(issue) {
             Some(url) => {
                 let (program, args) = opener_command(&url);
@@ -2068,6 +2298,445 @@ impl App {
         Outcome::Continue
     }
 
+    /// Opens the Slack view, fetching the snapshot when the stream has not sent one yet.
+    fn open_slack(&mut self) {
+        if self.slack_snapshot.polled_at.is_none()
+            && let Ok(snapshot) = self.machine.slack()
+        {
+            self.take_slack(snapshot);
+        }
+        self.slack = Some(SlackState::default());
+        self.prefetch_slack_catalog();
+    }
+
+    /// The Slack view's keys: move, switch split, open, act on the item, Watches, refresh.
+    fn handle_slack(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.slack.clone() else {
+            return Outcome::Continue;
+        };
+        if state.watches.is_some() {
+            return self.handle_slack_watches(key);
+        }
+        let count = slack::items(&self.slack_snapshot.items, state.split).len();
+        let under = self.slack_under_cursor().cloned();
+        let mut next = state.clone();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('S') | KeyCode::Char('q') => {
+                self.slack = None;
+                return Outcome::Continue;
+            }
+            KeyCode::Char('?') => {
+                self.mode = Mode::Help(HelpFor::Slack);
+                return Outcome::Continue;
+            }
+            KeyCode::Char('j') | KeyCode::Down => next.cursor = (state.cursor + 1).min(count.saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => next.cursor = state.cursor.saturating_sub(1),
+            KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => {
+                next.split = state.split.next();
+                next.cursor = 0;
+            }
+            KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => {
+                next.split = state.split.prev();
+                next.cursor = 0;
+            }
+            KeyCode::Char(d @ '1'..='6') => {
+                next.split = SlackSplit::ALL[(d as usize) - ('1' as usize)];
+                next.cursor = 0;
+            }
+            KeyCode::Char('R') => {
+                match self.machine.refresh_slack() {
+                    Ok(snapshot) => {
+                        self.take_slack(snapshot);
+                        self.notify("polled Slack", false);
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('W') => {
+                // The popup edits them, so it opens on the machine's current list, not a stale snapshot.
+                if let Ok(watches) = self.machine.slack_watches() {
+                    self.slack_snapshot.watches = watches;
+                }
+                next.watches = Some(WatchesState::default());
+            }
+            KeyCode::Enter => {
+                if let Some(item) = under {
+                    match item.task_id() {
+                        Some(id) if self.task(id).is_some() => {
+                            let id = id.to_string();
+                            self.slack = None;
+                            self.select(&id, true);
+                            self.open_detail(id);
+                        }
+                        _ => self.open_url(&item.permalink),
+                    }
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('x') => {
+                if under.is_some() {
+                    self.mode = Mode::SlackActions { cursor: 0 };
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char(c) => {
+                if let (Some(item), Some(key)) = (under, SlackKey::from_char(c)) {
+                    self.slack_key(key, &item);
+                }
+                return Outcome::Continue;
+            }
+            _ => {}
+        }
+        self.slack = Some(next);
+        Outcome::Continue
+    }
+
+    /// One of the item keys: the blocker as a toast, else the popup or the call it stands for.
+    fn slack_key(&mut self, key: SlackKey, item: &SlackItem) {
+        if let Some(why) = slack::blocker(item, key) {
+            self.notify(why, false);
+            return;
+        }
+        let id = item.id.clone();
+        match key {
+            SlackKey::Open => self.open_url(&item.permalink),
+            SlackKey::Reply => self.open_slack_reply(item, item.triage.as_ref().and_then(|t| t.draft.clone()).unwrap_or_default(), false),
+            // The mention itself is built on the machine, by id; the editor shows the words only.
+            SlackKey::Nudge => self.open_slack_reply(item, "gentle nudge on this one: any news?".to_string(), true),
+            SlackKey::Snooze => self.mode = Mode::SlackSnooze { id, cursor: 0 },
+            SlackKey::Task => {
+                let title = item.summary().to_string();
+                let repo = self.guess_repo(&item.channel.name);
+                self.mode = Mode::SlackTask { id, title, repo };
+            }
+            SlackKey::Done => {
+                let now = iso_of(now_secs());
+                self.patch_slack(&id, serde_json::json!({ "done": true }), "done", move |item| {
+                    item.split = SlackSplit::Done.wire().to_string();
+                    item.done_at = Some(now);
+                });
+            }
+            SlackKey::Bump | SlackKey::Lower => {
+                let Some(next) = item.priority().and_then(|p| priority_step(p, key == SlackKey::Bump)) else {
+                    return;
+                };
+                let toast = format!("{} → {next}", item.priority().unwrap_or("?"));
+                self.patch_slack(&id, serde_json::json!({ "priority": next }), &toast, move |item| {
+                    if let Some(triage) = item.triage.as_mut() {
+                        triage.priority = next.to_string();
+                        triage.overridden = true;
+                    }
+                });
+            }
+        }
+    }
+
+    /// PATCHes one item and, when the machine took it, applies the same change to the local
+    /// snapshot so the view moves at once instead of on the next poll.
+    fn patch_slack(&mut self, id: &str, patch: serde_json::Value, toast: &str, apply: impl FnOnce(&mut SlackItem)) {
+        match self.machine.patch_slack_item(id, patch) {
+            Ok(_) => {
+                if let Some(item) = self.slack_item_mut(id) {
+                    apply(item);
+                }
+                self.clamp_slack_cursor();
+                self.notify(toast, false);
+            }
+            Err(error) => self.notify(error, true),
+        }
+    }
+
+    /// The repo a channel most likely belongs to: a repo of a ticket on the board whose name
+    /// and the channel's share a word. None when nothing matches.
+    fn guess_repo(&self, channel: &str) -> Option<String> {
+        let channel = channel.to_lowercase();
+        let mut repos: Vec<&str> = self.tasks.iter().filter_map(|t| t.repo_path.as_deref()).collect();
+        repos.sort_unstable();
+        repos.dedup();
+        repos
+            .into_iter()
+            .find(|path| {
+                let name = path.trim_end_matches('/').rsplit('/').next().unwrap_or("").to_lowercase();
+                !name.is_empty() && (channel.contains(&name) || name.contains(&channel))
+            })
+            .map(str::to_string)
+    }
+
+    /// The reply editor over `item`, pre-filled with `text`; the same vim keys as every editor.
+    /// `nudge` asks the machine to open the message with a mention of the author.
+    fn open_slack_reply(&mut self, item: &SlackItem, text: String, nudge: bool) {
+        let lines: Vec<String> = if text.is_empty() { vec![String::new()] } else { text.lines().map(str::to_string).collect() };
+        let mut area = TextArea::new(lines);
+        area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
+        self.mode = Mode::SlackReply { id: item.id.clone(), area, vim: Vim::new(), nudge };
+    }
+
+    fn handle_slack_reply(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::SlackReply { id, area, vim, nudge } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match vim.handle(area, key) {
+            crate::vim::Outcome::Continue => {}
+            crate::vim::Outcome::Cancel => self.mode = Mode::Normal,
+            crate::vim::Outcome::Save => {
+                let id = id.clone();
+                let nudge = *nudge;
+                let text = area.lines().join("\n").trim().to_string();
+                if text.is_empty() {
+                    self.notify("nothing to send", true);
+                    return Outcome::Continue;
+                }
+                self.mode = Mode::Normal;
+                match self.machine.slack_reply(&id, &text, nudge) {
+                    Ok(()) => {
+                        let now = iso_of(now_secs());
+                        if let Some(item) = self.slack_item_mut(&id) {
+                            item.split = SlackSplit::Done.wire().to_string();
+                            item.you_replied = true;
+                            item.done_at = Some(now);
+                        }
+                        self.clamp_slack_cursor();
+                        self.notify("sent", false);
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+            }
+        }
+        Outcome::Continue
+    }
+
+    /// The snooze picker: j/k or 1-4 pick, enter sets `snoozedUntil`, esc leaves it awake.
+    fn handle_slack_snooze(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::SlackSnooze { id, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        let mut chosen = None;
+        let mut close = false;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(slack::SNOOZE_OPTIONS.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(*cursor),
+            KeyCode::Char(d @ '1'..='4') => chosen = Some((d as usize) - ('1' as usize)),
+            KeyCode::Esc | KeyCode::Char('q') => close = true,
+            _ => {}
+        }
+        if close {
+            self.mode = Mode::Normal;
+        }
+        if let Some(option) = chosen {
+            self.mode = Mode::Normal;
+            let until = iso_of(slack::snooze_until(option, now_secs(), local_offset_secs()));
+            let toast = format!("snoozed until {}", slack::SNOOZE_OPTIONS[option]);
+            let stored = until.clone();
+            self.patch_slack(&id, serde_json::json!({ "snoozedUntil": until }), &toast, move |item| {
+                item.split = SlackSplit::Snoozed.wire().to_string();
+                item.snoozed_until = Some(stored);
+            });
+        }
+        Outcome::Continue
+    }
+
+    /// `t`'s confirm: y creates the ticket and opens it (the repo picker follows when none was
+    /// guessed), n / esc keeps the message where it is.
+    fn handle_slack_task(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                let Mode::SlackTask { id, title, repo } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                match self.machine.slack_task(&id, &title, repo.as_deref()) {
+                    Ok(task) => {
+                        let task_id = task.id.clone();
+                        let no_repo = task.repo_path.is_none();
+                        self.upsert(task);
+                        if let Some(item) = self.slack_item_mut(&id) {
+                            item.linked.task_id = Some(task_id.clone());
+                        }
+                        self.slack = None;
+                        self.select(&task_id, true);
+                        self.open_detail(task_id.clone());
+                        if no_repo {
+                            self.notify(format!("ticket #{} created; pick its repo", short_id(&task_id)), false);
+                            self.open_repo_picker(&task_id);
+                        } else {
+                            self.notify(format!("ticket #{} created", short_id(&task_id)), false);
+                        }
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// The Watches popup: j/k move, space toggles, d deletes (not a built-in), e cycles the
+    /// priority floor, n adds, esc / W closes.
+    fn handle_slack_watches(&mut self, key: KeyEvent) -> Outcome {
+        let Some(open) = self.slack.as_ref().and_then(|s| s.watches.clone()) else {
+            return Outcome::Continue;
+        };
+        let count = self.slack_snapshot.watches.len();
+        let under = self.slack_snapshot.watches.get(open.cursor.min(count.saturating_sub(1))).cloned();
+        let mut cursor = open.cursor;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('W') | KeyCode::Char('q') => {
+                if let Some(state) = self.slack.as_mut() {
+                    state.watches = None;
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('?') => {
+                self.mode = Mode::Help(HelpFor::Slack);
+                return Outcome::Continue;
+            }
+            KeyCode::Char('j') | KeyCode::Down => cursor = (cursor + 1).min(count.saturating_sub(1)),
+            KeyCode::Char('k') | KeyCode::Up => cursor = cursor.saturating_sub(1),
+            KeyCode::Char('n') => {
+                // The catalogue was asked for when the view opened; the picker says "loading…" until it lands.
+                self.prefetch_slack_catalog();
+                self.mode = Mode::SlackWatchAdd { query: String::new(), cursor: 0 };
+                return Outcome::Continue;
+            }
+            KeyCode::Char(' ') => {
+                if let Some(watch) = under {
+                    let enabled = !watch.enabled;
+                    self.patch_slack_watch(&watch.id, serde_json::json!({ "enabled": enabled }), if enabled { "on" } else { "off" });
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('e') => {
+                if let Some(watch) = under {
+                    let floor = match watch.priority.as_deref() {
+                        None => Some("P0"),
+                        Some("P0") => Some("P1"),
+                        Some("P1") => Some("P2"),
+                        _ => None,
+                    };
+                    let toast = floor.map_or("no priority floor".to_string(), |p| format!("at least {p}"));
+                    self.patch_slack_watch(&watch.id, serde_json::json!({ "priority": floor }), &toast);
+                }
+                return Outcome::Continue;
+            }
+            KeyCode::Char('d') => {
+                if let Some(watch) = under {
+                    if watch.builtin {
+                        self.notify("built-in; switch it off instead", false);
+                    } else {
+                        match self.machine.delete_slack_watch(&watch.id) {
+                            Ok(()) => {
+                                self.slack_snapshot.watches.retain(|w| w.id != watch.id);
+                                self.clamp_slack_cursor();
+                                self.notify(format!("removed {}", watch.label), false);
+                            }
+                            Err(error) => self.notify(error, true),
+                        }
+                    }
+                }
+                return Outcome::Continue;
+            }
+            _ => {}
+        }
+        if let Some(state) = self.slack.as_mut()
+            && let Some(open) = state.watches.as_mut()
+        {
+            open.cursor = cursor;
+        }
+        Outcome::Continue
+    }
+
+    /// PATCHes one watch and keeps the local copy in step with the machine's answer.
+    fn patch_slack_watch(&mut self, id: &str, patch: serde_json::Value, toast: &str) {
+        match self.machine.patch_slack_watch(id, patch) {
+            Ok(updated) => {
+                if let Some(watch) = self.slack_snapshot.watches.iter_mut().find(|w| w.id == id) {
+                    *watch = updated;
+                }
+                self.notify(toast, false);
+            }
+            Err(error) => self.notify(error, true),
+        }
+    }
+
+    /// Type `@handle`, `#channel` or a word; up/down pick a completion; enter saves the watch.
+    fn handle_slack_watch_add(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::SlackWatchAdd { query, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char(c) => {
+                query.push(c);
+                *cursor = 0;
+            }
+            KeyCode::Backspace => {
+                query.pop();
+                *cursor = 0;
+            }
+            KeyCode::Down => *cursor += 1,
+            KeyCode::Up => *cursor = cursor.saturating_sub(1),
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let (query, cursor) = (query.trim().to_string(), *cursor);
+                let (kind, text) = slack::watch_kind_of(&query);
+                if text.is_empty() {
+                    return Outcome::Continue;
+                }
+                let matches = self.slack_watch_matches(&query);
+                let input = match kind {
+                    "keyword" => serde_json::json!({ "kind": "keyword", "value": text, "label": text }),
+                    _ => {
+                        let Some(pick) = matches.get(cursor.min(matches.len().saturating_sub(1))) else {
+                            self.notify(format!("no {kind} matches {query}"), true);
+                            return Outcome::Continue;
+                        };
+                        let sigil = if kind == "usergroup" { '@' } else { '#' };
+                        let label = if pick.label.starts_with(sigil) { pick.label.clone() } else { format!("{sigil}{}", pick.label) };
+                        serde_json::json!({ "kind": kind, "value": pick.id, "label": label })
+                    }
+                };
+                self.mode = Mode::Normal;
+                match self.machine.add_slack_watch(input) {
+                    Ok(watch) => {
+                        self.notify(format!("watching {}", watch.label), false);
+                        self.slack_snapshot.watches.push(watch);
+                        if let Some(open) = self.slack.as_mut().and_then(|s| s.watches.as_mut()) {
+                            open.cursor = self.slack_snapshot.watches.len() - 1;
+                        }
+                    }
+                    Err(error) => self.notify(error, true),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// `x` in the Slack view: a menu of the item keys, each line saying why it is off when it is.
+    fn handle_slack_actions(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::SlackActions { cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let mut chosen = None;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(SlackKey::ALL.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(SlackKey::ALL[*cursor]),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            KeyCode::Char(c) => chosen = SlackKey::from_char(c),
+            _ => {}
+        }
+        if let Some(key) = chosen {
+            self.mode = Mode::Normal;
+            if let Some(item) = self.slack_under_cursor().cloned() {
+                self.slack_key(key, &item);
+            }
+        }
+        Outcome::Continue
+    }
+
     fn handle_confirm_approve_all(&mut self, key: KeyEvent) -> Outcome {
         match key.code {
             KeyCode::Char('y') => {
@@ -2144,6 +2813,7 @@ impl App {
             KeyCode::Char('I') => self.inbox = Some(InboxState::default()),
             KeyCode::Char('D') => self.digest = Some(DigestState::default()),
             KeyCode::Char('P') => self.open_pulls(),
+            KeyCode::Char('S') => self.open_slack(),
             KeyCode::Char('v') => {
                 // Toggle: remove it if it was marked, else mark it.
                 if let Some(id) = self.selected_id().filter(|id| !self.marked.remove(id)) {
@@ -2674,6 +3344,7 @@ impl App {
             "inbox" => self.inbox = Some(InboxState::default()),
             "digest" => self.digest = Some(DigestState::default()),
             "prs" | "pulls" => self.open_pulls(),
+            "slack" => self.open_slack(),
             "help" | "?" => self.mode = Mode::Help(HelpFor::Board),
             other => self.notify(format!("unknown command: {other} (try :help)"), true),
         }
@@ -3544,11 +4215,12 @@ mod tests {
         assert_eq!(flattened(HelpFor::Digest), sorted(&[DIGEST_HELP]));
         assert_eq!(flattened(HelpFor::Detail), sorted(&[DETAIL_HELP]));
         assert_eq!(flattened(HelpFor::Pulls), sorted(&[PULLS_HELP]));
+        assert_eq!(flattened(HelpFor::Slack), sorted(&[SLACK_HELP]));
     }
 
     #[test]
     fn help_sections_are_named_and_not_empty() {
-        for ctx in [HelpFor::Board, HelpFor::Floor, HelpFor::Inbox, HelpFor::Digest, HelpFor::Detail, HelpFor::Pulls] {
+        for ctx in [HelpFor::Board, HelpFor::Floor, HelpFor::Inbox, HelpFor::Digest, HelpFor::Detail, HelpFor::Pulls, HelpFor::Slack] {
             assert!(!ctx.sections().is_empty());
             assert!(ctx.sections().iter().all(|s| !s.heading.is_empty() && !s.rows.is_empty()));
         }
@@ -3697,6 +4369,319 @@ mod pr_tests {
         let notices = app.take_notices();
         assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["CI failed"], "staying put is not news; a new split is");
         assert_eq!(app.needs_you_count(), 2);
+    }
+}
+
+#[cfg(test)]
+mod slack_tests {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+    };
+
+    use ratatui::crossterm::event::KeyModifiers;
+
+    use super::*;
+    use crate::model::SlackOption;
+    use crate::slack::fixtures::{item, snapshot, watch_json};
+
+    /// A machine that says yes to everything: `{}` for any call it does not know, the fixture
+    /// watches for `/slack/watches`, and an `/events` stream it keeps open and silent.
+    fn fake_machine() -> Machine {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let mut streams = Vec::new();
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut request = String::new();
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                    request.push_str(&line);
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let path = request.split_whitespace().nth(1).unwrap_or("");
+                let mut stream = reader.into_inner();
+                let answer = match path {
+                    "/events" => {
+                        let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n");
+                        streams.push(stream);
+                        continue;
+                    }
+                    "/tasks" => "[]".to_string(),
+                    "/slack/watches" => format!("[{},{}]", watch_json("w1", "usergroup", "S04ABCD", "@platform-team", false), watch_json("w2", "broadcast", "here", "@here", true)),
+                    "/slack/usergroups" => r#"[{"id":"S04ABCD","label":"@platform-team"},{"id":"S05","label":"@data"}]"#.to_string(),
+                    "/slack/channels" => r##"[{"id":"C1","label":"#eng"}]"##.to_string(),
+                    p if p.ends_with("/reply") => format!(r#"{{"replied":{}}}"#, String::from_utf8_lossy(&body)),
+                    p if p.starts_with("/slack/watches/") => watch_json("w1", "usergroup", "S04ABCD", "@platform-team", false).replace("\"enabled\":true", "\"enabled\":false"),
+                    _ => "{}".to_string(),
+                };
+                // One request per connection: `Connection: close` keeps ureq from reusing it.
+                let _ = stream.write_all(
+                    format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{answer}", answer.len()).as_bytes(),
+                );
+            }
+        });
+        Machine::at(&format!("http://{addr}"))
+    }
+
+    fn app_with(snapshot: SlackSnapshot) -> App {
+        let mut app = App::new(fake_machine());
+        app.tasks.clear();
+        app.toast = None;
+        app.take_notices();
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot })).unwrap();
+        app.pump();
+        app
+    }
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn toast(app: &App) -> String {
+        app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    fn type_command(app: &mut App, text: &str) {
+        press(app, KeyCode::Char(':'));
+        for ch in text.chars() {
+            press(app, KeyCode::Char(ch));
+        }
+        press(app, KeyCode::Enter);
+    }
+
+    #[test]
+    fn s_opens_the_slack_view_and_its_keys_move_between_splits_and_rows() {
+        let mut snapshot = snapshot();
+        snapshot.items.push(item("C0123:3", "needs_reply", Some("P1"), "2026-10-28T08:00:00Z"));
+        let mut app = app_with(snapshot);
+        press(&mut app, KeyCode::Char('S'));
+        let state = app.slack.clone().expect("the Slack view opens");
+        assert_eq!(state.split, SlackSplit::NeedsReply);
+        assert_eq!(app.slack_under_cursor().map(|i| i.id.as_str()), Some("C0123:1730112345.0001"), "the P0 is on top");
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.slack_under_cursor().map(|i| i.id.as_str()), Some("C0123:3"));
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.slack.as_ref().unwrap().cursor, 1, "stops at the last row");
+        press(&mut app, KeyCode::Char('l'));
+        assert_eq!(app.slack.as_ref().unwrap().split, SlackSplit::WaitingOnThem);
+        assert_eq!(app.slack.as_ref().unwrap().cursor, 0);
+        press(&mut app, KeyCode::Char('4'));
+        assert_eq!(app.slack.as_ref().unwrap().split, SlackSplit::Fyi);
+        press(&mut app, KeyCode::Char('h'));
+        assert_eq!(app.slack.as_ref().unwrap().split, SlackSplit::Decide);
+        press(&mut app, KeyCode::Char('?'));
+        assert!(matches!(app.mode, Mode::Help(HelpFor::Slack)));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal) && app.slack.is_some(), "closing the help keeps the view");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.slack.is_none());
+        type_command(&mut app, "slack");
+        assert!(app.slack.is_some(), ":slack opens it too");
+        press(&mut app, KeyCode::Char('S'));
+        assert!(app.slack.is_none(), "S closes it again");
+    }
+
+    #[test]
+    fn d_clears_the_row_at_once_and_the_priority_keys_step_one_at_a_time() {
+        let mut snapshot = snapshot();
+        snapshot.items.push(item("C0123:3", "needs_reply", Some("P1"), "2026-10-28T08:00:00Z"));
+        let mut app = app_with(snapshot);
+        press(&mut app, KeyCode::Char('S'));
+        assert_eq!(slack::items(&app.slack_snapshot.items, SlackSplit::NeedsReply).len(), 2);
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(toast(&app), "done");
+        assert_eq!(slack::items(&app.slack_snapshot.items, SlackSplit::NeedsReply).len(), 1, "the row leaves the split before the next poll");
+        let cleared = app.slack_item("C0123:1730112345.0001").unwrap();
+        assert_eq!(cleared.split_enum(), Some(SlackSplit::Done));
+        assert!(cleared.done_at.is_some());
+        assert_eq!(app.slack_under_cursor().map(|i| i.id.as_str()), Some("C0123:3"), "the cursor lands on the next row");
+
+        press(&mut app, KeyCode::Char('!'));
+        assert_eq!(toast(&app), "P1 → P0");
+        let bumped = app.slack_item("C0123:3").unwrap();
+        assert_eq!(bumped.priority(), Some("P0"));
+        assert!(bumped.triage.as_ref().unwrap().overridden);
+        press(&mut app, KeyCode::Char('!'));
+        assert_eq!(toast(&app), "already P0", "the blocker speaks before any call");
+        press(&mut app, KeyCode::Char('-'));
+        assert_eq!(toast(&app), "P0 → P1");
+        press(&mut app, KeyCode::Char('n'));
+        assert_eq!(toast(&app), "only while waiting on them");
+        press(&mut app, KeyCode::Char('6'));
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(toast(&app), "already done");
+    }
+
+    #[test]
+    fn s_picks_a_snooze_and_r_sends_the_edited_draft() {
+        let mut app = app_with(snapshot());
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('s'));
+        assert!(matches!(&app.mode, Mode::SlackSnooze { id, cursor: 0 } if id == "C0123:1730112345.0001"));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert!(matches!(&app.mode, Mode::SlackSnooze { cursor: 2, .. }));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(app.slack_item("C0123:1730112345.0001").unwrap().split, "needs_reply", "esc leaves it awake");
+        press(&mut app, KeyCode::Char('s'));
+        press(&mut app, KeyCode::Char('3'));
+        assert_eq!(toast(&app), "snoozed until tomorrow 9:00");
+        let snoozed = app.slack_item("C0123:1730112345.0001").unwrap();
+        assert_eq!(snoozed.split_enum(), Some(SlackSplit::Snoozed));
+        assert!(snoozed.snoozed_until.as_deref().is_some_and(|t| t.ends_with("Z")));
+
+        press(&mut app, KeyCode::Char('5'));
+        press(&mut app, KeyCode::Char('r'));
+        let Mode::SlackReply { id, area, .. } = &app.mode else { panic!("the reply editor opens: {}", toast(&app)) };
+        assert_eq!(id, "C0123:1730112345.0001");
+        assert_eq!(area.lines().join("\n"), "Approve the rollback, I'm on it.", "pre-filled with the draft");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal) && app.slack.is_some(), "esc backs out without sending");
+        press(&mut app, KeyCode::Char('r'));
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert_eq!(toast(&app), "sent");
+        let sent = app.slack_item("C0123:1730112345.0001").unwrap();
+        assert_eq!(sent.split_enum(), Some(SlackSplit::Done));
+        assert!(sent.you_replied);
+    }
+
+    #[test]
+    fn n_opens_a_nudge_the_machine_addresses_by_id_not_a_typed_at_name() {
+        let mut waiting = snapshot();
+        waiting.items.push(item("C0123:7", "waiting_on_them", Some("P1"), "2026-10-27T08:00:00Z"));
+        let mut app = app_with(waiting);
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('2'));
+        press(&mut app, KeyCode::Char('n'));
+        let Mode::SlackReply { area, nudge, .. } = &app.mode else { panic!("the reply editor opens: {}", toast(&app)) };
+        assert!(*nudge);
+        assert_eq!(area.lines().join("\n"), "gentle nudge on this one: any news?", "no @name typed into the text: the machine mentions the author by id");
+        app.handle_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL));
+        assert_eq!(toast(&app), "sent");
+    }
+
+    #[test]
+    fn opening_the_slack_view_prefetches_the_watch_catalogue_off_the_ui_thread() {
+        let mut app = app_with(snapshot());
+        assert!(app.slack_catalog_loading());
+        press(&mut app, KeyCode::Char('S'));
+        assert!(app.slack_catalog_pending, "the fetch started when the view opened");
+        assert!(app.slack_catalog_loading(), "and has not landed yet");
+        let landed = app.stream.recv_timeout(std::time::Duration::from_secs(5)).expect("the catalogue arrives on the stream");
+        assert!(matches!(landed, Incoming::SlackCatalog { .. }));
+        app.tx.send(landed).unwrap();
+        app.pump();
+        assert!(!app.slack_catalog_loading() && !app.slack_catalog_pending);
+        assert_eq!(app.slack_watch_matches("@dat").iter().map(|o| o.id.as_str()).collect::<Vec<_>>(), vec!["S05"]);
+        assert_eq!(app.slack_watch_matches("#").len(), 1);
+    }
+
+    #[test]
+    fn quiet_hours_hold_back_every_notice_but_a_p0s() {
+        let mut quiet = snapshot();
+        quiet.quiet = true;
+        let mut app = app_with(quiet.clone());
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Needs reply"], "the P0 gets through; the overdue P2 waits");
+        let mut later = quiet.clone();
+        later.items[1].reopened_at = Some("2026-10-28T10:30:00Z".into());
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: later })).unwrap();
+        app.pump();
+        assert!(app.take_notices().is_empty(), "a P1 reopen is held during quiet hours");
+        let mut morning = quiet;
+        morning.quiet = false;
+        morning.items.push(item("C0123:9", "needs_reply", Some("P1"), "2026-10-28T10:00:00Z"));
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: morning })).unwrap();
+        app.pump();
+        assert_eq!(app.take_notices().iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Needs reply"], "outside the window a P1 entering Needs reply is news again");
+    }
+
+    #[test]
+    fn t_asks_first_with_the_title_it_will_use_and_w_runs_the_watches() {
+        let mut app = app_with(snapshot());
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('t'));
+        let Mode::SlackTask { title, repo, .. } = &app.mode else { panic!("the confirm opens: {}", toast(&app)) };
+        assert_eq!(title, "approve rollback");
+        assert!(repo.is_none(), "no ticket's repo matches the channel");
+        press(&mut app, KeyCode::Char('n'));
+        assert!(matches!(app.mode, Mode::Normal) && app.slack.is_some());
+        let mut linked = app.slack_snapshot.items[0].clone();
+        linked.linked.task_id = Some("t1".into());
+        app.slack_snapshot.items[0] = linked;
+        press(&mut app, KeyCode::Char('t'));
+        assert_eq!(toast(&app), "already a ticket");
+
+        press(&mut app, KeyCode::Char('W'));
+        assert!(app.slack.as_ref().unwrap().watches.is_some());
+        assert_eq!(app.slack_snapshot.watches.len(), 2, "opens on the machine's list");
+        press(&mut app, KeyCode::Char('j'));
+        assert_eq!(app.slack.as_ref().unwrap().watches.as_ref().unwrap().cursor, 1);
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(toast(&app), "built-in; switch it off instead");
+        assert_eq!(app.slack_snapshot.watches.len(), 2);
+        press(&mut app, KeyCode::Char('k'));
+        press(&mut app, KeyCode::Char(' '));
+        assert_eq!(toast(&app), "off");
+        assert!(!app.slack_snapshot.watches[0].enabled, "the machine's answer replaces the row");
+        press(&mut app, KeyCode::Char('d'));
+        assert_eq!(toast(&app), "removed @platform-team");
+        assert_eq!(app.slack_snapshot.watches.len(), 1);
+
+        app.slack_catalog = Some((
+            vec![SlackOption { id: "S04ABCD".into(), label: "@platform-team".into() }, SlackOption { id: "S05".into(), label: "@data".into() }],
+            vec![SlackOption { id: "C1".into(), label: "#eng".into() }],
+        ));
+        press(&mut app, KeyCode::Char('n'));
+        assert!(matches!(app.mode, Mode::SlackWatchAdd { .. }));
+        for ch in "@plat".chars() {
+            press(&mut app, KeyCode::Char(ch));
+        }
+        assert_eq!(app.slack_watch_matches("@plat").iter().map(|o| o.id.as_str()).collect::<Vec<_>>(), vec!["S04ABCD"]);
+        assert_eq!(app.slack_watch_matches("#E").iter().map(|o| o.label.as_str()).collect::<Vec<_>>(), vec!["#eng"]);
+        assert!(app.slack_watch_matches("luna").is_empty(), "a keyword has nothing to complete");
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal) && app.slack.as_ref().unwrap().watches.is_some(), "esc returns to the Watches");
+        press(&mut app, KeyCode::Esc);
+        assert!(app.slack.as_ref().unwrap().watches.is_none() && app.slack.is_some(), "esc closes the popup, not the view");
+    }
+
+    #[test]
+    fn urgent_and_overdue_items_count_on_the_badge_and_raise_a_notice_once_and_a_reopen_always_does() {
+        let mut app = app_with(snapshot());
+        assert_eq!(app.needs_you_count(), 2, "the P0 in Needs reply and the overdue P2 in Decide; the FYI does not count");
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Needs reply", "Overdue"]);
+        assert_eq!(notices[0].body, "#payments-oncall @marta: approve rollback");
+
+        let mut next = snapshot();
+        next.items[1].reopened_at = Some("2026-10-28T10:30:00Z".into());
+        next.items.push(item("C0123:9", "decide", Some("P2"), "2026-10-28T10:00:00Z"));
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: next })).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Reopened"], "staying put or overdue is not news; a P2 in Decide is not either");
+        assert_eq!(app.needs_you_count(), 2);
+
+        let mut late = snapshot();
+        late.items[0].overdue = true;
+        late.items[2].split = "done".into();
+        app.tx.send(Incoming::Message(StreamMessage::Slack { snapshot: late })).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Overdue"], "the P0 going past its SLA is news");
+        assert_eq!(app.needs_you_count(), 1, "the overdue P0 counts once; the done item no longer does");
     }
 }
 

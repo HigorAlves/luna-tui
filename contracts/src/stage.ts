@@ -18,6 +18,8 @@ export const TaskSource = z.discriminatedUnion("kind", [
     headRef: z.string(),
     baseRef: z.string(),
   }),
+  /** A ticket made from a Slack message (`t` in the board's Slack inbox). */
+  z.object({ kind: z.literal("slack"), channel: z.string(), ts: z.string(), permalink: z.string() }),
 ]);
 export type TaskSource = z.infer<typeof TaskSource>;
 
@@ -92,6 +94,8 @@ export const PackId = z.enum([
   "reviewing_memory",
   "reviewing",
   "addressing",
+  // Not a task stage: the Slack inbox's triage, run as a pack with no worktree.
+  "slack_triage",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -159,6 +163,29 @@ export const ThreadsContext = z.object({
   ),
 });
 export type ThreadsContext = z.infer<typeof ThreadsContext>;
+
+/** For slack_triage: one person's inbox batch, as the machine gathered it. `rules` is the
+ *  text of the rules file's VIPs, Notes and Learned sections; a watch counts as the person. */
+export const SlackTriageContext = z.object({
+  me: z.object({ id: z.string(), name: z.string() }),
+  watches: z.array(z.object({ label: z.string(), kind: z.string() })),
+  rules: z.string(),
+  items: z.array(
+    z.object({
+      id: z.string(),
+      channel: z.string(),
+      author: z.string(),
+      isBot: z.boolean(),
+      text: z.string(),
+      /** Earlier messages of the thread, oldest first. */
+      context: z.array(z.object({ user: z.string(), text: z.string() })),
+      /** Why it is in the inbox: `me`, `usergroup:S…`, `broadcast:here`, `keyword:…`, `channel:C…`, `dm`. */
+      matched: z.array(z.string()),
+      threadReplies: z.number().int(),
+    }),
+  ),
+});
+export type SlackTriageContext = z.infer<typeof SlackTriageContext>;
 
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
@@ -298,6 +325,8 @@ export const StageInput = z.object({
     threads: ThreadsContext.nullable().optional(),
     /** For implementing and verifying: the repo's own checks from its luna.yaml; absent means detect them. */
     checks: z.array(CheckSpec).optional(),
+    /** For slack_triage: the inbox batch; the task is synthetic and there is no worktree. */
+    slack: SlackTriageContext.nullable().optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),

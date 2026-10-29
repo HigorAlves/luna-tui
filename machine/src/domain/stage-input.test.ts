@@ -2,7 +2,7 @@ import { PACKS, type PackId, StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { ApprovalRow, TaskRow } from "./task.ts";
-import { PACK_LIMITS, buildStageInput } from "./stage-input.ts";
+import { PACK_LIMITS, buildSlackTriageInput, buildStageInput } from "./stage-input.ts";
 
 const task = {
   id: "t1",
@@ -114,12 +114,27 @@ describe("buildStageInput", () => {
     }
   });
 
-  it("has no plan before one is approved, and covers all eleven packs", () => {
+  it("has no plan before one is approved, and covers all eleven stage packs plus slack_triage", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["addressing", "ci_watch", "e2e", "evidence", "implementing", "reviewing", "reviewing_memory", "setup", "test_design", "triage", "verifying"],
+      ["addressing", "ci_watch", "e2e", "evidence", "implementing", "reviewing", "reviewing_memory", "setup", "slack_triage", "test_design", "triage", "verifying"],
     );
+  });
+
+  it("builds slack_triage's input around a synthetic task: the batch in context.slack, no plan, no branch, the pack's limits", () => {
+    const slack = {
+      me: { id: "U1", name: "higor" },
+      watches: [{ label: "@platform-team", kind: "usergroup" }],
+      rules: "## Notes\n- short\n",
+      items: [{ id: "C1:1", channel: "#eng", author: "@marta", isBot: false, text: "hi?", context: [], matched: ["me"], threadReplies: 0 }],
+    };
+    const input = buildSlackTriageInput(slack);
+    const parsed = StageInput.safeParse(input);
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    expect(input).toMatchObject({ pack: "slack_triage", stage: "slack_triage", attempt: 1, plan: null, task: { id: "slack-triage", title: "Slack triage", branch: "", repoPath: "", source: null } });
+    expect(input.context).toEqual({ projectContext: null, slack });
+    expect(input.limits).toEqual({ maxTurns: 3, timeoutMs: 180_000 });
   });
 
   it("carries what the host fetched for ci_watch, and nothing test_design never wrote", () => {
@@ -155,7 +170,7 @@ describe("buildStageInput", () => {
 
   it("hands implementing and verifying the repo's checks from luna.yaml, and no other pack", () => {
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }];
-    const build = (stage: PackId) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
+    const build = (stage: Exclude<PackId, "slack_triage">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
     expect(build("implementing").context.checks).toEqual(checks);
     expect(build("verifying").context.checks).toEqual(checks);
     expect(build("triage").context.checks).toBeUndefined();

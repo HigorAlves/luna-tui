@@ -72,6 +72,7 @@ Press `?` in the board for the full list. The main ones:
 | `z` | fold: show every column at once, collapsing all but the focused one to its header bar |
 | `F` | Floor: the machine's 7d and 30d metrics full screen (`r` refreshes, `esc` or `F` closes) |
 | `P` | Pulls: every open PR involving you, split by what you do about it (see below) |
+| `S` | Slack: your mentions, DMs, threads and watched handles, triaged and split by what you do about them (see below); `W` inside it edits the Watches |
 | `x` | actions menu for the selected ticket |
 | `q` | quit (closes a popup instead, if one is open) |
 
@@ -188,6 +189,42 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 
 From 100 columns the view is a list beside a detail pane. A row reads `✓ ▌repo  #n  title  age  tag` in fixed columns, the checks glyph first (`✓` green, `✗` red, `◐` running), the repo's colour bar and name next (the name after the owner's `/`, the same colour its cards wear), `⚙` while a task runs for it and `⌂` when the machine has no clone of the repo; only the title is ever cut; the list scrolls to keep the selected row in view. The pane shows the selected PR: author and branches, every check by name, the review state and unresolved threads, the task in flight, and the four keys with why each is off. Under 100 columns the pane hides and `x` shows the same detail over the list. A dispatch on such a PR opens the clone prompt: the same filter-as-you-type search `R` uses, over the folders under `HARDNESS_REPOS_DIR`; `enter` clones into `<folder>/<name>` and runs the action once it lands, `esc` leaves the row read-only. `c` and `t` are off on a fork head (nothing can push to it), `v` is off on your own PRs, and all three are off while a task already runs for the PR.
 
+## Slack
+
+`S` opens the Slack inbox (`:slack` too): everything your Activity tab shows plus the handles you watch, as the machine polls it every minute and a triage pass sorts it. Six splits, `h`/`l` or `1`–`6` between them, `j`/`k` down the rows. Needs reply and Decide go P0 first, then oldest; the other splits newest first.
+
+| Split | An item lands here when |
+|---|---|
+| Needs reply | triage says a reply is expected and you have not replied |
+| Waiting on them | you asked something in a thread and nobody answered |
+| Decide | a decision or a blocker without an explicit question |
+| FYI | everything P2/P3 that is not automated |
+| Snoozed | you pressed `s`; it returns to its split when the timer ends |
+| Done | you replied, pressed `d`, or made it a ticket |
+
+A P0 or P1 entering Needs reply or Decide counts on the Board tab's badge and raises a herdr notice; so does any item whose thread moved after you cleared it (`Reopened`). Lower priorities and the other splits are quiet.
+
+| Key | Does |
+|---|---|
+| `r` | reply: the editor opens with triage's draft (vim keys, like every editor); `ctrl+s` posts it as you in the thread, `esc` backs out; nothing is ever sent without the key |
+| `t` | ticket: a Backlog task from the message and its thread, titled with the summary, in the repo the channel name matches; one `y` first, and the repo picker follows when none was guessed |
+| `d` | done: clears the item here at once; Slack itself is not touched. If the thread moves afterwards the item comes back, re-triaged, with `new since you cleared it` in the pane |
+| `s` | snooze: 1h, 3h, tomorrow 9:00 or next Monday 9:00 (your local 9:00) |
+| `n` | nudge (Waiting on them only): the reply editor with a one-line reminder |
+| `!` / `-` | priority up / down one step; re-triage keeps your value |
+| `o` / `enter` | open the message in Slack / jump to its ticket on the board when it has one |
+| `W` | Watches (below) |
+| `R` | poll Slack now |
+| `x` | the same actions as a menu, each saying why it is off when it is |
+
+From 100 columns the view is a list beside a detail pane. A row reads `P0 ▌#channel  @author  summary  age  tag` in fixed columns: the priority first (`P0` red, `P1` yellow, `P3` muted), the channel's colour bar next (the same hue a repo of that name wears on the board), the author, triage's one-line summary (the only column ever cut; `×N` when a thread's mentions collapsed into one row), the age, then `⎇` for a thread, `⚙` once it is a ticket and `↺` when it came back after you cleared it. The pane shows where and who, the thread's last messages, the message itself, triage's verdict (`P0 · blocker · reply expected`), why, the links it found (with the linked PR's split from your Pulls inbox), the draft, and every key with why it is off. Under 100 columns the strip shortens its labels (`Reply`, `Wait`, `Snz`…), the pane hides and `x` shows the same detail over the list. The strip also says when Slack was last polled and, with an app token, whether the Socket Mode websocket is `live` or down.
+
+Every item that expects a reply carries a due time under the reply SLA for its priority. The targets come from the rules file's `## SLA` section (defaults: P0 10m, P1 30m, P2 and P3 1h); the machine computes them, the board only shows them. The pane says `due      in 12m (P1 · 30m SLA)`, and within five minutes of it the row's age turns yellow. Past it the item is overdue: the row's summary and age go red, the tag leads with `‼`, it sorts to the top of Needs reply and Decide (the longest overdue first, ahead of P0), the strip counts them as `‼ N overdue`, the Board badge counts each one once whatever its priority, and a notice fires the moment it tips over (once; coming back inside the SLA is not news).
+
+### Watches
+
+A watch is anything beyond your own handle the inbox should treat as addressed to you: a user group (`@platform-team`), a broadcast (`@here`, `@channel`, `@everyone`; these ship on and can be switched off, not deleted), a keyword, or a whole channel. `W` opens them: `j`/`k` move, `space` switches one on or off, `e` cycles its priority floor (none, P0, P1, P2: an item matching the watch is at least that), `d` deletes, `n` adds. Type `@` to complete a user group, `#` to complete a channel, anything else is a keyword; `enter` saves it. Watches live in the machine, so every board shares them and triage reads them.
+
 ## Floor
 
-`F` opens the Floor: one full-screen table with a 7d and a 30d column, read from the machine's `GET /metrics?since=7d|30d`. It shows tasks closed, created and open, what needs you, running and queued now, cycle time (median and p90), first-pass rate for verifying, ci_watch and implementing, escalation rate with the top reasons, retries per task, cost, and queue depth, slot use and utilisation. A per-stage table (runs, median, p90, cost) sits below it, or beside it on terminals 110 columns or wider. Numbers load when you open the view and again on `r`; if the machine is unreachable the error shows in the footer and the last numbers stay. Fold moved from `F` to `z` to make room.
+`F` opens the Floor: one full-screen table with a 7d and a 30d column, read from the machine's `GET /metrics?since=7d|30d`. It shows tasks closed, created and open, what needs you, running and queued now, cycle time (median and p90), first-pass rate for verifying, ci_watch and implementing, escalation rate with the top reasons, retries per task, cost, and queue depth, slot use and utilisation. A per-stage table (runs, median, p90, cost) sits below it, or beside it on terminals 110 columns or wider. With the Slack inbox on, a Slack block sits under the stage table: items and replies by priority over 7d / 30d, how many of the 7d replies came inside their SLA (count and share), the median and p90 time to reply, the share answered within an hour, and the SLA targets in force as `10m/30m/1h/1h` (`GET /slack/metrics?since=7d|30d`); a machine without the inbox simply leaves it out. Numbers load when you open the view and again on `r`; if the machine is unreachable the error shows in the footer and the last numbers stay. Fold moved from `F` to `z` to make room.

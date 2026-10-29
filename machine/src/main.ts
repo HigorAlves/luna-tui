@@ -14,10 +14,16 @@ import { loadConfig } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns } from "./adapters/persistence/prune.ts";
-import { sweepImages, sweepRunFolders, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
+import { sweepImages, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { GitHubPulls } from "./application/pulls.ts";
+import { SlackInbox } from "./application/slack-inbox.ts";
+import { noTokenSlack } from "./application/slack.ts";
+import { createSlackTriager } from "./application/stages/slack-triage-runner.ts";
+import { PgSlackStore } from "./adapters/persistence/slack-store.ts";
+import { SocketMode } from "./adapters/slack/socket-mode.ts";
+import { createSlack } from "./adapters/slack/web-api.ts";
 import { createPrTask } from "./application/pr-tasks.ts";
 import { prFollowUpRunner } from "./application/stages/pr-address.ts";
 import { postVerdictRunner } from "./application/stages/pr-review.ts";
@@ -70,6 +76,10 @@ async function sweep(): Promise<void> {
     const removed = await sweepTaskState(db, config.stateDir);
     return removed > 0 ? `removed ${removed} per-task state dir(s) whose task is gone` : null;
   });
+  await step("slack triage runs", async () => {
+    const removed = await sweepSlackTriageRuns(config.stateDir, config.retentionDays);
+    return removed > 0 ? `removed ${removed} failed slack triage run folder(s)` : null;
+  });
   await step("images", async () => {
     const removed = await sweepImages();
     return removed.length > 0 ? `untagged ${removed.join(", ")}` : null;
@@ -92,7 +102,7 @@ const watcher = new StreamWatcher(bus);
 let pipeline: Pipeline;
 /** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
 const policies = new PolicyStore();
-const { real, verifyPack, checksExec } = await buildRealStages(
+const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   config,
   watcher,
   (taskId) => pipeline.latestStageFinish(taskId, "e2e"),
@@ -217,7 +227,32 @@ const pulls = new GitHubPulls({
 const prTasks = {
   dispatch: (pr: PullRequest, action: PrAction) => createPrTask({ worktreesDir: config.worktreesDir, pipeline }, pr, action),
 };
-const app = createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file) });
+/** The Slack inbox: your user token reads and posts; the slack_triage pack triages in the stage
+ *  container with the same image and credential as the stages, so it is off when they are. */
+const slackApi = config.slackInbox.userToken ? createSlack(config.slackInbox.userToken) : noTokenSlack();
+const slackStore = new PgSlackStore(db);
+const triager = agentDeps ? createSlackTriager({ ...agentDeps, store: slackStore }) : null;
+const slackInbox = new SlackInbox({
+  slack: slackApi,
+  triager,
+  store: slackStore,
+  intervalMs: config.slackInbox.intervalMs,
+  publish: (snapshot) => bus.publish({ type: "slack.items", snapshot }),
+  findTask: (id) => pipeline.get(id).catch(() => null),
+  linkPr: (refs) => {
+    for (const ref of refs) {
+      const pr = pulls.find(ref.repo, ref.number);
+      if (pr) return { repo: pr.repo, number: pr.number, split: pr.split };
+    }
+    return null;
+  },
+  createTask: (input) => pipeline.createTask(input),
+  markRead: config.slackInbox.markRead,
+  rulesPath: config.slackInbox.rulesPath,
+  socketToken: config.slackInbox.appToken,
+  retentionDays: config.retentionDays,
+});
+const app = createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, slack: slackInbox, taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file) });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
   const agents = [...new Set([...Object.keys(real), "verifying", "delivering", "shipping"])];
   console.log(
@@ -228,6 +263,39 @@ const server = serve({ fetch: app.fetch, port: config.port, hostname: config.hos
 if (config.githubPrs.enabled) {
   console.log(`github prs: polling every open PR involving you every ${config.githubPrs.intervalMs / 1000}s`);
   pulls.start();
+}
+
+let socket: SocketMode | undefined;
+let digestTimer: NodeJS.Timeout | undefined;
+if (config.slackInbox.enabled && config.slackInbox.userToken) {
+  const { intervalMs, appToken, digestAt } = config.slackInbox;
+  console.log(`slack inbox: polling mentions, DMs, threads and watches every ${intervalMs / 1000}s${triager ? " · triage by the slack_triage pack (haiku)" : " · agents off, no triage"}${appToken ? " · Socket Mode on" : ""}`);
+  slackInbox.start();
+  if (appToken) {
+    socket = new SocketMode({
+      openSocket: () => slackApi.openSocket(appToken),
+      onEvent: (event) => slackInbox.handleSocketEvent(event),
+      onState: (state) => slackInbox.setSocketState(state),
+    });
+    void socket.start();
+  }
+  if (digestAt) {
+    /** Posts the digest to your own DM at `HH:MM` local time, every day. */
+    const scheduleDigest = () => {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(digestAt.hour, digestAt.minute, 0, 0);
+      if (next <= now) next.setDate(next.getDate() + 1);
+      digestTimer = setTimeout(() => {
+        slackInbox.postDigest().catch((error: unknown) => console.warn("slack inbox: digest failed", error));
+        scheduleDigest();
+      }, next.getTime() - now.getTime());
+      digestTimer.unref();
+    };
+    scheduleDigest();
+  }
+} else if (config.slackInbox.enabled) {
+  console.log("slack inbox: off until MACHINE_SLACK_USER_TOKEN is set");
 }
 
 let intake: GitHubIntake | undefined;
@@ -241,6 +309,9 @@ if (config.githubPoll.repos.length > 0) {
 async function shutdown(): Promise<void> {
   intake?.stop();
   pulls.stop();
+  slackInbox.stop();
+  socket?.stop();
+  if (digestTimer) clearTimeout(digestTimer);
   pipeline.stopSupervisor();
   server.close();
   await pipeline.shutdown();

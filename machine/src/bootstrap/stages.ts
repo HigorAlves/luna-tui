@@ -6,6 +6,7 @@ import type { TaskRoute, TaskState } from "@hardness/contracts";
 import type { Ledger, RunSummary } from "@hardness/contracts";
 
 import type { Config } from "../config.ts";
+import type { Credential } from "../adapters/docker/credentials.ts";
 import type { Watcher } from "../application/ports.ts";
 import { agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
@@ -30,6 +31,9 @@ export interface RealStagesResult {
   verifyPack: ((context: StageContext) => Promise<StageResult>) | null;
   /** Runs a project's checks inside the runner image; null when stages are stubs. */
   checksExec: ReturnType<typeof sandboxExecutor> | null;
+  /** What any pack run outside the pipeline needs (the Slack inbox's triage): the image, the
+   *  credential and the state dir; null when agents are off or something is missing. */
+  agentDeps: { image: string; credential: Credential; stateDir: string } | null;
 }
 
 /** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
@@ -46,16 +50,16 @@ export async function buildRealStages(
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
-    return { real: {}, verifyPack: null, checksExec: null };
+    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null };
   }
   const credential = await loadCredential();
   if (!credential) {
     console.warn("no Claude credential in ~/.config/hardness: every stage is a stub");
-    return { real: {}, verifyPack: null, checksExec: null };
+    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null };
   }
   if (!(await imageExists(config.runnerImage))) {
     console.warn(`image ${config.runnerImage} is missing (pnpm runner:build): every stage is a stub`);
-    return { real: {}, verifyPack: null, checksExec: null };
+    return { real: {}, verifyPack: null, checksExec: null, agentDeps: null };
   }
   const removed = await removeLeftoverContainers();
   if (removed > 0) console.log(`removed ${removed} leftover stage container(s)`);
@@ -103,7 +107,7 @@ export async function buildRealStages(
       }),
     ),
   };
-  return { real, verifyPack, checksExec };
+  return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, credential, stateDir: config.stateDir } };
 }
 
 export interface RunnerForDeps {

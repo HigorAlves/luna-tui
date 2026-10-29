@@ -36,15 +36,44 @@ pub struct Retries {
     pub total: u32,
 }
 
-/// Where a task came from, when it was created from an outside issue. `kind` stays a plain
-/// string so kinds this board does not know still load.
+/// Where a task came from, when it was created from an outside issue or a Slack message.
+/// `kind` stays a plain string so kinds this board does not know still load; an issue has
+/// `repo`, `number` and `url`, a Slack message `channel`, `ts` and `permalink`.
 #[derive(Deserialize, Clone, Debug)]
 pub struct TaskSource {
-    #[allow(dead_code)] // kept for kinds beyond GitHub; the board only labels GitHub today
     pub kind: String,
-    pub repo: String,
-    pub number: u64,
-    pub url: String,
+    #[serde(default)]
+    pub repo: Option<String>,
+    #[serde(default)]
+    pub number: Option<u64>,
+    #[serde(default)]
+    pub url: Option<String>,
+    #[serde(default)]
+    pub channel: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; the board links through the permalink
+    pub ts: Option<String>,
+    #[serde(default)]
+    pub permalink: Option<String>,
+}
+
+impl TaskSource {
+    /// The link to open for the source: the issue's URL or the Slack permalink.
+    pub fn link(&self) -> Option<&str> {
+        self.url.as_deref().or(self.permalink.as_deref())
+    }
+
+    /// `GitHub     acme/app#42 · url` or `Slack      #channel · permalink`, for the ticket popup.
+    pub fn detail_line(&self) -> String {
+        match (self.repo.as_deref(), self.number) {
+            (Some(repo), Some(number)) => format!("GitHub     {repo}#{number} · {}", self.url.as_deref().unwrap_or("")),
+            _ => format!(
+                "Slack      {} · {}",
+                self.channel.as_deref().unwrap_or("?"),
+                self.permalink.as_deref().unwrap_or("")
+            ),
+        }
+    }
 }
 
 fn feature_route() -> String {
@@ -512,6 +541,374 @@ pub struct PrSnapshot {
     pub error: Option<String>,
 }
 
+/// Someone on Slack: you, an author, a bot.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackUser {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub is_bot: bool,
+}
+
+/// One earlier message of a thread or DM, for the pane and the reply editor's context.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackMessage {
+    pub ts: String,
+    pub user: SlackUser,
+    pub text: String,
+}
+
+/// Where a message was posted: `kind` is `channel`, `group`, `dm` or `mpim`.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackChannel {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+}
+
+/// Something the message points at: a PR, an issue, a Jira key or a bare URL.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct SlackRef {
+    pub kind: String,
+    #[serde(rename = "ref")]
+    pub reference: String,
+}
+
+/// What the triage pass (or a rule) decided about an item.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackTriage {
+    /// `P0` … `P3`.
+    pub priority: String,
+    /// `blocker`, `decision`, `question`, `request`, `fyi`, `social` or `automated`.
+    pub category: String,
+    #[serde(default)]
+    pub expects_reply: bool,
+    /// One line for the row: what they want from you.
+    #[serde(default)]
+    pub summary: String,
+    #[serde(default)]
+    pub why: String,
+    #[serde(default)]
+    pub draft: Option<String>,
+    #[serde(default)]
+    pub refs: Vec<SlackRef>,
+    #[serde(default)]
+    pub deadline: Option<String>,
+    /// `model` or `rules`.
+    #[serde(default)]
+    pub by: String,
+    #[serde(default)]
+    pub triaged_at: String,
+    /// You set the priority by hand; re-triage keeps it.
+    #[serde(default)]
+    pub overridden: bool,
+}
+
+/// The PR a message mentions, with the split the Pulls inbox has it in.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackLinkedPr {
+    pub repo: String,
+    pub number: u64,
+    pub split: String,
+}
+
+/// What an item is cross-linked to: a PR it mentions, the ticket made from it.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackLinked {
+    #[serde(default)]
+    pub pr: Option<SlackLinkedPr>,
+    #[serde(default)]
+    pub task_id: Option<String>,
+}
+
+fn one() -> u64 {
+    1
+}
+
+/// One thing in your Slack inbox: a message, or a thread's worth of them collapsed into one.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackItem {
+    /// `<channel id>:<message ts>`; stable across polls.
+    pub id: String,
+    /// `mention`, `dm`, `thread_reply`, `reaction`, `watch` or `automated`.
+    #[serde(default)]
+    pub kind: String,
+    pub channel: SlackChannel,
+    pub author: SlackUser,
+    /// The latest message's text, already plain.
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub thread_ts: Option<String>,
+    #[serde(default)]
+    pub context: Vec<SlackMessage>,
+    #[serde(default)]
+    pub permalink: String,
+    /// The latest message's time, ISO.
+    pub ts: String,
+    /// Why it is in your inbox: `me`, `usergroup:S…`, `broadcast:here`, `keyword:…`, …
+    #[serde(default)]
+    pub matched: Vec<String>,
+    /// Messages collapsed into this item.
+    #[serde(default = "one")]
+    pub count: u64,
+    /// Replies in the thread since the item's first message.
+    #[serde(default)]
+    pub replies: u64,
+    #[serde(default)]
+    #[allow(dead_code)] // the split already folds it in
+    pub you_replied: bool,
+    #[serde(default)]
+    #[allow(dead_code)] // the machine's read state; the board does not act on it yet
+    pub seen_at: Option<String>,
+    #[serde(default)]
+    pub done_at: Option<String>,
+    #[serde(default)]
+    pub snoozed_until: Option<String>,
+    /// The thread moved after you cleared it.
+    #[serde(default)]
+    pub reopened_at: Option<String>,
+    /// When a reply is due under the SLA for its priority, ISO; None when none is expected
+    /// or the item is cleared. The machine computes it; the board only shows it.
+    #[serde(default)]
+    pub due_at: Option<String>,
+    /// `due_at` has passed with no reply from you.
+    #[serde(default)]
+    pub overdue: bool,
+    #[serde(default)]
+    pub triage: Option<SlackTriage>,
+    /// The machine's split name; `split_enum` reads it.
+    pub split: String,
+    #[serde(default)]
+    pub linked: SlackLinked,
+}
+
+/// The priorities in order; `priority_step` walks them.
+pub const SLACK_PRIORITIES: [&str; 4] = ["P0", "P1", "P2", "P3"];
+
+impl SlackItem {
+    pub fn split_enum(&self) -> Option<crate::slack::SlackSplit> {
+        crate::slack::SlackSplit::from_wire(&self.split)
+    }
+
+    /// Triage's priority, `P0` … `P3`; None until triage ran.
+    pub fn priority(&self) -> Option<&str> {
+        self.triage.as_ref().map(|t| t.priority.as_str())
+    }
+
+    /// 0 for P0 … 3 for P3, 4 when untriaged: lower sorts first.
+    pub fn priority_rank(&self) -> usize {
+        self.priority().and_then(|p| SLACK_PRIORITIES.iter().position(|x| *x == p)).unwrap_or(SLACK_PRIORITIES.len())
+    }
+
+    /// P0 or P1: what counts on the badge and raises a notice.
+    pub fn urgent(&self) -> bool {
+        self.priority_rank() <= 1
+    }
+
+    /// Triage's one-line summary, or the message's first line until triage ran.
+    pub fn summary(&self) -> &str {
+        match self.triage.as_ref().map(|t| t.summary.as_str()).filter(|s| !s.is_empty()) {
+            Some(summary) => summary,
+            None => self.text.lines().next().unwrap_or(""),
+        }
+    }
+
+    /// `#channel`, `dm` or `group dm`: how the row and the pane name where it was said.
+    pub fn channel_label(&self) -> String {
+        match self.channel.kind.as_str() {
+            "dm" => "dm".to_string(),
+            "mpim" => "group dm".to_string(),
+            _ => format!("#{}", self.channel.name),
+        }
+    }
+
+    pub fn age(&self, now: u64) -> String {
+        age(&self.ts, now)
+    }
+
+    /// Seconds until the reply is due; negative once it is past. None without a `due_at`.
+    pub fn due_in(&self, now: u64) -> Option<i64> {
+        let due = unix_secs(self.due_at.as_deref()?)?;
+        Some(due as i64 - now as i64)
+    }
+
+    /// `due in 12m` or `overdue 40m`, for the pane; None without a `due_at`.
+    pub fn due_label(&self, now: u64) -> Option<String> {
+        let left = self.due_in(now)?;
+        Some(if self.overdue || left < 0 {
+            format!("overdue {}", age_secs(left.unsigned_abs()))
+        } else {
+            format!("due in {}", age_secs(left as u64))
+        })
+    }
+
+    /// Due within five minutes and not yet overdue: the row's age turns yellow.
+    pub fn due_soon(&self, now: u64) -> bool {
+        !self.overdue && self.due_in(now).is_some_and(|left| (0..=300).contains(&left))
+    }
+
+    /// The ticket made from this item, if any.
+    pub fn task_id(&self) -> Option<&str> {
+        self.linked.task_id.as_deref()
+    }
+}
+
+/// The priority one step up (`!`) or down (`-`) from `current`; None at either end.
+pub fn priority_step(current: &str, up: bool) -> Option<&'static str> {
+    let i = SLACK_PRIORITIES.iter().position(|p| *p == current)?;
+    let next = if up { i.checked_sub(1)? } else { i + 1 };
+    SLACK_PRIORITIES.get(next).copied()
+}
+
+/// A handle, broadcast, keyword or channel the inbox treats as addressed to you.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackWatch {
+    pub id: String,
+    /// `usergroup`, `broadcast`, `keyword` or `channel`.
+    pub kind: String,
+    pub value: String,
+    pub label: String,
+    /// Channel ids a keyword is limited to; empty means everywhere.
+    #[serde(default)]
+    pub channels: Vec<String>,
+    pub enabled: bool,
+    /// Ships with the machine; can be switched off, not deleted.
+    #[serde(default)]
+    pub builtin: bool,
+    /// A floor for triage: an item matching this watch is at least this priority.
+    #[serde(default)]
+    pub priority: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract
+    pub created_at: String,
+}
+
+fn socket_off() -> String {
+    "off".to_string()
+}
+
+/// `GET /slack/items` and the `slack.items` stream event: the items, the watches, and how
+/// the poll and the socket are doing.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackSnapshot {
+    #[serde(default)]
+    pub items: Vec<SlackItem>,
+    #[serde(default)]
+    pub watches: Vec<SlackWatch>,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; the pane names you by the author field
+    pub me: Option<SlackUser>,
+    pub polled_at: Option<String>,
+    pub error: Option<String>,
+    /// The Socket Mode websocket: `connected`, `disconnected`, or `off` without an app token.
+    #[serde(default = "socket_off")]
+    pub socket: String,
+    /// The reply SLA in effect, seconds by priority (rules file `## SLA`); 0 or missing means none.
+    #[serde(default)]
+    pub sla: BTreeMap<String, u64>,
+    /// Now is inside the rules file's quiet hours: only a P0 raises a notice.
+    #[serde(default)]
+    pub quiet: bool,
+}
+
+impl SlackSnapshot {
+    /// The SLA for a priority in seconds; 0 when there is none (or no priority yet).
+    pub fn sla_for(&self, priority: Option<&str>) -> u64 {
+        priority.and_then(|p| self.sla.get(p).copied()).unwrap_or(0)
+    }
+}
+
+/// The SLA targets in priority order, `10m/30m/1h/1h`; `–` for a priority without one.
+pub fn sla_targets(sla: &BTreeMap<String, u64>) -> String {
+    SLACK_PRIORITIES
+        .iter()
+        .map(|p| match sla.get(*p).copied().unwrap_or(0) {
+            0 => NONE.to_string(),
+            secs => age_secs(secs),
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// `GET /slack/usergroups` and `GET /slack/channels`: one choice for the watch picker.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct SlackOption {
+    pub id: String,
+    pub label: String,
+}
+
+/// One day of the Slack metrics window.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct SlackDay {
+    #[allow(dead_code)] // part of the contract; the Floor shows the window totals
+    pub day: String,
+    #[allow(dead_code)]
+    pub items: u64,
+    #[allow(dead_code)]
+    pub replied: u64,
+}
+
+/// `GET /slack/metrics?since=7d|30d`: how fast you answer, by priority.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SlackMetrics {
+    #[allow(dead_code)] // part of the contract; the Floor header already names the windows
+    pub since: String,
+    #[serde(default)]
+    pub items: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub replied: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub within_hour: u64,
+    /// Of those replied, how many inside their priority's SLA, by priority.
+    #[serde(default)]
+    pub within_sla: BTreeMap<String, u64>,
+    /// The SLA in effect, seconds by priority, as the rules file sets it.
+    #[serde(default)]
+    pub sla: BTreeMap<String, u64>,
+    /// Seconds from the message to your reply, by priority.
+    #[serde(default)]
+    pub time_to_reply: BTreeMap<String, Stats>,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract
+    pub by_day: Vec<SlackDay>,
+}
+
+impl SlackMetrics {
+    pub fn total_items(&self) -> u64 {
+        self.items.values().sum()
+    }
+
+    pub fn total_replied(&self) -> u64 {
+        self.replied.values().sum()
+    }
+
+    /// The share of replies that came within an hour, 0..=1; None with nothing replied.
+    pub fn within_hour_rate(&self) -> Option<f64> {
+        let replied = self.total_replied();
+        (replied > 0).then(|| self.within_hour as f64 / replied as f64)
+    }
+
+    /// For one priority: how many replies came inside its SLA, and that as a share of the
+    /// replies; the share is None with nothing replied.
+    pub fn within_sla_of(&self, priority: &str) -> (u64, Option<f64>) {
+        let within = self.within_sla.get(priority).copied().unwrap_or(0);
+        let replied = self.replied.get(priority).copied().unwrap_or(0);
+        (within, (replied > 0).then(|| within as f64 / replied as f64))
+    }
+}
+
 /// Messages on the machine's `/events` stream.
 #[derive(Deserialize, Debug)]
 #[serde(tag = "type")]
@@ -534,6 +931,9 @@ pub enum StreamMessage {
     /// The PR inbox changed; the whole snapshot rides along.
     #[serde(rename = "github.prs")]
     Prs { snapshot: PrSnapshot },
+    /// The Slack inbox changed; the whole snapshot rides along, watches included.
+    #[serde(rename = "slack.items")]
+    Slack { snapshot: SlackSnapshot },
 }
 
 /// `budget.alert`: a task's, a repo's month's or the day's spend passing a threshold.
@@ -786,9 +1186,14 @@ impl Task {
         short_id(&self.id)
     }
 
-    /// `#42 ` when the task came from an issue, else empty. The card shows it dim.
+    /// `#42 ` when the task came from an issue, `⌁ ` when it came from a Slack message, else
+    /// empty. The card shows it dim.
     pub fn issue_prefix(&self) -> String {
-        self.source.as_ref().map_or_else(String::new, |s| format!("#{} ", s.number))
+        match self.source.as_ref() {
+            Some(TaskSource { number: Some(number), .. }) => format!("#{number} "),
+            Some(TaskSource { kind, .. }) if kind == "slack" => "⌁ ".to_string(),
+            _ => String::new(),
+        }
     }
 
     #[allow(dead_code)] // the card renders the prefix dim, so it builds from `issue_prefix`
@@ -1148,17 +1553,39 @@ pub fn unix_secs(iso: &str) -> Option<u64> {
     u64::try_from(days * 86_400 + hour * 3600 + minute * 60 + second).ok()
 }
 
+/// The ISO-8601 UTC timestamp for unix seconds: the inverse of `unix_secs`, for the times
+/// the board sends (a snooze).
+pub fn iso_of(secs: u64) -> String {
+    let days = (secs / 86_400) as i64;
+    let rem = secs % 86_400;
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!("{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}.000Z", rem / 3600, (rem % 3600) / 60, rem % 60)
+}
+
 /// How long ago an ISO timestamp was, compact: `45s`, `12m`, `3h`, `2d`.
 pub fn age(iso: &str, now: u64) -> String {
     let Some(since) = unix_secs(iso) else {
         return String::new();
     };
-    let s = now.saturating_sub(since);
-    match s {
-        0..=59 => format!("{s}s"),
-        60..=3599 => format!("{}m", s / 60),
-        3600..=86_399 => format!("{}h", s / 3600),
-        _ => format!("{}d", s / 86_400),
+    age_secs(now.saturating_sub(since))
+}
+
+/// A span of seconds, compact: `45s`, `12m`, `3h`, `2d`.
+pub fn age_secs(secs: u64) -> String {
+    match secs {
+        0..=59 => format!("{secs}s"),
+        60..=3599 => format!("{}m", secs / 60),
+        3600..=86_399 => format!("{}h", secs / 3600),
+        _ => format!("{}d", secs / 86_400),
     }
 }
 
@@ -1171,6 +1598,16 @@ mod tests {
         assert_eq!(unix_secs("1970-01-01T00:00:00.000Z"), Some(0));
         assert_eq!(unix_secs("2026-10-22T23:24:22.089Z"), Some(1_792_711_462));
         assert_eq!(unix_secs("2024-02-29T12:00:00Z"), Some(1_709_208_000));
+    }
+
+    #[test]
+    fn iso_of_is_the_inverse_of_unix_secs() {
+        assert_eq!(iso_of(0), "1970-01-01T00:00:00.000Z");
+        assert_eq!(iso_of(1_792_711_462), "2026-10-22T23:24:22.000Z");
+        assert_eq!(iso_of(1_709_208_000), "2024-02-29T12:00:00.000Z");
+        for secs in [951_782_400u64, 1_767_225_599, 1_893_456_000] {
+            assert_eq!(unix_secs(&iso_of(secs)), Some(secs), "{secs}");
+        }
     }
 
     fn task_json(source: &str) -> String {
@@ -1296,9 +1733,26 @@ mod tests {
         );
         let task: Task = serde_json::from_str(&json).unwrap();
         let source = task.source.expect("source present");
-        assert_eq!(source.number, 42);
-        assert_eq!(source.repo, "acme/app");
-        assert_eq!(source.url, "https://github.com/acme/app/issues/42");
+        assert_eq!(source.number, Some(42));
+        assert_eq!(source.repo.as_deref(), Some("acme/app"));
+        assert_eq!(source.url.as_deref(), Some("https://github.com/acme/app/issues/42"));
+        assert_eq!(source.link(), Some("https://github.com/acme/app/issues/42"));
+        assert_eq!(source.detail_line(), "GitHub     acme/app#42 · https://github.com/acme/app/issues/42");
+    }
+
+    #[test]
+    fn task_with_a_slack_source_deserialises_and_wears_the_slack_glyph() {
+        let json = task_json(
+            r##","source":{"kind":"slack","channel":"#payments-oncall","ts":"1730112345.0001","permalink":"https://acme.slack.com/archives/C0123/p1730112345000100"}"##,
+        );
+        let task: Task = serde_json::from_str(&json).unwrap();
+        let source = task.source.clone().expect("source present");
+        assert_eq!(source.kind, "slack");
+        assert!(source.repo.is_none() && source.number.is_none() && source.url.is_none());
+        assert_eq!(source.channel.as_deref(), Some("#payments-oncall"));
+        assert_eq!(source.link(), Some("https://acme.slack.com/archives/C0123/p1730112345000100"));
+        assert!(source.detail_line().starts_with("Slack      #payments-oncall · https://"));
+        assert_eq!(task.card_label(), "⌁ Login page");
     }
 
     #[test]
@@ -1312,6 +1766,69 @@ mod tests {
         let json = task_json(r#","source":{"kind":"linear","repo":"ENG","number":7,"url":"https://x/7"}"#);
         let task: Task = serde_json::from_str(&json).unwrap();
         assert_eq!(task.source.unwrap().kind, "linear");
+    }
+
+    #[test]
+    fn a_slack_snapshot_deserialises_with_every_field_and_its_nulls() {
+        let snapshot: SlackSnapshot = crate::slack::fixtures::snapshot();
+        assert_eq!(snapshot.items.len(), 3);
+        assert_eq!(snapshot.watches.len(), 2);
+        assert_eq!(snapshot.socket, "connected");
+        assert_eq!((snapshot.sla_for(Some("P0")), snapshot.sla_for(Some("P2")), snapshot.sla_for(Some("P9")), snapshot.sla_for(None)), (600, 3600, 0, 0));
+        assert_eq!(sla_targets(&snapshot.sla), "10m/30m/1h/1h");
+        assert_eq!(snapshot.items[0].due_at.as_deref(), Some("2026-10-28T09:58:00.000Z"));
+        assert!(!snapshot.items[0].overdue && snapshot.items[2].overdue && snapshot.items[1].due_at.is_none());
+        assert_eq!(snapshot.me.as_ref().map(|m| m.name.as_str()), Some("higor"));
+        assert_eq!(snapshot.polled_at.as_deref(), Some("2026-10-28T10:00:00.000Z"));
+        let item = &snapshot.items[0];
+        assert_eq!(item.id, "C0123:1730112345.0001");
+        assert_eq!(item.channel_label(), "#payments-oncall");
+        assert_eq!(item.author.name, "marta");
+        assert_eq!(item.thread_ts.as_deref(), Some("1730112000.0001"));
+        assert_eq!(item.context.len(), 2);
+        assert_eq!(item.context[1].user.name, "joão");
+        assert_eq!(item.matched, vec!["me".to_string()]);
+        assert_eq!((item.count, item.replies), (1, 3));
+        assert!(item.done_at.is_none() && item.snoozed_until.is_none() && item.reopened_at.is_none());
+        assert_eq!(item.priority(), Some("P0"));
+        assert_eq!(item.priority_rank(), 0);
+        assert!(item.urgent());
+        assert_eq!(item.summary(), "approve rollback");
+        assert_eq!(item.split_enum(), Some(crate::slack::SlackSplit::NeedsReply));
+        let triage = item.triage.as_ref().unwrap();
+        assert_eq!(triage.refs[0].reference, "acme/app#212");
+        assert!(triage.deadline.is_none() && triage.expects_reply && !triage.overridden);
+        assert_eq!(item.linked.pr.as_ref().map(|p| (p.number, p.split.as_str())), Some((212, "ci_failed")));
+        assert!(item.task_id().is_none());
+        let untriaged: SlackItem = serde_json::from_str(&crate::slack::fixtures::item_json("x", "fyi", None, "2026-10-28T07:00:00Z")).unwrap();
+        assert!(untriaged.triage.is_none() && !untriaged.urgent());
+        assert_eq!(untriaged.priority_rank(), 4);
+        assert!(untriaged.summary().starts_with("@higor checkout"), "the text stands in for the summary");
+        let watch = &snapshot.watches[1];
+        assert!(watch.builtin && watch.enabled);
+        assert_eq!(watch.priority.as_deref(), Some("P2"));
+        assert!(snapshot.watches[0].priority.is_none());
+
+        let sparse: SlackSnapshot = serde_json::from_str(r#"{"items":[],"watches":[],"me":null,"polledAt":null,"error":"no token","socket":"off"}"#).unwrap();
+        assert_eq!(sparse.error.as_deref(), Some("no token"));
+        assert_eq!(sparse.socket, "off");
+        assert!(sparse.sla.is_empty(), "a machine from before the SLA sends none");
+        assert_eq!(sla_targets(&sparse.sla), "–/–/–/–");
+        let metrics: SlackMetrics = serde_json::from_str(
+            r#"{"since":"2026-10-21T00:00:00.000Z","items":{"P0":1,"P1":4,"P2":10,"P3":20},"replied":{"P0":1,"P1":3,"P2":2,"P3":0},
+            "withinHour":3,"withinSla":{"P0":1,"P1":2,"P2":0,"P3":0},"sla":{"P0":600,"P1":1800,"P2":3600,"P3":3600},
+            "timeToReply":{"P0":{"median":600,"p90":600},"P1":{"median":3600,"p90":7200},"P2":{"median":null,"p90":null},"P3":{"median":null,"p90":null}},
+            "byDay":[{"day":"2026-10-27","items":5,"replied":2}]}"#,
+        )
+        .unwrap();
+        assert_eq!(metrics.total_items(), 35);
+        assert_eq!(metrics.total_replied(), 6);
+        assert_eq!(metrics.within_hour_rate(), Some(0.5));
+        assert_eq!(metrics.time_to_reply["P1"].median, Some(3600.0));
+        assert_eq!(metrics.within_sla_of("P0"), (1, Some(1.0)));
+        assert_eq!(metrics.within_sla_of("P1").1.map(|s| (s * 100.0).round() as u64), Some(67));
+        assert_eq!(metrics.within_sla_of("P3"), (0, None), "nothing replied, no share");
+        assert_eq!(metrics.sla["P1"], 1800);
     }
 
     #[test]

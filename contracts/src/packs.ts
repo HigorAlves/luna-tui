@@ -5,9 +5,10 @@
 // may give is one the machine ingests.
 import { z } from "zod";
 
+import { SlackCategory, SlackPriority } from "./slack.ts";
 import { Finding, LunaConfig, PackId, TestCase, VerifyResult } from "./stage.ts";
 
-/** The eight agent roles. A pack names one; the runner looks its definition up by this. */
+/** The agent roles. A pack names one; the runner looks its definition up by this. */
 export const AgentRole = z.enum([
   "setup-planner",
   "triage-planner",
@@ -18,6 +19,8 @@ export const AgentRole = z.enum([
   "ci-investigator",
   "retro-reviewer",
   "pr-reviewer",
+  // The Slack inbox's triage: no tools, no worktree, a batch of messages in and verdicts out.
+  "slack-triager",
   // Helpers a PR task's role dispatches through the Agent tool; never a pack's own role.
   "security-reviewer",
   "reply-drafter",
@@ -150,6 +153,28 @@ export const PrAddressAnswer = z.object({
   reason: z.string().optional(),
   options: z.array(z.string()).optional(),
 });
+
+/** slack_triage: one verdict per inbox item id; the inbox ingests it, not the pipeline. */
+export const SlackTriageAnswer = z.object({
+  items: z.array(
+    z.object({
+      id: z.string(),
+      priority: SlackPriority,
+      category: SlackCategory,
+      /** The text asks the person for something nobody has answered yet. */
+      expectsReply: z.boolean(),
+      /** At most 90 characters: what they want from the person, not what they said. */
+      summary: z.string(),
+      why: z.string(),
+      /** Only when expectsReply: at most two sentences in the person's voice. */
+      draft: z.string().nullable(),
+      refs: z.array(z.object({ kind: z.enum(["pr", "issue", "jira", "url"]), ref: z.string() })),
+      /** An ISO date the text names, else null. */
+      deadline: z.string().nullable(),
+    }),
+  ),
+});
+export type SlackTriageAnswer = z.infer<typeof SlackTriageAnswer>;
 
 export interface Pack {
   id: PackId;
@@ -401,6 +426,22 @@ export const PACKS: Record<PackId, Pack> = {
     effort: "medium",
     answer: PrAddressAnswer,
     template: "addressing.md",
+  },
+  slack_triage: {
+    id: "slack_triage",
+    // The Slack inbox's batch triage: not a task stage. No tools at all, no worktree; the
+    // batch is in the input and the answer is the whole job. Haiku, low effort, three turns.
+    agent: "slack-triager",
+    helpers: [],
+    skills: [],
+    tools: [],
+    writable: false,
+    maxTurns: 3,
+    timeoutMs: 3 * MINUTE,
+    model: "haiku",
+    effort: "low",
+    answer: SlackTriageAnswer,
+    template: "slack_triage.md",
   },
 };
 

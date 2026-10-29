@@ -23,6 +23,24 @@ pnpm board:link       # builds the board and links it into herdr once; `pnpm boa
 
 Both use the same database, so tasks carry over when you switch. For board usage and keys, see [`board/README.md`](../board/README.md).
 
+## Slack inbox
+
+`S` on the board is your Slack Activity tab, triaged. It needs a small Slack app of your own, installed only in your workspace, created once from the manifest in this repo:
+
+1. Open <https://api.slack.com/apps> → **Create New App** → **From a manifest** → pick your workspace → paste [`slack/manifest.json`](../slack/manifest.json) → **Create**.
+2. **Install to Workspace** and allow it. On the app's **OAuth & Permissions** page copy the **User OAuth Token** (`xoxp-…`).
+3. On **Basic Information → App-Level Tokens**, generate one with the `connections:write` scope and copy it (`xapp-…`). It feeds the live socket that brings reactions and replies in as they happen; without it the inbox polls once a minute and shows no reactions.
+4. Put both where the machine reads them: `machine/.env` for `pnpm dev`, a root `.env` (or the shell) for `pnpm start`:
+
+   ```sh
+   MACHINE_SLACK_USER_TOKEN=xoxp-...
+   MACHINE_SLACK_APP_TOKEN=xapp-...
+   ```
+
+5. Start the machine, press `S` on the board, then `W` to add the team handles (`@platform-team`), keywords or channels it should treat as addressed to you.
+
+The token is yours, so replies sent from the board post as you. Nothing is posted without `ctrl+s` in the reply editor. `d` clears an item on the board only; `MACHINE_SLACK_MARK_READ=on` also marks it read in Slack. Priorities and drafts come from the `slack_triage` pack: a harness agent (Haiku, low effort, no tools) that runs in the stage container with your Claude Code credential, the same way every stage does, one short run per batch of new messages after the poll has published; without Docker or a credential (or with `MACHINE_AGENTS=off`) the inbox still fills, sorted by time, with no priorities. The rules the triage follows (VIPs, muted channels, quiet hours, always-P0 keywords, your notes) live in `~/.local/state/hardness/slack-triage.md` (`MACHINE_STATE_DIR`; the machine writes it from the template in [`docs/agents/slack-triage.md`](./agents/slack-triage.md) on first run, and `MACHINE_SLACK_RULES` moves it); its `## SLA` section sets how long you give yourself to reply by priority (10m for P0, 30m for P1, 1h for P2 and P3 unless you change it), and an item past its target turns red on the board. Inside its `## Quiet hours` window the board raises notices for P0 only. What the inbox learns from what you clear and answer is kept next to it in `slack-triage.learned.md`. Every variable is in [configuration.md](./configuration.md).
+
 ## Checks
 
 ```sh

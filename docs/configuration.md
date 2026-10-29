@@ -16,7 +16,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `MACHINE_MAX_CONCURRENT` | `4` | tasks driving a stage at once, across every repo |
 | `MACHINE_MAX_PER_REPO` | unset | running tasks one repo may hold at once, so it cannot take every slot; unset means no cap. Claims go oldest-queued first, the repo with the fewest running tasks first. A repo's own `PIPELINE.md` (`max_concurrent`) overrides it for that repo |
 | `MACHINE_MAX_PER_STAGE` | unset | `stage=n` pairs, e.g. `implementing=2,e2e=1`: tasks that may drive one stage at once. A task whose next stage is at cap waits in the queue, state kept (`stage.held`). `ci_watch` never holds a slot: it polls GitHub outside the pool and takes a slot again (or queues) for the stage after |
-| `MACHINE_AGENTS` | on | set to `off` to make every stage a stub (no credential or Docker needed) |
+| `MACHINE_AGENTS` | on | set to `off` to make every stage a stub (no credential or Docker needed); the Slack inbox's triage is a pack too (`slack_triage`), so it is off with them and items show no priority |
 | `MACHINE_GITHUB_POLL` | empty, off | comma-separated `owner/name` repos whose open issues labelled `MACHINE_GITHUB_LABEL` land in Intake as tasks; needs `GITHUB_TOKEN` |
 | `MACHINE_GITHUB_POLL_INTERVAL` | `300` | seconds between GitHub polls |
 | `MACHINE_GITHUB_LABEL` | `ready-for-agent` | the issue label GitHub intake looks for |
@@ -26,6 +26,13 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `MACHINE_REPOS_DIR` | `~/Developer` | where `MACHINE_REPO_MAP`'s fallback scan looks |
 | `MACHINE_THREAD_REPLIES` | on | set to `off` to stop the machine replying in the thread a task came from (a comment on its GitHub issue; a Slack thread when the pair below is set) when it is picked up, needs you, escalates, pauses, gets its PR and closes |
 | `MACHINE_SLACK_TOKEN` / `MACHINE_SLACK_CHANNEL` | unset | a bot token (`chat:write`) and a channel id: one Slack thread per task is opened there and every reply above lands in it. Both or neither |
+| `MACHINE_SLACK_USER_TOKEN` | unset | your User OAuth Token (`xoxp-…`) from the internal app in `slack/manifest.json`: the inbox reads what you see and replies as you. Unset: the inbox is off and every Slack call says so |
+| `MACHINE_SLACK_APP_TOKEN` | unset | the app-level token (`xapp-…`, `connections:write`) for Socket Mode: reactions and new messages arrive as they happen. Unset: the snapshot's `socket` is `off`; polling still covers everything but reactions |
+| `MACHINE_SLACK_INBOX` | on | `off` stops the scheduled polls, Socket Mode and the digest; the `/slack/*` routes stay up with an empty snapshot, so the board's `S` view shows nothing until you press `R`, which still polls once on demand |
+| `MACHINE_SLACK_INBOX_INTERVAL` | `60` | seconds between inbox polls; a rate-limited answer backs the next poll off to five minutes |
+| `MACHINE_SLACK_MARK_READ` | off | `on` makes `d` (done) also move your read cursor in Slack (`conversations.mark`, needs the `channels:write`, `groups:write`, `im:write`, `mpim:write` user scopes) |
+| `MACHINE_SLACK_RULES` | `MACHINE_STATE_DIR/slack-triage.md` | the triage rules file you edit (VIPs, muted channels, always-P0 keywords, quiet hours, the reply SLA, notes for the model). A missing file is written from the template, [`docs/agents/slack-triage.md`](./agents/slack-triage.md), which is only that: a template. A relative path is taken from the repo root. What the inbox learns from you goes to the machine-owned sibling `<rules>.learned.md`, so its writes never collide with your edits. Triage itself runs as the `slack_triage` pack in the stage container, with the same credential and Docker image as the stages; nothing else to set |
+| `MACHINE_SLACK_DIGEST_AT` | unset | `HH:MM` local time: the machine DMs you a ten-line digest (open P0/P1, what waits on others, yesterday's response time) every day at that time |
 | `RUNNER_IMAGE` | `hardness-runner:dev` | the stage container image |
 | `RUNNER_QA_IMAGE` | `hardness-runner-qa:dev` | the QA stage image; without it e2e is skipped |
 | `WORKTREES_DIR` | `~/Developer/worktrees` | where task worktrees are created, as `<worktreesDir>/<repo>/<branch>` |

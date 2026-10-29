@@ -14,6 +14,8 @@ import {
   PrSplit,
   ReviewContext,
   RUNNING,
+  SlackTriageAnswer,
+  SlackTriageContext,
   StageInput,
   StageOutput,
   TaskRoute,
@@ -173,11 +175,36 @@ describe("StageOutput", () => {
 });
 
 describe("PackId", () => {
-  it("has the eleven packs, each named after a task state", () => {
+  it("has the eleven stage packs, each named after a task state, plus the Slack inbox's triage", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing"].sort(),
+      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage"].sort(),
     );
-    for (const pack of PackId.options) expect(TaskState.options).toContain(pack);
+    for (const pack of PackId.options) {
+      if (pack === "slack_triage") expect(TaskState.options).not.toContain(pack);
+      else expect(TaskState.options).toContain(pack);
+    }
+  });
+});
+
+describe("slack_triage", () => {
+  it("runs as the slack-triager on haiku, low effort, three turns, no tools and no worktree", () => {
+    expect(PACKS.slack_triage).toMatchObject({ agent: "slack-triager", helpers: [], skills: [], tools: [], writable: false, maxTurns: 3, model: "haiku", effort: "low", template: "slack_triage.md" });
+    expect(PACKS.slack_triage.timeoutMs).toBe(3 * 60_000);
+    expect(AgentRole.options).toContain("slack-triager");
+  });
+
+  it("answers one verdict per item id, and a stage input may carry the inbox batch", () => {
+    const verdict = { id: "C1:1", priority: "P1", category: "question", expectsReply: true, summary: "s", why: "w", draft: "d", refs: [{ kind: "pr", ref: "o/a#1" }], deadline: null };
+    expect(SlackTriageAnswer.safeParse({ items: [verdict] }).success).toBe(true);
+    expect(SlackTriageAnswer.safeParse({ items: [{ ...verdict, priority: "P9" }] }).success).toBe(false);
+    const slack = {
+      me: { id: "U1", name: "higor" },
+      watches: [{ label: "@platform-team", kind: "usergroup" }],
+      rules: "## Notes\n- short replies",
+      items: [{ id: "C1:1", channel: "#eng", author: "@marta", isBot: false, text: "can you?", context: [{ user: "@lee", text: "earlier" }], matched: ["me"], threadReplies: 1 }],
+    };
+    expect(SlackTriageContext.safeParse(slack).success).toBe(true);
+    expect(StageInput.safeParse({ ...stageInputExample, pack: "slack_triage", context: { projectContext: null, slack } }).success).toBe(true);
   });
 });
 
