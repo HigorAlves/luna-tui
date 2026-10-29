@@ -98,12 +98,47 @@ describe("splitOf", () => {
     expect(mine({ reviewDecision: "APPROVED" })).toBe("ready_to_merge");
     expect(mine({ contexts: green, reviewDecision: "APPROVED", mergeable: "CONFLICTING" })).toBe("mine");
     expect(mine({ contexts: running, reviewDecision: "APPROVED" })).toBe("ci_running");
-    expect(mine({ contexts: green })).toBe("mine");
+    expect(mine({ contexts: green, reviewDecision: "REVIEW_REQUIRED" })).toBe("mine");
+  });
+
+  it("a repo that asks for no review has no decision at all: green and mergeable is ready", () => {
+    expect(mine({ contexts: green })).toBe("ready_to_merge");
+    expect(mine({ contexts: green, mergeable: "CONFLICTING" })).toBe("mine");
+    expect(mine({ contexts: green, isDraft: true })).toBe("mine");
+    expect(mine({ contexts: green, reviewThreads: { nodes: [{ isResolved: false }] } })).toBe("changes_requested");
+    expect(mine({ contexts: running })).toBe("ci_running");
   });
 
   it("a draft of mine is never ready", () => {
     expect(mine({ contexts: green, reviewDecision: "APPROVED", isDraft: true })).toBe("mine");
     expect(mine({ contexts: red, isDraft: true })).toBe("ci_failed");
+  });
+});
+
+describe("GitHub's merge state decides ready to merge", () => {
+  const mine = (overrides: Partial<PrNode> & { contexts?: unknown[] } = {}) => splitOf(facts(overrides));
+  const withState = (mergeStateStatus: string, over: Record<string, unknown> = {}) => mine({ contexts: green, ...over, mergeStateStatus } as never);
+
+  it("CLEAN and HAS_HOOKS are ready whatever the review decision says, because GitHub says the button works", () => {
+    expect(withState("CLEAN")).toBe("ready_to_merge");
+    expect(withState("HAS_HOOKS", { reviewDecision: null })).toBe("ready_to_merge");
+    expect(withState("CLEAN", { reviewDecision: "REVIEW_REQUIRED" })).toBe("ready_to_merge");
+  });
+
+  it("BLOCKED, BEHIND and DIRTY are not, even approved and green", () => {
+    for (const state of ["BLOCKED", "BEHIND", "DIRTY", "DRAFT"]) {
+      expect(withState(state, { reviewDecision: "APPROVED" }), state).toBe("mine");
+    }
+  });
+
+  it("UNSTABLE is ready only when nothing is still running", () => {
+    expect(withState("UNSTABLE")).toBe("ready_to_merge");
+    expect(mine({ contexts: running, mergeStateStatus: "UNSTABLE" } as never)).toBe("ci_running");
+  });
+
+  it("a draft is never ready, and an unresolved thread still sends it to changes requested", () => {
+    expect(withState("CLEAN", { isDraft: true })).toBe("mine");
+    expect(withState("CLEAN", { reviewThreads: { nodes: [{ isResolved: false }] } })).toBe("changes_requested");
   });
 });
 

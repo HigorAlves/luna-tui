@@ -3,7 +3,8 @@ import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { Pipeline } from "../../application/pipeline.ts";
-import { CloneError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
+import { PrBusyError } from "../../application/pr-tasks.ts";
+import { CloneError, NoPullError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
 import { freshTestDatabase } from "../../test/database.ts";
 import { createApp } from "./app.ts";
@@ -37,6 +38,7 @@ const pr = (number: number, split: PullRequest["split"]): PullRequest => ({
   fromFork: false,
   reviewDecision: "APPROVED",
   mergeable: "MERGEABLE",
+  mergeState: "CLEAN",
   checks: { state: "success", passed: 1, total: 1, failed: [], all: [{ name: "build", state: "SUCCESS", url: null }] },
   unresolvedThreads: 0,
   split,
@@ -62,6 +64,12 @@ function fakePulls(prs: PullRequest[]): PullsPort & { did: string[] } {
       const found = prs.find((p) => p.repo === repo && p.number === number);
       if (!found || found.split !== "ready_to_merge") throw new NotReadyError(repo, number);
       did.push(`merge ${repo}#${number}`);
+    },
+    async close(repo, number) {
+      const found = prs.find((p) => p.repo === repo && p.number === number);
+      if (!found) throw new NoPullError(repo, number);
+      if (found.task) throw new PrBusyError(repo, number, found.task.id);
+      did.push(`close ${repo}#${number}`);
     },
     async clone(repo, dest) {
       if (!dest.startsWith("/")) throw new CloneError("dest must be an absolute path");
@@ -94,6 +102,20 @@ describe("the PR inbox over HTTP", () => {
     expect(refused.status).toBe(409);
     expect(await refused.json()).toMatchObject({ error: "not_ready" });
     expect(pulls.did).toEqual(["merge o/a#1"]);
+  });
+
+  it("closes a PR without a task, refuses one a task is working on, and 404s an unknown one", async () => {
+    const busy = { ...pr(2, "ci_failed"), task: { id: "abcdef123456", state: "implementing", route: "ci_fix" as const } };
+    const pulls = fakePulls([pr(1, "mine"), busy]);
+    const app = createApp({ db, pipeline, bus: new Bus(), pulls });
+    const closed = await app.request("/github/prs/o/a/1/close", post({}));
+    expect(closed.status).toBe(200);
+    expect(await closed.json()).toEqual({ closed: true });
+    expect((await app.request("/github/prs/o/a/2/close", post({}))).status).toBe(409);
+    const missing = await app.request("/github/prs/o/a/9/close", post({}));
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toMatchObject({ error: "no_pull" });
+    expect(pulls.did).toEqual(["close o/a#1"]);
   });
 
   it("starts a clone and rejects a bad destination or repo", async () => {

@@ -6,7 +6,8 @@ import type { PrSnapshot } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import { fakeGitHub } from "../test/github.ts";
-import { CloneError, GitHubPulls, NotReadyError } from "./pulls.ts";
+import { PrBusyError } from "./pr-tasks.ts";
+import { CloneError, GitHubPulls, NoPullError, NotReadyError } from "./pulls.ts";
 
 /** A PR node as PR_QUERY answers it, approved and green unless overridden. */
 function node(number: number, over: Record<string, unknown> = {}) {
@@ -55,6 +56,7 @@ function setup(world: World, over: Partial<ConstructorParameters<typeof GitHubPu
       }
       return (world.nodes[number] ?? null) as never;
     },
+    closePr: async (repo, number) => void calls.push(["close", repo, String(number)]),
     mergePr: async (repo, number) => {
       calls.push(["merge", repo, String(number)]);
       if (world.mergeError) throw new Error(world.mergeError);
@@ -83,7 +85,7 @@ const hit = (number: number, repo = "o/a") => ({ number, repository: { nameWithO
 
 describe("GitHubPulls.pollOnce", () => {
   it("builds the snapshot with each PR's split, checkout and task, and publishes only when it changed", async () => {
-    const { pulls, published } = setup({ hits: [hit(1), hit(2), hit(3, "o/b")], nodes: { 1: node(1), 2: node(2, { reviewDecision: null }), 3: node(3, { headRepository: { nameWithOwner: "o/b" } }) } });
+    const { pulls, published } = setup({ hits: [hit(1), hit(2), hit(3, "o/b")], nodes: { 1: node(1), 2: node(2, { reviewDecision: "REVIEW_REQUIRED" }), 3: node(3, { headRepository: { nameWithOwner: "o/b" } }) } });
     const snapshot = await pulls.pollOnce();
     expect(snapshot.error).toBeNull();
     expect(snapshot.polledAt).not.toBeNull();
@@ -138,7 +140,7 @@ describe("GitHubPulls.pollOnce", () => {
 
 describe("GitHubPulls.merge", () => {
   it("refuses a PR outside Ready to merge, squashes a ready one, and polls again", async () => {
-    const world: World = { hits: [hit(1), hit(2)], nodes: { 1: node(1), 2: node(2, { reviewDecision: null }) } };
+    const world: World = { hits: [hit(1), hit(2)], nodes: { 1: node(1), 2: node(2, { reviewDecision: "REVIEW_REQUIRED" }) } };
     const { pulls, calls } = setup(world);
     await pulls.pollOnce();
     await expect(pulls.merge("o/a", 2)).rejects.toThrow(NotReadyError);
@@ -154,6 +156,21 @@ describe("GitHubPulls.merge", () => {
     const { pulls } = setup(world);
     await pulls.pollOnce();
     await expect(pulls.merge("o/a", 1)).rejects.toThrow(/not mergeable/);
+  });
+});
+
+describe("GitHubPulls.close", () => {
+  it("closes any PR in the snapshot, polls again, and refuses a PR a task works on or one it does not know", async () => {
+    const world: World = { hits: [hit(1), hit(2)], nodes: { 1: node(1, { reviewDecision: "REVIEW_REQUIRED" }), 2: node(2) } };
+    const { pulls, calls } = setup(world);
+    await pulls.pollOnce();
+    await pulls.close("o/a", 1);
+    expect(calls).toContainEqual(["close", "o/a", "1"]);
+    await expect(pulls.close("o/a", 9)).rejects.toThrow(NoPullError);
+    const busy = setup(world, { findTask: async () => ({ id: "t1234567", state: "implementing", route: "ci_fix" }) });
+    await busy.pulls.pollOnce();
+    await expect(busy.pulls.close("o/a", 1)).rejects.toThrow(PrBusyError);
+    expect(busy.calls.some((c) => c[0] === "close")).toBe(false);
   });
 });
 

@@ -78,8 +78,10 @@ export interface GitHub {
   prComments(slug: string, number: number): Promise<ReviewContext["existingComments"]>;
   /** The unresolved review threads, with the ids replies and resolutions address. */
   prThreads(slug: string, number: number): Promise<ThreadsContext["threads"]>;
-  /** Squash-merges and deletes the head branch. */
+  /** Merges the way the repo allows (squash, else merge, else rebase) and deletes the head branch. */
   mergePr(slug: string, number: number): Promise<void>;
+  /** Closes the PR without merging; its branch stays. */
+  closePr(slug: string, number: number): Promise<void>;
   postReview(slug: string, number: number, review: ReviewPost): Promise<void>;
   replyToThread(threadId: string, body: string): Promise<void>;
   resolveThread(threadId: string): Promise<void>;
@@ -113,6 +115,7 @@ export function noTokenGitHub(): GitHub {
     prComments: refuse,
     prThreads: refuse,
     mergePr: refuse,
+    closePr: refuse,
     postReview: refuse,
     replyToThread: refuse,
     resolveThread: refuse,

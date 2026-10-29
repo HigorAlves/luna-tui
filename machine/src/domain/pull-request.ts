@@ -7,7 +7,7 @@ export const PR_QUERY = `query($owner:String!,$name:String!,$number:Int!){
   repository(owner:$owner,name:$name){ pullRequest(number:$number){
     number title body url isDraft updatedAt baseRefName headRefName
     author{login} headRepository{nameWithOwner}
-    reviewDecision mergeable
+    reviewDecision mergeable mergeStateStatus
     reviewRequests(first:50){nodes{requestedReviewer{__typename ... on User{login} ... on Team{slug}}}}
     reviewThreads(first:100){nodes{isResolved}}
     commits(last:1){nodes{commit{statusCheckRollup{state contexts(first:100){nodes{__typename
@@ -46,6 +46,8 @@ export interface PrNode {
   headRepository: { nameWithOwner: string } | null;
   reviewDecision: PullRequest["reviewDecision"];
   mergeable: PullRequest["mergeable"];
+  /** Absent from older fixtures. */
+  mergeStateStatus?: PullRequest["mergeState"] | null;
   reviewRequests: { nodes: Array<{ requestedReviewer: { login?: string; slug?: string } | null }> };
   reviewThreads: { nodes: Array<{ isResolved: boolean }> };
   commits: {
@@ -117,16 +119,25 @@ export function fromGraphQl(node: PrNode, repo: string, me: string, teams: strin
     fromFork: head === null || head.toLowerCase() !== repo.toLowerCase(),
     reviewDecision: node.reviewDecision ?? null,
     mergeable: node.mergeable ?? "UNKNOWN",
+    mergeState: node.mergeStateStatus ?? "UNKNOWN",
     checks: summarizeChecks(node.commits.nodes[0]?.commit.statusCheckRollup?.contexts.nodes ?? []),
     unresolvedThreads: node.reviewThreads.nodes.filter((t) => !t.isResolved).length,
     updatedAt: node.updatedAt,
   };
 }
 
-/** Approved, green (or no checks), mergeable, not a draft, nothing left to resolve. */
+/** GitHub's own answer decides whether the Merge button works: CLEAN, HAS_HOOKS or UNSTABLE (only
+ *  checks that are not required are red). Only while GitHub has not said yet does the rule below
+ *  stand in: approved (or the repo asks for no review, which GitHub reports as no decision at all),
+ *  green (or no checks), mergeable, not a draft, nothing left to resolve. */
 export function readyToMerge(pr: PrFacts): boolean {
+  if (pr.isDraft) return false;
+  if (pr.mergeState === "CLEAN" || pr.mergeState === "HAS_HOOKS") return true;
+  // Mergeable with a check that is not required still red or running: red is CI failed, running is not ready yet.
+  if (pr.mergeState === "UNSTABLE") return pr.checks.state !== "pending";
+  if (pr.mergeState !== "UNKNOWN") return false;
   return (
-    pr.reviewDecision === "APPROVED" &&
+    (pr.reviewDecision === "APPROVED" || pr.reviewDecision === null) &&
     (pr.checks.state === "success" || pr.checks.state === "none") &&
     pr.mergeable === "MERGEABLE" &&
     !pr.isDraft &&

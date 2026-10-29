@@ -92,10 +92,11 @@ pub enum PrKey {
     CiFix,
     Review,
     Address,
+    Close,
 }
 
 impl PrKey {
-    pub const ALL: [PrKey; 4] = [PrKey::Merge, PrKey::CiFix, PrKey::Review, PrKey::Address];
+    pub const ALL: [PrKey; 5] = [PrKey::Merge, PrKey::CiFix, PrKey::Review, PrKey::Address, PrKey::Close];
 
     pub fn key(self) -> char {
         match self {
@@ -103,22 +104,24 @@ impl PrKey {
             PrKey::CiFix => 'c',
             PrKey::Review => 'v',
             PrKey::Address => 't',
+            PrKey::Close => 'X',
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
-            PrKey::Merge => "merge (squash, delete the branch)",
+            PrKey::Merge => "merge (the repo's method, delete the branch)",
             PrKey::CiFix => "CI fix: an agent diagnoses the red run and pushes a fix",
             PrKey::Review => "review: an agent posts line comments; a verdict waits for you",
             PrKey::Address => "threads: an agent answers every unresolved review thread",
+            PrKey::Close => "close the PR without merging (asks first; the branch stays)",
         }
     }
 
     /// The machine's action for a dispatching key; `Merge` is a merge, not a task.
     pub fn action(self) -> Option<PrAction> {
         match self {
-            PrKey::Merge => None,
+            PrKey::Merge | PrKey::Close => None,
             PrKey::CiFix => Some(PrAction::CiFix),
             PrKey::Review => Some(PrAction::Review),
             PrKey::Address => Some(PrAction::Address),
@@ -126,11 +129,26 @@ impl PrKey {
     }
 }
 
+/// Why Merge is off, in GitHub's terms when it said so: its merge state is the authority.
+fn merge_blocker(pr: &PullRequest) -> &'static str {
+    match pr.merge_state.as_str() {
+        "BLOCKED" => "GitHub: blocked, a required review or check is still missing",
+        "BEHIND" => "GitHub: the branch is behind its base; update it first",
+        "DIRTY" => "GitHub: the branch has conflicts with its base",
+        "DRAFT" => "GitHub: still a draft",
+        _ if pr.checks.state == "failure" => "a check is red",
+        _ if pr.checks.state == "pending" => "checks are still running",
+        _ => "not ready to merge",
+    }
+}
+
 /// Why a key is off for this PR, or None when it works. Mirrors the machine's refusals, so a
 /// greyed key never has to round-trip to learn it would be a 409.
 pub fn blocker(pr: &PullRequest, key: PrKey) -> Option<&'static str> {
     match key {
-        PrKey::Merge => (pr.split_enum() != Some(PrSplit::ReadyToMerge)).then_some("not ready to merge"),
+        PrKey::Merge => (pr.split_enum() != Some(PrSplit::ReadyToMerge)).then(|| merge_blocker(pr)),
+        PrKey::Close if !pr.mine => Some("closing is for your own PRs"),
+        PrKey::Close => pr.task.is_some().then_some("a task is already running for it"),
         PrKey::CiFix | PrKey::Review | PrKey::Address => {
             if pr.task.is_some() {
                 return Some("a task is already running for it");
@@ -193,7 +211,7 @@ mod tests {
     #[test]
     fn the_keys_that_work_follow_the_machine_s_own_refusals() {
         let keys = |p: &PullRequest| PrKey::ALL.iter().filter(|k| blocker(p, **k).is_none()).map(|k| k.key()).collect::<String>();
-        assert_eq!(keys(&pr(1, "ready_to_merge", "t")), "mct", "mine, ready: merge, CI fix, threads; no self-review");
+        assert_eq!(keys(&pr(1, "ready_to_merge", "t")), "mctX", "mine, ready: merge, CI fix, threads, close; no self-review");
         let theirs = PullRequest { mine: false, author: "them".into(), ..pr(2, "review_requested", "t") };
         assert_eq!(keys(&theirs), "cv", "a teammate's PR: CI fix and review, no threads");
         assert_eq!(keys(&PullRequest { local_path: None, ..theirs.clone() }), "", "no checkout, nothing to dispatch");
@@ -204,5 +222,19 @@ mod tests {
         assert_eq!(blocker(&pr(4, "mine", "t"), PrKey::Merge), Some("not ready to merge"));
         assert_eq!(PrKey::CiFix.action(), Some(PrAction::CiFix));
         assert_eq!(PrKey::Merge.action(), None);
+        assert_eq!(PrKey::Close.action(), None);
+    }
+
+    #[test]
+    fn merge_says_what_github_says_and_close_is_for_your_own_idle_prs() {
+        let with = |state: &str| PullRequest { merge_state: state.into(), ..pr(5, "mine", "t") };
+        assert_eq!(blocker(&with("BLOCKED"), PrKey::Merge), Some("GitHub: blocked, a required review or check is still missing"));
+        assert_eq!(blocker(&with("BEHIND"), PrKey::Merge), Some("GitHub: the branch is behind its base; update it first"));
+        assert_eq!(blocker(&with("DIRTY"), PrKey::Merge), Some("GitHub: the branch has conflicts with its base"));
+        let theirs = PullRequest { mine: false, author: "them".into(), ..pr(6, "review_requested", "t") };
+        assert_eq!(blocker(&theirs, PrKey::Close), Some("closing is for your own PRs"));
+        let busy = PullRequest { task: Some(crate::model::PrTask { id: "t1".into(), state: "ci_watch".into(), route: "ci_fix".into() }), ..pr(7, "ci_failed", "t") };
+        assert_eq!(blocker(&busy, PrKey::Close), Some("a task is already running for it"));
+        assert_eq!(blocker(&pr(8, "mine", "t"), PrKey::Close), None);
     }
 }

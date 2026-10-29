@@ -279,8 +279,10 @@ pub enum Mode {
         all: Vec<String>,
         cursor: usize,
     },
-    /// `m` on a ready PR: one yes, then the machine squash-merges it.
+    /// `m` on a ready PR: one yes, then the machine merges it the way the repo allows (squash, else merge, else rebase).
     ConfirmMerge { repo: String, number: u64 },
+    /// `X` on a PR: one yes, then the machine closes it without merging.
+    ConfirmClose { repo: String, number: u64 },
     /// A dispatch on a PR the machine has no checkout of: pick the folder to clone it into
     /// (the same filter-as-you-type list `R` uses, over folders); `then` runs once it lands.
     ClonePrompt {
@@ -1847,6 +1849,7 @@ impl App {
             Mode::Actions { .. } => self.handle_actions(key),
             Mode::RepoPicker { .. } => self.handle_repo_picker(key),
             Mode::ConfirmMerge { .. } => self.handle_confirm_merge(key),
+            Mode::ConfirmClose { .. } => self.handle_confirm_close(key),
             Mode::ClonePrompt { .. } => self.handle_clone_prompt(key),
             Mode::PrActions { .. } => self.handle_pr_actions(key),
             Mode::SlackSnooze { .. } => self.handle_slack_snooze(key),
@@ -2126,7 +2129,7 @@ impl App {
 
     /// The keys `handle_pulls` matches, `PrKey::ALL` included.
     #[cfg(test)]
-    pub(crate) const HANDLED_PULLS: &[&str] = &["esc", "P", "q", "?", "j", "k", "l", "h", "1-6", "R", "o", "enter", "x", "m", "c", "v", "t"];
+    pub(crate) const HANDLED_PULLS: &[&str] = &["esc", "P", "q", "?", "j", "k", "l", "h", "1-6", "R", "o", "enter", "x", "m", "c", "v", "t", "X"];
 
     /// The PR view's keys: move, switch split, open, merge, dispatch an agent, refresh.
     fn handle_pulls(&mut self, key: KeyEvent) -> Outcome {
@@ -2211,7 +2214,7 @@ impl App {
     /// One of `m`, `c`, `v`, `t` on a PR: the blocker as a toast, a merge confirm, or a dispatch
     /// (through the clone prompt when the machine has no checkout of the repo).
     fn pr_key(&mut self, key: PrKey, pr: &PullRequest) {
-        if key != PrKey::Merge && pr.local_path.is_none() && pr.task.is_none() {
+        if key.action().is_some() && pr.local_path.is_none() && pr.task.is_none() {
             if let Some(action) = key.action() {
                 self.open_clone_prompt(pr, action);
             }
@@ -2222,6 +2225,7 @@ impl App {
             return;
         }
         match key.action() {
+            None if key == PrKey::Close => self.mode = Mode::ConfirmClose { repo: pr.repo.clone(), number: pr.number },
             None => self.mode = Mode::ConfirmMerge { repo: pr.repo.clone(), number: pr.number },
             Some(action) => self.dispatch_pr(pr, action),
         }
@@ -2255,6 +2259,23 @@ impl App {
                 };
                 match self.machine.merge_pr(&repo, number) {
                     Ok(()) => self.notify(format!("merged {repo}#{number}"), false),
+                    Err(error) => self.notify(error, true),
+                }
+            }
+            KeyCode::Char('n') | KeyCode::Esc => self.mode = Mode::Normal,
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    fn handle_confirm_close(&mut self, key: KeyEvent) -> Outcome {
+        match key.code {
+            KeyCode::Char('y') => {
+                let Mode::ConfirmClose { repo, number } = std::mem::replace(&mut self.mode, Mode::Normal) else {
+                    return Outcome::Continue;
+                };
+                match self.machine.close_pr(&repo, number) {
+                    Ok(()) => self.notify(format!("closed {repo}#{number}"), false),
                     Err(error) => self.notify(error, true),
                 }
             }
@@ -4757,6 +4778,23 @@ mod pr_tests {
         app.pump();
         assert!(!app.prs_polling);
         assert!(app.toast.as_ref().is_some_and(|t| t.error && t.text.contains("timed out")));
+    }
+
+    #[test]
+    fn x_asks_before_closing_your_own_pr_and_says_why_it_will_not_close_a_teammates() {
+        let mut app = app_with(vec![pr(1, "mine", true, true), pr(2, "review_requested", false, false)]);
+        app.handle_key(KeyEvent::from(KeyCode::Char('P')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('6')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('X')));
+        assert!(matches!(&app.mode, Mode::ConfirmClose { repo, number } if repo == "acme/app" && *number == 1), "{:?}", app.toast.as_ref().map(|t| t.text.clone()));
+        app.handle_key(KeyEvent::from(KeyCode::Char('x')));
+        assert!(matches!(app.mode, Mode::ConfirmClose { .. }), "only y, n and esc answer the modal");
+        app.handle_key(KeyEvent::from(KeyCode::Esc));
+        assert!(matches!(app.mode, Mode::Normal) && app.pulls.is_some(), "esc closes nothing and keeps the view");
+        app.handle_key(KeyEvent::from(KeyCode::Char('1')));
+        app.handle_key(KeyEvent::from(KeyCode::Char('X')));
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(app.toast.as_ref().map(|t| t.text.as_str()), Some("closing is for your own PRs"));
     }
 
     #[test]

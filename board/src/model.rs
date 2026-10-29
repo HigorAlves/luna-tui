@@ -703,6 +703,10 @@ pub struct PrTask {
     pub route: String,
 }
 
+fn unknown_merge_state() -> String {
+    "UNKNOWN".to_string()
+}
+
 /// One open pull request involving you, as the machine's PR inbox shows it.
 #[derive(Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -723,6 +727,9 @@ pub struct PullRequest {
     pub review_decision: Option<String>,
     #[allow(dead_code)]
     pub mergeable: String,
+    /// GitHub's own verdict on merging now (`CLEAN`, `BLOCKED`, `BEHIND`, `DIRTY`, ...); `UNKNOWN` from a machine that predates it.
+    #[serde(default = "unknown_merge_state")]
+    pub merge_state: String,
     pub checks: PrChecks,
     pub unresolved_threads: u64,
     /// The machine's split name; `split_enum` reads it.

@@ -140,13 +140,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
         return;
     }
     if let Some(state) = app.pulls.as_ref().filter(|_| {
-        matches!(app.mode, Mode::Normal | Mode::ConfirmMerge { .. } | Mode::ClonePrompt { .. } | Mode::PrActions { .. } | Mode::Help { .. })
+        matches!(app.mode, Mode::Normal | Mode::ConfirmMerge { .. } | Mode::ConfirmClose { .. } | Mode::ClonePrompt { .. } | Mode::PrActions { .. } | Mode::Help { .. })
     }) {
         render_pulls(frame, body, app, state);
         frame.render_widget(footer_line(app), footer);
         match &app.mode {
             Mode::ConfirmMerge { repo, number } => {
-                render_note(frame, " Merge? ", &format!("{repo}#{number} is squash-merged and its branch deleted.  y / n"));
+                render_confirm_pr(frame, app, repo, *number, " Merge? ", "Merged the way the repo allows, and its branch is deleted.", GREEN);
+            }
+            Mode::ConfirmClose { repo, number } => {
+                render_confirm_pr(frame, app, repo, *number, " Close PR? ", "Closed without merging. Its branch stays.", RED);
             }
             Mode::ClonePrompt { repo, query, all, cursor, .. } => render_clone_prompt(frame, repo, query, all, *cursor),
             Mode::PrActions { cursor } => render_pr_actions(frame, app, *cursor),
@@ -456,6 +459,7 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::Actions { .. } | Mode::PrActions { .. } | Mode::SlackActions { .. } => hint(&[("j/k", "move"), ("enter", "run"), ("esc", "close")]),
         Mode::RepoPicker { .. } => hint(&[("type", "filter"), ("↑/↓", "move"), ("enter", "set"), ("esc", "cancel")]),
         Mode::ConfirmMerge { .. } => hint(&[("y", "merge"), ("n", "cancel")]),
+        Mode::ConfirmClose { .. } => hint(&[("y", "close the PR"), ("n", "cancel")]),
         Mode::JiraLink { .. } => hint(&[("type", "search from 3 chars"), ("↑/↓", "move"), ("enter", "link (row 0 creates)"), ("ctrl+n", "create"), ("esc", "cancel")]),
         Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
         Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
@@ -889,20 +893,31 @@ pub(crate) fn describe(event: &TaskEvent) -> String {
 
 /// Popup asking to confirm a delete or an abort.
 fn render_confirm(frame: &mut Frame, task: &Task, title: &str, note: &str) {
+    render_confirm_box(frame, &format!("#{} {}", task.short_id(), task.title), title, note, RED);
+}
+
+/// Popup asking to confirm a PR merge or close, in the same box as a ticket delete: the
+/// item's name in bold, what happens in muted text, then the yes / no chips.
+fn render_confirm_pr(frame: &mut Frame, app: &App, repo: &str, number: u64, title: &str, note: &str, accent: Color) {
+    let name = app.prs.prs.iter().find(|p| p.repo == repo && p.number == number).map_or(String::new(), |p| format!("  {}", p.title));
+    render_confirm_box(frame, &format!("{repo}#{number}{name}"), title, note, accent);
+}
+
+fn render_confirm_box(frame: &mut Frame, heading: &str, title: &str, note: &str, accent: Color) {
     let area = centered(frame.area(), 68, 7);
     frame.render_widget(Clear, area);
 
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(c(RED)))
+        .border_style(Style::new().fg(c(accent)))
         .padding(Padding::horizontal(2))
-        .title(Line::from(title).fg(c(RED)).bold());
+        .title(Line::from(title).fg(c(accent)).bold());
     let lines = vec![
-        Line::from(Span::from(format!("#{} {}", task.short_id(), task.title)).bold()),
+        Line::from(Span::from(truncate(heading, 62)).bold()),
         Line::from(Span::from(note).fg(c(SUBTEXT0))),
         Line::default(),
         Line::from(vec![
-            Span::from(" y ").fg(c(BASE)).bg(c(RED)),
+            Span::from(" y ").fg(c(BASE)).bg(c(accent)),
             Span::from(" yes   ").fg(c(SUBTEXT0)),
             Span::from(" n ").fg(c(BASE)).bg(c(ACCENT)),
             Span::from(" no").fg(c(SUBTEXT0)),
@@ -1142,6 +1157,19 @@ const PULLS_DETAIL_WIDTH: u16 = 46;
 /// the owner's `/`; the whole slug when there is none), the
 /// number, the title (the only field ever cut), the age, and a tag (⚙ a task runs, ⌂ no
 /// checkout). Everything else lives in the detail pane.
+/// Room for `◐ threads`, the longest tag.
+const PR_TAG_WIDTH: usize = 9;
+
+/// What the PR task is doing, in a word or two.
+fn pr_work_label(route: &str) -> &'static str {
+    match route {
+        "ci_fix" => "ci fix",
+        "review" => "review",
+        "address" => "threads",
+        _ => "working",
+    }
+}
+
 fn pr_row(pr: &PullRequest, selected: bool, width: usize, now: u64) -> Line<'static> {
     let (glyph, checks_color) = match pr.checks.state.as_str() {
         "failure" => ("✗", RED),
@@ -1151,15 +1179,17 @@ fn pr_row(pr: &PullRequest, selected: bool, width: usize, now: u64) -> Line<'sta
     };
     let repo_name = pr.repo.rsplit('/').next().unwrap_or(&pr.repo);
     let repo_colour = REPO_COLOURS[repo_colour_slot(repo_name)];
+    // A task at work reads as a spinner and what it is doing, bold yellow, so a row that is busy
+    // stands out from the list; ⌂ marks a repo with no clone.
     let (tag, tag_color) = match (&pr.task, pr.local_path.is_some()) {
-        (Some(_), _) => ("⚙", YELLOW),
-        (None, false) => ("⌂", SUBTEXT0),
-        _ => (" ", SUBTEXT0),
+        (Some(task), _) => (format!("{} {}", spinner(), pr_work_label(&task.route)), YELLOW),
+        (None, false) => ("⌂".to_string(), SUBTEXT0),
+        _ => (String::new(), SUBTEXT0),
     };
     let number = format!("#{}", pr.number);
     let age = age(&pr.updated_at, now);
-    // sel(2) glyph(2) bar(1) repo(10) gap(1) number(5) gap(1) title gap(2) age(3) gap(2) tag(1)
-    let fixed = 2 + 2 + 1 + 10 + 1 + 5 + 1 + 2 + 3 + 2 + 1;
+    // sel(2) glyph(2) bar(1) repo(10) gap(1) number(5) gap(1) title gap(2) age(3) gap(2) tag(9)
+    let fixed = 2 + 2 + 1 + 10 + 1 + 5 + 1 + 2 + 3 + 2 + PR_TAG_WIDTH;
     let room = width.saturating_sub(fixed).max(4);
     let mut spans = vec![
         Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
@@ -1169,7 +1199,7 @@ fn pr_row(pr: &PullRequest, selected: bool, width: usize, now: u64) -> Line<'sta
         Span::from(format!("{number:>5} ")).fg(c(SUBTEXT0)),
         Span::from(format!("{:<room$}", truncate(&pr.title, room))).bold(),
         Span::from(format!("  {age:>3}  ")).fg(c(SUBTEXT0)),
-        Span::from(tag.to_string()).fg(c(tag_color)),
+        Span::from(format!("{tag:<PR_TAG_WIDTH$}")).fg(c(tag_color)).bold(),
     ];
     if selected {
         spans = spans.into_iter().map(|s| s.bg(c(SELECTED_BG))).collect();
@@ -2732,13 +2762,13 @@ mod pr_tests {
         let mut ready = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, true)]);
         ready.pulls = Some(PullsState { split: PrSplit::ReadyToMerge, cursor: 0 });
         let third = render(120, 20, &ready).lines().find(|l| l.contains("#14") && l.contains("Ready one")).unwrap_or_default().to_string();
-        assert!(third.contains("⚙") && third.contains("✓"), "a running task is a tag: {third}");
+        assert!(third.contains("ci fix") && third.contains("✓") && ["◐", "◓", "◑", "◒"].iter().any(|f| third.contains(f)), "a running task is a spinner and what it does: {third}");
         // The detail pane shows the selected PR with the fields the row dropped.
         assert!(text.contains("acme/app#12  Export CSV"), "{text}");
         assert!(text.contains("@them · h → main"), "{text}");
         assert!(text.contains("✗ lint") && text.contains("✗ 1 of 3 failed"), "{text}");
         assert!(text.contains("approved · 2 unresolved threads"), "{text}");
-        assert!(text.contains("m ") && text.contains("off: not ready to merge"), "{text}");
+        assert!(text.contains("m ") && text.contains("off: a check is red"), "{text}");
         assert!(text.contains("[pulls]"), "{text}");
 
         let text = render(80, 20, &app);
@@ -2775,13 +2805,18 @@ mod pr_tests {
         let mut app = app_with(vec![pr(14, "Ready one", "ready_to_merge", "success", true, false)]);
         app.pulls = Some(PullsState { split: PrSplit::ReadyToMerge, cursor: 0 });
         app.mode = Mode::ConfirmMerge { repo: "acme/app".into(), number: 14 };
-        assert!(render(100, 14, &app).contains("acme/app#14 is squash-merged"));
+        let merge = render(100, 14, &app);
+        assert!(merge.contains(" Merge? ") && merge.contains("acme/app#14  Ready one") && merge.contains("Merged the way the repo allows"), "{merge}");
+        assert!(merge.contains(" y ") && merge.contains(" yes ") && merge.contains(" n ") && merge.contains(" no"), "the same yes / no chips as a delete: {merge}");
+        app.mode = Mode::ConfirmClose { repo: "acme/app".into(), number: 14 };
+        let text = render(100, 14, &app);
+        assert!(text.contains(" Close PR? ") && text.contains("acme/app#14  Ready one") && text.contains("Closed without merging. Its branch stays."), "{text}");
         app.mode = Mode::ClonePrompt { repo: "acme/app".into(), query: "proj".into(), all: vec!["/r".into(), "/r/projects".into()], cursor: 0, then: crate::model::PrAction::Review };
         let text = render(100, 20, &app);
         assert!(text.contains("clone acme/app into") && text.contains("/r/projects/app") && !text.contains("▌ /r/app"), "{text}");
         app.mode = Mode::PrActions { cursor: 0 };
         let text = render(100, 30, &app);
-        assert!(text.contains("merge: squash, delete the branch") && !text.contains("review is for other people's PRs"), "{text}");
+        assert!(text.contains("merge, delete the branch") && !text.contains("review is for other people's PRs"), "{text}");
         assert!(text.contains("↳ threads are answered on your own PRs"), "{text}");
         assert!(text.contains("@them · h → main"), "the menu carries the PR widget: {text}");
     }

@@ -279,6 +279,11 @@ impl Machine {
         Self::json(self.agent.post(self.url(&pr_path(repo, number, "merge"))).send_json(json!({}))).map(|_| ())
     }
 
+    /// Closes the PR without merging; its branch stays.
+    pub fn close_pr(&self, repo: &str, number: u64) -> Result<(), String> {
+        Self::json(self.agent.post(self.url(&pr_path(repo, number, "close"))).send_json(json!({}))).map(|_| ())
+    }
+
     /// Asks the machine to clone `owner/name` into `dest`; the next snapshot shows the checkout.
     pub fn clone_repo(&self, repo: &str, dest: &str) -> Result<(), String> {
         Self::json(self.agent.post(self.url("/github/clone")).send_json(json!({ "repo": repo, "dest": dest }))).map(|_| ())

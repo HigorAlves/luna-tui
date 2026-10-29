@@ -39,7 +39,7 @@ import type { Watcher } from "../../application/ports.ts";
 import { NoCasesToEditError, NoPlanToEditError, type Pipeline, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
-import { CloneError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
+import { CloneError, NoPullError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
 import { AlreadyTaskError, BuiltinWatchError, NoItemError, NoWatchError, type SlackInboxPort } from "../../application/slack-inbox.ts";
 import { NoSlackTokenError } from "../../application/slack.ts";
 import { NoJiraTokenError } from "../../application/jira.ts";
@@ -124,6 +124,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof NoWorktreeError) return fail(c, 404, "no_worktree", error.message);
     if (error instanceof NoFileError) return fail(c, 404, "no_file", error.message);
     if (error instanceof NotReadyError) return fail(c, 409, "not_ready", error.message);
+    if (error instanceof NoPullError) return fail(c, 404, "no_pull", error.message);
     if (error instanceof PrBusyError) return fail(c, 409, "pr_busy", error.message);
     if (error instanceof NoCheckoutError) return fail(c, 409, "no_checkout", error.message);
     if (error instanceof ForkError) return fail(c, 409, "fork", error.message);
@@ -292,6 +293,11 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
       const { owner, name, number } = prParams(c);
       await pulls.merge(`${owner}/${name}`, number);
       return c.json({ merged: true });
+    });
+    app.post("/github/prs/:owner/:name/:number/close", async (c) => {
+      const { owner, name, number } = prParams(c);
+      await pulls.close(`${owner}/${name}`, number);
+      return c.json({ closed: true });
     });
     if (prTasks) {
       app.post("/github/prs/:owner/:name/:number/actions", async (c) => {

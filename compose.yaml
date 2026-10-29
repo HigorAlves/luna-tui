@@ -48,6 +48,10 @@ services:
       # host. So every path the machine hands to `docker run` must be the same path in here:
       # repos and worktrees under LUNA_REPOS_DIR, run folders under the state dir.
       WORKTREES_DIR: ${WORKTREES_DIR:-${HOME}/Developer/worktrees}
+      # Where the machine looks for a PR's checkout. Inside the container HOME is /root, so the
+      # default would be an empty /root/Developer: name the mounted folder, at its host path.
+      MACHINE_REPOS_DIR: ${LUNA_REPOS_DIR:-${HOME}/Developer}
+      MACHINE_REPO_MAP: ${MACHINE_REPO_MAP:-}
       MACHINE_STATE_DIR: ${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}
       MACHINE_AGENTS: ${MACHINE_AGENTS:-on}
       MACHINE_MAX_CONCURRENT: ${MACHINE_MAX_CONCURRENT:-4}

@@ -27,6 +27,7 @@ export interface OctokitLike {
       list(params: Record<string, unknown>): Promise<{ data: Array<{ html_url: string; number: number; draft?: boolean }> }>;
       create(params: Record<string, unknown>): Promise<{ data: { html_url: string; number: number; draft?: boolean } }>;
       merge(params: Record<string, unknown>): Promise<unknown>;
+      update(params: Record<string, unknown>): Promise<unknown>;
       createReview(params: Record<string, unknown>): Promise<unknown>;
       listFiles: unknown;
       listReviewComments: unknown;
@@ -182,11 +183,32 @@ export class OctokitGitHub implements GitHub {
       }));
   }
 
+  async closePr(slug: string, number: number): Promise<void> {
+    const { owner, repo } = repoRef(slug);
+    await call(`closing ${slug}#${number}`, () => this.octokit.rest.pulls.update({ owner, repo, pull_number: number, state: "closed" }));
+  }
+
+  /** Each repo allows its own merge methods: squash when it does, else a merge commit, else a rebase. */
+  private async mergeMethod(owner: string, repo: string): Promise<"squash" | "merge" | "rebase"> {
+    try {
+      const { data } = await this.octokit.rest.repos.get({ owner, repo });
+      const allowed = data as { allow_squash_merge?: boolean; allow_merge_commit?: boolean; allow_rebase_merge?: boolean } | undefined;
+      if (allowed?.allow_squash_merge === false) {
+        if (allowed.allow_merge_commit !== false) return "merge";
+        if (allowed.allow_rebase_merge !== false) return "rebase";
+      }
+    } catch {
+      // The settings are a hint; GitHub's own answer to the merge is the authority.
+    }
+    return "squash";
+  }
+
   async mergePr(slug: string, number: number): Promise<void> {
     const { owner, repo } = repoRef(slug);
     const { data } = await call(`reading ${slug}#${number}`, () => this.octokit.rest.pulls.get({ owner, repo, pull_number: number }));
     const head = (data as { head: { ref: string; repo: { full_name: string } | null } }).head;
-    await call(`merging ${slug}#${number}`, () => this.octokit.rest.pulls.merge({ owner, repo, pull_number: number, merge_method: "squash" }));
+    const merge_method = await this.mergeMethod(owner, repo);
+    await call(`merging ${slug}#${number}`, () => this.octokit.rest.pulls.merge({ owner, repo, pull_number: number, merge_method }));
     // The branch goes with it, as `gh pr merge --delete-branch` did; a fork's branch is not ours to delete.
     if (head.repo?.full_name.toLowerCase() === slug.toLowerCase()) {
       await call(`deleting ${head.ref}`, () => this.octokit.rest.git.deleteRef({ owner, repo, ref: `heads/${head.ref}` }));
