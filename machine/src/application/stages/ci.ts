@@ -6,11 +6,15 @@
 import type { CiContext, Finding } from "@hardness/contracts";
 
 import { originSlugOf } from "../../adapters/git/worktree.ts";
+import { exec } from "../../adapters/process/exec.ts";
 import { type Check, type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
 const MINUTE = 60_000;
 const RERUN_WAIT_MS = 15 * MINUTE;
+/** How long a push may take to show the checks the commit before it had: a workflow run is
+ *  created a few seconds after the push, and until then only the fast external checks exist. */
+const NEW_RUN_GRACE_MS = 3 * MINUTE;
 /** The pack reads a log tail, not a whole run: the end is where the failure is. */
 const LOG_TAIL_CHARS = 20_000;
 
@@ -20,6 +24,10 @@ export interface CiDeps {
   runPack: (context: StageContext, ci: CiContext) => Promise<StageResult>;
   /** The `owner/name` of a worktree; tests inject one. */
   slugOf?: (cwd: string) => Promise<string | null>;
+  /** The commit before the worktree's HEAD, whose checks the new head should repeat; tests inject one. */
+  parentRef?: (cwd: string) => Promise<string | null>;
+  /** How long to wait for those checks to appear on the new head. */
+  graceMs?: number;
   pollMs?: number;
   maxWaitMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -27,6 +35,11 @@ export interface CiDeps {
 
 const PENDING = new Set(["PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED", "EXPECTED"]);
 const FAILED = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ACTION_REQUIRED", "STALE"]);
+
+const parentOf = async (cwd: string): Promise<string | null> => {
+  const parent = await exec("git", ["-C", cwd, "rev-parse", "--verify", "-q", "HEAD~1"]).catch(() => null);
+  return parent && parent.code === 0 && parent.stdout.trim() ? parent.stdout.trim() : null;
+};
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
@@ -39,6 +52,8 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
   const maxWaitMs = deps.maxWaitMs ?? 45 * MINUTE;
   const sleep = deps.sleep ?? defaultSleep;
   const slugOf = deps.slugOf ?? originSlugOf;
+  const parentRef = deps.parentRef ?? parentOf;
+  const graceMs = deps.graceMs ?? NEW_RUN_GRACE_MS;
 
   return async (context) => {
     const { task, signal } = context;
@@ -50,6 +65,18 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
     if (!origin) return { outcome: "fail", detail: { error: "the worktree's origin is not a GitHub repository" } };
     const slug: string = origin;
 
+    /** The check names the commit before HEAD had: after a fix is pushed, the new head must
+     *  show them again before "nothing pending, nothing red" means anything. */
+    let expected: Promise<string[]> | null = null;
+    const expectedNames = () =>
+      (expected ??= (async () => {
+        const parent = await parentRef(task.worktreePath!).catch(() => null);
+        if (!parent) return [];
+        const before = await deps.github.prChecks(slug, parent).catch(() => [] as Check[]);
+        return [...new Set(before.map((c) => c.name))];
+      })());
+    const graceEnds = Date.now() + graceMs;
+
     async function settle(waitMs: number): Promise<Settled> {
       const deadline = Date.now() + waitMs;
       for (;;) {
@@ -60,7 +87,11 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
         } catch (error) {
           return { kind: "error", error: messageOf(error) };
         }
-        if (!checks.some((c) => PENDING.has(String(c.state).toUpperCase()))) return { kind: "settled", checks };
+        if (!checks.some((c) => PENDING.has(String(c.state).toUpperCase()))) {
+          const have = new Set(checks.map((c) => c.name));
+          const missing = Date.now() < graceEnds && (await expectedNames()).some((name) => !have.has(name));
+          if (!missing) return { kind: "settled", checks };
+        }
         if (Date.now() >= deadline) return { kind: "timeout" };
         await sleep(pollMs);
       }
