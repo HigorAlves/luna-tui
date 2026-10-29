@@ -33,6 +33,7 @@ const item = (id: string, over: Partial<DatadogItem> = {}): DatadogItem => ({
   snoozedUntil: null,
   doneAt: null,
   reopenedAt: null,
+  resolvedAt: null,
   taskId: null,
   ...over,
 });

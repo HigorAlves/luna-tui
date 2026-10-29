@@ -197,6 +197,70 @@ describe("DatadogInbox.pollOnce", () => {
   });
 });
 
+describe("DatadogInbox resolved marking", () => {
+  it("marks a monitor that is gone on the next successful poll resolved, keeps it listed and open, and clears it when it is back", async () => {
+    let alerting = [monitor];
+    const { inbox, store, advance } = make({ datadog: fakeDatadog({ alertingMonitors: async () => alerting }) });
+    await inbox.pollOnce(true);
+    expect(store.rows.get("mon:7:service:api,env:prod")!.resolvedAt).toBeNull();
+    alerting = [];
+    advance(60_000);
+    await inbox.pollOnce(true);
+    const gone = inbox.snapshot.items.find((i) => i.id === "mon:7:service:api,env:prod")!;
+    expect(gone).toMatchObject({ resolvedAt: "2026-10-28T12:01:00.000Z", doneAt: null });
+    advance(60_000);
+    await inbox.pollOnce(true);
+    expect(store.rows.get("mon:7:service:api,env:prod")!.resolvedAt).toBe("2026-10-28T12:01:00.000Z");
+    alerting = [monitor];
+    advance(60_000);
+    await inbox.pollOnce(true);
+    expect(inbox.snapshot.items.find((i) => i.id === "mon:7:service:api,env:prod")!.resolvedAt).toBeNull();
+  });
+
+  it("marks a gone incident resolved, but never when the incidents call failed", async () => {
+    let mode: "ok" | "gone" | "fail" = "ok";
+    const { inbox, advance } = make({ datadog: fakeDatadog({ incidents: async () => { if (mode === "fail") throw new DatadogError("boom", 500); return mode === "ok" ? [incident] : []; } }) });
+    await inbox.pollOnce(true);
+    mode = "fail";
+    advance(60_000);
+    await inbox.pollOnce(true);
+    expect(inbox.snapshot.items.find((i) => i.id === "inc:812")!.resolvedAt).toBeNull();
+    mode = "gone";
+    advance(60_000);
+    await inbox.pollOnce(true);
+    expect(inbox.snapshot.items.find((i) => i.id === "inc:812")!.resolvedAt).toBe("2026-10-28T12:02:00.000Z");
+  });
+
+  it("never marks Error Tracking issues or error-log clusters resolved, and leaves done items alone", async () => {
+    let present = true;
+    const { inbox, advance } = make({ datadog: fakeDatadog({ errorTrackingIssues: async () => (present ? [issue] : []), errorLogClusters: async () => (present ? [cluster] : []), incidents: async () => (present ? [incident] : []) }) });
+    await inbox.pollOnce(true);
+    await inbox.patch("inc:812", { done: true });
+    present = false;
+    advance(60_000);
+    await inbox.pollOnce(true);
+    const byId = (id: string) => inbox.snapshot.items.find((i) => i.id === id)!;
+    expect(byId("et:9f3").resolvedAt).toBeNull();
+    expect(byId("log:api:TimeoutError").resolvedAt).toBeNull();
+    expect(byId("inc:812").resolvedAt).toBeNull();
+  });
+
+  it("does not send a resolved item to the triager", async () => {
+    let alerting = [monitor];
+    const batches: string[][] = [];
+    const { inbox, advance } = make({ datadog: fakeDatadog({ alertingMonitors: async () => alerting }), triager: { triage: async (items) => (batches.push(items.map((i) => i.id)), new Map()) } });
+    await inbox.pollOnce(true);
+    await inbox.idle();
+    expect(batches[0]).toContain("mon:7:service:api,env:prod");
+    alerting = [];
+    advance(60_000);
+    await inbox.pollOnce(true);
+    await inbox.idle();
+    expect(batches[1]).not.toContain("mon:7:service:api,env:prod");
+    expect(batches[1]).toContain("inc:812");
+  });
+});
+
 describe("DatadogInbox.patch", () => {
   it("marks done, snoozes and sets a priority by hand, republishing each time", async () => {
     const { inbox, published } = make();

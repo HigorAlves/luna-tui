@@ -205,6 +205,13 @@ export class DatadogInbox implements DatadogInboxPort {
         const before = stored.get(item.id);
         merged.set(item.id, before ? merge(before, item, now) : item);
       }
+      // Incidents and monitors are full lists of what is active: one that is gone, from a call that succeeded, is resolved.
+      for (const source of ["incident", "monitor"] as const) {
+        if (settled[SOURCES.indexOf(source)]!.status !== "fulfilled") continue;
+        for (const row of stored.values()) {
+          if (row.source === source && !row.doneAt && row.resolvedAt === null && !merged.has(row.id)) merged.set(row.id, { ...row, resolvedAt: now.toISOString() });
+        }
+      }
       if (merged.size > 0) await this.options.store.save([...merged.values()]);
       await this.prune();
     } catch (thrown) {
@@ -274,7 +281,7 @@ export class DatadogInbox implements DatadogInboxPort {
     if (!triager) return;
     const now = this.now();
     const rows = await store.items(new Date(now.getTime() - KEEP_DONE_MS));
-    const todo = triageOrder(rows.filter((row) => row.triage === null && splitOf(row, now) !== "done" && splitOf(row, now) !== "snoozed"));
+    const todo = triageOrder(rows.filter((row) => row.triage === null && row.resolvedAt === null && splitOf(row, now) !== "done" && splitOf(row, now) !== "snoozed"));
     if (todo.length === 0) return;
     await this.refresh();
     let answers: Awaited<ReturnType<DatadogTriager["triage"]>> = new Map();

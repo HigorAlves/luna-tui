@@ -30,6 +30,9 @@ export interface DatadogTriageRunEntityRow {
   error: string | null;
 }
 
+/** Rows written before `resolvedAt` existed have no such key. */
+const fromRow = (row: DatadogItem): DatadogItem => ({ ...row, resolvedAt: row.resolvedAt ?? null });
+
 const toEntity = (i: DatadogItem): Omit<DatadogItemEntityRow, "updatedAt"> => ({
   id: i.id,
   row: i,
@@ -57,12 +60,12 @@ export class PgDatadogStore implements DatadogStore {
       where: [{ doneAt: IsNull() }, { doneAt: MoreThanOrEqual(doneSince) }],
       order: { lastSeen: "DESC" },
     });
-    return rows.map((r) => r.row);
+    return rows.map((r) => fromRow(r.row));
   }
 
   async item(id: string): Promise<DatadogItem | null> {
     const row = await this.db.getRepository(DatadogItemEntity).findOneBy({ id });
-    return row ? row.row : null;
+    return row ? fromRow(row.row) : null;
   }
 
   async save(items: DatadogItem[]): Promise<void> {

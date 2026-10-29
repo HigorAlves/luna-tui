@@ -67,10 +67,10 @@ function githubSlug(url: string | null): string | null {
 }
 
 /** The item before it has a split; the constructors below fill it in. */
-type Fresh = Omit<DatadogItem, "split" | "triage" | "snoozedUntil" | "doneAt" | "reopenedAt" | "taskId">;
+type Fresh = Omit<DatadogItem, "split" | "triage" | "snoozedUntil" | "doneAt" | "reopenedAt" | "resolvedAt" | "taskId">;
 
 function build(fresh: Fresh): DatadogItem {
-  const item: DatadogItem = { ...fresh, triage: null, split: "investigate", snoozedUntil: null, doneAt: null, reopenedAt: null, taskId: null };
+  const item: DatadogItem = { ...fresh, triage: null, split: "investigate", snoozedUntil: null, doneAt: null, reopenedAt: null, resolvedAt: null, taskId: null };
   return { ...item, split: splitOf(item, EPOCH) };
 }
 
@@ -182,6 +182,7 @@ export function merge(stored: DatadogItem, fresh: DatadogItem, now: Date): Datad
     snoozedUntil: stored.snoozedUntil,
     doneAt: reopen ? null : stored.doneAt,
     reopenedAt: reopen ? now.toISOString() : stored.reopenedAt,
+    resolvedAt: null,
     taskId: stored.taskId,
   };
   return { ...next, split: splitOf(next, now) };

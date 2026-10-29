@@ -64,6 +64,8 @@ export interface DatadogItem {
   doneAt: string | null;
   /** Set when it came back after done. */
   reopenedAt: string | null;
+  /** Datadog no longer reports it: an incident resolved or a monitor recovered; it stays until you clear it. */
+  resolvedAt: string | null;
   taskId: string | null;
 }
 

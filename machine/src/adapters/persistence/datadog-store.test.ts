@@ -29,6 +29,7 @@ const item = (id: string, over: Partial<DatadogItem> = {}): DatadogItem => ({
   snoozedUntil: null,
   doneAt: null,
   reopenedAt: null,
+  resolvedAt: null,
   taskId: null,
   ...over,
 });
@@ -100,5 +101,15 @@ describe.each(stores)("%s", (_name, make) => {
     const all = await store.triageRuns(new Date(0));
     expect(all).toHaveLength(3);
     expect(all[2]).toMatchObject({ ok: false, costUsd: null, error: "timed out" });
+  });
+});
+
+describe("PgDatadogStore rows written before resolvedAt", () => {
+  it("read back with resolvedAt null", async () => {
+    await db.query("truncate datadog_items, datadog_triage_runs");
+    const { resolvedAt: _gone, ...legacy } = item("mon:1:*");
+    await db.query("insert into datadog_items (id, row, last_seen, done_at) values ($1, $2, $3, null)", ["mon:1:*", JSON.stringify(legacy), legacy.lastSeen]);
+    expect((await new PgDatadogStore(db).item("mon:1:*"))!.resolvedAt).toBeNull();
+    expect((await new PgDatadogStore(db).items(new Date(0)))[0]!.resolvedAt).toBeNull();
   });
 });
