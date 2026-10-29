@@ -54,20 +54,20 @@ tickets are created on the machine once, then the file is renamed to
 
 Press `?` anywhere for the keys of what has the keyboard: the board, the ticket popup, the
 Inbox, the Digest, the Floor, Pulls, Slack or its Watches. The sheet is read from one registry
-(`src/keys.rs`) that the footer, the `x` menus, the `:` completion and the tables in this file
+(`src/keys.rs`) that the `x` menus, the `:` completion and the tables in this file
 derive from too, so they cannot disagree. It knows the ticket under the cursor: the title names
 it and its state, a key that works right now is bright with what it does (`a  approve the plan`
 at the plan gate, `a  start` on a draft), a key that does not is dim with the reason (`r  (only
-a setup, plan or tests go back)`), and a meaning that cannot apply is left out. Dense groups
-(Move, Filter, Views, App) fold to one line of keys; `?` again shows every group as rows. Inside
+a setup, plan or tests go back)`), and a meaning that cannot apply is left out. It opens with every group as rows; `?` again folds the dense groups
+(Move, Filter, Views, App) to one line of keys. Inside
 the sheet `j`/`k` and `ctrl+d`/`ctrl+u` move the cursor and `enter` runs the row; pressing a
 bright key closes the sheet and runs it (a dim one only says why); `/` searches every view's keys
 by key or label (`merge` finds `m` and says `in Pulls`; `enter` on it says to open Pulls first);
 `esc` or `q` closes. Under a popup the layer beneath folds to one line at the bottom
 (`▸ board keys: …`). Two columns from 100 columns wide, one below.
 
-The footer shows the heaviest keys that work right now, so it changes with the ticket: `a approve
-the plan` at the gate, `R set the repo` on a draft without one. After `g` or `z` with no second
+The footer is a few short words per view (`? help  n new  a advance  enter open  x actions …`);
+`?` has the rest. After `g` or `z` with no second
 key for 400 ms it lists the second keys (`g ▸  g first ticket …  s order columns by stage …`).
 Inside an editor `?` types a character, so the editor's title carries its keys and follows the
 vim mode (`normal · i a o insert · dd x delete · u ^r undo · ctrl+s save · esc q cancel`, then
