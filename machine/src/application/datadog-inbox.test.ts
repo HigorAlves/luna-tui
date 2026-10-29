@@ -314,6 +314,44 @@ describe("DatadogInbox resolved marking", () => {
     expect(byId("inc:812").resolvedAt).toBeNull();
   });
 
+  it("resolves Error Tracking issues and error-log clusters that were quiet for a day, on a successful poll of their source, and clears it when they fire again", async () => {
+    let issues: (typeof issue)[] = [issue];
+    let clusters: (typeof cluster)[] = [cluster];
+    let etDown = false;
+    const { inbox, advance } = make({
+      datadog: fakeDatadog({
+        errorTrackingIssues: async () => {
+          if (etDown) throw new DatadogError("boom", 500);
+          return issues;
+        },
+        errorLogClusters: async () => clusters,
+      }),
+    });
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await inbox.pollOnce(true);
+    issues = [];
+    clusters = [];
+    advance(23 * 3_600_000);
+    await inbox.pollOnce(true);
+    const byId = (id: string) => inbox.snapshot.items.find((i) => i.id === id)!;
+    expect(byId("et:9f3").resolvedAt).toBeNull();
+    etDown = true;
+    advance(2 * 3_600_000);
+    await inbox.pollOnce(true);
+    expect(byId("et:9f3").resolvedAt).toBeNull();
+    expect(byId("log:api:TimeoutError").resolvedAt).toBe("2026-10-29T13:00:00.000Z");
+    etDown = false;
+    advance(60_000);
+    await inbox.pollOnce(true);
+    expect(byId("et:9f3").resolvedAt).toBe("2026-10-29T13:01:00.000Z");
+    expect(inbox.snapshot.items.some((i) => i.id === "et:9f3")).toBe(true);
+    issues = [{ ...issue, lastSeen: "2026-10-29T13:00:30.000Z" }];
+    advance(60_000);
+    await inbox.pollOnce(true);
+    expect(byId("et:9f3").resolvedAt).toBeNull();
+    log.mockRestore();
+  });
+
   it("does not send a resolved item to the triager", async () => {
     let alerting = [monitor];
     const batches: string[][] = [];
@@ -327,6 +365,79 @@ describe("DatadogInbox resolved marking", () => {
     await inbox.idle();
     expect(batches[1]).not.toContain("mon:7:service:api,env:prod");
     expect(batches[1]).toContain("inc:812");
+  });
+});
+
+describe("DatadogInbox concurrent actions", () => {
+  /** A store whose first `items` read after `arm()` returns only once `release()` is called (so the caller holds a stale list). */
+  function gatedStore() {
+    const store = new InMemoryDatadogStore();
+    const read = store.items.bind(store);
+    let gate: Promise<void> | null = null;
+    let release!: () => void;
+    let reached!: () => void;
+    let hit: Promise<void> = new Promise((r) => (reached = r));
+    store.items = async (since) => {
+      const rows = await read(since);
+      const wait = gate;
+      if (wait) {
+        gate = null;
+        reached();
+        await wait;
+      }
+      return rows;
+    };
+    return {
+      store,
+      arm: () => {
+        gate = new Promise<void>((r) => (release = r));
+        hit = new Promise((r) => (reached = r));
+      },
+      hit: () => hit,
+      release: () => release(),
+    };
+  }
+
+  it("a done click made while a poll is in flight is not overwritten by the poll's save", async () => {
+    const g = gatedStore();
+    const { inbox, store } = make({ store: g.store });
+    await inbox.pollOnce(true);
+    g.arm();
+    const poll = inbox.pollOnce(true);
+    await g.hit();
+    const click = inbox.patch("et:9f3", { done: true });
+    await new Promise((r) => setTimeout(r, 5));
+    g.release();
+    await Promise.all([poll, click]);
+    expect(store.rows.get("et:9f3")!.doneAt).not.toBeNull();
+  });
+
+  it("a ticket made while you mark the item done keeps both", async () => {
+    let open!: () => void;
+    const gate = new Promise<void>((r) => (open = r));
+    const store = new InMemoryDatadogStore();
+    const created: NewTask[] = [];
+    const inbox = new DatadogInbox({
+      datadog: fakeDatadog(),
+      store,
+      triager: null,
+      scope: "",
+      intervalMs: 60_000,
+      publish: () => {},
+      createTask: async (input) => (created.push(input), await gate, { id: "t1" } as TaskRow),
+      findTask: async () => null,
+      resolveRepo: async () => null,
+      now: () => T0,
+    });
+    await inbox.pollOnce(true);
+    const ticket = inbox.toTask("et:9f3", {});
+    await vi.waitFor(() => expect(created).toHaveLength(1));
+    const click = inbox.patch("et:9f3", { done: true });
+    await new Promise((r) => setTimeout(r, 5));
+    open();
+    await Promise.all([ticket, click]);
+    expect(store.rows.get("et:9f3")).toMatchObject({ taskId: "t1" });
+    expect(store.rows.get("et:9f3")!.doneAt).not.toBeNull();
   });
 });
 

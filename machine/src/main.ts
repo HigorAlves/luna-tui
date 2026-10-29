@@ -362,6 +362,8 @@ if (config.slackInbox.enabled && config.slackInbox.userToken) {
   console.log("slack inbox: off until MACHINE_SLACK_USER_TOKEN is set");
 }
 
+// Without keys the board should hear "no_token" from boot, whether or not polling is on.
+if (!config.datadog.apiKey) void datadogInbox.pollOnce(true).catch(() => {});
 if (config.datadog.enabled && config.datadog.apiKey) {
   console.log(`datadog inbox: polling incidents, monitors, Error Tracking and error logs every ${config.datadog.intervalMs / 1000}s${config.datadog.scope ? ` (${config.datadog.scope})` : ""}${datadogTriager ? " · triage by the datadog_triage pack (haiku)" : " · agents off, no triage"}`);
   datadogInbox.start();

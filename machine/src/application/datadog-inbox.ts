@@ -10,7 +10,7 @@ import { applyFloor, fromCluster, fromIncident, fromIssue, fromMonitor, merge, s
 import type { TaskRow } from "../domain/task.ts";
 import { type Datadog, DatadogError, NoDatadogTokenError } from "./datadog.ts";
 import type { DatadogStore } from "./datadog-store.ts";
-import type { DatadogTriager } from "./datadog-triage.ts";
+import type { DatadogTriageVerdict, DatadogTriager } from "./datadog-triage.ts";
 import type { NewTask } from "./pipeline.ts";
 import { AlreadyTaskError } from "./slack-inbox.ts";
 import { TriageRunError } from "./slack-triage.ts";
@@ -60,6 +60,8 @@ const DAY_MS = 86_400_000;
 const RATE_LIMIT_BACKOFF_MS = 5 * MINUTE_MS;
 const FIRST_LOOKBACK_MS = 60 * MINUTE_MS;
 const OVERLAP_MS = MINUTE_MS;
+/** An Error Tracking issue or log cluster with no activity this long is marked resolved. */
+const QUIET_RESOLVE_MS = DAY_MS;
 /** Done items stay listed (and stored) this long. */
 const KEEP_DONE_MS = 30 * DAY_MS;
 /** Error-log clusters fetched per poll. */
@@ -98,6 +100,8 @@ export class DatadogInbox implements DatadogInboxPort {
   private polledAt: string | null = null;
   private triaging: Promise<void> | null = null;
   private triageAgain = false;
+  /** Every write to the store (poll save, triage verdicts, your actions, a ticket) runs one at a time on this chain, each reading the rows afresh. */
+  private writes: Promise<unknown> = Promise.resolve();
   /** Items the pack failed or skipped: how often, when to try again, and the `lastSeen` it was at (a change gives it a fresh start). */
   private readonly triageFailures = new Map<string, { failures: number; notBefore: number; lastSeen: string }>();
   private warnedNoTriager = false;
@@ -140,6 +144,12 @@ export class DatadogInbox implements DatadogInboxPort {
       });
     }
     return this.polling;
+  }
+
+  private exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const run = this.writes.then(fn, fn);
+    this.writes = run.catch(() => {});
+    return run;
   }
 
   /** Resolves once no triage is in flight. Tests wait on it; the poll never does. */
@@ -213,21 +223,30 @@ export class DatadogInbox implements DatadogInboxPort {
       return this.refresh(true);
     }
     try {
-      const stored = new Map((await this.options.store.items(new Date(now.getTime() - KEEP_DONE_MS))).map((i) => [i.id, i]));
-      const merged = new Map<string, DatadogItem>();
-      for (const item of fresh) {
-        const before = stored.get(item.id);
-        merged.set(item.id, before ? merge(before, item, now) : item);
-      }
-      // Incidents and monitors are full lists of what is active: one that is gone, from a call that succeeded, is resolved.
-      for (const source of ["incident", "monitor"] as const) {
-        if (settled[SOURCES.indexOf(source)]!.status !== "fulfilled" || incomplete.has(source)) continue;
-        for (const row of stored.values()) {
-          if (row.source === source && !row.doneAt && row.resolvedAt === null && !merged.has(row.id)) merged.set(row.id, { ...row, resolvedAt: now.toISOString() });
+      await this.exclusive(async () => {
+        const stored = new Map((await this.options.store.items(new Date(now.getTime() - KEEP_DONE_MS))).map((i) => [i.id, i]));
+        const merged = new Map<string, DatadogItem>();
+        for (const item of fresh) {
+          const before = stored.get(item.id);
+          merged.set(item.id, before ? merge(before, item, now) : item);
         }
-      }
-      if (merged.size > 0) await this.options.store.save([...merged.values()]);
-      await this.prune();
+        // Incidents and monitors are full lists of what is active: one that is gone, from a call that succeeded, is resolved.
+        for (const source of ["incident", "monitor"] as const) {
+          if (settled[SOURCES.indexOf(source)]!.status !== "fulfilled" || incomplete.has(source)) continue;
+          for (const row of stored.values()) {
+            if (row.source === source && !row.doneAt && row.resolvedAt === null && !merged.has(row.id)) merged.set(row.id, { ...row, resolvedAt: now.toISOString() });
+          }
+        }
+        // Error Tracking issues and error-log clusters have no "gone" signal: one with no activity for a day counts as resolved until it fires again.
+        for (const source of ["error_tracking", "error_logs"] as const) {
+          if (settled[SOURCES.indexOf(source)]!.status !== "fulfilled") continue;
+          for (const row of new Map([...stored, ...merged]).values()) {
+            if (row.source === source && !row.doneAt && row.resolvedAt === null && now.getTime() - Date.parse(row.lastSeen) >= QUIET_RESOLVE_MS) merged.set(row.id, { ...row, resolvedAt: now.toISOString() });
+          }
+        }
+        if (merged.size > 0) await this.options.store.save([...merged.values()]);
+        await this.prune();
+      });
     } catch (thrown) {
       this.lastError = messageOf(thrown);
       console.warn(`datadog inbox: ${this.lastError}`);
@@ -312,6 +331,11 @@ export class DatadogInbox implements DatadogInboxPort {
       console.warn(`datadog inbox: triage failed: ${messageOf(error)}`);
       if (error instanceof TriageRunError) answers = error.answers;
     }
+    await this.exclusive(() => this.saveVerdicts(todo, answers));
+  }
+
+  private async saveVerdicts(todo: DatadogItem[], answers: Map<string, DatadogTriageVerdict>): Promise<void> {
+    const { store } = this.options;
     const at = this.now();
     const saved: DatadogItem[] = [];
     // The container took a while: re-read each row so the verdict lands on what you did meanwhile.
@@ -349,7 +373,11 @@ export class DatadogInbox implements DatadogInboxPort {
     return snapshot.items.find((i) => i.id === next.id) ?? next;
   }
 
-  async patch(id: string, patch: DatadogItemPatch): Promise<DatadogItem> {
+  patch(id: string, patch: DatadogItemPatch): Promise<DatadogItem> {
+    return this.exclusive(() => this.applyPatch(id, patch));
+  }
+
+  private async applyPatch(id: string, patch: DatadogItemPatch): Promise<DatadogItem> {
     let next = await this.get(id);
     const now = this.now().toISOString();
     if (patch.done === true && !next.doneAt) next = { ...next, doneAt: now, snoozedUntil: null };
@@ -362,7 +390,11 @@ export class DatadogInbox implements DatadogInboxPort {
     return this.saveAndPublish(next);
   }
 
-  async toTask(id: string, input: DatadogTaskInput): Promise<TaskRow> {
+  toTask(id: string, input: DatadogTaskInput): Promise<TaskRow> {
+    return this.exclusive(() => this.makeTask(id, input));
+  }
+
+  private async makeTask(id: string, input: DatadogTaskInput): Promise<TaskRow> {
     const row = await this.get(id);
     if (row.taskId && (await this.options.findTask(row.taskId))) throw new AlreadyTaskError(id, row.taskId);
     const where = [row.service, row.env].filter((part): part is string => part !== null).join(" · ");
@@ -382,7 +414,8 @@ export class DatadogInbox implements DatadogInboxPort {
       repoPath,
       source: { kind: "datadog", source: row.source, id: row.id, url: row.url },
     });
-    await this.saveAndPublish({ ...row, taskId: task.id });
+    // createTask took a while: save onto the row as it is now.
+    await this.saveAndPublish({ ...(await this.get(id)), taskId: task.id });
     return task;
   }
 
