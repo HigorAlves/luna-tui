@@ -13,7 +13,7 @@ import { createSlackTriager } from "./slack-triage-runner.ts";
 const NOW = new Date("2026-10-28T12:00:00.000Z");
 
 const item = (id: string, over: Partial<TriageItem> = {}): TriageItem => ({ id, channel: "#eng", author: "@marta", text: `msg ${id}?`, context: ["@lee: earlier"], matched: ["me"], isBot: false, threadReplies: 0, ...over });
-const verdict = (id: string) => ({ id, priority: "P1", category: "question", expectsReply: true, summary: "s".repeat(120), why: "w", draft: "d", refs: [], deadline: null });
+const verdict = (id: string) => ({ id, priority: "P1", category: "question", expectsReply: true, summary: "s".repeat(90), why: "w", draft: "d", refs: [], deadline: null });
 const watches = [
   { id: "w1", kind: "usergroup" as const, value: "S1", label: "@platform-team", channels: [], enabled: true, builtin: false, priority: "P1" as const, createdAt: "" },
   { id: "w2", kind: "keyword" as const, value: "luna", label: "luna", channels: [], enabled: false, builtin: false, priority: null, createdAt: "" },
@@ -96,7 +96,7 @@ describe("createSlackTriager", () => {
     ]);
   });
 
-  it("validates the answer, keeps only the ids it asked about, cuts summaries to 90, and runs 25 items per container", async () => {
+  it("validates the answer (a summary over 90 fails it), keeps only the ids it asked about, and runs 25 items per container", async () => {
     const store = new MemorySlackStore();
     // Each run skips its last item and adds one nobody asked for.
     const sandbox = fakeSandbox((run) => output({ items: [...idsOf(run).slice(0, -1).map(verdict), verdict("other")] }));
@@ -123,6 +123,10 @@ describe("createSlackTriager", () => {
     const partial = await half.triage(items, context).catch((e: unknown) => e);
     expect(partial).toBeInstanceOf(TriageRunError);
     expect((partial as TriageRunError).answers.size).toBe(25);
+
+    // A summary over the schema's 90-character cap is not the pack's shape either.
+    const long = createSlackTriager({ image: "img", credential: { name: "ANTHROPIC_API_KEY", value: "k" }, stateDir, store: new MemorySlackStore(), sandbox: fakeSandbox(() => output({ items: [{ ...verdict("C1:1"), summary: "s".repeat(91) }] })), log: () => {} });
+    await expect(long.triage([item("C1:1")], context)).rejects.toThrow(TriageRunError);
   });
 
   it("records every run: items, model, turns and cost on success; the reason on a failure, a timeout or a missing result", async () => {

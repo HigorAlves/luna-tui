@@ -21,8 +21,5 @@ You are `{{agent}}`, attempt {{attempt}}. The worktree is `/work`, branch `{{tas
 4. `rulesMarkdown`: the proposed additions to `docs/agents/project-context.md` as a fenced `diff` block. The runner writes it to `/out/files/rules.md`. Empty string when there is nothing to propose.
 
 ## Rules
-- Never call AskUserQuestion. Primary sources only; never retro from memory.
-- Never `gh pr create`, never push, never post or write to the tracker.
-- Never write outside `/work` and `/out`; you have no edit tools.
+- Primary sources only: every incident and pattern cites a run row, a ledger row, a commit or a finding. Never retro from memory, and there is nobody to ask.
 
-Answer ONLY with the JSON object matching the schema above. No text before or after.

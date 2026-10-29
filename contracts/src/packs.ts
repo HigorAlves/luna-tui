@@ -63,12 +63,12 @@ export const JiraIntakeAnswer = z.object({
   verdict: z.enum(["ready", "needs_brief", "not_for_agent"]),
   /** One line for the board and the Jira comment. */
   reason: z.string(),
-  /** The ticket as it should read; set for `ready` and `needs_brief`. */
+  /** The ticket as it should read; set for `ready` only (the machine reads none of these for `needs_brief`). */
   title: z.string().optional(),
   description: z.string().optional(),
   criteria: z.array(z.string()).optional(),
   /** What is missing, for `needs_brief`: asked back on the issue as a comment, with the answer the agent would pick. */
-  questions: z.array(Question).optional(),
+  questions: z.array(Question).max(3).optional(),
 });
 export type JiraIntakeAnswer = z.infer<typeof JiraIntakeAnswer>;
 
@@ -87,7 +87,6 @@ export const TriageAnswer = z.object({
 export const TestDesignAnswer = z.object({
   kind: z.enum(["done", "questions"]),
   summary: z.string(),
-  tests: z.array(z.string()).optional(),
   questions: z.array(Question).max(3).optional(),
   cases: z.array(TestCase).optional(),
 });
@@ -180,7 +179,7 @@ export const SlackTriageAnswer = z.object({
       /** The text asks the person for something nobody has answered yet. */
       expectsReply: z.boolean(),
       /** At most 90 characters: what they want from the person, not what they said. */
-      summary: z.string(),
+      summary: z.string().max(90),
       why: z.string(),
       /** Only when expectsReply: at most two sentences in the person's voice. */
       draft: z.string().nullable(),
@@ -216,10 +215,11 @@ export interface Pack {
 }
 
 // Every agent pack carries Skill: an explicit `tools` list hides it otherwise, and the role's skills
-// (`luna-factory:<name>`) are only reachable through it.
-const READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "Skill", ...["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse"].map((c) => `Bash(${c}:*)`)];
+// (`luna-factory:<name>`) are only reachable through it. It also carries `mcp__luna__step`: every
+// role reports progress with it, and the runner serves the luna server to every agent pack.
+const READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "Skill", "mcp__luna__step", ...["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse"].map((c) => `Bash(${c}:*)`)];
 const CHECK_COMMANDS = ["npm", "pnpm", "yarn", "npx", "go", "cargo", "pip", "pytest", "make"].map((c) => `Bash(${c}:*)`);
-const LEDGER_TOOLS = ["mcp__luna__step", "mcp__luna__slice_init", "mcp__luna__slice_set", "mcp__luna__slice_list", "mcp__luna__decision_get"];
+const LEDGER_TOOLS = ["mcp__luna__slice_init", "mcp__luna__slice_set", "mcp__luna__slice_list", "mcp__luna__decision_get"];
 
 /** What the setup planner may run to learn a repo: version prints and listings, nothing that builds. */
 const PROBE_COMMANDS = ["which", "command -v", "find", "node", "npm", "pnpm", "yarn", "go", "cargo", "rustc", "python", "python3", "pip", "make", "docker", "git log", "git ls-files"].map((c) => `Bash(${c}:*)`);
@@ -347,7 +347,8 @@ export const PACKS: Record<PackId, Pack> = {
     maxTurns: 60,
     timeoutMs: 20 * MINUTE,
     model: "sonnet",
-    effort: "low",
+    // A 60-turn browser job: low effort drops steps and misreads screens; medium holds the thread.
+    effort: "medium",
     answer: E2eAnswer,
     template: "e2e.md",
   },
@@ -378,6 +379,8 @@ export const PACKS: Record<PackId, Pack> = {
       "Bash(gh pr view:*)",
       "Bash(git log:*)",
       "Bash(git diff:*)",
+      // The PR number comes from the settled decisions when the machine recorded one.
+      "mcp__luna__decision_get",
     ],
     writable: false,
     maxTurns: 30,

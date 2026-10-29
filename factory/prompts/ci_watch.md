@@ -11,7 +11,7 @@ You are `{{agent}}`, attempt {{attempt}}. The worktree is `/work`, branch `{{tas
 ## Project context
 {{context.projectContext}}
 
-## CI, as the controller fetched it
+## CI, as the machine fetched it
 {{context.ci}}
 
 ## What to do
@@ -27,15 +27,13 @@ You are `{{agent}}`, attempt {{attempt}}. The worktree is `/work`, branch `{{tas
 5. For `infra` and `needs_debug`, answer `kind: "escalated"` with `reason` (the proving log line) and `options[]` (concrete next steps, each a string), plus the fields below.
 6. Answer `{verdict, classification, summary, findings[], runUrl}` (`kind: "done"` or omitted).
 
-## What the controller does with it
+## What the machine does with it
 - `fixable` fails the stage and loops to implementing with your findings.
 - `flake` passes with your note; one re-run follows.
-- `infra` and `needs_debug` escalate to a human with your `reason` and `options`.
+- `infra` and `needs_debug` escalate to a person with your `reason` and `options`.
 - `green` passes.
 
 ## Rules
-- Never call AskUserQuestion. Uncertainty goes in `summary`, with `needs_debug`.
-- Never `gh run rerun`, never `gh pr create`, never post reviews or tracker writes.
-- Never write outside `/work` and `/out`; you have no edit tools.
+- Uncertainty goes in `summary`, with `needs_debug`: nobody answers a question during the run.
+- Never `gh run rerun`: the machine re-runs a flake once itself, on your verdict.
 
-Answer ONLY with the JSON object matching the schema above. No text before or after.

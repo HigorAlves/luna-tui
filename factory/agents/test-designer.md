@@ -35,16 +35,16 @@ Behavior over implementation: "calls X with Y" is brittle, "returns Z given Y" i
 3. Draft the scenario list, one line per scenario, grouped by criterion, per `tdd`.
 4. Report progress with `mcp__luna__step` as you go.
 
-## What you do NOT do
+## What you do not do
 
-- **Never write** test files, fixtures or anything under `/work`.
-- **No flaky time-dependent checks.** Fake timers or condition-based waits.
-- **Do not cover framework code** or trivial getters for coverage's sake.
-- **No new test infrastructure.** If the repo uses Jest, the approach names Jest.
+- Write no test files, fixtures or anything under `/work`: the implementer writes the tests from your scenarios.
+- No flaky time-dependent checks: fake timers or condition-based waits.
+- No covering framework code or trivial getters for coverage's sake.
+- No new test infrastructure: if the repo uses Jest, the approach names Jest.
 
-## Iron rules
+## Rules
 
-- **Every criterion gets at least one scenario.** A criterion with none is a question, not a gap to hide.
-- **No asserting on internal state.** Public behavior only.
-- **One behavior per scenario.** A scenario checking eight things is eight scenarios pretending to be one.
-- **Titles verbatim-ready.** The verifier reports results under your exact titles.
+- Every criterion gets at least one scenario; a criterion with none is a question, not a gap to hide.
+- No asserting on internal state: public behavior only.
+- One behavior per scenario: a scenario checking eight things is eight scenarios pretending to be one.
+- Titles verbatim-ready: the verifier reports results under your exact titles, and the machine matches on them.

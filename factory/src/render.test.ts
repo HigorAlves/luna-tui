@@ -1,7 +1,7 @@
 import { PACKS, type StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { FACTORY_RULES, callLine, renderPrompt } from "./render.ts";
+import { FACTORY_RULES, callLine, escalationLine, renderPrompt } from "./render.ts";
 
 const input: StageInput = {
   schema: 3,
@@ -57,15 +57,24 @@ describe("renderPrompt", () => {
     expect(prompt).toContain("context: (none)");
   });
 
-  it("opens with the role, the stage, the factory rules and the answer schema", () => {
+  it("opens with the role, the stage and how this stage ends when it cannot settle something; no schema dump", () => {
     const prompt = renderPrompt({ pack: PACKS.triage, input: { ...input, pack: "triage", stage: "triage" }, template: "body" });
-    const [header, schema] = prompt.split("\n");
+    const [header, rest] = prompt.split("\n");
     expect(header).toContain("`triage-planner` role running the `triage` stage in factory mode (LUNA_FACTORY=1)");
-    expect(header).toContain("Never call AskUserQuestion");
-    const parsed = JSON.parse(schema!);
-    expect(parsed.properties.kind.enum).toEqual(["brief", "questions"]);
-    expect(parsed.$schema).toBeUndefined();
+    expect(header).toContain('answer kind "questions" (at most three');
+    expect(rest).toBe("body");
+    expect(prompt).not.toContain('"properties"');
+    expect(prompt).not.toContain("Answer ONLY");
     expect(prompt.endsWith("\nbody")).toBe(true);
+  });
+
+  it("names each pack's own escalation shape: questions, escalated, needs_brief, or none", () => {
+    expect(escalationLine(PACKS.test_design)).toContain('kind "questions"');
+    for (const id of ["setup", "implementing", "verifying", "e2e", "ci_watch", "reviewing", "addressing"] as const) expect(escalationLine(PACKS[id])).toContain('kind "escalated" with reason and options[]');
+    expect(escalationLine(PACKS.jira_intake)).toContain('verdict "needs_brief"');
+    expect(escalationLine(PACKS.slack_triage)).toContain("no escalation");
+    expect(escalationLine(PACKS.reviewing_memory)).toContain("no escalation");
+    expect(renderPrompt({ pack: PACKS.implementing, input, template: "x" })).not.toContain("questions");
   });
 
   it("renders the CI facts, the base commit and the QA targets for the packs that read them", () => {
@@ -145,10 +154,14 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.evidence, input: { ...input, pack: "evidence", stage: "evidence" }, template: "{{agent}}" })).toMatch(/\nscript$/);
   });
 
-  it("states the rules a stage runs under", () => {
+  it("states the rules a stage runs under, once, without promising an answer shape", () => {
     expect(FACTORY_RULES).toContain("Never call AskUserQuestion");
     expect(FACTORY_RULES).toContain("requested[]");
     expect(FACTORY_RULES).toContain("Never write outside /work and /out");
+    expect(FACTORY_RULES).toContain("chained command");
+    expect(FACTORY_RULES).not.toContain('kind "questions"');
+    expect(FACTORY_RULES).not.toContain("Answer ONLY");
+    expect(FACTORY_RULES).not.toMatch(/human|controller/);
   });
 });
 

@@ -10,7 +10,7 @@ You are `{{agent}}`, attempt {{attempt}}. The worktree is `/work`, checked out o
 ## Project context
 {{context.projectContext}}
 
-## The pull request, as the controller fetched it
+## The pull request, as the machine fetched it
 {{context.review}}
 
 ## What to do
@@ -22,14 +22,11 @@ You are `{{agent}}`, attempt {{attempt}}. The worktree is `/work`, checked out o
 6. Set `verdict` mechanically: `request_changes` on a `bug` or `security` finding at confidence >= 0.8; `approve` when the whole diff was read and nothing of severity `bug`, `security` or `test` was found; else `comment`.
 7. Answer `{verdict, summary, findings[], comments[]}` (`kind: "done"` or omitted). `comments[]` carries what gets posted; `findings[]` the same in contract shape (the security reviewer's included); `summary` becomes the review's body: two sentences at most, the PR in one clause plus the finding counts by severity.
 
-## What the controller does with it
-- `comments[]` go out at once as one COMMENT review under the user's name, `summary` as its body.
+## What the machine does with it
+- `comments[]` go out at once as one COMMENT review under the person's name, `summary` as its body.
 - `verdict: comment` closes the task.
-- `verdict: approve` or `request_changes` waits for the user, who posts it with one key or drops it.
+- `verdict: approve` or `request_changes` waits for the person, who posts it with one key or drops it.
 
 ## Rules
-- Never call AskUserQuestion. Uncertainty is a `question` finding.
-- Never `gh pr review`, never `gh pr comment`, never push or edit.
-- Never write outside `/work` and `/out`; you have no edit tools.
+- Uncertainty is a `question` finding: nobody answers a question during the run, and the author can.
 
-Answer ONLY with the JSON object matching the schema above. No text before or after.

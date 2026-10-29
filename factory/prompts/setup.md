@@ -40,8 +40,7 @@ qa_targets: []               # only documented targets: { name, url, credential:
 Every key is optional. A `run` line goes through `sh -c` in `cwd`, in a container built from the stage image (Node 24, Go, Rust, git, gh; no Docker inside). The machine then runs every check once with the services beside it and shows the person pass or fail per check.
 
 ## Rules
-- Never call AskUserQuestion. Escalation ends the stage.
+- Escalation ends the stage; what you could not settle but can still propose around goes in `notes[]` for the person to check.
 - Never write anywhere: `/work` is read-only and the file is written by the machine after approval.
-- Never put a secret value in the config: references (`env:NAME`) or throwaway local values only.
+- Never put a secret value in the config: references (`env:NAME`) or throwaway local values only, because the file is committed.
 
-Answer ONLY with the JSON object matching the schema above. No text before or after.
