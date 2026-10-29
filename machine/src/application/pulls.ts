@@ -11,12 +11,14 @@ import { HOST_GIT } from "../adapters/git/worktree.ts";
 import { type ExecResult, exec as realExec } from "../adapters/process/exec.ts";
 import { fromGraphQl, splitOf } from "../domain/pull-request.ts";
 import { type GitHub, messageOf } from "./github.ts";
+import { PrBusyError } from "./pr-tasks.ts";
 
 /** What the HTTP routes need from the poller; the real class and a test fake both fit. */
 export interface PullsPort {
   readonly snapshot: PrSnapshot;
   pollOnce(): Promise<PrSnapshot>;
   merge(repo: string, number: number): Promise<void>;
+  close(repo: string, number: number): Promise<void>;
   clone(repo: string, dest: string): Promise<void>;
 }
 
@@ -48,6 +50,14 @@ export class NotReadyError extends Error {
   constructor(repo: string, number: number) {
     super(`${repo}#${number} is not ready to merge`);
     this.name = "NotReadyError";
+  }
+}
+
+/** Close asked for a PR the snapshot does not hold. */
+export class NoPullError extends Error {
+  constructor(repo: string, number: number) {
+    super(`${repo}#${number} is not an open PR of yours`);
+    this.name = "NoPullError";
   }
 }
 
@@ -179,6 +189,15 @@ export class GitHubPulls implements PullsPort {
     const pr = this.find(repo, number);
     if (!pr || pr.split !== "ready_to_merge") throw new NotReadyError(repo, number);
     await this.options.github.mergePr(repo, number);
+    await this.pollOnce();
+  }
+
+  /** Closes a PR without merging, unless a task is working on it, then polls so it drops off the list. */
+  async close(repo: string, number: number): Promise<void> {
+    const pr = this.find(repo, number);
+    if (!pr) throw new NoPullError(repo, number);
+    if (pr.task) throw new PrBusyError(repo, number, pr.task.id);
+    await this.options.github.closePr(repo, number);
     await this.pollOnce();
   }
 

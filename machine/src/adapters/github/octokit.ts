@@ -27,6 +27,7 @@ export interface OctokitLike {
       list(params: Record<string, unknown>): Promise<{ data: Array<{ html_url: string; number: number; draft?: boolean }> }>;
       create(params: Record<string, unknown>): Promise<{ data: { html_url: string; number: number; draft?: boolean } }>;
       merge(params: Record<string, unknown>): Promise<unknown>;
+      update(params: Record<string, unknown>): Promise<unknown>;
       createReview(params: Record<string, unknown>): Promise<unknown>;
       listFiles: unknown;
       listReviewComments: unknown;
@@ -180,6 +181,11 @@ export class OctokitGitHub implements GitHub {
         line: t.line ?? null,
         comments: t.comments.nodes.map((c) => ({ author: c.author?.login ?? "ghost", body: c.body, at: c.createdAt })),
       }));
+  }
+
+  async closePr(slug: string, number: number): Promise<void> {
+    const { owner, repo } = repoRef(slug);
+    await call(`closing ${slug}#${number}`, () => this.octokit.rest.pulls.update({ owner, repo, pull_number: number, state: "closed" }));
   }
 
   /** Each repo allows its own merge methods: squash when it does, else a merge commit, else a rebase. */

@@ -38,6 +38,8 @@ export interface PullRequest {
   fromFork: boolean;
   reviewDecision: "APPROVED" | "CHANGES_REQUESTED" | "REVIEW_REQUIRED" | null;
   mergeable: "MERGEABLE" | "CONFLICTING" | "UNKNOWN";
+  /** GitHub's own verdict on merging now: CLEAN, HAS_HOOKS and UNSTABLE can; BLOCKED (a rule still waits), BEHIND, DIRTY (conflicts) and DRAFT cannot; UNKNOWN while it computes. */
+  mergeState: "CLEAN" | "HAS_HOOKS" | "UNSTABLE" | "BLOCKED" | "BEHIND" | "DIRTY" | "DRAFT" | "UNKNOWN";
   /** `failed` is the red subset of `all`, which lists every check in the order GitHub reports them. */
   checks: { state: ChecksState; passed: number; total: number; failed: PrCheck[]; all: PrCheck[] };
   unresolvedThreads: number;
