@@ -425,11 +425,15 @@ pub struct App {
     imported: bool,
     /// The latest stage container per task id, for `f` to open a watch tab on.
     stages: std::collections::HashMap<String, herdr::Stage>,
+    /// Stages found running at connect: recorded for `f` without re-pointing any tab.
+    scan_tx: Sender<(String, herdr::Stage)>,
+    scan_rx: Receiver<(String, herdr::Stage)>,
 }
 
 impl App {
     pub fn new(machine: Machine) -> Self {
         let (tx, rx) = mpsc::channel();
+        let (scan_tx, scan_rx) = mpsc::channel();
         machine.follow_stream(tx.clone());
         let mut app = Self {
             machine,
@@ -466,6 +470,8 @@ impl App {
             detail_scroll: Cell::new(0),
             imported: false,
             stages: std::collections::HashMap::new(),
+            scan_tx,
+            scan_rx,
         };
         app.reload();
         if !app.online {
@@ -546,6 +552,10 @@ impl App {
 
     /// Applies everything the stream thread reported since the last frame.
     pub fn pump(&mut self) {
+        while let Ok((id, stage)) = self.scan_rx.try_recv() {
+            // A stage the stream reported meanwhile is newer than the scan.
+            self.stages.entry(id).or_insert(stage);
+        }
         while let Ok(incoming) = self.stream.try_recv() {
             match incoming {
                 Incoming::Online => {
@@ -652,24 +662,19 @@ impl App {
     }
 
     /// Records stages that started before the board connected, so `f` can open them. Opens
-    /// no tabs; the scan comes back through the stream as ordinary `stage.started` messages.
+    /// no tabs and re-points none: the scan only fills `stages` (see `scan_rx`).
     fn catch_up_watch_tabs(&self) {
         let tasks: Vec<(String, String, String)> = self
             .tasks
             .iter()
             .filter_map(|t| Some((t.id.clone(), format!("#{} {}", t.short_id(), t.title), t.worktree_path.clone()?)))
             .collect();
-        let tx = self.tx.clone();
+        let tx = self.scan_tx.clone();
         thread::spawn(move || {
             for (container, task_id) in herdr::running_containers() {
                 if let Some((id, label, cwd)) = tasks.iter().find(|(id, ..)| *id == task_id) {
-                    let message = StreamMessage::StageStarted {
-                        task_id: id.clone(),
-                        label: label.clone(),
-                        cwd: cwd.clone(),
-                        container,
-                    };
-                    let _ = tx.send(Incoming::Message(message));
+                    let stage = herdr::Stage { label: label.clone(), cwd: cwd.clone(), container };
+                    let _ = tx.send((id.clone(), stage));
                 }
             }
         });
@@ -681,9 +686,15 @@ impl App {
             self.notify("the watch tab needs herdr; run the board inside it", false);
             return;
         }
+        self.watch_with(task, herdr::has_task_tab(task.short_id()));
+    }
+
+    /// The decision half of `f`, given whether the task already has a tab. A recorded stage
+    /// only counts while the task is still running: a finished stage leaves nothing to tail.
+    fn watch_with(&mut self, task: &Task, has_tab: bool) {
         let short = task.short_id().to_string();
-        let stage = self.stages.get(&task.id).cloned();
-        match herdr::watch_action(herdr::has_task_tab(&short), stage.as_ref()) {
+        let stage = self.stages.get(&task.id).filter(|_| task.running).cloned();
+        match herdr::watch_action(has_tab, stage.as_ref()) {
             herdr::WatchAction::FocusExisting => {
                 herdr::focus_task_tab(&short);
             }
@@ -2515,6 +2526,41 @@ mod tests {
         let toast = app.toast.as_ref().expect("a toast");
         assert!(!toast.error);
         assert!(!toast.text.contains("opens when an agent runs"), "{}", toast.text);
+    }
+
+    #[test]
+    fn the_nothing_to_watch_branch_notices_without_error() {
+        let mut app = App::new(Machine::from_env());
+        let task = ticket("aaaaaaaa0000", "building", true, true);
+        app.tasks.push(task.clone());
+        app.watch_with(&task, false);
+        let toast = app.toast.as_ref().expect("a toast");
+        assert!(!toast.error);
+        assert!(toast.text.contains("nothing is running"), "{}", toast.text);
+    }
+
+    #[test]
+    fn a_stage_of_a_task_that_stopped_running_is_not_opened_by_f() {
+        let mut app = App::new(Machine::from_env());
+        let task = ticket("aaaaaaaa0000", "awaiting_approval", false, true);
+        app.tasks.push(task.clone());
+        let stage = herdr::Stage { label: "#aaaaaaaa app".into(), cwd: "/wt".into(), container: "c1".into() };
+        app.stages.insert(task.id.clone(), stage);
+        app.watch_with(&task, false);
+        let toast = app.toast.as_ref().expect("a toast");
+        assert!(toast.text.contains("nothing is running"), "{}", toast.text);
+    }
+
+    #[test]
+    fn the_connect_scan_records_a_stage_without_overwriting_a_newer_one() {
+        let mut app = App::new(Machine::from_env());
+        let stage = |c: &str| herdr::Stage { label: "#a".into(), cwd: "/w".into(), container: c.into() };
+        app.stages.insert("t1".into(), stage("new"));
+        app.scan_tx.send(("t1".into(), stage("old"))).unwrap();
+        app.scan_tx.send(("t2".into(), stage("c2"))).unwrap();
+        app.pump();
+        assert_eq!(app.stages["t1"].container, "new");
+        assert_eq!(app.stages["t2"].container, "c2");
     }
 
     #[test]
