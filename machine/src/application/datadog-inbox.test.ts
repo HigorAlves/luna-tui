@@ -165,6 +165,50 @@ describe("DatadogInbox.pollOnce", () => {
     log.mockRestore();
   });
 
+  it("backs a failed item off (1m, 5m, 15m) and gives up after that, while the others keep going", async () => {
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const calls: string[][] = [];
+    const { inbox, advance } = make({ triager: { triage: async (items) => (calls.push(items.map((i) => i.id)), new Map(items.filter((i) => i.id !== "et:9f3").map((i) => [i.id, verdict("P2")]))) } });
+    await inbox.pollOnce(true);
+    await inbox.idle();
+    expect(calls).toEqual([["inc:812", "mon:7:service:api,env:prod", "et:9f3", "log:api:TimeoutError"]]);
+    // The skipped item waits out a minute before it is asked again.
+    advance(30_000);
+    await inbox.pollOnce(true);
+    await inbox.idle();
+    expect(calls).toHaveLength(1);
+    for (const wait of [31_000, 5 * 60_000 + 1, 15 * 60_000 + 1]) {
+      advance(wait);
+      await inbox.pollOnce(true);
+      await inbox.idle();
+    }
+    expect(calls.slice(1)).toEqual([["et:9f3"], ["et:9f3"], ["et:9f3"]]);
+    advance(60 * 60_000);
+    await inbox.pollOnce(true);
+    await inbox.idle();
+    expect(calls).toHaveLength(4);
+    const stuck = inbox.snapshot.items.find((i) => i.id === "et:9f3")!;
+    expect(stuck.triage).toBeNull();
+    expect(stuck.split).toBe("investigate");
+    log.mockRestore();
+  });
+
+  it("a thrown run counts as a failure for every item it left without an answer", async () => {
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let calls = 0;
+    const { inbox, advance } = make({ triager: { triage: async () => (calls++, Promise.reject(new TriageRunError("docker: down", new Map()))) } });
+    await inbox.pollOnce(true);
+    await inbox.idle();
+    await inbox.pollOnce(true);
+    await inbox.idle();
+    expect(calls).toBe(1);
+    advance(61_000);
+    await inbox.pollOnce(true);
+    await inbox.idle();
+    expect(calls).toBe(2);
+    log.mockRestore();
+  });
+
   it("answers no_token with an empty snapshot when the keys are unset", async () => {
     const { inbox, store } = make({ datadog: noTokenDatadog() });
     const snapshot = await inbox.pollOnce(true);

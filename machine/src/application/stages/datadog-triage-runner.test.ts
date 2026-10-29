@@ -135,6 +135,15 @@ describe("createDatadogTriager", () => {
     expect((partial as TriageRunError<unknown>).answers.size).toBe(20);
   });
 
+  it("runs the later batches after a failed one and throws at the end with every answer", async () => {
+    let batches = 0;
+    const triager = createDatadogTriager({ image: "img", credential, stateDir, store: new InMemoryDatadogStore(), sandbox: fakeSandbox((run) => (batches++ === 0 ? null : output({ items: idsOf(run).map(verdict) }))), log: () => {} });
+    const failed = await triager.triage(Array.from({ length: 25 }, (_, i) => item(`et:${i}`)), "").catch((e: unknown) => e);
+    expect(failed).toBeInstanceOf(TriageRunError);
+    expect(seen).toHaveLength(2);
+    expect([...(failed as TriageRunError<unknown>).answers.keys()]).toEqual(["et:20", "et:21", "et:22", "et:23", "et:24"]);
+  });
+
   it("records every run: cost on success, the reason on a failure, a timeout or a missing result", async () => {
     const store = new InMemoryDatadogStore();
     const lines: string[] = [];

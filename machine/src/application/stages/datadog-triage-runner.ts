@@ -124,11 +124,14 @@ export function createDatadogTriager(deps: DatadogTriageDeps): DatadogTriager {
   return {
     async triage(items, scope) {
       const answers = new Map<string, DatadogTriageVerdict>();
+      let firstError: string | null = null;
       for (let at = 0; at < items.length; at += DATADOG_TRIAGE_BATCH) {
         const batch = await runBatch(items.slice(at, at + DATADOG_TRIAGE_BATCH), scope, at / DATADOG_TRIAGE_BATCH);
         for (const [id, verdict] of batch.answers) answers.set(id, verdict);
-        if (batch.error !== null) throw new TriageRunError(batch.error, answers);
+        // A failed batch does not stop the later ones; the run reports the first failure once all have had their turn.
+        if (batch.error !== null && firstError === null) firstError = batch.error;
       }
+      if (firstError !== null) throw new TriageRunError(firstError, answers);
       return answers;
     },
   };

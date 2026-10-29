@@ -173,12 +173,30 @@ export function splitOf(item: Pick<DatadogItem, "doneAt" | "snoozedUntil" | "tri
   return priority ? SPLIT_OF_PRIORITY[priority] : "investigate";
 }
 
-/** Folds a fresh poll into the stored item: fresh facts win, your state and triage stay, a done item that fired again reopens. */
+/** True when `floor` is a stricter priority than `priority` (P0 is highest). */
+const floorAbove = (floor: DatadogPriority | null, priority: DatadogPriority): boolean => floor !== null && higher(floor, priority) === floor && floor !== priority;
+
+/**
+ * Whether a done item fired again. Most sources reopen on any newer `lastSeen`; an incident's
+ * `lastSeen` is its edit time, so it reopens only when its state or severity changed or it came
+ * back after being resolved.
+ */
+function firedAgain(stored: DatadogItem, fresh: DatadogItem): boolean {
+  if (stored.doneAt === null) return false;
+  if (stored.source === "incident") return stored.status !== fresh.status || stored.severity !== fresh.severity || stored.resolvedAt !== null;
+  return fresh.lastSeen > stored.doneAt;
+}
+
+/**
+ * Folds a fresh poll into the stored item: fresh facts win, your state and triage stay, a done item
+ * that fired again reopens, and a model verdict now under a risen floor is dropped for a re-triage.
+ */
 export function merge(stored: DatadogItem, fresh: DatadogItem, now: Date): DatadogItem {
-  const reopen = stored.doneAt !== null && fresh.lastSeen > stored.doneAt;
+  const reopen = firedAgain(stored, fresh);
+  const belowFloor = stored.triage !== null && !stored.triage.overridden && floorAbove(fresh.floor, stored.triage.priority);
   const next: DatadogItem = {
     ...fresh,
-    triage: reopen ? null : stored.triage,
+    triage: reopen || belowFloor ? null : stored.triage,
     snoozedUntil: stored.snoozedUntil,
     doneAt: reopen ? null : stored.doneAt,
     reopenedAt: reopen ? now.toISOString() : stored.reopenedAt,

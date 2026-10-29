@@ -39,6 +39,25 @@ describe("datadog items", () => {
     const done = { ...fromCluster(cluster, web), doneAt: "2026-10-29T11:59:30Z", triage: { priority: "P2" } as never };
     expect(merge(done, fromCluster(cluster, web), now)).toMatchObject({ doneAt: "2026-10-29T11:59:30Z", triage: { priority: "P2" } });
   });
+  it("re-triages a triaged item whose floor rose above its verdict, but not one you set by hand", () => {
+    const stored = { ...fromIncident({ ...incident, severity: "SEV-4" }, web), triage: { priority: "P2", overridden: false } as never };
+    const risen = fromIncident({ ...incident, severity: "SEV-1" }, web);
+    const merged = merge(stored, risen, now);
+    expect(merged.triage).toBeNull();
+    expect(merged.split).toBe("act_now");
+    const byHand = merge({ ...stored, triage: { priority: "P2", overridden: true } as never }, risen, now);
+    expect(byHand.triage).toMatchObject({ priority: "P2" });
+    const sameFloor = merge({ ...stored, triage: { priority: "P1", overridden: false } as never }, fromIncident({ ...incident, severity: "SEV-4" }, web), now);
+    expect(sameFloor.triage).toMatchObject({ priority: "P1" });
+  });
+  it("an edit alone does not reopen a done incident; a new state or severity does", () => {
+    const done = { ...fromIncident(incident, web), doneAt: "2026-10-29T11:40:00Z", triage: { priority: "P0", overridden: false } as never };
+    const edited = fromIncident({ ...incident, modified: "2026-10-29T11:59:00Z" }, web);
+    expect(merge(done, edited, now)).toMatchObject({ doneAt: "2026-10-29T11:40:00Z", lastSeen: "2026-10-29T11:59:00Z", reopenedAt: null });
+    expect(merge(done, fromIncident({ ...incident, modified: "2026-10-29T11:59:00Z", state: "stable" }, web), now).doneAt).toBeNull();
+    expect(merge(done, fromIncident({ ...incident, modified: "2026-10-29T11:59:00Z", severity: "SEV-1" }, web), now).doneAt).toBeNull();
+    expect(merge({ ...done, resolvedAt: "2026-10-29T11:45:00Z" }, edited, now).doneAt).toBeNull();
+  });
   it("never lets the model go below the floor", () => {
     expect(applyFloor("P2", "P1")).toBe("P1");
     expect(applyFloor("P0", "P1")).toBe("P0");

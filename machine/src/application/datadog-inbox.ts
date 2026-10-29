@@ -65,6 +65,8 @@ const KEEP_DONE_MS = 30 * DAY_MS;
 /** Error-log clusters fetched per poll. */
 const TOP_CLUSTERS = 15;
 const TICK_MS = MINUTE_MS;
+/** The pause before each retry of an item the pack failed or skipped; past the last one it keeps its floor until it changes. */
+const TRIAGE_RETRY_MS = [MINUTE_MS, 5 * MINUTE_MS, 15 * MINUTE_MS];
 const SOURCES: DatadogSource[] = ["incident", "monitor", "error_tracking", "error_logs"];
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
@@ -96,6 +98,8 @@ export class DatadogInbox implements DatadogInboxPort {
   private polledAt: string | null = null;
   private triaging: Promise<void> | null = null;
   private triageAgain = false;
+  /** Items the pack failed or skipped: how often, when to try again, and the `lastSeen` it was at (a change gives it a fresh start). */
+  private readonly triageFailures = new Map<string, { failures: number; notBefore: number; lastSeen: string }>();
   private warnedNoTriager = false;
   private readonly now: () => Date;
 
@@ -281,7 +285,14 @@ export class DatadogInbox implements DatadogInboxPort {
     if (!triager) return;
     const now = this.now();
     const rows = await store.items(new Date(now.getTime() - KEEP_DONE_MS));
-    const todo = triageOrder(rows.filter((row) => row.triage === null && row.resolvedAt === null && splitOf(row, now) !== "done" && splitOf(row, now) !== "snoozed"));
+    const todo = triageOrder(
+      rows.filter((row) => {
+        if (row.triage !== null || row.resolvedAt !== null || splitOf(row, now) === "done" || splitOf(row, now) === "snoozed") return false;
+        const failed = this.triageFailures.get(row.id);
+        if (!failed || failed.lastSeen !== row.lastSeen) return true;
+        return failed.failures <= TRIAGE_RETRY_MS.length && failed.notBefore <= now.getTime();
+      }),
+    );
     if (todo.length === 0) return;
     await this.refresh();
     let answers: Awaited<ReturnType<DatadogTriager["triage"]>> = new Map();
@@ -296,12 +307,23 @@ export class DatadogInbox implements DatadogInboxPort {
     // The container took a while: re-read each row so the verdict lands on what you did meanwhile.
     for (const asked of todo) {
       const verdict = answers.get(asked.id);
+      if (verdict) this.triageFailures.delete(asked.id);
+      else this.countFailure(asked, at);
       const row = await store.item(asked.id);
       if (!verdict || !row || row.triage !== null) continue;
       const triage: DatadogTriage = { ...verdict, priority: applyFloor(verdict.priority, row.floor), by: "model", triagedAt: at.toISOString(), overridden: false };
       saved.push({ ...row, triage, split: splitOf({ ...row, triage }, at) });
     }
     if (saved.length > 0) await store.save(saved);
+  }
+
+  /** A failed or skipped item waits out the next retry delay; past the last it stays untriaged at its floor. */
+  private countFailure(item: DatadogItem, at: Date): void {
+    const before = this.triageFailures.get(item.id);
+    const failures = before && before.lastSeen === item.lastSeen ? before.failures : 0;
+    const delay = TRIAGE_RETRY_MS[failures];
+    if (delay === undefined) console.warn(`datadog inbox: giving up on triage for ${item.id} after ${TRIAGE_RETRY_MS.length} retries; it keeps its floor until it changes`);
+    this.triageFailures.set(item.id, { failures: failures + 1, notBefore: at.getTime() + (delay ?? 0), lastSeen: item.lastSeen });
   }
 
   private async get(id: string): Promise<DatadogItem> {
