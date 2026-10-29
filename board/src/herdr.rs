@@ -256,6 +256,27 @@ mod tests {
     }
 
     #[test]
+    fn a_tab_opened_with_f_is_found_again_so_a_second_f_only_focuses_it() {
+        let WatchAction::OpenAndFocus(opened) = watch_action(false, Some(&stage())) else {
+            panic!("a running stage with no tab opens one");
+        };
+        let tabs = json!({"result": {"tabs": [
+            {"tab_id": "w:1", "label": "Board"},
+            {"tab_id": "w:3", "label": opened.label},
+        ]}});
+        let found = tab_with_prefix(&tabs, "#abcd1234 ");
+        assert_eq!(found.as_deref(), Some("w:3"), "the opened tab carries the task's #short prefix");
+        assert_eq!(watch_action(found.is_some(), Some(&stage())), WatchAction::FocusExisting);
+        let panes = json!({"result": {"panes": [{"pane_id": "p:3", "tab_id": "w:3"}]}});
+        let pane = pane_in_tab(&panes, "w:3");
+        assert_eq!(
+            follow_command(pane.as_deref(), "c2"),
+            Some(("p:3".to_string(), "docker logs -f c2".to_string())),
+            "a later stage re-points that same tab's pane"
+        );
+    }
+
+    #[test]
     fn reads_running_stage_containers_from_docker_ps() {
         let listed = "hardness-abc-triage\tabc\n\nstray-container\t\n";
         assert_eq!(running_stages(listed), vec![("hardness-abc-triage".to_string(), "abc".to_string())]);

@@ -2518,6 +2518,37 @@ mod tests {
     }
 
     #[test]
+    fn f_outside_herdr_with_a_running_stage_notices_and_keeps_the_stage() {
+        if herdr::available() {
+            return;
+        }
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.select("aaaaaaaa0000", true);
+        let started = r##"{"type":"stage.started","taskId":"aaaaaaaa0000","label":"#aaaaaaaa app · t","cwd":"/wt","container":"c1"}"##;
+        app.tx.send(Incoming::Message(serde_json::from_str(started).unwrap())).unwrap();
+        app.pump();
+        app.handle_key(KeyEvent::from(KeyCode::Char('f')));
+        let toast = app.toast.as_ref().expect("f outside herdr says why nothing opened");
+        assert!(!toast.error, "{}", toast.text);
+        assert!(toast.text.contains("herdr"), "{}", toast.text);
+        assert!(app.stages.contains_key("aaaaaaaa0000"), "the stage stays recorded for a later f inside herdr");
+        assert!(app.floor.is_none(), "lowercase f never opens the Floor view");
+    }
+
+    #[test]
+    fn uppercase_f_opens_and_closes_the_floor_view() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.select("aaaaaaaa0000", true);
+        app.handle_key(KeyEvent::from(KeyCode::Char('F')));
+        assert!(app.floor.is_some(), "F opens the Floor view");
+        assert!(app.toast.as_ref().is_none_or(|t| !t.text.contains("watch")), "F is not the watch key");
+        app.handle_key(KeyEvent::from(KeyCode::Char('F')));
+        assert!(app.floor.is_none(), "F again closes it");
+    }
+
+    #[test]
     fn a_budget_alert_becomes_a_notice_and_a_toast_that_turns_red_at_the_ceiling() {
         let mut app = App::new(Machine::from_env());
         let alert = |pct: u8| {
