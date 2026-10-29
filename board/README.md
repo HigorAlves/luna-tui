@@ -63,7 +63,7 @@ Press `?` in the board for the full list. The main ones:
 | `X` | abort the running or paused stage (asks first) |
 | `w` | kill the ticket's worktree once you are done with it (asks first); its branch and commits stay |
 | `R` | search for a repo to set on the ticket, instead of typing a path |
-| `f` | focus the agent's watch tab in herdr |
+| `f` | open or focus the agent's watch tab in herdr |
 | `o` | open the linked GitHub issue in the browser |
 | `/` / `!` / `@` | filter by title or `#id`; show only tickets that need you; show only this repo's tickets |
 | `z` | fold: show every column at once, collapsing all but the focused one to its header bar |
@@ -121,10 +121,11 @@ that flow didn't move in place yet.
 A new ticket starts in Backlog. `a` moves it to Intake (no stage runs, it's
 just a deliberate "I'm shaping this one up" step); `a` again starts triage.
 
-The board opens a herdr tab following each stage's agent (`docker logs -f` on
-its container), whether the machine runs in Docker or on your host, and closes it
-once the ticket is closed. Stages already running when the board starts get a tab
-too. Tabs only open while a board is running. Approving the Ship gate (`a` on `awaiting_ship`)
+Press `f` on a ticket with a running stage to open a herdr tab following its
+agent (`docker logs -f` on its container), whether the machine runs in Docker or
+on your host; `f` again focuses that tab. Nothing opens by itself: once the tab
+exists, later stages of the ticket re-point it, and the board closes it once the
+ticket is closed. Approving the Ship gate (`a` on `awaiting_ship`)
 pushes the task's branch and opens a real PR with `gh` — see the root
 `README.md`'s "Shipping" section for what that needs.
 
