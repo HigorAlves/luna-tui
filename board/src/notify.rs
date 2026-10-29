@@ -107,13 +107,14 @@ pub struct DatadogNoticed(std::collections::HashSet<String>);
 
 impl DatadogNoticed {
     /// The notices `items` are worth: `Datadog P0` for a P0 in an open split not told yet,
-    /// `Datadog P0 reopened` for one that came back after you cleared it. Untriaged items, lower
-    /// priorities and anything snoozed or done are not news. There are no quiet hours to honour:
-    /// only P0s are told, and a P0 gets through Slack's quiet hours too.
+    /// `Datadog P0 reopened` for one that came back after you cleared it. A P0 is triage's, or the
+    /// rule's floor while untriaged; lower priorities and anything snoozed or done are not news.
+    /// There are no quiet hours to honour: only P0s are told, and a P0 gets through Slack's quiet
+    /// hours too.
     pub fn notices(&mut self, items: &[DatadogItem]) -> Vec<Notice> {
         let mut out = Vec::new();
         for item in items {
-            if item.priority() != Some("P0") || !item.split_enum().is_some_and(crate::datadog::DatadogSplit::open) {
+            if item.effective_priority() != Some("P0") || !item.split_enum().is_some_and(crate::datadog::DatadogSplit::open) {
                 continue;
             }
             let key = match &item.reopened_at {
@@ -346,5 +347,15 @@ mod datadog_tests {
             item("d", "incident", "snoozed", Some("P0"), "t"),
         ];
         assert!(told.notices(&quiet).is_empty(), "a P1, an untriaged item and a P0 put away are not news");
+    }
+
+    #[test]
+    fn an_untriaged_item_at_a_p0_floor_is_news_with_agents_off() {
+        let mut told = DatadogNoticed::default();
+        let mut sev1 = item("inc:900", "incident", "act_now", None, "2026-10-28T09:55:00Z");
+        sev1.floor = Some("P0".into());
+        let notices = told.notices(std::slice::from_ref(&sev1));
+        assert_eq!(notices.iter().map(|n| n.title.as_str()).collect::<Vec<_>>(), vec!["Datadog P0"], "the rule's P0 counts without triage");
+        assert!(told.notices(&[sev1]).is_empty(), "once");
     }
 }

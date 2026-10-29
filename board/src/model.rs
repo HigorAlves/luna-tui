@@ -1165,7 +1165,6 @@ pub struct DatadogItem {
     pub repository: Option<String>,
     /// The lowest priority triage may give it; set by rules.
     #[serde(default)]
-    #[allow(dead_code)] // the machine applies it; triage already reflects it
     pub floor: Option<String>,
     #[serde(default)]
     pub triage: Option<DatadogTriage>,
@@ -1197,6 +1196,12 @@ impl DatadogItem {
     /// Triage's priority, `P0` … `P3`; None until triage ran.
     pub fn priority(&self) -> Option<&str> {
         self.triage.as_ref().map(|t| t.priority.as_str())
+    }
+
+    /// Triage's priority, else the rule's floor: what the machine splits by, so an untriaged
+    /// SEV-1 (agents off, or triage not run yet) still counts as a P0.
+    pub fn effective_priority(&self) -> Option<&str> {
+        self.priority().or(self.floor.as_deref())
     }
 
     /// 0 for P0 … 3 for P3, 4 when untriaged: lower sorts first.
