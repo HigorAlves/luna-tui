@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -141,12 +141,34 @@ describe("GitHubPulls.merge", () => {
 describe("GitHubPulls.clone", () => {
   const root = mkdtempSync(join(tmpdir(), "pulls-clone-"));
 
-  it("refuses a relative destination, a missing parent and an existing target", async () => {
+  it("refuses a relative destination, a missing parent and an existing folder that is no checkout", async () => {
     const { pulls } = setup({ hits: [], nodes: {} });
     await expect(pulls.clone("o/b", "relative/b")).rejects.toThrow(CloneError);
     await expect(pulls.clone("o/b", join(root, "nope", "b"))).rejects.toThrow(CloneError);
     mkdirSync(join(root, "taken"));
-    await expect(pulls.clone("o/b", join(root, "taken"))).rejects.toThrow(CloneError);
+    const notGit = async () => ({ code: 128, stdout: "", stderr: "not a git repository" });
+    const { pulls: strict } = setup({ hits: [], nodes: {} }, { exec: notGit });
+    await expect(strict.clone("o/b", join(root, "taken"))).rejects.toThrow(/not a git checkout/);
+  });
+
+  it("links a folder that already is a checkout instead of cloning over it", async () => {
+    const dest = join(root, "workbench");
+    mkdirSync(dest);
+    const world: World = { hits: [hit(3, "o/workbench")], nodes: { 3: node(3, { headRepository: { nameWithOwner: "o/workbench" } }) } };
+    const resolved = new Map<string, string>();
+    const calls: string[][] = [];
+    const exec = async (command: string, args: string[]) => {
+      calls.push([command, ...args]);
+      return { code: 0, stdout: `${realpathSync(dest)}\n`, stderr: "" };
+    };
+    const { pulls } = setup(world, { exec, resolveRepo: async (repo) => resolved.get(repo) ?? null, rememberRepo: (repo, path) => void resolved.set(repo, path) });
+    await pulls.pollOnce();
+    expect(pulls.snapshot.prs[0]?.localPath).toBeNull();
+    await pulls.clone("o/workbench", dest);
+    await pulls.cloning;
+    expect(calls.some((c) => c.includes("clone"))).toBe(false);
+    expect(resolved.get("o/workbench")).toBe(dest);
+    expect(pulls.snapshot.prs[0]?.localPath).toBe(dest);
   });
 
   it("clones in the background, remembers the path and polls again once done", async () => {

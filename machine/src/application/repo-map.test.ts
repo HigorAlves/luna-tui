@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -58,5 +58,41 @@ describe("RepoMap.resolve", () => {
   it("is null for a repo nothing matches, and for a repos dir that does not exist", async () => {
     expect(await new RepoMap({ map: {}, reposDir: reposDir() }).resolve("o/none")).toBeNull();
     expect(await new RepoMap({ map: {}, reposDir: "/nowhere/at/all" }).resolve("o/none")).toBeNull();
+  });
+});
+
+describe("RepoMap two levels down", () => {
+  it("finds a checkout in a folder of checkouts (projects/orc) but does not descend into a checkout", async () => {
+    const root = reposDir();
+    mkdirSync(join(root, "projects"));
+    const orc = gitRepo(join(root, "projects"), "orc", "https://github.com/o/orc.git");
+    mkdirSync(join(orc, "vendored"));
+    gitRepo(join(orc, "vendored"), "inner", "https://github.com/o/inner.git");
+    const map = new RepoMap({ map: {}, reposDir: root });
+    expect(await map.resolve("o/orc")).toBe(orc);
+    expect(await map.resolve("o/inner")).toBeNull();
+  });
+});
+
+describe("RepoMap links that outlive a restart", () => {
+  it("writes what it was told to remember and reads it back in a new instance", async () => {
+    const root = reposDir();
+    const checkout = gitRepo(root, "workbench", "https://github.com/o/Foundry");
+    const file = join(root, "links.json");
+    const first = new RepoMap({ map: {}, reposDir: join(root, "nowhere"), file });
+    expect(await first.resolve("o/workbench")).toBeNull();
+    first.remember("o/workbench", checkout);
+    await first.saved();
+    const second = new RepoMap({ map: {}, reposDir: join(root, "nowhere"), file });
+    expect(await second.resolve("O/Workbench")).toBe(checkout);
+  });
+
+  it("drops a saved link whose folder is gone, and survives a damaged file", async () => {
+    const root = reposDir();
+    const file = join(root, "links.json");
+    writeFileSync(file, JSON.stringify({ "o/gone": join(root, "deleted") }));
+    expect(await new RepoMap({ map: {}, reposDir: root, file }).resolve("o/gone")).toBeNull();
+    writeFileSync(file, "{ not json");
+    expect(await new RepoMap({ map: {}, reposDir: root, file }).resolve("o/gone")).toBeNull();
   });
 });

@@ -22,7 +22,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `MACHINE_GITHUB_LABEL` | `ready-for-agent` | the issue label GitHub intake looks for |
 | `MACHINE_GITHUB_PRS` | on | `off` stops the PR inbox from polling GitHub; the board's `P` view then shows nothing |
 | `MACHINE_GITHUB_PRS_INTERVAL` | `60` | seconds between PR inbox polls; a rate-limited answer backs the next poll off to five minutes |
-| `MACHINE_REPO_MAP` | unset | `owner/name=/abs/path` pairs: the checkout an imported issue's task works in. Without a match, the checkouts one level under `MACHINE_REPOS_DIR` are matched by their `origin` remote |
+| `MACHINE_REPO_MAP` | unset | `owner/name=/abs/path` pairs: the checkout an imported issue's task works in. Without a match, the checkouts up to two folders under `MACHINE_REPOS_DIR` (`~/Developer/orc` and `~/Developer/projects/orc`) are matched by their `origin` remote. A folder you pick in the board's clone prompt that already is a checkout is linked instead of cloned, and the link is kept in `<state dir>/repo-links.json`, so a renamed remote needs no setting |
 | `MACHINE_REPOS_DIR` | `~/Developer` | where `MACHINE_REPO_MAP`'s fallback scan looks |
 | `MACHINE_THREAD_REPLIES` | on | set to `off` to stop the machine replying in the thread a task came from (a comment on its GitHub issue; a Slack thread when the pair below is set) when it is picked up, needs you, escalates, pauses, gets its PR and closes |
 | `MACHINE_SLACK_TOKEN` / `MACHINE_SLACK_CHANNEL` | unset | a bot token (`chat:write`) and a channel id: one Slack thread per task is opened there and every reply above lands in it. Both or neither |
