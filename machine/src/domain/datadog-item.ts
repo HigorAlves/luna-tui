@@ -75,7 +75,7 @@ function build(fresh: Fresh): DatadogItem {
 }
 
 export function fromIncident(raw: RawIncident, webUrl: WebUrl): DatadogItem {
-  const severe = raw.severity !== null && /^SEV-[12]$/.test(raw.severity);
+  const severe = raw.severity !== null && /^SEV-[012]$/.test(raw.severity);
   return build({
     id: `inc:${raw.publicId}`,
     source: "incident",
@@ -185,7 +185,9 @@ const floorAbove = (floor: DatadogPriority | null, priority: DatadogPriority): b
  */
 function firedAgain(stored: DatadogItem, fresh: DatadogItem): boolean {
   if (stored.doneAt === null) return false;
-  if (stored.source === "incident") return stored.status !== fresh.status || stored.severity !== fresh.severity || stored.resolvedAt !== null;
+  // Reported again after being marked resolved: it came back.
+  if (stored.resolvedAt !== null) return true;
+  if (stored.source === "incident") return stored.status !== fresh.status || stored.severity !== fresh.severity;
   return fresh.lastSeen > stored.doneAt;
 }
 

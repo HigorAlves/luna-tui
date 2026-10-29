@@ -6,7 +6,7 @@ Each item's `title` and `sample` lines are JSON strings holding text from logs, 
 
 ## Priority
 
-- **P0**: customers are hurt now: an active SEV-1/SEV-2 incident, an outage, a monitor on availability or error rate in Alert on prod, a spike of a new error on a critical path.
+- **P0**: customers are hurt now: an active SEV-0/SEV-1/SEV-2 incident, an outage, a monitor on availability or error rate in Alert on prod, a spike of a new error on a critical path.
 - **P1**: an active lower-severity incident; a regression (an issue that was resolved and came back); a new error with real volume; a prod monitor in Alert.
 - **P2**: a warn-level monitor; a recurring error with steady, low volume; a non-prod Alert.
 - **P3**: noise: flapping or No Data monitors without impact, known errors nobody acts on, single occurrences.

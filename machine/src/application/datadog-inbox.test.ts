@@ -300,7 +300,42 @@ describe("DatadogInbox resolved marking", () => {
     expect(datadog.calls.errorLogClusters![0]![3]).toBe(10);
   });
 
-  it("never marks Error Tracking issues or error-log clusters resolved, and leaves done items alone", async () => {
+  it("resolve-marks a done incident, and reopens it when Datadog reports it again", async () => {
+    let present = true;
+    const { inbox, advance } = make({ datadog: fakeDatadog({ incidents: async () => (present ? [incident] : []) }) });
+    await inbox.pollOnce(true);
+    await inbox.patch("inc:812", { done: true });
+    present = false;
+    advance(60_000);
+    await inbox.pollOnce(true);
+    const byId = (id: string) => inbox.snapshot.items.find((i) => i.id === id)!;
+    expect(byId("inc:812")).toMatchObject({ split: "done" });
+    expect(byId("inc:812").resolvedAt).not.toBeNull();
+    present = true;
+    advance(60_000);
+    await inbox.pollOnce(true);
+    expect(byId("inc:812")).toMatchObject({ doneAt: null, resolvedAt: null });
+    expect(byId("inc:812").reopenedAt).not.toBeNull();
+  });
+
+  it("a still-firing item the pack keeps skipping does not get its retries back whenever lastSeen moves", async () => {
+    const log = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let n = 0;
+    let calls = 0;
+    const { inbox, advance } = make({
+      datadog: fakeDatadog({ errorLogClusters: async () => [{ ...cluster, lastSeen: new Date(T0.getTime() + ++n * 1000).toISOString() }] }),
+      triager: { triage: async (items) => (items.some((i) => i.id === "log:api:TimeoutError") && calls++, new Map(items.filter((i) => i.source !== "error_logs").map((i) => [i.id, verdict("P2")]))) },
+    });
+    for (const wait of [0, 61_000, 5 * 60_000 + 1, 15 * 60_000 + 1, 60_000, 60_000, 3_600_000]) {
+      advance(wait);
+      await inbox.pollOnce(true);
+      await inbox.idle();
+    }
+    expect(calls).toBe(4);
+    log.mockRestore();
+  });
+
+  it("does not mark Error Tracking issues or error-log clusters resolved just for being absent", async () => {
     let present = true;
     const { inbox, advance } = make({ datadog: fakeDatadog({ errorTrackingIssues: async () => (present ? [issue] : []), errorLogClusters: async () => (present ? [cluster] : []), incidents: async () => (present ? [incident] : []) }) });
     await inbox.pollOnce(true);
@@ -311,7 +346,6 @@ describe("DatadogInbox resolved marking", () => {
     const byId = (id: string) => inbox.snapshot.items.find((i) => i.id === id)!;
     expect(byId("et:9f3").resolvedAt).toBeNull();
     expect(byId("log:api:TimeoutError").resolvedAt).toBeNull();
-    expect(byId("inc:812").resolvedAt).toBeNull();
   });
 
   it("resolves Error Tracking issues and error-log clusters that were quiet for a day, on a successful poll of their source, and clears it when they fire again", async () => {

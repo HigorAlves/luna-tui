@@ -71,6 +71,9 @@ const TICK_MS = MINUTE_MS;
 const TRIAGE_RETRY_MS = [MINUTE_MS, 5 * MINUTE_MS, 15 * MINUTE_MS];
 const SOURCES: DatadogSource[] = ["incident", "monitor", "error_tracking", "error_logs"];
 
+/** What makes a failed item worth a fresh set of retries: a reopen or a change of floor, status or severity, not new activity. */
+const failureKey = (item: DatadogItem): string => JSON.stringify([item.floor, item.status, item.severity, item.reopenedAt]);
+
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
 const emptySources = (): Record<DatadogSource, DatadogSourceState> => ({
@@ -102,8 +105,8 @@ export class DatadogInbox implements DatadogInboxPort {
   private triageAgain = false;
   /** Every write to the store (poll save, triage verdicts, your actions, a ticket) runs one at a time on this chain, each reading the rows afresh. */
   private writes: Promise<unknown> = Promise.resolve();
-  /** Items the pack failed or skipped: how often, when to try again, and the `lastSeen` it was at (a change gives it a fresh start). */
-  private readonly triageFailures = new Map<string, { failures: number; notBefore: number; lastSeen: string }>();
+  /** Items the pack failed or skipped: how often, when to try again, and what it was when it failed (`failureKey`: a real change gives it a fresh start). */
+  private readonly triageFailures = new Map<string, { failures: number; notBefore: number; key: string }>();
   private warnedNoTriager = false;
   private readonly now: () => Date;
 
@@ -234,7 +237,7 @@ export class DatadogInbox implements DatadogInboxPort {
         for (const source of ["incident", "monitor"] as const) {
           if (settled[SOURCES.indexOf(source)]!.status !== "fulfilled" || incomplete.has(source)) continue;
           for (const row of stored.values()) {
-            if (row.source === source && !row.doneAt && row.resolvedAt === null && !merged.has(row.id)) merged.set(row.id, { ...row, resolvedAt: now.toISOString() });
+            if (row.source === source && row.resolvedAt === null && !merged.has(row.id)) merged.set(row.id, { ...row, resolvedAt: now.toISOString() });
           }
         }
         // Error Tracking issues and error-log clusters have no "gone" signal: one with no activity for a day counts as resolved until it fires again.
@@ -318,7 +321,7 @@ export class DatadogInbox implements DatadogInboxPort {
       rows.filter((row) => {
         if (row.triage !== null || row.resolvedAt !== null || splitOf(row, now) === "done" || splitOf(row, now) === "snoozed") return false;
         const failed = this.triageFailures.get(row.id);
-        if (!failed || failed.lastSeen !== row.lastSeen) return true;
+        if (!failed || failed.key !== failureKey(row)) return true;
         return failed.failures <= TRIAGE_RETRY_MS.length && failed.notBefore <= now.getTime();
       }),
     );
@@ -354,10 +357,10 @@ export class DatadogInbox implements DatadogInboxPort {
   /** A failed or skipped item waits out the next retry delay; past the last it stays untriaged at its floor. */
   private countFailure(item: DatadogItem, at: Date): void {
     const before = this.triageFailures.get(item.id);
-    const failures = before && before.lastSeen === item.lastSeen ? before.failures : 0;
+    const failures = before && before.key === failureKey(item) ? before.failures : 0;
     const delay = TRIAGE_RETRY_MS[failures];
     if (delay === undefined) console.warn(`datadog inbox: giving up on triage for ${item.id} after ${TRIAGE_RETRY_MS.length} retries; it keeps its floor until it changes`);
-    this.triageFailures.set(item.id, { failures: failures + 1, notBefore: at.getTime() + (delay ?? 0), lastSeen: item.lastSeen });
+    this.triageFailures.set(item.id, { failures: failures + 1, notBefore: at.getTime() + (delay ?? 0), key: failureKey(item) });
   }
 
   private async get(id: string): Promise<DatadogItem> {

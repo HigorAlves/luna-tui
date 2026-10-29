@@ -15,6 +15,14 @@ describe("datadog items", () => {
     expect(fromIssue(issue, web).id).toBe("et:9f3");
     expect(fromCluster(cluster, web).id).toBe("log:billing:TimeoutError");
   });
+  it("floors SEV-0, SEV-1 and SEV-2 incidents at P0", () => {
+    for (const severity of ["SEV-0", "SEV-1", "SEV-2"]) expect(fromIncident({ ...incident, severity }, web).floor).toBe("P0");
+    expect(fromIncident({ ...incident, severity: "SEV-3" }, web).floor).toBe("P1");
+  });
+  it("a done monitor that was resolved and is back reopens", () => {
+    const done = { ...fromMonitor(monitor, web), doneAt: "2026-10-29T12:00:00Z", resolvedAt: "2026-10-29T12:30:00Z" };
+    expect(merge(done, fromMonitor(monitor, web), now)).toMatchObject({ doneAt: null, resolvedAt: null });
+  });
   it("sets floors from rules", () => {
     expect(fromIncident(incident, web).floor).toBe("P0");
     expect(fromIncident({ ...incident, severity: "SEV-4" }, web).floor).toBe("P1");
