@@ -2540,6 +2540,24 @@ mod tests {
     }
 
     #[test]
+    fn f_on_a_running_ticket_with_a_recorded_stage_opens_instead_of_noticing() {
+        if herdr::available() {
+            return;
+        }
+        let mut app = App::new(Machine::from_env());
+        let task = ticket("aaaaaaaa0000", "implementing", true, true);
+        app.tasks.push(task.clone());
+        let stage = herdr::Stage { label: "#aaaaaaaa app · t".into(), cwd: "/wt".into(), container: "c1".into() };
+        app.stages.insert(task.id.clone(), stage);
+        app.watch_with(&task, false);
+        assert!(
+            app.toast.as_ref().is_none_or(|t| !t.text.contains("nothing is running")),
+            "a running stage opens its tab, it does not say nothing is running"
+        );
+        assert!(app.stages.contains_key("aaaaaaaa0000"), "the stage stays recorded");
+    }
+
+    #[test]
     fn a_stage_of_a_task_that_stopped_running_is_not_opened_by_f() {
         let mut app = App::new(Machine::from_env());
         let task = ticket("aaaaaaaa0000", "awaiting_approval", false, true);
