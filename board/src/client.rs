@@ -14,13 +14,13 @@ use serde_json::{Value, json};
 use ureq::{Agent, Body, http::Response};
 
 use crate::model::{
-    Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
+    DatadogSnapshot, Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
     StreamMessage, Task, TaskDetail, TaskDiff, TestCase, TicketText,
 };
 
 const RECONNECT_EVERY: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
-/// A poll asks GitHub or Slack about every item, so it may take far longer than a click.
+/// A poll asks GitHub, Slack or Datadog about every item, so it may take far longer than a click.
 const POLL_TIMEOUT: Duration = Duration::from_secs(120);
 const PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
@@ -48,6 +48,8 @@ pub enum Incoming {
     PrsPolled(Result<PrSnapshot, String>),
     /// The answer to `R` in Slack, polled off the UI thread.
     SlackPolled(Result<SlackSnapshot, String>),
+    /// The answer to `R` in Datadog, polled off the UI thread.
+    DatadogPolled(Result<DatadogSnapshot, String>),
 }
 
 #[derive(Clone)]
@@ -349,6 +351,28 @@ impl Machine {
         Self::typed(self.agent.get(self.url("/slack/channels")).call())
     }
 
+    /// The Datadog inbox as the machine last polled it.
+    pub fn datadog(&self) -> Result<DatadogSnapshot, String> {
+        Self::typed(self.agent.get(self.url("/datadog/items")).call())
+    }
+
+    /// Polls Datadog now and answers the fresh snapshot.
+    pub fn refresh_datadog(&self) -> Result<DatadogSnapshot, String> {
+        Self::typed(self.slow.post(self.url("/datadog/refresh")).send_json(json!({})))
+    }
+
+    /// `done`, `snoozedUntil` or `priority` on one item; answers the item as the machine now
+    /// has it, which the next snapshot repeats.
+    pub fn patch_datadog_item(&self, id: &str, patch: Value) -> Result<Value, String> {
+        Self::json(self.agent.patch(self.url(&datadog_item_path(id, ""))).send_json(patch))
+    }
+
+    /// A Backlog ticket from the item, its samples and triage in the description; `repo_path`
+    /// None lets the machine resolve the repository Datadog names, else leaves it to set later.
+    pub fn datadog_task(&self, id: &str, title: &str, repo_path: Option<&str>) -> Result<Task, String> {
+        self.post(&datadog_item_path(id, "/task"), datadog_task_body(title, repo_path))
+    }
+
     /// Links an existing Jira issue to the ticket; answers the task with its `jira` set.
     pub fn link_jira(&self, id: &str, key: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/jira"), json!({ "key": key }))
@@ -382,6 +406,21 @@ impl Machine {
 /// `/slack/items/<id><verb>`; the id carries `:` and `.`, so it travels percent-encoded.
 fn slack_item_path(id: &str, verb: &str) -> String {
     format!("/slack/items/{}{verb}", urlencoding(id))
+}
+
+/// `/datadog/items/<id><verb>`; the fingerprint carries `:`, so it travels percent-encoded.
+fn datadog_item_path(id: &str, verb: &str) -> String {
+    format!("/datadog/items/{}{verb}", urlencoding(id))
+}
+
+/// The `/task` body: `repoPath` only when the board guessed one, since an explicit null tells
+/// the machine not to resolve the item's repository itself.
+fn datadog_task_body(title: &str, repo_path: Option<&str>) -> Value {
+    let mut body = json!({ "title": title });
+    if let Some(repo) = repo_path {
+        body["repoPath"] = json!(repo);
+    }
+    body
 }
 
 /// `/github/prs/<owner>/<name>/<number>/<verb>`.
@@ -449,7 +488,7 @@ fn spawn_stream(shared: Arc<RwLock<String>>, candidates: Vec<String>, tx: Sender
 /// snapshot does not say which window it covers. Unknown event types are never an error.
 fn parse_stream_event(event: &str, data: &str) -> Option<StreamMessage> {
     match event {
-        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed" | "budget.alert" | "github.prs" | "slack.items" => {
+        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed" | "budget.alert" | "github.prs" | "slack.items" | "datadog.items" => {
             serde_json::from_str(data).ok()
         }
         _ => None,
@@ -545,6 +584,21 @@ mod pr_tests {
         assert_eq!(pr_path("o/a", 12, "actions"), "/github/prs/o/a/12/actions");
         let event = parse_stream_event("github.prs", r#"{"type":"github.prs","snapshot":{"prs":[],"polledAt":null,"error":"x"}}"#);
         assert!(matches!(event, Some(StreamMessage::Prs { ref snapshot }) if snapshot.error.as_deref() == Some("x")));
+    }
+
+    #[test]
+    fn the_datadog_routes_encode_the_item_id_and_the_stream_event_is_parsed() {
+        assert_eq!(datadog_item_path("inc:412", ""), "/datadog/items/inc%3A412");
+        assert_eq!(datadog_item_path("log:payments-worker:TimeoutError", "/task"), "/datadog/items/log%3Apayments-worker%3ATimeoutError/task");
+        let data = format!(r#"{{"type":"datadog.items","snapshot":{}}}"#, crate::datadog::fixtures::snapshot_json());
+        let event = parse_stream_event("datadog.items", &data);
+        assert!(matches!(event, Some(StreamMessage::Datadog { ref snapshot }) if snapshot.items.len() == 2 && snapshot.polled_at.is_some()));
+    }
+
+    #[test]
+    fn a_datadog_ticket_leaves_the_repo_to_the_machine_unless_the_board_guessed_one() {
+        assert_eq!(datadog_task_body("checkout 5xx", None), json!({ "title": "checkout 5xx" }), "no repoPath: the machine resolves Datadog's repository");
+        assert_eq!(datadog_task_body("checkout 5xx", Some("/r/checkout")), json!({ "title": "checkout 5xx", "repoPath": "/r/checkout" }));
     }
 
     #[test]

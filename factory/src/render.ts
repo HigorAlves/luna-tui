@@ -71,6 +71,28 @@ const slackText = (slack: StageInput["context"]["slack"]) => {
   };
 };
 
+/** The signals, as datadog_triage reads them: one block per item, in the order the machine sent. */
+const datadogText = (datadog: StageInput["context"]["datadog"]) => {
+  if (!datadog) return { scope: NONE, items: NONE };
+  const items = datadog.items.map((item, i) => {
+    // id, service and env come from facet values and error kinds, which whoever can log can write: fenced like the title.
+    const facts = [
+      item.source,
+      item.service ? `service ${JSON.stringify(item.service)}` : null,
+      `env ${item.env === null ? "(none)" : JSON.stringify(item.env)}`,
+      `status ${item.status}`,
+      item.severity ? `severity ${item.severity}` : null,
+      item.count !== null ? `${item.count} in the window` : null,
+      `first ${item.firstSeen}`,
+      `last ${item.lastSeen}`,
+      item.floor ? `floor ${item.floor}` : null,
+      item.reopened ? "reopened" : null,
+    ].filter(Boolean);
+    return [`${i + 1}. id ${JSON.stringify(item.id)} · ${facts.join(" · ")}`, `   title: ${JSON.stringify(item.title)}`, ...item.samples.map((s) => `   sample: ${JSON.stringify(s)}`)].join("\n");
+  });
+  return { scope: datadog.scope.trim() === "" ? NONE : datadog.scope.trim(), items: items.length > 0 ? items.join("\n") : NONE };
+};
+
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
   if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE };
@@ -124,6 +146,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
   const context = input.context.projectContext ?? projectContext ?? null;
   const slack = slackText(input.context.slack);
   const jira = jiraText(input.context.jira);
+  const datadog = datadogText(input.context.datadog);
   const subs: Record<string, string> = {
     "{{task.title}}": txt(input.task.title),
     "{{task.description}}": txt(input.task.description),
@@ -165,6 +188,8 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{context.slack.watches}}": slack.watches,
     "{{context.slack.rules}}": slack.rules,
     "{{context.slack.items}}": slack.items,
+    "{{context.datadog.scope}}": datadog.scope,
+    "{{context.datadog.items}}": datadog.items,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,

@@ -35,6 +35,7 @@ describe("loadConfig", () => {
       threadReplies: true,
       slack: null,
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null },
+      datadog: { enabled: true, apiKey: "", appKey: "", site: "datadoghq.com", intervalMs: 120_000, scope: "" },
       jira: null,
       sla: { gateSecs: 3600, cycleSecs: null },
     });
@@ -66,6 +67,20 @@ describe("loadConfig", () => {
     expect(loadConfig({ HOME: "/h", MACHINE_THREAD_REPLIES: "off" }).threadReplies).toBe(false);
     expect(loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb", MACHINE_SLACK_CHANNEL: "C1" }).slack).toEqual({ token: "xoxb", channel: "C1" });
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb" })).toThrow(/MACHINE_SLACK_CHANNEL/);
+  });
+
+  it("reads the Datadog keys, which go together, and its knobs", () => {
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DATADOG_API_KEY: "a" })).toThrow(/MACHINE_DATADOG_API_KEY and MACHINE_DATADOG_APP_KEY go together/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DATADOG_APP_KEY: "b" })).toThrow(/go together/);
+    expect(loadConfig({ HOME: "/h", MACHINE_DATADOG_API_KEY: "a", MACHINE_DATADOG_APP_KEY: "b" }).datadog).toEqual({ enabled: true, apiKey: "a", appKey: "b", site: "datadoghq.com", intervalMs: 120_000, scope: "" });
+    expect(
+      loadConfig({ HOME: "/h", MACHINE_DATADOG_INBOX: "off", MACHINE_DATADOG_SITE: "https://api.datadoghq.eu", MACHINE_DATADOG_INTERVAL: "30", MACHINE_DATADOG_SCOPE: " env:prod team:payments " }).datadog,
+    ).toEqual({ enabled: false, apiKey: "", appKey: "", site: "datadoghq.eu", intervalMs: 30_000, scope: "env:prod team:payments" });
+    for (const [given, site] of [["app.datadoghq.eu", "datadoghq.eu"], ["api.us5.datadoghq.com", "us5.datadoghq.com"], ["https://app.datadoghq.com/", "datadoghq.com"], ["us3.datadoghq.com", "us3.datadoghq.com"]] as const) {
+      expect(loadConfig({ HOME: "/h", MACHINE_DATADOG_SITE: given }).datadog.site).toBe(site);
+    }
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DATADOG_INTERVAL: "x" })).toThrow(/MACHINE_DATADOG_INTERVAL/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DATADOG_INTERVAL: "1.5" })).toThrow(/MACHINE_DATADOG_INTERVAL/);
   });
 
   it("caps the running tasks per repo only when told to", () => {

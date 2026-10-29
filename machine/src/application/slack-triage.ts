@@ -43,11 +43,11 @@ export interface Triager {
   triage(items: TriageItem[], context: TriageContext): Promise<Map<string, TriageAnswer>>;
 }
 
-/** A batch failed to run; `answers` holds what the batches before it settled. */
-export class TriageRunError extends Error {
+/** A batch failed to run (the Datadog runner uses it too, with its own verdict type); `answers` holds what the batches before it settled. */
+export class TriageRunError<A = TriageAnswer> extends Error {
   constructor(
     message: string,
-    readonly answers: Map<string, TriageAnswer>,
+    readonly answers: Map<string, A>,
   ) {
     super(message);
     this.name = "TriageRunError";

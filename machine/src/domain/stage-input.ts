@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type CheckSpec, type CiContext, type Finding, type JiraIntakeContext, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type CheckSpec, type CiContext, type DatadogTriageContext, type Finding, type JiraIntakeContext, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -139,6 +139,28 @@ export function buildSlackTriageInput(slack: SlackTriageContext): StageInput {
     decisions: [],
     priorFindings: [],
     context: { projectContext: null, slack },
+    limits: { maxTurns, timeoutMs },
+    env: { LUNA_FACTORY: "1" },
+  };
+}
+
+/** The id of the synthetic task every datadog_triage input carries: the pack is not a task stage. */
+export const DATADOG_TRIAGE_TASK_ID = "datadog-triage";
+
+/** The /in/stage.json the datadog_triage pack reads: no task of its own, no plan, no worktree;
+ *  the batch rides in `context.datadog` and the answer goes back to the Datadog inbox. */
+export function buildDatadogTriageInput(datadog: DatadogTriageContext): StageInput {
+  const { maxTurns, timeoutMs } = PACK_LIMITS.datadog_triage;
+  return {
+    schema: 3,
+    stage: "datadog_triage",
+    pack: "datadog_triage",
+    attempt: 1,
+    task: { id: DATADOG_TRIAGE_TASK_ID, title: "Datadog triage", description: "", criteria: [], repoPath: "", branch: "", source: null },
+    plan: null,
+    decisions: [],
+    priorFindings: [],
+    context: { projectContext: null, datadog },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

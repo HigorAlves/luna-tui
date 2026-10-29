@@ -175,12 +175,12 @@ describe("StageOutput", () => {
 });
 
 describe("PackId", () => {
-  it("has the eleven stage packs, each named after a task state, plus the Slack and Jira intake triages", () => {
+  it("has the eleven stage packs, each named after a task state, plus the Slack, Datadog and Jira intake triages", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake"].sort(),
+      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "datadog_triage", "jira_intake"].sort(),
     );
     for (const pack of PackId.options) {
-      if (pack === "slack_triage" || pack === "jira_intake") expect(TaskState.options).not.toContain(pack);
+      if (pack === "slack_triage" || pack === "datadog_triage" || pack === "jira_intake") expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
     }
   });

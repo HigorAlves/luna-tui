@@ -12,6 +12,7 @@ import { AddSlackInbox1793600000000 } from "./1793600000000-AddSlackInbox.ts";
 import { AddSlackTriageRuns1793700000000 } from "./1793700000000-AddSlackTriageRuns.ts";
 import { AddTaskJira1793800000000 } from "./1793800000000-AddTaskJira.ts";
 import { AddTaskStateSince1793900000000 } from "./1793900000000-AddTaskStateSince.ts";
+import { AddDatadogInbox1794000000000 } from "./1794000000000-AddDatadogInbox.ts";
 
 export const MIGRATIONS: Function[] = [
   Init1792712166445,
@@ -27,4 +28,5 @@ export const MIGRATIONS: Function[] = [
   AddSlackTriageRuns1793700000000,
   AddTaskJira1793800000000,
   AddTaskStateSince1793900000000,
+  AddDatadogInbox1794000000000,
 ];

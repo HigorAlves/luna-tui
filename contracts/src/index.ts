@@ -7,6 +7,7 @@ export * from "./packs.ts";
 export * from "./github.ts";
 export * from "./slack.ts";
 export * from "./jira.ts";
+export * from "./datadog.ts";
 
 /** Board columns, named after the harness stages. Same order as the Rust board. */
 export const COLUMNS = [

@@ -23,6 +23,8 @@ export const AgentRole = z.enum([
   "slack-triager",
   // Jira intake: reads an issue (and, read-only, the repo) before it becomes a ticket.
   "jira-triager",
+  // The Datadog inbox's triage: no tools, no worktree, a batch of signals in and verdicts out.
+  "datadog-triager",
   // Helpers a PR task's role dispatches through the Agent tool; never a pack's own role.
   "security-reviewer",
   "reply-drafter",
@@ -190,6 +192,24 @@ export const SlackTriageAnswer = z.object({
   ),
 });
 export type SlackTriageAnswer = z.infer<typeof SlackTriageAnswer>;
+
+/** datadog_triage: one verdict per signal id; the Datadog inbox ingests it, not the pipeline. */
+export const DatadogTriageAnswer = z.object({
+  items: z.array(
+    z.object({
+      id: z.string(),
+      priority: SlackPriority,
+      category: z.enum(["outage", "degradation", "regression", "new_error", "recurring_error", "noise", "known"]),
+      /** At most 90 characters: what is wrong and where. */
+      summary: z.string().max(90),
+      why: z.string(),
+      suspectedCause: z.string().nullable(),
+      nextStep: z.string(),
+      refs: z.array(z.object({ kind: z.enum(["deploy", "trace", "pr", "jira", "url"]), ref: z.string() })),
+    }),
+  ),
+});
+export type DatadogTriageAnswer = z.infer<typeof DatadogTriageAnswer>;
 
 export interface Pack {
   id: PackId;
@@ -478,6 +498,22 @@ export const PACKS: Record<PackId, Pack> = {
     effort: "low",
     answer: SlackTriageAnswer,
     template: "slack_triage.md",
+  },
+  datadog_triage: {
+    id: "datadog_triage",
+    // The Datadog inbox's batch triage: not a task stage. No tools, no worktree; the signals
+    // are in the input and the answer is the whole job. Haiku, low effort, three turns.
+    agent: "datadog-triager",
+    helpers: [],
+    skills: [],
+    tools: [],
+    writable: false,
+    maxTurns: 3,
+    timeoutMs: 3 * MINUTE,
+    model: "haiku",
+    effort: "low",
+    answer: DatadogTriageAnswer,
+    template: "datadog_triage.md",
   },
 };
 
