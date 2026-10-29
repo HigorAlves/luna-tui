@@ -378,7 +378,7 @@ const SHARED: &[Binding] = &[
         40,
     ),
     b("d", "delete (asks first)", Group::Ticket, Scope::Board, |app| with_task(app, |_| Avail::On), 42),
-    b("f", "focus the agent's herdr tab", Group::Ticket, Scope::Board, |app| with_task(app, |_| Avail::On), 41),
+    b("f", "open or focus the agent's watch tab", Group::Ticket, Scope::Board, |app| with_task(app, |_| Avail::On), 41),
     cmd(
         b(
             "J",

@@ -217,8 +217,9 @@ export interface TaskDetail {
  * - `task.event`: one entry from the task's activity log.
  * - `task.deleted`: the task is gone.
  * - `task.metrics`: fresh factory metrics (7d window), sent after tasks change state.
- * - `stage.started`: a stage container is running; the board opens a herdr tab at `cwd`
- *   labelled `label` that follows `container`'s logs.
+ * - `stage.started`: a stage container is running; the board remembers it, so `f` can open a
+ *   herdr tab at `cwd` labelled `label` that follows `container`'s logs, and points an
+ *   already-open tab at it.
  * - `task.closed`: the task is done or deleted; the board closes its watch tab.
  * - `budget.alert`: a spend crossed 80, 90 or 100% of a ceiling (a task's, a repo's month's, the day's).
  * - `github.prs`: the PR inbox changed; carries the whole snapshot.

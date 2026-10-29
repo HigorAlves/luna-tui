@@ -4,8 +4,6 @@ use std::{env, ffi::OsString, path::Path, process::Command};
 
 use serde_json::Value;
 
-use crate::model::short_id;
-
 fn bin() -> Option<OsString> {
     env::var_os("HERDR_BIN_PATH")
 }
@@ -61,15 +59,69 @@ pub fn focus_task_tab(short_id: &str) -> bool {
     }
 }
 
-/// Shows `container`'s output in the task's watch tab, opening the tab at `cwd` if needed.
-pub fn follow(short_id: &str, label: &str, cwd: &str, container: &str) {
+/// The command to run in the watch tab's pane, if the task has one. A task with no tab gets
+/// nothing: a stage starting never opens a tab, only `f` does.
+fn follow_command(existing_pane: Option<&str>, container: &str) -> Option<(String, String)> {
+    existing_pane.map(|pane| (pane.to_string(), format!("docker logs -f {container}")))
+}
+
+/// The latest stage container a task is running: what `f` opens a watch tab for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stage {
+    pub label: String,
+    pub cwd: String,
+    pub container: String,
+}
+
+/// What `f` does on a ticket.
+#[derive(Debug, PartialEq, Eq)]
+pub enum WatchAction {
+    FocusExisting,
+    OpenAndFocus(Stage),
+    NothingToWatch,
+}
+
+/// Picks what `f` does from whether the task has a watch tab and what stage it last ran.
+pub fn watch_action(has_tab: bool, stage: Option<&Stage>) -> WatchAction {
+    match (has_tab, stage) {
+        (true, _) => WatchAction::FocusExisting,
+        (false, Some(stage)) => WatchAction::OpenAndFocus(stage.clone()),
+        (false, None) => WatchAction::NothingToWatch,
+    }
+}
+
+/// True when the task already has a watch tab.
+pub fn has_task_tab(short_id: &str) -> bool {
+    task_tab(short_id).is_some()
+}
+
+/// Points the task's existing watch tab at `container`. Opens nothing if there is no tab.
+pub fn follow(short_id: &str, container: &str) {
     let existing = task_tab(short_id).and_then(|tab| pane_in_tab(&json(&["pane", "list"])?, &tab));
-    let pane = existing.or_else(|| {
-        let created = json(&["tab", "create", "--cwd", cwd, "--label", label])?;
-        created["result"]["root_pane"]["pane_id"].as_str().map(String::from)
-    });
-    if let Some(pane) = pane {
-        run(&["pane", "run", &pane, &format!("docker logs -f {container}")]);
+    if let Some((pane, command)) = follow_command(existing.as_deref(), container) {
+        run(&["pane", "run", &pane, &command]);
+    }
+}
+
+/// Opens the task's watch tab at `stage.cwd` tailing its container, then switches to it.
+/// A tab that already exists is only focused. No-op outside herdr.
+pub fn open_and_focus(short_id: &str, stage: &Stage) {
+    if bin().is_none() {
+        return;
+    }
+    if focus_task_tab(short_id) {
+        return;
+    }
+    let Some(created) = json(&["tab", "create", "--cwd", &stage.cwd, "--label", &stage.label]) else {
+        return;
+    };
+    if let Some(pane) = created["result"]["root_pane"]["pane_id"].as_str() {
+        run(&["pane", "run", pane, &format!("docker logs -f {}", stage.container)]);
+    }
+    if let Some(tab) = created["result"]["tab"]["tab_id"].as_str().or_else(|| created["result"]["tab_id"].as_str()) {
+        run(&["tab", "focus", tab]);
+    } else {
+        focus_task_tab(short_id);
     }
 }
 
@@ -90,26 +142,14 @@ fn running_stages(listed: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Opens watch tabs for stages that were already running when the board connected.
-/// `tasks` is `(task id, tab label, worktree)` for every task the board knows.
-pub fn catch_up(tasks: &[(String, String, String)]) {
-    if bin().is_none() {
-        return;
-    }
+/// `(container, task id)` for the stages running when the board connected. Opens no tabs.
+pub fn running_containers() -> Vec<(String, String)> {
     let format = format!("{{{{.Names}}}}\t{{{{.Label \"{TASK_LABEL}\"}}}}");
     let filter = format!("label={TASK_LABEL}");
     let Ok(output) = Command::new("docker").args(["ps", "--filter", &filter, "--format", &format]).output() else {
-        return;
+        return Vec::new();
     };
-    for (container, task_id) in running_stages(&String::from_utf8_lossy(&output.stdout)) {
-        let Some((id, label, cwd)) = tasks.iter().find(|(id, ..)| *id == task_id) else {
-            continue;
-        };
-        let short = short_id(id);
-        if task_tab(short).is_none() {
-            follow(short, label, cwd, &container);
-        }
-    }
+    running_stages(&String::from_utf8_lossy(&output.stdout))
 }
 
 /// The repo a new ticket defaults to: herdr's workspace when the board runs as its plugin,
@@ -169,7 +209,34 @@ mod tests {
 
     use serde_json::json;
 
-    use super::{pane_in_tab, repo_root, running_stages, tab_with_prefix};
+    use super::{follow_command, open_and_focus, pane_in_tab, repo_root, running_stages, tab_with_prefix, watch_action, Stage, WatchAction};
+
+    fn stage() -> Stage {
+        Stage { label: "#abcd1234 app · Fix".into(), cwd: "/w".into(), container: "c1".into() }
+    }
+
+    #[test]
+    fn a_stage_starting_only_repoints_an_existing_pane() {
+        assert_eq!(follow_command(None, "c2"), None, "no tab, no command: nothing is created");
+        assert_eq!(follow_command(Some("p:2"), "c2"), Some(("p:2".to_string(), "docker logs -f c2".to_string())));
+    }
+
+    #[test]
+    fn f_focuses_an_existing_tab_opens_for_a_running_stage_or_says_nothing_to_watch() {
+        assert_eq!(watch_action(true, Some(&stage())), WatchAction::FocusExisting);
+        assert_eq!(watch_action(true, None), WatchAction::FocusExisting);
+        assert_eq!(watch_action(false, Some(&stage())), WatchAction::OpenAndFocus(stage()));
+        assert_eq!(watch_action(false, None), WatchAction::NothingToWatch);
+    }
+
+    #[test]
+    fn opening_outside_herdr_is_a_no_op() {
+        // The tests never run inside herdr; nothing sets HERDR_BIN_PATH.
+        if super::bin().is_some() {
+            return;
+        }
+        open_and_focus("abcd1234", &stage());
+    }
 
     #[test]
     fn finds_a_task_tab_by_its_label_prefix_and_the_pane_inside_it() {
@@ -186,6 +253,27 @@ mod tests {
         ]}});
         assert_eq!(pane_in_tab(&panes, "w:2").as_deref(), Some("p:2"));
         assert_eq!(pane_in_tab(&panes, "w:9"), None);
+    }
+
+    #[test]
+    fn a_tab_opened_with_f_is_found_again_so_a_second_f_only_focuses_it() {
+        let WatchAction::OpenAndFocus(opened) = watch_action(false, Some(&stage())) else {
+            panic!("a running stage with no tab opens one");
+        };
+        let tabs = json!({"result": {"tabs": [
+            {"tab_id": "w:1", "label": "Board"},
+            {"tab_id": "w:3", "label": opened.label},
+        ]}});
+        let found = tab_with_prefix(&tabs, "#abcd1234 ");
+        assert_eq!(found.as_deref(), Some("w:3"), "the opened tab carries the task's #short prefix");
+        assert_eq!(watch_action(found.is_some(), Some(&stage())), WatchAction::FocusExisting);
+        let panes = json!({"result": {"panes": [{"pane_id": "p:3", "tab_id": "w:3"}]}});
+        let pane = pane_in_tab(&panes, "w:3");
+        assert_eq!(
+            follow_command(pane.as_deref(), "c2"),
+            Some(("p:3".to_string(), "docker logs -f c2".to_string())),
+            "a later stage re-points that same tab's pane"
+        );
     }
 
     #[test]

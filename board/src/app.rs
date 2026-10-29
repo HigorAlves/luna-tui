@@ -466,11 +466,17 @@ pub struct App {
     /// The ticket whose Detail `?` was pressed in; closing the help returns to it.
     help_return: Option<String>,
     imported: bool,
+    /// The latest stage container per task id, for `f` to open a watch tab on.
+    stages: std::collections::HashMap<String, herdr::Stage>,
+    /// Stages found running at connect: recorded for `f` without re-pointing any tab.
+    scan_tx: Sender<(String, herdr::Stage)>,
+    scan_rx: Receiver<(String, herdr::Stage)>,
 }
 
 impl App {
     pub fn new(machine: Machine) -> Self {
         let (tx, rx) = mpsc::channel();
+        let (scan_tx, scan_rx) = mpsc::channel();
         machine.follow_stream(tx.clone());
         let mut app = Self {
             machine,
@@ -529,6 +535,9 @@ impl App {
             help_viewport: Cell::new(0),
             help_return: None,
             imported: false,
+            stages: std::collections::HashMap::new(),
+            scan_tx,
+            scan_rx,
         };
         app.reload();
         if !app.online {
@@ -609,6 +618,10 @@ impl App {
 
     /// Applies everything the stream thread reported since the last frame.
     pub fn pump(&mut self) {
+        while let Ok((id, stage)) = self.scan_rx.try_recv() {
+            // A stage the stream reported meanwhile is newer than the scan.
+            self.stages.entry(id).or_insert(stage);
+        }
         while let Ok(incoming) = self.stream.try_recv() {
             self.take_incoming(incoming);
         }
@@ -619,6 +632,9 @@ impl App {
         {
             match incoming {
                 Incoming::Online => {
+                    // Containers seen before the outage may have finished; the scan
+                    // below refills `stages` with what is running now.
+                    self.stages.clear();
                     self.reload();
                     self.catch_up_watch_tabs();
                 }
@@ -689,10 +705,13 @@ impl App {
                 }
                 Incoming::Message(StreamMessage::Deleted { id }) => self.forget(&id),
                 // herdr calls are subprocesses, so they stay off the UI thread.
+                // Recorded for `f`; an existing watch tab is re-pointed, none is ever opened.
                 Incoming::Message(StreamMessage::StageStarted { task_id, label, cwd, container }) => {
-                    thread::spawn(move || herdr::follow(short_id(&task_id), &label, &cwd, &container));
+                    self.stages.insert(task_id.clone(), herdr::Stage { label, cwd, container: container.clone() });
+                    thread::spawn(move || herdr::follow(short_id(&task_id), &container));
                 }
                 Incoming::Message(StreamMessage::Closed { id }) => {
+                    self.stages.remove(&id);
                     thread::spawn(move || herdr::close_task_tab(short_id(&id)));
                 }
                 Incoming::Message(StreamMessage::BudgetAlert { alert }) => {
@@ -918,17 +937,54 @@ impl App {
         }
     }
 
-    /// Watch tabs for stages that started before the board connected.
+    /// Records stages that started before the board connected, so `f` can open them. Opens
+    /// no tabs and re-points none: the scan only fills `stages` (see `scan_rx`).
     fn catch_up_watch_tabs(&self) {
         let tasks: Vec<(String, String, String)> = self
             .tasks
             .iter()
             .filter_map(|t| Some((t.id.clone(), format!("#{} {}", t.short_id(), t.title), t.worktree_path.clone()?)))
             .collect();
-        thread::spawn(move || herdr::catch_up(&tasks));
+        let tx = self.scan_tx.clone();
+        thread::spawn(move || {
+            for (container, task_id) in herdr::running_containers() {
+                if let Some((id, label, cwd)) = tasks.iter().find(|(id, ..)| *id == task_id) {
+                    let stage = herdr::Stage { label: label.clone(), cwd: cwd.clone(), container };
+                    let _ = tx.send((id.clone(), stage));
+                }
+            }
+        });
+    }
+
+    /// `f`: focus the ticket's watch tab, opening it first if a stage is running.
+    fn watch(&mut self, task: &Task) {
+        if !herdr::available() {
+            self.notify("the watch tab needs herdr; run the board inside it", false);
+            return;
+        }
+        self.watch_with(task, herdr::has_task_tab(task.short_id()));
+    }
+
+    /// The decision half of `f`, given whether the task already has a tab. A recorded stage
+    /// only counts while the task is still running: a finished stage leaves nothing to tail.
+    fn watch_with(&mut self, task: &Task, has_tab: bool) {
+        let short = task.short_id().to_string();
+        let stage = self.stages.get(&task.id).filter(|_| task.running).cloned();
+        match herdr::watch_action(has_tab, stage.as_ref()) {
+            herdr::WatchAction::FocusExisting => {
+                herdr::focus_task_tab(&short);
+            }
+            herdr::WatchAction::OpenAndFocus(stage) => {
+                thread::spawn(move || herdr::open_and_focus(&short, &stage));
+            }
+            herdr::WatchAction::NothingToWatch => {
+                self.notify(format!("nothing is running on #{short} to watch"), false);
+            }
+        }
     }
 
     fn forget(&mut self, id: &str) {
+        self.stages.remove(id);
         self.tasks.retain(|t| t.id != id);
         if self.shows_detail_of(id) {
             self.detail = None;
@@ -1543,11 +1599,7 @@ impl App {
                 }
             }
             'd' => self.mode = Mode::ConfirmDelete(id.to_string()),
-            'f' => {
-                if !herdr::focus_task_tab(task.short_id()) {
-                    self.notify(format!("no watch tab for #{} yet; it opens when an agent runs", task.short_id()), false);
-                }
-            }
+            'f' => self.watch(&task),
             'o' => match task.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| task.jira.as_ref().map(|j| j.url.clone())) {
                 Some(url) => {
                     let (program, args) = opener_command(&url);
@@ -4019,6 +4071,163 @@ mod tests {
         assert_eq!(app.floor.as_ref().unwrap().focused(), None, "back to all");
         app.handle_key(KeyEvent::from(KeyCode::BackTab));
         assert_eq!(app.floor.as_ref().unwrap().focused(), Some(None));
+    }
+
+    #[test]
+    fn a_started_stage_is_recorded_for_f_and_closing_or_deleting_forgets_it() {
+        let mut app = App::new(Machine::from_env());
+        let started = |id: &str| {
+            serde_json::from_str::<StreamMessage>(&format!(
+                r##"{{"type":"stage.started","taskId":"{id}","label":"#aaaaaaaa app","cwd":"/w","container":"c1"}}"##
+            ))
+            .unwrap()
+        };
+        app.tx.send(Incoming::Message(started("aaaaaaaa0000"))).unwrap();
+        app.tx.send(Incoming::Message(started("bbbbbbbb0000"))).unwrap();
+        app.pump();
+        let stage = app.stages.get("aaaaaaaa0000").expect("recorded");
+        assert_eq!((stage.label.as_str(), stage.cwd.as_str(), stage.container.as_str()), ("#aaaaaaaa app", "/w", "c1"));
+        app.tx.send(Incoming::Message(StreamMessage::Closed { id: "aaaaaaaa0000".into() })).unwrap();
+        app.tx.send(Incoming::Message(StreamMessage::Deleted { id: "bbbbbbbb0000".into() })).unwrap();
+        app.pump();
+        assert!(app.stages.is_empty());
+    }
+
+    #[test]
+    fn f_with_nothing_to_watch_shows_a_plain_notice() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "building", true, false));
+        app.ticket_key('f', "aaaaaaaa0000");
+        let toast = app.toast.as_ref().expect("a toast");
+        assert!(!toast.error);
+        assert!(!toast.text.contains("opens when an agent runs"), "{}", toast.text);
+    }
+
+    #[test]
+    fn the_nothing_to_watch_branch_notices_without_error() {
+        let mut app = App::new(Machine::from_env());
+        let task = ticket("aaaaaaaa0000", "building", true, true);
+        app.tasks.push(task.clone());
+        app.watch_with(&task, false);
+        let toast = app.toast.as_ref().expect("a toast");
+        assert!(!toast.error);
+        assert!(toast.text.contains("nothing is running"), "{}", toast.text);
+    }
+
+    #[test]
+    fn f_on_a_running_ticket_with_a_recorded_stage_opens_instead_of_noticing() {
+        if herdr::available() {
+            return;
+        }
+        let mut app = App::new(Machine::from_env());
+        let task = ticket("aaaaaaaa0000", "implementing", true, true);
+        app.tasks.push(task.clone());
+        let stage = herdr::Stage { label: "#aaaaaaaa app · t".into(), cwd: "/wt".into(), container: "c1".into() };
+        app.stages.insert(task.id.clone(), stage);
+        app.watch_with(&task, false);
+        assert!(
+            app.toast.as_ref().is_none_or(|t| !t.text.contains("nothing is running")),
+            "a running stage opens its tab, it does not say nothing is running"
+        );
+        assert!(app.stages.contains_key("aaaaaaaa0000"), "the stage stays recorded");
+    }
+
+    #[test]
+    fn a_stage_of_a_task_that_stopped_running_is_not_opened_by_f() {
+        let mut app = App::new(Machine::from_env());
+        let task = ticket("aaaaaaaa0000", "awaiting_approval", false, true);
+        app.tasks.push(task.clone());
+        let stage = herdr::Stage { label: "#aaaaaaaa app".into(), cwd: "/wt".into(), container: "c1".into() };
+        app.stages.insert(task.id.clone(), stage);
+        app.watch_with(&task, false);
+        let toast = app.toast.as_ref().expect("a toast");
+        assert!(toast.text.contains("nothing is running"), "{}", toast.text);
+    }
+
+    #[test]
+    fn the_connect_scan_records_a_stage_without_overwriting_a_newer_one() {
+        let mut app = App::new(Machine::from_env());
+        let stage = |c: &str| herdr::Stage { label: "#a".into(), cwd: "/w".into(), container: c.into() };
+        app.stages.insert("t1".into(), stage("new"));
+        app.scan_tx.send(("t1".into(), stage("old"))).unwrap();
+        app.scan_tx.send(("t2".into(), stage("c2"))).unwrap();
+        app.pump();
+        assert_eq!(app.stages["t1"].container, "new");
+        assert_eq!(app.stages["t2"].container, "c2");
+    }
+
+    #[test]
+    fn reconnecting_drops_stages_recorded_before_the_outage() {
+        let mut app = App::new(Machine::from_env());
+        let stage = herdr::Stage { label: "#a".into(), cwd: "/w".into(), container: "finished".into() };
+        app.stages.insert("t1".into(), stage);
+        app.tx.send(Incoming::Online).unwrap();
+        app.pump();
+        assert!(!app.stages.contains_key("t1"), "the scan refills it with what is really running");
+    }
+
+    #[test]
+    fn f_outside_herdr_with_a_running_stage_notices_and_keeps_the_stage() {
+        if herdr::available() {
+            return;
+        }
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.select("aaaaaaaa0000", true);
+        let started = r##"{"type":"stage.started","taskId":"aaaaaaaa0000","label":"#aaaaaaaa app · t","cwd":"/wt","container":"c1"}"##;
+        app.tx.send(Incoming::Message(serde_json::from_str(started).unwrap())).unwrap();
+        app.pump();
+        app.handle_key(KeyEvent::from(KeyCode::Char('f')));
+        let toast = app.toast.as_ref().expect("f outside herdr says why nothing opened");
+        assert!(!toast.error, "{}", toast.text);
+        assert!(toast.text.contains("herdr"), "{}", toast.text);
+        assert!(app.stages.contains_key("aaaaaaaa0000"), "the stage stays recorded for a later f inside herdr");
+        assert!(app.floor.is_none(), "lowercase f never opens the Floor view");
+    }
+
+    #[test]
+    fn uppercase_f_opens_and_closes_the_floor_view() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "implementing", true, true));
+        app.select("aaaaaaaa0000", true);
+        app.handle_key(KeyEvent::from(KeyCode::Char('F')));
+        assert!(app.floor.is_some(), "F opens the Floor view");
+        assert!(app.toast.as_ref().is_none_or(|t| !t.text.contains("watch")), "F is not the watch key");
+        app.handle_key(KeyEvent::from(KeyCode::Char('F')));
+        assert!(app.floor.is_none(), "F again closes it");
+    }
+
+    #[test]
+    fn a_later_stage_replaces_the_recorded_one_so_f_opens_the_newest_container() {
+        let mut app = App::new(Machine::from_env());
+        let task = ticket("aaaaaaaa0000", "implementing", true, true);
+        app.tasks.push(task.clone());
+        for container in ["c1", "c2"] {
+            let started = format!(
+                r##"{{"type":"stage.started","taskId":"aaaaaaaa0000","label":"#aaaaaaaa app · t","cwd":"/wt","container":"{container}"}}"##
+            );
+            app.tx.send(Incoming::Message(serde_json::from_str(&started).unwrap())).unwrap();
+        }
+        app.pump();
+        assert_eq!(app.stages.len(), 1, "one entry per task, not per stage");
+        let want = herdr::Stage { label: "#aaaaaaaa app · t".into(), cwd: "/wt".into(), container: "c2".into() };
+        assert_eq!(herdr::watch_action(false, app.stages.get(&task.id)), herdr::WatchAction::OpenAndFocus(want));
+    }
+
+    #[test]
+    fn f_with_an_existing_tab_only_focuses_and_says_nothing() {
+        if herdr::available() {
+            return;
+        }
+        let mut app = App::new(Machine::from_env());
+        let task = ticket("aaaaaaaa0000", "implementing", true, true);
+        app.tasks.push(task.clone());
+        let stage = herdr::Stage { label: "#aaaaaaaa app · t".into(), cwd: "/wt".into(), container: "c1".into() };
+        app.stages.insert(task.id.clone(), stage);
+        app.toast = None;
+        app.watch_with(&task, true);
+        assert!(app.toast.is_none(), "focusing an existing tab is silent: {:?}", app.toast.as_ref().map(|t| &t.text));
+        assert!(app.stages.contains_key(&task.id), "the stage stays recorded");
     }
 
     #[test]

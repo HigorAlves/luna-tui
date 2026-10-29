@@ -100,7 +100,7 @@ and a test fails when they drift from the registry.
 | `X` | abort the running stage (asks first) |
 | `w` | kill its worktree (asks first) |
 | `d` | delete (asks first) |
-| `f` | focus the agent's herdr tab |
+| `f` | open or focus the agent's watch tab |
 | `J` | link a Jira issue (search or create); unlink the Jira issue (asks first) |
 | `R` | set the repo (search) |
 | `e` | edit the plan and the ticket; edit title, description and criteria |
@@ -233,7 +233,7 @@ link is the board's `J`):
 | `X` | abort the running stage (asks first) |
 | `w` | kill its worktree (asks first) |
 | `d` | delete (asks first) |
-| `f` | focus the agent's herdr tab |
+| `f` | open or focus the agent's watch tab |
 | `R` | set the repo (search) |
 | `e` | edit: the plan, the cases or the ticket |
 | `o` | open: the file, the PR or the issue |
@@ -306,10 +306,11 @@ too, pre-filled with its recommended answers; `ctrl+s` sends them.
 A new ticket starts in Backlog. `a` moves it to Intake (no stage runs, it's
 just a deliberate "I'm shaping this one up" step); `a` again starts triage.
 
-The board opens a herdr tab following each stage's agent (`docker logs -f` on
-its container), whether the machine runs in Docker or on your host, and closes it
-once the ticket is closed. Stages already running when the board starts get a tab
-too. Tabs only open while a board is running. Approving the Ship gate (`a` on `awaiting_ship`)
+Press `f` on a ticket with a running stage to open a herdr tab following its
+agent (`docker logs -f` on its container), whether the machine runs in Docker or
+on your host; `f` again focuses that tab. Nothing opens by itself: once the tab
+exists, later stages of the ticket re-point it, and the board closes it once the
+ticket is closed. Approving the Ship gate (`a` on `awaiting_ship`)
 pushes the task's branch and opens a real PR through the GitHub API — see the root
 `README.md`'s "Shipping" section for what that needs.
 
@@ -527,7 +528,7 @@ What the ticket shows:
 | `X` | abort the running stage (asks first) |
 | `w` | kill its worktree (asks first) |
 | `d` | delete (asks first) |
-| `f` | focus the agent's herdr tab |
+| `f` | open or focus the agent's watch tab |
 | `J` | link a Jira issue (search or create); unlink the Jira issue (asks first) |
 | `R` | set the repo (search) |
 | `e` | edit the ticket in place |
