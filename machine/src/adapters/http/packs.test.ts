@@ -28,7 +28,7 @@ describe("GET /packs", () => {
       id: "implementing",
       agent: "implementer",
       kind: "agent",
-      model: PACKS.implementing.model,
+      engines: PACKS.implementing.engines,
       effort: PACKS.implementing.effort,
       writable: true,
       maxTurns: PACKS.implementing.maxTurns,

@@ -213,7 +213,8 @@ export interface PackInfo {
   id: PackId;
   agent: AgentRole | null;
   kind: "agent" | "script";
-  model: Pack["model"];
+  /** The engine the pack runs on unless a task names another, and the ones it may run on. */
+  engines: Pack["engines"];
   effort: Pack["effort"];
   writable: boolean;
   maxTurns: number;

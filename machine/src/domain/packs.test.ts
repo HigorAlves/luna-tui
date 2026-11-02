@@ -22,12 +22,12 @@ describe("packStates", () => {
 });
 
 describe("packInfo", () => {
-  it("lists a pack's agent, kind, model, limits and states", () => {
+  it("lists a pack's agent, kind, engines, limits and states", () => {
     expect(packInfo(PACKS.triage)).toEqual({
       id: "triage",
       agent: "triage-planner",
       kind: "agent",
-      model: PACKS.triage.model,
+      engines: { default: "claude:opus", allowed: ["claude:opus"] },
       effort: PACKS.triage.effort,
       writable: false,
       maxTurns: PACKS.triage.maxTurns,

@@ -21,7 +21,7 @@ export function packInfo(pack: Pack): PackInfo {
     id: pack.id,
     agent: pack.agent,
     kind: pack.agent === null ? "script" : "agent",
-    model: pack.model,
+    engines: pack.engines,
     effort: pack.effort,
     writable: pack.writable,
     maxTurns: pack.maxTurns,
