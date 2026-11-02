@@ -255,3 +255,27 @@ eve ships `decide()` defaulting to Jev. Rejected: it routes through AI Gateway, 
 - With a Codex login, `luna.yaml` moves `triage` to `codex:sol` and a task passes triage with no change to the machine.
 - `issue_classify` labels a recorded ticket set, and tickets below threshold reach `jira_intake` unchanged.
 - No file outside `factory/src/runtimes/<runtime>/` imports that runtime's SDK.
+
+## Spike findings (2026-11-02)
+
+Run in a container built on `hardness-runner:dev` with the stage's own flags (read-only root, tmpfs `/tmp`, `no-new-privileges`, the host uid). Code on the unmerged branch `spike/eve-runtime`.
+
+| Question | Verdict | How |
+|---|---|---|
+| eve on the Codex login inside the container | Yes | `chatgpt()` with `@openai/codex` 0.164.0 in the image; eve asks `codex app-server --stdio` for the token, Codex owns the file. A per-run copy of `~/.codex/auth.json` mounted writable at `/tmp/.codex` |
+| Structured answer, validated | Yes | `outputSchema` on `sessions.create`; the server validates and retries; the answer is `delivery.result().data` |
+| Refuse a tool call before it runs | Yes, through `approval` | A `defineTool` wrapper over `bash` and `write_file` whose `approval` returns `{ type: "denied", reason }`; the call never starts and the model gets the reason. Hooks fire after the fact and can only cancel the turn |
+| Commands in `/work` without nested Docker | Yes | A custom `defineSandboxProvider` (~90 lines) with `workspaceRoot: "/work"`, running `bash -lc` children of the server |
+
+eve 1.0.0-rc.1 (Node 24+), ai 7.0.161. The server is healthy in under 0.7 s and a whole one-turn container exits in about 2 s warm. The image grows by ~700 MB on disk (~185 MB compressed), 381 MB of it the Codex CLI.
+
+What the eve runtime has to do because of them:
+
+- Start the built server with `node .output/server/index.mjs` and its working directory on the `/tmp` tmpfs (or `/session` to resume): it keeps its workflow store under `<cwd>/.eve/` and `eve start` would put that on the read-only root.
+- Bind to loopback with `httpBasic` and a password made per run; the local-dev authenticator only works under `eve dev`.
+- Set `limits` in `defineAgent`: schema retries are invisible and were 14 model calls once.
+- Set `EVE_TELEMETRY_DISABLED=1` at build and run, and pin `eve` exactly (it rides on a nitro beta).
+- The guard refuses any path under the Codex home: the model's `bash` runs as the same user and could read the token.
+- Decide how a refreshed Codex token gets back to the host (copy back on change, or one copy with eve stages serialized) before more than one eve stage runs at a time.
+
+`@typesafe-ai/sdk` 0.7.0 (MIT, no runtime dependencies): `new TypeSafeClient()`, `client.systemOne({ state, questions, model? })`, helpers `noul`, `choice`, `score`, `box`; `TYPESAFE_API_KEY` (required), `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL` (`jev-latest`); 10 s per attempt, two retries. A yes/no answer is `{ noul: P(yes) }`, a probability with no separate confidence, so a pack sets its own threshold; a choice carries `confidence` and `probabilities`; a score is a fractional expected value that can fall between rubric levels.
