@@ -61,7 +61,7 @@ function envelope(answer: any): Record<string, unknown> {
 const agentPacks = Object.values(PACKS).filter((pack) => pack.agent != null);
 
 describe("the pack registry", () => {
-  it("has one pack per PackId, each with a template and a model, and the limits the machine reads", () => {
+  it("has one pack per PackId, each with a template and its engines, and the limits the machine reads", () => {
     expect(Object.keys(PACKS).sort()).toEqual([...PackId.options].sort());
     for (const pack of Object.values(PACKS)) {
       expect(pack.template).toMatch(/^[a-z0-9_]+\.md$/);

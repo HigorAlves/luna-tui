@@ -3,6 +3,8 @@
 // the seam live in this repository; `factory-contract.test.ts` holds them together.
 import { z } from "zod";
 
+import { EngineId } from "./engines.ts";
+
 /** What a stage run decided. Lives here, not in api.ts, so the two files do not import each other in a loop. */
 export const StageOutcome = z.enum(["pass", "fail", "needs_input", "test_change", "escalated"]);
 export type StageOutcome = z.infer<typeof StageOutcome>;
@@ -340,6 +342,8 @@ export const StageInput = z.object({
   schema: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   stage: z.string(),
   pack: PackId,
+  /** The engine to run the pack on, one of its `engines.allowed`; absent means the pack's default. */
+  engine: EngineId.optional(),
   attempt: z.number().int(),
   task: z.object({
     id: z.string(),

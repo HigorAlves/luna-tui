@@ -1,7 +1,7 @@
 // The entry, end to end without a model: a dry run of every agent pack renders the prompt,
 // prints the SDK options and leaves a result the machine's contract accepts; the evidence
 // pack reads the QA manifest; a bad input still leaves a result that says why.
-import { PACKS, type PackId, StageOutput } from "@hardness/contracts";
+import { PACKS, type PackId, StageOutput, resolveEngine } from "@hardness/contracts";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -77,7 +77,7 @@ describe("factory main (dry run)", () => {
     expect(prompt).toContain(`running the \`${pack}\` stage`);
     expect(prompt).toContain("Keep it small.");
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
-    expect(options).toMatchObject({ agent: PACKS[pack].agent, agents: [PACKS[pack].agent, ...PACKS[pack].helpers], model: PACKS[pack].model, effort: PACKS[pack].effort, maxTurns: 5, permissionMode: "dontAsk", settingSources: [], hooks: ["PreToolUse"], mcpServers: ["luna"] });
+    expect(options).toMatchObject({ agent: PACKS[pack].agent, agents: [PACKS[pack].agent, ...PACKS[pack].helpers], model: resolveEngine(PACKS[pack].engines.default).modelId, effort: PACKS[pack].effort, maxTurns: 5, permissionMode: "dontAsk", settingSources: [], hooks: ["PreToolUse"], mcpServers: ["luna"] });
     expect(options.allowedTools).toEqual(PACKS[pack].tools);
     expect(options.tools).toEqual([...new Set(PACKS[pack].tools.map((t) => t.replace(/\(.*\)$/, "")))]);
     expect(options.tools.every((t: string) => !t.includes("("))).toBe(true);
@@ -99,7 +99,7 @@ describe("factory main (dry run)", () => {
     expect(prompt).toContain("- @platform-team (usergroup)");
     expect(prompt).toContain("id C1:1 · #eng · @marta · matched me");
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
-    expect(options).toMatchObject({ agent: "slack-triager", agents: ["slack-triager"], model: "haiku", effort: "low", maxTurns: 5, tools: [], allowedTools: [] });
+    expect(options).toMatchObject({ agent: "slack-triager", agents: ["slack-triager"], model: "claude-haiku-5-5", effort: "low", maxTurns: 5, tools: [], allowedTools: [] });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
@@ -116,9 +116,22 @@ describe("factory main (dry run)", () => {
     expect(prompt).toContain("- Marta: please");
     expect(prompt).toContain("Keep it small.");
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
-    expect(options).toMatchObject({ agent: "jira-triager", agents: ["jira-triager"], model: "sonnet", effort: "low", tools: ["Read", "Glob", "Grep"], allowedTools: ["Read", "Glob", "Grep"] });
+    expect(options).toMatchObject({ agent: "jira-triager", agents: ["jira-triager"], model: "claude-sonnet-5-5", effort: "low", tools: ["Read", "Glob", "Grep"], allowedTools: ["Read", "Glob", "Grep"] });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
+  it("runs the engine the input names, by its pinned model ID", () => {
+    const { stdout } = run(stageInput("triage", { engine: "claude:haiku" }));
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options.model).toBe("claude-haiku-5-5");
+  });
+
+  it("ends the stage, without a crash, on an engine whose runtime this factory does not have", () => {
+    const { code, result } = run(stageInput("triage", { engine: "codex:sol" }));
+    expect(code).toBe(0);
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ ok: false, outcome: "fail", error: "engine codex:sol runs on eve, which is not available in this factory yet" });
   });
 
   it("takes a structured answer through the test seam and maps its kind to the outcome", () => {

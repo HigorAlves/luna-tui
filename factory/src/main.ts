@@ -7,7 +7,7 @@
 // LUNA_STAGE_DEBUG=1 also writes every SDK message to /out/raw.jsonl.
 // This file reads the input, renders the prompt and writes the result; the run itself is the
 // runtime's (src/runtimes/).
-import { PACKS } from "@hardness/contracts";
+import { PACKS, resolveEngine } from "@hardness/contracts";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -55,7 +55,16 @@ if (pack.agent === null) {
   process.exit(0);
 }
 
-const run = await RUNTIMES.claude.run({ pack, input, prompt, paths: { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT }, luna, dry: DRY, out });
+// The engine the machine chose, else the pack's default; its runtime runs the stage. An engine
+// on a runtime this factory does not carry yet fails the stage with a reason, not a crash.
+const engine = resolveEngine(input.engine ?? pack.engines.default);
+const runtime = RUNTIMES[engine.runtime];
+if (!runtime) {
+  finish(OUT, pack, { ...EMPTY_RUN, error: `engine ${engine.id} runs on ${engine.runtime}, which is not available in this factory yet` }, luna.state);
+  process.exit(0);
+}
+
+const run = await runtime.run({ pack, engine, input, prompt, paths: { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT }, luna, dry: DRY, out });
 // A model that answered in text instead of through structured output still answered: take
 // the JSON when it is one the pack's schema accepts, so a stage is not lost to the channel.
 if (run.ok && run.structured === null && run.text.trim().startsWith("{")) {

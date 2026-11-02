@@ -1,11 +1,13 @@
 // What main.ts hands a runtime and what it gets back. A runtime runs one prepared stage on its
 // vendor's SDK; reading the input, rendering the prompt and writing the result stay in main.ts.
-import type { Pack, StageInput } from "@hardness/contracts";
+import type { Pack, ResolvedEngine, RuntimeId, StageInput } from "@hardness/contracts";
 
 import type { LunaState, RunOutcome } from "./output.ts";
 
 export interface RunContext {
   pack: Pack;
+  /** The engine the stage runs on, resolved to its pinned model ID; its runtime is this one. */
+  engine: ResolvedEngine;
   input: StageInput;
   prompt: string;
   paths: {
@@ -25,6 +27,6 @@ export interface RunContext {
 }
 
 export interface Runtime {
-  id: "claude";
+  id: RuntimeId;
   run(ctx: RunContext): Promise<RunOutcome>;
 }

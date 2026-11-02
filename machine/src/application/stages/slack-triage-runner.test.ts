@@ -155,7 +155,7 @@ describe("createSlackTriager", () => {
       [false, "the container left no result (exit code 2)", 0, null],
       [false, "no structured output", 3, 0.001],
     ]);
-    expect(store.runs[1]).toMatchObject({ startedAt: "2026-10-28T12:01:00.000Z", endedAt: "2026-10-28T12:01:00.000Z", model: "haiku" });
+    expect(store.runs[1]).toMatchObject({ startedAt: "2026-10-28T12:01:00.000Z", endedAt: "2026-10-28T12:01:00.000Z", model: "claude-haiku-5-5" });
     expect(lines[1]).toBe("slack triage: 1 item(s) failed: docker: not running");
     expect(existsSync(join(stateDir, "slack-triage"))).toBe(true);
   });
