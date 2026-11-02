@@ -76,7 +76,7 @@ A new runtime, or a major SDK bump, is done when the table passes.
 evals/                          # @hardness/evals
   <pack>/cases/<id>/stage.json  # a recorded StageInput, scrubbed, plus its worktree ref
   <pack>/cases/<id>/expect.json # what a good answer must contain
-  <pack>/graders.ts             # schema first, deterministic checks second, a judge last
+  <pack>/graders.ts             # schema first, deterministic checks second, a Claude judge last
   baselines/<engine>/<pack>.json
   run.ts
 ```
@@ -174,9 +174,12 @@ A flag per pack and engine. Rejected: flags say on or off; shadow and canary are
 
 ## Open questions
 
-- Where eval cases live: in this repo after scrubbing, or in a private store outside git, since they hold real ticket and Slack text.
-- Who judges eval answers: a fixed Claude engine, Jev with typed questions, or both.
 - Shadow cost: shadowing every task doubles model use on that pack; is a sampled shadow enough?
+
+### Settled (2026-11-02)
+
+- Eval cases live in this repo under `evals/`, scrubbed of names, tokens and any message text a grader does not need.
+- A fixed Claude engine judges (`claude:opus`, pinned in the catalog like any other), after the schema and deterministic checks.
 
 ## Risks & unknowns
 
