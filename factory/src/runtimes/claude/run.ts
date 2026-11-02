@@ -1,5 +1,5 @@
 // The Claude runtime: one stage through the Claude Agent SDK. The pack becomes the SDK options
-// (its role as `agent`, its helpers as `agents`, the plugin's skills, the tool allow-list, the
+// (its role as `agent`, its helpers as `agents`, the plugin's skills, its access as tool lists, the
 // guards as PreToolUse hooks, the luna tools as an in-process MCP server) and `query()` is
 // followed to its result, the transcript written to stdout as it goes.
 import type { McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { EMPTY_RUN, type RunOutcome } from "../../core/output.ts";
 import { FACTORY_RULES, callLine } from "../../core/render.ts";
 import type { RunContext, Runtime } from "../../core/runtime.ts";
+import { claudeTools } from "./access.ts";
 import { agentDefinitions } from "./agents.ts";
 import { branchPrefixFor, preToolUseGuards } from "./guards.ts";
 
@@ -26,10 +27,7 @@ async function run({ pack, engine, input, prompt, paths, luna, dry, out }: RunCo
     systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: FACTORY_RULES },
     plugins: [{ type: "local" as const, path: join(paths.factoryRoot, "plugin") }],
     settingSources: [] as [],
-    // `tools` takes bare names (a scoped rule such as `Bash(git add:*)` is not a name and would
-    // drop Bash); the scoped rules go to `allowedTools`, which is what dontAsk consults.
-    tools: toolNames(pack.tools),
-    allowedTools: pack.tools,
+    ...claudeTools(pack.access),
     permissionMode: "dontAsk" as const,
     maxTurns: input.limits.maxTurns,
     outputFormat: { type: "json_schema" as const, schema: answerJsonSchema(pack) },
@@ -102,9 +100,4 @@ async function run({ pack, engine, input, prompt, paths, luna, dry, out }: RunCo
   }
   if (!run.durationMs) run.durationMs = Date.now() - t0;
   return run;
-}
-
-/** The tool names behind a pack's allow-list: `Bash(git add:*)` and `Bash(npm:*)` are one `Bash`. */
-export function toolNames(allowed: string[]): string[] {
-  return [...new Set(allowed.map((t) => t.replace(/\(.*\)$/, "")))];
 }
