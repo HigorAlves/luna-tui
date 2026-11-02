@@ -1,10 +1,11 @@
 // The pack registry: one entry per agent stage. It is the single source of truth for what a
-// stage runs as (which role, on which engines, with which tools and skills), how long it may
+// stage runs as (which role, on which engines, with what access and which skills), how long it may
 // run, and the shape of the answer it must give. The machine reads the limits from here; the
 // factory runner reads everything else; the conformance test checks that every answer a pack
 // may give is one the machine ingests.
 import { z } from "zod";
 
+import { type Access, type LunaTool, NO_ACCESS, access } from "./access.ts";
 import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
@@ -204,8 +205,8 @@ export interface Pack {
   helpers: AgentRole[];
   /** Skills the role may invoke, by the name the plugin folder gives them. */
   skills: string[];
-  /** The tool allow-list, verbatim for the SDK. */
-  tools: string[];
+  /** What the agent may touch; each runtime turns it into its own tool list. */
+  access: Access;
   /** Whether the stage may edit the worktree and commit. */
   writable: boolean;
   maxTurns: number;
@@ -220,15 +221,15 @@ export interface Pack {
   template: string;
 }
 
-// Every agent pack carries Skill: an explicit `tools` list hides it otherwise, and the role's skills
-// (`luna-factory:<name>`) are only reachable through it. It also carries `mcp__luna__step`: every
-// role reports progress with it, and the runner serves the luna server to every agent pack.
-const READ_ONLY_TOOLS = ["Read", "Glob", "Grep", "Skill", "mcp__luna__step", ...["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse"].map((c) => `Bash(${c}:*)`)];
-const CHECK_COMMANDS = ["npm", "pnpm", "yarn", "npx", "go", "cargo", "pip", "pytest", "make"].map((c) => `Bash(${c}:*)`);
-const LEDGER_TOOLS = ["mcp__luna__slice_init", "mcp__luna__slice_set", "mcp__luna__slice_list", "mcp__luna__decision_get"];
+// Every agent pack carries skills: an explicit tool list hides them otherwise, and the role's skills
+// (`luna-factory:<name>`) are only reachable through them. It also carries the luna `step`: every
+// role reports progress with it, and the runner serves the luna tools to every agent pack.
+const READ_ONLY: Partial<Access> = { read: true, skills: true, luna: ["step"], commands: ["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse"] };
+const CHECK_COMMANDS = ["npm", "pnpm", "yarn", "npx", "go", "cargo", "pip", "pytest", "make"];
+const LEDGER_TOOLS: LunaTool[] = ["slice_init", "slice_set", "slice_list", "decision_get"];
 
 /** What the setup planner may run to learn a repo: version prints and listings, nothing that builds. */
-const PROBE_COMMANDS = ["which", "command -v", "find", "node", "npm", "pnpm", "yarn", "go", "cargo", "rustc", "python", "python3", "pip", "make", "docker", "git log", "git ls-files"].map((c) => `Bash(${c}:*)`);
+const PROBE_COMMANDS = ["which", "command -v", "find", "node", "npm", "pnpm", "yarn", "go", "cargo", "rustc", "python", "python3", "pip", "make", "docker", "git log", "git ls-files"];
 
 export const PACKS: Record<PackId, Pack> = {
   setup: {
@@ -238,7 +239,7 @@ export const PACKS: Record<PackId, Pack> = {
     skills: ["code-discovery"],
     // Read-only over the repo checkout itself (not a worktree), with network: it may fetch a
     // tool's docs. It proposes; the machine proves the checks and writes the file on approval.
-    tools: [...READ_ONLY_TOOLS, "WebFetch", ...PROBE_COMMANDS],
+    access: access(READ_ONLY, { web: true, commands: PROBE_COMMANDS }),
     writable: false,
     maxTurns: 40,
     timeoutMs: 15 * MINUTE,
@@ -252,7 +253,7 @@ export const PACKS: Record<PackId, Pack> = {
     agent: "triage-planner",
     helpers: [],
     skills: ["writing-plans", "code-discovery"],
-    tools: [...READ_ONLY_TOOLS, "WebFetch", "Bash(gh issue view:*)", "mcp__luna__decision_get"],
+    access: access(READ_ONLY, { web: true, commands: ["gh issue view"], luna: ["decision_get"] }),
     writable: false,
     maxTurns: 30,
     timeoutMs: 10 * MINUTE,
@@ -268,7 +269,7 @@ export const PACKS: Record<PackId, Pack> = {
     skills: ["tdd"],
     // Read-only: test_design designs the cases the implementer then writes as tests (the
     // approved cases reach implementing and verifying as `context.testCases`).
-    tools: [...READ_ONLY_TOOLS, "WebFetch", "Bash(gh issue view:*)", "mcp__luna__decision_get"],
+    access: access(READ_ONLY, { web: true, commands: ["gh issue view"], luna: ["decision_get"] }),
     writable: false,
     maxTurns: 40,
     timeoutMs: 15 * MINUTE,
@@ -282,18 +283,7 @@ export const PACKS: Record<PackId, Pack> = {
     agent: "implementer",
     helpers: [],
     skills: ["tdd", "verification-before-completion", "code-discovery"],
-    tools: [
-      ...READ_ONLY_TOOLS,
-      "Write",
-      "Edit",
-      ...LEDGER_TOOLS,
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(git diff:*)",
-      "Bash(git status:*)",
-      "Bash(git log:*)",
-      ...CHECK_COMMANDS,
-    ],
+    access: access(READ_ONLY, { write: true, luna: LEDGER_TOOLS, commands: ["git add", "git commit", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
     writable: true,
     maxTurns: 80,
     timeoutMs: 30 * MINUTE,
@@ -307,21 +297,11 @@ export const PACKS: Record<PackId, Pack> = {
     agent: "verifier",
     helpers: [],
     skills: ["review-contract", "caveman-review"],
-    tools: [
-      ...READ_ONLY_TOOLS,
-      "Write",
-      "Edit",
-      "mcp__luna__slice_list",
-      "Bash(gh pr view:*)",
-      "Bash(gh pr diff:*)",
-      "Bash(git diff:*)",
-      "Bash(git log:*)",
-      "Bash(git merge-base:*)",
-      "Bash(git rev-list:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      ...CHECK_COMMANDS,
-    ],
+    access: access(READ_ONLY, {
+      write: true,
+      luna: ["slice_list"],
+      commands: ["gh pr view", "gh pr diff", "git diff", "git log", "git merge-base", "git rev-list", "git add", "git commit", ...CHECK_COMMANDS],
+    }),
     writable: true,
     maxTurns: 60,
     timeoutMs: 20 * MINUTE,
@@ -335,20 +315,7 @@ export const PACKS: Record<PackId, Pack> = {
     agent: "qa-validator",
     helpers: [],
     skills: ["browser-qa", "playwright-qa", "agent-browser", "qa-targets"],
-    tools: [
-      ...READ_ONLY_TOOLS,
-      "Write",
-      "Edit",
-      "Bash(curl:*)",
-      "Bash(node:*)",
-      "Bash(npm:*)",
-      "Bash(pnpm:*)",
-      "Bash(npx:*)",
-      "Bash(agent-browser:*)",
-      "Bash(npx agent-browser:*)",
-      "Bash(command -v:*)",
-      "Bash(ffmpeg:*)",
-    ],
+    access: access(READ_ONLY, { write: true, commands: ["curl", "node", "npm", "pnpm", "npx", "agent-browser", "npx agent-browser", "command -v", "ffmpeg"] }),
     writable: true,
     maxTurns: 60,
     timeoutMs: 20 * MINUTE,
@@ -363,7 +330,7 @@ export const PACKS: Record<PackId, Pack> = {
     agent: null,
     helpers: [],
     skills: [],
-    tools: [],
+    access: NO_ACCESS,
     writable: false,
     maxTurns: 0,
     timeoutMs: 5 * MINUTE,
@@ -377,17 +344,11 @@ export const PACKS: Record<PackId, Pack> = {
     agent: "ci-investigator",
     helpers: [],
     skills: ["ci-routing", "review-contract"],
-    tools: [
-      ...READ_ONLY_TOOLS,
-      "Bash(gh run:*)",
-      "Bash(gh workflow:*)",
-      "Bash(gh pr checks:*)",
-      "Bash(gh pr view:*)",
-      "Bash(git log:*)",
-      "Bash(git diff:*)",
+    access: access(READ_ONLY, {
+      commands: ["gh run", "gh workflow", "gh pr checks", "gh pr view", "git log", "git diff"],
       // The PR number comes from the settled decisions when the machine recorded one.
-      "mcp__luna__decision_get",
-    ],
+      luna: ["decision_get"],
+    }),
     writable: false,
     maxTurns: 30,
     timeoutMs: 10 * MINUTE,
@@ -401,7 +362,7 @@ export const PACKS: Record<PackId, Pack> = {
     agent: "retro-reviewer",
     helpers: [],
     skills: [],
-    tools: [...READ_ONLY_TOOLS, "Bash(git log:*)", "Bash(git blame:*)", "mcp__luna__slice_list"],
+    access: access(READ_ONLY, { commands: ["git log", "git blame"], luna: ["slice_list"] }),
     writable: false,
     maxTurns: 30,
     timeoutMs: 10 * MINUTE,
@@ -416,7 +377,7 @@ export const PACKS: Record<PackId, Pack> = {
     // The security pass runs as a subagent when the diff touches a sensitive path.
     helpers: ["security-reviewer"],
     skills: ["review-contract", "caveman-review", "inline-review", "code-discovery"],
-    tools: [...READ_ONLY_TOOLS, "Agent", "Bash(git diff:*)", "Bash(git log:*)", "Bash(git merge-base:*)"],
+    access: access(READ_ONLY, { agent: true, commands: ["git diff", "git log", "git merge-base"] }),
     writable: false,
     maxTurns: 40,
     timeoutMs: 15 * MINUTE,
@@ -431,19 +392,7 @@ export const PACKS: Record<PackId, Pack> = {
     agent: "code-fixer",
     helpers: ["reply-drafter"],
     skills: ["receiving-code-review", "verification-before-completion", "tdd", "code-discovery"],
-    tools: [
-      ...READ_ONLY_TOOLS,
-      "Agent",
-      "Write",
-      "Edit",
-      ...LEDGER_TOOLS,
-      "Bash(git add:*)",
-      "Bash(git commit:*)",
-      "Bash(git diff:*)",
-      "Bash(git status:*)",
-      "Bash(git log:*)",
-      ...CHECK_COMMANDS,
-    ],
+    access: access(READ_ONLY, { agent: true, write: true, luna: LEDGER_TOOLS, commands: ["git add", "git commit", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
     writable: true,
     maxTurns: 60,
     timeoutMs: 25 * MINUTE,
@@ -460,7 +409,7 @@ export const PACKS: Record<PackId, Pack> = {
     agent: "jira-triager",
     helpers: [],
     skills: [],
-    tools: ["Read", "Glob", "Grep"],
+    access: access({ read: true }),
     writable: false,
     maxTurns: 8,
     timeoutMs: 5 * MINUTE,
@@ -476,7 +425,7 @@ export const PACKS: Record<PackId, Pack> = {
     agent: "slack-triager",
     helpers: [],
     skills: [],
-    tools: [],
+    access: NO_ACCESS,
     writable: false,
     maxTurns: 3,
     timeoutMs: 3 * MINUTE,

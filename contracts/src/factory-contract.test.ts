@@ -4,7 +4,7 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
 
-import { PACKS, PACK_LIMITS, PackId, StageOutput, answerJsonSchema } from "./index.ts";
+import { NO_ACCESS, PACKS, PACK_LIMITS, PackId, StageOutput, answerJsonSchema } from "./index.ts";
 
 /** A minimal instance of a JSON schema: every required property, the first enum value,
  *  one item per array (so item shapes such as findings get exercised). */
@@ -67,13 +67,13 @@ describe("the pack registry", () => {
       expect(pack.template).toMatch(/^[a-z0-9_]+\.md$/);
       expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: pack.maxTurns, timeoutMs: pack.timeoutMs, writable: pack.writable });
       if (pack.agent) expect(pack.maxTurns).toBeGreaterThan(0);
-      else expect(pack.tools).toEqual([]);
+      else expect(pack.access).toEqual(NO_ACCESS);
     }
   });
 
   it("gives a writable pack the tools to commit and a read-only pack none that edit", () => {
     for (const pack of agentPacks) {
-      const edits = pack.tools.some((t) => t === "Write" || t === "Edit" || t.startsWith("Bash(git commit"));
+      const edits = pack.access.write || pack.access.commands.includes("git commit");
       expect(edits, pack.id).toBe(pack.writable);
     }
   });

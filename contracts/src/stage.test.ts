@@ -6,6 +6,7 @@ import {
   CloneInput,
   COLUMN_OF,
   MergeInput,
+  NO_ACCESS,
   PACKS,
   PackId,
   PrAction,
@@ -188,7 +189,7 @@ describe("PackId", () => {
 
 describe("slack_triage", () => {
   it("runs as the slack-triager on haiku, low effort, three turns, no tools and no worktree", () => {
-    expect(PACKS.slack_triage).toMatchObject({ agent: "slack-triager", helpers: [], skills: [], tools: [], writable: false, maxTurns: 3, engines: { default: "claude:haiku", allowed: ["claude:haiku"] }, effort: "low", template: "slack_triage.md" });
+    expect(PACKS.slack_triage).toMatchObject({ agent: "slack-triager", helpers: [], skills: [], access: NO_ACCESS, writable: false, maxTurns: 3, engines: { default: "claude:haiku", allowed: ["claude:haiku"] }, effort: "low", template: "slack_triage.md" });
     expect(PACKS.slack_triage.timeoutMs).toBe(3 * 60_000);
     expect(AgentRole.options).toContain("slack-triager");
   });
@@ -257,7 +258,7 @@ describe("PR tasks", () => {
     for (const pack of Object.values(PACKS)) {
       expect(Array.isArray(pack.helpers), pack.id).toBe(true);
       // A role with helpers needs the Agent tool to dispatch them; one without must not carry it.
-      expect(pack.tools.includes("Agent"), pack.id).toBe(pack.helpers.length > 0);
+      expect(pack.access.agent, pack.id).toBe(pack.helpers.length > 0);
     }
     expect(AgentRole.options).toEqual(expect.arrayContaining(["security-reviewer", "reply-drafter", "code-fixer"]));
   });
