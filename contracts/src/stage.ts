@@ -24,6 +24,9 @@ export const TaskSource = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("slack"), channel: z.string(), ts: z.string(), permalink: z.string() }),
   /** A ticket imported from a Jira issue by intake. `issueType` is Jira's type name, e.g. `Bug`. */
   z.object({ kind: z.literal("jira"), key: z.string(), url: z.string(), issueType: z.string().nullable() }),
+  /** A Luna Notch ticket run on the machine: `ref` is its board key (`LUNA-14`), `id` its uuid.
+   *  The notch talks to Jira, Slack and Teams about it; `jiraKey` only names the branch. */
+  z.object({ kind: z.literal("notch"), ref: z.string(), id: z.string(), jiraKey: z.string().nullable().optional() }),
 ]);
 export type TaskSource = z.infer<typeof TaskSource>;
 

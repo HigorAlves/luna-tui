@@ -3,7 +3,7 @@
 import { existsSync, rmSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
 
-import { jiraBranch, jiraOf, slug } from "../../domain/jira-link.ts";
+import { branchLinkOf, jiraBranch, slug } from "../../domain/jira-link.ts";
 import { DEFAULT_JIRA_BRANCH } from "../../domain/policy.ts";
 import { exec, execOrThrow } from "../process/exec.ts";
 
@@ -41,7 +41,7 @@ export function workspaceFor(
  */
 export async function ownedWorkspace(task: Parameters<typeof workspaceFor>[0], repoPath: string, worktreesDir: string, jiraPattern: string = DEFAULT_JIRA_BRANCH): Promise<Workspace> {
   const plain = workspaceFor(task, repoPath, worktreesDir, jiraPattern);
-  const linked = jiraOf({ jira: task.jira ?? null, source: task.source ?? null }) !== null;
+  const linked = branchLinkOf({ jira: task.jira ?? null, source: task.source ?? null }) !== null;
   if (!linked || jiraPattern.includes("{id}") || jiraPattern.includes("{slug}")) return plain;
   if (!(await branchExists(repoPath, plain.branch))) return plain;
   return workspaceFor(task, repoPath, worktreesDir, `${jiraPattern}-{id}`);

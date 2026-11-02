@@ -66,12 +66,15 @@ export class PgTaskStore implements TaskStore {
       .getOne();
   }
 
-  /** The latest task linked to the issue: by its `jira` column, or as an intake import (`source.key`). */
+  /** The latest task linked to the issue: by its `jira` column, as an intake import (`source.key`), or as a notch task's `jiraKey`. */
   findTaskByJiraKey(key: string): Promise<TaskRow | null> {
     return this.db
       .getRepository(TaskEntity)
       .createQueryBuilder("task")
-      .where("task.jira->>'key' = :key or (task.source->>'kind' = 'jira' and task.source->>'key' = :key)", { key })
+      .where(
+        "task.jira->>'key' = :key or (task.source->>'kind' = 'jira' and task.source->>'key' = :key) or (task.source->>'kind' = 'notch' and task.source->>'jiraKey' = :key)",
+        { key },
+      )
       .orderBy("task.created_at", "DESC")
       .getOne();
   }

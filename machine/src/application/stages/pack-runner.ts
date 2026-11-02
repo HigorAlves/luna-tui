@@ -22,7 +22,7 @@ import {
 import type { Credential } from "../../adapters/docker/credentials.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
-import { PROTECTED_BRANCHES, jiraOf } from "../../domain/jira-link.ts";
+import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
 import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
@@ -101,7 +101,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   // task (the branch it persisted carries the issue key or the task id, never a protected
   // name), or, for a PR task, the PR's own head branch.
   const prBranch = task.source?.kind === "github_pr" ? task.source.headRef : null;
-  const link = jiraOf(task);
+  const link = branchLinkOf(task);
   const ownsPersisted = (branch: string): boolean => persisted && link !== null && (branch.includes(link.key) || branch.includes(task.id.slice(0, 8)));
   const protectedBranch = limits.writable && !extra.checkout && (PROTECTED_BRANCHES.has(workspace.branch) || workspace.branch === (await defaultBranch(task.repoPath)));
   if (

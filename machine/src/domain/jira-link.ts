@@ -8,11 +8,21 @@ export function bareLink(key: string, url: string, issueType: string | null = nu
   return { key, url, issueType, status: null, priority: null, dueAt: null, syncedAt: null, blocked: null, linkedAt, timeZone: null };
 }
 
-/** The task's Jira link: the column, or, for an intake import never refreshed yet, the key its source carries. */
+/** A task the notch made: the notch talks to Jira, Slack and Teams about it, the machine never does. */
+export const fromNotch = (row: { source: TaskSource | null }): boolean => row.source?.kind === "notch";
+
+/** The task's Jira link: the column, or, for an intake import never refreshed yet, the key its source carries. A notch task has none. */
 export function jiraOf(row: { jira: JiraLink | null; source: TaskSource | null }): JiraLink | null {
+  if (fromNotch(row)) return null;
   if (row.jira) return row.jira;
   if (row.source?.kind !== "jira") return null;
   return bareLink(row.source.key, row.source.url, row.source.issueType);
+}
+
+/** The issue a task's branch is named from: its link, or a notch task's `jiraKey`, which is never read or written. */
+export function branchLinkOf(row: { jira: JiraLink | null; source: TaskSource | null }): Pick<JiraLink, "key" | "issueType"> | null {
+  if (row.source?.kind === "notch") return row.source.jiraKey ? { key: row.source.jiraKey, issueType: null } : null;
+  return jiraOf(row);
 }
 
 /** Lowercase ascii words joined by `-`. Never empty. */
@@ -43,9 +53,9 @@ export function branchPatternProblem(pattern: string): string | null {
   return null;
 }
 
-/** The branch for a linked task from the repo's pattern: `{type}`, `{key}`, `{slug}`, `{route}`, `{id}`. */
+/** The branch for a linked task (or a notch task with a Jira key) from the repo's pattern: `{type}`, `{key}`, `{slug}`, `{route}`, `{id}`. */
 export function jiraBranch(task: { id: string; title: string; route: string; jira: JiraLink | null; source: TaskSource | null }, pattern: string = DEFAULT_JIRA_BRANCH): string | null {
-  const link = jiraOf(task);
+  const link = branchLinkOf(task);
   if (!link) return null;
   const rendered = pattern
     .replaceAll("{type}", branchType(link.issueType))

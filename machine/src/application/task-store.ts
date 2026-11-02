@@ -89,7 +89,7 @@ export interface TaskStore {
   getTask(id: string): Promise<TaskRow | null>;
   /** The task made from an issue (`github`) or a PR (`github_pr`) of this repo and number. */
   findTaskBySource(repo: string, number: number, kind?: "github" | "github_pr"): Promise<TaskRow | null>;
-  /** The latest task linked to a Jira issue, by its `jira` column or its intake source. */
+  /** The latest task linked to a Jira issue, by its `jira` column, its intake source or a notch task's `jiraKey`. */
   findTaskByJiraKey(key: string): Promise<TaskRow | null>;
   updateTask(id: string, patch: Partial<TaskRow>): Promise<void>;
   deleteTask(id: string): Promise<void>;

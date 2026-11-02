@@ -4,7 +4,7 @@
 // JiraWatch do the automatic part; this is the `J` key.
 import type { JiraCreateInput, JiraIssueHit, JiraLink, JiraStatus } from "@hardness/contracts";
 
-import { bareLink, jiraOf } from "../domain/jira-link.ts";
+import { bareLink, fromNotch, jiraOf } from "../domain/jira-link.ts";
 import type { TaskRow } from "../domain/task.ts";
 import type { Policy } from "../domain/policy.ts";
 import { JIRA_KEY, type Jira, JiraAuthError, type JiraIssue, JiraNotFoundError, messageOf } from "./jira.ts";
@@ -42,6 +42,13 @@ export class HasWorktreeError extends Error {
 }
 
 /** Creating an issue with no project named by the request or the repo's luna.yaml: 409 `no_project`. */
+/** A notch task's Jira issue belongs to the notch: the machine neither links nor creates one. */
+export class NotchTaskError extends Error {
+  constructor(taskId: string) {
+    super(`task ${taskId.slice(0, 8)} came from Luna Notch, which owns its Jira issue`);
+  }
+}
+
 export class NoProjectError extends Error {
   constructor() {
     super("no Jira project: pass one, or set jira.project in the repo's luna.yaml");
@@ -152,6 +159,7 @@ export class JiraTasks implements JiraTasksPort {
 
   async link(taskId: string, key: string): Promise<TaskRow> {
     const before = await this.options.pipeline.get(taskId);
+    if (fromNotch(before)) throw new NotchTaskError(taskId);
     const current = jiraOf(before);
     // A ticket already on its branch keeps the issue the branch was named from; the same key again only refreshes.
     if (before.worktreePath && before.branch && current && current.key !== key) throw new HasWorktreeError(taskId, before.branch, current.key);
@@ -181,6 +189,7 @@ export class JiraTasks implements JiraTasksPort {
 
   async create(taskId: string, input: JiraCreateInput): Promise<TaskRow> {
     const task = await this.options.pipeline.get(taskId);
+    if (fromNotch(task)) throw new NotchTaskError(taskId);
     const linked = jiraOf(task);
     if (linked) throw new AlreadyLinkedError(taskId, linked.key);
     const policy = await this.options.pipeline.policyFor(task.repoPath);

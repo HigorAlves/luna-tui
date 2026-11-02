@@ -1,10 +1,12 @@
 // Replies in the thread a task came from, the way every platform studied notifies: a comment
 // on the originating GitHub issue, and a Slack thread per task when a token and channel are
-// set. Only the moments that matter get a line: picked up, needs you, escalated, paused,
-// the PR, closed. Stage-to-stage progress stays on the board.
+// set; never for a notch task, whose ticket the notch talks about. Only the moments that
+// matter get a line: picked up, needs you, escalated, paused, the PR, closed. Stage-to-stage
+// progress stays on the board.
 import { WAITING_ON_USER, type TaskState } from "@hardness/contracts";
 import { basename } from "node:path";
 
+import { fromNotch } from "../domain/jira-link.ts";
 import { type GitHub, messageOf } from "./github.ts";
 import type { EventRow, TaskRow } from "../domain/task.ts";
 import type { Pipeline } from "./pipeline.ts";
@@ -85,6 +87,7 @@ export class ThreadReplies {
   /** The task was picked up: a first comment on its issue, and the root of its Slack thread. */
   private async open(taskId: string): Promise<void> {
     const task = await this.options.pipeline.get(taskId);
+    if (fromNotch(task)) return;
     const short = task.id.slice(0, 8);
     await this.comment(task, `Picked up by the pipeline as task #${short}: triage is planning it.`);
     if (!this.options.slack) return;
@@ -97,6 +100,7 @@ export class ThreadReplies {
 
   private async reply(taskId: string, text: string): Promise<void> {
     const task = await this.options.pipeline.get(taskId);
+    if (fromNotch(task)) return;
     await this.comment(task, text);
     const slack = this.options.slack;
     if (!slack) return;

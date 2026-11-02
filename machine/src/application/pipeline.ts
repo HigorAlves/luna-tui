@@ -261,10 +261,10 @@ export class Pipeline {
     return this.get(task.id);
   }
 
-  /** The link a new ticket starts with: its intake source's issue, else the first key in its text when Jira is set up. */
+  /** The link a new ticket starts with: its intake source's issue, else the first key in its text when Jira is set up. A notch ticket gets none. */
   private detectJira(title: string, description: string, source: TaskSource | null): JiraLink | null {
     if (source?.kind === "jira") return bareLink(source.key, source.url, source.issueType);
-    if (!this.jiraSite) return null;
+    if (!this.jiraSite || source?.kind === "notch") return null;
     const key = findJiraKey(title) ?? findJiraKey(description);
     return key ? bareLink(key, issueUrl(this.jiraSite, key)) : null;
   }

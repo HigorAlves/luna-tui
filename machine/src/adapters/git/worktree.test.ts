@@ -199,6 +199,14 @@ describe("workspaceFor", () => {
     expect(workspaceFor({ ...task, source: { kind: "jira", key: "PLAT-9", url: "u", issueType: "Story" } }, "/repos/app", "/wt").branch).toBe("story/PLAT-9");
   });
 
+  it("names a notch task's branch from its jiraKey through the pattern, and task/<id8>-<slug> without one", () => {
+    const notch = (jiraKey?: string | null) => ({ ...task, source: { kind: "notch" as const, ref: "LUNA-14", id: "n-1", jiraKey } });
+    expect(workspaceFor(notch("PLAT-123"), "/repos/app", "/wt")).toEqual({ branch: "task/PLAT-123", path: "/wt/app/task-PLAT-123" });
+    expect(workspaceFor(notch("PLAT-123"), "/repos/app", "/wt", "feat/{key}-{slug}").branch).toBe("feat/PLAT-123-login-page");
+    expect(workspaceFor(notch(null), "/repos/app", "/wt").branch).toBe("task/a1b2c3d4-login-page");
+    expect(workspaceFor(notch(), "/repos/app", "/wt").branch).toBe("task/a1b2c3d4-login-page");
+  });
+
   it("appends the task id when the repo already has the branch the pattern names (and the pattern has no {id} or {slug})", async () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "owned-")));
     const repo = join(root, "repo");
