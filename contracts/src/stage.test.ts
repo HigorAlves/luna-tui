@@ -223,6 +223,14 @@ describe("PR tasks", () => {
     expect(TaskSource.parse({ kind: "github", repo: "a/b", number: 7, url: "u" }).kind).toBe("github");
   });
 
+  it("a notch source names the notch ticket, and its Jira key only when it has one", () => {
+    const notch = TaskSource.parse({ kind: "notch", ref: "LUNA-14", id: "t-1", jiraKey: "PLAT-123" });
+    expect(notch).toEqual({ kind: "notch", ref: "LUNA-14", id: "t-1", jiraKey: "PLAT-123" });
+    expect(TaskSource.parse({ kind: "notch", ref: "LUNA-14", id: "t-1", jiraKey: null }).kind).toBe("notch");
+    expect(TaskSource.parse({ kind: "notch", ref: "LUNA-14", id: "t-1" }).kind).toBe("notch");
+    expect(() => TaskSource.parse({ kind: "notch", ref: "LUNA-14" })).toThrow();
+  });
+
   it("routes are a closed set: feature is today's pipeline, setup only proposes luna.yaml, the rest are PR actions", () => {
     expect(TaskRoute.options).toEqual(["feature", "setup", "ci_fix", "review", "address"]);
     expect(PrAction.options).toEqual(["ci_fix", "review", "address"]);

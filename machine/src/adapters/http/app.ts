@@ -43,7 +43,7 @@ import { CloneError, NoPullError, NotReadyError, type PullsPort } from "../../ap
 import { AlreadyTaskError, BuiltinWatchError, NoItemError, NoWatchError, type SlackInboxPort } from "../../application/slack-inbox.ts";
 import { NoSlackTokenError } from "../../application/slack.ts";
 import { NoJiraTokenError } from "../../application/jira.ts";
-import { AlreadyLinkedElsewhereError, AlreadyLinkedError, HasWorktreeError, type JiraTasksPort, NoIssueError, NoProjectError } from "../../application/jira-tasks.ts";
+import { AlreadyLinkedElsewhereError, AlreadyLinkedError, HasWorktreeError, type JiraTasksPort, NoIssueError, NoProjectError, NotchTaskError } from "../../application/jira-tasks.ts";
 import type { StubStages } from "../../application/stages/stubs.ts";
 import type { Bus } from "./bus.ts";
 import { InvalidSince, parseSince } from "./metrics.ts";
@@ -141,6 +141,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof HasWorktreeError) return fail(c, 409, "has_worktree", error.message);
     if (error instanceof AlreadyLinkedError) return fail(c, 409, "already_linked", error.message);
     if (error instanceof NoProjectError) return fail(c, 409, "no_project", error.message);
+    if (error instanceof NotchTaskError) return fail(c, 409, "notch_task", error.message);
     if (error instanceof ZodError) return fail(c, 400, "invalid_request", z.prettifyError(error));
     if (error instanceof BadRequest) return fail(c, 400, "invalid_request", error.message);
     console.error(error);
