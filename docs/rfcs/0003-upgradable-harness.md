@@ -1,7 +1,7 @@
 # RFC 0003 — Keep the harness upgradable: pinned models, conformance, replay evals and staged rollout
 
 - **Author:** Higor Alves
-- **Status:** Draft
+- **Status:** Accepted (2026-11-02)
 - **Created:** 2026-11-02
 - **Discussion:** (open a PR with this file)
 - **Related:** [RFC 0002](./0002-native-agent-runtimes.md) (the runtimes this keeps healthy)
