@@ -4,8 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { EMPTY_RUN, finish, outcomeOf, scanArtifacts } from "./output.ts";
-import type { LunaState } from "./tools/luna.ts";
+import { EMPTY_RUN, type LunaState, finish, outcomeOf, scanArtifacts } from "./output.ts";
 
 const state = (over: Partial<LunaState> = {}): LunaState => ({ ledger: { schema: 1, slices: [] }, events: [], ...over });
 const outDir = () => mkdtempSync(join(tmpdir(), "factory-out-"));

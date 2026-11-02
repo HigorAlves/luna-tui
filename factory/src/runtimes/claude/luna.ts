@@ -6,15 +6,7 @@ import type { Ledger, LedgerSlice, StageInput } from "@hardness/contracts";
 import { writeFileSync } from "node:fs";
 import { z } from "zod";
 
-export interface LunaEvent {
-  kind: string;
-  payload: Record<string, unknown>;
-}
-
-export interface LunaState {
-  ledger: Ledger;
-  events: LunaEvent[];
-}
+import type { LunaState } from "../../core/output.ts";
 
 const STATUS = z.enum(["pending", "red", "green", "committed", "escalated"]);
 const SLICE_EVENT: Record<LedgerSlice["status"], string | null> = {

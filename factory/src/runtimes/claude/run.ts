@@ -1,0 +1,109 @@
+// The Claude runtime: one stage through the Claude Agent SDK. The pack becomes the SDK options
+// (its role as `agent`, its helpers as `agents`, the plugin's skills, the tool allow-list, the
+// guards as PreToolUse hooks, the luna tools as an in-process MCP server) and `query()` is
+// followed to its result, the transcript written to stdout as it goes.
+import type { McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
+import { answerJsonSchema } from "@hardness/contracts";
+import { appendFileSync } from "node:fs";
+import { join } from "node:path";
+
+import { EMPTY_RUN, type RunOutcome } from "../../core/output.ts";
+import { FACTORY_RULES, callLine } from "../../core/render.ts";
+import type { RunContext, Runtime } from "../../core/runtime.ts";
+import { agentDefinitions } from "./agents.ts";
+import { branchPrefixFor, preToolUseGuards } from "./guards.ts";
+
+const env = process.env;
+
+export const claude: Runtime = { id: "claude", run };
+
+async function run({ pack, input, prompt, paths, luna, dry, out }: RunContext): Promise<RunOutcome> {
+  if (pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
+  const options = {
+    cwd: paths.work,
+    agent: pack.agent,
+    agents: agentDefinitions(pack, join(paths.factoryRoot, "roles")),
+    systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: FACTORY_RULES },
+    plugins: [{ type: "local" as const, path: join(paths.factoryRoot, "plugin") }],
+    settingSources: [] as [],
+    // `tools` takes bare names (a scoped rule such as `Bash(git add:*)` is not a name and would
+    // drop Bash); the scoped rules go to `allowedTools`, which is what dontAsk consults.
+    tools: toolNames(pack.tools),
+    allowedTools: pack.tools,
+    permissionMode: "dontAsk" as const,
+    maxTurns: input.limits.maxTurns,
+    outputFormat: { type: "json_schema" as const, schema: answerJsonSchema(pack) },
+    // The server lunaTools() built; RunContext keeps it opaque so core needs no SDK types.
+    mcpServers: { luna: luna.server as McpSdkServerConfigWithInstance },
+    hooks: {
+      PreToolUse: preToolUseGuards({
+        writable: pack.writable,
+        branch: input.task.branch || null,
+        // A PR task commits on the PR's own branch, not a task/ branch.
+        branchPrefix: branchPrefixFor(input.task),
+        workRoot: paths.work,
+        outRoot: paths.out,
+      }),
+    },
+    model: pack.model,
+    effort: pack.effort,
+    env: { ...env, LUNA_FACTORY: "1" },
+  };
+
+  if (dry) {
+    const { mcpServers: _m, hooks: _h, env: _e, agents, ...printable } = options;
+    out(JSON.stringify({ ...printable, agents: Object.keys(agents), hooks: ["PreToolUse"], mcpServers: ["luna"] }, null, 2));
+    let structured: Record<string, unknown> | null = null;
+    try {
+      structured = env.LUNA_STAGE_DRY_STRUCTURED ? (JSON.parse(env.LUNA_STAGE_DRY_STRUCTURED) as Record<string, unknown>) : null; // test seam
+    } catch {}
+    return { ...EMPTY_RUN, ok: true, structured, text: "dry-run" };
+  }
+
+  const t0 = Date.now();
+  const run: RunOutcome = { ...EMPTY_RUN };
+  try {
+    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    const raw = env.LUNA_STAGE_DEBUG === "1" ? join(paths.out, "raw.jsonl") : null;
+    for await (const msg of query({ prompt, options })) {
+      if (raw) appendFileSync(raw, `${JSON.stringify(msg)}\n`);
+      if ("session_id" in msg && typeof msg.session_id === "string" && !run.sessionId) run.sessionId = msg.session_id;
+      if (msg.type === "system" && msg.subtype === "init") {
+        run.model = msg.model;
+        out(`session ${msg.session_id} · model ${msg.model} · skills ${msg.skills.length} · plugins ${msg.plugins.map((p) => p.name).join(",") || "none"}`);
+      } else if (msg.type === "assistant") {
+        for (const block of msg.message?.content ?? []) {
+          if (block.type === "text" && block.text) out(block.text);
+          else if (block.type === "tool_use") out(callLine(block.name, (block.input ?? {}) as Record<string, unknown>));
+        }
+      } else if (msg.type === "rate_limit_event") {
+        const info = msg.rate_limit_info;
+        if (info.status === "rejected") {
+          run.rateLimited = true;
+          run.resetsAt = info.resetsAt ?? null;
+        }
+      } else if (msg.type === "result") {
+        run.ok = msg.subtype === "success" && !msg.is_error;
+        run.structured = msg.subtype === "success" && msg.structured_output && typeof msg.structured_output === "object" ? (msg.structured_output as Record<string, unknown>) : null;
+        run.text = msg.subtype === "success" && typeof msg.result === "string" ? msg.result : "";
+        run.turns = msg.num_turns ?? 0;
+        run.costUsd = msg.total_cost_usd ?? null;
+        run.durationMs = msg.duration_ms ?? 0;
+        if (!run.ok) {
+          const errors = "errors" in msg && Array.isArray(msg.errors) ? msg.errors.join("; ") : "";
+          run.error = errors || (msg.subtype === "success" ? msg.result : msg.subtype) || "error";
+        }
+      }
+    }
+  } catch (e) {
+    run.ok = false;
+    run.error = e instanceof Error ? e.message : String(e);
+  }
+  if (!run.durationMs) run.durationMs = Date.now() - t0;
+  return run;
+}
+
+/** The tool names behind a pack's allow-list: `Bash(git add:*)` and `Bash(npm:*)` are one `Bash`. */
+export function toolNames(allowed: string[]): string[] {
+  return [...new Set(allowed.map((t) => t.replace(/\(.*\)$/, "")))];
+}

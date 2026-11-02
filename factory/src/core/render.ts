@@ -1,8 +1,8 @@
 // Renders a pack's prompt: the factory header (the role, the stage and how this stage ends when
 // it cannot settle something), then the template with its {{placeholders}} filled from the
 // stage input. The answer's shape is not in the prompt: the SDK's structured output enforces it
-// (main.ts, `outputFormat`). Pure: the caller passes the template and the project context, so a
-// test needs no files.
+// (runtimes/claude/run.ts, `outputFormat`). Pure: the caller passes the template and the
+// project context, so a test needs no files.
 import type { Pack, StageInput } from "@hardness/contracts";
 import { answerJsonSchema } from "@hardness/contracts";
 import { createHash } from "node:crypto";

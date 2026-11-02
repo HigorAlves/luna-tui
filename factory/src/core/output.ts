@@ -1,12 +1,22 @@
 // What a stage leaves behind: /out/result.json (the StageOutput contract), /out/events.jsonl
 // and the artifact index over /out/files/**. One function, called however the run ended, so
 // the machine always finds a result.
-import type { Pack, StageArtifact, StageOutcome, StageOutput } from "@hardness/contracts";
+import type { Ledger, Pack, StageArtifact, StageOutcome, StageOutput } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 
-import type { LunaState } from "./tools/luna.ts";
+/** One call to a luna tool, as the machine ingests it from /out/events.jsonl. */
+export interface LunaEvent {
+  kind: string;
+  payload: Record<string, unknown>;
+}
+
+/** What the luna tools leave for the result: the slice ledger and the events. */
+export interface LunaState {
+  ledger: Ledger;
+  events: LunaEvent[];
+}
 
 /** How the model run ended, as the runner saw it. */
 export interface RunOutcome {
