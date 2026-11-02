@@ -6,7 +6,7 @@
 // the code); with no repo, an empty folder. The issue rides in
 // `context.jira`, the verdict comes back in /out/result.json. There is no row to record: the
 // ticket it makes (or does not) is the record, and the line logged says the rest.
-import { JiraIntakeAnswer, type JiraIntakeContext, PACKS, StageOutput } from "@hardness/contracts";
+import { JiraIntakeAnswer, type JiraIntakeContext, PACKS, StageOutput, resolveEngine } from "@hardness/contracts";
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -61,6 +61,8 @@ export function jiraContext(issue: JiraIssue, repoPath: string | null): JiraInta
 /** The JiraTriager that runs the jira_intake pack in the stage container, one run per issue. */
 export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
   const pack = PACKS.jira_intake;
+  // What the run is recorded as when the result names no model: the pinned ID it was started on.
+  const model = resolveEngine(pack.engines.default).modelId;
   const now = deps.now ?? (() => new Date());
   const log = deps.log ?? ((line: string) => console.log(line));
   const sandbox = deps.sandbox ?? runSandbox;
@@ -75,7 +77,7 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
       const input = buildJiraIntakeInput(jiraContext(issue, repoPath));
       let answer: JiraIntakeAnswer | null = null;
       let error: string | null = null;
-      let usage: { model: string; turns: number; costUsd: number | null } = { model: pack.model, turns: 0, costUsd: null };
+      let usage: { model: string; turns: number; costUsd: number | null } = { model, turns: 0, costUsd: null };
       try {
         // The pack reads the repo through its own clean checkout, never the live one.
         let work: string;
@@ -110,7 +112,7 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
           else if (!output.success) error = `unreadable result: ${output.error.issues.map((i) => i.message).join("; ")}`;
           else {
             const out = output.data;
-            usage = { model: out.usage.model || pack.model, turns: out.usage.turns, costUsd: out.usage.costUsd };
+            usage = { model: out.usage.model || model, turns: out.usage.turns, costUsd: out.usage.costUsd };
             if (!out.ok) error = typeof out.error === "string" ? out.error : out.error ? JSON.stringify(out.error) : out.summary || "the stage failed";
             else {
               const parsed = JiraIntakeAnswer.safeParse(out.answer);

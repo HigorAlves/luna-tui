@@ -1,10 +1,12 @@
 // The pack registry: one entry per agent stage. It is the single source of truth for what a
-// stage runs as (which role, on which model, with which tools and skills), how long it may
+// stage runs as (which role, on which engines, with which tools and skills), how long it may
 // run, and the shape of the answer it must give. The machine reads the limits from here; the
 // factory runner reads everything else; the conformance test checks that every answer a pack
 // may give is one the machine ingests.
 import { z } from "zod";
 
+import type { EngineId } from "./engines.ts";
+import type { Effort } from "./models.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
 import { Finding, LunaConfig, PackId, TestCase, VerifyResult } from "./stage.ts";
 
@@ -31,6 +33,9 @@ export const AgentRole = z.enum([
 export type AgentRole = z.infer<typeof AgentRole>;
 
 const MINUTE = 60_000;
+
+/** A pack that runs on one engine only. */
+const only = (engine: EngineId) => ({ default: engine, allowed: [engine] });
 
 /** A question the stage could not settle alone. `recommended` is what it would pick. */
 const Question = z.object({ question: z.string(), recommended: z.string().nullable() });
@@ -205,9 +210,10 @@ export interface Pack {
   writable: boolean;
   maxTurns: number;
   timeoutMs: number;
-  /** The model alias and effort the role runs on. */
-  model: "opus" | "sonnet" | "haiku";
-  effort: "low" | "medium" | "high";
+  /** The engines the stage may run on; the machine picks one of `allowed`, else `default`. */
+  engines: { default: EngineId; allowed: EngineId[] };
+  /** How hard the role thinks: about the job, so it stays here whatever the engine. */
+  effort: Effort;
   /** The answer the stage must give; the runner turns it into the SDK's JSON schema. */
   answer: z.ZodType;
   /** The prompt template under factory/prompts/. */
@@ -236,7 +242,7 @@ export const PACKS: Record<PackId, Pack> = {
     writable: false,
     maxTurns: 40,
     timeoutMs: 15 * MINUTE,
-    model: "opus",
+    engines: only("claude:opus"),
     effort: "high",
     answer: SetupAnswer,
     template: "setup.md",
@@ -250,7 +256,7 @@ export const PACKS: Record<PackId, Pack> = {
     writable: false,
     maxTurns: 30,
     timeoutMs: 10 * MINUTE,
-    model: "opus",
+    engines: only("claude:opus"),
     effort: "high",
     answer: TriageAnswer,
     template: "triage.md",
@@ -266,7 +272,7 @@ export const PACKS: Record<PackId, Pack> = {
     writable: false,
     maxTurns: 40,
     timeoutMs: 15 * MINUTE,
-    model: "sonnet",
+    engines: only("claude:sonnet"),
     effort: "medium",
     answer: TestDesignAnswer,
     template: "test_design.md",
@@ -291,7 +297,7 @@ export const PACKS: Record<PackId, Pack> = {
     writable: true,
     maxTurns: 80,
     timeoutMs: 30 * MINUTE,
-    model: "sonnet",
+    engines: only("claude:sonnet"),
     effort: "medium",
     answer: ImplementingAnswer,
     template: "implementing.md",
@@ -319,7 +325,7 @@ export const PACKS: Record<PackId, Pack> = {
     writable: true,
     maxTurns: 60,
     timeoutMs: 20 * MINUTE,
-    model: "opus",
+    engines: only("claude:opus"),
     effort: "high",
     answer: VerifyingAnswer,
     template: "verifying.md",
@@ -346,7 +352,7 @@ export const PACKS: Record<PackId, Pack> = {
     writable: true,
     maxTurns: 60,
     timeoutMs: 20 * MINUTE,
-    model: "sonnet",
+    engines: only("claude:sonnet"),
     // A 60-turn browser job: low effort drops steps and misreads screens; medium holds the thread.
     effort: "medium",
     answer: E2eAnswer,
@@ -361,7 +367,7 @@ export const PACKS: Record<PackId, Pack> = {
     writable: false,
     maxTurns: 0,
     timeoutMs: 5 * MINUTE,
-    model: "sonnet",
+    engines: only("claude:sonnet"),
     effort: "low",
     answer: EvidenceAnswer,
     template: "evidence.md",
@@ -385,7 +391,7 @@ export const PACKS: Record<PackId, Pack> = {
     writable: false,
     maxTurns: 30,
     timeoutMs: 10 * MINUTE,
-    model: "sonnet",
+    engines: only("claude:sonnet"),
     effort: "medium",
     answer: CiWatchAnswer,
     template: "ci_watch.md",
@@ -399,7 +405,7 @@ export const PACKS: Record<PackId, Pack> = {
     writable: false,
     maxTurns: 30,
     timeoutMs: 10 * MINUTE,
-    model: "opus",
+    engines: only("claude:opus"),
     effort: "high",
     answer: ReviewingMemoryAnswer,
     template: "reviewing_memory.md",
@@ -414,7 +420,7 @@ export const PACKS: Record<PackId, Pack> = {
     writable: false,
     maxTurns: 40,
     timeoutMs: 15 * MINUTE,
-    model: "opus",
+    engines: only("claude:opus"),
     effort: "high",
     answer: PrReviewAnswer,
     template: "reviewing.md",
@@ -441,7 +447,7 @@ export const PACKS: Record<PackId, Pack> = {
     writable: true,
     maxTurns: 60,
     timeoutMs: 25 * MINUTE,
-    model: "sonnet",
+    engines: only("claude:sonnet"),
     effort: "medium",
     answer: PrAddressAnswer,
     template: "addressing.md",
@@ -458,7 +464,7 @@ export const PACKS: Record<PackId, Pack> = {
     writable: false,
     maxTurns: 8,
     timeoutMs: 5 * MINUTE,
-    model: "sonnet",
+    engines: only("claude:sonnet"),
     effort: "low",
     answer: JiraIntakeAnswer,
     template: "jira_intake.md",
@@ -474,7 +480,7 @@ export const PACKS: Record<PackId, Pack> = {
     writable: false,
     maxTurns: 3,
     timeoutMs: 3 * MINUTE,
-    model: "haiku",
+    engines: only("claude:haiku"),
     effort: "low",
     answer: SlackTriageAnswer,
     template: "slack_triage.md",

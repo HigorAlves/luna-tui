@@ -17,12 +17,12 @@ const env = process.env;
 
 export const claude: Runtime = { id: "claude", run };
 
-async function run({ pack, input, prompt, paths, luna, dry, out }: RunContext): Promise<RunOutcome> {
+async function run({ pack, engine, input, prompt, paths, luna, dry, out }: RunContext): Promise<RunOutcome> {
   if (pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
   const options = {
     cwd: paths.work,
     agent: pack.agent,
-    agents: agentDefinitions(pack, join(paths.factoryRoot, "roles")),
+    agents: agentDefinitions(pack, join(paths.factoryRoot, "roles"), engine.modelId),
     systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: FACTORY_RULES },
     plugins: [{ type: "local" as const, path: join(paths.factoryRoot, "plugin") }],
     settingSources: [] as [],
@@ -45,7 +45,8 @@ async function run({ pack, input, prompt, paths, luna, dry, out }: RunContext): 
         outRoot: paths.out,
       }),
     },
-    model: pack.model,
+    // The pinned ID, never an alias: the model does not change under the stage between runs.
+    model: engine.modelId,
     effort: pack.effort,
     env: { ...env, LUNA_FACTORY: "1" },
   };

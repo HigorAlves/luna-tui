@@ -4,7 +4,7 @@
 // `context.slack`, and the structured answer comes back in /out/result.json. One row per run
 // goes to slack_triage_runs so the Floor can show what triage costs. A run that answered has
 // its folder removed at once; a failed one keeps it for the retention sweep (sweepSlackTriageRuns).
-import { PACKS, SlackTriageAnswer, type SlackTriageContext, StageOutput } from "@hardness/contracts";
+import { PACKS, SlackTriageAnswer, type SlackTriageContext, StageOutput, resolveEngine } from "@hardness/contracts";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -72,6 +72,8 @@ export function slackContext(items: TriageItem[], context: TriageContext): Slack
 /** The Triager that runs the slack_triage pack in the stage container, one run per batch. */
 export function createSlackTriager(deps: SlackTriageDeps): Triager {
   const pack = PACKS.slack_triage;
+  // What the run is recorded as when the result names no model: the pinned ID it was started on.
+  const model = resolveEngine(pack.engines.default).modelId;
   const now = deps.now ?? (() => new Date());
   const log = deps.log ?? ((line: string) => console.log(line));
   const sandbox = deps.sandbox ?? runSandbox;
@@ -86,7 +88,7 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
     const answers = new Map<string, TriageAnswer>();
     let ok = false;
     let error: string | null = null;
-    let usage: { model: string; turns: number; costUsd: number | null } = { model: pack.model, turns: 0, costUsd: null };
+    let usage: { model: string; turns: number; costUsd: number | null } = { model, turns: 0, costUsd: null };
     try {
       const result = await sandbox({
         name: `hardness-slack-triage-${stamp}`,
@@ -109,7 +111,7 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
         else if (!output.success) error = `unreadable result: ${output.error.issues.map((i) => i.message).join("; ")}`;
         else {
           const out = output.data;
-          usage = { model: out.usage.model || pack.model, turns: out.usage.turns, costUsd: out.usage.costUsd };
+          usage = { model: out.usage.model || model, turns: out.usage.turns, costUsd: out.usage.costUsd };
           if (!out.ok) error = typeof out.error === "string" ? out.error : out.error ? JSON.stringify(out.error) : out.summary || "the stage failed";
           else {
             const answer = SlackTriageAnswer.safeParse(out.answer);
