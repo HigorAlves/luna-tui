@@ -6,7 +6,7 @@ import { toTask } from "./serialize.ts";
 
 const row = (): TaskRow => ({
   id: "t1", title: "x", description: "", criteria: [], repoPath: null, source: null, route: "feature", branch: null, worktreePath: null,
-  state: "draft", retries: { ...NO_RETRIES }, resumeTo: null, reason: null, queued: false, queuedAt: null, stateSince: null, idempotencyKey: null, requestHash: null,
+  state: "draft", retries: { ...NO_RETRIES }, resumeTo: null, reason: null, queued: false, queuedAt: null, stateSince: null, idempotencyKey: null, requestHash: null, seq: "1",
   diffAdded: null, diffRemoved: null, testsPassed: null, testsTotal: null, jira: null,
   createdAt: new Date(0), updatedAt: new Date(0),
 });
@@ -31,5 +31,9 @@ describe("toTask", () => {
     const task = toTask({ ...row(), diffAdded: 142, diffRemoved: 18, testsPassed: 7, testsTotal: 9 });
     expect(task.diff).toEqual({ added: 142, removed: 18 });
     expect(task.tests).toEqual({ passed: 7, total: 9 });
+  });
+
+  it("carries the row's sequence number as a number", () => {
+    expect(toTask({ ...row(), seq: "9007199254740" }).seq).toBe(9007199254740);
   });
 });

@@ -83,6 +83,9 @@ export interface ClaimOptions {
   maxPerStage?: Readonly<Record<string, number>>;
 }
 
+/** One change past a sequence number: a task as it is now, or a task deleted since. */
+export type TaskChange = { seq: number; task: TaskRow } | { seq: number; deleted: string };
+
 export interface TaskStore {
   createTask(input: NewTaskRow): Promise<TaskRow>;
   /** Makes the task unless one already holds `key`, which it then answers instead; two calls
@@ -95,7 +98,12 @@ export interface TaskStore {
   /** The latest task linked to a Jira issue, by its `jira` column, its intake source or a notch task's `jiraKey`. */
   findTaskByJiraKey(key: string): Promise<TaskRow | null>;
   updateTask(id: string, patch: Partial<TaskRow>): Promise<void>;
-  deleteTask(id: string): Promise<void>;
+  /** Deletes the task; its tombstone's sequence number comes back. */
+  deleteTask(id: string): Promise<number>;
+  /** Every task changed and every task deleted after `since`, oldest first; `sourceKind` keeps one source's. */
+  changesSince(since: number, sourceKind?: string | null): Promise<TaskChange[]>;
+  /** The highest sequence number any committed change holds; 0 before the first. */
+  lastSeq(): Promise<number>;
   findStuckTasks(running: ReadonlySet<TaskState>): Promise<TaskRow[]>;
   /** Ends every stage run still `running` as aborted, except the ones a restart re-attached to. */
   markRunningStageRunsAborted(except?: readonly string[]): Promise<void>;

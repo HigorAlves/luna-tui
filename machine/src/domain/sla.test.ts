@@ -7,7 +7,7 @@ import { computeSla, endOfDay, gateFactor, parseDuration, slaFlags } from "./sla
 const NOW = new Date("2026-10-28T12:00:00Z");
 const task = (over: Partial<TaskRow> = {}): TaskRow => ({
   id: "t1", title: "x", description: "", criteria: [], repoPath: null, source: null, route: "feature", branch: null, worktreePath: null,
-  state: "awaiting_approval", retries: { ...NO_RETRIES }, resumeTo: null, reason: null, queued: false, queuedAt: null, stateSince: null, idempotencyKey: null, requestHash: null,
+  state: "awaiting_approval", retries: { ...NO_RETRIES }, resumeTo: null, reason: null, queued: false, queuedAt: null, stateSince: null, idempotencyKey: null, requestHash: null, seq: "1",
   diffAdded: null, diffRemoved: null, testsPassed: null, testsTotal: null, jira: null,
   createdAt: new Date("2026-10-27T12:00:00Z"), updatedAt: NOW, ...over,
 });

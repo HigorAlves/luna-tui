@@ -39,6 +39,8 @@ export interface TaskRow {
   /** The `Idempotency-Key` the work order that made the task came with, and a hash of its body. */
   idempotencyKey: string | null;
   requestHash: string | null;
+  /** The task's place in the change sequence (`task_seq`), bigint as pg returns it. */
+  seq: string;
   createdAt: Date;
   updatedAt: Date;
 }
