@@ -5,6 +5,7 @@ The machine's HTTP API, read straight from `machine/src/adapters/http/app.ts`. S
 | Method | Path | Does |
 |---|---|---|
 | GET | `/health` | Liveness check; also the stage pool: `slots {max, active, draining}`. |
+| GET | `/packs` | Every pack in the registry (`contracts/src/packs.ts`), in `PackId` order: `{ id, agent, kind: "agent" \| "script", model, effort, writable, maxTurns, timeoutMs, states }`. `agent` is null and `kind` `script` for a pack that calls no model (`evidence`); `states` are the task states the pipeline runs it in (`reviewing_memory` runs inside `shipping`; `slack_triage` and `jira_intake` in none). |
 | POST | `/drain` | Take no new work: running stages finish, the queue waits. Answers with the pool. |
 | POST | `/resume` | Carry on: the queue is picked up again at once. |
 | PATCH | `/slots` | `{max}`: resize the pool at run time (at least 1). |

@@ -6,7 +6,8 @@ import type { Column, TaskState } from "./index.ts";
 import type { PrSnapshot } from "./github.ts";
 import type { SlackSnapshot } from "./slack.ts";
 import type { JiraLink, TaskSla } from "./jira.ts";
-import { type ArtifactKind, StageOutcome, type TaskRoute, TaskSource, TestCase } from "./stage.ts";
+import type { AgentRole, Pack } from "./packs.ts";
+import { type ArtifactKind, type PackId, StageOutcome, type TaskRoute, TaskSource, TestCase } from "./stage.ts";
 
 export const NewTaskInput = z.object({
   title: z.string().trim().min(1),
@@ -204,6 +205,20 @@ export interface TaskEvent {
   kind: string;
   payload: Record<string, unknown>;
   at: string;
+}
+
+/** `GET /packs`: one row per pack in the registry. `kind` is `script` for a pack that calls no model;
+ *  `states` are the task states the pipeline runs it in (none for the inboxes' packs). */
+export interface PackInfo {
+  id: PackId;
+  agent: AgentRole | null;
+  kind: "agent" | "script";
+  model: Pack["model"];
+  effort: Pack["effort"];
+  writable: boolean;
+  maxTurns: number;
+  timeoutMs: number;
+  states: TaskState[];
 }
 
 /** `GET /tasks/:id` */
