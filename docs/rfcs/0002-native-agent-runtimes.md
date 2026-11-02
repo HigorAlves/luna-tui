@@ -1,7 +1,7 @@
 # RFC 0002 — Native agent runtimes: Claude through its SDK, Codex through eve, Jev through TypeSafe's SDK
 
 - **Author:** Higor Alves
-- **Status:** Draft
+- **Status:** Accepted (2026-11-02)
 - **Created:** 2026-11-02
 - **Discussion:** (open a PR with this file)
 - **Related:** [RFC 0001](./0001-own-the-factory.md) (the factory this extends), [RFC 0003](./0003-upgradable-harness.md) (how it stays maintainable)
