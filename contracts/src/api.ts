@@ -14,6 +14,8 @@ export const NewTaskInput = z.object({
   criteria: z.array(z.string().trim().min(1)).optional(),
   repoPath: z.string().nullable().optional(),
   source: TaskSource.nullable().optional(),
+  /** Start the pipeline in the same call, as `POST /tasks/:id/start` would. */
+  start: z.boolean().optional(),
 });
 
 /** `POST /repos/setup`: have the setup pack propose a luna.yaml for the checkout at `repoPath`. */

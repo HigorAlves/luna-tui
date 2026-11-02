@@ -29,7 +29,26 @@ export class PgTaskStore implements TaskStore {
   constructor(private readonly db: DataSource) {}
 
   async createTask(input: NewTaskRow): Promise<TaskRow> {
-    return this.db.getRepository(TaskEntity).save({
+    return this.db.getRepository(TaskEntity).save(this.newRow(input));
+  }
+
+  async createTaskOnce(input: NewTaskRow, key: string, requestHash: string): Promise<{ task: TaskRow; created: boolean }> {
+    // The unique index decides between racing calls: the loser inserts nothing and reads the winner's row.
+    const inserted = await this.db
+      .getRepository(TaskEntity)
+      .createQueryBuilder()
+      .insert()
+      .values({ ...this.newRow(input), idempotencyKey: key, requestHash })
+      .orIgnore()
+      .returning("id")
+      .execute();
+    const created = inserted.raw.length > 0;
+    const task = await this.db.getRepository(TaskEntity).findOneByOrFail({ idempotencyKey: key });
+    return { task, created };
+  }
+
+  private newRow(input: NewTaskRow): Partial<TaskRow> {
+    return {
       title: input.title,
       description: input.description,
       criteria: input.criteria,
@@ -44,7 +63,7 @@ export class PgTaskStore implements TaskStore {
       reason: null,
       jira: input.jira ?? null,
       stateSince: new Date(),
-    });
+    };
   }
 
   listTasks(): Promise<TaskRow[]> {

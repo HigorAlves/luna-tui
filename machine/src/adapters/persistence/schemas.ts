@@ -38,10 +38,12 @@ export const TaskEntity = new EntitySchema<TaskRow>({
     testsTotal: { name: "tests_total", type: "integer", nullable: true },
     jira: { type: "jsonb", nullable: true },
     stateSince: { name: "state_since", type: "timestamptz", nullable: true },
+    idempotencyKey: { name: "idempotency_key", type: "text", nullable: true },
+    requestHash: { name: "request_hash", type: "text", nullable: true },
     createdAt: { name: "created_at", type: "timestamptz", createDate: true },
     updatedAt: { name: "updated_at", type: "timestamptz", updateDate: true },
   },
-  indices: [{ columns: ["queued"] }],
+  indices: [{ columns: ["queued"] }, { name: "IDX_tasks_idempotency_key", columns: ["idempotencyKey"], unique: true }],
 });
 
 export const StageRunEntity = new EntitySchema<StageRunRow & { task?: TaskRow }>({
