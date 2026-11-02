@@ -9,3 +9,12 @@
 | [contributing.md](./contributing.md) | Running the checks, opening a PR |
 
 For the board (the Rust TUI): [`board/README.md`](../board/README.md).
+
+## RFCs
+
+Design proposals, numbered in the order they were written. Each one says its status at the top.
+
+| RFC | What it proposes |
+|---|---|
+| [0001](./rfcs/0001-own-the-factory.md) | Run every stage through the Agent SDK from this repo, with no orc dependency |
+| [0002](./rfcs/0002-native-agent-runtimes.md) | Three native runtimes: Claude through its SDK, Codex through eve, Jev through TypeSafe's SDK |
