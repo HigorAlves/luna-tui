@@ -22,7 +22,7 @@ Every pack runs on the Claude Agent SDK today, and the pack names a Claude model
 ## Non-goals
 
 - Running Claude models through anything but the Claude Agent SDK. eve never gets an Anthropic model, not even through `eve/models/anthropic`.
-- API-key paths for agent models. Claude stays on the subscription token, Codex on the ChatGPT login.
+- Making API keys the default. Claude runs on the subscription token first, as today (`ANTHROPIC_API_KEY` stays the fallback `loadCredential()` already has). OpenAI models run on the Codex login as `codex:*`, and on an API key only when you pick an `openai:*` engine.
 - Deploying agents to Vercel. eve runs inside the stage container, locally.
 - Moving any pack's default off Claude. That is decided per pack from eval results ([RFC 0003](./0003-upgradable-harness.md)), not here.
 
@@ -35,7 +35,7 @@ Every pack runs on the Claude Agent SDK today, and the pack names a Claude model
 | Role | Who the agent is: body, description, skills. Runtime-neutral. | `factory/roles/<role>/` | `triage-planner` |
 | Pack | A job: role (or questions) + template + answer schema + access + limits + allowed engines. | `contracts/src/packs.ts` | `triage`, `issue_classify` |
 | Runtime | The harness that executes a run, on one vendor SDK. Exactly three. | `factory/src/runtimes/<runtime>/` | `claude`, `eve`, `jev` |
-| Engine | A named alias: runtime + a pinned model + effort. What packs, `luna.yaml` and the board refer to. | `contracts/src/engines.ts` | `claude:opus`, `codex:sol`, `jev` |
+| Engine | A named alias: runtime + a pinned model + effort + how it is paid. What packs, `luna.yaml` and the boards refer to. | `contracts/src/engines.ts` | `claude:opus`, `codex:sol`, `openai:sol`, `jev` |
 
 ### Where Claude is welded in today
 
@@ -103,6 +103,8 @@ export const ENGINES = {
   "claude:haiku":  { runtime: "claude", model: "anthropic/haiku-5.5",  effort: "low" },
   "codex:sol":     { runtime: "eve",    model: "openai/gpt-6-sol",     effort: "high" },
   "codex:luna":    { runtime: "eve",    model: "openai/gpt-6-luna",    effort: "low" },
+  "openai:sol":    { runtime: "eve",    model: "openai/gpt-6-sol",     effort: "high", auth: "api-key" },
+  "openai:luna":   { runtime: "eve",    model: "openai/gpt-6-luna",    effort: "low",  auth: "api-key" },
   "jev":           { runtime: "jev",    model: "typesafe/jev" },
 } as const satisfies Record<string, Engine>;
 
@@ -126,6 +128,8 @@ export interface Runtime {
 }
 ```
 
+`codex:*` and `openai:*` run the same models through eve: `codex:*` on the Codex login (`chatgpt()`), `openai:*` on `OPENAI_API_KEY` (`openai()`). They match Luna Notch's Codex and Codex · API choices.
+
 The Claude runtime maps `access` back to exactly today's `tools`/`allowedTools`; a golden test pins that mapping for every pack. The eve runtime maps it to eve's tools plus the guard.
 
 ```yaml
@@ -134,7 +138,7 @@ engines:
   triage: codex:sol        # must be in the pack's `allowed`; the setup gate flags it otherwise
 ```
 
-Precedence: task override (a board key, later) → `luna.yaml` → pack default.
+Precedence: task override (set per stage from either board, the TUI or Luna Notch) → `luna.yaml` → pack default.
 
 ### The four cases
 
@@ -170,7 +174,8 @@ export default {
 | Runtime | Credential | Reaches the container as | When missing |
 |---|---|---|---|
 | `claude` | `CLAUDE_CODE_OAUTH_TOKEN`, then `ANTHROPIC_API_KEY` | env, as today | stage stays a stub, as today |
-| `eve` | the ChatGPT login owned by the Codex CLI | `codex` in the image; a per-run copy of `~/.codex/auth.json` mounted writable | the pack's Claude default runs, or a stub for an eve-only pack |
+| `eve` (`codex:*`) | the ChatGPT login owned by the Codex CLI | `codex` in the image; a per-run copy of `~/.codex/auth.json` mounted writable | the pack's Claude default runs, or a stub for an eve-only pack |
+| `eve` (`openai:*`) | `OPENAI_API_KEY` (env, then `~/.config/hardness/openai-api-key`) | env | the engine is greyed out on both boards |
 | `jev` | `TYPESAFE_API_KEY` (env, then `~/.config/hardness/typesafe-api-key`) | env | classification is skipped; intake behaves as now |
 
 One runner image carries all three SDKs and the Codex CLI, because a delegated child runs in its parent's container.
@@ -204,8 +209,8 @@ Lands with phase 5, when the folders it names exist:
 
 - Claude models run only through the Claude Agent SDK (runtimes/claude). Never add
   @anthropic-ai/sdk, a fetch to api.anthropic.com, or eve/models/anthropic.
-- Every other agent model runs through eve (runtimes/eve) on chatgpt(), the local
-  Codex login. No OPENAI_API_KEY path.
+- Every other agent model runs through eve (runtimes/eve): codex:* engines on
+  chatgpt(), the local Codex login; openai:* engines on OPENAI_API_KEY, opt-in.
 - Jev runs only through @typesafe-ai/sdk (runtimes/jev). It is the only metered path:
   opt-in through TYPESAFE_API_KEY, and Luna works the same without it.
 - An SDK is imported only inside its own runtime folder.
@@ -227,13 +232,17 @@ eve ships `decide()` defaulting to Jev. Rejected: it routes through AI Gateway, 
 
 ## Open questions
 
-- Engine switchable per task from the board, or only per repo in `luna.yaml` for now?
 - Which pack does Codex take first after `slack_triage`: `triage`, or `reviewing` (read-only, easy to shadow)?
-- `codex:*` or `openai:*` as the engine prefix?
+
+### Settled (2026-11-02)
+
+- The engine is switchable per task and per stage from the board, in the TUI and in Luna Notch.
+- Two OpenAI prefixes: `codex:*` on the Codex login, `openai:*` on an API key.
+- A TypeSafe account is available for the spike.
 
 ## Risks & unknowns
 
-- **TypeSafe access.** A third-party guide reports new signups paused in late September 2026, and the SDK names above are from secondary sources.
+- **TypeSafe SDK surface.** An account is available; the SDK names above come from secondary sources, and the spike confirms them.
 - **eve is a release candidate** (`1.0.0-rc.1`). Pin it and keep it behind `Runtime`.
 - **No verified pre-tool hook in eve.** If the spike cannot block a call before it runs, eve's built-in `bash` and `write_file` are replaced with guarded tools; until then writable packs stay Claude-only.
 - **Codex auth in a container.** Refresh rewrites the auth file; concurrent stages must not share one copy.
