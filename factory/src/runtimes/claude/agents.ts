@@ -2,7 +2,7 @@
 // factory/roles/<role>/role.md; the effort, tools, limits and skills come from the pack, the model
 // from the engine it runs on.
 import type { AgentDefinition } from "@anthropic-ai/claude-agent-sdk";
-import { type AgentRole, type EngineId, type Pack, resolveEngine } from "@hardness/contracts";
+import { type AgentPack, type AgentRole, type EngineId, resolveEngine } from "@hardness/contracts";
 
 import { readRole } from "../../core/roles.ts";
 
@@ -28,7 +28,7 @@ const HELPER: Partial<Record<AgentRole, HelperSpec>> = {
 };
 
 /** The definition a pack runs as on `modelId`, keyed by its role name, plus one per helper it may dispatch. */
-export function agentDefinitions(pack: Pack, rolesDir: string, modelId: string): Record<string, AgentDefinition> {
+export function agentDefinitions(pack: AgentPack, rolesDir: string, modelId: string): Record<string, AgentDefinition> {
   if (!pack.agent) return {};
   const helpers = Object.fromEntries(
     pack.helpers.map((role) => {

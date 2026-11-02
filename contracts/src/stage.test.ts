@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  AGENT_PACKS,
   AgentRole,
   ArtifactKind,
   CloneInput,
@@ -176,12 +177,12 @@ describe("StageOutput", () => {
 });
 
 describe("PackId", () => {
-  it("has the eleven stage packs, each named after a task state, plus the Slack and Jira intake triages", () => {
+  it("has the eleven stage packs, each named after a task state, plus the Slack and Jira intake triages and the issue classifier", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake"].sort(),
+      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "issue_classify"].sort(),
     );
     for (const pack of PackId.options) {
-      if (pack === "slack_triage" || pack === "jira_intake") expect(TaskState.options).not.toContain(pack);
+      if (pack === "slack_triage" || pack === "jira_intake" || pack === "issue_classify") expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
     }
   });
@@ -263,7 +264,7 @@ describe("PR tasks", () => {
     expect(PACKS.reviewing.skills).toEqual(expect.arrayContaining(["inline-review", "review-contract", "caveman-review"]));
     expect(PACKS.addressing).toMatchObject({ agent: "code-fixer", helpers: ["reply-drafter"] });
     expect(PACKS.addressing.skills).toEqual(expect.arrayContaining(["receiving-code-review", "verification-before-completion"]));
-    for (const pack of Object.values(PACKS)) {
+    for (const pack of AGENT_PACKS) {
       expect(Array.isArray(pack.helpers), pack.id).toBe(true);
       // A role with helpers needs the Agent tool to dispatch them; one without must not carry it.
       expect(pack.access.agent, pack.id).toBe(pack.helpers.length > 0);

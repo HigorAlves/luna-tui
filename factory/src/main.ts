@@ -30,11 +30,15 @@ mkdirSync(OUT, { recursive: true });
 const input = readStageInput(IN, OUT);
 if (!input) process.exit(1);
 const pack = PACKS[input.pack];
-const template = readFileSync(join(FACTORY_ROOT, "prompts", pack.template), "utf8");
-const contextFile = join(WORK, "docs", "agents", "project-context.md");
-const projectContext = existsSync(contextFile) ? readFileSync(contextFile, "utf8") : null;
-const prompt = renderPrompt({ pack, input, template, projectContext });
-writeFileSync(join(OUT, "prompt.md"), prompt);
+// A decision pack has no prompt: its runtime sends the pack's questions and the input as data.
+let prompt = "";
+if (pack.kind !== "decision") {
+  const template = readFileSync(join(FACTORY_ROOT, "prompts", pack.template), "utf8");
+  const contextFile = join(WORK, "docs", "agents", "project-context.md");
+  const projectContext = existsSync(contextFile) ? readFileSync(contextFile, "utf8") : null;
+  prompt = renderPrompt({ pack, input, template, projectContext });
+  writeFileSync(join(OUT, "prompt.md"), prompt);
+}
 
 const luna = lunaTools({
   ledgerPath: join(OUT, "ledger.json"),
@@ -43,10 +47,10 @@ const luna = lunaTools({
   onStep: (label, n, of) => out(`· ${label}${of ? ` (${n}/${of})` : ""}`),
 });
 
-out(`luna factory · pack ${pack.id} as ${pack.agent ?? "script"} (attempt ${input.attempt})`);
+out(`luna factory · pack ${pack.id} as ${pack.kind === "decision" ? "a decision" : (pack.agent ?? "script")} (attempt ${input.attempt})`);
 
 // Script-only pack (evidence): no model. The outcome comes from the QA manifest e2e left.
-if (pack.agent === null) {
+if (pack.kind === "script") {
   const manifest = readJson(join(OUT, "files", "qa", "qa-manifest.json")) as { verdict?: string } | null;
   const verdict = manifest?.verdict ?? null;
   const good = verdict === "pass" || verdict === "skipped";

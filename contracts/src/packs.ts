@@ -8,6 +8,7 @@ import { z } from "zod";
 import { type Access, type LunaTool, NO_ACCESS, access } from "./access.ts";
 import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
+import { type QuestionSet, answerSchema } from "./questions.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
 import { Finding, LunaConfig, PackId, TestCase, VerifyResult } from "./stage.ts";
 
@@ -197,8 +198,24 @@ export const SlackTriageAnswer = z.object({
 });
 export type SlackTriageAnswer = z.infer<typeof SlackTriageAnswer>;
 
-export interface Pack {
+/** What every pack has, whatever runs it: the machine reads the limits, the runner the rest. */
+interface PackBase {
   id: PackId;
+  /** `agent`: a role works the stage from a prompt; `script`: no model; `decision`: typed questions to a decision model. */
+  kind: "agent" | "decision" | "script";
+  /** Whether the stage may edit the worktree and commit. */
+  writable: boolean;
+  maxTurns: number;
+  timeoutMs: number;
+  /** The engines the stage may run on; the machine picks one of `allowed`, else `default`. */
+  engines: { default: EngineId; allowed: EngineId[] };
+  /** The answer the stage must give; the runner turns it into the SDK's JSON schema. */
+  answer: z.ZodType;
+}
+
+/** A pack a role runs from a prompt, or a script-only pack (`agent: null`) that calls no model. */
+export interface AgentPack extends PackBase {
+  kind: "agent" | "script";
   /** The role the stage runs as; null for a script-only pack that calls no model. */
   agent: AgentRole | null;
   /** Roles the pack's agent may dispatch as subagents (the SDK's Agent tool); each gets its own body, model and read-only tools. */
@@ -207,19 +224,21 @@ export interface Pack {
   skills: string[];
   /** What the agent may touch; each runtime turns it into its own tool list. */
   access: Access;
-  /** Whether the stage may edit the worktree and commit. */
-  writable: boolean;
-  maxTurns: number;
-  timeoutMs: number;
-  /** The engines the stage may run on; the machine picks one of `allowed`, else `default`. */
-  engines: { default: EngineId; allowed: EngineId[] };
   /** How hard the role thinks: about the job, so it stays here whatever the engine. */
   effort: Effort;
-  /** The answer the stage must give; the runner turns it into the SDK's JSON schema. */
-  answer: z.ZodType;
   /** The prompt template under factory/prompts/. */
   template: string;
 }
+
+/** A pack that asks a decision model typed questions about its input: no role, tools or prompt. */
+export interface DecisionPack extends PackBase {
+  kind: "decision";
+  questions: QuestionSet;
+  /** Below this confidence the answers are not acted on, and the caller takes the agent path. */
+  minConfidence: number;
+}
+
+export type Pack = AgentPack | DecisionPack;
 
 // Every agent pack carries skills: an explicit tool list hides them otherwise, and the role's skills
 // (`luna-factory:<name>`) are only reachable through them. It also carries the luna `step`: every
@@ -231,9 +250,49 @@ const LEDGER_TOOLS: LunaTool[] = ["slice_init", "slice_set", "slice_list", "deci
 /** What the setup planner may run to learn a repo: version prints and listings, nothing that builds. */
 const PROBE_COMMANDS = ["which", "command -v", "find", "node", "npm", "pnpm", "yarn", "go", "cargo", "rustc", "python", "python3", "pip", "make", "docker", "git log", "git ls-files"];
 
-export const PACKS: Record<PackId, Pack> = {
+/** What issue_classify asks about an issue before intake turns it into a ticket. */
+const ISSUE_QUESTIONS: QuestionSet = {
+  kind: {
+    type: "choice",
+    instructions: "What kind of work does this issue ask for?",
+    criteria: {
+      bug: "Something that works, or should work, is broken",
+      feature: "New behaviour a user or the pipeline can see",
+      chore: "Upkeep with no new behaviour: a refactor, dependencies, docs, CI",
+      question: "It asks for an answer or a decision, not a change",
+    },
+  },
+  area: {
+    type: "choice",
+    instructions: "Which part of the repository would the change touch most?",
+    criteria: {
+      board: "The Rust TUI under board/: views, keys, rendering",
+      machine: "The Node service under machine/: tasks, stages, Postgres, the GitHub, Jira and Slack adapters",
+      factory: "The stage runner under factory/: roles, prompts, skills and runtimes",
+      contracts: "The shared types under contracts/: stage input and output, packs, engines",
+      site: "The website under site/",
+    },
+  },
+  ready: { type: "yesno", instructions: "Does the issue have testable acceptance criteria an agent could verify without asking anyone?" },
+  size: {
+    type: "score",
+    instructions: "How much code would the change touch?",
+    rubric: {
+      tiny: "A line or two: a typo, a constant, a copy change",
+      small: "One function or one file, with its test",
+      medium: "Several files in one package",
+      large: "Several packages, or a new subsystem",
+    },
+  },
+};
+
+/** The packs a decision model answers; every other pack is a role's or a script's. */
+type DecisionPackId = "issue_classify";
+
+export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<DecisionPackId, DecisionPack> = {
   setup: {
     id: "setup",
+    kind: "agent",
     agent: "setup-planner",
     helpers: [],
     skills: ["code-discovery"],
@@ -250,6 +309,7 @@ export const PACKS: Record<PackId, Pack> = {
   },
   triage: {
     id: "triage",
+    kind: "agent",
     agent: "triage-planner",
     helpers: [],
     skills: ["writing-plans", "code-discovery"],
@@ -264,6 +324,7 @@ export const PACKS: Record<PackId, Pack> = {
   },
   test_design: {
     id: "test_design",
+    kind: "agent",
     agent: "test-designer",
     helpers: [],
     skills: ["tdd"],
@@ -280,6 +341,7 @@ export const PACKS: Record<PackId, Pack> = {
   },
   implementing: {
     id: "implementing",
+    kind: "agent",
     agent: "implementer",
     helpers: [],
     skills: ["tdd", "verification-before-completion", "code-discovery"],
@@ -294,6 +356,7 @@ export const PACKS: Record<PackId, Pack> = {
   },
   verifying: {
     id: "verifying",
+    kind: "agent",
     agent: "verifier",
     helpers: [],
     skills: ["review-contract", "caveman-review"],
@@ -312,6 +375,7 @@ export const PACKS: Record<PackId, Pack> = {
   },
   e2e: {
     id: "e2e",
+    kind: "agent",
     agent: "qa-validator",
     helpers: [],
     skills: ["browser-qa", "playwright-qa", "agent-browser", "qa-targets"],
@@ -327,6 +391,7 @@ export const PACKS: Record<PackId, Pack> = {
   },
   evidence: {
     id: "evidence",
+    kind: "script",
     agent: null,
     helpers: [],
     skills: [],
@@ -341,6 +406,7 @@ export const PACKS: Record<PackId, Pack> = {
   },
   ci_watch: {
     id: "ci_watch",
+    kind: "agent",
     agent: "ci-investigator",
     helpers: [],
     skills: ["ci-routing", "review-contract"],
@@ -359,6 +425,7 @@ export const PACKS: Record<PackId, Pack> = {
   },
   reviewing_memory: {
     id: "reviewing_memory",
+    kind: "agent",
     agent: "retro-reviewer",
     helpers: [],
     skills: [],
@@ -373,6 +440,7 @@ export const PACKS: Record<PackId, Pack> = {
   },
   reviewing: {
     id: "reviewing",
+    kind: "agent",
     agent: "pr-reviewer",
     // The security pass runs as a subagent when the diff touches a sensitive path.
     helpers: ["security-reviewer"],
@@ -388,6 +456,7 @@ export const PACKS: Record<PackId, Pack> = {
   },
   addressing: {
     id: "addressing",
+    kind: "agent",
     // The code fixer applies what each thread asks for; the reply drafter writes the thread replies.
     agent: "code-fixer",
     helpers: ["reply-drafter"],
@@ -403,6 +472,7 @@ export const PACKS: Record<PackId, Pack> = {
   },
   jira_intake: {
     id: "jira_intake",
+    kind: "agent",
     // Reads one Jira issue before intake turns it into a ticket: ready, needs a brief, or not
     // for an agent; with the title, description and criteria the ticket should carry. It may
     // read the repo to check the ask against the code, nothing more.
@@ -420,6 +490,7 @@ export const PACKS: Record<PackId, Pack> = {
   },
   slack_triage: {
     id: "slack_triage",
+    kind: "agent",
     // The Slack inbox's batch triage: not a task stage. No tools at all, no worktree; the
     // batch is in the input and the answer is the whole job. Haiku, low effort, three turns.
     agent: "slack-triager",
@@ -434,7 +505,23 @@ export const PACKS: Record<PackId, Pack> = {
     answer: SlackTriageAnswer,
     template: "slack_triage.md",
   },
+  issue_classify: {
+    id: "issue_classify",
+    // Labels an issue for intake on Jev: one call, no worktree. Above minConfidence the labels
+    // apply and the ticket routes; below it jira_intake reads the issue as it does without Jev.
+    kind: "decision",
+    questions: ISSUE_QUESTIONS,
+    minConfidence: 0.7,
+    writable: false,
+    maxTurns: 1,
+    timeoutMs: 1 * MINUTE,
+    engines: only("jev"),
+    answer: answerSchema(ISSUE_QUESTIONS),
+  },
 };
+
+/** The packs a role or a script runs: every pack but the decisions. */
+export const AGENT_PACKS: AgentPack[] = Object.values(PACKS).filter((pack): pack is AgentPack => pack.kind !== "decision");
 
 /** Turn and time limits, and whether the pack edits the worktree: the machine's view of a pack. */
 export const PACK_LIMITS: Record<PackId, { maxTurns: number; timeoutMs: number; writable: boolean }> = Object.fromEntries(

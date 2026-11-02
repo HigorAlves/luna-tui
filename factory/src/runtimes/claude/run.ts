@@ -19,7 +19,7 @@ const env = process.env;
 export const claude: Runtime = { id: "claude", run };
 
 async function run({ pack, engine, input, prompt, paths, luna, dry, out }: RunContext): Promise<RunOutcome> {
-  if (pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
+  if (pack.kind !== "agent" || pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
   const options = {
     cwd: paths.work,
     agent: pack.agent,

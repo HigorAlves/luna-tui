@@ -4,7 +4,7 @@
 import { z } from "zod";
 import { describe, expect, it } from "vitest";
 
-import { NO_ACCESS, PACKS, PACK_LIMITS, PackId, StageOutput, answerJsonSchema } from "./index.ts";
+import { AGENT_PACKS, NO_ACCESS, PACKS, PACK_LIMITS, PackId, StageOutput, answerJsonSchema } from "./index.ts";
 
 /** A minimal instance of a JSON schema: every required property, the first enum value,
  *  one item per array (so item shapes such as findings get exercised). */
@@ -58,14 +58,22 @@ function envelope(answer: any): Record<string, unknown> {
   };
 }
 
-const agentPacks = Object.values(PACKS).filter((pack) => pack.agent != null);
+const agentPacks = AGENT_PACKS.filter((pack) => pack.agent != null);
+/** Every pack whose answer a model gives: the agent packs and the decision packs. */
+const answering = Object.values(PACKS).filter((pack) => pack.kind !== "script");
 
 describe("the pack registry", () => {
-  it("has one pack per PackId, each with a template and its engines, and the limits the machine reads", () => {
+  it("has one pack per PackId, each with its engines and the limits the machine reads, and a template unless it is a decision", () => {
     expect(Object.keys(PACKS).sort()).toEqual([...PackId.options].sort());
     for (const pack of Object.values(PACKS)) {
-      expect(pack.template).toMatch(/^[a-z0-9_]+\.md$/);
       expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: pack.maxTurns, timeoutMs: pack.timeoutMs, writable: pack.writable });
+      if (pack.kind === "decision") {
+        expect(pack.writable, pack.id).toBe(false);
+        expect(pack.minConfidence, pack.id).toBeGreaterThan(0);
+        continue;
+      }
+      expect(pack.kind, pack.id).toBe(pack.agent ? "agent" : "script");
+      expect(pack.template).toMatch(/^[a-z0-9_]+\.md$/);
       if (pack.agent) expect(pack.maxTurns).toBeGreaterThan(0);
       else expect(pack.access).toEqual(NO_ACCESS);
     }
@@ -79,7 +87,7 @@ describe("the pack registry", () => {
   });
 
   it("turns each answer schema into a JSON schema the SDK can take: an object with properties and no $schema", () => {
-    for (const pack of agentPacks) {
+    for (const pack of answering) {
       const schema = answerJsonSchema(pack);
       expect(schema.type).toBe("object");
       expect(schema.properties).toBeTypeOf("object");
@@ -89,7 +97,7 @@ describe("the pack registry", () => {
 });
 
 describe("factory contract", () => {
-  it.each(agentPacks.map((p) => [p.id, p] as const))("accepts a minimal %s answer, for every answer kind its schema allows", (_id, pack) => {
+  it.each(answering.map((p) => [p.id, p] as const))("accepts a minimal %s answer, for every answer kind its schema allows", (_id, pack) => {
     const schema = answerJsonSchema(pack) as any;
     const kinds: unknown[] = schema.properties?.kind?.enum ?? schema.properties?.kind?.anyOf?.[0]?.enum ?? [undefined];
     for (const kind of kinds) {
@@ -113,6 +121,6 @@ describe("factory contract", () => {
   });
 
   it("keeps the answer schemas zod objects the runner can also validate with", () => {
-    for (const pack of agentPacks) expect(pack.answer).toBeInstanceOf(z.ZodObject);
+    for (const pack of answering) expect(pack.answer).toBeInstanceOf(z.ZodObject);
   });
 });

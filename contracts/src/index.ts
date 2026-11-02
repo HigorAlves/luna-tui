@@ -7,6 +7,7 @@ export * from "./packs.ts";
 export * from "./models.ts";
 export * from "./engines.ts";
 export * from "./access.ts";
+export * from "./questions.ts";
 export * from "./github.ts";
 export * from "./slack.ts";
 export * from "./jira.ts";

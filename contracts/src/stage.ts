@@ -105,6 +105,8 @@ export const PackId = z.enum([
   "slack_triage",
   // Not a task stage either: reads a Jira issue before it becomes a ticket (read-only on the repo).
   "jira_intake",
+  // A decision before intake: labels an issue (kind, area, ready, size) on a decision model.
+  "issue_classify",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -340,6 +342,16 @@ export const JiraIntakeContext = z.object({
 });
 export type JiraIntakeContext = z.infer<typeof JiraIntakeContext>;
 
+/** What issue_classify reads: an issue as the notch or intake sends it. `source` says where it
+ *  came from (`jira:HAR-12`, a GitHub URL), for the record. */
+export const IssueContext = z.object({
+  title: z.string(),
+  description: z.string(),
+  labels: z.array(z.string()).optional(),
+  source: z.string().optional(),
+});
+export type IssueContext = z.infer<typeof IssueContext>;
+
 /** Schema 2 adds `context.testCases`; schema 3 renames its `test` field to `approach`. */
 export const StageInput = z.object({
   schema: z.union([z.literal(1), z.literal(2), z.literal(3)]),
@@ -399,6 +411,8 @@ export const StageInput = z.object({
     slack: SlackTriageContext.nullable().optional(),
     /** For the jira_intake pack: the issue to read before it becomes a ticket. */
     jira: JiraIntakeContext.nullable().optional(),
+    /** For the issue_classify pack: the issue to label. */
+    issue: IssueContext.nullable().optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),
