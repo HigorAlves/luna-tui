@@ -107,6 +107,8 @@ export const PackId = z.enum([
   "jira_intake",
   // A decision before intake: labels an issue (kind, area, ready, size) on a decision model.
   "issue_classify",
+  // Not a task stage: the replay evals' judge, grading another pack's answer to an eval case.
+  "eval_judge",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -359,6 +361,23 @@ export const IssueContext = z.object({
 });
 export type IssueContext = z.infer<typeof IssueContext>;
 
+/** What eval_judge reads: one eval case, what a good answer must contain, and the answer under
+ *  test. The JSON fields are text, as the evals runner serialised them (evals/run.ts). */
+export const EvalJudgeContext = z.object({
+  /** The pack whose answer is judged, and the case it answered. */
+  pack: PackId,
+  caseId: z.string(),
+  /** The case's rubric in words: what a good answer does. */
+  rubric: z.string(),
+  /** What the pack under test was given: its task and context, as JSON. */
+  input: z.string(),
+  /** The case's deterministic checks, as JSON; the runner has already applied them. */
+  checks: z.string(),
+  /** The pack's structured answer, as JSON. */
+  answer: z.string(),
+});
+export type EvalJudgeContext = z.infer<typeof EvalJudgeContext>;
+
 /** Schema 2 adds `context.testCases`; schema 3 renames its `test` field to `approach`. */
 export const StageInput = z.object({
   schema: z.union([z.literal(1), z.literal(2), z.literal(3)]),
@@ -420,6 +439,8 @@ export const StageInput = z.object({
     jira: JiraIntakeContext.nullable().optional(),
     /** For the issue_classify pack: the issue to label. */
     issue: IssueContext.nullable().optional(),
+    /** For the eval_judge pack: the case, its expectation and the answer to grade. */
+    eval: EvalJudgeContext.nullable().optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),

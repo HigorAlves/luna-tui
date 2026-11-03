@@ -87,6 +87,16 @@ const jiraText = (jira: StageInput["context"]["jira"]) => {
   };
 };
 
+/** The case, as eval_judge reads it: JSON text the evals runner wrote, kept as is. */
+const evalText = (judged: StageInput["context"]["eval"]) => ({
+  pack: judged?.pack ?? NONE,
+  case: judged?.caseId ?? NONE,
+  rubric: txt(judged?.rubric?.trim()),
+  input: txt(judged?.input),
+  checks: txt(judged?.checks),
+  answer: txt(judged?.answer),
+});
+
 /** How a runtime names the tools the rules mention. */
 export interface RuleToolNames {
   /** The rule against asking a question nobody would answer. */
@@ -144,6 +154,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
   const context = input.context.projectContext ?? projectContext ?? null;
   const slack = slackText(input.context.slack);
   const jira = jiraText(input.context.jira);
+  const judged = evalText(input.context.eval);
   const subs: Record<string, string> = {
     "{{task.title}}": txt(input.task.title),
     "{{task.description}}": txt(input.task.description),
@@ -189,6 +200,12 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,
     "{{context.jira.repoPath}}": jira.repoPath,
+    "{{context.eval.pack}}": judged.pack,
+    "{{context.eval.case}}": judged.case,
+    "{{context.eval.rubric}}": judged.rubric,
+    "{{context.eval.input}}": judged.input,
+    "{{context.eval.checks}}": judged.checks,
+    "{{context.eval.answer}}": judged.answer,
     "{{attempt}}": txt(input.attempt),
     "{{agent}}": agent,
     "{{skills}}": pack.skills.length > 0 ? pack.skills.join(", ") : NONE,

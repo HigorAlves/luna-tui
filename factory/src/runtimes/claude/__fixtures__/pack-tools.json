@@ -414,5 +414,9 @@
   "slack_triage": {
     "allowedTools": [],
     "tools": []
+  },
+  "eval_judge": {
+    "allowedTools": [],
+    "tools": []
   }
 }

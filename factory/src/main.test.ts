@@ -67,8 +67,8 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
   return { code, stdout, out, result };
 }
 
-// slack_triage has no worktree and reads no project context; its dry run is below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage").map((p) => p.id);
+// slack_triage and eval_judge have no worktree and read no project context; their dry runs are below.
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "eval_judge").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -104,6 +104,20 @@ describe("factory main (dry run)", () => {
     expect(options).toMatchObject({ agent: "slack-triager", agents: ["slack-triager"], model: "claude-haiku-5-5", effort: "low", maxTurns: 5, tools: [], allowedTools: [] });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
+  it("eval_judge: runs on opus over an empty /work with no tools, renders the case and leaves a valid result", () => {
+    const task = { id: "eval", title: "Eval judge", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const judged = { pack: "slack_triage", caseId: "incident", rubric: "P0 for the outage", input: "{}", checks: "[]", answer: '{"items":[]}' };
+    const { code, stdout, out, result } = run(stageInput("eval_judge", { task, plan: null, context: { projectContext: null, eval: judged } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("grade one answer to case incident");
+    expect(prompt).toContain("P0 for the outage");
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "eval-judge", model: "claude-opus-5-5", tools: [], allowedTools: [] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
   });
 
   it("jira_intake: runs over the repo checkout read-only with Read, Glob and Grep, renders the issue and leaves a valid result", () => {

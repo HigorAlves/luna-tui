@@ -114,13 +114,13 @@ describe("buildStageInput", () => {
     }
   });
 
-  it("has no plan before one is approved, and covers all eleven stage packs plus slack_triage, jira_intake and issue_classify", () => {
+  it("has no plan before one is approved, and covers all eleven stage packs plus slack_triage, jira_intake, issue_classify and eval_judge", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["addressing", "ci_watch", "e2e", "evidence", "implementing", "issue_classify", "jira_intake", "reviewing", "reviewing_memory", "setup", "slack_triage", "test_design", "triage", "verifying"],
+      ["addressing", "ci_watch", "e2e", "eval_judge", "evidence", "implementing", "issue_classify", "jira_intake", "reviewing", "reviewing_memory", "setup", "slack_triage", "test_design", "triage", "verifying"],
     );
-    expect(Object.keys(PACK_LIMITS)).toHaveLength(14);
+    expect(Object.keys(PACK_LIMITS)).toHaveLength(15);
   });
 
   it("builds slack_triage's input around a synthetic task: the batch in context.slack, no plan, no branch, the pack's limits", () => {
@@ -193,7 +193,7 @@ describe("buildStageInput", () => {
 
   it("hands implementing and verifying the repo's checks from luna.yaml, and no other pack", () => {
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }];
-    const build = (stage: Exclude<PackId, "slack_triage" | "jira_intake" | "issue_classify">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
+    const build = (stage: Exclude<PackId, "slack_triage" | "jira_intake" | "issue_classify" | "eval_judge">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
     expect(build("implementing").context.checks).toEqual(checks);
     expect(build("verifying").context.checks).toEqual(checks);
     expect(build("triage").context.checks).toBeUndefined();
