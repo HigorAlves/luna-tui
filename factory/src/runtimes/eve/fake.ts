@@ -18,7 +18,8 @@ export function scriptedModel() {
       const results = toolResults.filter((r) => r.name !== "eve__reply");
       const step = script[Math.min(results.length, script.length - 1)]!;
       if ("call" in step) {
-        return { ...(step.say && { text: step.say }), toolCalls: [step.call === "bash" ? { name: "bash", input: { command: step.command } } : { name: step.tool, input: step.args }] };
+        const call = step.call === "bash" ? { name: "bash", input: { command: step.command } } : step.call === "delegate" ? { name: "delegate", input: { helper: step.helper, message: step.message } } : { name: step.tool, input: step.args };
+        return { ...(step.say && { text: step.say }), toolCalls: [call] };
       }
       // A model that never answers within any stage's time; the server is stopped long before.
       if ("hang" in step) await new Promise((resolve) => setTimeout(resolve, 600_000));

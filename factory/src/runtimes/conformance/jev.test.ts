@@ -21,7 +21,7 @@ const valid = {
   size: { type: "score", score: 1.4, confidence: 0.75, legend: {}, probabilities: {} },
 };
 
-conformance("jev", "jev", (script) => jevRuntime(() => typesafeTransport(() => scriptedClient(script))), { resetsAt: false, schemaIssue: true, tools: false, text: false }, {
+conformance("jev", "jev", (script) => jevRuntime(() => typesafeTransport(() => scriptedClient(script))), { resetsAt: false, schemaIssue: true, tools: false, text: false, delegate: false }, {
   table: { pack, valid, expected: fromJev(pack.questions, valid), off: { ...valid, kind: { type: "choice", choice: "epic", confidence: 0.9, probabilities: {} } } },
 });
 
@@ -32,7 +32,7 @@ const decided = {
   size: { type: "score", score: 1.4, probabilities: { 1: 0.6, 2: 0.4 } },
 };
 
-conformance("jev (gateway)", "jev", (script) => jevRuntime(() => gatewayTransport(scriptedDecide(script))), { resetsAt: false, schemaIssue: true, tools: false, text: false }, {
+conformance("jev (gateway)", "jev", (script) => jevRuntime(() => gatewayTransport(scriptedDecide(script))), { resetsAt: false, schemaIssue: true, tools: false, text: false, delegate: false }, {
   table: { pack, valid: decided, expected: fromDecide(pack.questions, decided), off: { ...decided, kind: { type: "choice", choice: "epic", probabilities: { epic: 0.9 } } } },
 });
 
