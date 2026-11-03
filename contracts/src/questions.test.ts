@@ -2,7 +2,7 @@
 // issue_classify asks what intake needs to label and route an issue.
 import { describe, expect, it } from "vitest";
 
-import { ENGINES, PACKS, PACK_LIMITS, StageInput, answerSchema } from "./index.ts";
+import { ENGINES, PACKS, PACK_LIMITS, StageInput, answerSchema, classificationLine, classificationOf } from "./index.ts";
 
 describe("the answer schema of a question set", () => {
   const schema = answerSchema({
@@ -57,5 +57,21 @@ describe("the issue_classify pack", () => {
     expect(StageInput.parse({ ...input, context: { projectContext: null, issue } }).context.issue).toEqual(issue);
     expect(StageInput.parse({ ...input, context: { projectContext: null, issue: { title: "t", description: "" } } }).context.issue).toEqual({ title: "t", description: "" });
     expect(StageInput.safeParse({ ...input, context: { projectContext: null, issue: { title: "t" } } }).success).toBe(false);
+  });
+});
+
+describe("an issue's classification", () => {
+  const answer = { kind: { choice: "question", confidence: 0.97 }, area: { choice: "machine", confidence: 0.9 }, ready: { value: false, p: 0.15 }, size: { score: 0.2, confidence: 0.8 } };
+
+  it("keeps each pick and the least sure answer's confidence, a yes/no's being its distance from a coin toss", () => {
+    const at = new Date("2026-11-03T12:00:00Z");
+    expect(classificationOf(answer, "typesafe-ai/jev", at)).toEqual({ kind: "question", kindConfidence: 0.97, area: "machine", ready: false, size: 0.2, confidence: 0.8, at: "2026-11-03T12:00:00.000Z", model: "typesafe-ai/jev" });
+    expect(classificationOf({ ...answer, ready: { value: true, p: 0.6 } }, "m", at).confidence).toBeCloseTo(0.6, 10);
+  });
+
+  it("reads in one line, the size by its rubric level", () => {
+    const c = classificationOf(answer, "typesafe-ai/jev", new Date(0));
+    expect(classificationLine(c)).toBe("question · machine · not ready · size tiny · lowest confidence 0.80 (typesafe-ai/jev)");
+    expect(classificationLine({ ...c, ready: true, size: 2.6 })).toMatch(/· ready · size large ·/);
   });
 });

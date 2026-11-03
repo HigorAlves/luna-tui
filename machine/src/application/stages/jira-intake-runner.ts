@@ -8,7 +8,7 @@
 // ticket it makes (or does not) is the record, and the line logged says the rest. The run folder
 // (`<stateDir>/jira-intake/<key>-<time>`: the issue's text, the transcript) goes once the run
 // answered; a failed run's stays, so the transcript says why, until the retention sweep.
-import { JiraIntakeAnswer, type JiraIntakeContext, PACKS, resolveEngine } from "@hardness/contracts";
+import { JiraIntakeAnswer, type JiraIntakeContext, PACKS, type TaskClassification, resolveEngine } from "@hardness/contracts";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -42,15 +42,16 @@ export interface JiraIntakeDeps {
 
 /** The port JiraIntake triages through; null (agents off) imports every issue as it is. */
 export interface JiraTriager {
-  /** The pack's verdict on one issue, or null when the run failed (logged). */
-  triage(issue: JiraIssue, repoPath: string | null): Promise<JiraIntakeAnswer | null>;
+  /** The pack's verdict on one issue, or null when the run failed (logged). `classification`,
+   *  issue_classify's first read when intake ran it, rides in the pack's context as a hint. */
+  triage(issue: JiraIssue, repoPath: string | null, classification?: TaskClassification | null): Promise<JiraIntakeAnswer | null>;
 }
 
 /** Where the runs live under the state dir; each run is a folder named by the issue and its start time. */
 export const JIRA_INTAKE_DIR = "jira-intake";
 
 /** The pack's input block for one issue. */
-export function jiraContext(issue: JiraIssue, repoPath: string | null): JiraIntakeContext {
+export function jiraContext(issue: JiraIssue, repoPath: string | null, classification: TaskClassification | null = null): JiraIntakeContext {
   return {
     key: issue.key,
     url: issue.url,
@@ -62,6 +63,7 @@ export function jiraContext(issue: JiraIssue, repoPath: string | null): JiraInta
     dueAt: issue.dueAt,
     comments: issue.comments.map((c) => `${c.author}: ${c.text}`),
     repoPath,
+    ...(classification ? { classification } : {}),
   };
 }
 
@@ -74,7 +76,7 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
   const checkout = deps.checkout ?? ((repoPath: string) => ensureCleanCheckout(repoPath, intakeCheckoutPath(repoPath, deps.worktreesDir)));
 
   return {
-    async triage(issue, repoPath) {
+    async triage(issue, repoPath, classification = null) {
       const startedAt = now();
       const stamp = `${issue.key}-${startedAt.toISOString().replace(/[:.]/g, "-")}`;
       const runDir = join(deps.stateDir, JIRA_INTAKE_DIR, stamp);
@@ -83,7 +85,7 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
       const { engine } = await pickEngine(deps.credentials, pack, null, (await policies.for(repoPath)).engines);
       // What the run is recorded as when the result names no model: the pinned ID it was started on.
       const model = resolveEngine(engine).modelId;
-      const input = buildJiraIntakeInput(jiraContext(issue, repoPath), engine);
+      const input = buildJiraIntakeInput(jiraContext(issue, repoPath, classification), engine);
       let answer: JiraIntakeAnswer | null = null;
       let error: string | null = null;
       let usage: { model: string; turns: number; costUsd: number | null } = { model, turns: 0, costUsd: null };
