@@ -14,6 +14,7 @@ import { AddTaskJira1793800000000 } from "./1793800000000-AddTaskJira.ts";
 import { AddTaskStateSince1793900000000 } from "./1793900000000-AddTaskStateSince.ts";
 import { AddTaskIdempotencyKey1794000000000 } from "./1794000000000-AddTaskIdempotencyKey.ts";
 import { AddTaskSeq1794100000000 } from "./1794100000000-AddTaskSeq.ts";
+import { AddTaskStages1794200000000 } from "./1794200000000-AddTaskStages.ts";
 
 export const MIGRATIONS: Function[] = [
   Init1792712166445,
@@ -31,4 +32,5 @@ export const MIGRATIONS: Function[] = [
   AddTaskStateSince1793900000000,
   AddTaskIdempotencyKey1794000000000,
   AddTaskSeq1794100000000,
+  AddTaskStages1794200000000,
 ];

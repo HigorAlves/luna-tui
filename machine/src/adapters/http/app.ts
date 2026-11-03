@@ -10,6 +10,7 @@ import {
   type PullRequest,
   EditCasesInput,
   EditPlanInput,
+  EditStagesInput,
   JiraCreateInput,
   JiraLinkInput,
   type TaskDiff,
@@ -41,7 +42,8 @@ import type { TaskRow } from "../../domain/task.ts";
 import { packInfo } from "../../domain/packs.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, type Pipeline, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, type Pipeline, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
 import { CloneError, NoPullError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
@@ -119,6 +121,12 @@ function prParams(c: Context): { owner: string; name: string; number: number } {
   return { owner, name, number };
 }
 
+/** A task's `stages` name only packs that run in a task, each on an engine it allows. */
+function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
+  const problem = taskStagesProblem(stages);
+  if (problem) throw new BadRequest(`stages.${problem}`);
+}
+
 export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll }: AppDeps): Hono {
   const app = new Hono();
   /** A task row as the board reads it, clocks included. */
@@ -131,6 +139,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof IdempotencyConflictError) return fail(c, 409, "idempotency_conflict", error.message);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
     if (error instanceof NoCasesToEditError) return fail(c, 409, "no_cases", error.message);
+    if (error instanceof StageStartedError) return fail(c, 409, "stage_started", error.message);
     if (error instanceof NoWorktreeError) return fail(c, 404, "no_worktree", error.message);
     if (error instanceof NoFileError) return fail(c, 404, "no_file", error.message);
     if (error instanceof NotReadyError) return fail(c, 409, "not_ready", error.message);
@@ -206,6 +215,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   /** A work order: with an `Idempotency-Key`, a retry answers the task already made (200); `start` starts it too. */
   app.post("/tasks", async (c) => {
     const input = await body(c, NewTaskInput);
+    checkStages(input.stages ?? {});
     const key = c.req.header("idempotency-key");
     if (key !== undefined && (key.length === 0 || key.length > IDEMPOTENCY_KEY_MAX)) {
       throw new BadRequest(`Idempotency-Key must be 1 to ${IDEMPOTENCY_KEY_MAX} characters`);
@@ -258,6 +268,16 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     const id = taskId(c);
     const { cases } = await body(c, EditCasesInput);
     const task = await serialize(await pipeline.editCases(id, cases));
+    bus.publish({ type: "task.updated", task, seq: task.seq });
+    return c.json(task);
+  });
+
+  /** Change the engine a pack runs on for this task, until that pack's stage starts. */
+  app.patch("/tasks/:id/stages", async (c) => {
+    const id = taskId(c);
+    const { stages } = await body(c, EditStagesInput);
+    checkStages(stages);
+    const task = await serialize(await pipeline.setStages(id, stages));
     bus.publish({ type: "task.updated", task, seq: task.seq });
     return c.json(task);
   });

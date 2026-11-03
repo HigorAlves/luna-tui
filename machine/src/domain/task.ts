@@ -1,6 +1,6 @@
 // Plain domain types for a task and everything attached to it. No TypeORM here — see
 // ../adapters/persistence/schemas.ts for the persistence mapping of these same shapes.
-import type { ArtifactKind, JiraLink, StageRunCase, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
+import type { ArtifactKind, JiraLink, StageEngines, StageRunCase, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
 
 import type { Retries } from "./transition.ts";
 
@@ -39,6 +39,8 @@ export interface TaskRow {
   /** The `Idempotency-Key` the work order that made the task came with, and a hash of its body. */
   idempotencyKey: string | null;
   requestHash: string | null;
+  /** The task's own engine per pack, over luna.yaml's and the pack's default; a pack's entry is fixed once its stage starts. */
+  stages: StageEngines;
   /** The task's place in the change sequence (`task_seq`), bigint as pg returns it. */
   seq: string;
   createdAt: Date;
@@ -133,6 +135,14 @@ export class IdempotencyConflictError extends Error {
   constructor(key: string) {
     super(`Idempotency-Key "${key}" already made a task from another body`);
     this.name = "IdempotencyConflictError";
+  }
+}
+
+/** A task's engine for a pack cannot change once that pack's stage has run or is running. */
+export class StageStartedError extends Error {
+  constructor(id: string, pack: string) {
+    super(`task ${id} has already run ${pack}; its engine is fixed`);
+    this.name = "StageStartedError";
   }
 }
 

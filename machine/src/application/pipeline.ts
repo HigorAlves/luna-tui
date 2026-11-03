@@ -2,14 +2,15 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type BudgetAlert, type Finding, type JiraLink, RUNNING, type StageRunCase, type TaskRoute, type TaskSource, type TaskState, type TestCase } from "@hardness/contracts";
+import { type BudgetAlert, type EngineId, type Finding, type JiraLink, type PackId, RUNNING, type StageEngines, type StageRunCase, type TaskRoute, type TaskSource, type TaskState, type TestCase } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+import { packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
@@ -27,7 +28,7 @@ import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+export { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -57,6 +58,8 @@ export interface NewTask {
   worktreePath?: string | null;
   /** The Jira issue to link from the start; absent, a key in the title or description links by itself. */
   jira?: JiraLink | null;
+  /** The task's own engine per pack (the work order's `stages`); checked against the packs by the caller. */
+  stages?: StageEngines;
 }
 
 export interface PipelineOptions {
@@ -281,6 +284,7 @@ export class Pipeline {
       ...(input.branch !== undefined ? { branch: input.branch } : {}),
       ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
       jira: input.jira ?? this.detectJira(input.title, input.description ?? "", source),
+      ...(input.stages ? { stages: input.stages } : {}),
     };
   }
 
@@ -458,6 +462,27 @@ export class Pipeline {
       await tx.updateApprovalRequested(open, { ...open.requested, cases });
     });
     await this.log(id, "cases.edited", { count: cases.length });
+    return this.get(id);
+  }
+
+  /** Sets the task's engine for each pack named (null clears it, back to luna.yaml's or the pack's
+   *  default). A pack whose stage has run or is running on the task keeps its engine: the whole
+   *  change is refused with `StageStartedError`. The caller checks the engines against the packs. */
+  async setStages(id: string, change: Partial<Record<PackId, EngineId | null>>): Promise<TaskRow> {
+    await this.store.withTaskLock(id, async (task, tx) => {
+      const ran = new Set<string>((await this.store.listStageRuns(id)).map((run) => run.stage));
+      const packs = Object.keys(change) as PackId[];
+      const started = packs.find((pack) => packStates(pack).some((state) => ran.has(state)));
+      if (started) throw new StageStartedError(id, started);
+      const stages: StageEngines = { ...task.stages };
+      for (const pack of packs) {
+        const engine = change[pack];
+        if (engine === null) delete stages[pack];
+        else if (engine !== undefined) stages[pack] = engine;
+      }
+      await tx.updateTask(id, { stages });
+    });
+    await this.log(id, "task.stages", { stages: change });
     return this.get(id);
   }
 

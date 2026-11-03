@@ -7,7 +7,8 @@ import type { PrSnapshot } from "./github.ts";
 import type { SlackSnapshot } from "./slack.ts";
 import type { JiraLink, TaskSla } from "./jira.ts";
 import type { AgentPack, AgentRole, Pack } from "./packs.ts";
-import { type ArtifactKind, type PackId, StageOutcome, type TaskRoute, TaskSource, TestCase } from "./stage.ts";
+import { EngineId } from "./engines.ts";
+import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskRoute, TaskSource, TestCase } from "./stage.ts";
 
 export const NewTaskInput = z.object({
   title: z.string().trim().min(1),
@@ -17,7 +18,13 @@ export const NewTaskInput = z.object({
   source: TaskSource.nullable().optional(),
   /** Start the pipeline in the same call, as `POST /tasks/:id/start` would. */
   start: z.boolean().optional(),
+  /** The engine per pack for this task, over the repo's luna.yaml and the pack's default. */
+  stages: StageEngines.optional(),
 });
+
+/** `PATCH /tasks/:id/stages`: the engine per pack to set; null goes back to luna.yaml's, else the pack's default. */
+export const EditStagesInput = z.object({ stages: z.partialRecord(PackId, EngineId.nullable()) });
+export type EditStagesInput = z.infer<typeof EditStagesInput>;
 
 /** `POST /repos/setup`: have the setup pack propose a luna.yaml for the checkout at `repoPath`. */
 export const SetupRepoInput = z.object({ repoPath: z.string().trim().min(1) });
@@ -151,6 +158,8 @@ export interface Task {
   jira: JiraLink | null;
   /** The ticket's SLA clocks, computed at snapshot time; null when none applies. */
   sla: TaskSla | null;
+  /** The task's own engine per pack (`PATCH /tasks/:id/stages`); a pack left out runs on luna.yaml's, else its default. */
+  stages: StageEngines;
   /** The task's place in the change sequence: every change to it takes a higher one (`GET /events?since=`). */
   seq: number;
   createdAt: string;
