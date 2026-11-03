@@ -87,16 +87,36 @@ const jiraText = (jira: StageInput["context"]["jira"]) => {
   };
 };
 
-/** The rules every stage runs under, appended to the system prompt. This is the one place they
+/** How a runtime names the tools the rules mention. */
+export interface RuleToolNames {
+  /** The rule against asking a question nobody would answer. */
+  ask: string;
+  /** What to read and search files with instead of the shell. */
+  read: string;
+  /** The luna progress tool. */
+  step: string;
+  /** What refuses a write outside the roots. */
+  guard: string;
+}
+
+export const CLAUDE_TOOL_NAMES: RuleToolNames = { ask: "Never call AskUserQuestion", read: "Read/Glob/Grep", step: "mcp__luna__step", guard: "a hook" };
+export const EVE_TOOL_NAMES: RuleToolNames = { ask: "Never ask a question", read: "read_file, glob and grep", step: "step", guard: "a guard" };
+
+/** The rules every stage runs under, in the runtime's tool names; the Claude runtime appends them
+ *  to the system prompt, eve puts them in the agent's instructions. This is the one place they
  *  are stated: the templates and the role bodies add only what is specific to their stage. */
-export const FACTORY_RULES = [
-  "You are running in factory mode (LUNA_FACTORY=1): no person is present. The machine wrote /in/stage.json and reads your structured answer as the stage result; it reads nothing else you write.",
-  "Never call AskUserQuestion: nobody would answer it. A question you cannot settle from the stage input ends the stage, in the shape this stage's answer allows (your prompt names it).",
-  "Never push, never open or edit pull requests, never post reviews or write to a tracker: the machine does those after a person approves. A stage whose answer has requested[] puts the outward action it needs there.",
-  "Never write outside /work and /out, and never touch /work/.git directly: everything else is mounted read-only and a hook denies the write.",
-  "Bash runs only the commands on this stage's allow-list, and a chained command (&&, ;, |) runs only when every part is allowed: one simple command per call, no cd, and Read/Glob/Grep for files. A denied command is not a finding; use an allowed one.",
-  "Report progress with the mcp__luna__step tool when it is available; it is a label for the board, not a gate.",
-].join("\n");
+export function factoryRules(names: RuleToolNames): string {
+  return [
+    "You are running in factory mode (LUNA_FACTORY=1): no person is present. The machine wrote /in/stage.json and reads your structured answer as the stage result; it reads nothing else you write.",
+    `${names.ask}: nobody would answer it. A question you cannot settle from the stage input ends the stage, in the shape this stage's answer allows (your prompt names it).`,
+    "Never push, never open or edit pull requests, never post reviews or write to a tracker: the machine does those after a person approves. A stage whose answer has requested[] puts the outward action it needs there.",
+    `Never write outside /work and /out, and never touch /work/.git directly: everything else is mounted read-only and ${names.guard} denies the write.`,
+    `Bash runs only the commands on this stage's allow-list, and a chained command (&&, ;, |) runs only when every part is allowed: one simple command per call, no cd, and ${names.read} for files. A denied command is not a finding; use an allowed one.`,
+    `Report progress with the ${names.step} tool when it is available; it is a label for the board, not a gate.`,
+  ].join("\n");
+}
+
+export const FACTORY_RULES = factoryRules(CLAUDE_TOOL_NAMES);
 
 /** How this stage ends when it cannot settle something: the pack's own answer shape, read from
  *  its schema, so the header never promises a `kind: "questions"` a pack cannot give. */

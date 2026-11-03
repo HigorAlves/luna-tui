@@ -19,6 +19,12 @@ export interface GuardContext {
   /** Where the worktree and the run's output folder are (defaults /work and /out; a host run moves them). */
   workRoot?: string;
   outRoot?: string;
+  /** The command prefixes the shell may run (the pack's access), for a runtime whose SDK does not
+   *  enforce them itself; absent means any command the rules let through. */
+  commands?: string[];
+  /** Paths no tool may read or write and no command may name: the Codex home, whose token the
+   *  model's shell could otherwise read as the same user. */
+  deniedRoots?: string[];
 }
 
 const WORK = "/work";
@@ -425,14 +431,57 @@ function field(input: unknown, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+/** A path's segments, resolved against the worktree: `$HOME/.codex` and `/tmp/x/../.codex` both
+ *  name a `.codex` segment. */
+const segments = (path: string, workRoot: string): string[] => posix.normalize(path.startsWith("/") ? path : posix.join(workRoot, path)).split("/");
+
+/** The reason a path or a command token reaches under a denied root, or null. */
+function deniedReason(path: string, policy: GuardContext): string | null {
+  const work = policy.workRoot ?? WORK;
+  for (const root of policy.deniedRoots ?? []) {
+    const resolved = posix.normalize(path.startsWith("/") ? path : posix.join(work, path));
+    if (isUnder(resolved, root) || segments(path, work).includes(posix.basename(root))) {
+      return `${root} is off limits in a stage: it holds the model's credentials`;
+    }
+  }
+  return null;
+}
+
+/** Every simple command's tokens, quotes removed. */
+const simpleCommands = (command: string): SimpleCommand[] => parseCommand(command).flat();
+
+/** The reason a command names a path under a denied root, or null. */
+function guardDeniedRoots(command: string, policy: GuardContext): string | null {
+  if (!policy.deniedRoots?.length) return null;
+  for (const token of simpleCommands(command).flat()) {
+    const reason = deniedReason(token.replace(/^\d*[<>]+&?/, ""), policy);
+    if (reason !== null) return reason;
+  }
+  return null;
+}
+
+/** The reason a command, or any part of a chain, starts with no listed prefix, or null. */
+function guardAllowList(command: string, policy: GuardContext): string | null {
+  if (policy.commands === undefined) return null;
+  const prefixes = policy.commands.map((p) => p.split(/\s+/));
+  for (const tokens of simpleCommands(command)) {
+    if (!prefixes.some((p) => p.every((word, i) => tokens[i] === word))) {
+      return `\`${tokens.join(" ")}\` is not on this stage's command allow-list (${policy.commands.join(", ")}): run one listed command per call`;
+    }
+  }
+  return null;
+}
+
 function decide(call: GuardedCall, policy: GuardContext): string | null {
   if (call.tool === "bash") {
     const command = field(call.input, "command");
-    return command === undefined ? "malformed tool input: Bash needs a string command" : guardBash(command, policy);
+    if (command === undefined) return "malformed tool input: Bash needs a string command";
+    return guardDeniedRoots(command, policy) ?? guardBash(command, policy) ?? guardAllowList(command, policy);
   }
-  if (call.tool === "write") {
+  if (call.tool === "write" || call.tool === "read") {
     const path = field(call.input, "path");
-    return path === undefined ? "malformed tool input: a write needs a string file_path" : guardWrite(path, policy);
+    if (path === undefined) return `malformed tool input: a ${call.tool} needs a string file_path`;
+    return deniedReason(path, policy) ?? (call.tool === "write" ? guardWrite(path, policy) : null);
   }
   return null;
 }
