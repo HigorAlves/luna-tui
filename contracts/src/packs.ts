@@ -5,7 +5,7 @@
 // may give is one the machine ingests.
 import { z } from "zod";
 
-import { type Access, type LunaTool, NO_ACCESS, access } from "./access.ts";
+import { type Access, type LunaTool, NO_ACCESS, access, readOnly } from "./access.ts";
 import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
 import { type QuestionSet, answerSchema } from "./questions.ts";
@@ -31,7 +31,7 @@ export const AgentRole = z.enum([
   "jira-triager",
   // The replay evals' judge: grades another pack's answer against a case's rubric; no tools.
   "eval-judge",
-  // Helpers a PR task's role dispatches through the Agent tool; never a pack's own role.
+  // Helpers a pack's role hands work to (packs' `helpers`); never a pack's own role.
   "security-reviewer",
   "reply-drafter",
   "code-fixer",
@@ -216,6 +216,22 @@ export type EvalJudgeAnswer = z.infer<typeof EvalJudgeAnswer>;
 export const ChatTriageAnswer = SlackTriageAnswer;
 export type ChatTriageAnswer = SlackTriageAnswer;
 
+/** A role a pack's agent may hand work to, and the engine it runs on. On the agent's own runtime
+ *  it is that runtime's subagent (Claude's Agent tool); otherwise the agent calls `delegate`
+ *  (factory/src/core/delegate.ts), which runs it as a child of the stage: `helperPack`. */
+export interface Helper {
+  role: AgentRole;
+  engine: EngineId;
+}
+
+/** What a helper run through `delegate` answers: its reply to the agent that asked, and findings
+ *  per the review contract when it found problems in code. */
+export const HelperAnswer = z.object({ answer: z.string(), findings: z.array(Finding).optional() });
+export type HelperAnswer = z.infer<typeof HelperAnswer>;
+
+/** What a delegated helper's run as a whole may spend at most; the parent's remaining turns and time cap it further. */
+export const HELPER_LIMITS = { maxTurns: 25, timeoutMs: 10 * MINUTE };
+
 /** What every pack has, whatever runs it: the machine reads the limits, the runner the rest. */
 interface PackBase {
   id: PackId;
@@ -238,8 +254,8 @@ export interface AgentPack extends PackBase {
   kind: "agent" | "script";
   /** The role the stage runs as; null for a script-only pack that calls no model. */
   agent: AgentRole | null;
-  /** Roles the pack's agent may dispatch as subagents (the SDK's Agent tool); each gets its own body, model and read-only tools. */
-  helpers: AgentRole[];
+  /** Roles the pack's agent may hand work to, each on its own engine and read-only. */
+  helpers: Helper[];
   /** Skills the role may invoke, by the name the plugin folder gives them. */
   skills: string[];
   /** What the agent may touch; each runtime turns it into its own tool list. */
@@ -465,7 +481,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     kind: "agent",
     agent: "pr-reviewer",
     // The security pass runs as a subagent when the diff touches a sensitive path.
-    helpers: ["security-reviewer"],
+    helpers: [{ role: "security-reviewer", engine: "claude:opus" }],
     skills: ["review-contract", "caveman-review", "inline-review", "code-discovery"],
     access: access(READ_ONLY, { agent: true, commands: ["git diff", "git log", "git merge-base"] }),
     writable: false,
@@ -481,7 +497,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     kind: "agent",
     // The code fixer applies what each thread asks for; the reply drafter writes the thread replies.
     agent: "code-fixer",
-    helpers: ["reply-drafter"],
+    helpers: [{ role: "reply-drafter", engine: "claude:haiku" }],
     skills: ["receiving-code-review", "verification-before-completion", "tdd", "code-discovery"],
     access: access(READ_ONLY, { agent: true, write: true, luna: LEDGER_TOOLS, commands: ["git add", "git commit", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
     writable: true,
@@ -592,6 +608,27 @@ export function classificationLine(c: TaskClassification): string {
   const sizes = Object.keys((ISSUE_QUESTIONS.size as { rubric: Record<string, string> }).rubric);
   const size = sizes[Math.min(sizes.length - 1, Math.max(0, Math.round(c.size)))];
   return `${c.kind} · ${c.area} · ${c.ready ? "ready" : "not ready"} · size ${size} · lowest confidence ${c.confidence.toFixed(2)} (${c.model})`;
+}
+
+/** A helper as the pack its child run is: the helper's role on its engine, the parent's access
+ *  narrowed to reading, no helpers of its own (delegation has depth 1), no skills, the parent's
+ *  effort, and the helper's reply as its answer. Its id stays the parent's: it has no pack of its own. */
+export function helperPack(parent: AgentPack, helper: Helper): AgentPack {
+  return {
+    id: parent.id,
+    kind: "agent",
+    agent: helper.role,
+    helpers: [],
+    skills: [],
+    access: readOnly(parent.access),
+    writable: false,
+    maxTurns: HELPER_LIMITS.maxTurns,
+    timeoutMs: HELPER_LIMITS.timeoutMs,
+    engines: only(helper.engine),
+    effort: parent.effort,
+    answer: HelperAnswer,
+    template: "helper.md",
+  };
 }
 
 /** The packs a role or a script runs: every pack but the decisions. */

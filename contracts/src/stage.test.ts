@@ -341,9 +341,9 @@ describe("PR tasks", () => {
   });
 
   it("the PR packs run as the orc roles with their helpers: a security pass for reviewing, a reply drafter for addressing", () => {
-    expect(PACKS.reviewing).toMatchObject({ agent: "pr-reviewer", helpers: ["security-reviewer"] });
+    expect(PACKS.reviewing).toMatchObject({ agent: "pr-reviewer", helpers: [{ role: "security-reviewer", engine: "claude:opus" }] });
     expect(PACKS.reviewing.skills).toEqual(expect.arrayContaining(["inline-review", "review-contract", "caveman-review"]));
-    expect(PACKS.addressing).toMatchObject({ agent: "code-fixer", helpers: ["reply-drafter"] });
+    expect(PACKS.addressing).toMatchObject({ agent: "code-fixer", helpers: [{ role: "reply-drafter", engine: "claude:haiku" }] });
     expect(PACKS.addressing.skills).toEqual(expect.arrayContaining(["receiving-code-review", "verification-before-completion"]));
     for (const pack of AGENT_PACKS) {
       expect(Array.isArray(pack.helpers), pack.id).toBe(true);
