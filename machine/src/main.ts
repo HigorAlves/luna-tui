@@ -16,6 +16,7 @@ import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
+import { createIssueClassifier } from "./application/classify.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { GitHubPulls } from "./application/pulls.ts";
 import { SlackInbox } from "./application/slack-inbox.ts";
@@ -322,6 +323,9 @@ const packRuns = buildPackRuns(config, {
 });
 // A run folder a crash left holds a client's context: never kept.
 await packRuns?.clearLeftovers();
+/** Intake's first read of a new issue: issue_classify on Jev through the same PackRuns, recorded
+ *  as the `intake` client. Without a Jev credential it answers nothing and intake runs as before. */
+const classifier = packRuns ? createIssueClassifier({ runs: packRuns }) : null;
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 const app = createApp({
   db,
@@ -414,6 +418,7 @@ if (config.jira) {
     jira: jiraApi,
     policies,
     triager: jiraTriager,
+    classifier,
     // Every checkout the machine knows: the repo map, the repos dir, and the repos of existing tasks.
     repos: async () => {
       const known = [...Object.values(config.repoMap), ...(await reposUnder(config.reposDir, { readdir, exists: existsSync }))];

@@ -14,6 +14,9 @@ You are `{{agent}}`. One Jira issue is below; `/work` is a clean, read-only chec
 ## Repository
 {{context.jira.repoPath}}
 
+## A classifier's first read (a hint from a small model, not a verdict; check it against the issue and the code)
+{{context.jira.classification}}
+
 ## Project context (from the repo's docs/agents/project-context.md, when present)
 {{context.projectContext}}
 

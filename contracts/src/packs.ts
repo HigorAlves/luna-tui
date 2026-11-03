@@ -10,7 +10,7 @@ import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
 import { type QuestionSet, answerSchema } from "./questions.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
-import { Finding, LunaConfig, PackId, TestCase, VerifyResult } from "./stage.ts";
+import { Finding, LunaConfig, PackId, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
 
 /** The agent roles. A pack names one; the runner looks its definition up by this. */
 export const AgentRole = z.enum([
@@ -575,6 +575,24 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     answer: answerSchema(ISSUE_QUESTIONS),
   },
 };
+
+type IssueAnswer = { kind: { choice: string; confidence: number }; area: { choice: string; confidence: number }; ready: { value: boolean; p: number }; size: { score: number; confidence: number } };
+
+/** issue_classify's validated answer as a task keeps it: the picks, and the least sure answer's
+ *  confidence (a yes/no's is its distance from a coin toss: max(p, 1 - p)). */
+export function classificationOf(answer: Record<string, unknown>, model: string, at: Date): TaskClassification {
+  const { kind, area, ready, size } = answer as IssueAnswer;
+  const confidence = Math.min(kind.confidence, area.confidence, Math.max(ready.p, 1 - ready.p), size.confidence);
+  return { kind: kind.choice, kindConfidence: kind.confidence, area: area.choice, ready: ready.value, size: size.score, confidence, at: at.toISOString(), model };
+}
+
+/** A classification in one line, for an issue comment, a log or a prompt:
+ *  `question · machine · not ready · size tiny · lowest confidence 0.85 (typesafe-ai/jev)`. */
+export function classificationLine(c: TaskClassification): string {
+  const sizes = Object.keys((ISSUE_QUESTIONS.size as { rubric: Record<string, string> }).rubric);
+  const size = sizes[Math.min(sizes.length - 1, Math.max(0, Math.round(c.size)))];
+  return `${c.kind} · ${c.area} · ${c.ready ? "ready" : "not ready"} · size ${size} · lowest confidence ${c.confidence.toFixed(2)} (${c.model})`;
+}
 
 /** The packs a role or a script runs: every pack but the decisions. */
 export const AGENT_PACKS: AgentPack[] = Object.values(PACKS).filter((pack): pack is AgentPack => pack.kind !== "decision");

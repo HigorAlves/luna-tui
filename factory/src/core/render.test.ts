@@ -179,6 +179,14 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.jira_intake, input, template })).toContain("issue:\n(none)\ndescription:\n(none)");
   });
 
+  it("renders issue_classify's first read for jira_intake when intake had one, (none) when not", () => {
+    const jira = { key: "PLAT-1", url: "u", summary: "s", description: "", issueType: null, priority: null, labels: [], dueAt: null, comments: [], repoPath: null };
+    const classification = { kind: "bug", area: "board", ready: true, size: 1.2, confidence: 0.82, at: "2026-11-03T12:00:00.000Z", model: "typesafe-ai/jev" };
+    const render = (j: object) => renderPrompt({ pack: PACKS.jira_intake, input: { ...input, pack: "jira_intake", stage: "jira_intake", context: { projectContext: null, jira: j as never } }, template: "hint: {{context.jira.classification}}" });
+    expect(render({ ...jira, classification })).toContain("hint: bug · board · ready · size small · lowest confidence 0.82 (typesafe-ai/jev)");
+    expect(render(jira)).toContain("hint: (none)");
+  });
+
   it("renders the case for eval_judge: the pack, the rubric and the JSON as the runner wrote it", () => {
     const template = "{{context.eval.pack}} {{context.eval.case}}\nrubric: {{context.eval.rubric}}\ninput: {{context.eval.input}}\nchecks: {{context.eval.checks}}\nanswer: {{context.eval.answer}}";
     const judged = { pack: "slack_triage" as const, caseId: "incident", rubric: "  P0 for the outage\n", input: '{"a":1}', checks: "[]", answer: '{"items":[]}' };

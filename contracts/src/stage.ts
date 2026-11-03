@@ -379,6 +379,8 @@ export type QaTarget = z.infer<typeof QaTarget>;
  *  when and on which model. A hint for people and for jira_intake; it decides nothing alone. */
 export const TaskClassification = z.object({
   kind: z.string(),
+  /** How sure Jev is of the kind alone; what routing reads. Absent on classifications stored before it. */
+  kindConfidence: z.number().min(0).max(1).optional(),
   area: z.string(),
   ready: z.boolean(),
   size: z.number(),

@@ -1,13 +1,17 @@
 // Polls Jira for the issues each repo's luna.yaml asks for (`jira.intake.jql`) and turns each
 // new one into a ticket in Intake, after the jira_intake pack has read it: `ready` makes the
 // ticket with the pack's title, description and criteria; `needs_brief` asks the questions back
-// on the issue and waits for it to change; `not_for_agent` says why once and moves on. An
+// on the issue and waits for it to change; `not_for_agent` says why once and moves on. With a
+// Jev credential, issue_classify reads the issue first: a question Jev is sure of on every answer
+// is declined like `not_for_agent` without running jira_intake; anything else goes to jira_intake
+// as before, the classification passed as a hint and kept on the ticket. An
 // issue already behind a ticket (by its key) is never imported twice; one the machine spoke
 // last on is left alone until someone else writes or edits it. Like GitHubIntake, never throws.
-import type { JiraIntakeAnswer } from "@hardness/contracts";
+import { type IssueContext, type JiraIntakeAnswer, type TaskClassification, classificationLine } from "@hardness/contracts";
 
 import type { Policy } from "../domain/policy.ts";
 import type { TaskRow } from "../domain/task.ts";
+import { type IssueClassifier, confidentQuestion } from "./classify.ts";
 import { parseChecklist } from "./intake.ts";
 import { type Jira, JiraAuthError, type JiraIssue, type JiraMe, messageOf } from "./jira.ts";
 import type { NewTask } from "./pipeline.ts";
@@ -26,6 +30,8 @@ export interface JiraIntakeOptions {
   repos: () => Promise<string[]>;
   /** The jira_intake pack; null (agents off) imports every issue as it reads in Jira. */
   triager: JiraTriager | null;
+  /** issue_classify on Jev, before jira_intake; absent or answering null, intake runs as without it. */
+  classifier?: IssueClassifier | null;
   /** How often repos are checked for a due poll; each repo polls at its own `every`. */
   tickMs?: number;
   now?: () => Date;
@@ -143,7 +149,14 @@ export class JiraIntake {
   }
 
   private async consider(issue: JiraIssue, repoPath: string, comments: "none" | "milestones" | "gates"): Promise<void> {
-    const answer: JiraIntakeAnswer = (await this.options.triager?.triage(issue, repoPath)) ?? { verdict: "ready", reason: "imported as written" };
+    const classification = (await this.options.classifier?.classify(issueContext(issue))) ?? null;
+    if (confidentQuestion(classification)) {
+      this.answered.set(issue.key, issue.updated);
+      await this.comment(issue, `Not for an agent: it reads as a question, not a change (${classificationLine(classification)}).`);
+      this.log(`jira intake: ${issue.key} not for an agent: classified as a question (${classificationLine(classification)})`);
+      return;
+    }
+    const answer: JiraIntakeAnswer = (await this.options.triager?.triage(issue, repoPath, classification)) ?? { verdict: "ready", reason: "imported as written" };
     if (answer.verdict === "ready") {
       const task = await this.options.pipeline.createTask({
         title: answer.title?.trim() || issue.summary,
@@ -151,6 +164,7 @@ export class JiraIntake {
         criteria: answer.criteria?.length ? answer.criteria : parseChecklist(issue.description),
         repoPath,
         source: { kind: "jira", key: issue.key, url: issue.url, issueType: issue.issueType },
+        classification,
       });
       await this.options.pipeline.record(task.id, "jira.intake", { key: issue.key, verdict: "ready", reason: answer.reason });
       if (comments !== "none") await this.comment(issue, `Picked up as task #${task.id.slice(0, 8)} on the Luna board. ${answer.reason}`.trim());
@@ -174,6 +188,11 @@ export class JiraIntake {
       console.warn(`jira intake: comment on ${issue.key} failed: ${messageOf(error)}`);
     }
   }
+}
+
+/** What issue_classify reads of a Jira issue. */
+export function issueContext(issue: JiraIssue): IssueContext {
+  return { title: issue.summary, description: issue.description, labels: issue.labels, source: `jira:${issue.key}` };
 }
 
 /** The checkouts one level under `reposDir` that carry a luna.yaml, for intake to look at. */

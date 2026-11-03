@@ -1,4 +1,4 @@
-import type { JiraIntakeAnswer } from "@hardness/contracts";
+import type { IssueContext, JiraIntakeAnswer, TaskClassification } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -29,7 +29,9 @@ const verdicts: Record<string, JiraIntakeAnswer> = {
   "PLAT-3": { verdict: "not_for_agent", reason: "needs production credentials" },
 };
 
-function wire(over: { triager?: boolean; comments?: JiraPolicy["comments"] } = {}) {
+const classified = (kind: string, confidence = 0.9): TaskClassification => ({ kind, area: "machine", ready: kind !== "question", size: 1, confidence, at: "2026-10-28T12:00:00.000Z", model: "typesafe-ai/jev" });
+
+function wire(over: { triager?: boolean; comments?: JiraPolicy["comments"]; classify?: (issue: IssueContext) => TaskClassification | null | Promise<TaskClassification | null> } = {}) {
   const jira = fakeJira({
     issues: [
       { key: "PLAT-1", summary: "Login page", description: "Users sign in.\n\n- [ ] bad password errors", issueType: "Story" },
@@ -39,7 +41,11 @@ function wire(over: { triager?: boolean; comments?: JiraPolicy["comments"] } = {
     ],
   });
   const triaged: string[] = [];
-  const triager = over.triager === false ? null : { triage: async (issue: JiraIssue) => (triaged.push(issue.key), verdicts[issue.key] ?? null) };
+  const hints: Array<TaskClassification | null | undefined> = [];
+  const triager = over.triager === false ? null : { triage: async (issue: JiraIssue, _repo: string | null, hint?: TaskClassification | null) => (triaged.push(issue.key), hints.push(hint), verdicts[issue.key] ?? null) };
+  const read: IssueContext[] = [];
+  const classify = over.classify;
+  const classifier = classify ? { classify: async (issue: IssueContext) => (read.push(issue), classify(issue)) } : undefined;
   const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, jiraSite: "https://acme.atlassian.net" });
   let now = new Date("2026-10-28T12:00:00Z");
   const logs: string[] = [];
@@ -49,11 +55,55 @@ function wire(over: { triager?: boolean; comments?: JiraPolicy["comments"] } = {
     policies: { for: async () => ({ ...DEFAULT_POLICY, jira: { ...policy, comments: over.comments ?? "milestones" } }) },
     repos: async () => ["/r/a", "/r/a"],
     triager,
+    ...(classifier ? { classifier } : {}),
     now: () => now,
     log: (l) => logs.push(l),
   });
-  return { jira, pipeline, intake, triaged, logs, setNow: (d: Date) => (now = d) };
+  return { jira, pipeline, intake, triaged, hints, read, logs, setNow: (d: Date) => (now = d) };
 }
+
+describe("JiraIntake with issue_classify", () => {
+  it("reads each new issue first, declines a question Jev is sure of without jira_intake, saying why once with the classification", async () => {
+    const { jira, pipeline, intake, triaged, read, logs } = wire({ classify: (issue) => classified(issue.title === "Rotate the prod password" ? "question" : "feature") });
+    await intake.tick();
+    expect(read.map((i) => i.source)).toEqual(["jira:PLAT-1", "jira:PLAT-2", "jira:PLAT-3"]);
+    expect(read[0]).toEqual({ title: "Login page", description: "Users sign in.\n\n- [ ] bad password errors", labels: [], source: "jira:PLAT-1" });
+    expect(triaged).toEqual(["PLAT-1", "PLAT-2"]);
+    expect(jira.comments["PLAT-3"]).toEqual(["Not for an agent: it reads as a question, not a change (question · machine · not ready · size small · lowest confidence 0.90 (typesafe-ai/jev))."]);
+    expect(logs).toContainEqual(expect.stringMatching(/PLAT-3 not for an agent: classified as a question/));
+    // Answered once: an unchanged issue is neither classified nor commented on again.
+    await intake.pollRepo("/r/a", "project = PLAT");
+    expect(read).toHaveLength(3);
+    expect(jira.comments["PLAT-3"]).toHaveLength(1);
+    expect(await pipeline.list()).toHaveLength(1);
+  });
+
+  it("runs jira_intake as before on anything less, the classification passed as a hint and kept on the ticket", async () => {
+    const unsure = classified("question", 0.6);
+    const { jira, pipeline, intake, triaged, hints } = wire({ classify: (issue) => (issue.source === "jira:PLAT-3" ? unsure : classified("feature")) });
+    await intake.tick();
+    expect(triaged).toEqual(["PLAT-1", "PLAT-2", "PLAT-3"]);
+    expect(hints).toEqual([classified("feature"), classified("feature"), unsure]);
+    expect(jira.comments["PLAT-3"]).toEqual(["Not for an agent: needs production credentials"]);
+    const [task] = await pipeline.list();
+    expect(task).toMatchObject({ title: "Add the login page", classification: classified("feature") });
+  });
+
+  it("without a classification (no Jev credential, a failed run) behaves exactly as without the classifier", async () => {
+    const plain = wire();
+    const unclassified = wire({ classify: () => null });
+    await plain.intake.tick();
+    const before = { triaged: [...plain.triaged], comments: { ...plain.jira.comments }, tasks: (await plain.pipeline.list()).map(({ title, description, criteria, source }) => ({ title, description, criteria, source })) };
+    await db.query("truncate tasks cascade");
+    await unclassified.intake.tick();
+    expect(unclassified.triaged).toEqual(before.triaged);
+    expect(unclassified.hints).toEqual([null, null, null]);
+    const after = await unclassified.pipeline.list();
+    expect(after.map(({ title, description, criteria, source }) => ({ title, description, criteria, source }))).toEqual(before.tasks);
+    expect(after[0]!.classification).toBeNull();
+    expect(Object.keys(unclassified.jira.comments).sort()).toEqual(Object.keys(before.comments).sort());
+  });
+});
 
 describe("JiraIntake", () => {
   it("runs each new issue through the pack: ready makes the ticket, needs_brief asks on the issue, not_for_agent declines once, the machine's own last word is left alone", async () => {

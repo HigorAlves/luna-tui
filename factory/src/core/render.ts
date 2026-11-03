@@ -4,7 +4,7 @@
 // (runtimes/claude/run.ts, `outputFormat`). Pure: the caller passes the template and the
 // project context, so a test needs no files.
 import type { AgentPack, Pack, StageInput } from "@hardness/contracts";
-import { answerJsonSchema } from "@hardness/contracts";
+import { answerJsonSchema, classificationLine } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
 import { callText } from "./transcript.ts";
@@ -101,7 +101,7 @@ const chatText = (chat: StageInput["context"]["chat"]) => {
 
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
-  if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE };
+  if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE, classification: NONE };
   const facts = [
     `${jira.key} · ${jira.issueType ?? "no type"} · priority ${jira.priority ?? "none"}`,
     jira.labels.length > 0 ? `labels ${jira.labels.join(", ")}` : null,
@@ -112,6 +112,7 @@ const jiraText = (jira: StageInput["context"]["jira"]) => {
     description: jira.description.trim() === "" ? NONE : jira.description.trim(),
     comments: jira.comments.length > 0 ? jira.comments.map((c) => `- ${c}`).join("\n") : NONE,
     repoPath: jira.repoPath ?? "(unknown: /work is empty)",
+    classification: jira.classification ? classificationLine(jira.classification) : NONE,
   };
 };
 
@@ -247,6 +248,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,
     "{{context.jira.repoPath}}": jira.repoPath,
+    "{{context.jira.classification}}": jira.classification,
     "{{context.eval.pack}}": judged.pack,
     "{{context.eval.case}}": judged.case,
     "{{context.eval.rubric}}": judged.rubric,
