@@ -1,5 +1,5 @@
 // The Triager port as the slack_triage pack: each batch of inbox items runs through the factory
-// runner in the stage container, like every stage, with the same image and credential. There is
+// runner in the stage container, like every stage, with the same image and its engine's credential. There is
 // no task and no worktree: /work is an empty folder under the run dir, the batch rides in
 // `context.slack`, and the structured answer comes back in /out/result.json. One row per run
 // goes to slack_triage_runs so the Floor can show what triage costs. A run that answered has
@@ -8,16 +8,18 @@ import { PACKS, SlackTriageAnswer, type SlackTriageContext, StageOutput, resolve
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { Credential } from "../../adapters/credentials/claude.ts";
+import type { Credentials } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
 import { buildSlackTriageInput } from "../../domain/stage-input.ts";
+import { pickEngine } from "../engine.ts";
 import type { SlackStore } from "../slack-store.ts";
 import { TRIAGE_BATCH, type TriageAnswer, type TriageContext, type TriageItem, TriageRunError, type Triager } from "../slack-triage.ts";
 
 export interface SlackTriageDeps {
   /** The base stage image; the same one the packs run in. */
   image: string;
-  credential: Credential;
+  /** Each engine's credential; a run gets only its own engine's. */
+  credentials: Credentials;
   stateDir: string;
   /** Records one row per run. */
   store: Pick<SlackStore, "recordTriageRun">;
@@ -72,8 +74,6 @@ export function slackContext(items: TriageItem[], context: TriageContext): Slack
 /** The Triager that runs the slack_triage pack in the stage container, one run per batch. */
 export function createSlackTriager(deps: SlackTriageDeps): Triager {
   const pack = PACKS.slack_triage;
-  // What the run is recorded as when the result names no model: the pinned ID it was started on.
-  const model = resolveEngine(pack.engines.default).modelId;
   const now = deps.now ?? (() => new Date());
   const log = deps.log ?? ((line: string) => console.log(line));
   const sandbox = deps.sandbox ?? runSandbox;
@@ -84,12 +84,17 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
     const runDir = join(deps.stateDir, SLACK_TRIAGE_DIR, stamp);
     const work = join(runDir, "work");
     await mkdir(work, { recursive: true });
-    const input = buildSlackTriageInput(slackContext(batch, context));
+    // The inbox is no repo's and no task's: the pack's default, unless this machine cannot run it.
+    const { engine } = await pickEngine(deps.credentials, pack, null, null);
+    // What the run is recorded as when the result names no model: the pinned ID it was started on.
+    const model = resolveEngine(engine).modelId;
+    const input = buildSlackTriageInput(slackContext(batch, context), engine);
     const answers = new Map<string, TriageAnswer>();
     let ok = false;
     let error: string | null = null;
     let usage: { model: string; turns: number; costUsd: number | null } = { model, turns: 0, costUsd: null };
     try {
+      const credential = await deps.credentials.prepare(engine, runDir);
       const result = await sandbox({
         name: `hardness-slack-triage-${stamp}`,
         image: deps.image,
@@ -99,9 +104,9 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
         gitDir: null,
         input: input as unknown as Record<string, unknown>,
         timeoutMs: input.limits.timeoutMs,
-        credential: deps.credential,
+        credential: { env: credential.env, mounts: credential.mounts },
         labels: { luna: "slack-triage" },
-      });
+      }).finally(() => credential.release());
       if (result.aborted) error = "aborted";
       else if (result.timedOut) error = `timed out after ${input.limits.timeoutMs / MINUTE} minutes`;
       else {
@@ -134,7 +139,7 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
     const cost = usage.costUsd === null ? "" : ` · $${usage.costUsd.toFixed(4)}`;
     log(ok ? `slack triage: ${batch.length} item(s), ${answers.size} verdict(s), ${usage.turns} turn(s)${cost}` : `slack triage: ${batch.length} item(s) failed: ${error}`);
     try {
-      await deps.store.recordTriageRun({ startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString(), items: batch.length, model: usage.model, turns: usage.turns, costUsd: usage.costUsd, ok, error });
+      await deps.store.recordTriageRun({ startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString(), items: batch.length, model: usage.model, engine, turns: usage.turns, costUsd: usage.costUsd, ok, error });
     } catch (thrown) {
       console.warn(`slack triage: could not record the run: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
     }

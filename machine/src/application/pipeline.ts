@@ -137,6 +137,7 @@ interface Resume {
   attempt: number;
   container: string;
   inputCommit: string | null;
+  engine: EngineId | null;
 }
 
 /** Extra wait after a usage window's reset time before trying again. */
@@ -698,6 +699,7 @@ export class Pipeline {
           attempt: run.attempt,
           container: run.containerId!,
           inputCommit: run.inputCommit,
+          engine: run.engine,
         });
         if (this.inline) await loop;
       } else {
@@ -1247,8 +1249,8 @@ export class Pipeline {
         approvals,
         priorFindings,
         signal,
-        ...(resume ? { resume: { container: resume.container, inputCommit: resume.inputCommit } } : {}),
-        started: (facts) => this.store.markStageRunStarted(runId, { containerId: facts.container, inputCommit: facts.inputCommit }),
+        ...(resume ? { resume: { container: resume.container, inputCommit: resume.inputCommit, engine: resume.engine } } : {}),
+        started: (facts) => this.store.markStageRunStarted(runId, { containerId: facts.container, inputCommit: facts.inputCommit, ...(facts.engine ? { engine: facts.engine } : {}) }),
       });
     } catch (thrown) {
       error = thrown instanceof Error ? thrown.message : String(thrown);

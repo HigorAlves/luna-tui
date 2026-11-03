@@ -54,7 +54,7 @@ async function sandbox(label, pack, writable, extraEnv) {
     input: stageInput(pack),
     timeoutMs: 120000,
     // Dummy: the dry run and the evidence pack never call the API.
-    credential: { name: "ANTHROPIC_API_KEY", value: "smoke-no-call" },
+    credential: { env: { ANTHROPIC_API_KEY: "smoke-no-call" }, mounts: [] },
     labels: { "dev.hardness.smoke": label },
     extraEnv,
   });

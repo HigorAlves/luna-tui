@@ -178,6 +178,8 @@ export interface StageRun {
   turns: number | null;
   /** Verifying only: one verdict per approved case, when the run reported them; null otherwise. */
   cases: StageRunCase[] | null;
+  /** The engine the run started on; null for a host-only stage, or a run from before engines. */
+  engine: EngineId | null;
   startedAt: string;
   endedAt: string | null;
 }

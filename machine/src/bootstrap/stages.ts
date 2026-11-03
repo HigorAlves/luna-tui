@@ -6,7 +6,7 @@ import type { TaskRoute, TaskState } from "@hardness/contracts";
 import type { Ledger, RunSummary } from "@hardness/contracts";
 
 import type { Config } from "../config.ts";
-import type { Credential } from "../adapters/credentials/claude.ts";
+import { type Credentials, machineCredentials } from "../adapters/credentials/index.ts";
 import type { Watcher } from "../application/ports.ts";
 import { agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
@@ -32,8 +32,8 @@ export interface RealStagesResult {
   /** Runs a project's checks inside the runner image; null when stages are stubs. */
   checksExec: ReturnType<typeof sandboxExecutor> | null;
   /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
-   *  the credential, the state dir and the worktrees dir; null when agents are off or something is missing. */
-  agentDeps: { image: string; credential: Credential; stateDir: string; worktreesDir: string } | null;
+   *  the credentials, the state dir, the worktrees dir and each repo's luna.yaml; null when agents are off or something is missing. */
+  agentDeps: { image: string; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
 }
 
 /** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
@@ -52,8 +52,8 @@ export async function buildRealStages(
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
     return { real: {}, verifyPack: null, checksExec: null, agentDeps: null };
   }
-  const credential = await loadCredential();
-  if (!credential) {
+  // Every pack defaults to a Claude engine, so without Claude's credential nothing runs for real.
+  if (!(await loadCredential())) {
     console.warn("no Claude credential in ~/.config/hardness: every stage is a stub");
     return { real: {}, verifyPack: null, checksExec: null, agentDeps: null };
   }
@@ -70,10 +70,12 @@ export async function buildRealStages(
   // A project's own checks run in the stage image too: what implementing installed there
   // (node_modules with Linux binaries, a Go cache) does not run on the host.
   const checksExec = sandboxExecutor(config.runnerImage);
+  // Each stage gets only its own engine's credential, read when the stage starts.
+  const credentials = machineCredentials();
   const deps = {
     image: config.runnerImage,
     qaImage: config.runnerQaImage,
-    credential,
+    credentials,
     worktreesDir: config.worktreesDir,
     stateDir: config.stateDir,
     watcher,
@@ -107,7 +109,7 @@ export async function buildRealStages(
       }),
     ),
   };
-  return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, credential, stateDir: config.stateDir, worktreesDir: config.worktreesDir } };
+  return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 export interface RunnerForDeps {

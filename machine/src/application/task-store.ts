@@ -1,7 +1,7 @@
 // Everything Pipeline needs from storage. Every method here is plain CRUD except
 // `withTaskLock`, whose Postgres implementation takes a row lock inside a transaction —
 // the one seam where the transition engine's correctness depends on the storage layer.
-import type { JiraLink, StageEngines, StageRunCase, TaskRoute, TaskState } from "@hardness/contracts";
+import type { EngineId, JiraLink, StageEngines, StageRunCase, TaskRoute, TaskState } from "@hardness/contracts";
 
 import type { ApprovalRow, ArtifactRow, Decision, EventRow, StageRunRow, StageRunStatus, TaskRow } from "../domain/task.ts";
 
@@ -110,7 +110,7 @@ export interface TaskStore {
   /** Ends every stage run still `running` as aborted, except the ones a restart re-attached to. */
   markRunningStageRunsAborted(except?: readonly string[]): Promise<void>;
   /** The container's name and the commit it started from, known once the stage is under way. */
-  markStageRunStarted(id: string, facts: { containerId: string; inputCommit: string | null }): Promise<void>;
+  markStageRunStarted(id: string, facts: { containerId: string; inputCommit: string | null; engine?: EngineId | null }): Promise<void>;
   /** Finds the longest-queued task and claims it (clearing `queued`) under a row lock, so
    *  two slots freeing at once cannot both claim the same task. Null when none is queued. */
   claimNextQueuedTask(options: ClaimOptions): Promise<TaskRow | null>;

@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type CheckSpec, type CiContext, type Finding, type JiraIntakeContext, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type CheckSpec, type CiContext, type EngineId, type Finding, type JiraIntakeContext, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -52,6 +52,8 @@ function checkedCases(approvals: ApprovalRow[]): TestCase[] {
 export function buildStageInput(opts: {
   task: TaskRow;
   stage: TaskState;
+  /** The engine engine-choice picked; absent, the factory runs the pack's default. */
+  engine?: EngineId;
   attempt: number;
   approvals: ApprovalRow[];
   priorFindings: Finding[];
@@ -82,6 +84,7 @@ export function buildStageInput(opts: {
     schema: 3,
     stage,
     pack,
+    ...(opts.engine ? { engine: opts.engine } : {}),
     attempt,
     task: {
       id: task.id,
@@ -127,12 +130,13 @@ export const SLACK_TRIAGE_TASK_ID = "slack-triage";
 
 /** The /in/stage.json the slack_triage pack reads: no task of its own, no plan, no worktree;
  *  the inbox batch rides in `context.slack` and the answer goes back to the inbox. */
-export function buildSlackTriageInput(slack: SlackTriageContext): StageInput {
+export function buildSlackTriageInput(slack: SlackTriageContext, engine?: EngineId): StageInput {
   const { maxTurns, timeoutMs } = PACK_LIMITS.slack_triage;
   return {
     schema: 3,
     stage: "slack_triage",
     pack: "slack_triage",
+    ...(engine ? { engine } : {}),
     attempt: 1,
     task: { id: SLACK_TRIAGE_TASK_ID, title: "Slack triage", description: "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
@@ -149,12 +153,13 @@ export const JIRA_INTAKE_TASK_ID = "jira-intake";
 
 /** The /in/stage.json the jira_intake pack reads: the issue in `context.jira`, the repo it would
  *  land in as the (read-only) worktree, no plan, no branch; the answer decides whether a ticket is made. */
-export function buildJiraIntakeInput(jira: JiraIntakeContext): StageInput {
+export function buildJiraIntakeInput(jira: JiraIntakeContext, engine?: EngineId): StageInput {
   const { maxTurns, timeoutMs } = PACK_LIMITS.jira_intake;
   return {
     schema: 3,
     stage: "jira_intake",
     pack: "jira_intake",
+    ...(engine ? { engine } : {}),
     attempt: 1,
     task: { id: JIRA_INTAKE_TASK_ID, title: jira.summary, description: jira.description, criteria: [], repoPath: jira.repoPath ?? "", branch: "", source: null },
     plan: null,

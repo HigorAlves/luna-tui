@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import type { Stats } from "./api.ts";
+import type { EngineId } from "./engines.ts";
 
 /** Where an item sits for you. One split per item, picked by the machine's `splitOf`. */
 export const SlackSplit = z.enum(["needs_reply", "waiting_on_them", "decide", "fyi", "snoozed", "done"]);
@@ -175,6 +176,8 @@ export interface SlackTriageRun {
   /** Items in the batch. */
   items: number;
   model: string;
+  /** The engine the run ran on; absent on runs from before engines. */
+  engine?: EngineId | null;
   turns: number;
   costUsd: number | null;
   ok: boolean;

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { StageInput, type StageOutput } from "@hardness/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { type Credentials, NoCredentialError, fixedCredentials } from "../../adapters/credentials/index.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
@@ -63,7 +64,7 @@ function deps(sandbox: (run: SandboxRun) => Promise<SandboxResult>): AgentDeps {
   return {
     image: "img",
     qaImage: "qa-img",
-    credential: { name: "ANTHROPIC_API_KEY", value: "x" },
+    credentials: fixedCredentials({ ANTHROPIC_API_KEY: "x" }),
     worktreesDir: join(root, "worktrees"),
     stateDir,
     watcher: { follow: vi.fn() } as never,
@@ -554,5 +555,69 @@ describe("agent stages through packs", () => {
     );
     const result = await run.triage!(context("triage"));
     expect(result.detail).toEqual({ summary: "did it", questions, answer: { kind: "questions", questions } });
+  });
+});
+
+describe("the engine a stage runs on", () => {
+  /** Credentials that record what was prepared and released; `missing` engines are not configured. */
+  function recordingCredentials(missing: string[] = []) {
+    const log: string[] = [];
+    const credentials: Credentials = {
+      check: async (engine) => (missing.includes(engine) ? { available: false, reason: `no ${engine} here` } : { available: true }),
+      prepare: async (engine) => {
+        if (missing.includes(engine)) throw new NoCredentialError(`no ${engine} here`);
+        log.push(`prepare ${engine}`);
+        return { env: { [`KEY_FOR_${engine.replace(/\W/g, "_").toUpperCase()}`]: "v" }, mounts: [], release: async () => void log.push(`release ${engine}`) };
+      },
+    };
+    return { credentials, log };
+  }
+
+  it("runs the pack's default, names it in the stage input, gives the sandbox only that engine's credential and releases it after", async () => {
+    const { credentials, log } = recordingCredentials();
+    const started = vi.fn(async () => {});
+    const sandbox = fakeSandbox(output(), () => log.push("sandbox"));
+    const result = await runAgent({ ...deps(sandbox), credentials }, { ...context("triage"), started }, "triage");
+    expect((seen!.input as unknown as StageInput).engine).toBe("claude:opus");
+    expect(seen!.credential).toEqual({ env: { KEY_FOR_CLAUDE_OPUS: "v" }, mounts: [] });
+    expect(log).toEqual(["prepare claude:opus", "sandbox", "release claude:opus"]);
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({ engine: "claude:opus" }));
+    expect(result.events?.map((e) => e.kind)).toEqual(["slice_committed"]);
+  });
+
+  it("never runs an engine the pack does not allow: the task's override is passed over and the reason logged", async () => {
+    const { credentials, log } = recordingCredentials();
+    const task = { ...context("triage").task, stages: { triage: "openai:sol" } } as TaskRow;
+    const result = await runAgent({ ...deps(fakeSandbox(output())), credentials }, { ...context("triage"), task }, "triage");
+    expect((seen!.input as unknown as StageInput).engine).toBe("claude:opus");
+    expect(log).toEqual(["prepare claude:opus", "release claude:opus"]);
+    expect(result.events?.find((e) => e.kind === "engine")?.payload).toEqual({
+      pack: "triage",
+      engine: "claude:opus",
+      reason: expect.stringMatching(/^the task's openai:sol is not allowed for triage/),
+    });
+  });
+
+  it("runs the engine a re-attached run started on, whatever the task or luna.yaml say now", async () => {
+    const { credentials } = recordingCredentials();
+    const resume = { container: "hardness-x", inputCommit: null, engine: "claude:opus" as const };
+    await runAgent({ ...deps(fakeSandbox(output())), credentials }, { ...context("triage"), resume }, "triage");
+    expect((seen!.input as unknown as StageInput).engine).toBe("claude:opus");
+  });
+
+  it("fails the stage with the reason when this machine has no credential for its engine, and starts no container", async () => {
+    const { credentials } = recordingCredentials(["claude:opus"]);
+    const result = await runAgent({ ...deps(fakeSandbox(output())), credentials }, context("triage"), "triage");
+    expect(seen).toBeUndefined();
+    expect(result).toMatchObject({ outcome: "fail", detail: { error: "no claude:opus here" } });
+  });
+
+  it("releases the credential when the sandbox throws", async () => {
+    const { credentials, log } = recordingCredentials();
+    const broken = async () => {
+      throw new Error("docker: not running");
+    };
+    await expect(runAgent({ ...deps(broken), credentials }, context("triage"), "triage")).rejects.toThrow(/docker/);
+    expect(log).toEqual(["prepare claude:opus", "release claude:opus"]);
   });
 });

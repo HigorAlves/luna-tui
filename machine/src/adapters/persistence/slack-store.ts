@@ -2,7 +2,7 @@
 // slack_triage_runs tables.
 // Timestamps are timestamptz in the database and ISO strings in the rows the inbox handles;
 // this file does the conversion and nothing else.
-import type { SlackItem, SlackPriority, SlackTriage, SlackTriageRun, SlackWatch, SlackWatchInput, SlackWatchPatch } from "@hardness/contracts";
+import type { EngineId, SlackItem, SlackPriority, SlackTriage, SlackTriageRun, SlackWatch, SlackWatchInput, SlackWatchPatch } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { IsNull, LessThan, MoreThanOrEqual } from "typeorm";
 
@@ -56,6 +56,7 @@ export interface SlackTriageRunEntityRow {
   endedAt: Date;
   items: number;
   model: string;
+  engine: string | null;
   turns: number;
   /** numeric comes back from pg as a string. */
   costUsd: string | number | null;
@@ -114,6 +115,7 @@ const toRun = (r: SlackTriageRunEntityRow): SlackTriageRun => ({
   endedAt: r.endedAt.toISOString(),
   items: r.items,
   model: r.model,
+  ...(r.engine ? { engine: r.engine as EngineId } : {}),
   turns: r.turns,
   costUsd: r.costUsd === null ? null : Number(r.costUsd),
   ok: r.ok,
@@ -210,6 +212,7 @@ export class PgSlackStore implements SlackStore {
       endedAt: new Date(run.endedAt),
       items: run.items,
       model: run.model,
+      engine: run.engine ?? null,
       turns: run.turns,
       costUsd: run.costUsd,
       ok: run.ok,
