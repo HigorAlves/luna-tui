@@ -1,0 +1,163 @@
+{
+  "schema": 1,
+  "pack": "issue_classify",
+  "engine": "jev",
+  "judge": "claude:opus",
+  "at": "2026-11-03T16:48:40.506Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 3,
+    "passed": 3,
+    "passRate": 1,
+    "meanJudgeScore": 0.8833333333333333,
+    "meanTurns": 1,
+    "meanDurationMs": 582.3333333333334,
+    "costUsd": 0.000095592,
+    "judgeCostUsd": 0.0781116
+  },
+  "cases": [
+    {
+      "id": "board-key-panic",
+      "pass": true,
+      "schema": {
+        "check": "answer on the issue_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice = \"bug\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "area.choice = \"board\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "ready.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "size.score within 0..1.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": {
+        "score": 0.95,
+        "pass": true,
+        "reasons": [
+          "size.score 0.92: small, which fits a one-function guard and its test (empty-list bounds check in board/src/pr_view.rs); it is not in the lower part of the 0–1.5 band, but it is still reasonable.",
+          "kind bug at confidence 1: right. The issue reports a panic with steps, actual and expected behaviour, and the rubric says high confidence is right here.",
+          "area board at confidence 1: right. It matches the label, the stack location in board/src/pr_view.rs and the PR view in the title.",
+          "ready true with p 0.92: right. The steps, the actual panic message and the expected behaviour for the empty case are all given, so an agent can start without asking anything."
+        ],
+        "costUsd": 0.038588
+      },
+      "turns": 1,
+      "durationMs": 698,
+      "costUsd": 0.000032550000000000005,
+      "model": "typesafe-ai/jev"
+    },
+    {
+      "id": "judge-engine-question",
+      "pass": true,
+      "schema": {
+        "check": "answer on the issue_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice = \"question\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "ready.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": {
+        "score": 0.8,
+        "pass": true,
+        "reasons": [
+          "area.choice 'machine' is neither of the rubric's plausible areas (factory, where the judge pack runs; contracts, where its engine is set). The low confidence of 0.27 is honest about the doubt, but the pick itself is off-target.",
+          "kind 'question' at confidence 1 is right: the issue asks for a decision and explicitly says 'no code change asked for yet'.",
+          "ready false (p 0.2) is right: the issue has no acceptance criteria an agent could verify.",
+          "size 0.22 is small, which is reasonable for a decision-only question with no code change."
+        ],
+        "costUsd": 0.0188088
+      },
+      "turns": 1,
+      "durationMs": 498,
+      "costUsd": 0.000030576,
+      "model": "typesafe-ai/jev"
+    },
+    {
+      "id": "zod-upgrade-contracts",
+      "pass": true,
+      "schema": {
+        "check": "answer on the issue_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice = \"chore\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "area.choice = \"contracts\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "ready.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "size.score within 0.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": {
+        "score": 0.9,
+        "pass": true,
+        "reasons": [
+          "size.score 1.96 sits near the top of the allowed 0.5–2.5 band. A bump plus a handful of call sites in stage.ts and api.ts reads as small, so a score closer to 1 would fit better. It is still within 'small to medium'.",
+          "kind.choice is chore, which is correct: it is a dependency bump with call-site updates and the issue says 'no behaviour change'. Confidence 1 is justified.",
+          "area.choice is contracts, which is correct: the work is in contracts/package.json and contracts/src. It is not placed in machine.",
+          "ready.value is true, which is correct: the issue states how to verify it ('pnpm --filter @hardness/contracts test' and typecheck pass with no deprecation warnings)."
+        ],
+        "costUsd": 0.020714800000000002
+      },
+      "turns": 1,
+      "durationMs": 551,
+      "costUsd": 0.000032466000000000004,
+      "model": "typesafe-ai/jev"
+    }
+  ]
+}
