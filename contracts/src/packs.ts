@@ -317,7 +317,8 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     writable: false,
     maxTurns: 30,
     timeoutMs: 10 * MINUTE,
-    engines: only("claude:opus"),
+    // Codex is a candidate here; the machine keeps the Claude default until evals move it.
+    engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"] },
     effort: "high",
     answer: TriageAnswer,
     template: "triage.md",
@@ -500,7 +501,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     writable: false,
     maxTurns: 3,
     timeoutMs: 3 * MINUTE,
-    engines: only("claude:haiku"),
+    engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"] },
     effort: "low",
     answer: SlackTriageAnswer,
     template: "slack_triage.md",
