@@ -25,6 +25,8 @@ export const AgentRole = z.enum([
   "pr-reviewer",
   // The Slack inbox's triage: no tools, no worktree, a batch of messages in and verdicts out.
   "slack-triager",
+  // Chat triage on demand: a Slack or Teams batch a client sends, verdicts out; no tools, no worktree.
+  "chat-triager",
   // Jira intake: reads an issue (and, read-only, the repo) before it becomes a ticket.
   "jira-triager",
   // The replay evals' judge: grades another pack's answer against a case's rubric; no tools.
@@ -209,6 +211,10 @@ export const EvalJudgeAnswer = z.object({
   reasons: z.array(z.string()),
 });
 export type EvalJudgeAnswer = z.infer<typeof EvalJudgeAnswer>;
+
+/** chat_triage: the same verdicts as slack_triage, one per item id, for Slack and Teams alike. */
+export const ChatTriageAnswer = SlackTriageAnswer;
+export type ChatTriageAnswer = SlackTriageAnswer;
 
 /** What every pack has, whatever runs it: the machine reads the limits, the runner the rest. */
 interface PackBase {
@@ -534,6 +540,23 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: EvalJudgeAnswer,
     template: "eval_judge.md",
+  },
+  chat_triage: {
+    id: "chat_triage",
+    kind: "agent",
+    // Triage on demand (POST /runs): a client's Slack or Teams batch, the verdicts slack_triage
+    // gives. Like slack_triage: no tools, no worktree, haiku, low effort, three turns.
+    agent: "chat-triager",
+    helpers: [],
+    skills: [],
+    access: NO_ACCESS,
+    writable: false,
+    maxTurns: 3,
+    timeoutMs: 3 * MINUTE,
+    engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"] },
+    effort: "low",
+    answer: ChatTriageAnswer,
+    template: "chat_triage.md",
   },
   issue_classify: {
     id: "issue_classify",

@@ -67,8 +67,8 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
   return { code, stdout, out, result };
 }
 
-// slack_triage and eval_judge have no worktree and read no project context; their dry runs are below.
-const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "eval_judge").map((p) => p.id);
+// slack_triage, chat_triage and eval_judge have no worktree and read no project context; their dry runs are below.
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage" && p.id !== "chat_triage" && p.id !== "eval_judge").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -118,6 +118,23 @@ describe("factory main (dry run)", () => {
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     expect(options).toMatchObject({ agent: "eval-judge", model: "claude-opus-5-5", tools: [], allowedTools: [] });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
+  });
+
+  it.each([
+    ["teams", { source: "teams", me: { id: "8f2c", name: "Higor Alves" }, items: [{ id: "chat:19:abc", place: "Rafa Souza", kind: "dm", author: "Rafa Souza", isBot: false, text: "approve the rollout?", flag: "urgent" }] }, "id chat:19:abc · dm Rafa Souza · Rafa Souza · matched (none) · flag urgent"],
+    ["slack", { source: "slack", me: { id: "U1", name: "higor" }, items: [{ id: "C1:1", place: "#eng", kind: "channel", author: "@marta", isBot: false, text: "review?", matched: ["me"] }] }, "id C1:1 · channel #eng · @marta · matched me"],
+  ])("chat_triage (%s): runs over an empty /work with no tools, renders the batch and leaves a valid result", (_source, chat, line) => {
+    const task = { id: "chat-triage", title: "Chat triage", description: "", criteria: [], repoPath: "", branch: "", source: null };
+    const { code, stdout, out, result } = run(stageInput("chat_triage", { task, plan: null, context: { projectContext: null, chat } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    const prompt = readFileSync(join(out, "prompt.md"), "utf8");
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("`chat-triager` role running the `chat_triage` stage");
+    expect(prompt).toContain(line);
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({ agent: "chat-triager", agents: ["chat-triager"], model: "claude-haiku-5-5", effort: "low", maxTurns: 5, tools: [], allowedTools: [] });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
   it("jira_intake: runs over the repo checkout read-only with Read, Glob and Grep, renders the issue and leaves a valid result", () => {

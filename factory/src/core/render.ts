@@ -71,6 +71,32 @@ const slackText = (slack: StageInput["context"]["slack"]) => {
   };
 };
 
+const CHAT_SOURCE = { slack: "Slack", teams: "Microsoft Teams" } as const;
+
+/** The chat batch, as chat_triage reads it: one block per item, its place, flag, floor and context inline. */
+const chatText = (chat: StageInput["context"]["chat"]) => {
+  if (!chat) return { source: NONE, me: NONE, rules: NONE, items: NONE };
+  const items = chat.items.map((item, i) => {
+    const facts = [
+      `id ${item.id}`,
+      `${item.kind} ${item.place}`,
+      `${item.author}${item.isBot ? " (app)" : ""}`,
+      `matched ${item.matched?.join(", ") || "(none)"}`,
+      item.flag ? `flag ${item.flag}` : null,
+      item.floor ? `floor ${item.floor}` : null,
+      item.replies ? `${item.replies} repl${item.replies === 1 ? "y" : "ies"}` : null,
+    ].filter(Boolean);
+    const context = (item.context ?? []).map((m) => `   earlier · ${m.author}: ${m.text}`);
+    return [`${i + 1}. ${facts.join(" · ")}`, ...context, `   text: ${item.text}`].join("\n");
+  });
+  return {
+    source: CHAT_SOURCE[chat.source],
+    me: `${chat.me.name} (${chat.me.id})`,
+    rules: chat.rules?.trim() ? chat.rules.trim() : NONE,
+    items: items.join("\n"),
+  };
+};
+
 /** The issue, as jira_intake reads it: one header line, the description, the comments, the repo. */
 const jiraText = (jira: StageInput["context"]["jira"]) => {
   if (!jira) return { issue: NONE, description: NONE, comments: NONE, repoPath: NONE };
@@ -155,6 +181,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
   const slack = slackText(input.context.slack);
   const jira = jiraText(input.context.jira);
   const judged = evalText(input.context.eval);
+  const chat = chatText(input.context.chat);
   const subs: Record<string, string> = {
     "{{task.title}}": txt(input.task.title),
     "{{task.description}}": txt(input.task.description),
@@ -196,6 +223,10 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{context.slack.watches}}": slack.watches,
     "{{context.slack.rules}}": slack.rules,
     "{{context.slack.items}}": slack.items,
+    "{{context.chat.source}}": chat.source,
+    "{{context.chat.me}}": chat.me,
+    "{{context.chat.rules}}": chat.rules,
+    "{{context.chat.items}}": chat.items,
     "{{context.jira.issue}}": jira.issue,
     "{{context.jira.description}}": jira.description,
     "{{context.jira.comments}}": jira.comments,

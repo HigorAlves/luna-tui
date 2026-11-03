@@ -4,6 +4,8 @@ import {
   AGENT_PACKS,
   AgentRole,
   ArtifactKind,
+  ChatTriageAnswer,
+  ChatTriageContext,
   CloneInput,
   EvalJudgeAnswer,
   EvalJudgeContext,
@@ -179,12 +181,13 @@ describe("StageOutput", () => {
 });
 
 describe("PackId", () => {
-  it("has the eleven stage packs, each named after a task state, plus the Slack and Jira intake triages, the issue classifier and the eval judge", () => {
+  it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "issue_classify", "eval_judge"].sort(),
+      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "issue_classify", "eval_judge", "chat_triage"].sort(),
     );
+    const onDemand: string[] = ["slack_triage", "jira_intake", "issue_classify", "eval_judge", "chat_triage"];
     for (const pack of PackId.options) {
-      if (pack === "slack_triage" || pack === "jira_intake" || pack === "issue_classify" || pack === "eval_judge") expect(TaskState.options).not.toContain(pack);
+      if (onDemand.includes(pack)) expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
     }
   });
@@ -223,6 +226,41 @@ describe("slack_triage", () => {
     };
     expect(SlackTriageContext.safeParse(slack).success).toBe(true);
     expect(StageInput.safeParse({ ...stageInputExample, pack: "slack_triage", context: { projectContext: null, slack } }).success).toBe(true);
+  });
+});
+
+describe("chat_triage", () => {
+  const teams = {
+    source: "teams",
+    me: { id: "8f2c", name: "Higor Alves" },
+    items: [
+      { id: "chat:19:abc", place: "Rafa Souza", kind: "dm", author: "Rafa Souza", isBot: false, text: "can you approve the rollout today?", context: [{ author: "Rafa Souza", text: "staging is green" }], matched: ["dm"], replies: 0, flag: "urgent", floor: "P0" },
+      { id: "post:t1:c1:m1", place: "Platform › incidents", kind: "channel", author: "Azure DevOps", isBot: true, text: "build 4411 failed", matched: ["watch"], replies: 2, flag: null },
+    ],
+  };
+
+  it("runs as the chat-triager like slack_triage: haiku (Codex luna allowed), low effort, three turns, no tools, no worktree", () => {
+    expect(PACKS.chat_triage).toMatchObject({ agent: "chat-triager", helpers: [], skills: [], access: NO_ACCESS, writable: false, maxTurns: 3, timeoutMs: 3 * 60_000, engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"] }, effort: "low", template: "chat_triage.md" });
+    expect(AgentRole.options).toContain("chat-triager");
+  });
+
+  it("answers in slack_triage's shape, so one schema serves Slack and Teams", () => {
+    expect(ChatTriageAnswer).toBe(SlackTriageAnswer);
+    expect(PACKS.chat_triage.answer).toBe(SlackTriageAnswer);
+  });
+
+  it("takes a Teams batch and a Slack batch in one context shape, and a stage input may carry it", () => {
+    expect(ChatTriageContext.safeParse(teams).error).toBeUndefined();
+    const slack = { source: "slack", me: { id: "U1", name: "higor" }, rules: "## VIPs\n- @cto", items: [{ id: "C1:1700.1", place: "#eng", kind: "channel", author: "@marta", isBot: false, text: "review?", matched: ["me"] }] };
+    expect(ChatTriageContext.safeParse(slack).error).toBeUndefined();
+    expect(StageInput.safeParse({ ...stageInputExample, pack: "chat_triage", context: { projectContext: null, chat: teams } }).error).toBeUndefined();
+  });
+
+  it("refuses an empty batch, more than 25 items, an unknown source or place kind", () => {
+    expect(ChatTriageContext.safeParse({ ...teams, items: [] }).success).toBe(false);
+    expect(ChatTriageContext.safeParse({ ...teams, items: Array.from({ length: 26 }, (_, i) => ({ ...teams.items[1], id: `i${i}` })) }).success).toBe(false);
+    expect(ChatTriageContext.safeParse({ ...teams, source: "discord" }).success).toBe(false);
+    expect(ChatTriageContext.safeParse({ ...teams, items: [{ ...teams.items[0], kind: "oneOnOne" }] }).success).toBe(false);
   });
 });
 

@@ -109,6 +109,8 @@ export const PackId = z.enum([
   "issue_classify",
   // Not a task stage: the replay evals' judge, grading another pack's answer to an eval case.
   "eval_judge",
+  // Not a task stage: triages a batch of chat items (Slack or Teams) a client sends to POST /runs.
+  "chat_triage",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -204,6 +206,43 @@ export const SlackTriageContext = z.object({
   ),
 });
 export type SlackTriageContext = z.infer<typeof SlackTriageContext>;
+
+/** For chat_triage: a batch of one person's chat items, Slack or Teams, as a client read them.
+ *  Shaped so the notch's SlackItem and TeamsItem both fit; the answer is SlackTriageAnswer's. */
+export const ChatTriageContext = z.object({
+  source: z.enum(["slack", "teams"]),
+  me: z.object({ id: z.string(), name: z.string() }),
+  /** The person's rules as markdown (VIPs, always-P0 words, notes), when the client keeps any. */
+  rules: z.string().optional(),
+  items: z
+    .array(
+      z.object({
+        id: z.string().min(1),
+        /** Where it was said, as the client names it: `#eng`, `Ana`, `Platform › incidents`, a meeting's topic. */
+        place: z.string(),
+        /** Slack's dm, mpim and channel/group, Teams' oneOnOne, group, meeting and channel, in one set. */
+        kind: z.enum(["dm", "group", "meeting", "channel"]),
+        author: z.string(),
+        /** An app, a bot, a connector or a workflow. */
+        isBot: z.boolean(),
+        /** The latest message, as plain text. */
+        text: z.string(),
+        /** Earlier messages of the thread or chat, oldest first. */
+        context: z.array(z.object({ author: z.string(), text: z.string() })).optional(),
+        /** Why it is in the inbox: `me`, `dm`, `group`, `meeting`, `tag:…`, `keyword:…`, `broadcast:…`, `watch`. */
+        matched: z.array(z.string()).optional(),
+        /** Replies in the thread or under the post, as last read. */
+        replies: z.number().int().min(0).optional(),
+        /** Teams' importance flag: urgent is at least P0, important at least P1. */
+        flag: z.enum(["urgent", "important"]).nullable().optional(),
+        /** The lowest priority the client's own rules allow (a VIP, an always-P0 word). */
+        floor: z.enum(["P0", "P1", "P2", "P3"]).nullable().optional(),
+      }),
+    )
+    .min(1)
+    .max(25),
+});
+export type ChatTriageContext = z.infer<typeof ChatTriageContext>;
 
 /** One slice of the implementer's ledger, kept by the runner in `/out/ledger.json`. */
 export const LedgerSlice = z.object({
@@ -441,6 +480,8 @@ export const StageInput = z.object({
     issue: IssueContext.nullable().optional(),
     /** For the eval_judge pack: the case, its expectation and the answer to grade. */
     eval: EvalJudgeContext.nullable().optional(),
+    /** For chat_triage: the chat batch; the task is synthetic and there is no worktree. */
+    chat: ChatTriageContext.nullable().optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),
