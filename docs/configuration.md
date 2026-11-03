@@ -4,6 +4,13 @@
 
 Put `claude-oauth-token` or `anthropic-api-key` in `~/.config/hardness/`. Without one, the agent stages do not run for real.
 
+Jev, the decision model behind `issue_classify`, is opt-in and metered: TypeSafe bills each call, unlike the Claude subscription. It runs only with a TypeSafe API key, and nothing about intake changes without one.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `TYPESAFE_API_KEY` | unset, Jev off | the key the Jev runtime (`@typesafe-ai/sdk`) calls `systemOne` with. Unset: a decision pack's stage ends `ok: false` with the reason, and intake goes on without the labels. The machine will also read it from `~/.config/hardness/typesafe-api-key` once it passes it to the stage container (a later change) |
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | the TypeSafe API root, for a proxy or a test server |
+
 ## Environment
 
 See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is only needed to change them; `pnpm dev` and `pnpm start` both load it automatically if it exists.
@@ -138,7 +145,7 @@ The image carries Node 24, Go and a pinned Rust toolchain (`RUST_VERSION` in `ma
 
 `pnpm --filter @hardness/machine runner:build` runs `machine/runner/build.sh`, which builds the image from this checkout with the repository root as the build context: `factory/` and `contracts/` are copied in and installed with the workspace lockfile, so the image runs exactly what the checkout tests. Each image is labelled with a key over those files and the Dockerfile and skipped when that key is current, so `pnpm images` (run by `pnpm start` and `pnpm dev`) is instant when nothing changed; `REBUILD=1 pnpm images` builds anyway. The image is tagged `hardness-runner:dev` and `hardness-runner:<key>`. `runner-qa:build` runs the same script with `--qa`, then builds `hardness-runner-qa:dev` from `machine/runner-qa/Dockerfile` on top of it.
 
-Inside a stage container the runner sees `/in/stage.json`, `/out`, `/work` (the worktree) and `/session` (the task's SDK session dir, `CLAUDE_CONFIG_DIR`). `LUNA_FACTORY=1` marks the run; `LUNA_STAGE_DRY_RUN=1` renders the prompt and the SDK options without a model call (the sandbox smoke uses it). A repo may keep binding rules for every stage in `docs/agents/project-context.md`; the memory review proposes additions to it.
+Inside a stage container the runner sees `/in/stage.json`, `/out`, `/work` (the worktree) and `/session` (the task's SDK session dir, `CLAUDE_CONFIG_DIR`). `LUNA_FACTORY=1` marks the run; `LUNA_STAGE_DRY_RUN=1` renders the prompt and the SDK options without a model call (the sandbox smoke uses it); for a decision pack it prints the questions and the state it would send to Jev. A repo may keep binding rules for every stage in `docs/agents/project-context.md`; the memory review proposes additions to it.
 
 ## Board
 
