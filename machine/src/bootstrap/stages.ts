@@ -6,7 +6,7 @@ import type { TaskRoute, TaskState } from "@hardness/contracts";
 import type { Ledger, RunSummary } from "@hardness/contracts";
 
 import type { Config } from "../config.ts";
-import type { Credential } from "../adapters/docker/credentials.ts";
+import type { Credential } from "../adapters/credentials/claude.ts";
 import type { Watcher } from "../application/ports.ts";
 import { agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
@@ -18,7 +18,7 @@ import { prAddressRunner } from "../application/stages/pr-address.ts";
 import { prReviewRunner } from "../application/stages/pr-review.ts";
 import { setupRunner } from "../application/stages/setup.ts";
 import { shipRunnerWith } from "../application/stages/ship.ts";
-import { loadCredential } from "../adapters/docker/credentials.ts";
+import { loadCredential } from "../adapters/credentials/claude.ts";
 import { imageExists, removeLeftoverContainers, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PolicyStore } from "../application/policy.ts";
 import { exec } from "../adapters/process/exec.ts";

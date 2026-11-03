@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 
 import type { ServiceSpec } from "@hardness/contracts";
 
-import type { Credential } from "./credentials.ts";
+import type { Credential } from "../credentials/claude.ts";
 import { startServices } from "./services.ts";
 import { type ExecResult, exec, execOrThrow } from "../process/exec.ts";
 

@@ -8,7 +8,7 @@ import { PACKS, SlackTriageAnswer, type SlackTriageContext, StageOutput, resolve
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { Credential } from "../../adapters/docker/credentials.ts";
+import type { Credential } from "../../adapters/credentials/claude.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
 import { buildSlackTriageInput } from "../../domain/stage-input.ts";
 import type { SlackStore } from "../slack-store.ts";

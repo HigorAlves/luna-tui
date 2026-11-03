@@ -10,7 +10,7 @@ import { JiraIntakeAnswer, type JiraIntakeContext, PACKS, StageOutput, resolveEn
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { Credential } from "../../adapters/docker/credentials.ts";
+import type { Credential } from "../../adapters/credentials/claude.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
 import { ensureCleanCheckout, intakeCheckoutPath } from "../../adapters/git/worktree.ts";
 import { buildJiraIntakeInput } from "../../domain/stage-input.ts";
