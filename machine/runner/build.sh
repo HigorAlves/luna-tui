@@ -16,7 +16,7 @@ root="$(cd "$here/../.." && pwd)"
 # changed. REBUILD=1 builds anyway (Docker's layer cache still applies).
 key_of() { { printf '%s\n' "$@"; cat "$@"; } | shasum | cut -c1-16; }
 current_key() { docker image inspect -f '{{index .Config.Labels "dev.hardness.build"}}' "$1" 2>/dev/null || true; }
-tree_files() { (cd "$root" && find "$@" -type f -not -path '*/node_modules/*' | LC_ALL=C sort | sed "s#^#$root/#"); }
+tree_files() { (cd "$root" && find "$@" -type f -not -path '*/node_modules/*' -not -path '*/.eve-agents*' | LC_ALL=C sort | sed "s#^#$root/#"); }
 
 ref="$(git -C "$root" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)"
 inputs=()

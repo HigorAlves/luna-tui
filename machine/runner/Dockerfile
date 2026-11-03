@@ -40,9 +40,18 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 ENV PATH="/usr/local/cargo/bin:${PATH}"
 
+# The Codex CLI, pinned: the eve runtime's chatgpt() models ask `codex app-server` for the
+# ChatGPT login's token, and Codex owns its refresh (it rewrites $CODEX_HOME/auth.json, a per-run
+# copy the machine mounts writable at /tmp/.codex). Without it eve would want an OS keychain.
+ARG CODEX_VERSION=0.164.0
+RUN npm install -g --no-audit --no-fund "@openai/codex@${CODEX_VERSION}" \
+ && codex --version \
+ && rm -rf /root/.npm
+ENV CODEX_HOME=/tmp/.codex EVE_TELEMETRY_DISABLED=1
+
 # The factory runner and the contracts package it shares with the machine, installed with the
 # workspace's own lockfile so the image runs exactly what the checkout tests. The Agent SDK
-# is installed now, so a stage needs no network to start.
+# and eve are installed now, so a stage needs no network to start.
 WORKDIR /factory-src
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY contracts/package.json contracts/
@@ -52,6 +61,10 @@ RUN corepack enable \
  && rm -rf /root/.cache /root/.local/share/pnpm
 COPY contracts/src contracts/src
 COPY factory factory
+# Every pack's eve agent, compiled and built now (roles and packs are static): a stage on an eve
+# engine starts the built server and sends its prompt. The build needs no Docker daemon.
+RUN cd factory && node src/runtimes/eve/build.ts \
+ && rm -rf /root/.cache
 RUN echo "${FACTORY_REF}" > /factory-src/factory/.ref \
  && chmod -R a+rX /factory-src
 ENV LUNA_FACTORY_ROOT=/factory-src/factory
