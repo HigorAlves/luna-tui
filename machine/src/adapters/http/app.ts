@@ -231,7 +231,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     const id = taskId(c);
     const patch = await body(c, UpdateTaskInput);
     const task = await serialize(await pipeline.update(id, patch));
-    bus.publish({ type: "task.updated", task });
+    bus.publish({ type: "task.updated", task, seq: task.seq });
     return c.json(task);
   });
 
@@ -239,7 +239,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     const id = taskId(c);
     const patch = await body(c, EditPlanInput);
     const task = await serialize(await pipeline.editPlan(id, patch));
-    bus.publish({ type: "task.updated", task });
+    bus.publish({ type: "task.updated", task, seq: task.seq });
     return c.json(task);
   });
 
@@ -247,7 +247,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     const id = taskId(c);
     const { cases } = await body(c, EditCasesInput);
     const task = await serialize(await pipeline.editCases(id, cases));
-    bus.publish({ type: "task.updated", task });
+    bus.publish({ type: "task.updated", task, seq: task.seq });
     return c.json(task);
   });
 
@@ -263,9 +263,9 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
 
   app.delete("/tasks/:id", async (c) => {
     const id = taskId(c);
-    await pipeline.delete(id);
+    const seq = await pipeline.delete(id);
     await watcher?.close(id);
-    bus.publish({ type: "task.deleted", id });
+    bus.publish({ type: "task.deleted", id, seq });
     return c.body(null, 204);
   });
 
@@ -371,7 +371,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     app.get("/jira/search", async (c) => c.json(await jira.search(c.req.query("q") ?? "")));
     const linked = async (c: Context, task: TaskRow, status: 200 | 201 = 200) => {
       const out = await serialize(task, await pipeline.taskUsage(task.id));
-      bus.publish({ type: "task.updated", task: out });
+      bus.publish({ type: "task.updated", task: out, seq: out.seq });
       return c.json(out, status);
     };
     app.post("/tasks/:id/jira", async (c) => {

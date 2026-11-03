@@ -13,6 +13,7 @@ import { AddSlackTriageRuns1793700000000 } from "./1793700000000-AddSlackTriageR
 import { AddTaskJira1793800000000 } from "./1793800000000-AddTaskJira.ts";
 import { AddTaskStateSince1793900000000 } from "./1793900000000-AddTaskStateSince.ts";
 import { AddTaskIdempotencyKey1794000000000 } from "./1794000000000-AddTaskIdempotencyKey.ts";
+import { AddTaskSeq1794100000000 } from "./1794100000000-AddTaskSeq.ts";
 
 export const MIGRATIONS: Function[] = [
   Init1792712166445,
@@ -29,4 +30,5 @@ export const MIGRATIONS: Function[] = [
   AddTaskJira1793800000000,
   AddTaskStateSince1793900000000,
   AddTaskIdempotencyKey1794000000000,
+  AddTaskSeq1794100000000,
 ];

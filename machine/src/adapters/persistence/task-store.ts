@@ -6,6 +6,7 @@ import { In, IsNull, Not } from "typeorm";
 
 import type {
   ClaimOptions,
+  TaskChange,
   TaskUsage,
   DecideApprovalInput,
   InsertStageRunInput,
@@ -102,8 +103,32 @@ export class PgTaskStore implements TaskStore {
     await this.db.getRepository(TaskEntity).update({ id }, patch);
   }
 
-  async deleteTask(id: string): Promise<void> {
+  async deleteTask(id: string): Promise<number> {
     await this.db.getRepository(TaskEntity).delete({ id });
+    const [row] = (await this.db.query("select seq from task_tombstones where id = $1", [id])) as { seq: string }[];
+    return Number(row?.seq ?? 0);
+  }
+
+  async changesSince(since: number, sourceKind: string | null = null): Promise<TaskChange[]> {
+    // One snapshot for both reads: a delete committed between them would otherwise jump the cursor past a change the first read missed.
+    const { tasks, tombstones } = await this.db.transaction("REPEATABLE READ", async (manager) => {
+      const query = manager.getRepository(TaskEntity).createQueryBuilder("task").where("task.seq > :since", { since }).orderBy("task.seq", "ASC");
+      if (sourceKind) query.andWhere("task.source->>'kind' = :kind", { kind: sourceKind });
+      const tasks = await query.getMany();
+      const kind = sourceKind ? "and source->>'kind' = $2" : "";
+      const tombstones = (await manager.query(`select id, seq from task_tombstones where seq > $1 ${kind} order by seq`, sourceKind ? [since, sourceKind] : [since])) as { id: string; seq: string }[];
+      return { tasks, tombstones };
+    });
+    const changes: TaskChange[] = [
+      ...tasks.map((task) => ({ seq: Number(task.seq), task })),
+      ...tombstones.map((t) => ({ seq: Number(t.seq), deleted: t.id })),
+    ];
+    return changes.sort((a, b) => a.seq - b.seq);
+  }
+
+  async lastSeq(): Promise<number> {
+    const [row] = (await this.db.query("select greatest((select max(seq) from tasks), (select max(seq) from task_tombstones)) as seq")) as { seq: string | null }[];
+    return Number(row?.seq ?? 0);
   }
 
   findStuckTasks(running: ReadonlySet<TaskState>): Promise<TaskRow[]> {

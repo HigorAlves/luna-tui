@@ -40,6 +40,8 @@ export const TaskEntity = new EntitySchema<TaskRow>({
     stateSince: { name: "state_since", type: "timestamptz", nullable: true },
     idempotencyKey: { name: "idempotency_key", type: "text", nullable: true },
     requestHash: { name: "request_hash", type: "text", nullable: true },
+    // Stamped by the `tasks_seq` trigger on every insert and update; never written from here.
+    seq: { type: "bigint", insert: false, update: false },
     createdAt: { name: "created_at", type: "timestamptz", createDate: true },
     updatedAt: { name: "updated_at", type: "timestamptz", updateDate: true },
   },

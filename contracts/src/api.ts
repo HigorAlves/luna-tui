@@ -150,6 +150,8 @@ export interface Task {
   jira: JiraLink | null;
   /** The ticket's SLA clocks, computed at snapshot time; null when none applies. */
   sla: TaskSla | null;
+  /** The task's place in the change sequence: every change to it takes a higher one (`GET /events?since=`). */
+  seq: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -215,9 +217,10 @@ export interface TaskDetail {
 
 /**
  * Messages on `GET /events` (Server-Sent Events). The SSE `event` field is `type`.
- * - `task.updated`: a task changed; carries the whole task, so the board can just replace it.
+ * - `task.updated`: a task changed; carries the whole task, so the board can just replace it, and
+ *   its `seq`, the cursor `GET /events?since=` replays from.
  * - `task.event`: one entry from the task's activity log.
- * - `task.deleted`: the task is gone.
+ * - `task.deleted`: the task is gone; `seq` is its tombstone's place in the sequence.
  * - `task.metrics`: fresh factory metrics (7d window), sent after tasks change state.
  * - `stage.started`: a stage container is running; the board remembers it, so `f` can open a
  *   herdr tab at `cwd` labelled `label` that follows `container`'s logs, and points an
@@ -228,10 +231,10 @@ export interface TaskDetail {
  * - `slack.items`: the Slack inbox changed; carries the whole snapshot, watches included.
  */
 export type StreamMessage =
-  | { type: "task.updated"; task: Task }
+  | { type: "task.updated"; task: Task; seq: number }
   | { type: "budget.alert"; alert: BudgetAlert }
   | { type: "task.event"; event: TaskEvent }
-  | { type: "task.deleted"; id: string }
+  | { type: "task.deleted"; id: string; seq: number }
   | { type: "task.metrics"; metrics: Metrics }
   | { type: "stage.started"; taskId: string; label: string; cwd: string; container: string }
   | { type: "task.closed"; id: string }

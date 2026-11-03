@@ -6,7 +6,7 @@ import { type BudgetAlert, type Finding, type JiraLink, RUNNING, type StageRunCa
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
-import type { NewTaskRow, TaskStore } from "./task-store.ts";
+import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
@@ -462,8 +462,8 @@ export class Pipeline {
   }
 
   /** Deletes a task with its runs, approvals and events. Its worktree is kept. */
-  /** Deletes the task and the checkout it worked in; the branch and its commits stay. */
-  async delete(id: string): Promise<void> {
+  /** Deletes the task and the checkout it worked in; the branch and its commits stay. Answers its tombstone's sequence number. */
+  async delete(id: string): Promise<number> {
     const task = await this.get(id);
     if (RUNNING.has(task.state)) throw new TaskBusyError(id, task.state);
     clearTimeout(this.resumeTimers.get(id));
@@ -473,7 +473,17 @@ export class Pipeline {
         console.error(`could not remove the worktree of deleted task ${id}`, error),
       );
     }
-    await this.store.deleteTask(id);
+    return this.store.deleteTask(id);
+  }
+
+  /** Every task changed and every task deleted after the sequence number `since`, oldest first; `sourceKind` keeps one source's. */
+  changesSince(since: number, sourceKind: string | null = null): Promise<TaskChange[]> {
+    return this.store.changesSince(since, sourceKind);
+  }
+
+  /** The highest sequence number a committed change holds. */
+  lastSeq(): Promise<number> {
+    return this.store.lastSeq();
   }
 
   /** Removes a task's worktree from disk once you are done with it. The task, its branch
