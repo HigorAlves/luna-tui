@@ -19,7 +19,7 @@ import {
   resetWorktree,
   restoreFiles,
 } from "../../adapters/git/worktree.ts";
-import type { Credential } from "../../adapters/docker/credentials.ts";
+import type { Credential } from "../../adapters/credentials/claude.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
