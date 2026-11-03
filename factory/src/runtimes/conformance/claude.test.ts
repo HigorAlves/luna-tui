@@ -13,7 +13,7 @@ conformance("claude", "claude:sonnet", (script) => claudeRuntime(scriptedQuery(s
 it("the Claude runtime's transcript of the golden run", async () => {
   const root = mkdtempSync(join(tmpdir(), "golden-"));
   try {
-    const { transcript } = await runScenario(claudeRuntime(scriptedQuery(GOLDEN)), "claude:sonnet", root);
+    const { transcript, events } = await runScenario(claudeRuntime(scriptedQuery(GOLDEN)), "claude:sonnet", root);
     expect(masked(transcript)).toEqual([
       "session <id> · model claude-sonnet-5-5 · skills 0 · plugins none",
       "Looking around first.",
@@ -23,6 +23,18 @@ it("the Claude runtime's transcript of the golden run", async () => {
       "→ Bash pwd",
       "→ mcp__luna__slice_init",
     ]);
+    // The events behind it: every call with the guard's decision, then its result.
+    expect(events.filter((e) => e.kind === "tool_call" || e.kind === "tool_result").map((e) => e.payload)).toEqual([
+      { id: "toolu_1", tool: "mcp__luna__step", target: "reading the code", allowed: true },
+      { id: "toolu_1", tool: "mcp__luna__step", ok: true },
+      { id: "toolu_2", tool: "Bash", target: "git push origin HEAD", allowed: false, reason: expect.stringMatching(/git push is not allowed/) },
+      { id: "toolu_2", tool: "Bash", ok: false },
+      { id: "toolu_3", tool: "Bash", target: "pwd", allowed: true },
+      { id: "toolu_3", tool: "Bash", ok: true },
+      { id: "toolu_4", tool: "mcp__luna__slice_init", target: "", allowed: true },
+      { id: "toolu_4", tool: "mcp__luna__slice_init", ok: true },
+    ]);
+    expect(events.map((e) => e.kind)).toEqual(["session", "text", "tool_call", "step", "tool_result", "tool_call", "tool_result", "tool_call", "tool_result", "tool_call", "ledger.init", "tool_result", "usage"]);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

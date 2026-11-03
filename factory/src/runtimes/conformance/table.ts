@@ -4,7 +4,7 @@
 // each runtime's fake plays it through its SDK's shapes. The run is settled the way main.ts
 // settles it, and the same checks apply to every runtime. A new runtime, or a major SDK bump, is
 // done when the table passes.
-import { type EngineId, type LunaTool, type Pack, PACKS, StageInput, resolveEngine } from "@hardness/contracts";
+import { type EngineId, type LunaTool, type Pack, PACKS, type RunEvent, StageInput, resolveEngine } from "@hardness/contracts";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -14,6 +14,7 @@ import { describe, expect, it } from "vitest";
 import { lunaHandlers } from "../../core/luna-tools.ts";
 import { type RunOutcome, settle } from "../../core/output.ts";
 import type { Runtime } from "../../core/runtime.ts";
+import { transcript as printer } from "../../core/transcript.ts";
 
 /** One model turn. A call's result is what the model reads next, and `say` is text the model
  *  writes before it; `echo` puts the last result into the answer's summary, so a check can see
@@ -50,6 +51,8 @@ export interface Scenario {
 export interface ConformanceResult {
   run: RunOutcome;
   out: string;
+  /** What the run emitted, in order, and the transcript core printed from it. */
+  events: RunEvent[];
   transcript: string[];
   /** How long the runtime took, start to finish. */
   elapsedMs: number;
@@ -124,10 +127,13 @@ export const SCENARIOS: Scenario[] = [
     name: "a guarded call is refused before it runs and the run continues",
     needs: "tools",
     script: (t) => [{ call: "bash", command: "git push origin HEAD" }, { answer: t.valid, echo: true }],
-    check: ({ run, transcript }) => {
+    check: ({ run, transcript, events }) => {
       expect(run.ok).toBe(true);
       expect(run.structured?.summary).toMatch(/git push is not allowed/);
       expect(transcript.join("\n")).toMatch(/git push origin HEAD/);
+      // The refusal is in the audit trail, with its reason, once.
+      const refused = events.filter((e) => e.kind === "tool_call" && !e.payload.allowed);
+      expect(refused).toEqual([{ kind: "tool_call", payload: expect.objectContaining({ target: "git push origin HEAD", allowed: false, reason: expect.stringMatching(/git push is not allowed/) }) }]);
     },
   },
   {
@@ -152,8 +158,9 @@ export const SCENARIOS: Scenario[] = [
     name: "a ledger tool call updates /out/ledger.json",
     needs: "tools",
     script: (t) => [{ call: "luna", tool: "slice_init", args: { slices: [{ id: 1, title: "parse the input" }] } }, { answer: t.valid }],
-    check: ({ run, out }) => {
+    check: ({ run, out, events }) => {
       expect(run.ok).toBe(true);
+      expect(events).toContainEqual({ kind: "ledger.init", payload: { total: 1 } });
       const ledger = JSON.parse(readFileSync(join(out, "ledger.json"), "utf8"));
       expect(ledger.slices).toEqual([expect.objectContaining({ id: 1, title: "parse the input", status: "pending" })]);
     },
@@ -200,8 +207,13 @@ export async function runScenario(runtime: Runtime, engine: EngineId, root: stri
   const scratch = join(root, "scratch");
   for (const dir of [work, out, scratch]) mkdirSync(dir, { recursive: true });
   const transcript: string[] = [];
-  // The step line as main.ts prints it.
-  const luna = lunaHandlers({ ledgerPath: join(out, "ledger.json"), decisions: [], onStep: (label, n, of) => transcript.push(`· ${label}${of ? ` (${n}/${of})` : ""}`) });
+  const events: RunEvent[] = [];
+  const print = printer((line) => transcript.push(line));
+  const emit = (event: RunEvent) => {
+    events.push(event);
+    print(event);
+  };
+  const luna = lunaHandlers({ ledgerPath: join(out, "ledger.json"), decisions: [], emit });
   const input = stageInput(t.pack, engine, timeoutMs);
   const started = Date.now();
   const run = await runtime.run({
@@ -212,9 +224,9 @@ export async function runScenario(runtime: Runtime, engine: EngineId, root: stri
     paths: { factoryRoot: FACTORY_ROOT, work, out, input: root, scratch },
     luna,
     dry: false,
-    out: (line) => transcript.push(line),
+    emit,
   });
-  return { run: settle(run, t.pack), out, transcript, elapsedMs: Date.now() - started };
+  return { run: settle(run, t.pack), out, events, transcript, elapsedMs: Date.now() - started };
 }
 
 /** Registers the table for one runtime: `runtimeFor` gives the runtime wired to a fake that plays

@@ -1,7 +1,7 @@
 // A scripted query() for the conformance table: it plays a script the way the Agent SDK would run
 // it, through the options the runtime built. A tool call runs the runtime's PreToolUse hooks for
 // that tool and, when they allow it, the luna server's handler; a denial's reason is what the
-// model reads next, as the SDK reports it. No model and no subprocess.
+// model reads next, as the SDK reports it in the call's tool_result. No model and no subprocess.
 import type { HookCallbackMatcher, HookJSONOutput, Options, Query, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 import type { ScriptStep } from "../conformance/table.ts";
@@ -16,22 +16,22 @@ function toolUse(step: Extract<ScriptStep, { call: string }>): { name: string; i
 }
 
 /** What the model reads back from one call: the hooks' denial, or what the tool returned. */
-async function execute(options: Options, name: string, input: Record<string, unknown>, id: string): Promise<string> {
+async function execute(options: Options, name: string, input: Record<string, unknown>, id: string): Promise<{ text: string; denied: boolean }> {
   const matchers: HookCallbackMatcher[] = options.hooks?.PreToolUse ?? [];
   for (const matcher of matchers.filter((m) => new RegExp(m.matcher ?? ".*").test(name))) {
     for (const hook of matcher.hooks) {
       const decision = (await hook({ hook_event_name: "PreToolUse", tool_name: name, tool_input: input, tool_use_id: id, session_id: SESSION, transcript_path: "", cwd: options.cwd ?? "" } as never, id, { signal: new AbortController().signal })) as HookJSONOutput;
       const specific = "hookSpecificOutput" in decision ? (decision.hookSpecificOutput as { permissionDecision?: string; permissionDecisionReason?: string } | undefined) : undefined;
-      if (specific?.permissionDecision === "deny") return specific.permissionDecisionReason ?? "denied";
+      if (specific?.permissionDecision === "deny") return { text: specific.permissionDecisionReason ?? "denied", denied: true };
     }
   }
   if (name.startsWith("mcp__luna__")) {
     const server = options.mcpServers?.luna as { instance?: { _registeredTools?: RegisteredTools } } | undefined;
     const tool = server?.instance?._registeredTools?.[name.slice("mcp__luna__".length)];
-    if (!tool) return `no tool ${name}`;
-    return (await tool.handler(input, {})).content[0]?.text ?? "";
+    if (!tool) return { text: `no tool ${name}`, denied: true };
+    return { text: (await tool.handler(input, {})).content[0]?.text ?? "", denied: false };
   }
-  return "(ran)";
+  return { text: "(ran)", denied: false };
 }
 
 export function scriptedQuery(script: ScriptStep[]): (params: { prompt: string; options?: Options }) => Query {
@@ -46,7 +46,9 @@ export function scriptedQuery(script: ScriptStep[]): (params: { prompt: string; 
           const { name, input } = toolUse(step);
           const said = step.say ? [{ type: "text", text: step.say }] : [];
           yield { type: "assistant", session_id: SESSION, message: { content: [...said, { type: "tool_use", id: `toolu_${turns}`, name, input }] } } as unknown as SDKMessage;
-          last = await execute(options, name, input, `toolu_${turns}`);
+          const result = await execute(options, name, input, `toolu_${turns}`);
+          last = result.text;
+          yield { type: "user", session_id: SESSION, message: { role: "user", content: [{ type: "tool_result", tool_use_id: `toolu_${turns}`, content: result.text, is_error: result.denied }] } } as unknown as SDKMessage;
         } else if ("rateLimit" in step) {
           yield { type: "rate_limit_event", session_id: SESSION, rate_limit_info: { status: "rejected", resetsAt: step.rateLimit.resetsAt } } as unknown as SDKMessage;
           yield { type: "result", subtype: "error_during_execution", is_error: true, errors: ["Claude AI usage limit reached"], num_turns: turns, duration_ms: 1, total_cost_usd: 0, session_id: SESSION } as unknown as SDKMessage;

@@ -4,9 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { EMPTY_RUN, budgetSpent, type LunaState, finish, outcomeOf, scanArtifacts, settle } from "./output.ts";
+import { EMPTY_RUN, budgetSpent, type RunRecord, finish, outcomeOf, scanArtifacts, settle } from "./output.ts";
 
-const state = (over: Partial<LunaState> = {}): LunaState => ({ ledger: { schema: 1, slices: [] }, events: [], ...over });
+const state = (over: Partial<RunRecord> = {}): RunRecord => ({ ledger: { schema: 1, slices: [] }, events: [], ...over });
 const outDir = () => mkdtempSync(join(tmpdir(), "factory-out-"));
 const read = (dir: string, name: string) => JSON.parse(readFileSync(join(dir, name), "utf8"));
 
@@ -65,11 +65,11 @@ describe("finish", () => {
   it("writes a schema-3 result the machine's contract accepts, with the ledger and the session", () => {
     const dir = outDir();
     const ledger = { schema: 1 as const, slices: [{ id: 1, title: "s", status: "committed" as const, commit: "abc" }, { id: 2, title: "t", status: "red" as const, commit: null }] };
-    const result = finish(dir, PACKS.implementing, { ...EMPTY_RUN, ok: true, structured: { kind: "done", summary: "did it", commit: "abc" }, turns: 7, costUsd: 0.5, durationMs: 1234.6, model: "sonnet", sessionId: "sess-1" }, state({ ledger, events: [{ kind: "step", payload: { label: "x" } }] }));
+    const result = finish(dir, PACKS.implementing, { ...EMPTY_RUN, ok: true, structured: { kind: "done", summary: "did it", commit: "abc" }, turns: 7, costUsd: 0.5, durationMs: 1234.6, model: "sonnet", sessionId: "sess-1" }, state({ ledger, events: [{ kind: "step", payload: { label: "x", n: 0, of: 0 } }] }));
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(read(dir, "result.json")).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "did it", commit: "abc", slices: { done: 1, total: 2 }, usage: { turns: 7, costUsd: 0.5, durationMs: 1235, model: "sonnet" }, ledger, sessionId: "sess-1" });
     const events = readFileSync(join(dir, "events.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
-    expect(events).toEqual([{ kind: "step", payload: { label: "x" } }, { kind: "note", payload: { phase: "stage_end", outcome: "pass", pack: "implementing" } }]);
+    expect(events).toEqual([{ kind: "step", payload: { label: "x", n: 0, of: 0 } }, { kind: "note", payload: { phase: "stage_end", outcome: "pass", pack: "implementing" } }]);
   });
 
   it("carries questions, requested actions and findings out of the answer", () => {

@@ -155,9 +155,9 @@ describe("TurnFollower", () => {
 describe("eveRuntime", () => {
   it("refuses a pack without a built agent with the reason, before starting anything", async () => {
     const agentsDir = mkdtempSync(join(tmpdir(), "eve-none-"));
-    const luna = { state: { ledger: { schema: 1 as const, slices: [] }, events: [] }, call: async () => null };
+    const luna = { call: async () => null };
     const input = StageInput.parse({ schema: 3, stage: "implementing", pack: "implementing", attempt: 1, task: { id: "t", title: "x", description: "y", criteria: [], repoPath: "/r", branch: "task/x", source: null }, plan: null, decisions: [], priorFindings: [], context: { projectContext: null }, limits: { maxTurns: 3, timeoutMs: 10_000 }, env: {} });
-    const run = await eveRuntime({ agentsDir }).run({ pack: PACKS.implementing, engine: resolveEngine("codex:luna"), input, prompt: "x", paths: { factoryRoot: "/f", work: agentsDir, out: agentsDir, input: agentsDir, scratch: agentsDir }, luna, dry: false, out: () => {} });
+    const run = await eveRuntime({ agentsDir }).run({ pack: PACKS.implementing, engine: resolveEngine("codex:luna"), input, prompt: "x", paths: { factoryRoot: "/f", work: agentsDir, out: agentsDir, input: agentsDir, scratch: agentsDir }, luna, dry: false, emit: () => {} });
     expect(run).toMatchObject({ ok: false, error: expect.stringMatching(/the eve agent for implementing is not built .*whose engines allow eve/) });
   });
 });

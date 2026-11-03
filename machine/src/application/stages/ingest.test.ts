@@ -91,6 +91,29 @@ describe("ingestStageOutput", () => {
     });
   });
 
+  it("keeps the run's stream in events.jsonl and off the task's log, and a kind it does not know on it", async () => {
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output()));
+    const lines = [
+      { kind: "session", payload: { id: "s1", text: "session s1" } },
+      { kind: "text", payload: { text: "Looking around first." } },
+      { kind: "tool_call", payload: { id: "1", tool: "Bash", target: "git push", allowed: false, reason: "no" } },
+      { kind: "step", payload: { label: "reading", n: 1, of: 2 } },
+      { kind: "tool_result", payload: { id: "1", tool: "Bash", ok: false } },
+      { kind: "usage", payload: { model: "m", inputTokens: 1 } },
+      { kind: "rate_limit", payload: { resetsAt: null } },
+      { kind: "child", payload: { phase: "start", runId: "r2", pack: "triage", engine: "codex:sol" } },
+      { kind: "ledger.init", payload: { total: 1 } },
+      { kind: "something.new", payload: { x: 1 } },
+      { kind: "note", payload: { phase: "stage_end", outcome: "pass", pack: "implementing" } },
+    ];
+    await writeFile(join(outDir, "events.jsonl"), `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+
+    const ingested = await ingestStageOutput({ outDir, runId: "r", stateDir });
+
+    expect(ingested.events.map((e) => e.kind)).toEqual(["step", "ledger.init", "something.new", "note"]);
+    expect(ingested.events[2]?.payload).toEqual({ x: 1 });
+  });
+
   it("names the failing key when result.json is invalid", async () => {
     await writeFile(join(outDir, "result.json"), JSON.stringify(output({ outcome: "bogus" })));
     await expect(ingestStageOutput({ outDir, runId: "r", stateDir })).rejects.toThrow(/outcome/);

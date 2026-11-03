@@ -1,21 +1,16 @@
 // What a stage leaves behind: /out/result.json (the StageOutput contract), /out/events.jsonl
 // and the artifact index over /out/files/**. One function, called however the run ended, so
 // the machine always finds a result.
-import type { Ledger, Pack, StageArtifact, StageOutcome, StageOutput } from "@hardness/contracts";
+import type { Ledger, Pack, RunEvent, StageArtifact, StageOutcome, StageOutput } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 
-/** One call to a luna tool, as the machine ingests it from /out/events.jsonl. */
-export interface LunaEvent {
-  kind: string;
-  payload: Record<string, unknown>;
-}
-
-/** What the luna tools leave for the result: the slice ledger and the events. */
-export interface LunaState {
+/** What the run leaves for the result besides its outcome: the luna tools' slice ledger and every
+ *  event the run emitted, in order. */
+export interface RunRecord {
   ledger: Ledger;
-  events: LunaEvent[];
+  events: RunEvent[];
 }
 
 /** How the model run ended, as the runner saw it. */
@@ -133,8 +128,9 @@ export function outcomeOf(run: RunOutcome): StageOutcome {
   return run.ok ? "pass" : "fail";
 }
 
-/** Writes result.json and events.jsonl; returns what it wrote. */
-export function finish(outDir: string, pack: Pack, run: RunOutcome, state: LunaState): StageOutput {
+/** Writes result.json and events.jsonl, every event in order and the stage's end last; returns
+ *  what it wrote. */
+export function finish(outDir: string, pack: Pack, run: RunOutcome, state: RunRecord): StageOutput {
   mkdirSync(outDir, { recursive: true });
   const s = run.structured ?? {};
   if (typeof s.rulesMarkdown === "string" && s.rulesMarkdown.trim()) {
@@ -168,7 +164,7 @@ export function finish(outDir: string, pack: Pack, run: RunOutcome, state: LunaS
     sessionId: run.sessionId,
   };
   writeFileSync(join(outDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
-  const lines = [...state.events, { kind: "note", payload: { phase: "stage_end", outcome, pack: pack.id } }];
+  const lines: RunEvent[] = [...state.events, { kind: "note", payload: { phase: "stage_end", outcome, pack: pack.id } }];
   writeFileSync(join(outDir, "events.jsonl"), `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
   return result;
 }

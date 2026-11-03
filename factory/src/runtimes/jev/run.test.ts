@@ -5,8 +5,10 @@ import { PACKS, type StageInput, resolveEngine } from "@hardness/contracts";
 import { APIConnectionError, APIError, APITimeoutError, APIUserAbortError } from "@typesafe-ai/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { LunaState } from "../../core/output.ts";
+import type { RunEvent } from "@hardness/contracts";
+
 import type { RunContext } from "../../core/runtime.ts";
+import { transcript } from "../../core/transcript.ts";
 import { type JevClient, jevRuntime } from "./run.ts";
 
 const issue = { title: "Board crashes on resize", description: "Resize the terminal and it panics.", labels: ["bug"], source: "jira:HAR-12" };
@@ -27,19 +29,23 @@ const input = (context: Partial<StageInput["context"]> = { issue }): StageInput 
 
 function context(over: Partial<RunContext> = {}) {
   const lines: string[] = [];
-  const state: LunaState = { ledger: { schema: 1, slices: [] }, events: [] };
+  const events: RunEvent[] = [];
+  const print = transcript((line) => lines.push(line));
   const ctx: RunContext = {
     pack: PACKS.issue_classify,
     engine: resolveEngine("jev"),
     input: input(),
     prompt: "",
     paths: { factoryRoot: "/factory", work: "/work", out: "/out", input: "/in", scratch: "/tmp/luna-scratch" },
-    luna: { state, call: async () => null },
+    luna: { call: async () => null },
     dry: false,
-    out: (line) => lines.push(line),
+    emit: (event) => {
+      events.push(event);
+      print(event);
+    },
     ...over,
   };
-  return { ctx, lines, state };
+  return { ctx, lines, events };
 }
 
 const answers = {
@@ -80,14 +86,14 @@ describe("the Jev runtime", () => {
 
   it("answers in the pack's schema, with the model, one turn, the duration and the tokens; no cost without a rate", async () => {
     const { client } = fake();
-    const { ctx, lines, state } = context();
+    const { ctx, lines, events } = context();
     const run = await jevRuntime(() => client).run(ctx);
     expect(run).toMatchObject({ ok: true, error: null, turns: 1, costUsd: null, model: "jev-2026-10", rateLimited: false });
     expect(run.structured).toEqual({ kind: { choice: "bug", confidence: 0.91 }, area: { choice: "board", confidence: 0.62 }, ready: { value: true, p: 0.83 }, size: { score: 1.4, confidence: 0.75 } });
     expect(PACKS.issue_classify.answer.safeParse(run.structured).success).toBe(true);
     expect(run.durationMs).toBeGreaterThanOrEqual(0);
     expect(run.text).toBe("kind bug (0.91) · area board (0.62) · ready yes (p 0.83) · size 1.4 (0.75) · below 0.7: area");
-    expect(state.events).toContainEqual({ kind: "note", payload: { phase: "usage", model: "jev-2026-10", inputTokens: 412, outputTokens: 9 } });
+    expect(events).toContainEqual({ kind: "usage", payload: { model: "jev-2026-10", inputTokens: 412, outputTokens: 9 } });
     expect(lines.join("\n")).toContain("412 in · 9 out");
   });
 

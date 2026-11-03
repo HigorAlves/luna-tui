@@ -1,11 +1,13 @@
 // Reads what a stage pack left in its /out folder: result.json, events.jsonl and the
 // artifact files. Artifacts are copied under the machine's state dir so they outlive the
-// run's scratch folder.
+// run's scratch folder. events.jsonl holds the run's whole event stream (text, every tool call
+// with its guard's decision, usage); only the facts for the task's log are taken from it, the
+// rest stays in the file.
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
-import { type ArtifactKind, StageOutput } from "@hardness/contracts";
+import { type ArtifactKind, StageOutput, isStreamEvent } from "@hardness/contracts";
 
 import type { StageResult } from "../ports.ts";
 
@@ -57,6 +59,7 @@ export async function ingestStageOutput(opts: {
     try {
       const item = JSON.parse(line) as Partial<IngestedEvent>;
       if (typeof item.kind !== "string") throw new Error("no kind");
+      if (isStreamEvent({ kind: item.kind })) continue;
       events.push({
         at: typeof item.at === "string" ? item.at : new Date().toISOString(),
         kind: item.kind,
