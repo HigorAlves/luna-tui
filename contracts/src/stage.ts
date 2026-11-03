@@ -110,6 +110,11 @@ export const PackId = z.enum([
 ]);
 export type PackId = z.infer<typeof PackId>;
 
+/** An engine per pack: a task's own overrides (`stages`), or a repo's luna.yaml `engines`. Each must
+ *  be one of its pack's `engines.allowed`; the machine checks that against the pack registry. */
+export const StageEngines = z.partialRecord(PackId, EngineId);
+export type StageEngines = z.infer<typeof StageEngines>;
+
 /** One behaviour test_design names: the plan criterion it proves, and how to prove it. */
 export const TestCase = z.object({
   title: z.string(),
@@ -313,6 +318,8 @@ export const LunaConfig = z.object({
   toolchains: z.record(z.string().min(1), z.union([z.string(), z.number()])).optional(),
   jira: JiraConfig.optional(),
   sla: SlaConfig.optional(),
+  /** The engine a pack runs on in this repo, over its default; a task's own choice wins over it. */
+  engines: StageEngines.optional(),
 });
 export type LunaConfig = z.infer<typeof LunaConfig>;
 

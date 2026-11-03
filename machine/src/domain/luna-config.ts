@@ -3,6 +3,7 @@
 import { type JiraConfig, LunaConfig, RUNNING, type SlaConfig, TaskState } from "@hardness/contracts";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 
+import { stagesProblem } from "./engine-choice.ts";
 import { branchPatternProblem } from "./jira-link.ts";
 import { DEFAULT_JIRA_BRANCH, DEFAULT_JIRA_COMMENTS, DEFAULT_POLICY, type JiraPolicy, type Policy, PolicyParseError } from "./policy.ts";
 import { type SlaTargets, parseDuration } from "./sla.ts";
@@ -14,20 +15,22 @@ const quiet: Warn = () => {};
 export const CONFIG_FILE = "luna.yaml";
 export { LunaConfig };
 
-/** The config as data, validated; a bad value throws naming its path. */
+/** The config as data, validated; a bad value throws naming its path, as does an engine its pack does not allow. */
 export function validateLunaConfig(raw: unknown): LunaConfig {
   const parsed = LunaConfig.safeParse(raw);
   if (!parsed.success) {
     const issue = parsed.error.issues[0]!;
     throw new PolicyParseError(`${issue.path.join(".") || "file"}: ${issue.message}`);
   }
+  const engines = stagesProblem(parsed.data.engines ?? {});
+  if (engines) throw new PolicyParseError(`engines.${engines}`);
   return parsed.data;
 }
 
 /** The file text for a config, sections in the order people read them, empty ones left out. */
 export function renderLunaConfig(config: LunaConfig): string {
   const ordered: Record<string, unknown> = {};
-  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla"] as const) {
+  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines"] as const) {
     const value = config[key];
     if (value === undefined) continue;
     if (Array.isArray(value) ? value.length === 0 : typeof value === "object" && Object.keys(value as object).length === 0) continue;
@@ -45,7 +48,7 @@ export function parseLunaConfig(text: string, warn: Warn = quiet): Policy {
   } catch (error) {
     throw new PolicyParseError(`not valid YAML: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (raw === null || raw === undefined) return { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {} };
+  if (raw === null || raw === undefined) return { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {} };
   if (typeof raw !== "object" || Array.isArray(raw)) throw new PolicyParseError("the file must be a YAML mapping");
   return policyOf(validateLunaConfig(raw), warn);
 }
@@ -115,7 +118,7 @@ export function slaTargetsOf(sla: SlaConfig, warn: Warn = quiet): Partial<SlaTar
 
 /** The policy a validated config means. */
 export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
-  const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla } = config;
+  const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla, engines = {} } = config;
   return {
     qa: policy.qa ?? DEFAULT_POLICY.qa,
     monthlyBudgetUsd: policy.monthly_budget_usd ?? null,
@@ -128,5 +131,6 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     toolchains: Object.fromEntries(Object.entries(toolchains).map(([tool, version]) => [tool, String(version)])),
     jira: jira ? jiraPolicyOf(jira, warn) : null,
     sla: sla ? slaTargetsOf(sla, warn) : {},
+    engines,
   };
 }
