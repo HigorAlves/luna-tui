@@ -90,6 +90,9 @@ const issuesLine = (error: { issues: { path: PropertyKey[]; message: string }[] 
 const BUDGET_SPENT = "the pack's own budget for this run is spent";
 export const budgetSpent = (detail: string): string => `${BUDGET_SPENT}: ${detail}`;
 
+/** The error a runtime reports when it ended the stage at its deadline. */
+export const timeRanOut = (ms: number): string => `the stage's time ran out after ${ms} ms with no answer`;
+
 /** The run as the result reports it, whatever runtime produced it: an answer given as JSON text
  *  is taken when it is one the pack's schema accepts, so a stage is not lost to the channel; an
  *  answer off the schema fails the run with the issue, and so does a run that ended with no

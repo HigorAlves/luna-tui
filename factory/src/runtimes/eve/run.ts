@@ -18,14 +18,16 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { type GuardContext, branchPrefixFor } from "../../core/guards.ts";
-import { EMPTY_RUN, type RunOutcome, budgetSpent } from "../../core/output.ts";
+import { EMPTY_RUN, type RunOutcome, budgetSpent, timeRanOut } from "../../core/output.ts";
 import { callLine } from "../../core/render.ts";
-import type { RunContext, Runtime } from "../../core/runtime.ts";
+import { type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
 import { eveTools, tokenBudgetPerTurn } from "./compile.ts";
 import type { EveSecrets } from "./agent/secrets.ts";
 
 const env = process.env;
 const HEALTHY_WITHIN_MS = 30_000;
+/** How long a cancelled turn may take to settle before the run stops following it. */
+const CANCEL_GRACE_MS = 5_000;
 
 export interface EveOptions {
   /** Where the built agents are, one folder per pack (default <factory>/.eve-agents). */
@@ -110,7 +112,9 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
     } catch {}
     return { ...EMPTY_RUN, ok: true, structured, text: "dry-run" };
   }
-  if (!existsSync(entry)) return { ...EMPTY_RUN, error: `the eve agent for ${pack.id} is not built (${app}); the runner image builds every agent` };
+  if (!existsSync(entry)) {
+    return { ...EMPTY_RUN, error: `the eve agent for ${pack.id} is not built (${app}): the runner image builds one for each pack whose engines allow eve (node src/runtimes/eve/build.ts)` };
+  }
 
   const t0 = Date.now();
   // The pinned ID the server was given; eve's model.started names the agent's compiled default
@@ -124,6 +128,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   let server: ChildProcess | null = null;
   let secretsFile: string | null = null;
   let state: string | null = null;
+  let timedOut: number | null = null;
   try {
     const bridgeToken = randomBytes(24).toString("hex");
     const served = await serveLuna(luna.call, bridgeToken);
@@ -173,9 +178,27 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
     const { session, delivery } = await client.sessions.create({ message: prompt, outputSchema });
     turn.result.sessionId = session.id;
     out(`session ${session.id} · eve agent ${pack.id} · ${apiKey ? "openai" : "chatgpt"}(${engine.modelId})`);
-    for await (const event of delivery.stream()) {
-      if (debug) appendFileSync(join(paths.out, "raw.jsonl"), `${JSON.stringify(event)}\n`);
-      if (turn.take(event as unknown as SessionEvent)) await session.cancel();
+    // The stage ends itself at its deadline, before the machine kills the container: the turn is
+    // cancelled, and if the server does not settle it soon after, the run stops following it.
+    const deadline = deadlineMs(input.limits.timeoutMs);
+    let expire: (value: { done: true; value: undefined }) => void = () => {};
+    const expired = new Promise<{ done: true; value: undefined }>((resolve) => (expire = resolve));
+    const timer = setTimeout(() => {
+      timedOut = deadline;
+      session.cancel().catch(() => {});
+      setTimeout(() => expire({ done: true, value: undefined }), CANCEL_GRACE_MS).unref();
+    }, deadline);
+    try {
+      const events = delivery.stream()[Symbol.asyncIterator]();
+      for (;;) {
+        const next = await Promise.race([events.next(), expired]);
+        if (next.done) break;
+        if (debug) appendFileSync(join(paths.out, "raw.jsonl"), `${JSON.stringify(next.value)}\n`);
+        if (turn.take(next.value as unknown as SessionEvent)) await session.cancel();
+      }
+    } finally {
+      clearTimeout(timer);
+      expire({ done: true, value: undefined });
     }
   } catch (e) {
     turn.result.ok = false;
@@ -183,6 +206,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
     turn.result.error = e instanceof Error ? e.message : String(e);
     if (/\b429\b|too many requests/i.test(turn.result.error)) turn.result.rateLimited = true;
   } finally {
+    if (timedOut !== null && !turn.result.ok) Object.assign(turn.result, { structured: null, rateLimited: false, error: timeRanOut(timedOut) });
     if (server) await stop(server);
     bridge?.close();
     if (state) rmSync(state, { recursive: true, force: true });

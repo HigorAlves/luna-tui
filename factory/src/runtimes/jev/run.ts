@@ -6,7 +6,7 @@ import type { StageInput } from "@hardness/contracts";
 import type { JsonValue, Questions, RequestOptions, SystemOneRequest, SystemOneResult } from "@typesafe-ai/sdk";
 
 import { EMPTY_RUN, type RunOutcome } from "../../core/output.ts";
-import type { RunContext, Runtime } from "../../core/runtime.ts";
+import { type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
 
 type Sdk = typeof import("@typesafe-ai/sdk");
 
@@ -75,7 +75,7 @@ export function jevRuntime(client: () => JevClient | Promise<JevClient> = typesa
           } catch {}
           return { ...EMPTY_RUN, ok: true, structured, text: "dry-run" };
         }
-        const result = await (await client()).systemOne(request, { signal: AbortSignal.timeout(input.limits.timeoutMs) });
+        const result = await (await client()).systemOne(request, { signal: AbortSignal.timeout(deadlineMs(input.limits.timeoutMs)) });
         const durationMs = Date.now() - t0;
         const { input_tokens: tokensIn, output_tokens: tokensOut } = result.usage;
         out(`jev · model ${result.model} · ${tokensIn ?? "?"} in · ${tokensOut ?? "?"} out · ${durationMs} ms`);
