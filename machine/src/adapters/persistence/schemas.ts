@@ -4,6 +4,7 @@
 import { EntitySchema } from "typeorm";
 
 import type { ApprovalRow, ArtifactRow, EventRow, StageRunRow, TaskRow } from "../../domain/task.ts";
+import type { PackRunEntityRow } from "./pack-run-store.ts";
 import type { SlackItemEntityRow, SlackTriageRunEntityRow, SlackWatchEntityRow } from "./slack-store.ts";
 
 const taskRelation = {
@@ -200,4 +201,25 @@ export const SlackTriageRunEntity = new EntitySchema<SlackTriageRunEntityRow>({
   indices: [{ columns: ["startedAt"] }],
 });
 
-export const ENTITIES = [TaskEntity, StageRunEntity, EventEntity, ApprovalEntity, ArtifactEntity, SlackItemEntity, SlackWatchEntity, SlackTriageRunEntity];
+/** One `POST /runs` call that ran: never its context nor its answer. */
+export const PackRunEntity = new EntitySchema<PackRunEntityRow>({
+  name: "PackRun",
+  tableName: "pack_runs",
+  columns: {
+    id: { type: "uuid", primary: true, generated: "uuid" },
+    pack: { type: "text" },
+    engine: { type: "text" },
+    model: { type: "text", default: "" },
+    client: { type: "text", nullable: true },
+    ok: { type: "boolean", default: false },
+    error: { type: "text", nullable: true },
+    turns: { type: "integer", default: 0 },
+    durationMs: { name: "duration_ms", type: "integer", default: 0 },
+    costUsd: { name: "cost_usd", type: "numeric", precision: 10, scale: 4, nullable: true },
+    startedAt: { name: "started_at", type: "timestamptz" },
+    endedAt: { name: "ended_at", type: "timestamptz" },
+  },
+  indices: [{ columns: ["startedAt"] }],
+});
+
+export const ENTITIES = [TaskEntity, StageRunEntity, EventEntity, ApprovalEntity, ArtifactEntity, SlackItemEntity, SlackWatchEntity, SlackTriageRunEntity, PackRunEntity];

@@ -10,6 +10,7 @@ import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
 import { TaskEntity } from "../adapters/persistence/schemas.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { NO_RETRIES } from "../domain/transition.ts";
+import { PACK_RUNS_DIR } from "./pack-runs.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./sweep.ts";
 
@@ -148,6 +149,17 @@ describe("sweepTaskState", () => {
     expect(existsSync(join(stateDir, "tasks", task.id))).toBe(true);
     expect(existsSync(join(stateDir, "tasks", "11111111-2222-3333-4444-555555555555"))).toBe(false);
     expect(await sweepTaskState(db, join(stateDir, "nowhere"))).toBe(0);
+  });
+});
+
+describe("sweepRunFolders and pack runs", () => {
+  it("never touches a POST /runs call's folder, in flight or not: those live under pack-runs/, apart from the stage runs", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "sweep-pack-runs-"));
+    const inFlight = join(stateDir, PACK_RUNS_DIR, "chat_triage-0b9e", "in");
+    mkdirSync(inFlight, { recursive: true });
+    mkdirSync(join(stateDir, "runs", "orphan"), { recursive: true });
+    expect(await sweepRunFolders(db, stateDir)).toBe(1);
+    expect(existsSync(inFlight)).toBe(true);
   });
 });
 

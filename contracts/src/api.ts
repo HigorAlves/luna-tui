@@ -27,6 +27,23 @@ export const NewTaskInput = z.object({
 export const EditStagesInput = z.object({ stages: z.partialRecord(PackId, EngineId.nullable()) });
 export type EditStagesInput = z.infer<typeof EditStagesInput>;
 
+/** `POST /runs`: one context-only pack (it runs in no task state) on data the client sends.
+ *  `context` holds the pack's own key of the stage input's context (`chat`, `issue`, `jira`,
+ *  `slack`) and nothing else; the machine checks it against that key's schema. */
+export const RunInput = z.object({
+  pack: PackId,
+  /** One of the pack's `engines.allowed`; absent means its default. */
+  engine: EngineId.optional(),
+  context: z.record(z.string(), z.unknown()),
+});
+export type RunInput = z.infer<typeof RunInput>;
+
+/** What `POST /runs` answers: the pack's answer, validated against its schema, and what the run cost. */
+export interface RunResult {
+  answer: Record<string, unknown>;
+  usage: { model: string; engine: EngineId; turns: number; durationMs: number; costUsd: number | null };
+}
+
 /** `POST /repos/setup`: have the setup pack propose a luna.yaml for the checkout at `repoPath`. */
 export const SetupRepoInput = z.object({ repoPath: z.string().trim().min(1) });
 export type SetupRepoInput = z.infer<typeof SetupRepoInput>;
@@ -414,4 +431,6 @@ export interface ApiError {
   message: string;
   /** With 409 `idempotency_conflict`: the task the key already made. */
   taskId?: string;
+  /** `POST /runs`' 429: when the engine's usage window resets (ISO), when the run said. */
+  resetsAt?: string | null;
 }
