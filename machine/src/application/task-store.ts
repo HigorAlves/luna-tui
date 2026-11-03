@@ -148,6 +148,8 @@ export interface TaskStore {
   spendSinceUsd(since: Date): Promise<number>;
   /** What one repo's stage runs started since `since` have cost, in USD. */
   repoSpendSinceUsd(repoPath: string, since: Date): Promise<number>;
+  /** Cost by engine since then: stage runs, `POST /runs` calls and Slack triage runs; with `repo`, that repo's stage runs only. */
+  engineSpendSinceUsd(since: Date, repo?: string): Promise<Map<string, number>>;
   countStageRunAttempts(taskId: string, stage: TaskState): Promise<number>;
   insertStageRun(input: InsertStageRunInput): Promise<string>;
   updateStageRun(id: string, patch: UpdateStageRunInput): Promise<void>;

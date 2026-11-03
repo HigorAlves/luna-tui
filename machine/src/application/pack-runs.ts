@@ -73,6 +73,8 @@ export class EngineNotAllowedError extends Error {}
 export class RunNoCredentialError extends Error {}
 /** The engine's runtime is turned off on this machine (MACHINE_DISABLE_RUNTIMES): 409, nothing ran. */
 export class RunEngineDisabledError extends Error {}
+/** The engine is at a monthly cap (MACHINE_ENGINE_BUDGETS): 409 `budget`, nothing ran. */
+export class RunEngineBudgetError extends Error {}
 /** The pack ran and gave no valid answer: 422 with the run's error. */
 export class RunFailedError extends Error {}
 /** Every place is taken and the waiting list is full: 429, nothing ran. */
@@ -129,7 +131,8 @@ const usd = (value: number) => `$${value.toFixed(2)}`;
 /** Why an engine cannot run a call, as the error the route answers. */
 function unavailable(engine: EngineId, found: { reason: string; code?: "disabled" | "budget" }): Error {
   const message = `${engine}: ${found.reason}`;
-  return found.code === "disabled" ? new RunEngineDisabledError(message) : new RunNoCredentialError(message);
+  if (found.code === "disabled") return new RunEngineDisabledError(message);
+  return found.code === "budget" ? new RunEngineBudgetError(message) : new RunNoCredentialError(message);
 }
 
 /** Of two usage limits, the one whose window opens first: what a client waits for to try again. */

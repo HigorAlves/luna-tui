@@ -22,6 +22,7 @@ describe("parsePolicy", () => {
       jira: null,
       sla: {},
       engines: {},
+      engineBudgets: {},
     });
   });
 
@@ -42,6 +43,7 @@ describe("parsePolicy", () => {
       jira: null,
       sla: {},
       engines: {},
+      engineBudgets: {},
     });
   });
 

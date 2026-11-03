@@ -994,6 +994,22 @@ describe("fallback across engines", () => {
     expect((await pipeline.events(task.id)).some((e) => e.kind === "stage.engine")).toBe(false);
   });
 
+  it("asks about each fallback for the task's repo, so a monthly cap there holds it back and the task pauses", async () => {
+    const ran: EngineId[] = [];
+    const asked: Array<[EngineId, string | null | undefined]> = [];
+    const capped = {
+      check: async (engine: EngineId, scope?: { repo?: string | null }) => {
+        asked.push([engine, scope?.repo]);
+        return engine === "codex:sol" ? { available: false as const, code: "budget" as const, reason: "over its monthly budget ($5.00 of $5.00 on codex in a)" } : { available: true as const };
+      },
+    };
+    pipeline = new Pipeline(db, triageLimitedOn(new Set(["claude:opus"]), ran), { inline: true, hasConfig: () => true, credentials: capped });
+    const task = await pipeline.createTask({ title: "a", repoPath: "/r/a" });
+    expect((await pipeline.start(task.id)).state).toBe("paused_rate_limit");
+    expect(ran).toEqual(["claude:opus"]);
+    expect(asked).toContainEqual(["codex:sol", "/r/a"]);
+  });
+
   it("never falls back on a stage whose pack has no fallback", async () => {
     pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, credentials: everyCredential });
     stubs.plan("implementing", { outcome: "pass", rateLimited: true, detail: { resetsAt: String(inOneHour()) } });

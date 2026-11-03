@@ -23,9 +23,14 @@ export function credentialsFor(engine: EngineId, opts: CredentialOptions = {}): 
   return loaders[credentialOwner(engine)](opts);
 }
 
+export interface CheckScope {
+  repo?: string | null;
+}
+
 /** The machine's credentials by engine, as the stage runners and `GET /engines` use them. */
 export interface Credentials {
-  check(engine: EngineId): Promise<Availability>;
+  /** `scope.repo`: the repo the run is for, when the machine holds engines back per repo (its monthly caps). */
+  check(engine: EngineId, scope?: CheckScope): Promise<Availability>;
   /** Waits, within `wait`, while another run holds a credential only one run may use at a time (the Codex login). */
   prepare(engine: EngineId, runDir: string, wait?: PrepareWait): Promise<RunCredential>;
 }

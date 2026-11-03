@@ -698,7 +698,7 @@ export class Pipeline {
     const pack = packForState(stage);
     if (!pack) return null;
     const { engines } = await this.policies.for(task.repoPath);
-    return (await pickEngine(this.credentials, PACKS[pack], task.stages ?? null, engines ?? null)).engine;
+    return (await pickEngine(this.credentials, PACKS[pack], task.stages ?? null, engines ?? null, task.repoPath)).engine;
   }
 
   /** Whose window `stage` would spend for `task`. A stage with no pack of its own counts as
@@ -729,7 +729,7 @@ export class Pipeline {
     let next: EngineId | null = null;
     for (const candidate of fallbackCandidates(PACKS[pack], tried)) {
       if (held.has(credentialOwner(candidate))) continue;
-      if ((await this.credentials.check(candidate)).available) {
+      if ((await this.credentials.check(candidate, { repo: task.repoPath })).available) {
         next = candidate;
         break;
       }

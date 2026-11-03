@@ -30,7 +30,7 @@ export function validateLunaConfig(raw: unknown): LunaConfig {
 /** The file text for a config, sections in the order people read them, empty ones left out. */
 export function renderLunaConfig(config: LunaConfig): string {
   const ordered: Record<string, unknown> = {};
-  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines"] as const) {
+  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "budget"] as const) {
     const value = config[key];
     if (value === undefined) continue;
     if (Array.isArray(value) ? value.length === 0 : typeof value === "object" && Object.keys(value as object).length === 0) continue;
@@ -48,7 +48,7 @@ export function parseLunaConfig(text: string, warn: Warn = quiet): Policy {
   } catch (error) {
     throw new PolicyParseError(`not valid YAML: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (raw === null || raw === undefined) return { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {} };
+  if (raw === null || raw === undefined) return { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {} };
   if (typeof raw !== "object" || Array.isArray(raw)) throw new PolicyParseError("the file must be a YAML mapping");
   return policyOf(validateLunaConfig(raw), warn);
 }
@@ -118,7 +118,7 @@ export function slaTargetsOf(sla: SlaConfig, warn: Warn = quiet): Partial<SlaTar
 
 /** The policy a validated config means. */
 export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
-  const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla, engines = {} } = config;
+  const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla, engines = {}, budget } = config;
   return {
     qa: policy.qa ?? DEFAULT_POLICY.qa,
     monthlyBudgetUsd: policy.monthly_budget_usd ?? null,
@@ -132,5 +132,6 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     jira: jira ? jiraPolicyOf(jira, warn) : null,
     sla: sla ? slaTargetsOf(sla, warn) : {},
     engines,
+    engineBudgets: budget?.engines ?? {},
   };
 }

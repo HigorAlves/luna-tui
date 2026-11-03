@@ -32,6 +32,7 @@ describe("loadConfig", () => {
       taskBudgetUsd: null,
       dailyBudgetUsd: null,
       disabledRuntimes: [],
+      engineBudgets: {},
       restartPolicy: "requeue",
       worktreeRetentionDays: 7,
       maxPerRepo: null,
@@ -180,6 +181,14 @@ describe("loadConfig", () => {
     expect(loadConfig({ HOME: "/home/me", MACHINE_DISABLE_RUNTIMES: " jev , eve,jev " }).disabledRuntimes).toEqual(["jev", "eve"]);
     expect(() => loadConfig({ HOME: "/home/me", MACHINE_DISABLE_RUNTIMES: "eve,claude" })).toThrow("MACHINE_DISABLE_RUNTIMES cannot turn off claude: every pack's default engine runs on it");
     expect(() => loadConfig({ HOME: "/home/me", MACHINE_DISABLE_RUNTIMES: "codex" })).toThrow(/MACHINE_DISABLE_RUNTIMES lists runtimes \(eve, jev\), got "codex"/);
+  });
+
+  it("reads monthly caps per engine or credential from MACHINE_ENGINE_BUDGETS, and refuses Claude, unknown names and bad amounts", () => {
+    expect(loadConfig({ HOME: "/home/me", MACHINE_ENGINE_BUDGETS: "codex=0, openai=20,jev=5,openai:luna=2.5" }).engineBudgets).toEqual({ codex: 0, openai: 20, jev: 5, "openai:luna": 2.5 });
+    expect(() => loadConfig({ HOME: "/home/me", MACHINE_ENGINE_BUDGETS: "claude=50" })).toThrow(/^MACHINE_ENGINE_BUDGETS: claude: no monthly cap on Claude/);
+    expect(() => loadConfig({ HOME: "/home/me", MACHINE_ENGINE_BUDGETS: "gpt=5" })).toThrow(/^MACHINE_ENGINE_BUDGETS: gpt: not an engine or a credential/);
+    expect(() => loadConfig({ HOME: "/home/me", MACHINE_ENGINE_BUDGETS: "openai=lots" })).toThrow('MACHINE_ENGINE_BUDGETS must list <engine or credential>=<USD> pairs, got "openai=lots"');
+    expect(() => loadConfig({ HOME: "/home/me", MACHINE_ENGINE_BUDGETS: "openai=-1" })).toThrow(/MACHINE_ENGINE_BUDGETS must list/);
   });
 
   it("reads a custom retention window, including 0 to disable pruning", () => {

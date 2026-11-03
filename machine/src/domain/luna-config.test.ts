@@ -32,6 +32,8 @@ qa_targets:
     credential: env:QA_PASSWORD
 engines:
   triage: claude:opus
+budget:
+  engines: { "openai:sol": 10, codex: 0 }
 `;
 
 describe("parseLunaConfig", () => {
@@ -59,6 +61,7 @@ describe("parseLunaConfig", () => {
       jira: null,
       sla: {},
       engines: { triage: "claude:opus" },
+      engineBudgets: { "openai:sol": 10, codex: 0 },
     });
   });
 
@@ -82,6 +85,12 @@ describe("parseLunaConfig", () => {
     expect(() => parseLunaConfig("checks: [\n")).toThrow(/yaml/i);
     expect(() => parseLunaConfig("engines:\n  triage: gpt-6\n")).toThrow(/engines\.triage/);
     expect(() => parseLunaConfig("engines:\n  nope: claude:opus\n")).toThrow(/engines/);
+  });
+
+  it("refuses a monthly engine cap on Claude, on no engine, or below zero, naming the key", () => {
+    expect(() => parseLunaConfig("budget:\n  engines: { \"claude:opus\": 5 }\n")).toThrow(/^budget\.engines\.claude:opus: claude:opus: no monthly cap on Claude/);
+    expect(() => parseLunaConfig("budget:\n  engines: { gpt: 5 }\n")).toThrow(/^budget\.engines\.gpt: gpt: not an engine or a credential/);
+    expect(() => parseLunaConfig("budget:\n  engines: { openai: -1 }\n")).toThrow(/^budget\.engines\.openai/);
   });
 
   it("refuses an engine its pack does not allow, like any other bad value", () => {

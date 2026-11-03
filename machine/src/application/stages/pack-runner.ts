@@ -130,7 +130,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     ? { engine: resume.engine, reason: null }
     : context.engine
       ? { engine: context.engine, reason: null }
-      : await pickEngine(deps.credentials, PACKS[pack], task.stages ?? null, policy.engines);
+      : await pickEngine(deps.credentials, PACKS[pack], task.stages ?? null, policy.engines, task.repoPath);
   const engineEvents = choice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: choice.reason } }] : [];
   if (!resume) await context.started?.({ container, inputCommit, engine: choice.engine });
   // An engine asked for that gave way to the default is said on the task as it starts, not only in the run's events.
