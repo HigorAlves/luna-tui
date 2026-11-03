@@ -27,6 +27,7 @@ import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-file
 import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
+import { prepareStageCredentials } from "./stage-credentials.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
 import { pickEngine } from "../engine.ts";
 import { PolicyStore } from "../policy.ts";
@@ -159,15 +160,19 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   // you can read it, and a later run can resume it.
   const sessionMount = join(deps.stateDir, "tasks", task.id, "session");
   await mkdir(sessionMount, { recursive: true });
-  // Only this engine's credential, prepared under the run folder and released once the container is gone.
-  // One only one run may hold at a time (the Codex login) is waited for within the stage's own
-  // timeout, and the wait is said on the task, not left a silent hang.
+  // Only this engine's credential, and its helpers' on other engines (delegated inside the
+  // container), prepared under the run folder and released once the container is gone. One only
+  // one run may hold at a time (the Codex login) is waited for within the stage's own timeout, and
+  // the wait is said on the task, not left a silent hang.
   let credential;
   try {
-    credential = await deps.credentials.prepare(choice.engine, runDir, {
+    const note = (line: string) => void context.note?.(line).catch(() => {});
+    credential = await prepareStageCredentials(deps.credentials, PACKS[pack], choice.engine, runDir, {
       signal: context.signal,
       timeoutMs: input.limits.timeoutMs,
-      onWait: (note) => void context.note?.(note).catch(() => {}),
+      onWait: note,
+      repo: task.repoPath,
+      note,
     });
   } catch (error) {
     if (!(error instanceof NoCredentialError || error instanceof CredentialWaitError)) throw error;

@@ -696,6 +696,13 @@ describe("the engine a stage runs on", () => {
     expect(result).toMatchObject({ outcome: "fail", detail: { error: expect.stringMatching(/^waited 60 min for the Codex login/) } });
   });
 
+  it("gives a verifying stage the Codex login its second opinion needs beside its own engine's, and releases both", async () => {
+    const { credentials, log } = recordingCredentials();
+    await runAgent({ ...deps(fakeSandbox(output(), () => log.push("sandbox"))), credentials }, context("verifying"), "verifying");
+    expect(seen!.credential).toEqual({ env: { KEY_FOR_CLAUDE_OPUS: "v", KEY_FOR_CODEX_SOL: "v" }, mounts: [] });
+    expect(log).toEqual(["prepare claude:opus", "prepare codex:sol", "sandbox", "release claude:opus", "release codex:sol"]);
+  });
+
   it("releases the credential when the sandbox throws", async () => {
     const { credentials, log } = recordingCredentials();
     const broken = async () => {
