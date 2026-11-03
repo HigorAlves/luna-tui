@@ -374,6 +374,20 @@ export const QaTarget = z.object({
 });
 export type QaTarget = z.infer<typeof QaTarget>;
 
+/** What issue_classify said about the issue a task came from, as intake stores it: each answer's
+ *  pick (`size` is the rubric score, 0 tiny to 3 large), the lowest of the answers' confidences,
+ *  when and on which model. A hint for people and for jira_intake; it decides nothing alone. */
+export const TaskClassification = z.object({
+  kind: z.string(),
+  area: z.string(),
+  ready: z.boolean(),
+  size: z.number(),
+  confidence: z.number().min(0).max(1),
+  at: z.string(),
+  model: z.string(),
+});
+export type TaskClassification = z.infer<typeof TaskClassification>;
+
 /** What the jira_intake pack reads: the issue, as Jira gives it, plus where it would land. */
 export const JiraIntakeContext = z.object({
   key: z.string(),
@@ -389,6 +403,8 @@ export const JiraIntakeContext = z.object({
   comments: z.array(z.string()),
   /** The repo the ticket would use, when known, so the agent can check the ask against the code. */
   repoPath: z.string().nullable(),
+  /** issue_classify's first read, when intake ran it: a hint, not a verdict. */
+  classification: TaskClassification.nullable().optional(),
 });
 export type JiraIntakeContext = z.infer<typeof JiraIntakeContext>;
 

@@ -79,3 +79,14 @@ describe("a task snapshot's lastRun and gate", () => {
     expect(updated.task).toMatchObject({ lastRun: { stage: "triage", summary: "s" }, gate: { state: "awaiting_approval" } });
   });
 });
+
+describe("a task snapshot's classification", () => {
+  it("is what intake stored from issue_classify, in one task and in the list; null on a task intake did not classify", async () => {
+    const classification = { kind: "bug", area: "board", ready: true, size: 1, confidence: 0.85, at: "2026-11-03T12:00:00.000Z", model: "typesafe-ai/jev" };
+    const classified = await pipeline.createTask({ title: "Board crashes", classification });
+    const plain = await pipeline.createTask({ title: "Login" });
+    expect((await one(classified.id)).classification).toEqual(classification);
+    expect((await one(plain.id)).classification).toBeNull();
+    expect((await all()).map((t) => t.classification)).toEqual([classification, null]);
+  });
+});

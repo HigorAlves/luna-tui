@@ -1,6 +1,6 @@
 // Plain domain types for a task and everything attached to it. No TypeORM here — see
 // ../adapters/persistence/schemas.ts for the persistence mapping of these same shapes.
-import type { ArtifactKind, EngineId, JiraLink, RunInfo, StageEngines, StageRunCase, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
+import type { ArtifactKind, EngineId, JiraLink, RunInfo, StageEngines, StageRunCase, TaskClassification, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
 
 import type { Retries } from "./transition.ts";
 
@@ -41,6 +41,8 @@ export interface TaskRow {
   requestHash: string | null;
   /** The task's own engine per pack, over luna.yaml's and the pack's default; a pack's entry is fixed once its stage starts. */
   stages: StageEngines;
+  /** What issue_classify said about the issue the task came from; null when intake did not run it. */
+  classification: TaskClassification | null;
   /** The task's place in the change sequence (`task_seq`), bigint as pg returns it. */
   seq: string;
   createdAt: Date;

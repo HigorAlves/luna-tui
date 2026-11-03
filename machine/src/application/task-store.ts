@@ -1,7 +1,7 @@
 // Everything Pipeline needs from storage. Every method here is plain CRUD except
 // `withTaskLock`, whose Postgres implementation takes a row lock inside a transaction —
 // the one seam where the transition engine's correctness depends on the storage layer.
-import type { EngineId, JiraLink, StageEngines, StageRunCase, TaskRoute, TaskState } from "@hardness/contracts";
+import type { EngineId, JiraLink, StageEngines, StageRunCase, TaskClassification, TaskRoute, TaskState } from "@hardness/contracts";
 
 import type { ApprovalRow, ArtifactRow, Decision, EventRow, StageRunRow, StageRunStatus, TaskRow } from "../domain/task.ts";
 
@@ -20,6 +20,8 @@ export interface NewTaskRow {
   jira?: JiraLink | null;
   /** The task's own engine per pack (the work order's `stages`). */
   stages?: StageEngines;
+  /** What issue_classify said about the issue, when intake ran it. */
+  classification?: TaskClassification | null;
 }
 
 export interface DecideApprovalInput {

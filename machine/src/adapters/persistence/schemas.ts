@@ -42,6 +42,7 @@ export const TaskEntity = new EntitySchema<TaskRow>({
     idempotencyKey: { name: "idempotency_key", type: "text", nullable: true },
     requestHash: { name: "request_hash", type: "text", nullable: true },
     stages: { type: "jsonb", default: () => "'{}'::jsonb" },
+    classification: { type: "jsonb", nullable: true },
     // Stamped by the `tasks_seq` trigger on every insert and update; never written from here.
     seq: { type: "bigint", insert: false, update: false },
     createdAt: { name: "created_at", type: "timestamptz", createDate: true },
@@ -227,7 +228,7 @@ export const PackRunEntity = new EntitySchema<PackRunEntityRow>({
     error: { type: "text", nullable: true },
     turns: { type: "integer", default: 0 },
     durationMs: { name: "duration_ms", type: "integer", default: 0 },
-    costUsd: { name: "cost_usd", type: "numeric", precision: 10, scale: 4, nullable: true },
+    costUsd: { name: "cost_usd", type: "numeric", precision: 14, scale: 8, nullable: true },
     startedAt: { name: "started_at", type: "timestamptz" },
     endedAt: { name: "ended_at", type: "timestamptz" },
   },
