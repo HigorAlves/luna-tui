@@ -200,6 +200,9 @@ describe("renderPrompt", () => {
     expect(eve).toContain("Never ask a question");
     expect(eve).toContain("read_file, glob and grep for files");
     expect(eve).toContain("Report progress with the step tool");
+    // eve's bash runs one process: the rules must not promise a chain the tool refuses.
+    expect(eve).toContain("bash is not a shell");
+    expect(eve).not.toContain("chained command");
     expect(eve).not.toMatch(/AskUserQuestion|Read\/Glob\/Grep|mcp__luna__/);
     expect(eve.split("\n")).toHaveLength(FACTORY_RULES.split("\n").length);
   });

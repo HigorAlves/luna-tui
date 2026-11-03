@@ -9,24 +9,24 @@ import { Readable, Writable } from "node:stream";
 import { defineSandbox } from "eve/sandbox";
 import { defineSandboxProvider, SANDBOX_AGENT_ENV, type SandboxConnection } from "eve/sandbox/provider";
 
-// Commands the model runs must not inherit the runner's secrets: the per-run API password, the
-// bridge token, the model credentials. GH_TOKEN stays: the stage holds it to read, as on Claude.
-// The Codex auth file itself stays readable to the same uid: the guards refuse any path under
-// the Codex home instead (core/guards.ts, deniedRoots).
-const SECRET_ENV = /^(LUNA_EVE_PASSWORD|LUNA_EVE_BRIDGE_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN)$|CODEX/i;
-function commandEnv(extra: Readonly<Record<string, string>>): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [key, value] of Object.entries(process.env)) if (!SECRET_ENV.test(key)) env[key] = value;
-  return { ...env, ...SANDBOX_AGENT_ENV, ...extra };
+import { commandEnv } from "./exec.ts";
+
+// What eve runs here itself (glob's and grep's searches, its own job bookkeeping) is a script it
+// builds with every model input quoted; the model's commands never come here (agent/tools.ts runs
+// them as one process each). Neither inherits the server's environment: an explicit one, without
+// a credential, and a non-login shell with no profile or rc file, so nothing a command wrote can
+// run later and PATH keeps the image's toolchains.
+function scriptEnv(extra: Readonly<Record<string, string>>): Record<string, string> {
+  return { ...commandEnv("bash", { home: process.env.HOME || "/tmp" }), ...SANDBOX_AGENT_ENV, ...extra };
 }
 
 function connect(root: string): SandboxConnection {
   return {
     workspaceRoot: root,
     async spawn({ command, env, workingDirectory, signal, stdin }) {
-      const child = spawn("bash", ["-lc", command], {
+      const child = spawn("bash", ["--noprofile", "--norc", "-c", command], {
         cwd: workingDirectory,
-        env: commandEnv(env),
+        env: scriptEnv(env),
         stdio: [stdin ? "pipe" : "ignore", "pipe", "pipe"],
         detached: true, // own process group, so kill() takes the whole tree
         signal,
