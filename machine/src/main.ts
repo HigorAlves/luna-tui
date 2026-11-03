@@ -14,7 +14,7 @@ import { loadConfig } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns } from "./adapters/persistence/prune.ts";
-import { sweepImages, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
+import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { GitHubPulls } from "./application/pulls.ts";
@@ -91,6 +91,10 @@ async function sweep(): Promise<void> {
   await step("slack triage runs", async () => {
     const removed = await sweepSlackTriageRuns(config.stateDir, config.retentionDays);
     return removed > 0 ? `removed ${removed} failed slack triage run folder(s)` : null;
+  });
+  await step("jira intake runs", async () => {
+    const removed = await sweepJiraIntakeRuns(config.stateDir, config.retentionDays);
+    return removed > 0 ? `removed ${removed} failed jira intake run folder(s)` : null;
   });
   await step("images", async () => {
     const removed = await sweepImages();

@@ -1,8 +1,9 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type CheckSpec, type CiContext, type EngineId, type Finding, type JiraIntakeContext, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type ChatTriageContext, type CheckSpec, type CiContext, type EngineId, type Finding, type IssueContext, type JiraIntakeContext, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
+import type { ContextPackId, PackContext } from "./context-packs.ts";
 import type { ApprovalRow, TaskRow } from "./task.ts";
 
 const MINUTE = 60_000;
@@ -166,6 +167,31 @@ export function buildJiraIntakeInput(jira: JiraIntakeContext, engine?: EngineId)
     decisions: [],
     priorFindings: [],
     context: { projectContext: null, jira },
+    limits: { maxTurns, timeoutMs },
+    env: { LUNA_FACTORY: "1" },
+  };
+}
+
+/** The /in/stage.json a context-only pack reads on data a client sent (`POST /runs`): a synthetic
+ *  task named after the pack, no plan, no branch, the context under the pack's own key. The
+ *  Slack and Jira packs get exactly the input their own runners build. */
+export function buildContextPackInput(pack: ContextPackId, context: PackContext, engine?: EngineId): StageInput {
+  if ("slack" in context) return buildSlackTriageInput(context.slack, engine);
+  if ("jira" in context) return buildJiraIntakeInput(context.jira, engine);
+  const { maxTurns, timeoutMs } = PACK_LIMITS[pack];
+  const issue: IssueContext | null = "issue" in context ? context.issue : null;
+  const chat: ChatTriageContext | null = "chat" in context ? context.chat : null;
+  return {
+    schema: 3,
+    stage: pack,
+    pack,
+    ...(engine ? { engine } : {}),
+    attempt: 1,
+    task: { id: pack.replace(/_/g, "-"), title: issue?.title ?? "Chat triage", description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
+    plan: null,
+    decisions: [],
+    priorFindings: [],
+    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}) },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

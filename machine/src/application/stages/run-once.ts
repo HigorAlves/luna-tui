@@ -1,7 +1,7 @@
 // One pack run in the stage container outside the task pipeline: only the engine's credential,
 // prepared under the run folder and released once the container is gone; the input written to
 // /in, the container run by the docker sandbox like every stage, /out/result.json read back and
-// validated. The Slack triage runner and the replay evals (evals/run.ts) both run a pack this way.
+// validated. The Slack triage runner, Jira intake and the replay evals (evals/run.ts) run a pack this way.
 import { type EngineId, type StageInput, StageOutput } from "@hardness/contracts";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
