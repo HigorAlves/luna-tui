@@ -1,6 +1,6 @@
 // Factory metrics: how the pipeline is doing over a window. Rows come from Postgres and
 // the numbers are computed here, so a window with no data gives null, never NaN.
-import { type Metrics, type RepoMetrics, RUNNING, WAITING_ON_USER } from "@hardness/contracts";
+import { type Metrics, type RepoMetrics, RUNNING, type Slots, WAITING_ON_USER } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import { ratio, stats } from "../http/metrics.ts";
@@ -8,7 +8,7 @@ import { ratio, stats } from "../http/metrics.ts";
 export interface MetricsOptions {
   since: Date;
   until?: Date;
-  slots: { max: number; active: number; draining: boolean };
+  slots: Slots;
   /** The spend ceilings, when set, and the trailing-24h spend they apply to. */
   budget?: { taskUsd: number | null; dailyUsd: number | null; spentTodayUsd: number };
   /** Only this repo's tasks (null: only tasks with no repo); absent means every task. */

@@ -38,3 +38,14 @@ export function resolveEngine(id: EngineId): ResolvedEngine {
   const model = MODELS[ENGINES[id].model];
   return { id, runtime: model.runtime, modelId: model.id, caps: model.caps };
 }
+
+/** Whose credential an engine spends, and so whose usage window it shares: a ChatGPT limit on
+ *  the Codex login never stops a Claude stage, nor the other way round. */
+export type CredentialOwner = "claude" | "codex" | "openai" | "typesafe";
+
+export function credentialOwner(id: EngineId): CredentialOwner {
+  const { runtime } = resolveEngine(id);
+  if (runtime === "claude") return "claude";
+  if (runtime === "jev") return "typesafe";
+  return (ENGINES[id] as Engine).auth === "chatgpt" ? "codex" : "openai";
+}

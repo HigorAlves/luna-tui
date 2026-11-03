@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { TaskState } from "@hardness/contracts";
+import type { EngineId, TaskState } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -810,6 +810,93 @@ describe("the supervisor tick", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("one usage window per credential", () => {
+  const everyCredential = { check: async () => ({ available: true as const }) };
+  const inOneHour = () => Math.floor(Date.now() / 1000) + 3600;
+  /** Triage hits the usage window of the engine named for the task, once; any other run passes. */
+  const limitedTriage = (limited: Map<string, EngineId>) => (stage: TaskState): StageRunner =>
+    stage !== "triage"
+      ? stubs.runnerFor(stage)
+      : async ({ task, started }) => {
+          const engine = limited.get(task.id);
+          if (!engine) return { outcome: "pass" };
+          limited.delete(task.id);
+          await started?.({ container: `c-${task.id.slice(0, 8)}`, inputCommit: null, engine });
+          return { outcome: "fail", rateLimited: true, detail: { resetsAt: inOneHour() } };
+        };
+  const until = async (check: () => Promise<boolean>) => {
+    for (let i = 0; i < 400 && !(await check()); i++) await new Promise((resolve) => setTimeout(resolve, 5));
+  };
+
+  it("a Codex window holds only the tasks whose next stage runs on Codex; Claude work keeps claiming", async () => {
+    const limited = new Map<string, EngineId>();
+    pipeline = new Pipeline(db, limitedTriage(limited), { inline: true, hasConfig: () => true, credentials: everyCredential });
+    const onCodex = await pipeline.createTask({ title: "on codex", stages: { triage: "codex:sol" } });
+    limited.set(onCodex.id, "codex:sol");
+    expect((await pipeline.start(onCodex.id)).state).toBe("paused_rate_limit");
+    expect(pipeline.slots.latched).toEqual([{ owner: "codex", until: expect.any(String) }]);
+    expect((await pipeline.events(onCodex.id)).find((e) => e.kind === "usage.latched")?.payload).toMatchObject({ owner: "codex", engine: "codex:sol" });
+
+    // A Claude task starts at once; another Codex one waits in the queue.
+    const claude = await newTask();
+    expect((await pipeline.start(claude.id)).state).toBe("awaiting_approval");
+    const codex = await pipeline.createTask({ title: "also codex", stages: { triage: "codex:sol" } });
+    expect(await pipeline.start(codex.id)).toMatchObject({ state: "triage", queued: true });
+
+    // The claim skips the held task and takes the Claude one queued behind it.
+    pipeline.drain();
+    const queuedClaude = await newTask();
+    expect(await pipeline.start(queuedClaude.id)).toMatchObject({ state: "triage", queued: true });
+    pipeline.resumeClaims();
+    await until(async () => (await pipeline.get(queuedClaude.id)).state === "awaiting_approval");
+    expect(await pipeline.get(queuedClaude.id)).toMatchObject({ state: "awaiting_approval", queued: false });
+    await pipeline.tick();
+    expect(await pipeline.get(codex.id)).toMatchObject({ state: "triage", queued: true });
+
+    // Resuming the Codex task opens Codex's window again, and the queue drains.
+    expect((await pipeline.windowReset(onCodex.id)).state).toBe("awaiting_approval");
+    expect(pipeline.slots.latched).toEqual([]);
+    await pipeline.tick();
+    expect(await pipeline.get(codex.id)).toMatchObject({ state: "awaiting_approval", queued: false });
+  });
+
+  it("a Claude window does not hold a task whose next stage runs on codex:sol", async () => {
+    const limited = new Map<string, EngineId>();
+    pipeline = new Pipeline(db, limitedTriage(limited), { inline: true, hasConfig: () => true, credentials: everyCredential });
+    const claude = await newTask();
+    limited.set(claude.id, "claude:opus");
+    expect((await pipeline.start(claude.id)).state).toBe("paused_rate_limit");
+    expect(pipeline.slots.latched).toEqual([{ owner: "claude", until: expect.any(String) }]);
+
+    const codex = await pipeline.createTask({ title: "on codex", stages: { triage: "codex:sol" } });
+    expect((await pipeline.start(codex.id)).state).toBe("awaiting_approval");
+    const other = await newTask();
+    expect(await pipeline.start(other.id)).toMatchObject({ state: "triage", queued: true });
+  });
+
+  it("a restart keeps each credential's window, and a pick that falls back to Claude waits with Claude", async () => {
+    const limited = new Map<string, EngineId>();
+    pipeline = new Pipeline(db, limitedTriage(limited), { inline: true, hasConfig: () => true, credentials: everyCredential });
+    const claude = await newTask();
+    limited.set(claude.id, "claude:opus");
+    const codex = await pipeline.createTask({ title: "on codex", stages: { triage: "codex:sol" } });
+    limited.set(codex.id, "codex:sol");
+    expect((await pipeline.start(claude.id)).state).toBe("paused_rate_limit");
+    expect((await pipeline.start(codex.id)).state).toBe("paused_rate_limit");
+    await pipeline.shutdown();
+
+    // This machine has no Codex login: a task asking for codex:sol runs triage on claude:opus.
+    const noCodex = { check: async (engine: EngineId) => (engine.startsWith("codex") ? { available: false as const, reason: "no Codex login" } : { available: true as const }) };
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, credentials: noCodex });
+    await pipeline.recover();
+    expect(pipeline.slots.latched.map((latch) => latch.owner).sort()).toEqual(["claude", "codex"]);
+    const fallsBack = await pipeline.createTask({ title: "asks for codex", stages: { triage: "codex:sol" } });
+    expect(await pipeline.start(fallsBack.id)).toMatchObject({ state: "triage", queued: true });
+    await pipeline.tick();
+    expect(await pipeline.get(fallsBack.id)).toMatchObject({ state: "triage", queued: true });
   });
 });
 

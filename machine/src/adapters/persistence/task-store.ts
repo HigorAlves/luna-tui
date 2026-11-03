@@ -176,6 +176,7 @@ export class PgTaskStore implements TaskStore {
       .filter((task) => repoCap(task) === null || load(task) < repoCap(task)!)
       .filter((task) => stageCap(task) === null || (runningStage.get(task.state) ?? 0) < stageCap(task)!)
       .filter((task) => task.repoPath === null || !options.excludeRepos?.has(task.repoPath))
+      .filter((task) => !options.excludeTasks?.has(task.id))
       .sort((a, b) => load(a) - load(b))[0];
     if (!candidate) return null;
     return this.db.transaction(async (tx) => {

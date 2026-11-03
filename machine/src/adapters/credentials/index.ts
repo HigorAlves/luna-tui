@@ -1,10 +1,10 @@
 // One credential loader per runtime, and the engine → loader map. A stage gets only its own
 // engine's credential: a Claude stage never sees the Codex login, an eve stage never the Claude token.
-import { ENGINES, type Engine, type EngineId, resolveEngine } from "@hardness/contracts";
+import { type CredentialOwner, type EngineId, credentialOwner } from "@hardness/contracts";
 
 import { claudeCredentials } from "./claude.ts";
 import { codexCredentials } from "./codex.ts";
-import { type Availability, type CredentialLoader, type CredentialOptions, type RunCredential, noCredential } from "./credential.ts";
+import type { Availability, CredentialLoader, CredentialOptions, RunCredential } from "./credential.ts";
 import { openaiCredentials } from "./openai.ts";
 import { typesafeCredentials } from "./typesafe.ts";
 
@@ -13,13 +13,13 @@ export { NoCredentialError, noCredential } from "./credential.ts";
 
 /** The loader for what `engine` needs: Claude's token, the Codex login, an OpenAI key or a TypeSafe key. */
 export function credentialsFor(engine: EngineId, opts: CredentialOptions = {}): CredentialLoader {
-  const { runtime } = resolveEngine(engine);
-  const { auth }: Engine = ENGINES[engine];
-  if (runtime === "claude") return claudeCredentials(opts);
-  if (runtime === "jev") return typesafeCredentials(opts);
-  if (auth === "chatgpt") return codexCredentials(opts);
-  if (auth === "api-key") return openaiCredentials(opts);
-  return noCredential(`${engine}: no credential loader for its runtime`);
+  const loaders: Record<CredentialOwner, (opts: CredentialOptions) => CredentialLoader> = {
+    claude: claudeCredentials,
+    codex: codexCredentials,
+    openai: openaiCredentials,
+    typesafe: typesafeCredentials,
+  };
+  return loaders[credentialOwner(engine)](opts);
 }
 
 /** The machine's credentials by engine, as the stage runners and `GET /engines` use them. */
