@@ -1,4 +1,5 @@
 **/node_modules
+factory/.eve-agents*
 .git
 board
 site
