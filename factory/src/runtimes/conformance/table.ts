@@ -20,7 +20,8 @@ export type ScriptStep =
   | { call: "bash"; command: string }
   | { call: "luna"; tool: LunaTool; args: Record<string, unknown> }
   | { answer: Record<string, unknown>; as?: "structured" | "text"; echo?: boolean }
-  | { rateLimit: { resetsAt?: number } };
+  | { rateLimit: { resetsAt?: number } }
+  | { fail: string };
 
 export interface Scenario {
   name: string;
@@ -73,6 +74,14 @@ export const SCENARIOS: Scenario[] = [
     check: ({ run }, can) => {
       expect(run).toMatchObject({ ok: false, rateLimited: true });
       if (can.resetsAt) expect(run.resetsAt).toBe(RESETS_AT);
+    },
+  },
+  {
+    name: "a model error the provider will not retry fails the run with its message",
+    script: [{ fail: "The 'x-model' model is not supported" }],
+    check: ({ run }) => {
+      expect(run).toMatchObject({ ok: false, structured: null, rateLimited: false });
+      expect(run.error).toMatch(/The 'x-model' model is not supported/);
     },
   },
   {

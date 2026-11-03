@@ -3,6 +3,7 @@
 // the reply tool and its schema check, retries) runs around it. Each step after the first follows
 // one tool result; a rejected reply (an answer off the schema) gets the same step again, the way
 // a model that does not learn would.
+import { APICallError } from "ai";
 import { mockModel } from "eve/evals";
 import { readFileSync } from "node:fs";
 
@@ -20,6 +21,8 @@ export function scriptedModel() {
         return { toolCalls: [step.call === "bash" ? { name: "bash", input: { command: step.command } } : { name: step.tool, input: step.args }] };
       }
       if ("rateLimit" in step) throw new Error("Rate limit reached for requests (429): try again later");
+      // A provider's 400: eve does not retry it and ends the session.
+      if ("fail" in step) throw new APICallError({ message: step.fail, url: "http://model", requestBodyValues: {}, statusCode: 400, isRetryable: false });
       const last = results.at(-1)?.output;
       const answer = step.echo ? { ...step.answer, summary: typeof last === "string" ? last : JSON.stringify(last) } : step.answer;
       return step.as === "text" ? { text: JSON.stringify(answer) } : { toolCalls: [{ name: "eve__reply", input: answer }] };

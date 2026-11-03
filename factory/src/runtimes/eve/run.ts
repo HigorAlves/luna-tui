@@ -90,7 +90,9 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   if (!existsSync(entry)) return { ...EMPTY_RUN, error: `the eve agent for ${pack.id} is not built (${app}); the runner image builds every agent` };
 
   const t0 = Date.now();
-  const result: RunOutcome = { ...EMPTY_RUN };
+  // The pinned ID the server was given; eve's model.started names the agent's compiled default
+  // for a model chosen at run time, so it is not read back.
+  const result: RunOutcome = { ...EMPTY_RUN, model: engine.modelId };
   const bridgeToken = randomBytes(24).toString("hex");
   const bridge = await serveLuna(luna.call, bridgeToken);
   const password = randomBytes(24).toString("hex");
@@ -142,6 +144,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
     let modelCalls = 0;
     let capped = false;
     let replyText = "";
+    let failure: string | null = null;
     for await (const event of delivery.stream()) {
       if (debug) appendFileSync(join(paths.out, "raw.jsonl"), `${JSON.stringify(event)}\n`);
       const data = (event as unknown as { data?: Record<string, unknown> }).data ?? {};
@@ -153,8 +156,10 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
           capped = true;
           await session.cancel();
         }
-      } else if (event.type === "model.started" && typeof data.modelId === "string") {
-        result.model = data.modelId;
+      } else if ((event.type === "model.settled" || event.type === "session.ended") && data.error) {
+        // A model error eve will not retry ends the session and cancels the turn: keep its reason.
+        const error = data.error as { code?: string; message?: string };
+        failure = `${error.code ?? "error"}: ${error.message ?? ""}`;
       } else if (event.type === "content.completed") {
         if (data.kind === "result") result.structured = data.value as Record<string, unknown>;
         else if (data.kind === "text" && typeof data.value === "string") {
@@ -187,7 +192,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
         } else if (capped && !result.error) {
           result.error = `no answer the ${pack.id} schema accepts within ${input.limits.maxTurns} model calls`;
         } else if (!result.error) {
-          result.error = error?.message ? `${error.code ?? "error"}: ${error.message}` : String(data.outcome);
+          result.error = error?.message ? `${error.code ?? "error"}: ${error.message}` : (failure ?? String(data.outcome));
         }
       }
     }
