@@ -16,6 +16,9 @@ describe("the model catalog and the engines", () => {
     expect(resolveEngine("claude:haiku").modelId).toBe("claude-haiku-5-5");
     expect(resolveEngine("codex:luna")).toMatchObject({ runtime: "eve", modelId: "gpt-6-luna-fast" });
     expect(resolveEngine("jev")).toMatchObject({ runtime: "jev", modelId: "jev-latest", caps: { tools: false, structured: true } });
+    // Jev is also served on the Vercel AI Gateway, under its own ID, at the catalog's one price.
+    expect(resolveEngine("jev")).toMatchObject({ gatewayId: "typesafe-ai/jev", pricing: { inputPerMTokUsd: 0.042 } });
+    expect(resolveEngine("claude:opus")).not.toHaveProperty("gatewayId");
     expect(ENGINES["codex:sol"].auth).toBe("chatgpt");
     expect(ENGINES["openai:sol"].auth).toBe("api-key");
     expect(EngineId.options.sort()).toEqual(["claude:haiku", "claude:opus", "claude:sonnet", "codex:luna", "codex:sol", "jev", "openai:luna", "openai:sol"]);
