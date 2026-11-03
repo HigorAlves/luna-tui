@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, BorderType, Clear, Padding, Paragraph, Wrap},
 };
 use crate::model::{
-    Approval, CriterionRow, EngineCatalog, PullRequest, StageRun, Task, TaskDetail, TaskDiff, TestCase, Tone, age, criteria_summary, now_secs,
+    Approval, CriterionRow, EngineCatalog, PullRequest, StageRun, Task, TaskDetail, TaskDiff, TaskSource, TestCase, Tone, age, criteria_summary, now_secs,
     plan_history, questions_of,
 };
 use crate::ui::{
@@ -133,7 +133,11 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         .border_type(BorderType::Rounded)
         .border_style(Style::new().fg(c(look_color(look))))
         .padding(Padding::new(1, 1, 0, 0))
-        .title(Line::from(format!(" #{} {} ", task.short_id(), task.title)).bold())
+        .title(Line::from(vec![
+            Span::from(format!(" #{} ", task.short_id())).bold(),
+            Span::from(task.source.as_ref().and_then(TaskSource::notch_tag).map(|t| format!("{t} ")).unwrap_or_default()).fg(c(SUBTEXT0)),
+            Span::from(format!("{} ", task.title)).bold(),
+        ]))
         .title_bottom(
             Line::from(format!(
                 " {} {}{} · h/l sections · {} · + size · ? help ",
@@ -1098,6 +1102,18 @@ mod tests {
 
     fn col_of(rows: &[String], needle: &str) -> Option<usize> {
         rows.iter().find_map(|r| r.find(needle).map(|i| r[..i].chars().count()))
+    }
+
+    #[test]
+    fn a_ticket_from_luna_notch_says_so_in_the_header_and_the_overview() {
+        let (_, detail) = fixture();
+        let task: Task = serde_json::from_str(&TASK.replace(r#""reason":null"#, r#""reason":null,"source":{"kind":"notch","ref":"LUNA-14","id":"wo_1"}"#)).unwrap();
+        let rows = render(120, 36, &task, Some(&detail), Section::Overview, 0);
+        assert!(rows[0].contains("#abcdef12 notch LUNA-14 Add CSV export"), "{}", rows[0]);
+        assert!(rows.iter().any(|r| r.contains("Luna Notch LUNA-14")), "{}", rows.join("\n"));
+        let (plain, _) = fixture();
+        let rows = render(120, 36, &plain, Some(&detail), Section::Overview, 0);
+        assert!(rows[0].contains("#abcdef12 Add CSV export"), "{}", rows[0]);
     }
 
     #[test]

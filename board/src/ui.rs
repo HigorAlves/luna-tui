@@ -24,7 +24,7 @@ use crate::slack::{self, SlackKey, SlackSplit, SlackState};
 use crate::{
     app::{App, Density, FloorState, GroupBy, Mode},
     model::{
-        COLUMNS, JiraIssueHit, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
+        COLUMNS, EngineInfo, JiraIssueHit, Look, Metrics, PullRequest, REPO_COLOUR_SLOTS, SLACK_PRIORITIES, SlackItem, SlackMetrics, Task, TaskEvent, age, age_secs, fmt_ms, fmt_pct,
         fmt_usd, repo_colour_slot, sla_targets, spend_p90, now_secs, unix_secs,
     },
 };
@@ -1905,9 +1905,20 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
         lines.push(Line::from(Span::from(" no numbers yet; R to retry").style(label_style)));
     }
 
-    // The per-repo table takes the bottom when there is more than one repo to compare.
+    // The per-repo table takes the bottom when there is more than one repo to compare, the
+    // per-engine one sits above it once there are numbers.
     let repo_height = if floor.repos.is_empty() { 0 } else { (floor.repos.len() as u16 + 3).min(area.height / 3) };
-    let [top, repo_area] = Layout::vertical([Constraint::Min(0), Constraint::Length(repo_height)]).areas(area);
+    let engine_rows = floor_engine_rows(floor);
+    let engine_height = match (&floor.d7, &floor.by_engine) {
+        (None, _) => 0,
+        (Some(_), None) => 2,
+        (Some(_), Some(_)) => (engine_rows.len() as u16 + 2).min(area.height / 3),
+    };
+    let [top, engine_area, repo_area] =
+        Layout::vertical([Constraint::Min(0), Constraint::Length(engine_height), Constraint::Length(repo_height)]).areas(area);
+    if engine_height > 0 {
+        render_floor_engines(frame, engine_area, floor.by_engine.is_some(), &engine_rows, head_style, label_style);
+    }
     let wide = top.width >= 110;
     let [table_area, stage_area] = if wide {
         Layout::horizontal([Constraint::Percentage(55), Constraint::Percentage(45)]).areas(top)
@@ -1970,6 +1981,48 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
         out.push(Line::from(Span::from(format!(" … +{hidden} more")).style(label_style)));
     }
     frame.render_widget(Paragraph::new(out), stage_area);
+}
+
+/// The engine table's lines: each engine with runs over 7d, then each one with only a month's
+/// spend or a cap; whether it is at its cap rides along.
+fn floor_engine_rows(floor: &FloorState) -> Vec<(String, bool)> {
+    let row = |name: &str, cells: [String; 6], info: Option<&EngineInfo>| {
+        let [runs, first, esc, limited, turns, cost] = cells;
+        let month = info.and_then(EngineInfo::month_line).unwrap_or_default();
+        let text = format!("  {:<16}{runs:>6}{first:>12}{esc:>5}{limited:>9}{turns:>7}{cost:>9}   {month}", truncate(name, 15));
+        (text, info.is_some_and(EngineInfo::at_cap))
+    };
+    let info = |id: &str| floor.engines.iter().find(|e| e.id == id);
+    let ran = floor.by_engine.as_deref().unwrap_or_default();
+    let mut rows: Vec<(String, bool)> = ran
+        .iter()
+        .map(|r| {
+            let turns = r.mean_turns.map_or("–".to_string(), |t| format!("{t:.1}"));
+            let cells = [r.stage_runs.to_string(), fmt_pct(r.first_pass_rate), r.escalations.to_string(), r.rate_limited.to_string(), turns, fmt_usd(Some(r.cost_usd))];
+            row(r.name(), cells, r.engine.as_deref().and_then(info))
+        })
+        .collect();
+    let idle = floor.engines.iter().filter(|e| !ran.iter().any(|r| r.engine.as_deref() == Some(e.id.as_str())));
+    for e in idle.filter(|e| e.budget_usd.is_some() || e.spent_this_month_usd.is_some_and(|s| s > 0.0)) {
+        rows.push(row(&e.id, std::array::from_fn(|_| "–".to_string()), Some(e)));
+    }
+    rows
+}
+
+/// Cost per engine over 7d and each engine's month against its cap; an engine at its cap reads
+/// red. A machine from before engines gets one line saying so.
+fn render_floor_engines(frame: &mut Frame, area: Rect, reported: bool, rows: &[(String, bool)], head_style: Style, label_style: Style) {
+    if !reported {
+        let note = " engines · the machine does not report engines";
+        frame.render_widget(Paragraph::new(Line::from(Span::from(note).style(label_style))), area);
+        return;
+    }
+    let head = format!("  {:<16}{:>6}{:>12}{:>5}{:>9}{:>7}{:>9}   {}", "engine · 7d", "runs", "first-pass", "esc", "limited", "turns", "cost", "month / cap");
+    let mut out = vec![Line::from(Span::from(head).style(head_style))];
+    for (text, at_cap) in rows.iter().take((area.height as usize).saturating_sub(1)) {
+        out.push(Line::from(Span::from(text.clone()).style(if *at_cap { Style::new().fg(c(RED)).bold() } else { Style::new() })));
+    }
+    frame.render_widget(Paragraph::new(out), area);
 }
 
 /// One row per repo over 7d, `all` first; `▌` marks the focus `tab` moves.
@@ -2377,6 +2430,42 @@ mod tests {
         let text = render(140, 36, &state);
         assert!(text.contains("▌ alpha"), "{text}");
         assert!(text.contains("Floor · alpha ·"), "{text}");
+    }
+
+    #[test]
+    fn floor_tables_cost_per_engine_with_the_month_against_its_cap_or_says_the_machine_does_not_report_engines() {
+        let mut state = floor();
+        let text = render(140, 40, &state);
+        assert!(text.contains("the machine does not report engines"), "{text}");
+
+        state.by_engine = serde_json::from_str(
+            r#"[{"engine":"claude:opus","stageRuns":12,"firstPassRate":0.75,"escalations":1,"rateLimited":2,"meanTurns":14.5,"meanDurationMs":90000,"costUsd":4.2},
+                {"engine":null,"stageRuns":3,"firstPassRate":null,"escalations":0,"rateLimited":0,"meanTurns":null,"meanDurationMs":null,"costUsd":0}]"#,
+        )
+        .unwrap();
+        state.engines = serde_json::from_str(
+            r#"[{"id":"claude:opus","available":true,"spentThisMonthUsd":6,"budgetUsd":null},
+                {"id":"openai:sol","available":false,"spentThisMonthUsd":20,"budgetUsd":20},
+                {"id":"claude:haiku","available":true,"spentThisMonthUsd":0,"budgetUsd":null}]"#,
+        )
+        .unwrap();
+        let text = render(140, 40, &state);
+        assert!(!text.contains("does not report engines"), "{text}");
+        let opus = text.lines().find(|l| l.contains("claude:opus")).unwrap_or_default().to_string();
+        for cell in ["12", "75%", "14.5", "$4.20", "$6.00 / no cap"] {
+            assert!(opus.contains(cell), "{cell}: {opus}");
+        }
+        assert!(text.lines().any(|l| l.contains("(none)") && l.contains('3')), "{text}");
+        let sol = text.lines().find(|l| l.contains("openai:sol")).unwrap_or_default().to_string();
+        assert!(sol.contains("$20.00 / $20.00"), "an engine with spend but no runs this week still shows its month: {sol}");
+        assert!(!text.contains("claude:haiku"), "nothing spent, no cap, no runs: left out");
+
+        let mut terminal = Terminal::new(TestBackend::new(140, 40)).unwrap();
+        terminal.draw(|f| render_floor(f, f.area(), &state)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let row = (0..40).find(|&y| (0..140).map(|x| buffer[(x, y)].symbol()).collect::<String>().contains("openai:sol")).unwrap();
+        let col = (0..140).find(|&x| buffer[(x, row)].symbol() == "o").unwrap();
+        assert_eq!(buffer[(col, row)].fg, c(RED), "at its cap: the row reads red");
     }
 
     fn render(width: u16, height: u16, floor: &FloorState) -> String {

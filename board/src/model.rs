@@ -39,7 +39,7 @@ pub struct Retries {
 /// Where a task came from, when it was created from an outside issue, a Slack message or a
 /// Jira issue. `kind` stays a plain string so kinds this board does not know still load; an
 /// issue has `repo`, `number` and `url`, a Slack message `channel`, `ts` and `permalink`, a
-/// Jira issue `key`, `url` and `issueType`.
+/// Jira issue `key`, `url` and `issueType`, a Luna Notch work order `ref`, `id` and `jiraKey`.
 #[derive(Deserialize, Clone, Debug)]
 pub struct TaskSource {
     pub kind: String,
@@ -61,6 +61,14 @@ pub struct TaskSource {
     #[serde(default, rename = "issueType")]
     #[allow(dead_code)] // part of the contract; the link carries the type once synced
     pub issue_type: Option<String>,
+    /// A Luna Notch work order's ticket (`LUNA-14`).
+    #[serde(default, rename = "ref")]
+    pub reference: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; the board names the work order by its ref
+    pub id: Option<String>,
+    #[serde(default, rename = "jiraKey")]
+    pub jira_key: Option<String>,
 }
 
 impl TaskSource {
@@ -69,12 +77,21 @@ impl TaskSource {
         self.url.as_deref().or(self.permalink.as_deref())
     }
 
-    /// `GitHub     acme/app#42 · url`, `Jira       PLAT-123 · url` or `Slack      #channel ·
-    /// permalink`, for the ticket popup.
+    /// `notch LUNA-14` for a task Luna Notch sent, else None: the card and the popup header wear it.
+    pub fn notch_tag(&self) -> Option<String> {
+        (self.kind == "notch").then(|| format!("notch {}", self.reference.as_deref().unwrap_or_default()).trim_end().to_string())
+    }
+
+    /// `GitHub     acme/app#42 · url`, `Jira       PLAT-123 · url`, `Luna Notch LUNA-14 · PLAT-9`
+    /// or `Slack      #channel · permalink`, for the ticket popup.
     pub fn detail_line(&self) -> String {
         match (self.repo.as_deref(), self.number) {
             (Some(repo), Some(number)) => format!("GitHub     {repo}#{number} · {}", self.url.as_deref().unwrap_or("")),
             _ if self.kind == "jira" => format!("Jira       {} · {}", self.key.as_deref().unwrap_or("?"), self.url.as_deref().unwrap_or("")),
+            _ if self.kind == "notch" => {
+                let jira = self.jira_key.as_deref().map(|k| format!(" · {k}")).unwrap_or_default();
+                format!("Luna Notch {}{jira}", self.reference.as_deref().unwrap_or("?"))
+            }
             _ => format!(
                 "Slack      {} · {}",
                 self.channel.as_deref().unwrap_or("?"),
@@ -601,6 +618,25 @@ pub struct EngineInfo {
     pub available: bool,
     #[serde(default)]
     pub reason: Option<String>,
+    /// This calendar month's recorded cost and the cap that binds the engine (None: no cap).
+    /// Both absent from a machine from before engine caps.
+    #[serde(default)]
+    pub spent_this_month_usd: Option<f64>,
+    #[serde(default)]
+    pub budget_usd: Option<f64>,
+}
+
+impl EngineInfo {
+    /// `$16.00 / $20.00`, `$3.10 / no cap`; None when the machine does not report the spend.
+    pub fn month_line(&self) -> Option<String> {
+        let spent = self.spent_this_month_usd?;
+        Some(format!("${spent:.2} / {}", self.budget_usd.map_or("no cap".to_string(), |b| format!("${b:.2}"))))
+    }
+
+    /// At or past its monthly cap: the machine will not start it.
+    pub fn at_cap(&self) -> bool {
+        matches!((self.spent_this_month_usd, self.budget_usd), (Some(spent), Some(cap)) if spent >= cap)
+    }
 }
 
 /// What the Engines section and its picker read, fetched together.
@@ -1417,6 +1453,27 @@ impl RepoMetrics {
     }
 }
 
+/// One engine's row of `GET /metrics?groupBy=engine`. Unknown keys (`meanDurationMs`) are ignored.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineMetrics {
+    /// None for host-only stages and runs from before engines.
+    pub engine: Option<String>,
+    pub stage_runs: u64,
+    pub first_pass_rate: Option<f64>,
+    pub escalations: u64,
+    pub rate_limited: u64,
+    pub mean_turns: Option<f64>,
+    pub cost_usd: f64,
+}
+
+impl EngineMetrics {
+    /// The engine's id, or `(none)` for the runs on none.
+    pub fn name(&self) -> &str {
+        self.engine.as_deref().unwrap_or("(none)")
+    }
+}
+
 /// Gates answered within their SLA over gates answered, and the median wait per gate state.
 #[derive(Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -1439,6 +1496,9 @@ pub struct Metrics {
     /// One row per repo, when asked for with `?groupBy=repo`.
     #[serde(default)]
     pub by_repo: Option<Vec<RepoMetrics>>,
+    /// One row per engine, when asked for with `?groupBy=engine`; absent from older machines.
+    #[serde(default)]
+    pub by_engine: Option<Vec<EngineMetrics>>,
     #[allow(dead_code)] // part of the contract; the view only shows the start of the window
     pub until: String,
     pub tasks: TaskCounts,
@@ -1542,8 +1602,12 @@ impl Task {
     }
 
     /// `#42 ` when the task came from an issue, `⌁ ` when it came from a Slack message,
-    /// `PLAT-123 ` when it came from a Jira issue, else empty. The card shows it dim.
+    /// `PLAT-123 ` when it came from a Jira issue, `notch LUNA-14 ` when Luna Notch sent it,
+    /// else empty. The card shows it dim.
     pub fn issue_prefix(&self) -> String {
+        if let Some(tag) = self.source.as_ref().and_then(TaskSource::notch_tag) {
+            return format!("{tag} ");
+        }
         match self.source.as_ref() {
             Some(TaskSource { number: Some(number), .. }) => format!("#{number} "),
             Some(TaskSource { kind, .. }) if kind == "slack" => "⌁ ".to_string(),
@@ -2153,6 +2217,18 @@ pub(crate) mod tests {
         assert_eq!(task.card_label(), "PLAT-123 Login page");
     }
 
+    #[test]
+    fn task_from_luna_notch_wears_notch_and_its_ref() {
+        let task: Task = serde_json::from_str(&task_json(r#","source":{"kind":"notch","ref":"LUNA-14","id":"wo_1","jiraKey":"PLAT-9"}"#)).unwrap();
+        let source = task.source.clone().expect("source present");
+        assert_eq!(source.notch_tag().as_deref(), Some("notch LUNA-14"));
+        assert_eq!(source.detail_line(), "Luna Notch LUNA-14 · PLAT-9");
+        assert_eq!(task.issue_prefix(), "notch LUNA-14 ");
+        let bare: Task = serde_json::from_str(&task_json(r#","source":{"kind":"notch"}"#)).unwrap();
+        assert_eq!(bare.issue_prefix(), "notch ", "a notch source without its ref still loads and says notch");
+        assert_eq!(bare.source.unwrap().detail_line(), "Luna Notch ?");
+    }
+
     /// A task linked to PLAT-123, waiting at the plan gate 40 minutes past its hour, its stage
     /// clock warning, a cycle clock and the issue's own due date two days out.
     pub(crate) fn jira_task_json() -> String {
@@ -2375,7 +2451,7 @@ pub(crate) mod tests {
         assert_eq!(parse_ticket(&markdown, "x"), expected);
     }
 
-    const METRICS_JSON: &str = r#"{
+    pub(crate) const METRICS_JSON: &str = r#"{
       "since":"2026-10-16T00:00:00.000Z","until":"2026-10-23T00:00:00.000Z",
       "tasks":{"created":9,"closed":6,"open":3,"waitingOnYou":1,"running":1,"queued":0},
       "cycleTimeMs":{"task":{"median":5400000,"p90":null},
@@ -2407,6 +2483,22 @@ pub(crate) mod tests {
         assert_eq!(m.gates.wait_ms["awaiting_approval"].median, Some(1_800_000.0));
         let old: Metrics = serde_json::from_str(&METRICS_JSON.replace(r#""gates":{"withinSla":0.75,"answered":8,"waitMs":{"awaiting_approval":{"median":1800000,"p90":5400000},"awaiting_ship":{"median":null,"p90":null}}},"#, "")).unwrap();
         assert_eq!(old.gates.answered, 0, "a machine without the gate SLA still loads");
+        assert!(old.by_engine.is_none(), "a machine without groupBy=engine still loads");
+    }
+
+    #[test]
+    fn engine_rows_and_month_caps_deserialise_and_a_machine_without_them_still_loads() {
+        let m: Metrics = serde_json::from_str(&super::engine_tests::metrics_json(true)).unwrap();
+        let rows = m.by_engine.unwrap();
+        assert_eq!((rows[0].name(), rows[0].stage_runs, rows[0].rate_limited, rows[0].cost_usd), ("claude:opus", 12, 2, 4.2));
+        assert_eq!((rows[1].name(), rows[1].mean_turns), ("(none)", None));
+        let engines: Vec<EngineInfo> = serde_json::from_str(
+            r#"[{"id":"a","available":false,"spentThisMonthUsd":20,"budgetUsd":20},{"id":"b","available":true,"spentThisMonthUsd":3.1,"budgetUsd":null},{"id":"c","available":true}]"#,
+        )
+        .unwrap();
+        assert_eq!((engines[0].month_line().as_deref(), engines[0].at_cap()), (Some("$20.00 / $20.00"), true));
+        assert_eq!((engines[1].month_line().as_deref(), engines[1].at_cap()), (Some("$3.10 / no cap"), false));
+        assert_eq!((engines[2].month_line(), engines[2].at_cap()), (None, false), "a machine before caps");
     }
 
     #[test]
@@ -2607,8 +2699,15 @@ pub(crate) mod engine_tests {
         {"id":"slack_triage","agent":"slack-triage","kind":"agent","engines":{"default":"claude:haiku","allowed":["claude:haiku","codex:luna"]},"states":[]}]"#;
     pub const ENGINES: &str = r#"[
         {"id":"claude:opus","runtime":"claude","modelId":"claude-opus-5-5","auth":"subscription","status":"ga","available":true},
-        {"id":"claude:sonnet","runtime":"claude","modelId":"claude-sonnet-5-5","auth":"subscription","status":"ga","available":true},
+        {"id":"claude:sonnet","runtime":"claude","modelId":"claude-sonnet-5-5","auth":"subscription","status":"ga","available":true,"spentThisMonthUsd":20,"budgetUsd":20},
         {"id":"codex:sol","runtime":"codex","modelId":"gpt-5.6-terra","auth":"chatgpt","status":"preview","available":false,"reason":"no ~/.codex/auth.json"}]"#;
+
+    /// A `GET /metrics` answer; `by_engine` adds two `byEngine` rows, claude:opus and the runs with none.
+    pub fn metrics_json(by_engine: bool) -> String {
+        let rows = r#""byEngine":[{"engine":"claude:opus","stageRuns":12,"firstPassRate":0.75,"escalations":1,"rateLimited":2,"meanTurns":14.5,"meanDurationMs":90000,"costUsd":4.2},
+            {"engine":null,"stageRuns":3,"firstPassRate":null,"escalations":0,"rateLimited":0,"meanTurns":null,"meanDurationMs":null,"costUsd":0}],"futureKey""#;
+        if by_engine { tests::METRICS_JSON.replace(r#""futureKey""#, rows) } else { tests::METRICS_JSON.to_string() }
+    }
 
     pub fn catalog() -> EngineCatalog {
         EngineCatalog { packs: serde_json::from_str(PACKS).unwrap(), engines: serde_json::from_str(ENGINES).unwrap() }

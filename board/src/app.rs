@@ -30,7 +30,7 @@ use crate::{
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, EngineCatalog, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
+        COLUMNS, EngineCatalog, EngineInfo, EngineMetrics, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
         StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of,
         plan_markdown, priority_step, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
@@ -99,6 +99,10 @@ pub struct FloorState {
     pub cursor: usize,
     /// How fast you answer on Slack, 7d and 30d; None until both fetches succeed.
     pub slack: Option<(SlackMetrics, SlackMetrics)>,
+    /// One row per engine over 7d; None while the machine does not report engines.
+    pub by_engine: Option<Vec<EngineMetrics>>,
+    /// Each engine's month against its cap (`GET /engines`); empty from a machine without it.
+    pub engines: Vec<EngineInfo>,
 }
 
 impl FloorState {
@@ -1879,16 +1883,21 @@ impl App {
         };
         let focused = repo.is_some();
         let repo = repo.map(|r| r.map(str::to_string));
-        let d7 = self.machine.metrics_for("7d", repo.as_ref().map(|r| r.as_deref()), !focused);
-        let d30 = self.machine.metrics_for("30d", repo.as_ref().map(|r| r.as_deref()), false);
+        let d7 = self.machine.metrics_for("7d", repo.as_ref().map(|r| r.as_deref()), (!focused).then_some("repo"));
+        let d30 = self.machine.metrics_for("30d", repo.as_ref().map(|r| r.as_deref()), None);
         // The rows are the 7d answer's when it covers every repo; one more call otherwise.
-        let rows = if focused { Some(self.machine.metrics_for("7d", None, true)) } else { None };
+        let rows = if focused { Some(self.machine.metrics_for("7d", None, Some("repo"))) } else { None };
+        // Engines are a bonus too: a machine from before them answers groupBy=engine with a 400.
+        let by_engine = self.machine.metrics_for("7d", repo.as_ref().map(|r| r.as_deref()), Some("engine")).ok().and_then(|m| m.by_engine);
+        let engines = self.machine.engines().ok().filter(|e| e.iter().any(|e| e.spent_this_month_usd.is_some()));
         // The Slack block is a bonus: a machine without the inbox leaves it out, nothing else changes.
         let slack = self.machine.slack_metrics("7d").and_then(|d7| self.machine.slack_metrics("30d").map(|d30| (d7, d30))).ok();
         let Some(floor) = self.floor.as_mut() else {
             return;
         };
         floor.slack = slack;
+        floor.by_engine = by_engine;
+        floor.engines = engines.unwrap_or_default();
         match d7 {
             Ok(m) => {
                 if let Some(by_repo) = m.by_repo.clone() {
@@ -4949,6 +4958,7 @@ mod slack_tests {
                 let answer = match path {
                     "/packs" => crate::model::engine_tests::PACKS.to_string(),
                     "/engines" => crate::model::engine_tests::ENGINES.to_string(),
+                    p if p.starts_with("/metrics?") => crate::model::engine_tests::metrics_json(p.contains("groupBy=engine")),
                     _ if refused && sent.contains("test_design") => r#"{"error":"stage_started","message":"test_design has run"}"#.to_string(),
                     _ if refused => r#"{"error":"invalid_input","message":"claude:opus is not allowed for triage"}"#.to_string(),
                     p if p.ends_with("/stages") => super::jira_tests::linked_task_json(p.trim_start_matches("/tasks/").trim_end_matches("/stages"), None),
@@ -5024,6 +5034,21 @@ mod slack_tests {
             press(app, KeyCode::Char(ch));
         }
         press(app, KeyCode::Enter);
+    }
+
+    #[test]
+    fn the_floor_reads_cost_per_engine_and_each_engine_s_month_from_the_machine() {
+        let mut app = app_with(snapshot());
+        press(&mut app, KeyCode::Char('F'));
+        let floor = app.floor.as_ref().expect("F opens the Floor");
+        let rows = floor.by_engine.as_ref().expect("the machine reports engines");
+        assert_eq!(rows.iter().map(|r| r.name()).collect::<Vec<_>>(), ["claude:opus", "(none)"]);
+        let sonnet = floor.engines.iter().find(|e| e.id == "claude:sonnet").unwrap();
+        assert!(sonnet.at_cap(), "{sonnet:?}");
+
+        let mut old = App::new(Machine::at("http://127.0.0.1:9"));
+        press(&mut old, KeyCode::Char('F'));
+        assert!(old.floor.as_ref().unwrap().by_engine.is_none() && old.floor.as_ref().unwrap().engines.is_empty());
     }
 
     #[test]

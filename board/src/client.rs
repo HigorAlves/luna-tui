@@ -19,7 +19,7 @@ use ureq::{
 };
 
 use crate::model::{
-    EngineCatalog, Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
+    EngineCatalog, EngineInfo, Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
     StreamMessage, Task, TaskDetail, TaskDiff, TestCase, TicketText,
 };
 
@@ -164,14 +164,15 @@ impl Machine {
     }
 
     /// Metrics for a window: `7d` or `30d`.
-    /// One repo's numbers (`Some(None)` is the tasks with no repo), or every repo's at once.
-    pub fn metrics_for(&self, since: &str, repo: Option<Option<&str>>, group: bool) -> Result<Metrics, String> {
+    /// One repo's numbers (`Some(None)` is the tasks with no repo); `group` adds a row per
+    /// `repo` or per `engine`.
+    pub fn metrics_for(&self, since: &str, repo: Option<Option<&str>>, group: Option<&str>) -> Result<Metrics, String> {
         let mut query = format!("/metrics?since={since}");
         if let Some(repo) = repo {
             query.push_str(&format!("&repo={}", urlencoding(repo.unwrap_or(""))));
         }
-        if group {
-            query.push_str("&groupBy=repo");
+        if let Some(group) = group {
+            query.push_str(&format!("&groupBy={group}"));
         }
         Self::typed(self.agent.get(self.url(&query)).call())
     }
@@ -230,6 +231,11 @@ impl Machine {
         let packs = Self::typed(self.agent.get(self.url("/packs")).call())?;
         let engines = Self::typed(self.agent.get(self.url("/engines")).call())?;
         Ok(EngineCatalog { packs, engines })
+    }
+
+    /// `GET /engines`: each engine's credential, and this month's spend against its cap.
+    pub fn engines(&self) -> Result<Vec<EngineInfo>, String> {
+        Self::typed(self.agent.get(self.url("/engines")).call())
     }
 
     /// Sets the task's engine for one pack; `None` goes back to luna.yaml's, else the pack's default.
