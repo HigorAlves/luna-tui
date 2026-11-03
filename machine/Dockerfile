@@ -17,7 +17,7 @@ RUN apt-get update \
 COPY --from=docker:29-cli /usr/local/bin/docker /usr/local/bin/docker
 
 WORKDIR /app
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .pnpmfile.cjs ./
 COPY contracts/package.json contracts/
 COPY machine/package.json machine/
 RUN pnpm install --frozen-lockfile --filter @hardness/machine...

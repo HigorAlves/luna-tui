@@ -51,9 +51,10 @@ ENV CODEX_HOME=/tmp/.codex EVE_TELEMETRY_DISABLED=1
 
 # The factory runner and the contracts package it shares with the machine, installed with the
 # workspace's own lockfile so the image runs exactly what the checkout tests. The Agent SDK
-# and eve are installed now, so a stage needs no network to start.
+# and eve are installed now, so a stage needs no network to start. .pnpmfile.cjs keeps eve's
+# optional framework peers (next, react, vite) out, which the lockfile records.
 WORKDIR /factory-src
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .pnpmfile.cjs ./
 COPY contracts/package.json contracts/
 COPY factory/package.json factory/
 RUN corepack enable \
