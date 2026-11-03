@@ -137,12 +137,12 @@ describe("OctokitGitHub", () => {
     const { github } = stub({
       "actions.listJobsForWorkflowRun": { jobs: [{ id: 1, name: "lint", conclusion: "failure" }, { id: 2, name: "unit", conclusion: "success" }] },
       "actions.downloadJobLogsForWorkflowRun": "ERR at a.ts:1",
-      "issues.listForRepo": [{ number: 1, title: "issue", body: null, html_url: "u" }, { number: 2, title: "pr", body: "", html_url: "u2", pull_request: {} }],
+      "issues.listForRepo": [{ number: 1, title: "issue", body: null, html_url: "u", labels: [{ name: "bug" }, "ready"] }, { number: 2, title: "pr", body: "", html_url: "u2", pull_request: {} }],
       "pulls.merge": Object.assign(new Error("Pull Request is not mergeable"), { status: 405 }),
       "pulls.get": { head: { ref: "x", repo: null } },
     });
     expect(await github.failedRunLog("o/a", "111")).toBe("== lint ==\nERR at a.ts:1");
-    expect(await github.listReadyIssues("o/a", "ready")).toEqual([{ number: 1, title: "issue", body: null, url: "u" }]);
+    expect(await github.listReadyIssues("o/a", "ready")).toEqual([{ number: 1, title: "issue", body: null, url: "u", labels: ["bug", "ready"] }]);
     await expect(github.mergePr("o/a", 1)).rejects.toThrow(GitHubError);
     await expect(github.mergePr("o/a", 1)).rejects.toThrow(/merging o\/a#1 failed \(405\): Pull Request is not mergeable/);
   });

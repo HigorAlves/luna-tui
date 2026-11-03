@@ -1,5 +1,11 @@
 // Polls GitHub for labelled issues and turns each new one into a task in Intake, through the
-// GitHub port.
+// GitHub port. With a Jev credential, issue_classify reads each new issue first: a question Jev is
+// sure of on every answer becomes no task, and the issue hears why once (once per run of the
+// machine: it keeps no record of the comment); anything else becomes a task as before, with the
+// classification kept on it.
+import { classificationLine } from "@hardness/contracts";
+
+import { type IssueClassifier, confidentQuestion } from "./classify.ts";
 import type { GitHub } from "./github.ts";
 import type { Pipeline } from "./pipeline.ts";
 
@@ -11,6 +17,8 @@ export interface GitHubIntakeOptions {
   github: GitHub;
   /** The local checkout for `owner/name`, so an imported issue needs no hand edit; null when unknown. */
   resolveRepo?: (repo: string) => Promise<string | null>;
+  /** issue_classify on Jev; absent or answering null, every new issue becomes a task as without it. */
+  classifier?: IssueClassifier | null;
 }
 
 /** The items of an issue body's markdown checklist, e.g. `- [ ] text`. */
@@ -27,6 +35,8 @@ export function parseChecklist(body: string): string[] {
 export class GitHubIntake {
   private timer: NodeJS.Timeout | undefined;
   private warnedAuth = false;
+  /** Issues declined as questions, `owner/name#n`: not classified nor told again. */
+  private readonly declined = new Set<string>();
 
   constructor(private readonly options: GitHubIntakeOptions) {}
 
@@ -71,14 +81,26 @@ export class GitHubIntake {
       repoPath = await this.options.resolveRepo(repo).catch(() => null);
     }
     for (const issue of issues) {
-      if (await this.options.pipeline.findBySource(repo, issue.number)) continue;
+      const ref = `${repo}#${issue.number}`;
+      if (this.declined.has(ref) || (await this.options.pipeline.findBySource(repo, issue.number))) continue;
       const body = issue.body ?? "";
+      const classification = (await this.options.classifier?.classify({ title: issue.title, description: body, labels: issue.labels ?? [], source: issue.url })) ?? null;
+      if (confidentQuestion(classification)) {
+        this.declined.add(ref);
+        const line = classificationLine(classification);
+        await this.options.github.commentOnIssue(repo, issue.number, `Not for an agent: it reads as a question, not a change (${line}).`).catch((error: unknown) => {
+          console.warn(`github intake: comment on ${ref} failed: ${error instanceof Error ? error.message : String(error)}`);
+        });
+        console.log(`github intake: ${ref} not for an agent: classified as a question (${line})`);
+        continue;
+      }
       const task = await this.options.pipeline.createTask({
         title: issue.title,
         description: body,
         criteria: parseChecklist(body),
         repoPath,
         source: { kind: "github", repo, number: issue.number, url: issue.url },
+        classification,
       });
       console.log(`github intake: ${repo}#${issue.number} -> task ${task.id}`);
     }
