@@ -143,13 +143,14 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   const app = new Hono();
   app.use(guard(access));
   /** A task row as the board reads it, clocks included. */
-  const serialize = async (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null) => toTask(row, usage, sla ? await sla(row) : null);
+  const serialize = async (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null) =>
+    toTask(row, usage, sla ? await sla(row) : null, await pipeline.glance(row.id));
 
   app.onError((error, c) => {
     if (error instanceof TaskNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof TransitionError) return fail(c, 409, "invalid_transition", error.message);
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
-    if (error instanceof IdempotencyConflictError) return fail(c, 409, "idempotency_conflict", error.message);
+    if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
     if (error instanceof NoCasesToEditError) return fail(c, 409, "no_cases", error.message);
     if (error instanceof StageStartedError) return fail(c, 409, "stage_started", error.message);
@@ -223,11 +224,9 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
 
   app.get("/tasks", async (c) => {
     const [rows, usage] = await Promise.all([pipeline.list(), pipeline.usageByTask()]);
-    if (slaAll) {
-      const clocks = await slaAll(rows);
-      return c.json(rows.map((row) => toTask(row, usage.get(row.id) ?? null, clocks.get(row.id) ?? null)));
-    }
-    return c.json(await Promise.all(rows.map((row) => serialize(row, usage.get(row.id) ?? null))));
+    const glances = await pipeline.glances(rows.map((row) => row.id));
+    const clocks = slaAll ? await slaAll(rows) : new Map(await Promise.all(rows.map(async (row) => [row.id, sla ? await sla(row) : null] as const)));
+    return c.json(rows.map((row) => toTask(row, usage.get(row.id) ?? null, clocks.get(row.id) ?? null, glances.get(row.id) ?? null)));
   });
 
   /** A work order: with an `Idempotency-Key`, a retry answers the task already made (200); `start` starts it too. */

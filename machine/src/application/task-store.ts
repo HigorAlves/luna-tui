@@ -90,6 +90,12 @@ export interface ClaimOptions {
   maxPerStage?: Readonly<Record<string, number>>;
 }
 
+/** What a task snapshot's `lastRun` and `gate` are made from. */
+export interface GlanceRows {
+  runs: Array<{ taskId: string; stage: TaskState; engine: EngineId | null; outcome: string | null; status: StageRunStatus; endedAt: Date; finished: Record<string, unknown> | null }>;
+  gates: Array<{ taskId: string; kind: TaskState; requested: Record<string, unknown> }>;
+}
+
 /** One change past a sequence number: a task as it is now, or a task deleted since. */
 export type TaskChange = { seq: number; task: TaskRow } | { seq: number; deleted: string };
 
@@ -128,6 +134,8 @@ export interface TaskStore {
   listStageRuns(taskId: string): Promise<StageRunRow[]>;
   /** When the stage run still `running` started, per task that has one; one query for a whole list. */
   runningStageStarts(): Promise<Map<string, Date>>;
+  /** Per task of `ids`: its latest ended stage run with that run's `stage.finished` payload, and its open approval. Two queries for a whole list. */
+  glanceRows(ids: readonly string[]): Promise<GlanceRows>;
   /** What the task's stage runs have cost so far, in USD. */
   taskSpendUsd(taskId: string): Promise<number>;
   /** Spend and worked time per task, for the tasks that have any run; one query for a whole list. */

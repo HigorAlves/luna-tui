@@ -17,7 +17,12 @@ import type { ApprovalRow, ArtifactRow, EventRow, StageRunRow, TaskRow } from ".
 const iso = (date: Date | null) => (date ? date.toISOString() : null);
 
 /** The clocks are computed by the caller (application/sla.ts) when it has the task's history; a plain call shows none. */
-export const toTask = (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null, sla: TaskSla | null = null): Task => ({
+export const toTask = (
+  row: TaskRow,
+  usage: { spentUsd: number; workedMs: number } | null = null,
+  sla: TaskSla | null = null,
+  glance: Pick<Task, "lastRun" | "gate"> | null = null,
+): Task => ({
   id: row.id,
   title: row.title,
   description: row.description,
@@ -43,6 +48,8 @@ export const toTask = (row: TaskRow, usage: { spentUsd: number; workedMs: number
   sla,
   stages: row.stages ?? {},
   seq: Number(row.seq),
+  lastRun: glance?.lastRun ?? null,
+  gate: glance?.gate ?? null,
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),
 });

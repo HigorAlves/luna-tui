@@ -287,6 +287,30 @@ describe("abort", () => {
   });
 });
 
+describe("stop at a gate (a Luna Notch Stop)", () => {
+  it.each<[TaskState, TaskState]>([
+    ["awaiting_setup", "setup"],
+    ["awaiting_answers", "triage"],
+    ["awaiting_approval", "triage"],
+    ["awaiting_test_check", "test_design"],
+    ["awaiting_ship", "evidence"],
+  ])("escalates a task at %s as stopped; a retry re-runs %s, the stage that opened the gate", (gate, stage) => {
+    const step = transition(at(gate), { type: "stop" });
+    expect(step).toMatchObject({ state: "escalated", resumeTo: stage, reason: "stopped", effect: { kind: "wait", gate: "escalated" } });
+    expect(transition(step, approved)).toMatchObject({ state: stage, effect: { kind: "run", stage } });
+  });
+
+  it("re-runs the review at a review task's verdict gate", () => {
+    expect(transition(at("awaiting_ship", { route: "review" }), { type: "stop" })).toMatchObject({ resumeTo: "reviewing" });
+  });
+
+  it("is not a stop anywhere else: escalated, the memory rules, a running stage, a draft", () => {
+    for (const state of ["escalated", "reviewing_memory", "implementing", "draft", "closed"] as TaskState[]) {
+      expect(() => transition(at(state), { type: "stop" }), state).toThrow(TransitionError);
+    }
+  });
+});
+
 describe("invalid events", () => {
   it.each<[TaskState, PipelineEvent]>([
     ["draft", approved],

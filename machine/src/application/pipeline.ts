@@ -2,14 +2,14 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type BudgetAlert, type CredentialOwner, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, type Slots, type StageEngines, type StageRunCase, type TaskRoute, type TaskSource, type TaskState, type TestCase, credentialOwner } from "@hardness/contracts";
+import { type BudgetAlert, type CredentialOwner, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, type Slots, type StageEngines, type StageRunCase, type Task, type TaskRoute, type TaskSource, type TaskState, type TestCase, credentialOwner } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, sameSource } from "../domain/task.ts";
+import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, runSummary, sameSource } from "../domain/task.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
@@ -47,6 +47,25 @@ export function canonicalJson(value: unknown): string {
     v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : v,
   );
 }
+
+/** A work order's hash: its fields with every default filled (`description: ""`, `criteria: []`,
+ *  `repoPath: null`, `source: null`, `stages: {}`, a source's absent fields as null) and `start`
+ *  left out, so an equivalent retry is the same order. */
+export function orderHash(order: NewTask & Record<string, unknown>): string {
+  const source = order.source ? Object.fromEntries(Object.entries(order.source).filter(([, value]) => value !== null && value !== undefined)) : null;
+  const canonical = {
+    title: order.title,
+    description: order.description ?? "",
+    criteria: order.criteria ?? [],
+    repoPath: order.repoPath ?? null,
+    source,
+    stages: order.stages ?? {},
+  };
+  return createHash("sha256").update(canonicalJson(canonical)).digest("hex");
+}
+
+/** What a task snapshot says about its last stage run and its gate. */
+export type TaskGlance = Pick<Task, "lastRun" | "gate">;
 
 export interface NewTask {
   title: string;
@@ -273,12 +292,14 @@ export class Pipeline {
   }
 
   /** A work order under an `Idempotency-Key`: the first call makes the task, a retry with the same
-   *  body answers that task (`created: false`), another body under the key is an `IdempotencyConflictError`.
-   *  `order` is the whole body as sent; its hash is what "the same body" means. */
+   *  body answers that task (`created: false`), another body under the key is an `IdempotencyConflictError`
+   *  naming the task. "The same body" is the same canonical order (`orderHash`); a key stored before
+   *  bodies were canonical keeps its hash of the body as it was sent, which a retry still matches. */
   async createTaskOnce(order: NewTask & Record<string, unknown>, key: string): Promise<{ task: TaskRow; created: boolean }> {
-    const hash = createHash("sha256").update(canonicalJson(order)).digest("hex");
+    const hash = orderHash(order);
     const { task, created } = await this.store.createTaskOnce(this.newRow(order), key, hash);
-    if (task.requestHash !== hash) throw new IdempotencyConflictError(key);
+    const legacy = () => createHash("sha256").update(canonicalJson(order)).digest("hex");
+    if (task.requestHash !== hash && task.requestHash !== legacy()) throw new IdempotencyConflictError(key, task.id);
     if (created) await this.log(task.id, "task.created", { title: task.title });
     return { task: created ? await this.get(task.id) : task, created };
   }
@@ -389,6 +410,21 @@ export class Pipeline {
   }
 
   /** What one task has spent, and how long its runs took. */
+  /** Each task's `lastRun` and `gate`, for its snapshot; two queries for a whole list. */
+  async glances(ids: readonly string[]): Promise<Map<string, TaskGlance>> {
+    const { runs, gates } = await this.store.glanceRows(ids);
+    const out = new Map<string, TaskGlance>(ids.map((id) => [id, { lastRun: null, gate: null }]));
+    for (const run of runs) {
+      out.get(run.taskId)!.lastRun = { stage: run.stage, engine: run.engine, outcome: run.outcome ?? run.status, summary: runSummary(run.finished), at: run.endedAt.toISOString() };
+    }
+    for (const gate of gates) out.get(gate.taskId)!.gate = { state: gate.kind, requested: gate.requested };
+    return out;
+  }
+
+  async glance(id: string): Promise<TaskGlance> {
+    return (await this.glances([id])).get(id)!;
+  }
+
   taskUsage(id: string): Promise<TaskUsage> {
     return this.store.taskUsage(id);
   }
@@ -572,6 +608,11 @@ export class Pipeline {
 
   /** Stops the running (or merely queued) stage and waits for you. */
   async abort(id: string): Promise<TaskRow> {
+    // The notch's Stop at a gate ends the run there (RFC 0004); a board task at a gate is a 409, as always.
+    const before = await this.get(id);
+    if (before.source?.kind === "notch" && before.state.startsWith("awaiting_")) {
+      return this.dispatch(id, { type: "stop" }, { decision: { decision: "sent_back", reason: "stopped" } });
+    }
     const task = await this.dispatch(id, { type: "abort" });
     this.loops.get(id)?.abort();
     await this.store.updateTask(id, { queued: false });

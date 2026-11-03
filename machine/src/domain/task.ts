@@ -134,8 +134,9 @@ export class NoPlanToEditError extends Error {
 
 /** A work order reused an `Idempotency-Key` with another body. */
 export class IdempotencyConflictError extends Error {
-  constructor(key: string) {
-    super(`Idempotency-Key "${key}" already made a task from another body`);
+  /** The task the key already made, for the client to follow. */
+  constructor(key: string, readonly taskId: string) {
+    super(`Idempotency-Key "${key}" already made task ${taskId} from another body`);
     this.name = "IdempotencyConflictError";
   }
 }
@@ -185,4 +186,14 @@ export function sameSource(a: unknown, b: unknown): boolean {
     );
   };
   return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+}
+
+/** The longest `lastRun.summary` a task snapshot carries. */
+export const SUMMARY_MAX = 2000;
+
+/** What a stage run said, from its `stage.finished` payload: the pack's summary, else its error, else triage's brief. */
+export function runSummary(finished: Record<string, unknown> | null): string | null {
+  const detail = finished?.detail && typeof finished.detail === "object" ? (finished.detail as Record<string, unknown>) : {};
+  const said = [detail.summary, finished?.error, detail.error, detail.brief].find((value): value is string => typeof value === "string" && value.trim() !== "");
+  return said === undefined ? null : said.slice(0, SUMMARY_MAX);
 }
