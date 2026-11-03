@@ -6,9 +6,10 @@ import type { Pack, PackId, PackInfo, TaskState } from "@hardness/contracts";
 const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   // The retro runs after the push, inside the shipping stage; its proposal waits at reviewing_memory.
   reviewing_memory: ["shipping"],
-  // The inboxes' packs: no task, so no task state.
+  // The inboxes' packs and the decision pack callers run on demand: no task, so no task state.
   slack_triage: [],
   jira_intake: [],
+  issue_classify: [],
 };
 
 /** The task states in which the pipeline runs the pack. */
@@ -19,10 +20,10 @@ export function packStates(id: PackId): TaskState[] {
 export function packInfo(pack: Pack): PackInfo {
   return {
     id: pack.id,
-    agent: pack.agent,
-    kind: pack.agent === null ? "script" : "agent",
+    agent: pack.kind === "decision" ? null : pack.agent,
+    kind: pack.kind,
     engines: pack.engines,
-    effort: pack.effort,
+    effort: pack.kind === "decision" ? null : pack.effort,
     writable: pack.writable,
     maxTurns: pack.maxTurns,
     timeoutMs: pack.timeoutMs,
