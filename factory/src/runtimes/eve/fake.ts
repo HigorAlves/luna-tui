@@ -13,13 +13,16 @@ export function scriptedModel() {
   return mockModel({
     modelId: "scripted",
     provider: "conformance",
-    respond: ({ toolResults }) => {
+    respond: async ({ toolResults }) => {
       const script = JSON.parse(readFileSync(process.env.LUNA_EVE_SCRIPT ?? "", "utf8")) as ScriptStep[];
       const results = toolResults.filter((r) => r.name !== "eve__reply");
       const step = script[Math.min(results.length, script.length - 1)]!;
       if ("call" in step) {
         return { toolCalls: [step.call === "bash" ? { name: "bash", input: { command: step.command } } : { name: step.tool, input: step.args }] };
       }
+      // A model that never answers within any stage's time; the server is stopped long before.
+      if ("hang" in step) await new Promise((resolve) => setTimeout(resolve, 600_000));
+      if ("hang" in step) return { text: "" };
       if ("rateLimit" in step) throw new Error("Rate limit reached for requests (429): try again later");
       // A provider's 400: eve does not retry it and ends the session.
       if ("fail" in step) throw new APICallError({ message: step.fail, url: "http://model", requestBodyValues: {}, statusCode: 400, isRetryable: false });

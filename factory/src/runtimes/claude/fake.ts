@@ -50,6 +50,12 @@ export function scriptedQuery(script: ScriptStep[]): (params: { prompt: string; 
           yield { type: "rate_limit_event", session_id: SESSION, rate_limit_info: { status: "rejected", resetsAt: step.rateLimit.resetsAt } } as unknown as SDKMessage;
           yield { type: "result", subtype: "error_during_execution", is_error: true, errors: ["Claude AI usage limit reached"], num_turns: turns, duration_ms: 1, total_cost_usd: 0, session_id: SESSION } as unknown as SDKMessage;
           return;
+        } else if ("hang" in step) {
+          // A model that never answers: the query ends only when the runtime aborts it, as the
+          // SDK's does, by throwing.
+          const signal = options.abortController?.signal;
+          await new Promise<void>((resolve) => (signal?.aborted ? resolve() : signal?.addEventListener("abort", () => resolve(), { once: true })));
+          throw new Error("Claude Code process aborted by user");
         } else if ("fail" in step) {
           yield { type: "result", subtype: "error_during_execution", is_error: true, errors: [step.fail], num_turns: turns, duration_ms: 1, total_cost_usd: 0, session_id: SESSION } as unknown as SDKMessage;
           return;

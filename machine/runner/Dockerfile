@@ -62,8 +62,9 @@ RUN corepack enable \
  && rm -rf /root/.cache /root/.local/share/pnpm
 COPY contracts/src contracts/src
 COPY factory factory
-# Every pack's eve agent, compiled and built now (roles and packs are static): a stage on an eve
-# engine starts the built server and sends its prompt. The build needs no Docker daemon.
+# The eve agent of every pack an eve engine may run, compiled and built now (roles and packs are
+# static): a stage on an eve engine starts the built server and sends its prompt. The build
+# needs no Docker daemon.
 RUN cd factory && node src/runtimes/eve/build.ts \
  && rm -rf /root/.cache
 RUN echo "${FACTORY_REF}" > /factory-src/factory/.ref \

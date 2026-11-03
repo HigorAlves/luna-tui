@@ -1,13 +1,14 @@
 // The eve runner's own pieces, without a server: what the server's environment holds, where the
 // run's secrets go, and the luna bridge's token check.
-import { PACKS } from "@hardness/contracts";
+import { PACKS, StageInput, resolveEngine } from "@hardness/contracts";
 import { spawn } from "node:child_process";
-import { readFileSync, rmSync, statSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { settle } from "../../core/output.ts";
-import { TurnFollower, serveLuna, serverEnv, stop, waitHealthy, writeSecrets } from "./run.ts";
+import { TurnFollower, eveRuntime, serveLuna, serverEnv, stop, waitHealthy, writeSecrets } from "./run.ts";
 
 const SOURCE = {
   PATH: "/usr/bin",
@@ -148,5 +149,15 @@ describe("TurnFollower", () => {
       bad.take(schemaMissed);
       expect(bad.result).toMatchObject({ ok: false, structured: null, error: expect.stringMatching(/OUTPUT_SCHEMA_NOT_FULFILLED/) });
     }
+  });
+});
+
+describe("eveRuntime", () => {
+  it("refuses a pack without a built agent with the reason, before starting anything", async () => {
+    const agentsDir = mkdtempSync(join(tmpdir(), "eve-none-"));
+    const luna = { state: { ledger: { schema: 1 as const, slices: [] }, events: [] }, call: async () => null };
+    const input = StageInput.parse({ schema: 3, stage: "implementing", pack: "implementing", attempt: 1, task: { id: "t", title: "x", description: "y", criteria: [], repoPath: "/r", branch: "task/x", source: null }, plan: null, decisions: [], priorFindings: [], context: { projectContext: null }, limits: { maxTurns: 3, timeoutMs: 10_000 }, env: {} });
+    const run = await eveRuntime({ agentsDir }).run({ pack: PACKS.implementing, engine: resolveEngine("codex:luna"), input, prompt: "x", paths: { factoryRoot: "/f", work: agentsDir, out: agentsDir, input: agentsDir, scratch: agentsDir }, luna, dry: false, out: () => {} });
+    expect(run).toMatchObject({ ok: false, error: expect.stringMatching(/the eve agent for implementing is not built .*whose engines allow eve/) });
   });
 });

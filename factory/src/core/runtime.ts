@@ -36,3 +36,7 @@ export interface Runtime {
   id: RuntimeId;
   run(ctx: RunContext): Promise<RunOutcome>;
 }
+
+/** When a runtime ends the stage itself: a little before the machine kills the container at the
+ *  stage's time limit, so the run still writes a result that says why. */
+export const deadlineMs = (timeoutMs: number): number => timeoutMs - Math.min(10_000, Math.round(timeoutMs / 10));

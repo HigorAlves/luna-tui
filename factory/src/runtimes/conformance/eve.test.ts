@@ -26,6 +26,6 @@ conformance(
     writeFileSync(file, JSON.stringify(script));
     return eveRuntime({ agentsDir, serverEnv: { LUNA_EVE_SCRIPT: file } });
   },
-  { resetsAt: false, schemaIssue: false },
-  60_000,
+  { resetsAt: false, schemaIssue: false, tools: true, text: true },
+  { timeoutMs: 60_000 },
 );

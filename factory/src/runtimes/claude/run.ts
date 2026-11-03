@@ -9,9 +9,9 @@ import { join } from "node:path";
 
 import type { GuardContext } from "../../core/guards.ts";
 
-import { EMPTY_RUN, type RunOutcome } from "../../core/output.ts";
+import { EMPTY_RUN, type RunOutcome, timeRanOut } from "../../core/output.ts";
 import { FACTORY_RULES, callLine } from "../../core/render.ts";
-import type { RunContext, Runtime } from "../../core/runtime.ts";
+import { type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
 import { claudeTools } from "./access.ts";
 import { agentDefinitions } from "./agents.ts";
 import { branchPrefixFor, preToolUseGuards } from "./guards.ts";
@@ -83,10 +83,18 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
 
   const t0 = Date.now();
   const run: RunOutcome = { ...EMPTY_RUN };
+  // The stage ends itself at its deadline, before the machine kills the container.
+  const abortController = new AbortController();
+  const deadline = deadlineMs(input.limits.timeoutMs);
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    abortController.abort();
+  }, deadline);
   try {
     const query = transport ?? (await import("@anthropic-ai/claude-agent-sdk")).query;
     const raw = env.LUNA_STAGE_DEBUG === "1" ? join(paths.out, "raw.jsonl") : null;
-    for await (const msg of query({ prompt, options })) {
+    for await (const msg of query({ prompt, options: { ...options, abortController } })) {
       if (raw) appendFileSync(raw, `${JSON.stringify(msg)}\n`);
       if ("session_id" in msg && typeof msg.session_id === "string" && !run.sessionId) run.sessionId = msg.session_id;
       if (msg.type === "system" && msg.subtype === "init") {
@@ -119,7 +127,10 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
   } catch (e) {
     run.ok = false;
     run.error = e instanceof Error ? e.message : String(e);
+  } finally {
+    clearTimeout(timer);
   }
+  if (timedOut && !run.ok) Object.assign(run, { structured: null, rateLimited: false, error: timeRanOut(deadline) });
   if (!run.durationMs) run.durationMs = Date.now() - t0;
   return run;
 }
