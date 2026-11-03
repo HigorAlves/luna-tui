@@ -155,3 +155,34 @@ export class NoCasesToEditError extends Error {
     this.name = "NoCasesToEditError";
   }
 }
+
+/** `PATCH /tasks/:id` naming another source: where a task came from never changes (400 `source_immutable`). */
+export class SourceImmutableError extends Error {
+  constructor(id: string) {
+    super(`task ${id}'s source cannot change after it is created`);
+    this.name = "SourceImmutableError";
+  }
+}
+
+/** `PATCH /tasks/:id` moving the checkout of a task that already has a worktree or branch (409 `has_worktree`). */
+export class RepoPathLockedError extends Error {
+  constructor(id: string, branch: string | null) {
+    super(`task ${id} already works on ${branch ?? "a worktree"}; its checkout cannot change`);
+    this.name = "RepoPathLockedError";
+  }
+}
+
+/** Two sources are the same when their fields are, in any order; an absent field equals null. */
+export function sameSource(a: unknown, b: unknown): boolean {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value === null || typeof value !== "object") return value ?? null;
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, v]) => v !== undefined && v !== null)
+        .sort(([x], [y]) => (x < y ? -1 : 1))
+        .map(([k, v]) => [k, canonical(v)]),
+    );
+  };
+  return JSON.stringify(canonical(a)) === JSON.stringify(canonical(b));
+}

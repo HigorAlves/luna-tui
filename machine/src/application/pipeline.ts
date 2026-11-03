@@ -9,7 +9,7 @@ import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, sameSource } from "../domain/task.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
@@ -30,7 +30,7 @@ import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+export { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -409,19 +409,25 @@ export class Pipeline {
     return this.store.findTaskBySource(repo, number, kind);
   }
 
-  /** Edits the ticket's text. Stages started after this see the new text. */
+  /** Edits the ticket's text. Stages started after this see the new text. The source never
+   *  changes (the same one again is no change), and the checkout only until a worktree or branch
+   *  was made from it. */
   async update(
     id: string,
     patch: { title?: string; description?: string; criteria?: string[]; repoPath?: string | null;
       source?: TaskSource | null;
     },
   ): Promise<TaskRow> {
-    await this.get(id);
-    const changes = Object.fromEntries(Object.entries(patch).filter(([, value]) => value !== undefined));
-    if (Object.keys(changes).length > 0) {
-      await this.store.updateTask(id, changes);
-      await this.log(id, "task.edited", { fields: Object.keys(changes) });
-    }
+    const fields = await this.store.withTaskLock(id, async (task, tx) => {
+      const { source, ...rest } = patch;
+      if (source !== undefined && !sameSource(source, task.source)) throw new SourceImmutableError(id);
+      const moved = rest.repoPath !== undefined && rest.repoPath !== task.repoPath;
+      if (moved && (task.worktreePath || task.branch)) throw new RepoPathLockedError(id, task.branch);
+      const changes = Object.fromEntries(Object.entries(rest).filter(([, value]) => value !== undefined));
+      if (Object.keys(changes).length > 0) await tx.updateTask(id, changes);
+      return Object.keys(changes);
+    });
+    if (fields.length > 0) await this.log(id, "task.edited", { fields });
     return this.get(id);
   }
 
@@ -732,9 +738,12 @@ export class Pipeline {
   }
 
   /** A plan that has waited the repo's `auto_approve_plan_minutes` is approved by itself when
-   *  triage reported high confidence and low risk and asked nothing. Anything less waits for you. */
+   *  triage reported high confidence and low risk and asked nothing. Anything less waits for you,
+   *  and a notch task always does: the machine never moves a notch card into Approved (RFC 0004). */
   private async autoApprovePlans(): Promise<void> {
     for (const task of await this.store.findStuckTasks(new Set<TaskState>(["awaiting_approval"]))) {
+      // A Luna Notch task's plan is the notch's to approve (its AutoApproval calls /decision).
+      if (task.source?.kind === "notch") continue;
       const { autoApprovePlanMinutes: minutes } = await this.policies.for(task.repoPath);
       if (minutes === null) continue;
       const open = (await this.store.listApprovals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
