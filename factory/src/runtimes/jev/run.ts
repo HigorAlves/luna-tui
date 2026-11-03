@@ -59,7 +59,7 @@ function failed(e: unknown, { APIConnectionError, APIError, APIUserAbortError, R
 export function jevRuntime(client: () => JevClient | Promise<JevClient> = typesafeClient): Runtime {
   return {
     id: "jev",
-    async run({ pack, engine, input, luna, dry, out }: RunContext): Promise<RunOutcome> {
+    async run({ pack, engine, input, dry, emit }: RunContext): Promise<RunOutcome> {
       if (pack.kind !== "decision") return { ...EMPTY_RUN, error: `pack ${pack.id} is not a decision pack` };
       const t0 = Date.now();
       let sdk: Sdk | null = null;
@@ -68,7 +68,7 @@ export function jevRuntime(client: () => JevClient | Promise<JevClient> = typesa
         const { fromJev, toJev } = await import("./questions.ts");
         const request = { state: stateOf(input), questions: toJev(pack.questions), model: engine.modelId };
         if (dry) {
-          out(JSON.stringify(request, null, 2));
+          emit({ kind: "session", payload: { model: engine.modelId, text: JSON.stringify(request, null, 2) } });
           let structured: Record<string, unknown> | null = null;
           try {
             structured = process.env.LUNA_STAGE_DRY_STRUCTURED ? (JSON.parse(process.env.LUNA_STAGE_DRY_STRUCTURED) as Record<string, unknown>) : null; // test seam
@@ -78,8 +78,8 @@ export function jevRuntime(client: () => JevClient | Promise<JevClient> = typesa
         const result = await (await client()).systemOne(request, { signal: AbortSignal.timeout(deadlineMs(input.limits.timeoutMs)) });
         const durationMs = Date.now() - t0;
         const { input_tokens: tokensIn, output_tokens: tokensOut } = result.usage;
-        out(`jev · model ${result.model} · ${tokensIn ?? "?"} in · ${tokensOut ?? "?"} out · ${durationMs} ms`);
-        luna.state.events.push({ kind: "note", payload: { phase: "usage", model: result.model, inputTokens: tokensIn, outputTokens: tokensOut } });
+        emit({ kind: "session", payload: { model: result.model, text: `jev · model ${result.model} · ${tokensIn ?? "?"} in · ${tokensOut ?? "?"} out · ${durationMs} ms` } });
+        emit({ kind: "usage", payload: { model: result.model, ...(tokensIn != null && { inputTokens: tokensIn }), ...(tokensOut != null && { outputTokens: tokensOut }) } });
         const run = { ...EMPTY_RUN, turns: 1, durationMs, model: result.model };
         const parsed = pack.answer.safeParse(fromJev(pack.questions, result.answers));
         if (!parsed.success) {
@@ -88,7 +88,7 @@ export function jevRuntime(client: () => JevClient | Promise<JevClient> = typesa
         }
         const answer = parsed.data as Record<string, unknown>;
         const text = summary(answer, pack.minConfidence);
-        out(text);
+        emit({ kind: "text", payload: { text } });
         return { ...run, ok: true, structured: answer, text };
       } catch (e) {
         const reason = sdk ? failed(e, sdk) : { error: `jev: ${e instanceof Error ? e.message : String(e)}`, rateLimited: false, resetsAt: null };

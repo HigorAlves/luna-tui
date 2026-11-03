@@ -2,8 +2,8 @@
 // The pack's agent was compiled and built at image time (compile.ts, build.ts); a run starts that
 // built server on loopback with a per-run password, its working directory on the /tmp tmpfs (eve
 // keeps its workflow store under <cwd>/.eve), sends the prompt with the pack's answer schema
-// through eve/client, and follows the session's events into the transcript the way the Claude
-// runtime prints them. The luna tools' state stays here: the agent's luna tools call back into
+// through eve/client, and follows the session's events into run events, the tool approvals' outcome
+// included. The luna tools' state stays here: the agent's luna tools call back into
 // this process over a loopback bridge with a per-run bearer token. The server always stops.
 // LUNA_STAGE_DEBUG=1 also writes every session event to /out/raw.jsonl and the server's log to
 // /out/eve-server.log.
@@ -17,11 +17,11 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { CallJoin, type Emit } from "../../core/events.ts";
 import { type GuardContext, branchPrefixFor } from "../../core/guards.ts";
 import { EMPTY_RUN, type RunOutcome, budgetSpent, timeRanOut } from "../../core/output.ts";
-import { callLine } from "../../core/render.ts";
 import { type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
-import { eveTools, tokenBudgetPerTurn } from "./compile.ts";
+import { GUARDED, eveTools, tokenBudgetPerTurn } from "./compile.ts";
 import type { EveSecrets } from "./agent/secrets.ts";
 
 const env = process.env;
@@ -80,7 +80,7 @@ export function writeSecrets(secrets: EveSecrets): string {
 }
 
 async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
-  const { pack, engine, input, prompt, paths, luna, dry, out } = ctx;
+  const { pack, engine, input, prompt, paths, luna, dry, emit } = ctx;
   if (pack.kind !== "agent" || pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
   const app = join(options.agentsDir ?? join(paths.factoryRoot, ".eve-agents"), pack.id);
   const entry = join(app, ".output", "server", "index.mjs");
@@ -88,24 +88,19 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   const guard = guardPolicy(pack, ctx);
 
   if (dry) {
-    out(
-      JSON.stringify(
-        {
-          agent: app,
-          built: existsSync(entry),
-          model: `${apiKey ? "openai" : "chatgpt"}(${engine.modelId})`,
-          reasoning: pack.effort,
-          tools: eveTools(pack.access),
-          skills: pack.access.skills ? pack.skills : [],
-          maxModelCalls: input.limits.maxTurns,
-          tokenBudget: { input: input.limits.maxTurns * tokenBudgetPerTurn.input, output: input.limits.maxTurns * tokenBudgetPerTurn.output },
-          outputSchema: pack.id,
-          guard,
-        },
-        null,
-        2,
-      ),
-    );
+    const options = {
+      agent: app,
+      built: existsSync(entry),
+      model: `${apiKey ? "openai" : "chatgpt"}(${engine.modelId})`,
+      reasoning: pack.effort,
+      tools: eveTools(pack.access),
+      skills: pack.access.skills ? pack.skills : [],
+      maxModelCalls: input.limits.maxTurns,
+      tokenBudget: { input: input.limits.maxTurns * tokenBudgetPerTurn.input, output: input.limits.maxTurns * tokenBudgetPerTurn.output },
+      outputSchema: pack.id,
+      guard,
+    };
+    emit({ kind: "session", payload: { model: engine.modelId, text: JSON.stringify(options, null, 2) } });
     let structured: Record<string, unknown> | null = null;
     try {
       structured = env.LUNA_STAGE_DRY_STRUCTURED ? (JSON.parse(env.LUNA_STAGE_DRY_STRUCTURED) as Record<string, unknown>) : null; // test seam
@@ -119,7 +114,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   const t0 = Date.now();
   // The pinned ID the server was given; eve's model.started names the agent's compiled default
   // for a model chosen at run time, so it is not read back.
-  const turn = new TurnFollower(pack, input.limits.maxTurns, out);
+  const turn = new TurnFollower(pack, input.limits.maxTurns, emit, engine.modelId);
   turn.result.model = engine.modelId;
   const debug = env.LUNA_STAGE_DEBUG === "1";
   // Everything the run makes is made inside the try, so a throw anywhere still stops the server,
@@ -177,7 +172,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
     const outputSchema = answerJsonSchema(pack) as SendTurnOptions["outputSchema"];
     const { session, delivery } = await client.sessions.create({ message: prompt, outputSchema });
     turn.result.sessionId = session.id;
-    out(`session ${session.id} · eve agent ${pack.id} · ${apiKey ? "openai" : "chatgpt"}(${engine.modelId})`);
+    emit({ kind: "session", payload: { id: session.id, model: engine.modelId, text: `session ${session.id} · eve agent ${pack.id} · ${apiKey ? "openai" : "chatgpt"}(${engine.modelId})` } });
     // The stage ends itself at its deadline, before the machine kills the container: the turn is
     // cancelled, and if the server does not settle it soon after, the run stops following it.
     const deadline = deadlineMs(input.limits.timeoutMs);
@@ -207,6 +202,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
     if (/\b429\b|too many requests/i.test(turn.result.error)) turn.result.rateLimited = true;
   } finally {
     if (timedOut !== null && !turn.result.ok) Object.assign(turn.result, { structured: null, rateLimited: false, error: timeRanOut(timedOut) });
+    turn.calls.flush();
     if (server) await stop(server);
     bridge?.close();
     if (state) rmSync(state, { recursive: true, force: true });
@@ -222,14 +218,15 @@ interface SessionEvent {
   data?: Record<string, unknown>;
 }
 
-/** Follows one turn's session events into the run's outcome and the transcript, and says when
+/** Follows one turn's session events into the run's outcome and its events, and says when
  *  the turn must be cancelled: when the run's last allowed model call settles without an answer
  *  (eve retries an answer off the schema without a limit of its own), or when the turn pauses
  *  for input nobody can give. */
 export class TurnFollower {
   readonly result: RunOutcome = { ...EMPTY_RUN };
+  /** The tool calls: a guarded one is emitted once its approval settled, the rest when requested. */
+  readonly calls: CallJoin;
   private readonly runs = new Set<string>();
-  private readonly names = new Map<string, string>();
   private modelCalls = 0;
   private capped = false;
   private paused = false;
@@ -238,12 +235,15 @@ export class TurnFollower {
 
   private readonly pack: AgentPack;
   private readonly maxTurns: number;
-  private readonly out: (line: string) => void;
+  private readonly emit: Emit;
+  private readonly model: string;
 
-  constructor(pack: AgentPack, maxTurns: number, out: (line: string) => void) {
+  constructor(pack: AgentPack, maxTurns: number, emit: Emit, model = "") {
     this.pack = pack;
     this.maxTurns = maxTurns;
-    this.out = out;
+    this.emit = emit;
+    this.model = model;
+    this.calls = new CallJoin(emit, (tool) => GUARDED.has(tool));
   }
 
   /** Takes one event; true when the turn must be cancelled now. */
@@ -270,19 +270,33 @@ export class TurnFollower {
     } else if (event.type === "content.completed") {
       if (data.kind === "result") result.structured = data.value as Record<string, unknown>;
       else if (data.kind === "text" && typeof data.value === "string") {
-        this.out(data.value);
+        this.emit({ kind: "text", payload: { text: data.value } });
         if (data.phase === "reply") this.replyText = data.value;
       }
     } else if (event.type === "call.requested") {
-      const name = (data.capability as { name?: string } | undefined)?.name ?? "tool";
-      this.names.set(String(data.callId), name);
-      this.out(callLine(name, (data.input ?? {}) as Record<string, unknown>));
-    } else if (event.type === "call.settled" && data.outcome !== "completed") {
+      this.calls.requested(String(data.callId), (data.capability as { name?: string } | undefined)?.name ?? "tool", data.input ?? {});
+    } else if (event.type === "call.started") {
+      // The call cleared its approval (or needed none): the guard allowed it.
+      this.calls.decided(String(data.callId), "", {}, { allow: true });
+    } else if (event.type === "call.settled") {
+      const id = String(data.callId);
       const error = data.error as { message?: string } | undefined;
-      this.out(`  ✗ ${this.names.get(String(data.callId)) ?? "call"} ${String(data.outcome)}: ${error?.message ?? ""}`.trimEnd());
+      // A rejected call never started: in a stage nobody approves by hand, so the guard refused it.
+      if (data.outcome === "rejected") this.calls.decided(id, "", {}, { allow: false, reason: error?.message ?? "rejected" });
+      const ok = data.outcome === "completed";
+      this.calls.settled(id, ok, ok ? undefined : `${String(data.outcome)}: ${error?.message ?? ""}`);
     } else if (event.type === "usage.recorded") {
-      const usage = data.usage as { costUsd?: number } | undefined;
+      const usage = data.usage as { costUsd?: number; inputTokens?: number; outputTokens?: number } | undefined;
       if (typeof usage?.costUsd === "number") result.costUsd = (result.costUsd ?? 0) + usage.costUsd;
+      this.emit({
+        kind: "usage",
+        payload: {
+          model: this.model,
+          ...(typeof usage?.inputTokens === "number" && { inputTokens: usage.inputTokens }),
+          ...(typeof usage?.outputTokens === "number" && { outputTokens: usage.outputTokens }),
+          ...(typeof usage?.costUsd === "number" && { costUsd: usage.costUsd }),
+        },
+      });
     } else if (event.type === "turn.paused" && !this.capped) {
       // eve asks to continue past the pack's compiled token budget (approvals never ask here):
       // nobody is here to answer, and no provider reset would resume it.

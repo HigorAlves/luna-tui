@@ -1,7 +1,7 @@
 // The entry, end to end without a model: a dry run of every agent pack renders the prompt,
 // prints the SDK options and leaves a result the machine's contract accepts; the evidence
 // pack reads the QA manifest; a bad input still leaves a result that says why.
-import { AGENT_PACKS, type AgentPack, PACKS, type PackId, StageOutput, resolveEngine } from "@hardness/contracts";
+import { AGENT_PACKS, type AgentPack, PACKS, type PackId, RunEvent, StageOutput, resolveEngine } from "@hardness/contracts";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -89,7 +89,11 @@ describe("factory main (dry run)", () => {
     expect(options.systemPrompt).toMatchObject({ type: "preset", preset: "claude_code" });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run", ledger: { schema: 1, slices: [] } });
-    expect(readFileSync(join(out, "events.jsonl"), "utf8")).toContain('"stage_end"');
+    // The run's events in order: the options it would run with, then the stage's end.
+    const events = readFileSync(join(out, "events.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line));
+    expect(events.map((e) => e.kind)).toEqual(["session", "note"]);
+    expect(events.every((e) => RunEvent.safeParse(e).success)).toBe(true);
+    expect(events[1].payload).toMatchObject({ phase: "stage_end" });
   });
 
   it("slack_triage: runs over an empty /work with no tools, renders the batch and leaves a valid result", () => {

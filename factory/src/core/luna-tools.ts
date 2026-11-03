@@ -2,14 +2,14 @@
 // decisions, as a description and an input shape per tool plus one handler that keeps the state.
 // The state lives in the factory process, because finish() reads it; each runtime serves the
 // handlers its own way (Claude as an in-process MCP server, eve over a loopback call).
-import type { Ledger, LedgerSlice, LunaTool, StageInput } from "@hardness/contracts";
+import type { Ledger, LedgerSlice, LunaTool, RunEvent, StageInput } from "@hardness/contracts";
 import { writeFileSync } from "node:fs";
 import { z } from "zod";
 
-import type { LunaState } from "./output.ts";
+import type { Emit } from "./events.ts";
 
 const STATUS = z.enum(["pending", "red", "green", "committed", "escalated"]);
-const SLICE_EVENT: Record<LedgerSlice["status"], string | null> = {
+const SLICE_EVENT: Record<LedgerSlice["status"], "slice.red" | "slice.green" | "slice.committed" | "escalation" | null> = {
   pending: null,
   red: "slice.red",
   green: "slice.green",
@@ -52,21 +52,20 @@ export interface LunaToolsOptions {
   /** The ledger a resumed run starts from, when the machine passed one. */
   ledger?: Ledger | null;
   decisions: StageInput["decisions"];
-  /** Called with each progress label, so the transcript shows it. */
-  onStep?: (label: string, n: number, of: number) => void;
+  /** Where every call's event goes: the run's event stream (a step is also a transcript line). */
+  emit: Emit;
 }
 
 /** The handlers, by tool, and the state the runner reads at the end. `call` validates the input
  *  first, so a runtime that hands it raw JSON gets the same refusal a schema would give. */
 export function lunaHandlers(options: LunaToolsOptions) {
-  const state: LunaState = { ledger: options.ledger ?? { schema: 1, slices: [] }, events: [] };
+  const state: { ledger: Ledger } = { ledger: options.ledger ?? { schema: 1, slices: [] } };
   const persist = () => writeFileSync(options.ledgerPath, JSON.stringify(state.ledger, null, 2) + "\n");
-  const note = (kind: string, payload: Record<string, unknown>) => state.events.push({ kind, payload });
+  const note = (event: RunEvent) => options.emit(event);
 
   const handlers: { [T in LunaTool]: (args: Args<T>) => unknown } = {
     step: ({ label, n = 0, of = 0 }) => {
-      note("step", { label, n, of });
-      options.onStep?.(label, n, of);
+      note({ kind: "step", payload: { label, n, of } });
       return "ok";
     },
     slice_init: ({ slices }) => {
@@ -76,7 +75,7 @@ export function lunaHandlers(options: LunaToolsOptions) {
         slices: slices.map((s) => ({ id: s.id, title: s.title, status: "pending", commit: null, estLoc: s.estLoc ?? null, actualLoc: null, note: null })),
       };
       persist();
-      note("ledger.init", { total: state.ledger.slices.length });
+      note({ kind: "ledger.init", payload: { total: state.ledger.slices.length } });
       return state.ledger;
     },
     slice_set: ({ id, status, commit, actualLoc, note: sliceNote }) => {
@@ -88,7 +87,7 @@ export function lunaHandlers(options: LunaToolsOptions) {
       if (sliceNote !== undefined) slice.note = sliceNote;
       persist();
       const kind = SLICE_EVENT[status];
-      if (kind) note(kind, { id: slice.id, title: slice.title, commit: slice.commit });
+      if (kind) note({ kind, payload: { id: slice.id, title: slice.title, commit: slice.commit } });
       return slice;
     },
     slice_list: () => state.ledger,

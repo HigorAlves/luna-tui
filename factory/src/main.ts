@@ -2,21 +2,25 @@
 //   in:  /in/stage.json, a StageInput from the machine
 //   out: /out/result.json (StageOutput), /out/events.jsonl, /out/ledger.json, /out/files/**
 //   cwd: /work, the task's worktree
-// Stdout is a readable transcript; the board's watch pane follows it with `docker logs -f`.
+// Stdout is a readable transcript; the board's watch pane follows it with `docker logs -f`. The
+// runtime reports the run as events (core/events.ts): core prints them (core/transcript.ts) and
+// writes them to /out/events.jsonl.
 // LUNA_STAGE_DRY_RUN=1 renders the prompt and the SDK options without a model call.
 // LUNA_STAGE_DEBUG=1 also writes every SDK message to /out/raw.jsonl.
 // This file reads the input, renders the prompt and writes the result; the run itself is the
 // runtime's (src/runtimes/).
-import { PACKS, resolveEngine } from "@hardness/contracts";
+import { PACKS, type RunEvent, resolveEngine } from "@hardness/contracts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import type { Emit } from "./core/events.ts";
 import { lunaHandlers } from "./core/luna-tools.ts";
 import { EMPTY_RUN, type RunOutcome, finish, settle } from "./core/output.ts";
 import { renderPrompt } from "./core/render.ts";
 import { readJson, readStageInput } from "./core/stage-io.ts";
+import { transcript } from "./core/transcript.ts";
 import { RUNTIMES } from "./runtimes/index.ts";
 
 const env = process.env;
@@ -33,13 +37,16 @@ const input = readStageInput(IN, OUT);
 if (!input) process.exit(1);
 const pack = PACKS[input.pack];
 
+// Every event the run emits, in order: printed as it comes, written by finish().
+const events: RunEvent[] = [];
+const print = transcript(out);
+const emit: Emit = (event) => {
+  events.push(event);
+  print(event);
+};
+
 // The luna tools' state lives here, whatever runtime serves them: the result reads it.
-const luna = lunaHandlers({
-  ledgerPath: join(OUT, "ledger.json"),
-  ledger: input.context.ledger ?? null,
-  decisions: input.decisions,
-  onStep: (label, n, of) => out(`· ${label}${of ? ` (${n}/${of})` : ""}`),
-});
+const luna = lunaHandlers({ ledgerPath: join(OUT, "ledger.json"), ledger: input.context.ledger ?? null, decisions: input.decisions, emit });
 
 out(`luna factory · pack ${pack.id} as ${pack.kind === "decision" ? "a decision" : (pack.agent ?? "script")} (attempt ${input.attempt})`);
 
@@ -49,7 +56,7 @@ if (pack.kind === "script") {
   const verdict = manifest?.verdict ?? null;
   const good = verdict === "pass" || verdict === "skipped";
   const note = good ? `qa ${verdict}` : manifest ? `qa verdict: ${verdict ?? "missing"}` : "qa-manifest.json missing or unreadable";
-  finish(OUT, pack, { ...EMPTY_RUN, ok: good, text: note, error: good ? null : note }, luna.state);
+  finish(OUT, pack, { ...EMPTY_RUN, ok: good, text: note, error: good ? null : note }, { ledger: luna.state.ledger, events });
   process.exit(0);
 }
 
@@ -64,7 +71,9 @@ try {
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
-finish(OUT, pack, run, luna.state);
+// A rate limit, however the runtime learned of it, is one event.
+if (run.rateLimited) emit({ kind: "rate_limit", payload: { resetsAt: run.resetsAt } });
+finish(OUT, pack, run, { ledger: luna.state.ledger, events });
 
 async function runStage(): Promise<RunOutcome> {
   // A decision pack has no prompt: its runtime sends the pack's questions and the input as data.
@@ -82,7 +91,7 @@ async function runStage(): Promise<RunOutcome> {
   const runtime = RUNTIMES[engine.runtime];
   if (!runtime) return { ...EMPTY_RUN, error: `engine ${engine.id} runs on ${engine.runtime}, which is not available in this factory yet` };
   const paths = { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT, input: dirname(IN), scratch };
-  const run = await runtime.run({ pack, engine, input: input!, prompt, paths, luna, dry: DRY, out });
+  const run = await runtime.run({ pack, engine, input: input!, prompt, paths, luna, dry: DRY, emit });
   // A dry run answers nothing unless the test seam gave it an answer; that one is settled.
   return DRY && run.structured === null ? run : settle(run, pack);
 }
