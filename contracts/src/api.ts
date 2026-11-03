@@ -8,6 +8,7 @@ import type { SlackSnapshot } from "./slack.ts";
 import type { JiraLink, TaskSla } from "./jira.ts";
 import type { AgentPack, AgentRole, Pack } from "./packs.ts";
 import { EngineId } from "./engines.ts";
+import type { ModelEntry, RuntimeId } from "./models.ts";
 import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskRoute, TaskSource, TestCase } from "./stage.ts";
 
 export const NewTaskInput = z.object({
@@ -214,6 +215,22 @@ export interface TaskEvent {
   kind: string;
   payload: Record<string, unknown>;
   at: string;
+}
+
+/** `GET /engines`: one row per engine, and whether this machine can run it. Never a credential's value. */
+export interface EngineInfo {
+  id: EngineId;
+  runtime: RuntimeId;
+  /** The pinned ID the runtime passes to its SDK. */
+  modelId: string;
+  /** How a run is paid for: Claude's subscription (its API key is the fallback), the Codex login, or an API key. */
+  auth: "subscription" | "chatgpt" | "api-key";
+  /** The catalog model's status. */
+  status: ModelEntry["status"];
+  /** This machine has the credential the engine needs. */
+  available: boolean;
+  /** What is missing, when it is not available. */
+  reason?: string;
 }
 
 /** `GET /packs`: one row per pack in the registry. `kind` is `script` for a pack that calls no model,

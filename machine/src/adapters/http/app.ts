@@ -5,6 +5,7 @@ import {
   type ApiError,
   CloneInput,
   DecisionInput,
+  EngineId,
   type PrAction,
   PrActionInput,
   type PullRequest,
@@ -40,6 +41,8 @@ const SlotsInput = z.object({ max: z.number().int().min(1) });
 import { computeMetrics } from "../persistence/metrics-query.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import { packInfo } from "../../domain/packs.ts";
+import { engineInfo } from "../../domain/engines.ts";
+import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
 import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, type Pipeline, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
@@ -86,6 +89,8 @@ export interface AppDeps {
   sla?: (task: TaskRow) => Promise<TaskSla | null>;
   /** The same for a whole list at once (`GET /tasks`); falls back to `sla` per task. */
   slaAll?: (tasks: TaskRow[]) => Promise<Map<string, TaskSla | null>>;
+  /** Whether this machine has each engine's credential, for `GET /engines`; defaults to the machine's own. */
+  credentials?: Pick<Credentials, "check">;
 }
 
 class BadRequest extends Error {}
@@ -127,7 +132,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials() }: AppDeps): Hono {
   const app = new Hono();
   /** A task row as the board reads it, clocks included. */
   const serialize = async (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null) => toTask(row, usage, sla ? await sla(row) : null);
@@ -171,6 +176,9 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
 
   /** Every pack in the registry, with the task states it runs in. */
   app.get("/packs", (c) => c.json(PackId.options.map((id) => packInfo(PACKS[id]))));
+
+  /** Every engine, and whether this machine has the credential it needs; never the credential. */
+  app.get("/engines", async (c) => c.json(await Promise.all(EngineId.options.map(async (id) => engineInfo(id, await credentials.check(id))))));
 
   // "Stop picking up work" / "carry on" / "run N at once": the knobs for leaving and for debugging.
   app.post("/drain", (c) => c.json(pipeline.drain()));
