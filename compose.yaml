@@ -75,6 +75,10 @@ services:
       RUNNER_QA_IMAGE: ${RUNNER_QA_IMAGE:-hardness-runner-qa:dev}
       # gh and git push to GitHub over https with this token (`pnpm start` passes `gh auth token`).
       GH_TOKEN: ${GH_TOKEN:-}
+      # The Codex (ChatGPT) login for `codex:*` engines: your Codex home, mounted below. The machine
+      # copies auth.json into each run's folder and writes a refreshed token back here, so the stage
+      # containers never see this folder.
+      CODEX_HOME: /root/.codex-host
       # Repos are owned by your user, not the container's; gh answers git's https auth;
       # commits made here (the approved memory rules) carry your identity (`pnpm start` reads
       # it); and ssh GitHub remotes go over https, since there is no ssh key in here.
@@ -96,6 +100,8 @@ services:
       - ${LUNA_REPOS_DIR:-${HOME}/Developer}:${LUNA_REPOS_DIR:-${HOME}/Developer}
       - ${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}:${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}
       - ${HOME}/.config/hardness:/root/.config/hardness:ro
+      # Read-write: a run that refreshed the Codex token writes it back (a temp file, then a rename).
+      - ${CODEX_HOME:-${HOME}/.codex}:/root/.codex-host
 
 volumes:
   pgdata:

@@ -31,7 +31,9 @@ describe("chooseEngine", () => {
       engine: "claude:opus",
       source: "default",
       reason: "codex:sol has no credential on this machine (no Codex login (~/.codex/auth.json)); ran claude:opus, the pack's default",
+      note: "triage ran on claude:opus: codex:sol has no Codex login on this machine",
     });
+    expect(chooseEngine({ pack: triage, config: { triage: "openai:sol" }, missing: () => "unset" }).note).toBe("triage ran on claude:opus: openai:sol has no OpenAI API key on this machine");
     // The default itself is never passed over: without its credential the stage cannot run at all, and says so itself.
     expect(chooseEngine({ pack: triage, missing: () => "nothing" })).toEqual({ engine: "claude:opus", source: "default", reason: null });
   });
