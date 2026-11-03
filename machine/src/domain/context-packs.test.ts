@@ -1,0 +1,55 @@
+import { PackId, StageInput } from "@hardness/contracts";
+import { describe, expect, it } from "vitest";
+
+import { CONTEXT_OF, NOT_ON_DEMAND, contextSchema, isContextPack } from "./context-packs.ts";
+import { packStates } from "./packs.ts";
+import { buildContextPackInput, buildJiraIntakeInput, buildSlackTriageInput } from "./stage-input.ts";
+
+const chat = { source: "slack" as const, me: { id: "U1", name: "higor" }, items: [{ id: "C1:1", place: "#eng", kind: "channel" as const, author: "@marta", isBot: false, text: "review?" }] };
+const issue = { title: "Board crashes on resize", description: "It panics.", labels: ["bug"] };
+const jira = { key: "PLAT-1", url: "https://a.atlassian.net/browse/PLAT-1", summary: "Login", description: "Sign in.", issueType: "Story", priority: null, labels: [], dueAt: null, comments: [], repoPath: null };
+const slack = { me: { id: "U1", name: "higor" }, watches: [], rules: "", items: [] };
+
+describe("context-only packs", () => {
+  it("are the packs that run in no task state, but for the deny list: slack_triage, jira_intake, issue_classify and chat_triage", () => {
+    const none = PackId.options.filter((id) => packStates(id).length === 0);
+    // A new context-only pack must be given a context key or be denied: never on demand by accident.
+    expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "issue_classify", "jira_intake", "slack_triage"]);
+    expect(isContextPack("triage")).toBe(false);
+    expect(isContextPack("reviewing_memory")).toBe(false);
+    expect(isContextPack("chat_triage")).toBe(true);
+  });
+
+  it("never include eval_judge: it runs in no task state, but grades eval cases for the evals runner only", () => {
+    expect(packStates("eval_judge")).toEqual([]);
+    expect(NOT_ON_DEMAND).toContain("eval_judge");
+    expect(isContextPack("eval_judge")).toBe(false);
+  });
+
+  it("take an object with the pack's own key and nothing else", () => {
+    expect(contextSchema("chat_triage").safeParse({ chat }).success).toBe(true);
+    expect(contextSchema("issue_classify").safeParse({ issue }).success).toBe(true);
+    expect(contextSchema("jira_intake").safeParse({ jira }).success).toBe(true);
+    expect(contextSchema("chat_triage").safeParse({ issue }).success).toBe(false);
+    expect(contextSchema("chat_triage").safeParse({ chat, issue }).success).toBe(false);
+    expect(contextSchema("chat_triage").safeParse({ chat: { ...chat, items: [] } }).success).toBe(false);
+  });
+});
+
+describe("buildContextPackInput", () => {
+  it("builds chat_triage's and issue_classify's input around a synthetic task with the context under its key", () => {
+    const chatInput = buildContextPackInput("chat_triage", { chat }, "codex:luna");
+    expect(StageInput.parse(chatInput)).toEqual(chatInput);
+    expect(chatInput).toMatchObject({ pack: "chat_triage", stage: "chat_triage", engine: "codex:luna", attempt: 1, task: { id: "chat-triage", title: "Chat triage", repoPath: "", branch: "", source: null }, plan: null, context: { projectContext: null, chat }, limits: { maxTurns: 3, timeoutMs: 180_000 } });
+    const issueInput = buildContextPackInput("issue_classify", { issue });
+    expect(StageInput.parse(issueInput)).toEqual(issueInput);
+    expect(issueInput).toMatchObject({ pack: "issue_classify", task: { id: "issue-classify", title: "Board crashes on resize", description: "It panics." }, context: { projectContext: null, issue }, limits: { maxTurns: 1, timeoutMs: 60_000 } });
+    expect(issueInput).not.toHaveProperty("engine");
+  });
+
+  it("gives slack_triage and jira_intake exactly the input their own runners build", () => {
+    expect(buildContextPackInput("slack_triage", { slack }, "claude:haiku")).toEqual(buildSlackTriageInput(slack, "claude:haiku"));
+    expect(buildContextPackInput("jira_intake", { jira }, "claude:sonnet")).toEqual(buildJiraIntakeInput(jira, "claude:sonnet"));
+  });
+});

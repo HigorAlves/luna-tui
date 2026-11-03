@@ -9,6 +9,7 @@ import type { DataSource } from "typeorm";
 import { HOST_GIT } from "../adapters/git/worktree.ts";
 import { TaskEntity } from "../adapters/persistence/schemas.ts";
 import { type ExecResult, exec } from "../adapters/process/exec.ts";
+import { JIRA_INTAKE_DIR } from "./stages/jira-intake-runner.ts";
 import { SLACK_TRIAGE_DIR } from "./stages/slack-triage-runner.ts";
 
 export interface WorktreeSweep {
@@ -61,15 +62,27 @@ export async function sweepRunFolders(db: DataSource, stateDir: string): Promise
   return orphans.length;
 }
 
-/** A slack_triage run folder is named by its start time (`2026-10-28T12-00-00-000Z`, `-2` for a second batch). */
-const RUN_STAMP = /^(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/;
+/** A pack run folder outside a task is named by its start time (`2026-10-28T12-00-00-000Z`):
+ *  slack_triage's alone (`-2` for a second batch), jira_intake's after the issue key
+ *  (`PLAT-123-2026-10-28T12-00-00-000Z`). */
+const RUN_STAMP = /(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-(\d{3})Z/;
 
 /** Removes `<stateDir>/slack-triage/<stamp>` folders older than `days`: a run that answered
  *  removes its own folder, so these are the failed runs' transcripts, kept as long as the
  *  stage runs' history. 0 disables it. Returns how many went. */
-export async function sweepSlackTriageRuns(stateDir: string, days: number, now: Date = new Date()): Promise<number> {
+export function sweepSlackTriageRuns(stateDir: string, days: number, now: Date = new Date()): Promise<number> {
+  return sweepStampedRuns(join(stateDir, SLACK_TRIAGE_DIR), days, now);
+}
+
+/** Removes `<stateDir>/jira-intake/<key>-<stamp>` folders older than `days`: like Slack
+ *  triage's, a run that answered removes its own, so these are the failed runs'. 0 disables it. */
+export function sweepJiraIntakeRuns(stateDir: string, days: number, now: Date = new Date()): Promise<number> {
+  return sweepStampedRuns(join(stateDir, JIRA_INTAKE_DIR), days, now);
+}
+
+/** Removes the folders under `dir` started more than `days` ago, by their stamp, else their mtime. */
+async function sweepStampedRuns(dir: string, days: number, now: Date): Promise<number> {
   if (days <= 0) return 0;
-  const dir = join(stateDir, SLACK_TRIAGE_DIR);
   let names: string[];
   try {
     names = await readdir(dir);

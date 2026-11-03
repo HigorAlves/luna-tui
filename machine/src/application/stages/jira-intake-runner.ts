@@ -5,18 +5,21 @@
 // in it), mounted read-only (the pack has Read, Glob and Grep, so it can check the ask against
 // the code); with no repo, an empty folder. The issue rides in
 // `context.jira`, the verdict comes back in /out/result.json. There is no row to record: the
-// ticket it makes (or does not) is the record, and the line logged says the rest.
-import { JiraIntakeAnswer, type JiraIntakeContext, PACKS, StageOutput, resolveEngine } from "@hardness/contracts";
-import { mkdir, readFile } from "node:fs/promises";
+// ticket it makes (or does not) is the record, and the line logged says the rest. The run folder
+// (`<stateDir>/jira-intake/<key>-<time>`: the issue's text, the transcript) goes once the run
+// answered; a failed run's stays, so the transcript says why, until the retention sweep.
+import { JiraIntakeAnswer, type JiraIntakeContext, PACKS, resolveEngine } from "@hardness/contracts";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { Credentials } from "../../adapters/credentials/index.ts";
-import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
+import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { ensureCleanCheckout, intakeCheckoutPath } from "../../adapters/git/worktree.ts";
 import { buildJiraIntakeInput } from "../../domain/stage-input.ts";
 import type { JiraIssue } from "../jira.ts";
 import { pickEngine } from "../engine.ts";
 import { PolicyStore } from "../policy.ts";
+import { outputError, runPackOnce } from "./run-once.ts";
 
 export interface JiraIntakeDeps {
   /** The base stage image; the same one the packs run in. */
@@ -45,7 +48,6 @@ export interface JiraTriager {
 
 /** Where the runs live under the state dir; each run is a folder named by the issue and its start time. */
 export const JIRA_INTAKE_DIR = "jira-intake";
-const MINUTE = 60_000;
 
 /** The pack's input block for one issue. */
 export function jiraContext(issue: JiraIssue, repoPath: string | null): JiraIntakeContext {
@@ -69,7 +71,6 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
   const policies = deps.policies ?? new PolicyStore();
   const now = deps.now ?? (() => new Date());
   const log = deps.log ?? ((line: string) => console.log(line));
-  const sandbox = deps.sandbox ?? runSandbox;
   const checkout = deps.checkout ?? ((repoPath: string) => ensureCleanCheckout(repoPath, intakeCheckoutPath(repoPath, deps.worktreesDir)));
 
   return {
@@ -99,35 +100,19 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
           work = join(runDir, "work");
           await mkdir(work, { recursive: true });
         }
-        const credential = await deps.credentials.prepare(engine, runDir, { timeoutMs: input.limits.timeoutMs });
-        const result = await sandbox({
-          name: `hardness-jira-intake-${stamp.toLowerCase()}`,
-          image: deps.image,
-          runDir,
-          worktree: work,
-          writable: false,
-          gitDir: null,
-          input: input as unknown as Record<string, unknown>,
-          timeoutMs: input.limits.timeoutMs,
-          credential: { env: credential.env, mounts: credential.mounts },
-          labels: { luna: "jira-intake" },
-        }).finally(() => credential.release());
-        if (result.aborted) error = "aborted";
-        else if (result.timedOut) error = `timed out after ${input.limits.timeoutMs / MINUTE} minutes`;
+        const run = await runPackOnce(
+          { name: `hardness-jira-intake-${stamp.toLowerCase()}`, image: deps.image, runDir, worktree: work, input, engine, labels: { luna: "jira-intake" } },
+          { credentials: deps.credentials, sandbox: deps.sandbox },
+        );
+        if (run.error !== null) error = run.error;
         else {
-          const raw = await readFile(join(runDir, "out", "result.json"), "utf8").catch(() => null);
-          const output = raw === null ? null : StageOutput.safeParse(JSON.parse(raw));
-          if (!output) error = `the container left no result (exit code ${result.exitCode})`;
-          else if (!output.success) error = `unreadable result: ${output.error.issues.map((i) => i.message).join("; ")}`;
+          const out = run.output;
+          usage = { model: out.usage.model || model, turns: out.usage.turns, costUsd: out.usage.costUsd };
+          if (!out.ok) error = outputError(out);
           else {
-            const out = output.data;
-            usage = { model: out.usage.model || model, turns: out.usage.turns, costUsd: out.usage.costUsd };
-            if (!out.ok) error = typeof out.error === "string" ? out.error : out.error ? JSON.stringify(out.error) : out.summary || "the stage failed";
-            else {
-              const parsed = JiraIntakeAnswer.safeParse(out.answer);
-              if (!parsed.success) error = `the answer did not match the schema: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`;
-              else answer = parsed.data;
-            }
+            const parsed = JiraIntakeAnswer.safeParse(out.answer);
+            if (!parsed.success) error = `the answer did not match the schema: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`;
+            else answer = parsed.data;
           }
         }
       } catch (thrown) {
@@ -135,6 +120,7 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
       }
       const cost = usage.costUsd === null ? "" : ` · $${usage.costUsd.toFixed(4)}`;
       log(answer ? `jira intake: ${issue.key} ${answer.verdict}: ${answer.reason} (${usage.turns} turn(s)${cost})` : `jira intake: ${issue.key} failed: ${error}`);
+      if (answer) await rm(runDir, { recursive: true, force: true }).catch(() => {});
       return answer;
     },
   };

@@ -11,7 +11,7 @@ import { TaskEntity } from "../adapters/persistence/schemas.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import { NO_RETRIES } from "../domain/transition.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { sweepImages, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./sweep.ts";
+import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./sweep.ts";
 
 let db: DataSource;
 beforeAll(async () => {
@@ -148,6 +148,24 @@ describe("sweepTaskState", () => {
     expect(existsSync(join(stateDir, "tasks", task.id))).toBe(true);
     expect(existsSync(join(stateDir, "tasks", "11111111-2222-3333-4444-555555555555"))).toBe(false);
     expect(await sweepTaskState(db, join(stateDir, "nowhere"))).toBe(0);
+  });
+});
+
+describe("sweepJiraIntakeRuns", () => {
+  it("removes failed jira_intake run folders older than the window by the stamp after the issue key, keeps the rest, and is off at 0", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "sweep-jira-"));
+    const dir = join(stateDir, "jira-intake");
+    for (const name of ["PLAT-123-2026-07-01T12-00-00-000Z", "OPS-7-2026-10-27T09-30-00-000Z", "notes"]) {
+      mkdirSync(join(dir, name), { recursive: true });
+      writeFileSync(join(dir, name, "t.log"), "x");
+    }
+    const now = new Date("2026-10-28T12:00:00Z");
+    expect(await sweepJiraIntakeRuns(stateDir, 0, now)).toBe(0);
+    expect(await sweepJiraIntakeRuns(stateDir, 90, now)).toBe(1);
+    expect(existsSync(join(dir, "PLAT-123-2026-07-01T12-00-00-000Z"))).toBe(false);
+    expect(existsSync(join(dir, "OPS-7-2026-10-27T09-30-00-000Z"))).toBe(true);
+    expect(existsSync(join(dir, "notes"))).toBe(true);
+    expect(await sweepJiraIntakeRuns(join(stateDir, "nowhere"), 90, now)).toBe(0);
   });
 });
 

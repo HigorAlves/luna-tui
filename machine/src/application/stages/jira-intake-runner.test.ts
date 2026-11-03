@@ -74,12 +74,23 @@ describe("createJiraTriager", () => {
   });
 
   it("uses an empty folder under the run dir when the repo is unknown", async () => {
-    const triager = createJiraTriager(deps(fakeSandbox(output())));
+    let existed = false;
+    const sandbox = fakeSandbox(output());
+    const triager = createJiraTriager(deps(async (run) => ((existed = existsSync(run.worktree)), sandbox(run))));
     await triager.triage(issue, null);
     expect(checkouts).toEqual([]);
     expect(seen[0]!.worktree).toBe(join(stateDir, "jira-intake", "PLAT-123-2026-10-28T12-00-00-000Z", "work"));
-    expect(existsSync(seen[0]!.worktree)).toBe(true);
+    expect(existed).toBe(true);
     expect(StageInput.parse(seen[0]!.input).task.repoPath).toBe("");
+  });
+
+  it("removes the run folder (the issue's text, the transcript) once the run answered, and keeps a failed run's for the retention sweep", async () => {
+    await createJiraTriager(deps(fakeSandbox(output()))).triage(issue, null);
+    expect(existsSync(seen[0]!.runDir)).toBe(false);
+    await createJiraTriager(deps(fakeSandbox(output()))).triage(issue, "/r/a");
+    expect(existsSync(seen[1]!.runDir)).toBe(false);
+    await createJiraTriager(deps(fakeSandbox(output({ ok: false, error: "usage limit" })))).triage(issue, null);
+    expect(existsSync(join(seen[2]!.runDir, "out", "result.json"))).toBe(true);
   });
 
   it("answers null without running when the clean checkout cannot be prepared", async () => {
