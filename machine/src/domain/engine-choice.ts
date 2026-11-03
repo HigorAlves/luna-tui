@@ -4,6 +4,8 @@
 // for the task's log. Pure: the caller says which credentials are missing. See RFC 0002.
 import { type EngineId, PACKS, type Pack, type PackId, type StageEngines } from "@hardness/contracts";
 
+import { packStates } from "./packs.ts";
+
 export interface EngineChoice {
   engine: EngineId;
   /** Where the engine came from: the task's override, the repo's luna.yaml, or the pack. */
@@ -21,6 +23,16 @@ export function engineProblem(pack: PackId, engine: EngineId): string | null {
 export function stagesProblem(stages: StageEngines): string | null {
   for (const [pack, engine] of Object.entries(stages) as [PackId, EngineId | undefined][]) {
     const problem = engine === undefined ? null : engineProblem(pack, engine);
+    if (problem) return `${pack}: ${problem}`;
+  }
+  return null;
+}
+
+/** The same for a task's own `stages` (null clears one): a pack that never runs in a task cannot be set on one either. */
+export function taskStagesProblem(stages: Partial<Record<PackId, EngineId | null>>): string | null {
+  for (const [pack, engine] of Object.entries(stages) as [PackId, EngineId | null | undefined][]) {
+    if (packStates(pack).length === 0) return `${pack}: runs on its own, not in a task`;
+    const problem = engine == null ? null : engineProblem(pack, engine);
     if (problem) return `${pack}: ${problem}`;
   }
   return null;

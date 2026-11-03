@@ -41,6 +41,7 @@ export const toTask = (row: TaskRow, usage: { spentUsd: number; workedMs: number
   tests: row.testsPassed !== null && row.testsTotal !== null ? { passed: row.testsPassed, total: row.testsTotal } : null,
   jira: jiraOf(row),
   sla,
+  stages: row.stages ?? {},
   seq: Number(row.seq),
   createdAt: row.createdAt.toISOString(),
   updatedAt: row.updatedAt.toISOString(),

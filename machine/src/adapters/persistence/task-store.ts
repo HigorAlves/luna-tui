@@ -63,6 +63,7 @@ export class PgTaskStore implements TaskStore {
       resumeTo: null,
       reason: null,
       jira: input.jira ?? null,
+      stages: input.stages ?? {},
       stateSince: new Date(),
     };
   }
