@@ -4,6 +4,7 @@
 // the luna tools' events and the stage's notes have always had, so the machine reads them one way.
 import { z } from "zod";
 
+import { AgentRole } from "./packs.ts";
 import { PackId } from "./stage.ts";
 
 const event = <K extends string, P extends z.ZodRawShape>(kind: K, payload: P) => z.object({ kind: z.literal(kind), payload: z.object(payload) });
@@ -48,12 +49,14 @@ export const RunEvent = z.discriminatedUnion("kind", [
   sliceEvent("slice.green"),
   sliceEvent("slice.committed"),
   sliceEvent("escalation"),
-  /** A run this one delegated to another pack or engine, as it started and as it ended. Nothing
-   *  emits it yet: `delegate` (RFC 0002 phase 7) will. */
+  /** A run this one delegated to a helper on another engine (factory/src/core/delegate.ts), as it
+   *  started and as it ended: `pack` is the stage's, `role` the helper's, its own files are under
+   *  /out/children/<n>/ for `child-<n>`. */
   event("child", {
     phase: z.enum(["start", "end"]),
     runId: z.string(),
     pack: PackId,
+    role: AgentRole.optional(),
     engine: z.string(),
     ok: z.boolean().optional(),
     error: z.string().optional(),

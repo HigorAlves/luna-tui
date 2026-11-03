@@ -6,16 +6,18 @@ import type { HookCallbackMatcher, HookJSONOutput, Options, Query, SDKMessage } 
 
 import type { ScriptStep } from "../conformance/table.ts";
 
-type RegisteredTools = Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ content: Array<{ text: string }> }> }>;
+type RegisteredTools = Record<string, { handler: (args: unknown, extra: unknown) => Promise<{ content: Array<{ text: string }>; isError?: boolean }> }>;
 
 const SESSION = "fake-session";
 
 /** The tool the SDK would name for a scripted call, and its input. */
 function toolUse(step: Extract<ScriptStep, { call: string }>): { name: string; input: Record<string, unknown> } {
-  return step.call === "bash" ? { name: "Bash", input: { command: step.command } } : { name: `mcp__luna__${step.tool}`, input: step.args };
+  if (step.call === "bash") return { name: "Bash", input: { command: step.command } };
+  if (step.call === "delegate") return { name: "mcp__luna__delegate", input: { helper: step.helper, message: step.message } };
+  return { name: `mcp__luna__${step.tool}`, input: step.args };
 }
 
-/** What the model reads back from one call: the hooks' denial, or what the tool returned. */
+/** What the model reads back from one call: the hooks' denial, or what the tool returned (an error when it says so). */
 async function execute(options: Options, name: string, input: Record<string, unknown>, id: string): Promise<{ text: string; denied: boolean }> {
   const matchers: HookCallbackMatcher[] = options.hooks?.PreToolUse ?? [];
   for (const matcher of matchers.filter((m) => new RegExp(m.matcher ?? ".*").test(name))) {
@@ -29,7 +31,8 @@ async function execute(options: Options, name: string, input: Record<string, unk
     const server = options.mcpServers?.luna as { instance?: { _registeredTools?: RegisteredTools } } | undefined;
     const tool = server?.instance?._registeredTools?.[name.slice("mcp__luna__".length)];
     if (!tool) return { text: `no tool ${name}`, denied: true };
-    return { text: (await tool.handler(input, {})).content[0]?.text ?? "", denied: false };
+    const result = await tool.handler(input, {});
+    return { text: result.content[0]?.text ?? "", denied: result.isError === true };
   }
   return { text: "(ran)", denied: false };
 }

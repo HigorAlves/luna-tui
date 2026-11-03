@@ -19,6 +19,12 @@ export function transcriptLine(event: RunEvent): string | null {
       return !event.payload.ok && event.payload.error !== undefined ? `  ✗ ${event.payload.tool} ${event.payload.error}`.trimEnd() : null;
     case "step":
       return `· ${event.payload.label}${event.payload.of ? ` (${event.payload.n}/${event.payload.of})` : ""}`;
+    case "child": {
+      const { phase, role, engine, ok, error, costUsd } = event.payload;
+      const who = `↳ ${role ?? "helper"} on ${engine}`;
+      if (phase === "start") return who;
+      return ok ? `${who} answered${typeof costUsd === "number" ? ` · $${costUsd.toFixed(4)}` : ""}` : `${who} failed: ${error ?? "no answer"}`;
+    }
     default:
       return null;
   }

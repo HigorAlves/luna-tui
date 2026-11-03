@@ -2,6 +2,7 @@
 // vendor's SDK; reading the input, rendering the prompt and writing the result stay in main.ts.
 import type { Pack, ResolvedEngine, RuntimeId, StageInput } from "@hardness/contracts";
 
+import type { DelegateTool } from "./delegate.ts";
 import type { Emit } from "./events.ts";
 import type { RunOutcome } from "./output.ts";
 
@@ -32,6 +33,10 @@ export interface RunContext {
   /** Reports the run: core prints the transcript from these events and writes them to
    *  /out/events.jsonl. A runtime writes no transcript line of its own. */
   emit: Emit;
+  /** The `delegate` tool, when the pack hands work to a helper this runtime does not run itself
+   *  (core/delegate.ts): a runtime serves it beside the luna tools, its calls go to `luna.call`.
+   *  Null in a child: delegation has depth 1. */
+  delegate?: DelegateTool | null;
 }
 
 /** What a runtime gives the model besides the prompt, as its fingerprint reads it (core/fingerprint.ts). */

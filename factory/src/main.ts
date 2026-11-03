@@ -7,16 +7,18 @@
 // writes them to /out/events.jsonl.
 // LUNA_STAGE_DRY_RUN=1 renders the prompt and the SDK options without a model call.
 // LUNA_STAGE_DEBUG=1 also writes every SDK message to /out/raw.jsonl.
+// A helper on another runtime runs as a child of the stage (core/delegate.ts), into /out/children/<n>/.
 // This file reads the input, renders the prompt and writes the result; the run itself is the
 // runtime's (src/runtimes/).
-import { PACKS, type RunEvent, type RunInfo, answerJsonSchema, resolveEngine } from "@hardness/contracts";
+import { PACKS, type RunEvent, type RunInfo, resolveEngine } from "@hardness/contracts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { delegationFor, withChildren, withDelegate } from "./core/delegate.ts";
 import type { Emit } from "./core/events.ts";
-import { fingerprint, sdkInfo } from "./core/fingerprint.ts";
+import { runInfo } from "./core/fingerprint.ts";
 import { lunaHandlers } from "./core/luna-tools.ts";
 import { EMPTY_RUN, type RunOutcome, finish, settle } from "./core/output.ts";
 import { renderPrompt } from "./core/render.ts";
@@ -65,6 +67,7 @@ if (pack.kind === "script") {
 const scratch = mkdtempSync(join(tmpdir(), "luna-scratch-"));
 // What the run ran on and its fingerprint, once its runtime is known.
 let info: RunInfo | null = null;
+const startedAt = Date.now();
 let run: RunOutcome;
 try {
   run = await runStage();
@@ -94,16 +97,13 @@ async function runStage(): Promise<RunOutcome> {
   const engine = resolveEngine(input!.engine ?? pack.engines.default);
   const runtime = RUNTIMES[engine.runtime];
   if (!runtime) return { ...EMPTY_RUN, error: `engine ${engine.id} runs on ${engine.runtime}, which is not available in this factory yet` };
-  const hash = fingerprint({
-    template,
-    ...runtime.instructions(pack, FACTORY_ROOT),
-    skillsDir: join(FACTORY_ROOT, "plugin", "skills"),
-    access: pack.kind === "agent" ? pack.access : null,
-    answer: answerJsonSchema(pack),
-  });
-  info = { runtime: runtime.id, engine: engine.id, modelId: engine.modelId, sdk: sdkInfo(runtime.sdk), fingerprint: hash };
+  info = runInfo(runtime, engine, pack, template, FACTORY_ROOT);
   const paths = { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT, input: dirname(IN), scratch };
-  const run = await runtime.run({ pack, engine, input: input!, prompt, paths, luna, dry: DRY, emit });
+  // A helper the runtime does not run itself is a child run through `delegate`; the parent's turns
+  // so far are its calls so far, which is never fewer.
+  const turnsUsed = () => events.filter((e) => e.kind === "tool_call").length;
+  const delegating = delegationFor(runtime.id, { pack, input: input!, paths, runtimes: RUNTIMES, emit, print: out, startedAt, turnsUsed });
+  const run = await runtime.run({ pack, engine, input: input!, prompt, paths, luna: withDelegate(luna, delegating), dry: DRY, emit, delegate: delegating?.tool ?? null });
   // A dry run answers nothing unless the test seam gave it an answer; that one is settled.
-  return DRY && run.structured === null ? run : settle(run, pack);
+  return withChildren(DRY && run.structured === null ? run : settle(run, pack), delegating);
 }
