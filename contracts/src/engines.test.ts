@@ -52,16 +52,19 @@ describe("the engines each pack may run on", () => {
       expect(engine, id).toBeDefined();
       const model = MODELS[engine.model];
       expect(model, `${id} → ${engine.model}`).toBeDefined();
-      // An agent pack calls tools and answers through structured output.
-      if (pack.agent) expect(model.caps, id).toMatchObject({ tools: true, structured: true });
-      expect(model.caps.effort, `${id} at ${pack.effort}`).toContain(pack.effort);
+      // An agent pack calls tools and answers through structured output; a decision pack only answers.
+      if (pack.kind === "decision") expect(model.caps.structured, id).toBe(true);
+      else {
+        if (pack.agent) expect(model.caps, id).toMatchObject({ tools: true, structured: true });
+        expect(model.caps.effort, `${id} at ${pack.effort}`).toContain(pack.effort);
+      }
       expect(retired(model, today), `${id} → ${engine.model} retired after ${model.retireAfter}`).toBe(false);
     }
   });
 
   it("keeps today's models as the defaults", () => {
     const defaults = Object.fromEntries(Object.values(PACKS).map((p) => [p.id, p.engines.default]));
-    expect(defaults).toMatchObject({ setup: "claude:opus", triage: "claude:opus", implementing: "claude:sonnet", verifying: "claude:opus", slack_triage: "claude:haiku", jira_intake: "claude:sonnet" });
+    expect(defaults).toMatchObject({ setup: "claude:opus", triage: "claude:opus", implementing: "claude:sonnet", verifying: "claude:opus", slack_triage: "claude:haiku", jira_intake: "claude:sonnet", issue_classify: "jev" });
   });
 });
 

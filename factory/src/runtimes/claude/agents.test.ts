@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { PACKS } from "@hardness/contracts";
+import { AGENT_PACKS, PACKS } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import { agentDefinitions } from "./agents.ts";
@@ -12,7 +12,7 @@ const ROLES = join(ROOT, "roles");
 
 describe("agent definitions", () => {
   it("has a skill folder for every skill a pack names", () => {
-    for (const pack of Object.values(PACKS)) {
+    for (const pack of AGENT_PACKS) {
       for (const skill of pack.skills) expect(existsSync(join(ROOT, "plugin", "skills", skill, "SKILL.md")), `${pack.id}: ${skill}`).toBe(true);
     }
   });

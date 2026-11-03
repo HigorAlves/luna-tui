@@ -3,7 +3,7 @@
 // stage input. The answer's shape is not in the prompt: the SDK's structured output enforces it
 // (runtimes/claude/run.ts, `outputFormat`). Pure: the caller passes the template and the
 // project context, so a test needs no files.
-import type { Pack, StageInput } from "@hardness/contracts";
+import type { AgentPack, Pack, StageInput } from "@hardness/contracts";
 import { answerJsonSchema } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
@@ -111,7 +111,7 @@ export function escalationLine(pack: Pack): string {
 }
 
 export interface RenderInput {
-  pack: Pack;
+  pack: AgentPack;
   input: StageInput;
   template: string;
   /** The worktree's docs/agents/project-context.md, when the input carries none. */

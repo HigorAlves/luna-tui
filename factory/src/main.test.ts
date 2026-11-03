@@ -1,7 +1,7 @@
 // The entry, end to end without a model: a dry run of every agent pack renders the prompt,
 // prints the SDK options and leaves a result the machine's contract accepts; the evidence
 // pack reads the QA manifest; a bad input still leaves a result that says why.
-import { PACKS, type PackId, StageOutput, resolveEngine } from "@hardness/contracts";
+import { AGENT_PACKS, type AgentPack, PACKS, type PackId, StageOutput, resolveEngine } from "@hardness/contracts";
 import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -68,7 +68,7 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
 }
 
 // slack_triage has no worktree and reads no project context; its dry run is below.
-const agentPacks = Object.values(PACKS).filter((p) => p.agent !== null && p.id !== "slack_triage").map((p) => p.id);
+const agentPacks = AGENT_PACKS.filter((p) => p.agent !== null && p.id !== "slack_triage").map((p) => p.id);
 
 describe("factory main (dry run)", () => {
   it.each(agentPacks)("%s: renders the prompt, prints the options and leaves a valid result", (pack) => {
@@ -79,8 +79,9 @@ describe("factory main (dry run)", () => {
     expect(prompt).toContain(`running the \`${pack}\` stage`);
     expect(prompt).toContain("Keep it small.");
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
-    expect(options).toMatchObject({ agent: PACKS[pack].agent, agents: [PACKS[pack].agent, ...PACKS[pack].helpers], model: resolveEngine(PACKS[pack].engines.default).modelId, effort: PACKS[pack].effort, maxTurns: 5, permissionMode: "dontAsk", settingSources: [], hooks: ["PreToolUse"], mcpServers: ["luna"] });
-    expect(options).toMatchObject(claudeTools(PACKS[pack].access));
+    const def = PACKS[pack] as AgentPack;
+    expect(options).toMatchObject({ agent: def.agent, agents: [def.agent, ...def.helpers], model: resolveEngine(def.engines.default).modelId, effort: def.effort, maxTurns: 5, permissionMode: "dontAsk", settingSources: [], hooks: ["PreToolUse"], mcpServers: ["luna"] });
+    expect(options).toMatchObject(claudeTools(def.access));
     expect(options.tools.every((t: string) => !t.includes("("))).toBe(true);
     expect(options.plugins[0].path).toMatch(/factory\/plugin$/);
     expect(options.systemPrompt).toMatchObject({ type: "preset", preset: "claude_code" });
