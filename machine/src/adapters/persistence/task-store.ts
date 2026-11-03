@@ -282,6 +282,21 @@ export class PgTaskStore implements TaskStore {
     return Number(row?.usd ?? 0);
   }
 
+  async engineSpendSinceUsd(since: Date, repo?: string): Promise<Map<string, number>> {
+    const rows = (await this.db.query(
+      repo === undefined
+        ? `select engine, coalesce(sum(cost_usd), 0) as usd from (
+             select engine, cost_usd from stage_runs where started_at >= $1
+             union all select engine, cost_usd from pack_runs where started_at >= $1
+             union all select engine, cost_usd from slack_triage_runs where started_at >= $1
+           ) runs where engine is not null group by engine`
+        : `select r.engine, coalesce(sum(r.cost_usd), 0) as usd from stage_runs r join tasks t on t.id = r.task_id
+            where t.repo_path = $2 and r.started_at >= $1 and r.engine is not null group by r.engine`,
+      repo === undefined ? [since] : [since, repo],
+    )) as { engine: string; usd: string }[];
+    return new Map(rows.map((row) => [row.engine, Number(row.usd)]));
+  }
+
   async repoSpendSinceUsd(repoPath: string, since: Date): Promise<number> {
     const [row] = (await this.db.query(
       `select coalesce(sum(r.cost_usd), 0) as usd from stage_runs r join tasks t on t.id = r.task_id

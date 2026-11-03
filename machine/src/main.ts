@@ -39,7 +39,8 @@ import { SlaClocks } from "./application/sla.ts";
 import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
 import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
-import { gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
+import { engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
+import { PgTaskStore } from "./adapters/persistence/task-store.ts";
 import { machineCredentials } from "./adapters/credentials/index.ts";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
@@ -130,8 +131,13 @@ let pipeline: Pipeline;
 /** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
 const policies = new PolicyStore();
 /** Each engine's credential as every part of the machine sees it: an engine on a runtime
- *  MACHINE_DISABLE_RUNTIMES turned off is unavailable, as if its credential were missing. */
-const credentials = gatedCredentials(machineCredentials(), [runtimeKillSwitch(config.disabledRuntimes)]);
+ *  MACHINE_DISABLE_RUNTIMES turned off, or at a monthly cap (MACHINE_ENGINE_BUDGETS, a repo's
+ *  luna.yaml `budget.engines`), is unavailable, as if its credential were missing. */
+const engineSpend = new PgTaskStore(db);
+const credentials = gatedCredentials(machineCredentials(), [
+  runtimeKillSwitch(config.disabledRuntimes),
+  engineBudgetGate({ budgets: config.engineBudgets, repoBudgets: async (repo) => (await policies.for(repo)).engineBudgets, spend: engineSpend }),
+]);
 if (config.disabledRuntimes.length > 0) console.log(`runtimes off (MACHINE_DISABLE_RUNTIMES): ${config.disabledRuntimes.join(", ")}`);
 const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   config,

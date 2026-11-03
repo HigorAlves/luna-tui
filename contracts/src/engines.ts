@@ -49,3 +49,23 @@ export function credentialOwner(id: EngineId): CredentialOwner {
   if (runtime === "jev") return "typesafe";
   return (ENGINES[id] as Engine).auth === "chatgpt" ? "codex" : "openai";
 }
+
+const METERED_OWNERS: readonly CredentialOwner[] = ["codex", "openai", "typesafe"];
+
+/** Why `key` cannot name a monthly cap (MACHINE_ENGINE_BUDGETS, luna.yaml `budget.engines`), or
+ *  null: a cap names an engine or a credential, whose engines it then counts together. Claude has
+ *  none: every pack's default runs on it, so a spent cap would leave no engine to run. */
+export function engineBudgetKeyProblem(key: string): string | null {
+  if (key === "claude" || key.startsWith("claude:")) return `${key}: no monthly cap on Claude, every pack's default runs on it (use policy.monthly_budget_usd or MACHINE_DAILY_BUDGET_USD)`;
+  if (key in ENGINES || (METERED_OWNERS as string[]).includes(key)) return null;
+  return `${key}: not an engine or a credential (${METERED_OWNERS.join(", ")})`;
+}
+
+/** Monthly caps in USD by engine (`openai:sol`) or credential (`openai`); 0 holds an engine once it has cost anything. */
+export const EngineBudgets = z.record(z.string(), z.number().nonnegative()).superRefine((caps, ctx) => {
+  for (const key of Object.keys(caps)) {
+    const problem = engineBudgetKeyProblem(key);
+    if (problem) ctx.addIssue({ code: "custom", path: [key], message: problem });
+  }
+});
+export type EngineBudgets = z.infer<typeof EngineBudgets>;

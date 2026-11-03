@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { ENGINES, EngineId, MODELS, type ModelEntry, PACKS, StageInput, credentialOwner, resolveEngine, retired } from "./index.ts";
+import { ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, StageInput, credentialOwner, engineBudgetKeyProblem, resolveEngine, retired } from "./index.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
@@ -120,3 +120,21 @@ describe("model IDs", () => {
     expect(offenders.map((f) => relative(ROOT, f))).toEqual([]);
   });
 });
+
+describe("monthly caps per engine", () => {
+  it("names an engine or a credential, never Claude, whose engines are every pack's default", () => {
+    for (const key of ["codex", "openai", "typesafe", "jev", "openai:sol", "codex:luna"]) expect(engineBudgetKeyProblem(key), key).toBeNull();
+    expect(engineBudgetKeyProblem("claude")).toMatch(/^claude: no monthly cap on Claude/);
+    expect(engineBudgetKeyProblem("claude:opus")).toMatch(/^claude:opus: no monthly cap on Claude/);
+    expect(engineBudgetKeyProblem("gpt-6")).toBe("gpt-6: not an engine or a credential (codex, openai, typesafe)");
+  });
+
+  it("validates a map of caps in USD, zero allowed, naming the bad key", () => {
+    expect(EngineBudgets.parse({ "openai:sol": 10, codex: 0 })).toEqual({ "openai:sol": 10, codex: 0 });
+    expect(EngineBudgets.safeParse({ openai: -1 }).success).toBe(false);
+    const bad = EngineBudgets.safeParse({ "claude:haiku": 5 });
+    expect(bad.success).toBe(false);
+    expect(bad.error?.issues[0]?.path).toEqual(["claude:haiku"]);
+  });
+});
+

@@ -11,7 +11,7 @@ import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
 import type { StageContext } from "../ports.ts";
-import { gatedCredentials, runtimeKillSwitch } from "../engine-gates.ts";
+import { engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "../engine-gates.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -637,6 +637,17 @@ describe("the engine a stage runs on", () => {
     expect(log).toEqual(["prepare claude:opus", "release claude:opus"]);
     expect(note).toHaveBeenCalledWith("triage ran on claude:opus: codex:sol is disabled by MACHINE_DISABLE_RUNTIMES");
     expect(result.events?.find((e) => e.kind === "engine")?.payload).toMatchObject({ engine: "claude:opus", reason: "codex:sol is disabled by MACHINE_DISABLE_RUNTIMES; ran claude:opus, the pack's default" });
+  });
+
+  it("runs the default and says so on the task when the engine asked for is at its monthly cap in the task's repo", async () => {
+    const { credentials: inner, log } = recordingCredentials();
+    const spend = { engineSpendSinceUsd: async (_since: Date, repo?: string) => new Map(repo ? [["codex:sol", 11]] : []) };
+    const credentials = gatedCredentials(inner, [engineBudgetGate({ budgets: {}, repoBudgets: async () => ({ codex: 10 }), spend })]);
+    const note = vi.fn(async () => {});
+    const task = { ...context("triage").task, stages: { triage: "codex:sol" } } as TaskRow;
+    await runAgent({ ...deps(fakeSandbox(output())), credentials }, { ...context("triage"), task, note }, "triage");
+    expect(log).toEqual(["prepare claude:opus", "release claude:opus"]);
+    expect(note).toHaveBeenCalledWith(expect.stringMatching(/^triage ran on claude:opus: codex:sol is over its monthly budget \(\$11\.00 of \$10\.00 on codex in .+\)$/));
   });
 
   it("puts no note on the task when the engine asked for runs, or a disallowed one is passed over", async () => {

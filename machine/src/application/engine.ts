@@ -11,12 +11,14 @@ export async function pickEngine(
   pack: Pick<Pack, "id" | "engines">,
   task: StageEngines | null,
   config: StageEngines | null,
+  /** The repo the run is for: its luna.yaml may cap an engine there. */
+  repo: string | null = null,
 ): Promise<EngineChoice> {
   const missing = new Map<EngineId, string>();
   const held = new Map<EngineId, string>();
   for (const engine of new Set([task?.[pack.id], config?.[pack.id]])) {
     if (!engine || engine === pack.engines.default) continue;
-    const found = await credentials.check(engine);
+    const found = await credentials.check(engine, { repo });
     if (!found.available) (found.code ? held : missing).set(engine, found.reason);
   }
   return chooseEngine({ pack, task, config, missing: (engine) => missing.get(engine) ?? null, unavailable: (engine) => held.get(engine) ?? null });

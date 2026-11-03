@@ -3,7 +3,7 @@
 // the seam live in this repository; `factory-contract.test.ts` holds them together.
 import { z } from "zod";
 
-import { EngineId } from "./engines.ts";
+import { EngineBudgets, EngineId } from "./engines.ts";
 
 /** What a stage run decided. Lives here, not in api.ts, so the two files do not import each other in a loop. */
 export const StageOutcome = z.enum(["pass", "fail", "needs_input", "test_change", "escalated"]);
@@ -361,6 +361,8 @@ export const LunaConfig = z.object({
   sla: SlaConfig.optional(),
   /** The engine a pack runs on in this repo, over its default; a task's own choice wins over it. */
   engines: StageEngines.optional(),
+  /** Monthly caps in USD on this repo's stage runs, by engine or credential (`openai:sol: 10`). */
+  budget: z.object({ engines: EngineBudgets.optional() }).optional(),
 });
 export type LunaConfig = z.infer<typeof LunaConfig>;
 

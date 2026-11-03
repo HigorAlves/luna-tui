@@ -7,7 +7,7 @@ import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { type Credentials, fixedCredentials } from "../credentials/index.ts";
-import { gatedCredentials, runtimeKillSwitch } from "../../application/engine-gates.ts";
+import { engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "../../application/engine-gates.ts";
 import type { SandboxResult, SandboxRun } from "../docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../../application/pack-runs.ts";
 import { buildPackRuns } from "../../bootstrap/stages.ts";
@@ -98,6 +98,17 @@ describe("POST /runs", () => {
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "runtime_disabled", message: "jev: disabled by MACHINE_DISABLE_RUNTIMES" });
     expect(await db.query("select 1 from pack_runs")).toEqual([]);
+  });
+
+  it("is 409 budget for an engine at its monthly cap, without running", async () => {
+    const spend = { engineSpendSinceUsd: async () => new Map([["codex:luna", 0], ["openai:luna", 3]]) };
+    const credentials = gatedCredentials(fixedCredentials({}), [engineBudgetGate({ budgets: { openai: 3 }, spend })]);
+    const response = await post(appWith(output(), { deps: { credentials } }), { pack: "chat_triage", engine: "codex:luna", context: { chat } });
+    expect(response.status).toBe(200);
+    const over = gatedCredentials(fixedCredentials({}), [engineBudgetGate({ budgets: { "codex:luna": 0, jev: 2 }, spend: { engineSpendSinceUsd: async () => new Map([["jev", 2.5]]) } })]);
+    const refused = await post(appWith(output(), { deps: { credentials: over } }), { pack: "issue_classify", context: { issue: { title: "t", description: "d" } } });
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toEqual({ error: "budget", message: "jev: over its monthly budget ($2.50 of $2.00 on jev)" });
   });
 
   it("is 409 no_credential when this machine lacks the engine's credential", async () => {

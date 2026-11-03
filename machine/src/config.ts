@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { RUNNING, type RuntimeId, type TaskState } from "@hardness/contracts";
+import { type EngineBudgets, RUNNING, type RuntimeId, type TaskState, engineBudgetKeyProblem } from "@hardness/contracts";
 
 import { isLoopback } from "./adapters/http/access.ts";
 import { DEFAULT_GATE_SECS, parseDuration } from "./domain/sla.ts";
@@ -63,6 +63,9 @@ export interface Config {
   /** Runtimes whose engines this machine treats as unavailable (`MACHINE_DISABLE_RUNTIMES`): `eve`,
    *  `jev`; never `claude`, which every pack's default runs on. Read at boot. */
   disabledRuntimes: RuntimeId[];
+  /** Monthly caps in USD by engine or credential (`MACHINE_ENGINE_BUDGETS`, `codex=0,openai=20,jev=5`):
+   *  at a cap the engine is unavailable until the month turns. Never on Claude. */
+  engineBudgets: EngineBudgets;
   /** What happens to a task mid-stage when the machine stops: back to the queue (its stage re-runs
    *  on boot, no approval needed) or escalated for you to resume, as before. */
   restartPolicy: RestartPolicy;
@@ -117,6 +120,19 @@ function disabledRuntimes(env: NodeJS.ProcessEnv): RuntimeId[] {
     if (!SWITCHABLE.includes(name as RuntimeId)) throw new Error(`MACHINE_DISABLE_RUNTIMES lists runtimes (${SWITCHABLE.join(", ")}), got "${name}"`);
   }
   return [...new Set(names)] as RuntimeId[];
+}
+
+/** `MACHINE_ENGINE_BUDGETS`: `<engine or credential>=<USD>` pairs, a cap of 0 allowed; never Claude. */
+function engineBudgets(env: NodeJS.ProcessEnv): EngineBudgets {
+  const caps: EngineBudgets = {};
+  for (const pair of (env.MACHINE_ENGINE_BUDGETS ?? "").split(",").map((p) => p.trim()).filter(Boolean)) {
+    const match = /^([\w:.-]+)=(\d+(?:\.\d+)?)$/.exec(pair);
+    if (!match) throw new Error(`MACHINE_ENGINE_BUDGETS must list <engine or credential>=<USD> pairs, got "${pair}"`);
+    const problem = engineBudgetKeyProblem(match[1]!);
+    if (problem) throw new Error(`MACHINE_ENGINE_BUDGETS: ${problem}`);
+    caps[match[1]!] = Number(match[2]);
+  }
+  return caps;
 }
 
 function optionalUsd(env: NodeJS.ProcessEnv, key: string): number | null {
@@ -292,6 +308,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     taskBudgetUsd: optionalUsd(env, "MACHINE_TASK_BUDGET_USD"),
     dailyBudgetUsd: optionalUsd(env, "MACHINE_DAILY_BUDGET_USD"),
     disabledRuntimes: disabledRuntimes(env),
+    engineBudgets: engineBudgets(env),
     restartPolicy,
   };
 }
