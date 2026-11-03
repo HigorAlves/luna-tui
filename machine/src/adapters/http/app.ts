@@ -21,7 +21,9 @@ import {
   SlackTaskInput,
   SlackWatchInput,
   SlackWatchPatch,
+  type StreamMessage,
   StubPlanInput,
+  TaskSource,
   TaskState,
   UpdateTaskInput,
 } from "@hardness/contracts";
@@ -47,9 +49,12 @@ import { AlreadyLinkedElsewhereError, AlreadyLinkedError, HasWorktreeError, type
 import type { StubStages } from "../../application/stages/stubs.ts";
 import type { Bus } from "./bus.ts";
 import { InvalidSince, parseSince } from "./metrics.ts";
+import { ReplayFeed } from "./replay.ts";
 import { toApproval, toArtifact, toEvent, toStageRun, toTask } from "./serialize.ts";
 
 const PING_EVERY_MS = 15_000;
+/** Every `source.kind` a task may carry, for `GET /events?source=`. */
+const SOURCE_KINDS: string[] = TaskSource.options.map((option) => option.shape.kind.value);
 const IDEMPOTENCY_KEY_MAX = 200;
 /** Activity entries returned with one task. */
 const RECENT_EVENTS = 50;
@@ -394,24 +399,37 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     });
   }
 
-  app.get("/events", (c) =>
-    streamSSE(c, async (stream) => {
+  /** Live updates; `since` replays the task changes past that sequence number first, `source` keeps one source's tasks (see replay.ts). `ready` follows the replay. */
+  app.get("/events", (c) => {
+    const since = c.req.query("since");
+    const source = c.req.query("source") ?? null;
+    if (since !== undefined && !/^\d+$/.test(since)) throw new BadRequest(`since must be a sequence number, got "${since}"`);
+    if (source !== null && !SOURCE_KINDS.includes(source)) throw new BadRequest(`source must be one of ${SOURCE_KINDS.join(", ")}, got "${source}"`);
+    return streamSSE(c, async (stream) => {
       let unsubscribe = () => {};
-      unsubscribe = bus.subscribe((message) => {
+      const write = (message: StreamMessage) =>
         stream.writeSSE({ event: message.type, data: JSON.stringify(message) }).catch((error: unknown) => {
           console.error(`SSE write failed, dropping this listener: ${error}`);
           unsubscribe();
         });
-      });
+      const deps = {
+        changesSince: (after: number, kind: string | null) => pipeline.changesSince(after, kind),
+        lastSeq: () => pipeline.lastSeq(),
+        serialize: async (row: TaskRow) => serialize(row, await pipeline.taskUsage(row.id)),
+        write,
+      };
+      const feed = since === undefined && source === null ? null : new ReplayFeed(deps, since === undefined ? null : Number(since), source);
+      unsubscribe = bus.subscribe((message) => (feed ? feed.offer(message) : void write(message)));
       stream.onAbort(unsubscribe);
 
+      await feed?.read();
       await stream.writeSSE({ event: "ready", data: "{}" });
       while (!stream.aborted) {
         await stream.sleep(PING_EVERY_MS);
         if (!stream.aborted) await stream.writeSSE({ event: "ping", data: "{}" });
       }
-    }),
-  );
+    });
+  });
 
   return app;
 }
