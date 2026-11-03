@@ -34,8 +34,23 @@ export interface RunContext {
   emit: Emit;
 }
 
+/** What a runtime gives the model besides the prompt, as its fingerprint reads it (core/fingerprint.ts). */
+export interface Instructions {
+  /** The role as this runtime sends it: the body, its helpers' bodies, the runtime's addendum. */
+  role: string;
+  /** The factory rules, in this runtime's tool names. */
+  rules: string;
+  /** The skills it loads, by name. */
+  skills: string[];
+}
+
+export const NO_INSTRUCTIONS: Instructions = { role: "", rules: "", skills: [] };
+
 export interface Runtime {
   id: RuntimeId;
+  /** The SDK it runs on, by package name: the run record reads its installed version. */
+  sdk: string;
+  instructions(pack: Pack, factoryRoot: string): Instructions;
   run(ctx: RunContext): Promise<RunOutcome>;
 }
 

@@ -494,6 +494,18 @@ export const StageInput = z.object({
 export type StageInput = z.infer<typeof StageInput>;
 
 /** Schema 2 adds the `escalated` outcome; schema 3 adds the ledger and the session id. */
+/** A run's record: its runtime, engine and pinned model, the SDK and its version, and the sha256
+ *  fingerprint (factory/src/core/fingerprint.ts). Two runs with one fingerprint gave the model the
+ *  same template, role, skills, access, answer schema and rules. */
+export const RunInfo = z.object({
+  runtime: z.string(),
+  engine: z.string(),
+  modelId: z.string(),
+  sdk: z.object({ name: z.string(), version: z.string() }),
+  fingerprint: z.string().regex(/^[0-9a-f]{64}$/),
+});
+export type RunInfo = z.infer<typeof RunInfo>;
+
 export const StageOutput = z.object({
   schema: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   ok: z.boolean(),
@@ -522,6 +534,9 @@ export const StageOutput = z.object({
   ledger: Ledger.nullable().optional(),
   /** Schema 3: the SDK session, resumable from the per-task session dir. */
   sessionId: z.string().nullable().optional(),
+  /** What the run ran on and the fingerprint of everything that shaped the model's input besides
+   *  the task's data (RFC 0003 §7). Null for a script pack, absent from an older runner. */
+  run: RunInfo.nullable().optional(),
 }).refine((output) => output.schema >= 2 || output.outcome !== "escalated", {
   message: "outcome escalated needs schema 2",
   path: ["outcome"],

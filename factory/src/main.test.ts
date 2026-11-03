@@ -179,6 +179,25 @@ describe("factory main (dry run)", () => {
     expect(result).toMatchObject({ ok: false, outcome: "fail", rateLimited: false, error: expect.stringContaining("TYPESAFE_API_KEY is not set") });
   });
 
+  it("records what the run ran on and a fingerprint that holds across attempts and changes with the runtime and the pack", () => {
+    const first = run(stageInput("triage", { engine: "claude:haiku" })).result;
+    expect(first.run).toEqual({
+      runtime: "claude",
+      engine: "claude:haiku",
+      modelId: "claude-haiku-5-5",
+      sdk: { name: "@anthropic-ai/claude-agent-sdk", version: expect.stringMatching(/^\d+\.\d+\.\d+/) },
+      fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+    });
+    // The task's data and the model are not the harness: another attempt on another Claude model is the same fingerprint.
+    expect(run(stageInput("triage", { engine: "claude:opus", attempt: 2, task: { ...stageInput("triage").task, title: "Another bug" } })).result.run.fingerprint).toBe(first.run.fingerprint);
+    // eve gives the model its own rules and tool names: another fingerprint, on eve's SDK.
+    const eve = run(stageInput("triage", { engine: "codex:sol" })).result.run;
+    expect(eve).toMatchObject({ runtime: "eve", engine: "codex:sol", sdk: { name: "eve", version: expect.any(String) } });
+    expect(eve.fingerprint).not.toBe(first.run.fingerprint);
+    expect(run(stageInput("test_design")).result.run.fingerprint).not.toBe(first.run.fingerprint);
+    expect(run(stageInput("issue_classify", { plan: null }), {}, {}, { emptyWork: true }).result.run).toMatchObject({ runtime: "jev", sdk: { name: "@typesafe-ai/sdk" } });
+  });
+
   it("runs the engine the input names, by its pinned model ID", () => {
     const { stdout } = run(stageInput("triage", { engine: "claude:haiku" }));
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
@@ -221,6 +240,8 @@ describe("factory main (dry run)", () => {
     expect(skipped.result).toMatchObject({ ok: true, outcome: "pass" });
     const missing = run(stageInput("evidence"));
     expect(missing.result).toMatchObject({ ok: false, outcome: "fail", error: expect.stringContaining("missing") });
+    // No runtime ran it, so there is nothing to fingerprint.
+    expect(pass.result.run).toBeNull();
   });
 
   it("leaves a result that names the problem when the stage fails partway, instead of crashing", () => {
