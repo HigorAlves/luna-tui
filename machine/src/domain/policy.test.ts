@@ -21,6 +21,7 @@ describe("parsePolicy", () => {
       toolchains: {},
       jira: null,
       sla: {},
+      engines: {},
     });
   });
 
@@ -40,6 +41,7 @@ describe("parsePolicy", () => {
       toolchains: {},
       jira: null,
       sla: {},
+      engines: {},
     });
   });
 

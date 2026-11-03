@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_POLICY } from "./policy.ts";
-import { parseLunaConfig } from "./luna-config.ts";
+import { parseLunaConfig, validateLunaConfig } from "./luna-config.ts";
 
 const full = `
 checks:
@@ -30,6 +30,8 @@ qa_targets:
   - name: staging
     url: https://stg.example.com
     credential: env:QA_PASSWORD
+engines:
+  triage: claude:opus
 `;
 
 describe("parseLunaConfig", () => {
@@ -56,6 +58,7 @@ describe("parseLunaConfig", () => {
       toolchains: { node: "24", rust: "stable" },
       jira: null,
       sla: {},
+      engines: { triage: "claude:opus" },
     });
   });
 
@@ -77,6 +80,13 @@ describe("parseLunaConfig", () => {
     expect(() => parseLunaConfig("qa_targets:\n  - name: s\n    url: https://x\n    credential: hunter2\n")).toThrow(/credential must be a reference/);
     expect(() => parseLunaConfig("- just\n- a list\n")).toThrow(/mapping/);
     expect(() => parseLunaConfig("checks: [\n")).toThrow(/yaml/i);
+    expect(() => parseLunaConfig("engines:\n  triage: gpt-6\n")).toThrow(/engines\.triage/);
+    expect(() => parseLunaConfig("engines:\n  nope: claude:opus\n")).toThrow(/engines/);
+  });
+
+  it("refuses an engine its pack does not allow, like any other bad value", () => {
+    expect(() => parseLunaConfig("engines:\n  triage: jev\n")).toThrow(/^engines\.triage: jev is not allowed for triage \(allowed: claude:opus, codex:sol\)$/);
+    expect(() => validateLunaConfig({ engines: { implementing: "codex:sol" } })).toThrow(/engines\.implementing: codex:sol is not allowed/);
   });
 
   it("ignores keys it does not know, so a newer file still loads on an older machine", () => {
