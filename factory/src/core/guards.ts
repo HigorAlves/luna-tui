@@ -7,6 +7,7 @@
 // no human to ask, so a guard either denies with a reason phrased for the model or stays
 // silent; it never asks.
 import type { StageInput } from "@hardness/contracts";
+import { readFileSync } from "node:fs";
 import { posix } from "node:path";
 
 import { splitArgv } from "./argv.ts";
@@ -29,6 +30,8 @@ export interface GuardContext {
    *  worktree, the output, the run's scratch folder and `read`. Absent, paths are left to the
    *  rules above (the rule tests; a runtime always sets them). */
   roots?: StageRoots;
+  /** Whether the pack may fetch from the web; absent leaves a fetch to the address rule. */
+  web?: boolean;
   /** Variables a shell command may expand: the QA credentials the stage input names
    *  (`env:QA_PASSWORD`). Any other `$` expansion is refused when roots are set. */
   expandable?: string[];
@@ -286,15 +289,18 @@ function guardGit(args: string[], ctx: GuardContext): string | null {
   if (sub === "rebase") return "git rebase is not allowed in a stage: history is never rewritten; make a new commit instead";
   if (sub === "filter-branch") return "git filter-branch is not allowed in a stage: history is never rewritten";
   if (sub === "clean") return "git clean is not allowed in a stage: it deletes files nothing can recover";
-  if (sub === "reset" && rest.includes("--hard")) {
+  if (sub === "reset" && rest.some((a) => longOption(a, ["hard"]) === "hard")) {
     return "git reset --hard is not allowed in a stage: it discards work nothing can recover; use git reset (mixed) or git stash";
   }
-  if (sub === "branch" && rest.some((a) => a === "--delete" || /^-[a-zA-Z]*[dD]/.test(a))) {
+  if (sub === "branch" && rest.some((a) => longOption(a, ["delete"]) === "delete" || /^-[a-zA-Z]*[dD]/.test(a))) {
     return "deleting a branch is not allowed in a stage: the machine owns branches";
   }
   if (!ctx.writable) {
     if (GIT_WRITES.has(sub)) {
       return `read-only stage: git ${sub} is not allowed; this stage may not change the worktree`;
+    }
+    if (rest.some((a) => longOption(a, ["output"]) === "output")) {
+      return `read-only stage: git ${sub} --output writes a file; this stage may not change the worktree`;
     }
     if (sub === "checkout" && rest.some((a) => a === "--" || a === "." || a.startsWith("./"))) {
       return "read-only stage: git checkout of a path is not allowed; this stage may not change the worktree";
@@ -305,29 +311,67 @@ function guardGit(args: string[], ctx: GuardContext): string | null {
   return null;
 }
 
+/** The long option `arg` names as git reads it, among `names`: git takes any unambiguous prefix
+ *  of a long option, so `--amen` is `--amend` and `--no-verif` is `--no-verify`. Any prefix of two
+ *  letters or more is taken as the option, ambiguous or not (git refuses an ambiguous one anyway). */
+function longOption(arg: string, names: string[]): string | null {
+  if (!arg.startsWith("--")) return null;
+  const name = arg.slice(2).split("=")[0] as string;
+  if (name.length < 2) return null;
+  return names.find((full) => full === name) ?? names.find((full) => full.startsWith(name)) ?? null;
+}
+
+/** Short commit options that take a value, glued (`-mfeat`) or as the next word. */
+const COMMIT_SHORT_WITH_VALUE = new Set(["m", "F", "C", "c", "t"]);
+
+/** The reason a commit message read from a file (`-F`) may not be used, or null: the file must be
+ *  one the guard can read (in the roots), and its message must carry no attribution. */
+function guardMessageFile(file: string, ctx: GuardContext): string | null {
+  const unreadable = `git commit -F ${file}: the guard cannot read that message; write it to a file in the worktree or the scratch folder and pass that, or use -m`;
+  if (file === "-" || file.startsWith("/dev/")) return unreadable;
+  const reason = readRootReason(file, ctx);
+  if (reason !== null) return reason;
+  try {
+    return attributionReason(readFileSync(posix.resolve(ctx.workRoot ?? WORK, file), "utf8"));
+  } catch {
+    return unreadable;
+  }
+}
+
+function attributionReason(message: string): string | null {
+  if (ATTRIBUTION_TRAILER.test(message)) return "commits must not carry AI attribution; retry without the Co-Authored-By trailer";
+  if (ATTRIBUTION_WORDS.test(message)) return "commits must not carry AI attribution; retry without mentioning Claude or Anthropic in the message";
+  return null;
+}
+
 function guardCommit(args: string[], ctx: GuardContext): string | null {
   const messages: string[] = [];
+  const files: string[] = [];
   let amend = false;
   let noVerify = false;
   for (let i = 0; i < args.length; i++) {
     const a = args[i] as string;
-    if (a === "--amend") amend = true;
-    else if (a === "--no-verify") noVerify = true;
-    else if (a === "-m" || a === "--message" || a === "--trailer") {
-      const value = args[++i];
-      if (value !== undefined) messages.push(value);
-    } else if (a.startsWith("--message=") || a.startsWith("--trailer=")) {
-      messages.push(a.slice(a.indexOf("=") + 1));
-    } else if (/^-[a-zA-Z]/.test(a) && !a.startsWith("--")) {
-      // A short cluster: `-am msg`, `-mfeat: x`, `-sn`. Flags before an `m` are flags; what
-      // follows the `m` (or the next token) is the message.
-      const cluster = /^-([a-zA-Z]*?)(m(.*))?$/s.exec(a);
-      const flags = cluster?.[1] ?? "";
-      if (flags.includes("n")) noVerify = true;
-      if (cluster?.[2] !== undefined) {
-        const inline = cluster[3] ?? "";
-        const value = inline !== "" ? inline : args[++i];
-        if (value !== undefined) messages.push(value);
+    const long = longOption(a, ["amend", "no-verify", "message", "trailer", "file"]);
+    const value = (): string | undefined => (a.includes("=") ? a.slice(a.indexOf("=") + 1) : args[++i]);
+    if (long === "amend") amend = true;
+    else if (long === "no-verify") noVerify = true;
+    else if (long === "message" || long === "trailer") {
+      const v = value();
+      if (v !== undefined) messages.push(v);
+    } else if (long === "file") {
+      const v = value();
+      if (v !== undefined) files.push(v);
+    } else if (/^-[a-zA-Z]/.test(a)) {
+      // A short cluster: `-am msg`, `-mfeat: x`, `-sn`, `-aF file`. Flags up to the first one
+      // that takes a value are flags; what follows it (or the next word) is its value.
+      for (let k = 1; k < a.length; k++) {
+        const flag = a[k] as string;
+        if (flag === "n") noVerify = true;
+        if (!COMMIT_SHORT_WITH_VALUE.has(flag)) continue;
+        const v = k + 1 < a.length ? a.slice(k + 1) : args[++i];
+        if (v !== undefined && flag === "m") messages.push(v);
+        if (v !== undefined && flag === "F") files.push(v);
+        break;
       }
     }
   }
@@ -341,12 +385,12 @@ function guardCommit(args: string[], ctx: GuardContext): string | null {
     if (!allowed) return prefix === DEFAULT_BRANCH_PREFIX ? `commits must go on a "${prefix}" branch: the current branch is "${ctx.branch}"` : `commits must go on the "${prefix}" branch: the current branch is "${ctx.branch}"`;
   }
   for (const message of messages) {
-    if (ATTRIBUTION_TRAILER.test(message)) {
-      return "commits must not carry AI attribution; retry without the Co-Authored-By trailer";
-    }
-    if (ATTRIBUTION_WORDS.test(message)) {
-      return "commits must not carry AI attribution; retry without mentioning Claude or Anthropic in the message";
-    }
+    const reason = attributionReason(message);
+    if (reason !== null) return reason;
+  }
+  for (const file of files) {
+    const reason = guardMessageFile(file, ctx);
+    if (reason !== null) return reason;
   }
   return null;
 }
@@ -431,7 +475,8 @@ export function guardWrite(filePath: string, ctx: GuardContext): string | null {
 // ---------------------------------------------------------------------------------------
 
 /** A tool call in no runtime's words: `bash` with a `command` a shell runs, `exec` with a
- *  `command` run as one process without a shell (core/argv.ts), `write` or `read` with a `path`;
+ *  `command` run as one process without a shell (core/argv.ts), `write` or `read` with a `path`
+ *  (and a search's `pattern`), `fetch` with a `url`;
  *  any other tool is not guarded here. */
 export interface GuardedCall {
   tool: string;
@@ -603,6 +648,10 @@ function decide(call: GuardedCall, policy: GuardContext): string | null {
       firstReason(simpleCommands(command), (tokens) => argsRootReason(tokens, policy) ?? redirectRootReason(tokens, policy))
     );
   }
+  if (call.tool === "fetch") {
+    const url = field(call.input, "url");
+    return url === undefined ? "malformed tool input: a fetch needs a string url" : guardFetch(url, policy);
+  }
   if (call.tool === "write" || call.tool === "read") {
     const path = field(call.input, "path");
     if (path === undefined) return `malformed tool input: a ${call.tool} needs a string file_path`;
@@ -614,6 +663,29 @@ function decide(call: GuardedCall, policy: GuardContext): string | null {
     return readRootReason(path, policy) ?? (patternRoot === undefined ? null : readRootReason(patternRoot, policy));
   }
   return null;
+}
+
+/** The reason a web fetch of `url` is refused, or null: only http(s) to a public host. The
+ *  runner's luna bridge and the eve server listen on loopback, a cloud's metadata service on a
+ *  link-local address, a container's peers on private ones; none of them is the web. */
+function guardFetch(url: string, policy: GuardContext): string | null {
+  if (policy.web === false) return "this stage has no web access: work from the stage input and the worktree";
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return `${url} is not a URL: give a full https:// address`;
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return `${parsed.protocol} URLs are not fetched in a stage: only http(s) pages on the web`;
+  const host = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  const ipv4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host)?.slice(1).map(Number);
+  const local =
+    host === "localhost" ||
+    /\.(localhost|local|internal)$/.test(host) ||
+    (ipv4 !== undefined &&
+      (ipv4[0] === 0 || ipv4[0] === 10 || ipv4[0] === 127 || (ipv4[0] === 169 && ipv4[1] === 254) || (ipv4[0] === 172 && (ipv4[1] as number) >= 16 && (ipv4[1] as number) <= 31) || (ipv4[0] === 192 && ipv4[1] === 168) || (ipv4[0] === 100 && (ipv4[1] as number) >= 64 && (ipv4[1] as number) <= 127))) ||
+    (host.includes(":") && (host === "::" || host === "::1" || /^f[cd]/.test(host) || /^fe[89ab]/.test(host) || host.startsWith("::ffff:")));
+  return local ? `${parsed.host} is not on the web: a stage fetches public pages only, never loopback, private or link-local addresses` : null;
 }
 
 function firstReason<T>(items: T[], check: (item: T) => string | null): string | null {

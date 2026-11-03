@@ -105,4 +105,43 @@ describe("checkCall", () => {
       expect(checkCall({ tool: "exec", input: {} }, TRIAGE)).toEqual({ allow: false, reason: expect.stringMatching(/malformed tool input/) });
     });
   });
+
+  describe("a web fetch", () => {
+    const WEB = { ...READ_ONLY, web: true };
+    const fetchCall = (url: unknown, policy: Parameters<typeof checkCall>[1] = WEB) => checkCall({ tool: "fetch", input: { url } }, policy);
+
+    it("allows a public https page when the pack has the web", () => {
+      expect(fetchCall("https://docs.example.com/guide?x=1")).toEqual({ allow: true });
+      expect(fetchCall("http://example.com/")).toEqual({ allow: true });
+    });
+
+    it("refuses any fetch when the pack has no web", () => {
+      expect(fetchCall("https://example.com/", { ...READ_ONLY, web: false })).toEqual({ allow: false, reason: expect.stringMatching(/no web access/) });
+    });
+
+    // The runner's bridge and the eve server listen on loopback; a cloud's metadata service on a
+    // link-local address; neither is the web.
+    it.each([
+      "http://127.0.0.1:4111/step",
+      "http://localhost:3000/",
+      "http://app.localhost/",
+      "http://[::1]/",
+      "http://0.0.0.0/",
+      "http://10.0.0.5/",
+      "http://172.17.0.1/",
+      "http://192.168.1.1/",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://metadata.google.internal/",
+      "http://host.docker.internal/",
+      "http://[fd00::1]/",
+      "http://2130706433/",
+      "http://0x7f.0.0.1/",
+      "file:///etc/passwd",
+      "ftp://example.com/x",
+      "not a url",
+      42,
+    ])("refuses %j", (url) => {
+      expect(fetchCall(url)).toMatchObject({ allow: false });
+    });
+  });
 });

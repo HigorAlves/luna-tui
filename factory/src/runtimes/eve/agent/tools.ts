@@ -1,6 +1,6 @@
 // The tools a compiled stage agent is given (compile.ts re-exports them from agent/tools/): a
-// `bash` that runs one command as one process (exec.ts), eve's own read_file, write_file, glob and
-// grep, all behind the core guards, and the luna tools, which run in the factory process
+// `bash` that runs one command as one process (exec.ts), eve's own read_file, write_file, glob,
+// grep and web_fetch, all behind the core guards, and the luna tools, which run in the factory process
 // (core/luna-tools.ts keeps the state finish() reads) and are reached over a loopback call to the
 // runner. A tool here runs inside the eve server, never in the factory.
 import type { LunaTool } from "@hardness/contracts";
@@ -8,6 +8,7 @@ import { defineTool } from "eve/tools";
 import { glob as eveGlob } from "eve/tools/glob";
 import { grep as eveGrep } from "eve/tools/grep";
 import { readFile } from "eve/tools/read_file";
+import { webFetch } from "eve/tools/web_fetch";
 import { writeFile } from "eve/tools/write_file";
 import { z } from "zod";
 
@@ -41,6 +42,7 @@ export const read_file = defineTool({ ...readFile, approval: ({ toolInput }) => 
 export const write_file = defineTool({ ...writeFile, approval: ({ toolInput }) => approve("write", fileInput(toolInput)) });
 export const glob = defineTool({ ...eveGlob, approval: ({ toolInput }) => approve("read", searchInput(toolInput)) });
 export const grep = defineTool({ ...eveGrep, approval: ({ toolInput }) => approve("read", searchInput(toolInput)) });
+export const web_fetch = defineTool({ ...webFetch, approval: ({ toolInput }) => approve("fetch", toolInput) });
 
 /** A luna tool: the call goes to the runner's bridge (run.ts) with the run's bearer token. */
 export function lunaTool(name: LunaTool) {

@@ -72,7 +72,7 @@ describe("allow-roots", () => {
       "cat link-to-codex",
       "cat codex-dir/auth.json",
       `git -C ${codex} log`,
-      `git log --output=${base}/x`,
+      `git diff --no-index ${codex}/auth.json src/a.ts`,
       `curl file://${codex}/auth.json`,
     ])("exec %j", (command) => {
       expect(exec(command)).toEqual(refused);
@@ -91,6 +91,10 @@ describe("allow-roots", () => {
       ["echo hi >> src/.git/config", WRITABLE],
     ] as const)("bash %j", (command, policy) => {
       expect(bash(command, policy)).toMatchObject({ allow: false });
+    });
+
+    it("refuses a git --output outside the roots in a writable stage too", () => {
+      expect(exec(`git log --output=${base}/x`, { ...WRITABLE })).toEqual(refused);
     });
 
     it.each([join(codex, "auth.json"), join(tmpdir(), "elsewhere.txt"), `${work}/link-to-codex`, `${work}/codex-dir/config.toml`])("write %s", (path) => {

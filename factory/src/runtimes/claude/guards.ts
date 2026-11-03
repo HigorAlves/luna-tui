@@ -1,5 +1,5 @@
 // The core guards (core/guards.ts) as the Agent SDK's PreToolUse hooks: one matcher for Bash, one
-// for the write tools, one for the read tools. A refused call gets the SDK's deny shape with the
+// for the write tools, one for the read tools, one for WebFetch. A refused call gets the SDK's deny shape with the
 // reason for the model.
 import type { HookCallbackMatcher, HookInput, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
 
@@ -51,11 +51,12 @@ function readPath(input: HookInput): { path: unknown; pattern?: unknown } {
 }
 
 /** The SDK hook matchers for PreToolUse: one for Bash, one for the write tools, one for the read
- *  tools. Fails closed: any exception inside a guard denies. */
+ *  tools, one for WebFetch. Fails closed: any exception inside a guard denies. */
 export function preToolUseGuards(ctx: GuardContext): HookCallbackMatcher[] {
   return [
     { matcher: "^Bash$", hooks: [asHook((input) => ({ tool: "bash", input: toolInput(input) }), ctx)] },
     { matcher: `^(${WRITE_TOOLS.join("|")})$`, hooks: [asHook((input) => ({ tool: "write", input: writePath(input) }), ctx)] },
     { matcher: `^(${READ_TOOLS.join("|")})$`, hooks: [asHook((input) => ({ tool: "read", input: readPath(input) }), ctx)] },
+    { matcher: "^WebFetch$", hooks: [asHook((input) => ({ tool: "fetch", input: toolInput(input) }), ctx)] },
   ];
 }
