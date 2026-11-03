@@ -194,8 +194,8 @@ and a test fails when they drift from the registry.
 
 ## Tickets
 
-`enter` opens a ticket in a popup over the board. Inside it, a rail of eight sections on the
-left (a tab strip on a terminal under 100 columns) and one pane on the right; `h`/`l` or `1`…`8`
+`enter` opens a ticket in a popup over the board. Inside it, a rail of nine sections on the
+left (a tab strip on a terminal under 100 columns) and one pane on the right; `h`/`l` or `1`…`9`
 switch, `j`/`k` scroll the pane or pick a row where the section lists some (`J`/`K` scroll a line
 there, `ctrl+d`/`ctrl+u` and PgDn/PgUp half a page anywhere; picking a row brings it into view),
 `+` toggles the popup between most of the screen and all of it. Every section draws from everything the machine knows
@@ -212,6 +212,7 @@ While a gate is open, its strip sits on top of every section with the keys that 
 | Evidence | the QA verdict and every artifact the stages produced, by kind; opens on the latest | `j`/`k` pick a file, `J`/`K` scroll, `o` opens it |
 | PR | the branch's pull request as the Pulls inbox sees it: checks by name, review state, threads, the task in flight; or the URL the ship gate reported | `o` opens it, `S` ships at the gate |
 | Activity | every event | |
+| Engines | each stage the ticket runs (from `GET /packs`), the engine it is set to (yours, else `default: <engine>`) and the one it ran on; the bottom line names the running stage's (`implementing on codex:sol`). A machine from before engines says it offers none | `j`/`k` pick a stage, `E` picks its engine: the default, or one the stage allows; one this machine has no credential for is dim with what is missing and cannot be picked. A stage that already ran keeps its engine |
 
 The popup's keys (`?` inside it lists them with the ticket's state; `J` scrolls here, so the Jira
 link is the board's `J`):
@@ -237,13 +238,14 @@ link is the board's `J`):
 | `R` | set the repo (search) |
 | `e` | edit: the plan, the cases or the ticket |
 | `o` | open: the file, the PR or the issue |
+| `E` | pick the selected stage's engine |
 
 **Move**
 
 | Key | Does |
 |---|---|
 | `h / l` | previous / next section |
-| `1-8` | jump to that section |
+| `1-9` | jump to that section |
 | `j / k` | scroll, or pick a run / file |
 | `J / K` | scroll a line where j / k pick |
 | `ctrl+d / ctrl+u` | half a page |

@@ -30,7 +30,7 @@ use crate::{
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
+        COLUMNS, EngineCatalog, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
         StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of,
         plan_markdown, priority_step, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
@@ -321,6 +321,9 @@ pub enum Mode {
     },
     /// `J` on a linked ticket: one yes, then the link is dropped (the issue stays).
     ConfirmJiraUnlink(String),
+    /// `E` in the popup's Engines section: the engines `pack` may run on for ticket `id`;
+    /// enter sets the one under `cursor`, esc goes back to the popup.
+    EnginePicker { id: String, pack: String, cursor: usize },
     /// The `?` sheet for `scope`: `long` shows every group as rows, `query` is the `/` search
     /// while typing, `cursor` the row enter runs. How far it is scrolled lives in `help_scroll`.
     Help {
@@ -462,6 +465,8 @@ pub struct App {
     pub diff_generation: u64,
     /// A diff fetch that failed for this ticket; no retry until the section is reopened.
     diff_failed: Option<String>,
+    /// `GET /packs` and `GET /engines`, fetched each time the Engines section opens.
+    pub engine_catalog: Option<Result<EngineCatalog, String>>,
     /// The `J` prompt's query waiting to be searched, and when it was typed; see `ensure_jira_search`.
     jira_search_due: Option<(String, Instant)>,
     /// How far the help sheet is scrolled, the furthest `ui` found it can scroll, and how many
@@ -537,6 +542,7 @@ impl App {
             diff_pending: None,
             diff_generation: 0,
             diff_failed: None,
+            engine_catalog: None,
             jira_search_due: None,
             help_scroll: Cell::new(0),
             help_max: Cell::new(0),
@@ -1859,6 +1865,7 @@ impl App {
             Mode::SlackActions { .. } => self.handle_slack_actions(key),
             Mode::JiraLink { .. } => self.handle_jira_link(key),
             Mode::ConfirmJiraUnlink(_) => self.handle_confirm_jira_unlink(key),
+            Mode::EnginePicker { .. } => self.handle_engine_picker(key),
             Mode::Help { .. } => self.handle_help(key),
         }
     }
@@ -3039,7 +3046,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-8", "+", "?", "o", "a", "A", "S", "e", "R", "r", "X", "w", "d", "f"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "X", "w", "d", "f"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -3061,7 +3068,7 @@ impl App {
             KeyCode::PageUp => self.scroll_detail(-half_page),
             KeyCode::Char('l') | KeyCode::Right | KeyCode::Tab => self.set_section(self.detail_section.next()),
             KeyCode::Char('h') | KeyCode::Left | KeyCode::BackTab => self.set_section(self.detail_section.prev()),
-            KeyCode::Char(digit @ '1'..='8') => {
+            KeyCode::Char(digit @ '1'..='9') => {
                 if let Some(section) = Section::from_digit(digit) {
                     self.set_section(section);
                 }
@@ -3076,7 +3083,51 @@ impl App {
                 None if self.detail_section.has_cursor() => self.notify("nothing to open here", false),
                 None => return self.ticket_key('o', id),
             },
+            KeyCode::Char('E') => self.open_engine_picker(id),
             KeyCode::Char(c) => return self.ticket_key(c, id),
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// `E`: the picker for the selected stage of the Engines section.
+    fn open_engine_picker(&mut self, id: &str) {
+        if self.detail_section != Section::Engines {
+            return self.notify("E picks an engine in the Engines section (9)", false);
+        }
+        let pack = match &self.engine_catalog {
+            Some(Ok(catalog)) => catalog.task_packs().get(self.detail_row()).map(|p| p.id.clone()),
+            _ => return self.notify("this machine does not offer engines", false),
+        };
+        if let Some(pack) = pack {
+            self.mode = Mode::EnginePicker { id: id.to_string(), pack, cursor: 0 };
+        }
+    }
+
+    /// The picker: j/k move over the engines this machine can run, enter sets the one picked
+    /// (the default row clears the ticket's own), esc or q go back to the popup.
+    fn handle_engine_picker(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::EnginePicker { id, pack, cursor } = &self.mode else { return Outcome::Continue };
+        let (id, pack, at) = (id.clone(), pack.clone(), *cursor);
+        let choices = match &self.engine_catalog {
+            Some(Ok(catalog)) => catalog.task_packs().into_iter().find(|p| p.id == pack).map(|p| catalog.choices(p)).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let open = |i: &usize| choices[*i].off.is_none();
+        let step = |down: bool| if down { (at + 1..choices.len()).find(open) } else { (0..at).rev().find(open) }.unwrap_or(at);
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => self.mode = Mode::EnginePicker { id, pack, cursor: step(true) },
+            KeyCode::Char('k') | KeyCode::Up => self.mode = Mode::EnginePicker { id, pack, cursor: step(false) },
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Detail(id),
+            KeyCode::Enter => {
+                let Some(choice) = choices.get(at).filter(|c| c.off.is_none()).cloned() else { return Outcome::Continue };
+                self.mode = Mode::Detail(id.clone());
+                let done = match &choice.engine {
+                    Some(engine) => format!("{pack} runs on {engine} for this ticket"),
+                    None => format!("{pack} back on its default engine"),
+                };
+                self.act(|m| m.set_stage_engine(&id, &pack, choice.engine.as_deref()), &done);
+            }
             _ => {}
         }
         Outcome::Continue
@@ -3091,6 +3142,9 @@ impl App {
             self.detail_cursor = start_cursor(section);
             self.detail_follow.set(true);
             self.diff_failed = None;
+            if section == Section::Engines {
+                self.engine_catalog = Some(self.machine.engine_catalog());
+            }
         }
     }
 
@@ -3122,6 +3176,7 @@ impl App {
         match self.detail_section {
             Section::Runs => detail.map_or(0, |d| d.stage_runs.len()),
             Section::Evidence => detail.map_or(0, |d| d.artifacts.len()),
+            Section::Engines => self.engine_catalog.as_ref().and_then(|c| c.as_ref().ok()).map_or(0, |c| c.task_packs().len()),
             Section::Diff => self.diff.as_ref().filter(|(id, _)| matches!(&self.mode, Mode::Detail(open) if open == id)).map_or(0, |(_, d)| d.files.len()),
             _ => 0,
         }
@@ -4849,7 +4904,8 @@ mod slack_tests {
 
     /// A machine that says yes to everything: `{}` for any call it does not know, the fixture
     /// watches for `/slack/watches`, Jira answers for `/jira/*` and `/tasks/:id/jira`, and an
-    /// `/events` stream it keeps open and silent.
+    /// `/events` stream it keeps open and silent. Its one no: `PATCH /tasks/:id/stages` refuses
+    /// test_design (409, it ran) and claude:opus (400), the fixture packs and engines.
     pub(super) fn fake_machine() -> Machine {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -4874,7 +4930,14 @@ mod slack_tests {
                 let method = request.split_whitespace().next().unwrap_or("");
                 let path = request.split_whitespace().nth(1).unwrap_or("");
                 let mut stream = reader.into_inner();
+                let sent = String::from_utf8_lossy(&body).to_string();
+                let refused = path.ends_with("/stages") && (sent.contains("test_design") || sent.contains("claude:opus"));
                 let answer = match path {
+                    "/packs" => crate::model::engine_tests::PACKS.to_string(),
+                    "/engines" => crate::model::engine_tests::ENGINES.to_string(),
+                    _ if refused && sent.contains("test_design") => r#"{"error":"stage_started","message":"test_design has run"}"#.to_string(),
+                    _ if refused => r#"{"error":"invalid_input","message":"claude:opus is not allowed for triage"}"#.to_string(),
+                    p if p.ends_with("/stages") => super::jira_tests::linked_task_json(p.trim_start_matches("/tasks/").trim_end_matches("/stages"), None),
                     "/jira/status" => r#"{"configured":true,"site":"https://acme.atlassian.net","tokenExpiresAt":null,"error":null}"#.to_string(),
                     p if p.starts_with("/jira/search?q=") => {
                         let q = p.trim_start_matches("/jira/search?q=").to_uppercase();
@@ -4907,7 +4970,16 @@ mod slack_tests {
                 };
                 // One request per connection: `Connection: close` keeps ureq from reusing it.
                 let _ = stream.write_all(
-                    format!("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{answer}", answer.len()).as_bytes(),
+                    format!(
+                        "HTTP/1.1 {}\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{answer}",
+                        match (refused, sent.contains("test_design")) {
+                            (false, _) => "200 OK",
+                            (true, true) => "409 Conflict",
+                            (true, false) => "400 Bad Request",
+                        },
+                        answer.len()
+                    )
+                    .as_bytes(),
                 );
             }
         });
@@ -5221,7 +5293,7 @@ mod workspace_key_tests {
         assert_eq!(app.detail_section, Section::Plan);
         press(&mut app, KeyCode::Char('h'));
         press(&mut app, KeyCode::Char('h'));
-        assert_eq!(app.detail_section, Section::Activity, "h wraps around");
+        assert_eq!(app.detail_section, Section::Engines, "h wraps around");
         press(&mut app, KeyCode::Char('4'));
         assert_eq!(app.detail_section, Section::Runs);
         press(&mut app, KeyCode::Tab);
@@ -5697,5 +5769,51 @@ mod jira_tests {
         let notices = app.take_notices();
         assert_eq!(notices.len(), 1);
         assert_eq!((notices[0].title.as_str(), notices[0].body.as_str()), ("Jira", "PLAT-123 moved to Done while #abcdef12 waits"));
+    }
+}
+
+#[cfg(test)]
+mod engine_tests {
+    use super::*;
+    use crate::model::tests::task_json;
+
+    fn press(app: &mut App, code: KeyCode) {
+        app.handle_key(KeyEvent::from(code));
+    }
+
+    fn toast(app: &App) -> String {
+        app.toast.as_ref().map(|t| t.text.clone()).unwrap_or_default()
+    }
+
+    #[test]
+    fn e_in_the_engines_section_picks_skips_what_cannot_run_and_says_why_the_machine_refused() {
+        let mut app = App::new(super::slack_tests::fake_machine());
+        let mut task: Task = serde_json::from_str(&task_json("")).unwrap();
+        task.stages.insert("triage".into(), "claude:opus".into());
+        app.tasks.push(task);
+        app.open_detail("abcdef123456".into());
+        press(&mut app, KeyCode::Char('E'));
+        assert!(toast(&app).contains("Engines section"), "{}", toast(&app));
+        press(&mut app, KeyCode::Char('9'));
+        assert_eq!(app.detail_section, Section::Engines);
+        press(&mut app, KeyCode::Char('E'));
+        assert!(matches!(&app.mode, Mode::EnginePicker { pack, cursor: 0, .. } if pack == "triage"));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert!(matches!(app.mode, Mode::EnginePicker { cursor: 1, .. }), "codex:sol has no credential here, so j stops on claude:opus");
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(app.mode, Mode::Detail(_)));
+        assert_eq!(toast(&app), "claude:opus is not allowed for triage", "a 400 shows the machine's words");
+        press(&mut app, KeyCode::Char('E'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(toast(&app), "triage back on its default engine");
+        assert!(app.task("abcdef123456").unwrap().stages.is_empty(), "the ticket the machine answered replaces ours");
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('E'));
+        press(&mut app, KeyCode::Enter);
+        assert_eq!(toast(&app), "test_design already ran on this ticket; its engine stays");
+        press(&mut app, KeyCode::Char('E'));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Detail(_)), "esc goes back to the popup");
     }
 }

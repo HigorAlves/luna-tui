@@ -12,7 +12,7 @@ use ratatui::{
     widgets::{Block, BorderType, Clear, Padding, Paragraph, Wrap},
 };
 use crate::model::{
-    Approval, CriterionRow, PullRequest, StageRun, Task, TaskDetail, TaskDiff, TestCase, Tone, age, criteria_summary, now_secs,
+    Approval, CriterionRow, EngineCatalog, PullRequest, StageRun, Task, TaskDetail, TaskDiff, TestCase, Tone, age, criteria_summary, now_secs,
     plan_history, questions_of,
 };
 use crate::ui::{
@@ -20,7 +20,7 @@ use crate::ui::{
     json_list, look_color, look_glyph, proof_lines, rules_lines, slice_lines, truncate,
 };
 
-/// The sections of the workspace, in rail order. `1`…`8` jump to them.
+/// The sections of the workspace, in rail order. `1`…`9` jump to them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Section {
     #[default]
@@ -32,10 +32,11 @@ pub enum Section {
     Evidence,
     Pr,
     Activity,
+    Engines,
 }
 
 impl Section {
-    pub const ALL: [Section; 8] = [
+    pub const ALL: [Section; 9] = [
         Section::Overview,
         Section::Plan,
         Section::Tests,
@@ -44,6 +45,7 @@ impl Section {
         Section::Evidence,
         Section::Pr,
         Section::Activity,
+        Section::Engines,
     ];
 
     pub fn label(self) -> &'static str {
@@ -56,6 +58,7 @@ impl Section {
             Section::Evidence => "Evidence",
             Section::Pr => "PR",
             Section::Activity => "Activity",
+            Section::Engines => "Engines",
         }
     }
 
@@ -71,7 +74,7 @@ impl Section {
         Section::ALL[(self.index() + Section::ALL.len() - 1) % Section::ALL.len()]
     }
 
-    /// `1`…`8`, as the keys jump.
+    /// `1`…`9`, as the keys jump.
     pub fn from_digit(digit: char) -> Option<Section> {
         let i = digit.to_digit(10)? as usize;
         (1..=Section::ALL.len()).contains(&i).then(|| Section::ALL[i - 1])
@@ -90,7 +93,7 @@ impl Section {
 
     /// Sections where `j`/`k` pick a row instead of scrolling the text.
     pub fn has_cursor(self) -> bool {
-        matches!(self, Section::Runs | Section::Diff | Section::Evidence)
+        matches!(self, Section::Runs | Section::Diff | Section::Evidence | Section::Engines)
     }
 }
 
@@ -110,6 +113,8 @@ pub struct DetailView<'a> {
     pub viewport: &'a Cell<u16>,
     /// Bring the selected row into view this frame (the cursor moved); cleared once done.
     pub follow: &'a Cell<bool>,
+    /// `GET /packs` and `GET /engines`, for the Engines section; None until first asked.
+    pub engines: Option<&'a Result<EngineCatalog, String>>,
 }
 
 /// A terminal this wide or wider lays the rail beside the pane; narrower, the rail becomes a
@@ -131,9 +136,10 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         .title(Line::from(format!(" #{} {} ", task.short_id(), task.title)).bold())
         .title_bottom(
             Line::from(format!(
-                " {} {} · h/l sections · {} · + size · ? help ",
+                " {} {}{} · h/l sections · {} · + size · ? help ",
                 look_glyph(look),
                 task.status_label(),
+                detail.and_then(TaskDetail::running_engine).map(|e| format!(" on {e}")).unwrap_or_default(),
                 if view.section.has_cursor() { "j/k pick · J/K scroll" } else { "j/k scroll" }
             ))
                 .fg(c(look_color(look)))
@@ -199,6 +205,7 @@ pub fn render(frame: &mut Frame, area: Rect, view: &DetailView) {
         Section::Evidence => evidence_section_lines(detail, view.cursor),
         Section::Pr => (pr_lines(task, detail, view.prs, now), None),
         Section::Activity => (activity_lines(detail), None),
+        Section::Engines => engines_lines(task, detail, view.engines, view.cursor),
     };
     lines.extend(section_lines);
 
@@ -336,7 +343,50 @@ fn rail_status(section: Section, view: &DetailView, detail: Option<&TaskDetail>)
             None => dim("–".to_string()),
         },
         Section::Activity => dim(d.events.len().to_string()),
+        Section::Engines => match view.task.stages.len() {
+            0 => Span::raw(""),
+            n => Span::from(n.to_string()).fg(c(PEACH)),
+        },
     }
+}
+
+/// One row per pack the task runs: the engine it is set to (yours, else the default) and, once
+/// it ran, the engine it ran on. `E` on the selected row opens the picker.
+fn engines_lines(task: &Task, detail: Option<&TaskDetail>, catalog: Option<&Result<EngineCatalog, String>>, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
+    let mut lines = vec![heading("Engines · what each stage runs on, for this ticket"), Line::default()];
+    let catalog = match catalog {
+        Some(Ok(catalog)) => catalog,
+        Some(Err(why)) => {
+            lines.extend([muted("  this machine does not offer engines".into()), muted(format!("  ({why})"))]);
+            return (lines, None);
+        }
+        None => {
+            lines.push(muted("  loading…".into()));
+            return (lines, None);
+        }
+    };
+    let packs = catalog.task_packs();
+    let selected = cursor.min(packs.len().saturating_sub(1));
+    let cursor_row = lines.len() + 1 + selected;
+    lines.push(muted(format!("    {:<16} {:<24} {}", "stage", "engine", "ran on")));
+    for (i, pack) in packs.iter().enumerate() {
+        let (engine, color) = match task.stages.get(&pack.id) {
+            Some(engine) => (engine.clone(), PEACH),
+            None => (format!("default: {}", pack.engines.default), SUBTEXT0),
+        };
+        let ran = detail.and_then(|d| d.last_run_of(pack)).map(|r| r.engine.clone().unwrap_or_else(|| "–".into())).unwrap_or_default();
+        let missing = task.stages.get(&pack.id).and_then(|id| catalog.engines.iter().find(|e| e.id == *id && !e.available)).map_or("", |_| "  no credential here");
+        lines.push(Line::from(vec![
+            Span::from(if i == selected { "  ▌ " } else { "    " }).fg(c(ACCENT)),
+            Span::from(format!("{:<16} ", truncate(&pack.id, 16))).bold(),
+            Span::from(format!("{engine:<24} ")).fg(c(color)),
+            Span::from(ran).fg(c(SUBTEXT0)),
+            Span::from(missing).fg(c(RED)),
+        ]));
+    }
+    lines.push(Line::default());
+    lines.push(muted("E picks the selected stage's engine · a stage that ran keeps its engine".into()));
+    (lines, (!packs.is_empty()).then_some(cursor_row))
 }
 
 fn run_glyph(run: &StageRun) -> (&'static str, ratatui::style::Color) {
@@ -1034,7 +1084,7 @@ mod tests {
     ) -> Vec<String> {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         let scroll = Cell::new(0);
-        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false) };
+        let view = DetailView { task, detail, section, cursor, scroll: &scroll, prs, diff, viewport: &Cell::new(0), follow: &Cell::new(false), engines: None };
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         (0..height).map(|y| (0..width).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect()
@@ -1226,7 +1276,7 @@ mod tests {
         .unwrap();
         let (width, height) = (120, 20);
         let scroll = Cell::new(300);
-        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false) };
+        let view = DetailView { task: &task, detail: Some(&detail), section: Section::Diff, cursor: 0, scroll: &scroll, prs: &[], diff: Some(&diff), viewport: &Cell::new(0), follow: &Cell::new(false), engines: None };
         let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
         let buffer = terminal.backend().buffer().clone();
@@ -1335,9 +1385,10 @@ mod tests {
         assert_eq!(Section::for_task(&task), Section::Runs);
         assert_eq!(Section::from_digit('1'), Some(Section::Overview));
         assert_eq!(Section::from_digit('8'), Some(Section::Activity));
-        assert_eq!(Section::from_digit('9'), None);
-        assert_eq!(Section::Activity.next(), Section::Overview);
-        assert_eq!(Section::Overview.prev(), Section::Activity);
+        assert_eq!(Section::from_digit('9'), Some(Section::Engines));
+        assert_eq!(Section::from_digit('0'), None);
+        assert_eq!(Section::Engines.next(), Section::Overview);
+        assert_eq!(Section::Overview.prev(), Section::Engines);
     }
 
     #[test]
@@ -1351,5 +1402,43 @@ mod tests {
                 assert_eq!(rows.len(), usize::from(h));
             }
         }
+    }
+
+    fn render_engines(task: &Task, detail: &TaskDetail, catalog: &Result<EngineCatalog, String>) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        let scroll = Cell::new(0);
+        let view = DetailView {
+            task,
+            detail: Some(detail),
+            section: Section::Engines,
+            cursor: 1,
+            scroll: &scroll,
+            prs: &[],
+            diff: None,
+            viewport: &Cell::new(0),
+            follow: &Cell::new(false),
+            engines: Some(catalog),
+        };
+        terminal.draw(|f| super::render(f, f.area(), &view)).unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        (0..30).map(|y| (0..120).map(|x| buffer[(x, y)].symbol().to_string()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn the_engines_section_shows_each_stage_s_engine_and_the_header_the_running_one() {
+        let (mut task, mut detail) = fixture();
+        task.stages.insert("triage".into(), "codex:sol".into());
+        detail.stage_runs[0].engine = Some("claude:opus".into());
+        detail.stage_runs[3].engine = Some("codex:sol".into());
+        let catalog = Ok(crate::model::engine_tests::catalog());
+        let text = render_engines(&task, &detail, &catalog);
+        let row = |pack: &str| text.lines().find(|l| l.contains(&format!(" {pack} "))).unwrap_or_default().to_string();
+        assert!(row("triage").contains("codex:sol") && row("triage").contains("claude:opus"), "yours, then what it ran on: {text}");
+        assert!(row("triage").contains("no credential here"), "{text}");
+        assert!(row("test_design").contains("▌") && row("test_design").contains("default: claude:sonnet"), "{text}");
+        assert!(!text.contains("slack_triage") && !text.contains("evidence  "), "only the packs a task runs: {text}");
+        assert!(text.contains("implementing on codex:sol"), "the header names the running stage's engine: {text}");
+        let text = render_engines(&task, &detail, &Err("not found".into()));
+        assert!(text.contains("this machine does not offer engines"), "{text}");
     }
 }

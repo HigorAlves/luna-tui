@@ -190,7 +190,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     frame.render_widget(footer_line(app), footer);
 
     match &app.mode {
-        Mode::Detail(id) => {
+        Mode::Detail(id) | Mode::EnginePicker { id, .. } => {
             if let Some(task) = app.task(id) {
                 let view = DetailView {
                     task,
@@ -202,8 +202,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
                     diff: app.diff.as_ref().filter(|d| d.0 == task.id).map(|d| &d.1),
                     viewport: &app.detail_viewport,
                     follow: &app.detail_follow,
+                    engines: app.engine_catalog.as_ref(),
                 };
                 detail::render(frame, detail::popup_area(frame.area(), app.detail_full), &view);
+            }
+            if let (Mode::EnginePicker { pack, cursor, .. }, Some(Ok(catalog))) = (&app.mode, &app.engine_catalog)
+                && let Some(pack) = catalog.packs.iter().find(|p| p.id == *pack)
+            {
+                render_engine_picker(frame, pack, &catalog.choices(pack), *cursor);
             }
         }
         Mode::ConfirmDelete(id) => {
@@ -462,6 +468,7 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::ConfirmClose { .. } => hint(&[("y", "close the PR"), ("n", "cancel")]),
         Mode::JiraLink { .. } => hint(&[("type", "search from 3 chars"), ("↑/↓", "move"), ("enter", "link (row 0 creates)"), ("ctrl+n", "create"), ("esc", "cancel")]),
         Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
+        Mode::EnginePicker { .. } => hint(&[("j/k", "move"), ("enter", "set"), ("esc", "back")]),
         Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
         Mode::SlackSnooze { .. } => hint(&[("j/k 1-4", "pick"), ("enter", "snooze"), ("esc", "cancel")]),
         Mode::SlackTask { .. } => hint(&[("y", "create the ticket"), ("n", "cancel")]),
@@ -504,7 +511,7 @@ fn view_footer(app: &App) -> Line<'static> {
             let shippable = matches!(&app.mode, Mode::Detail(id) if app.task(id).is_some_and(|t| t.state == "awaiting_ship"));
             let (rows, scroll) = if app.detail_section.has_cursor() { (("jk", "pick"), ("JK", "scroll")) } else { (("jk", "scroll"), ("^d/^u", "page")) };
             let act = if shippable { ("S", "ship") } else { ("a", "advance") };
-            hint(&[("h/l 1-8", "section"), rows, scroll, act, ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
+            hint(&[("h/l 1-9", "section"), rows, scroll, act, ("r", "send back"), ("e", "edit"), ("+", "size"), ("esc", "back")])
         }
         _ => hint(&[("?", "help"), ("n", "new"), ("a", "advance"), ("enter", "open"), ("x", "actions"), ("=", "density"), ("/", "filter"), ("q", "quit")]),
     }
@@ -1741,6 +1748,34 @@ fn render_slack_snooze(frame: &mut Frame, cursor: usize) {
                 Span::from(format!("{}  ", i + 1)).fg(c(SUBTEXT0)),
                 Span::from(*option).style(style),
             ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `E` in the Engines section: the default, then each engine the stage may run on; one this
+/// machine has no credential for is dim with what is missing, and the cursor skips it.
+fn render_engine_picker(frame: &mut Frame, pack: &crate::model::PackInfo, choices: &[crate::model::EngineChoice], cursor: usize) {
+    let width = 72.min(frame.area().width.saturating_sub(2));
+    let area = centered(frame.area(), width, choices.len() as u16 + 4);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" {} runs on ", pack.id)).bold());
+    let lines: Vec<Line> = choices
+        .iter()
+        .enumerate()
+        .map(|(i, choice)| {
+            let selected = i == cursor;
+            let mut spans = vec![Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT))];
+            match &choice.off {
+                Some(why) => spans.extend([Span::from(choice.label.clone()).fg(c(MUTED)), Span::from(format!("  {why}")).fg(c(MUTED))]),
+                None if selected => spans.push(Span::from(choice.label.clone()).fg(c(ACCENT)).bold()),
+                None => spans.push(Span::from(choice.label.clone())),
+            }
+            Line::from(spans)
         })
         .collect();
     frame.render_widget(Paragraph::new(lines).block(block), area);
