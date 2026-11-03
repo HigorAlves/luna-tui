@@ -12,7 +12,7 @@ import { describe, expect, it } from "vitest";
 
 import { type RunOutcome, settle } from "../../core/output.ts";
 import type { Runtime } from "../../core/runtime.ts";
-import { lunaTools } from "../index.ts";
+import { lunaHandlers } from "../../core/luna-tools.ts";
 
 /** One model turn. A call's result is what the model reads next; `echo` puts the last result
  *  into the answer's summary, so a check can see what the model was told. */
@@ -148,7 +148,7 @@ export async function runScenario(runtime: Runtime, engine: EngineId): Promise<C
   mkdirSync(out);
   mkdirSync(scratch);
   const transcript: string[] = [];
-  const luna = lunaTools({ ledgerPath: join(out, "ledger.json"), decisions: [], onStep: () => {} });
+  const luna = lunaHandlers({ ledgerPath: join(out, "ledger.json"), decisions: [], onStep: () => {} });
   const input = stageInput(engine);
   const run = await runtime.run({
     pack: PACK,

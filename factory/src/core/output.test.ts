@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { EMPTY_RUN, type LunaState, finish, outcomeOf, scanArtifacts, settle } from "./output.ts";
+import { EMPTY_RUN, budgetSpent, type LunaState, finish, outcomeOf, scanArtifacts, settle } from "./output.ts";
 
 const state = (over: Partial<LunaState> = {}): LunaState => ({ ledger: { schema: 1, slices: [] }, events: [], ...over });
 const outDir = () => mkdtempSync(join(tmpdir(), "factory-out-"));
@@ -44,9 +44,20 @@ describe("settle", () => {
     expect(settle({ ...EMPTY_RUN, ok: true }, PACKS.triage)).toMatchObject({ ok: false, error: "no structured output" });
   });
 
+  // The reviewer's settle probe: each of these was a pass with no answer.
+  it.each(['{"kind":"brief","summary":"x"} trailing', '```json\n{"kind":"brief","summary":"x"}\n```', "Done.", "{not json"])("fails a run that ended with text no schema accepts: %j", (text) => {
+    expect(settle({ ...EMPTY_RUN, ok: true, text }, PACKS.triage)).toMatchObject({ ok: false, structured: null, error: expect.stringMatching(/^no answer the triage schema accepts: the run ended with text/) });
+  });
+
   it("marks a usage or rate limit error as rate limited", () => {
     expect(settle({ ...EMPTY_RUN, error: "You've hit your usage limit" }, PACKS.triage).rateLimited).toBe(true);
     expect(settle({ ...EMPTY_RUN, error: "model error" }, PACKS.triage).rateLimited).toBe(false);
+  });
+
+  // A pack that spends its own budget is not paused for a provider's reset: nothing would ever
+  // resume it, and a rate limit with no resetsAt latches the machine's queue.
+  it("does not take the pack's own spent budget for a rate limit", () => {
+    expect(settle({ ...EMPTY_RUN, error: budgetSpent("the session reached its usage limit") }, PACKS.triage)).toMatchObject({ ok: false, rateLimited: false, error: expect.stringMatching(/own budget/) });
   });
 });
 

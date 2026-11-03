@@ -44,9 +44,14 @@ const importPath = (from: string, to: string): string => {
   return rel.startsWith(".") ? rel : `./${rel}`;
 };
 
-/** The usage cap eve stops at; the runner's own model-call cap (run.ts) is the turn limit. */
+/** The tokens a run may spend per turn it was given; past them eve stops starting model calls. */
+export const tokenBudgetPerTurn = { input: 60_000, output: 8_000 };
+
+/** The usage cap eve stops at, for the turns the runner gives this run (LUNA_EVE_MAX_TURNS, the
+ *  stage input's limit; the pack's own as a fallback). The runner's model-call cap (run.ts) is the
+ *  turn limit itself. */
 const usageLimit = (pack: AgentPack): string =>
-  `({ window }) => window.inputTokens - window.cacheReadTokens >= ${pack.maxTurns * 60_000} || window.outputTokens >= ${pack.maxTurns * 8_000}`;
+  `({ window }) => { const turns = Number(process.env.LUNA_EVE_MAX_TURNS) || ${pack.maxTurns}; return window.inputTokens - window.cacheReadTokens >= turns * ${tokenBudgetPerTurn.input} || window.outputTokens >= turns * ${tokenBudgetPerTurn.output}; }`;
 
 /** Every file of the pack's agent app but its skills, by path relative to the app. */
 export function agentFiles(pack: AgentPack, options: CompileOptions): Record<string, string> {

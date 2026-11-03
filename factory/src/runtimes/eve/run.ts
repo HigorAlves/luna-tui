@@ -18,10 +18,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { type GuardContext, branchPrefixFor } from "../../core/guards.ts";
-import { EMPTY_RUN, type RunOutcome } from "../../core/output.ts";
+import { EMPTY_RUN, type RunOutcome, budgetSpent } from "../../core/output.ts";
 import { callLine } from "../../core/render.ts";
 import type { RunContext, Runtime } from "../../core/runtime.ts";
-import { eveTools } from "./compile.ts";
+import { eveTools, tokenBudgetPerTurn } from "./compile.ts";
 import type { EveSecrets } from "./agent/secrets.ts";
 
 const env = process.env;
@@ -96,6 +96,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
           tools: eveTools(pack.access),
           skills: pack.access.skills ? pack.skills : [],
           maxModelCalls: input.limits.maxTurns,
+          tokenBudget: { input: input.limits.maxTurns * tokenBudgetPerTurn.input, output: input.limits.maxTurns * tokenBudgetPerTurn.output },
           outputSchema: pack.id,
           guard,
         },
@@ -114,141 +115,226 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   const t0 = Date.now();
   // The pinned ID the server was given; eve's model.started names the agent's compiled default
   // for a model chosen at run time, so it is not read back.
-  const result: RunOutcome = { ...EMPTY_RUN, model: engine.modelId };
-  const bridgeToken = randomBytes(24).toString("hex");
-  const bridge = await serveLuna(luna.call, bridgeToken);
-  const password = randomBytes(24).toString("hex");
-  const ghToken = env.GH_TOKEN || env.GITHUB_TOKEN || undefined;
-  const secretsFile = writeSecrets({ password, bridgeToken, ...(ghToken && { ghToken }), ...(apiKey && env.OPENAI_API_KEY && { openaiApiKey: env.OPENAI_API_KEY }) });
-  const port = await freePort();
-  const state = mkdtempSync(join(tmpdir(), "eve-"));
-  const log: string[] = [];
-  const server = spawn(process.execPath, [entry], {
-    cwd: state,
-    env: serverEnv(env, {
-      ...options.serverEnv,
-      // eve swaps every authored model for its own mock under NODE_ENV=test (vitest sets it).
-      NODE_ENV: "production",
-      HOST: "127.0.0.1",
-      PORT: String(port),
-      EVE_TELEMETRY_DISABLED: "1",
-      EVE_SCHEDULES_DISABLED: "1",
-      LUNA_FACTORY: "1",
-      LUNA_EVE_SECRETS: secretsFile,
-      LUNA_EVE_MODEL: engine.modelId,
-      LUNA_EVE_AUTH: apiKey ? "api-key" : "chatgpt",
-      LUNA_EVE_WORKSPACE: paths.work,
-      LUNA_EVE_SCRATCH: paths.scratch,
-      LUNA_EVE_GUARD: JSON.stringify(guard),
-      LUNA_EVE_BRIDGE_URL: bridge.url,
-    }),
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  const turn = new TurnFollower(pack, input.limits.maxTurns, out);
+  turn.result.model = engine.modelId;
   const debug = env.LUNA_STAGE_DEBUG === "1";
-  const keep = (b: Buffer) => {
-    if (debug) appendFileSync(join(paths.out, "eve-server.log"), b);
-    log.push(...String(b).split("\n").filter(Boolean));
-    log.splice(0, Math.max(0, log.length - 50));
-  };
-  server.stdout?.on("data", keep);
-  server.stderr?.on("data", keep);
-
+  // Everything the run makes is made inside the try, so a throw anywhere still stops the server,
+  // closes the bridge and removes the run's folders.
+  let bridge: Server | null = null;
+  let server: ChildProcess | null = null;
+  let secretsFile: string | null = null;
+  let state: string | null = null;
   try {
+    const bridgeToken = randomBytes(24).toString("hex");
+    const served = await serveLuna(luna.call, bridgeToken);
+    bridge = served.server;
+    const password = randomBytes(24).toString("hex");
+    const ghToken = env.GH_TOKEN || env.GITHUB_TOKEN || undefined;
+    secretsFile = writeSecrets({ password, bridgeToken, ...(ghToken && { ghToken }), ...(apiKey && env.OPENAI_API_KEY && { openaiApiKey: env.OPENAI_API_KEY }) });
+    const port = await freePort();
+    state = mkdtempSync(join(tmpdir(), "eve-"));
+    const log: string[] = [];
+    server = spawn(process.execPath, [entry], {
+      cwd: state,
+      env: serverEnv(env, {
+        ...options.serverEnv,
+        // eve swaps every authored model for its own mock under NODE_ENV=test (vitest sets it).
+        NODE_ENV: "production",
+        HOST: "127.0.0.1",
+        PORT: String(port),
+        EVE_TELEMETRY_DISABLED: "1",
+        EVE_SCHEDULES_DISABLED: "1",
+        LUNA_FACTORY: "1",
+        LUNA_EVE_SECRETS: secretsFile,
+        LUNA_EVE_MODEL: engine.modelId,
+        LUNA_EVE_AUTH: apiKey ? "api-key" : "chatgpt",
+        // The compiled token budget (compile.ts) scales with the turns this run was given.
+        LUNA_EVE_MAX_TURNS: String(input.limits.maxTurns),
+        LUNA_EVE_WORKSPACE: paths.work,
+        LUNA_EVE_SCRATCH: paths.scratch,
+        LUNA_EVE_GUARD: JSON.stringify(guard),
+        LUNA_EVE_BRIDGE_URL: served.url,
+      }),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const keep = (b: Buffer) => {
+      if (debug) appendFileSync(join(paths.out, "eve-server.log"), b);
+      log.push(...String(b).split("\n").filter(Boolean));
+      log.splice(0, Math.max(0, log.length - 50));
+    };
+    server.stdout?.on("data", keep);
+    server.stderr?.on("data", keep);
+
     const { Client } = await import("eve/client");
     const client = new Client({ baseUrl: `http://127.0.0.1:${port}`, auth: { basic: { username: "stage", password } } });
     await waitHealthy(() => client.health(), server, log);
     // The pack's schema is plain JSON Schema; eve types it as its own JSON object.
     const outputSchema = answerJsonSchema(pack) as SendTurnOptions["outputSchema"];
     const { session, delivery } = await client.sessions.create({ message: prompt, outputSchema });
-    result.sessionId = session.id;
+    turn.result.sessionId = session.id;
     out(`session ${session.id} · eve agent ${pack.id} · ${apiKey ? "openai" : "chatgpt"}(${engine.modelId})`);
-
-    const names = new Map<string, string>();
-    let modelCalls = 0;
-    let capped = false;
-    let replyText = "";
-    let failure: string | null = null;
     for await (const event of delivery.stream()) {
       if (debug) appendFileSync(join(paths.out, "raw.jsonl"), `${JSON.stringify(event)}\n`);
-      const data = (event as unknown as { data?: Record<string, unknown> }).data ?? {};
-      if (event.type === "model.requested" && (data.owner as { turnId?: string } | undefined)?.turnId) {
-        modelCalls++;
-        // eve retries an answer that misses the schema without a limit of its own: the pack's turn
-        // budget caps the model calls, then the turn is cancelled.
-        if (modelCalls > input.limits.maxTurns && !capped) {
-          capped = true;
-          await session.cancel();
-        }
-      } else if ((event.type === "model.settled" || event.type === "session.ended") && data.error) {
-        // A model error eve will not retry ends the session and cancels the turn: keep its reason.
-        const error = data.error as { code?: string; message?: string };
-        failure = `${error.code ?? "error"}: ${error.message ?? ""}`;
-      } else if (event.type === "content.completed") {
-        if (data.kind === "result") result.structured = data.value as Record<string, unknown>;
-        else if (data.kind === "text" && typeof data.value === "string") {
-          out(data.value);
-          if (data.phase === "reply") replyText = data.value;
-        }
-      } else if (event.type === "call.requested") {
-        const capability = data.capability as { name?: string } | undefined;
-        const name = capability?.name ?? "tool";
-        names.set(String(data.callId), name);
-        out(callLine(name, (data.input ?? {}) as Record<string, unknown>));
-      } else if (event.type === "call.settled" && data.outcome !== "completed") {
-        const error = data.error as { message?: string } | undefined;
-        out(`  ✗ ${names.get(String(data.callId)) ?? "call"} ${String(data.outcome)}: ${error?.message ?? ""}`.trimEnd());
-      } else if (event.type === "usage.recorded") {
-        const usage = data.usage as { costUsd?: number } | undefined;
-        if (typeof usage?.costUsd === "number") result.costUsd = (result.costUsd ?? 0) + usage.costUsd;
-      } else if (event.type === "turn.paused" && !capped) {
-        // A continuation or approval prompt: nobody is here to answer it.
-        capped = true;
-        result.error = "the turn stopped to ask for input (a usage limit or an approval) and nobody can answer it";
-        await session.cancel();
-      } else if (event.type === "turn.settled") {
-        const error = data.error as { code?: string; message?: string } | undefined;
-        if (data.outcome === "completed") result.ok = true;
-        else if (error?.code === "OUTPUT_SCHEMA_NOT_FULFILLED" && replyText.trim().startsWith("{")) {
-          // The model answered in text instead of through the reply tool: core settles it against the schema.
-          result.ok = true;
-          result.text = replyText;
-        } else if (capped && !result.error) {
-          result.error = `no answer the ${pack.id} schema accepts within ${input.limits.maxTurns} model calls`;
-        } else if (!result.error) {
-          result.error = error?.message ? `${error.code ?? "error"}: ${error.message}` : (failure ?? String(data.outcome));
-        }
-      }
+      if (turn.take(event as unknown as SessionEvent)) await session.cancel();
     }
-    result.turns = modelCalls;
   } catch (e) {
-    result.ok = false;
-    result.error = e instanceof Error ? e.message : String(e);
+    turn.result.ok = false;
+    turn.result.structured = null;
+    turn.result.error = e instanceof Error ? e.message : String(e);
+    if (/\b429\b|too many requests/i.test(turn.result.error)) turn.result.rateLimited = true;
   } finally {
-    await stop(server);
-    bridge.server.close();
-    rmSync(state, { recursive: true, force: true });
-    rmSync(dirname(secretsFile), { recursive: true, force: true });
+    if (server) await stop(server);
+    bridge?.close();
+    if (state) rmSync(state, { recursive: true, force: true });
+    if (secretsFile) rmSync(dirname(secretsFile), { recursive: true, force: true });
   }
-  if (result.error && /\b429\b|too many requests/i.test(result.error)) result.rateLimited = true;
-  if (!result.ok && result.structured) result.structured = null;
-  result.durationMs = Date.now() - t0;
-  return result;
+  turn.result.durationMs = Date.now() - t0;
+  return turn.result;
 }
 
-/** Waits for the server to answer its health check; fails with its log when it exits or never does. */
-async function waitHealthy(health: () => Promise<{ ok: boolean }>, server: ChildProcess, log: string[]): Promise<void> {
-  const deadline = Date.now() + HEALTHY_WITHIN_MS;
-  while (Date.now() < deadline && server.exitCode === null) {
+/** One session event as the follower reads it. */
+interface SessionEvent {
+  type: string;
+  data?: Record<string, unknown>;
+}
+
+/** Follows one turn's session events into the run's outcome and the transcript, and says when
+ *  the turn must be cancelled: when the run's last allowed model call settles without an answer
+ *  (eve retries an answer off the schema without a limit of its own), or when the turn pauses
+ *  for input nobody can give. */
+export class TurnFollower {
+  readonly result: RunOutcome = { ...EMPTY_RUN };
+  private readonly runs = new Set<string>();
+  private readonly names = new Map<string, string>();
+  private modelCalls = 0;
+  private capped = false;
+  private paused = false;
+  private replyText = "";
+  private failure: string | null = null;
+
+  private readonly pack: AgentPack;
+  private readonly maxTurns: number;
+  private readonly out: (line: string) => void;
+
+  constructor(pack: AgentPack, maxTurns: number, out: (line: string) => void) {
+    this.pack = pack;
+    this.maxTurns = maxTurns;
+    this.out = out;
+  }
+
+  /** Takes one event; true when the turn must be cancelled now. */
+  take(event: SessionEvent): boolean {
+    const data = event.data ?? {};
+    const result = this.result;
+    if (event.type === "model.requested" && (data.owner as { turnId?: string } | undefined)?.turnId) {
+      this.modelCalls++;
+      this.runs.add(String(data.runId));
+      result.turns = this.modelCalls;
+      // A call past the cap that started before the cancel landed.
+      return this.cap(this.modelCalls > this.maxTurns);
+    }
+    if (event.type === "model.settled" && data.error) {
+      // A model error eve will not retry ends the session and cancels the turn: keep its reason.
+      const error = data.error as { code?: string; message?: string };
+      this.failure = `${error.code ?? "error"}: ${error.message ?? ""}`;
+      return false;
+    }
+    if (event.type === "model.settled") return this.cap(this.runs.has(String(data.runId)) && this.modelCalls >= this.maxTurns && result.structured === null);
+    if (event.type === "session.ended" && data.error) {
+      const error = data.error as { code?: string; message?: string };
+      this.failure = `${error.code ?? "error"}: ${error.message ?? ""}`;
+    } else if (event.type === "content.completed") {
+      if (data.kind === "result") result.structured = data.value as Record<string, unknown>;
+      else if (data.kind === "text" && typeof data.value === "string") {
+        this.out(data.value);
+        if (data.phase === "reply") this.replyText = data.value;
+      }
+    } else if (event.type === "call.requested") {
+      const name = (data.capability as { name?: string } | undefined)?.name ?? "tool";
+      this.names.set(String(data.callId), name);
+      this.out(callLine(name, (data.input ?? {}) as Record<string, unknown>));
+    } else if (event.type === "call.settled" && data.outcome !== "completed") {
+      const error = data.error as { message?: string } | undefined;
+      this.out(`  ✗ ${this.names.get(String(data.callId)) ?? "call"} ${String(data.outcome)}: ${error?.message ?? ""}`.trimEnd());
+    } else if (event.type === "usage.recorded") {
+      const usage = data.usage as { costUsd?: number } | undefined;
+      if (typeof usage?.costUsd === "number") result.costUsd = (result.costUsd ?? 0) + usage.costUsd;
+    } else if (event.type === "turn.paused" && !this.capped) {
+      // eve asks to continue past the pack's compiled token budget (approvals never ask here):
+      // nobody is here to answer, and no provider reset would resume it.
+      this.paused = true;
+      return this.cap(true);
+    } else if (event.type === "turn.settled") {
+      this.settle(data.outcome, data.error as { code?: string; message?: string } | undefined);
+    }
+    return false;
+  }
+
+  /** Marks the turn capped the first time `when` holds; true then, so the caller cancels once. */
+  private cap(when: boolean): boolean {
+    if (!when || this.capped) return false;
+    this.capped = true;
+    return true;
+  }
+
+  private settle(outcome: unknown, error: { code?: string; message?: string } | undefined): void {
+    const result = this.result;
+    if (outcome === "completed" && result.structured !== null) {
+      result.ok = true;
+      return;
+    }
+    // The model may have answered in text instead of through the reply tool: taken only when the
+    // text is an answer the pack's schema accepts, never on the strength of a leading brace.
+    const fromText = this.answerFromText();
+    if (fromText !== null) {
+      Object.assign(result, { ok: true, structured: fromText, text: this.replyText, error: null });
+      return;
+    }
+    result.ok = false;
+    result.structured = null;
+    if (this.paused || error?.code === "SESSION_USAGE_LIMIT_REACHED") result.error = budgetSpent(`its token budget for ${this.maxTurns} turns ran out before an answer`);
+    else if (this.capped) result.error = `no answer the ${this.pack.id} schema accepts within ${this.maxTurns} model calls`;
+    else result.error = error?.message ? `${error.code ?? "error"}: ${error.message}` : (this.failure ?? String(outcome));
+    if (/\b429\b|too many requests/i.test(`${result.error} ${this.failure ?? ""}`)) result.rateLimited = true;
+  }
+
+  private answerFromText(): Record<string, unknown> | null {
     try {
-      if ((await health()).ok) return;
-    } catch {}
-    await new Promise((r) => setTimeout(r, 50));
+      const parsed = this.pack.answer.safeParse(JSON.parse(this.replyText));
+      return parsed.success ? (parsed.data as Record<string, unknown>) : null;
+    } catch {
+      return null;
+    }
+  }
+}
+
+/** Waits for the server to answer its health check; fails with its log as soon as it exits (by
+ *  a code or a signal) or when it never does. */
+export async function waitHealthy(health: () => Promise<{ ok: boolean }>, server: ChildProcess, log: string[]): Promise<void> {
+  const deadline = Date.now() + HEALTHY_WITHIN_MS;
+  const exited = () => server.exitCode !== null || server.signalCode !== null;
+  let died = exited();
+  const onExit = () => {
+    died = true;
+  };
+  server.once("exit", onExit);
+  try {
+    while (Date.now() < deadline && !died) {
+      try {
+        if ((await health()).ok) return;
+      } catch {}
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  } finally {
+    server.off("exit", onExit);
   }
   throw new Error(`the eve server never became healthy:\n${log.slice(-20).join("\n")}`);
 }
 
-async function stop(server: ChildProcess): Promise<void> {
-  if (server.exitCode !== null) return;
+/** Stops the server: at once when it already exited, by a code or a signal; else SIGTERM, then
+ *  SIGKILL after 3 s. */
+export async function stop(server: ChildProcess): Promise<void> {
+  if (server.exitCode !== null || server.signalCode !== null) return;
   const exited = new Promise((r) => server.once("exit", r));
   server.kill("SIGTERM");
   const timer = setTimeout(() => server.kill("SIGKILL"), 3_000);

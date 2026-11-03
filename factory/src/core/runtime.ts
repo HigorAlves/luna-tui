@@ -23,9 +23,9 @@ export interface RunContext {
      *  one place outside the worktree and the output its tools may write. */
     scratch: string;
   };
-  /** The luna tools: the state the result reads, the server the Claude runtime serves them from,
-   *  and `call` for a runtime that serves the same handlers its own way. */
-  luna: { state: LunaState; server: unknown; call: (tool: string, args: unknown) => Promise<unknown> };
+  /** The luna tools (core/luna-tools.ts): the state the result reads, and `call`, which each
+   *  runtime serves its own way (Claude as an in-process MCP server, eve over a loopback bridge). */
+  luna: { state: LunaState; call: (tool: string, args: unknown) => Promise<unknown> };
   /** LUNA_STAGE_DRY_RUN=1: build and print the run's options without a model call. */
   dry: boolean;
   /** A line on the readable transcript (stdout). */

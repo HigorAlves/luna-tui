@@ -2,7 +2,7 @@
 // (its role as `agent`, its helpers as `agents`, the plugin's skills, its access as tool lists, the
 // guards as PreToolUse hooks, the luna tools as an in-process MCP server) and `query()` is
 // followed to its result, the transcript written to stdout as it goes.
-import type { McpSdkServerConfigWithInstance, Options, Query } from "@anthropic-ai/claude-agent-sdk";
+import type { Options, Query } from "@anthropic-ai/claude-agent-sdk";
 import { answerJsonSchema } from "@hardness/contracts";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ import type { RunContext, Runtime } from "../../core/runtime.ts";
 import { claudeTools } from "./access.ts";
 import { agentDefinitions } from "./agents.ts";
 import { branchPrefixFor, preToolUseGuards } from "./guards.ts";
+import { lunaServer } from "./luna.ts";
 
 const env = process.env;
 
@@ -59,8 +60,7 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     permissionMode: "dontAsk" as const,
     maxTurns: input.limits.maxTurns,
     outputFormat: { type: "json_schema" as const, schema: answerJsonSchema(pack) },
-    // The server lunaTools() built; RunContext keeps it opaque so core needs no SDK types.
-    mcpServers: { luna: luna.server as McpSdkServerConfigWithInstance },
+    mcpServers: { luna: lunaServer(luna.call) },
     hooks: {
       PreToolUse: preToolUseGuards(guardPolicy(ctx)),
     },

@@ -5,7 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { agentFiles, compileAgent, eveTools } from "./compile.ts";
+import { agentFiles, compileAgent, eveTools, tokenBudgetPerTurn } from "./compile.ts";
 
 const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const options = (over = {}) => ({ factoryRoot: FACTORY_ROOT, outDir: join(FACTORY_ROOT, ".eve-agents"), ...over });
@@ -29,6 +29,13 @@ describe("agentFiles", () => {
     expect(agent).toContain('reasoning: "high"');
     expect(agent).toContain("defaultTools: false");
     expect(agent).toMatch(/limits: \{ sessionUsage: /);
+    // The budget follows the turns the run was given, as the runner's call cap and the dry run do.
+    expect(agent).toContain("process.env.LUNA_EVE_MAX_TURNS");
+    const budget = new Function(`return ${/sessionUsage: (.*) \},$/m.exec(agent)![1]}`)() as (u: { window: Record<string, number> }) => boolean;
+    process.env.LUNA_EVE_MAX_TURNS = "2";
+    expect(budget({ window: { inputTokens: 2 * tokenBudgetPerTurn.input - 1, cacheReadTokens: 0, outputTokens: 0 } })).toBe(false);
+    expect(budget({ window: { inputTokens: 2 * tokenBudgetPerTurn.input, cacheReadTokens: 0, outputTokens: 0 } })).toBe(true);
+    delete process.env.LUNA_EVE_MAX_TURNS;
     expect(JSON.parse(files["package.json"]!)).toMatchObject({ private: true, type: "module", dependencies: { eve: expect.any(String) } });
   });
 
