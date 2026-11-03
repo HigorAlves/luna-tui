@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { EMPTY_RUN, type LunaState, finish, outcomeOf, scanArtifacts } from "./output.ts";
+import { EMPTY_RUN, type LunaState, finish, outcomeOf, scanArtifacts, settle } from "./output.ts";
 
 const state = (over: Partial<LunaState> = {}): LunaState => ({ ledger: { schema: 1, slices: [] }, events: [], ...over });
 const outDir = () => mkdtempSync(join(tmpdir(), "factory-out-"));
@@ -18,6 +18,35 @@ describe("outcomeOf", () => {
     expect(outcomeOf({ ...EMPTY_RUN, ok: true, structured: { kind: "test_change" } })).toBe("test_change");
     expect(outcomeOf({ ...EMPTY_RUN, ok: true, structured: { kind: "escalated" } })).toBe("escalated");
     expect(outcomeOf({ ...EMPTY_RUN, ok: false, structured: null })).toBe("fail");
+  });
+});
+
+describe("settle", () => {
+  const brief = { kind: "brief", summary: "plan" };
+
+  it("keeps a structured answer the pack's schema accepts", () => {
+    expect(settle({ ...EMPTY_RUN, ok: true, structured: brief }, PACKS.triage)).toMatchObject({ ok: true, structured: brief, error: null });
+  });
+
+  it("takes an answer given as JSON text when the pack's schema accepts it", () => {
+    expect(settle({ ...EMPTY_RUN, ok: true, text: JSON.stringify(brief) }, PACKS.triage)).toMatchObject({ ok: true, structured: brief });
+  });
+
+  it("fails an answer off the pack's schema, with the issue, structured or as JSON text", () => {
+    const off = { kind: "maybe", summary: "plan" };
+    for (const run of [{ ...EMPTY_RUN, ok: true, structured: off }, { ...EMPTY_RUN, ok: true, text: JSON.stringify(off) }]) {
+      const settled = settle(run, PACKS.triage);
+      expect(settled).toMatchObject({ ok: false, structured: null, error: expect.stringMatching(/^answer off the triage schema: kind: /) });
+    }
+  });
+
+  it("fails a run that answered nothing", () => {
+    expect(settle({ ...EMPTY_RUN, ok: true }, PACKS.triage)).toMatchObject({ ok: false, error: "no structured output" });
+  });
+
+  it("marks a usage or rate limit error as rate limited", () => {
+    expect(settle({ ...EMPTY_RUN, error: "You've hit your usage limit" }, PACKS.triage).rateLimited).toBe(true);
+    expect(settle({ ...EMPTY_RUN, error: "model error" }, PACKS.triage).rateLimited).toBe(false);
   });
 });
 

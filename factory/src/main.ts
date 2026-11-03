@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { EMPTY_RUN, finish } from "./core/output.ts";
+import { EMPTY_RUN, finish, settle } from "./core/output.ts";
 import { renderPrompt } from "./core/render.ts";
 import { readJson, readStageInput } from "./core/stage-io.ts";
 import { RUNTIMES, lunaTools } from "./runtimes/index.ts";
@@ -69,17 +69,4 @@ if (!runtime) {
 }
 
 const run = await runtime.run({ pack, engine, input, prompt, paths: { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT }, luna, dry: DRY, out });
-// A model that answered in text instead of through structured output still answered: take
-// the JSON when it is one the pack's schema accepts, so a stage is not lost to the channel.
-if (run.ok && run.structured === null && run.text.trim().startsWith("{")) {
-  try {
-    const candidate = pack.answer.safeParse(JSON.parse(run.text));
-    if (candidate.success) run.structured = candidate.data as Record<string, unknown>;
-  } catch {}
-}
-if (run.error && /usage limit|rate limit/i.test(String(run.error))) run.rateLimited = true;
-if (run.ok && run.structured === null && !run.text) {
-  run.ok = false;
-  run.error = "no structured output";
-}
-finish(OUT, pack, run, luna.state);
+finish(OUT, pack, settle(run, pack), luna.state);

@@ -81,6 +81,38 @@ export function scanArtifacts(outDir: string): StageArtifact[] {
     }));
 }
 
+/** The zod issues as one line: `path: message; ...`. */
+const issuesLine = (error: { issues: { path: PropertyKey[]; message: string }[] }): string =>
+  error.issues.map((i) => `${i.path.map(String).join(".") || "(root)"}: ${i.message}`).join("; ");
+
+/** The run as the result reports it, whatever runtime produced it: an answer given as JSON text
+ *  is taken when it is one the pack's schema accepts, so a stage is not lost to the channel; an
+ *  answer off the schema fails the run with the issue; a usage or rate limit error is a rate
+ *  limit; a run that answered nothing failed. */
+export function settle(run: RunOutcome, pack: Pack): RunOutcome {
+  const settled = { ...run };
+  let answer: unknown = settled.structured;
+  if (settled.ok && answer === null && settled.text.trim().startsWith("{")) {
+    try {
+      answer = JSON.parse(settled.text);
+    } catch {}
+  }
+  if (settled.ok && answer !== null) {
+    const parsed = pack.answer.safeParse(answer);
+    settled.structured = parsed.success ? (parsed.data as Record<string, unknown>) : null;
+    if (!parsed.success) {
+      settled.ok = false;
+      settled.error = `answer off the ${pack.id} schema: ${issuesLine(parsed.error)}`;
+    }
+  }
+  if (settled.error && /usage limit|rate limit/i.test(String(settled.error))) settled.rateLimited = true;
+  if (settled.ok && settled.structured === null && !settled.text) {
+    settled.ok = false;
+    settled.error = "no structured output";
+  }
+  return settled;
+}
+
 /** The outcome the machine acts on, from the pack's structured answer. */
 export function outcomeOf(run: RunOutcome): StageOutcome {
   const s = run.structured ?? {};

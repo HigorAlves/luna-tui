@@ -2,7 +2,7 @@
 // (its role as `agent`, its helpers as `agents`, the plugin's skills, its access as tool lists, the
 // guards as PreToolUse hooks, the luna tools as an in-process MCP server) and `query()` is
 // followed to its result, the transcript written to stdout as it goes.
-import type { McpSdkServerConfigWithInstance } from "@anthropic-ai/claude-agent-sdk";
+import type { McpSdkServerConfigWithInstance, Options, Query } from "@anthropic-ai/claude-agent-sdk";
 import { answerJsonSchema } from "@hardness/contracts";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
@@ -16,9 +16,17 @@ import { branchPrefixFor, preToolUseGuards } from "./guards.ts";
 
 const env = process.env;
 
-export const claude: Runtime = { id: "claude", run };
+/** The SDK's `query()`, or a stand-in with its signature (the conformance table's scripted fake). */
+export type Transport = (params: { prompt: string; options?: Options }) => Query;
 
-async function run({ pack, engine, input, prompt, paths, luna, dry, out }: RunContext): Promise<RunOutcome> {
+/** The Claude runtime on `transport`; without one, on the SDK's own `query()`. */
+export function claudeRuntime(transport?: Transport): Runtime {
+  return { id: "claude", run: (ctx) => run(ctx, transport) };
+}
+
+export const claude: Runtime = claudeRuntime();
+
+async function run({ pack, engine, input, prompt, paths, luna, dry, out }: RunContext, transport?: Transport): Promise<RunOutcome> {
   if (pack.kind !== "agent" || pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
   const options = {
     cwd: paths.work,
@@ -62,7 +70,7 @@ async function run({ pack, engine, input, prompt, paths, luna, dry, out }: RunCo
   const t0 = Date.now();
   const run: RunOutcome = { ...EMPTY_RUN };
   try {
-    const { query } = await import("@anthropic-ai/claude-agent-sdk");
+    const query = transport ?? (await import("@anthropic-ai/claude-agent-sdk")).query;
     const raw = env.LUNA_STAGE_DEBUG === "1" ? join(paths.out, "raw.jsonl") : null;
     for await (const msg of query({ prompt, options })) {
       if (raw) appendFileSync(raw, `${JSON.stringify(msg)}\n`);
