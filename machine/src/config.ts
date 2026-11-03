@@ -1,9 +1,11 @@
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { RUNNING, type TaskState } from "@hardness/contracts";
 
+import { isLoopback } from "./adapters/http/access.ts";
 import { DEFAULT_GATE_SECS, parseDuration } from "./domain/sla.ts";
 
 /** Settings read from the environment. Defaults match compose.dev.yml and herdr's config. */
@@ -12,6 +14,8 @@ export interface Config {
   port: number;
   /** Interface the API binds to. 127.0.0.1 on the host; 0.0.0.0 inside the compose container. */
   host: string;
+  /** The bearer token every API call must carry (`MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`); null asks for none. Required beyond loopback. Never logged. */
+  apiToken: string | null;
   /** Run Triage and Implementer as real agents. Off: every stage is a stub. */
   agents: boolean;
   /** Tasks that can be driving a stage at once, across every repo. The rest queue. */
@@ -116,6 +120,18 @@ export const DEFAULT_MAX_CONCURRENT_TASKS = 4;
 export const DEFAULT_RETENTION_DAYS = 90;
 export const DEFAULT_WORKTREE_RETENTION_DAYS = 7;
 
+/** The API token's file in `~/.config/hardness`, read by the board too. */
+export const API_TOKEN_FILE = "machine-api-token";
+
+/** A secret file's content with whitespace removed, or null. */
+function secretFileSync(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8").replace(/\s+/g, "") || null;
+  } catch {
+    return null;
+  }
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const port = env.MACHINE_PORT === undefined ? DEFAULT_PORT : Number(env.MACHINE_PORT);
   if (!Number.isInteger(port) || port < 1 || port > 65_535) {
@@ -217,10 +233,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const home = env.HOME ?? homedir();
   const stateDir = env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness");
   const rules = env.MACHINE_SLACK_RULES?.trim();
+  const host = env.MACHINE_HOST ?? "127.0.0.1";
+  const apiToken = env.MACHINE_API_TOKEN?.replace(/\s+/g, "") || secretFileSync(join(home, ".config", "hardness", API_TOKEN_FILE));
+  if (!isLoopback(host) && apiToken === null) {
+    throw new Error(
+      `MACHINE_HOST=${host} reaches beyond this computer, so the API needs a token: set MACHINE_API_TOKEN or put one in ~/.config/hardness/${API_TOKEN_FILE} (e.g. openssl rand -hex 32)`,
+    );
+  }
   return {
     databaseUrl: env.DATABASE_URL ?? DEFAULT_DATABASE_URL,
     port,
-    host: env.MACHINE_HOST ?? "127.0.0.1",
+    host,
+    apiToken,
     agents: env.MACHINE_AGENTS !== "off",
     maxConcurrentTasks,
     runnerImage: env.RUNNER_IMAGE ?? "hardness-runner:dev",

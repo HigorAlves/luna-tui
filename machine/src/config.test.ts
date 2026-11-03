@@ -1,3 +1,7 @@
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -14,6 +18,7 @@ describe("loadConfig", () => {
       databaseUrl: DEFAULT_DATABASE_URL,
       port: DEFAULT_PORT,
       host: "127.0.0.1",
+      apiToken: null,
       agents: true,
       maxConcurrentTasks: DEFAULT_MAX_CONCURRENT_TASKS,
       runnerImage: "hardness-runner:dev",
@@ -108,7 +113,25 @@ describe("loadConfig", () => {
   });
 
   it("binds to the host in MACHINE_HOST, so a container can listen on every interface", () => {
-    expect(loadConfig({ HOME: "/h", MACHINE_HOST: "0.0.0.0" }).host).toBe("0.0.0.0");
+    expect(loadConfig({ HOME: "/h", MACHINE_HOST: "0.0.0.0", MACHINE_API_TOKEN: "t" }).host).toBe("0.0.0.0");
+  });
+
+  it("reads the API token from MACHINE_API_TOKEN, else ~/.config/hardness/machine-api-token, else none", () => {
+    expect(loadConfig({ HOME: "/h" }).apiToken).toBeNull();
+    expect(loadConfig({ HOME: "/h", MACHINE_API_TOKEN: " s3cret " }).apiToken).toBe("s3cret");
+    const home = mkdtempSync(join(tmpdir(), "home-"));
+    mkdirSync(join(home, ".config", "hardness"), { recursive: true });
+    writeFileSync(join(home, ".config", "hardness", "machine-api-token"), "from-file\n");
+    expect(loadConfig({ HOME: home }).apiToken).toBe("from-file");
+    expect(loadConfig({ HOME: home, MACHINE_API_TOKEN: "from-env" }).apiToken).toBe("from-env");
+  });
+
+  it("refuses to start beyond loopback without an API token, and says how to set one", () => {
+    expect(() => loadConfig({ HOME: "/h", MACHINE_HOST: "0.0.0.0" })).toThrow(/MACHINE_API_TOKEN/);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_HOST: "192.168.1.5" })).toThrow(/machine-api-token/);
+    for (const host of ["127.0.0.1", "localhost", "::1", "127.0.0.2"]) {
+      expect(loadConfig({ HOME: "/h", MACHINE_HOST: host }).host).toBe(host);
+    }
   });
 
   it("rejects a port that is not a number", () => {
