@@ -1,7 +1,7 @@
 import { type EngineId, PACKS } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { chooseEngine, engineProblem, stagesProblem } from "./engine-choice.ts";
+import { chooseEngine, engineProblem, fallbackCandidates, stagesProblem } from "./engine-choice.ts";
 
 // No pack allows two engines yet, so the choice is proved on one that does.
 const triage = { id: "triage" as const, engines: { default: "claude:opus" as EngineId, allowed: ["claude:opus", "codex:sol", "openai:sol"] as EngineId[] } };
@@ -57,5 +57,17 @@ describe("engineProblem and stagesProblem", () => {
     expect(stagesProblem({})).toBeNull();
     expect(stagesProblem({ triage: PACKS.triage.engines.default, implementing: PACKS.implementing.engines.default })).toBeNull();
     expect(stagesProblem({ triage: PACKS.triage.engines.default, verifying: "jev" })).toMatch(/^verifying: jev is not allowed for verifying/);
+  });
+});
+
+describe("fallbackCandidates", () => {
+  it("is the pack's fallback list, in order, less the engines that already ran the stage", () => {
+    expect(fallbackCandidates(PACKS.triage, ["claude:opus"])).toEqual(["codex:sol"]);
+    expect(fallbackCandidates(PACKS.triage, ["codex:sol"])).toEqual(["claude:opus"]);
+    expect(fallbackCandidates(PACKS.triage, ["codex:sol", "claude:opus"])).toEqual([]);
+  });
+
+  it("is empty for a pack with no fallback", () => {
+    expect(fallbackCandidates(PACKS.implementing, ["claude:sonnet"])).toEqual([]);
   });
 });

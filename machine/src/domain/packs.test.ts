@@ -28,7 +28,7 @@ describe("packInfo", () => {
       id: "triage",
       agent: "triage-planner",
       kind: "agent",
-      engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"] },
+      engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"], fallback: ["codex:sol", "claude:opus"] },
       effort: PACKS.triage.effort,
       writable: false,
       maxTurns: PACKS.triage.maxTurns,

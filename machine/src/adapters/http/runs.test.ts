@@ -104,7 +104,12 @@ describe("POST /runs", () => {
     const limited = await post(appWith(output({ ok: false, outcome: "fail", answer: null, error: "usage limit", rateLimited: true, resetsAt: 1_793_620_800 })), { pack: "chat_triage", context: { chat } });
     expect(limited.status).toBe(429);
     expect(await limited.json()).toEqual({ error: "rate_limited", message: "usage limit", resetsAt: new Date(1_793_620_800_000).toISOString() });
-    expect((await db.query("select ok from pack_runs")).map((r: { ok: boolean }) => r.ok)).toEqual([false, false]);
+    // The limit on claude:haiku moved the call to codex:luna, its fallback, which hit one too: both recorded.
+    expect((await db.query("select ok, engine from pack_runs order by started_at, engine")).map((r: { ok: boolean; engine: string }) => [r.ok, r.engine])).toEqual([
+      [false, "claude:haiku"],
+      [false, "claude:haiku"],
+      [false, "codex:luna"],
+    ]);
   });
 
   it("is 503 agents_off on a machine that runs no packs", async () => {

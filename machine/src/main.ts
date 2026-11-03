@@ -297,6 +297,8 @@ const packRuns = buildPackRuns(config, {
   ...(agentDeps ? { credentials: agentDeps.credentials } : {}),
   store: new PgPackRunStore(db),
   budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },
+  // A usage limit moves a call to a fallback engine, never to one whose window the pipeline holds.
+  latched: () => pipeline.slots.latched.map((latch) => latch.owner),
 });
 // A run folder a crash left holds a client's context: never kept.
 await packRuns?.clearLeftovers();

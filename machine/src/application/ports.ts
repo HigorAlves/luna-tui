@@ -25,6 +25,8 @@ export interface StageContext {
   signal: AbortSignal;
   /** Set after a restart found the stage's container still running: wait on it, do not start another. `engine` is the one it started on. */
   resume?: { container: string; inputCommit: string | null; engine?: EngineId | null };
+  /** The engine to run on over the usual pick: the next of the pack's fallbacks after a usage limit. */
+  engine?: EngineId;
   /** Tells the machine the container's name, the commit it started from and the engine it runs on, as soon as they are known. */
   started?: (facts: { container: string; inputCommit: string | null; engine?: EngineId }) => Promise<void>;
   /** Puts a line on the task's activity while the stage runs (`stage.note`): a wait, a fallback, anything the run should say before it ends. */

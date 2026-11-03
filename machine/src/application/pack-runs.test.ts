@@ -121,14 +121,49 @@ describe("PackRuns", () => {
     const limited = await runs(fakeSandbox(output({ ok: false, outcome: "fail", answer: null, error: "usage limit", rateLimited: true, resetsAt: 1_793_620_800 }))).run({ pack: "chat_triage", context: { chat } }, null).catch((e: unknown) => e);
     expect(limited).toBeInstanceOf(RunRateLimitedError);
     expect((limited as RunRateLimitedError).resetsAt).toBe(new Date(1_793_620_800_000).toISOString());
-    expect(records.map((r) => [r.ok, r.error])).toEqual([
-      [false, "no structured output"],
-      [false, expect.stringContaining("the answer did not match the schema")],
-      [false, "the container left no result (exit code 1)"],
-      [false, "usage limit"],
+    // The limit on claude:haiku moved the call to codex:luna, its fallback, which hit one too.
+    expect(records.map((r) => [r.ok, r.error, r.engine])).toEqual([
+      [false, "no structured output", "claude:haiku"],
+      [false, expect.stringContaining("the answer did not match the schema"), "claude:haiku"],
+      [false, "the container left no result (exit code 1)", "claude:haiku"],
+      [false, "usage limit", "claude:haiku"],
+      [false, "usage limit", "codex:luna"],
     ]);
     expect(records[2]).toMatchObject({ model: resolveEngine("claude:haiku").modelId, turns: 0, costUsd: null });
     expect(readdirSync(join(stateDir, PACK_RUNS_DIR))).toEqual([]);
+  });
+
+  describe("on a usage limit", () => {
+    /** A sandbox where the engines in `limited` hit their usage limit and any other answers. */
+    const limitedOn = (limited: EngineId[]) => async (run: SandboxRun) => {
+      const engine = StageInput.parse(run.input).engine!;
+      return fakeSandbox(limited.includes(engine) ? output({ ok: false, outcome: "fail", answer: null, error: `${engine} usage limit`, rateLimited: true, resetsAt: 1_793_620_800 }) : output({ usage: { turns: 1, costUsd: null, durationMs: 900, model: resolveEngine(engine).modelId } }))(run);
+    };
+
+    it("runs the call again on the pack's next fallback engine, which answers, and records both runs", async () => {
+      const result = await runs(limitedOn(["codex:luna"])).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, "notch");
+      expect(result.usage).toMatchObject({ engine: "claude:haiku", model: resolveEngine("claude:haiku").modelId });
+      expect(seen.map((run) => StageInput.parse(run.input).engine)).toEqual(["codex:luna", "claude:haiku"]);
+      expect(records.map((r) => [r.engine, r.ok])).toEqual([["codex:luna", false], ["claude:haiku", true]]);
+    });
+
+    it("answers rate_limited once every fallback has hit its limit too", async () => {
+      await expect(runs(limitedOn(["codex:luna", "claude:haiku"])).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, null)).rejects.toBeInstanceOf(RunRateLimitedError);
+      expect(seen).toHaveLength(2);
+    });
+
+    it("skips a fallback whose credential is missing, or whose window the pipeline holds", async () => {
+      await expect(runs(limitedOn(["codex:luna"]), { credentials: credentials(["claude:haiku"]) }).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, null)).rejects.toBeInstanceOf(RunRateLimitedError);
+      expect(seen).toHaveLength(1);
+      seen = [];
+      await expect(runs(limitedOn(["codex:luna"]), { latched: () => ["claude"] }).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, null)).rejects.toBeInstanceOf(RunRateLimitedError);
+      expect(seen).toHaveLength(1);
+    });
+
+    it("never falls back on a pack with no fallback", async () => {
+      await expect(runs(limitedOn(["jev"])).run({ pack: "issue_classify", context: { issue: { title: "t", description: "d" } } }, null)).rejects.toBeInstanceOf(RunRateLimitedError);
+      expect(seen).toHaveLength(1);
+    });
   });
 
   it("runs at most `max` calls at once; the next waits for one to finish", async () => {

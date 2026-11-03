@@ -209,7 +209,7 @@ describe("eval_judge", () => {
 
 describe("slack_triage", () => {
   it("runs as the slack-triager on haiku (Codex luna allowed), low effort, three turns, no tools and no worktree", () => {
-    expect(PACKS.slack_triage).toMatchObject({ agent: "slack-triager", helpers: [], skills: [], access: NO_ACCESS, writable: false, maxTurns: 3, engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"] }, effort: "low", template: "slack_triage.md" });
+    expect(PACKS.slack_triage).toMatchObject({ agent: "slack-triager", helpers: [], skills: [], access: NO_ACCESS, writable: false, maxTurns: 3, engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"], fallback: ["codex:luna", "claude:haiku"] }, effort: "low", template: "slack_triage.md" });
     expect(PACKS.slack_triage.timeoutMs).toBe(3 * 60_000);
     expect(AgentRole.options).toContain("slack-triager");
   });
@@ -240,7 +240,7 @@ describe("chat_triage", () => {
   };
 
   it("runs as the chat-triager like slack_triage: haiku (Codex luna allowed), low effort, three turns, no tools, no worktree", () => {
-    expect(PACKS.chat_triage).toMatchObject({ agent: "chat-triager", helpers: [], skills: [], access: NO_ACCESS, writable: false, maxTurns: 3, timeoutMs: 3 * 60_000, engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"] }, effort: "low", template: "chat_triage.md" });
+    expect(PACKS.chat_triage).toMatchObject({ agent: "chat-triager", helpers: [], skills: [], access: NO_ACCESS, writable: false, maxTurns: 3, timeoutMs: 3 * 60_000, engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"], fallback: ["codex:luna", "claude:haiku"] }, effort: "low", template: "chat_triage.md" });
     expect(AgentRole.options).toContain("chat-triager");
   });
 

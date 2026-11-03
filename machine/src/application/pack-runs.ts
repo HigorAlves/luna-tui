@@ -17,18 +17,23 @@
 // to PACK_RUNS_QUEUE of them; past that a call is refused at once. A call whose client leaves is
 // dropped while it waits, and its container stopped while it runs.
 //
+// Usage limits: a call that hits one runs again at once on the pack's next fallback engine
+// (`engines.fallback`) whose credential is here and whose window neither it nor the pipeline
+// holds, in the same place; each run is its own pack_runs row, and the answer names the engine
+// that gave it. Only once there is none left is the call refused with when the window resets.
+//
 // Spend: a call's cost is a pack_runs row the day's budget counts (spendSinceUsd), and a call
 // while the day is at its ceiling is refused before it runs. There is no monthly ceiling here:
 // that one is per repo (luna.yaml), and a call has no repo.
-import { type EngineId, PACKS, type PackId, type RunInput, type RunResult, resolveEngine } from "@hardness/contracts";
+import { type CredentialOwner, type EngineId, PACKS, type PackId, type RunInput, type RunResult, credentialOwner, resolveEngine } from "@hardness/contracts";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import { type Credentials, NoCredentialError } from "../adapters/credentials/index.ts";
 import type { SandboxResult, SandboxRun } from "../adapters/docker/docker.ts";
-import { contextSchema, isContextPack } from "../domain/context-packs.ts";
-import { engineProblem } from "../domain/engine-choice.ts";
+import { type ContextPackId, type PackContext, contextSchema, isContextPack } from "../domain/context-packs.ts";
+import { engineProblem, fallbackCandidates } from "../domain/engine-choice.ts";
 import { buildContextPackInput } from "../domain/stage-input.ts";
 import { outputError, runPackOnce } from "./stages/run-once.ts";
 
@@ -104,6 +109,8 @@ export interface PackRunsDeps {
   queue?: number;
   /** The machine's daily ceiling and the day's spend (stage runs and pack runs); none when absent. */
   budget?: { dailyUsd: number | null; spentTodayUsd: () => Promise<number> };
+  /** The credentials whose usage window the pipeline holds right now: a fallback never goes to one. */
+  latched?: () => CredentialOwner[];
   /** One line per call; defaults to console.log. Never the context nor the answer. */
   log?: (line: string) => void;
 }
@@ -116,6 +123,12 @@ function resetsIso(resetsAt: number | string | null): string | null {
 }
 
 const usd = (value: number) => `$${value.toFixed(2)}`;
+
+/** Of two usage limits, the one whose window opens first: what a client waits for to try again. */
+function sooner(a: RunRateLimitedError | null, b: RunRateLimitedError): RunRateLimitedError {
+  if (!a?.resetsAt) return b;
+  return b.resetsAt && b.resetsAt < a.resetsAt ? b : a;
+}
 
 export class PackRuns implements PackRunsPort {
   private active = 0;
@@ -136,7 +149,7 @@ export class PackRuns implements PackRunsPort {
   async run(request: RunInput, client: string | null, signal?: AbortSignal): Promise<RunResult> {
     const { pack } = request;
     if (!isContextPack(pack)) throw new NotOnDemandError(`${pack} is not run on demand: only ${Object.keys(PACKS).filter((id) => isContextPack(id as PackId)).join(", ")} are`);
-    const engine = request.engine ?? PACKS[pack].engines.default;
+    let engine = request.engine ?? PACKS[pack].engines.default;
     const problem = engineProblem(pack, engine);
     if (problem) throw new EngineNotAllowedError(problem);
     // A context that does not fit the pack is a ZodError: the route's 400.
@@ -149,10 +162,41 @@ export class PackRuns implements PackRunsPort {
     try {
       // Calls ahead in the queue may have spent the day's ceiling meanwhile.
       if (waited) await this.checkBudget();
-    } catch (thrown) {
+      // A usage limit moves the call to the pack's next fallback engine, in the same place; the
+      // client hears rate_limited only once there is none left to try.
+      const tried: EngineId[] = [];
+      let limit: RunRateLimitedError | null = null;
+      for (;;) {
+        try {
+          return await this.once(pack, context, engine, client, signal);
+        } catch (thrown) {
+          if (!(thrown instanceof RunRateLimitedError)) throw thrown;
+          tried.push(engine);
+          limit = sooner(limit, thrown);
+          const next = signal?.aborted ? null : await this.fallback(pack, tried);
+          if (!next) throw limit;
+          this.log(`run: ${pack} moves to ${next} after ${engine} rate limit`);
+          engine = next;
+        }
+      }
+    } finally {
       this.release();
-      throw thrown;
     }
+  }
+
+  /** The pack's next fallback after a usage limit on each of `tried`: one whose window neither a
+   *  tried engine nor the pipeline holds, and whose credential this machine has; else null. */
+  private async fallback(pack: ContextPackId, tried: EngineId[]): Promise<EngineId | null> {
+    const held = new Set<CredentialOwner>([...tried.map(credentialOwner), ...(this.deps.latched?.() ?? [])]);
+    for (const candidate of fallbackCandidates(PACKS[pack], tried)) {
+      if (held.has(credentialOwner(candidate))) continue;
+      if ((await this.deps.credentials.check(candidate)).available) return candidate;
+    }
+    return null;
+  }
+
+  /** One run of the pack on one engine, in a place already taken: its answer, or the error that ended it. */
+  private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal): Promise<RunResult> {
     const startedAt = this.now();
     const t0 = Date.now();
     const runDir = join(this.deps.stateDir, PACK_RUNS_DIR, `${pack}-${randomUUID()}`);
@@ -184,7 +228,6 @@ export class PackRuns implements PackRunsPort {
       else failure = new RunFailedError(thrown instanceof Error ? thrown.message : String(thrown));
     } finally {
       await rm(runDir, { recursive: true, force: true }).catch(() => {});
-      this.release();
     }
     // What the run is recorded as when the result names no model: the pinned ID it was started on.
     if (!usage.model) usage.model = resolveEngine(engine).modelId;

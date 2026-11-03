@@ -225,8 +225,10 @@ interface PackBase {
   writable: boolean;
   maxTurns: number;
   timeoutMs: number;
-  /** The engines the stage may run on; the machine picks one of `allowed`, else `default`. */
-  engines: { default: EngineId; allowed: EngineId[] };
+  /** The engines the stage may run on; the machine picks one of `allowed`, else `default`. On a
+   *  usage limit the machine runs the stage again on the first `fallback` engine (each one of
+   *  `allowed`) that has not run it yet and whose credential is present and not at its limit. */
+  engines: { default: EngineId; allowed: EngineId[]; fallback?: EngineId[] };
   /** The answer the stage must give; the runner turns it into the SDK's JSON schema. */
   answer: z.ZodType;
 }
@@ -335,8 +337,9 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     writable: false,
     maxTurns: 30,
     timeoutMs: 10 * MINUTE,
-    // Codex is a candidate here; the machine keeps the Claude default until evals move it.
-    engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"] },
+    // Codex is a candidate here; the machine keeps the Claude default until evals move it. A usage
+    // limit on either moves the stage to the other.
+    engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"], fallback: ["codex:sol", "claude:opus"] },
     effort: "high",
     answer: TriageAnswer,
     template: "triage.md",
@@ -519,7 +522,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     writable: false,
     maxTurns: 3,
     timeoutMs: 3 * MINUTE,
-    engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"] },
+    engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"], fallback: ["codex:luna", "claude:haiku"] },
     effort: "low",
     answer: SlackTriageAnswer,
     template: "slack_triage.md",
@@ -553,7 +556,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     writable: false,
     maxTurns: 3,
     timeoutMs: 3 * MINUTE,
-    engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"] },
+    engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"], fallback: ["codex:luna", "claude:haiku"] },
     effort: "low",
     answer: ChatTriageAnswer,
     template: "chat_triage.md",

@@ -76,9 +76,22 @@ describe("the engines each pack may run on", () => {
     }
   });
 
-  it("lets Codex take the Slack inbox and triage, as candidates beside their Claude defaults", () => {
-    expect(PACKS.slack_triage.engines).toEqual({ default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"] });
-    expect(PACKS.triage.engines).toEqual({ default: "claude:opus", allowed: ["claude:opus", "codex:sol"] });
+  it("lets Codex take the Slack inbox and triage, as candidates beside their Claude defaults, each the other's fallback", () => {
+    expect(PACKS.slack_triage.engines).toEqual({ default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"], fallback: ["codex:luna", "claude:haiku"] });
+    expect(PACKS.chat_triage.engines).toEqual({ default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"], fallback: ["codex:luna", "claude:haiku"] });
+    expect(PACKS.triage.engines).toEqual({ default: "claude:opus", allowed: ["claude:opus", "codex:sol"], fallback: ["codex:sol", "claude:opus"] });
+  });
+
+  it.each(Object.values(PACKS).map((p) => [p.id, p] as const))("%s: falls back only to engines it allows, each once", (_id, pack) => {
+    const fallback = pack.engines.fallback ?? [];
+    for (const id of fallback) expect(pack.engines.allowed, `${pack.id} falls back to ${id}`).toContain(id);
+    expect(new Set(fallback).size).toBe(fallback.length);
+  });
+
+  it("gives a Claude-only pack no fallback", () => {
+    const claudeOnly = Object.values(PACKS).filter((p) => p.engines.allowed.every((id) => id.startsWith("claude:")));
+    expect(claudeOnly.length).toBeGreaterThan(0);
+    for (const pack of claudeOnly) expect(pack.engines.fallback, pack.id).toBeUndefined();
   });
 
   it("keeps today's models as the defaults", () => {
