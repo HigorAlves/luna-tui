@@ -38,6 +38,9 @@ export interface ConformanceResult {
 export interface RuntimeCapabilities {
   /** The SDK says when a rate limit resets. */
   resetsAt: boolean;
+  /** An answer off the schema reaches the runtime, so core can name the issue (eve validates on
+   *  its server and retries instead: the runtime only learns the schema was never met). */
+  schemaIssue: boolean;
 }
 
 /** The pack every scenario runs: it has shell commands, the ledger tools and an answer schema. */
@@ -59,9 +62,9 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "an answer off the schema fails the run with the issue",
     script: [{ answer: { kind: "maybe", summary: "x" } }],
-    check: ({ run }) => {
+    check: ({ run }, can) => {
       expect(run).toMatchObject({ ok: false, structured: null });
-      expect(run.error).toMatch(/kind/);
+      expect(run.error).toMatch(can.schemaIssue ? /kind/ : /schema/);
     },
   },
   {
