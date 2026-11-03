@@ -114,6 +114,14 @@ describe("ingestStageOutput", () => {
     expect(ingested.events[2]?.payload).toEqual({ x: 1 });
   });
 
+  it("carries the run record result.json names into the stage result", async () => {
+    const run = { runtime: "claude", engine: "claude:opus", modelId: "claude-opus-5-5", sdk: { name: "@anthropic-ai/claude-agent-sdk", version: "0.3.311" }, fingerprint: "a".repeat(64) };
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output({ schema: 3, run })));
+    expect(toStageResult(await ingestStageOutput({ outDir, runId: "r", stateDir })).run).toEqual({ outputCommit: "abc123", info: run });
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output()));
+    expect(toStageResult(await ingestStageOutput({ outDir, runId: "r", stateDir })).run).toEqual({ outputCommit: "abc123" });
+  });
+
   it("names the failing key when result.json is invalid", async () => {
     await writeFile(join(outDir, "result.json"), JSON.stringify(output({ outcome: "bogus" })));
     await expect(ingestStageOutput({ outDir, runId: "r", stateDir })).rejects.toThrow(/outcome/);

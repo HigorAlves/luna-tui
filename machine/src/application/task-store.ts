@@ -51,6 +51,11 @@ export interface UpdateStageRunInput {
   turns?: number | null;
   costUsd?: string | null;
   cases?: StageRunCase[] | null;
+  /** What the run's result named it ran on (domain/task.ts `runFacts`). */
+  runtime?: string;
+  modelId?: string;
+  sdkVersion?: string;
+  fingerprint?: string;
   /** Marks the run as ended now (`clock_timestamp()` on Postgres — not a value the caller computes). */
   ended: true;
 }

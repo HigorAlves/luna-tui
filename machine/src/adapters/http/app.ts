@@ -14,6 +14,8 @@ import {
   EditStagesInput,
   JiraCreateInput,
   JiraLinkInput,
+  METRICS_GROUP_BY,
+  type MetricsGroupBy,
   type TaskDiff,
   type TaskSla,
   NewTaskInput,
@@ -248,14 +250,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     }
     const budget = { ...pipeline.budget, spentTodayUsd: await pipeline.spentTodayUsd() };
     const groupBy = c.req.query("groupBy");
-    switch (groupBy) {
-      case undefined:
-      case "repo":
-      case "engine":
-        break;
-      default:
-        throw new BadRequest(`groupBy must be repo or engine, got "${groupBy}"`);
-    }
+    if (groupBy !== undefined && !(METRICS_GROUP_BY as readonly string[]).includes(groupBy)) throw new BadRequest(`groupBy must be one of ${METRICS_GROUP_BY.join(", ")}, got "${groupBy}"`);
     const repo = c.req.query("repo");
     return c.json(
       await computeMetrics(db, {
@@ -263,7 +258,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
         slots: pipeline.slots,
         budget,
         ...(repo !== undefined ? { repo: repo === "" ? null : repo } : {}),
-        ...(groupBy ? { groupBy } : {}),
+        ...(groupBy !== undefined ? { groupBy: groupBy as MetricsGroupBy } : {}),
       }),
     );
   });

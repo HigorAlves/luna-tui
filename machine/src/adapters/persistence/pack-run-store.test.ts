@@ -58,3 +58,16 @@ describe("engineSpendSinceUsd", () => {
     expect(Object.fromEntries(await store.engineSpendSinceUsd(since, "/r/app"))).toEqual({ "openai:sol": 2 });
   });
 });
+
+describe("record", () => {
+  it("stores the run record's runtime, pinned model, SDK version and fingerprint, null when the run named none", async () => {
+    const packs = new PgPackRunStore(db);
+    await packs.record({ ...run(new Date(), 0.1), runtime: "claude", modelId: "claude-haiku-5-5", sdkVersion: "0.3.311", fingerprint: "d".repeat(64) });
+    await packs.record(run(new Date(), null));
+    const rows = await db.query(`select runtime, model_id, sdk_version, fingerprint from pack_runs order by cost_usd nulls last`);
+    expect(rows).toEqual([
+      { runtime: "claude", model_id: "claude-haiku-5-5", sdk_version: "0.3.311", fingerprint: "d".repeat(64) },
+      { runtime: null, model_id: null, sdk_version: null, fingerprint: null },
+    ]);
+  });
+});

@@ -57,6 +57,10 @@ export interface SlackTriageRunEntityRow {
   items: number;
   model: string;
   engine: string | null;
+  runtime: string | null;
+  modelId: string | null;
+  sdkVersion: string | null;
+  fingerprint: string | null;
   turns: number;
   /** numeric comes back from pg as a string. */
   costUsd: string | number | null;
@@ -116,6 +120,10 @@ const toRun = (r: SlackTriageRunEntityRow): SlackTriageRun => ({
   items: r.items,
   model: r.model,
   ...(r.engine ? { engine: r.engine as EngineId } : {}),
+  ...(r.runtime ? { runtime: r.runtime } : {}),
+  ...(r.modelId ? { modelId: r.modelId } : {}),
+  ...(r.sdkVersion ? { sdkVersion: r.sdkVersion } : {}),
+  ...(r.fingerprint ? { fingerprint: r.fingerprint } : {}),
   turns: r.turns,
   costUsd: r.costUsd === null ? null : Number(r.costUsd),
   ok: r.ok,
@@ -213,6 +221,10 @@ export class PgSlackStore implements SlackStore {
       items: run.items,
       model: run.model,
       engine: run.engine ?? null,
+      runtime: run.runtime ?? null,
+      modelId: run.modelId ?? null,
+      sdkVersion: run.sdkVersion ?? null,
+      fingerprint: run.fingerprint ?? null,
       turns: run.turns,
       costUsd: run.costUsd,
       ok: run.ok,

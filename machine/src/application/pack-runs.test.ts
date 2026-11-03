@@ -79,6 +79,10 @@ describe("PackRuns", () => {
     await runs(fakeSandbox(output())).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, "notch");
     expect(records).toEqual([{ pack: "chat_triage", engine: "codex:luna", model: "gpt-6-luna", client: "notch", ok: true, error: null, turns: 1, durationMs: 4200, costUsd: 0.0031, startedAt: NOW.toISOString(), endedAt: NOW.toISOString() }]);
     expect(JSON.stringify(records)).not.toContain("approve the rollout");
+    // A runner that names its run record: the runtime, pinned model, SDK version and fingerprint ride along.
+    const run = { runtime: "eve", engine: "codex:luna", modelId: "gpt-6-luna-fast", sdk: { name: "eve", version: "1.0.0-rc.1" }, fingerprint: "e".repeat(64) };
+    await runs(fakeSandbox(output({ run }))).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, "notch");
+    expect(records[1]).toMatchObject({ runtime: "eve", modelId: "gpt-6-luna-fast", sdkVersion: "1.0.0-rc.1", fingerprint: run.fingerprint });
   });
 
   it("runs the pack's default engine when none is asked for, and issue_classify and jira_intake with their own contexts", async () => {

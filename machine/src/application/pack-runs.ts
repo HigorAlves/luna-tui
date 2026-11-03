@@ -36,6 +36,7 @@ import { type ContextPackId, type PackContext, contextSchema, isContextPack } fr
 import { engineProblem, fallbackCandidates } from "../domain/engine-choice.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { buildContextPackInput } from "../domain/stage-input.ts";
+import { type RunFacts, runFacts } from "../domain/task.ts";
 import { outputError, runPackOnce } from "./stages/run-once.ts";
 
 /** How many `POST /runs` calls run at once; the rest wait. */
@@ -47,7 +48,7 @@ export const PACK_RUNS_QUEUE = 8;
 export const PACK_RUNS_DIR = "pack-runs";
 
 /** One row per call that ran: never its context nor its answer. */
-export interface PackRunRecord {
+export interface PackRunRecord extends RunFacts {
   pack: PackId;
   engine: EngineId;
   model: string;
@@ -218,6 +219,7 @@ export class PackRuns implements PackRunsPort {
     let usage: RunResult["usage"] = { model: "", engine, turns: 0, durationMs: 0, costUsd: null };
     let answer: Record<string, unknown> | null = null;
     let failure: Error | null = null;
+    let facts: RunFacts = {};
     try {
       await mkdir(work, { recursive: true });
       const input = buildContextPackInput(pack, context, engine);
@@ -229,6 +231,7 @@ export class PackRuns implements PackRunsPort {
       else {
         const out = run.output;
         usage = { model: out.usage.model, engine, turns: out.usage.turns, durationMs: out.usage.durationMs, costUsd: out.usage.costUsd };
+        facts = runFacts(out.run);
         if (!out.ok) failure = out.rateLimited ? new RunRateLimitedError(outputError(out), resetsIso(out.resetsAt)) : new RunFailedError(outputError(out));
         else {
           const parsed = PACKS[pack].answer.safeParse(out.answer);
@@ -246,7 +249,7 @@ export class PackRuns implements PackRunsPort {
     // What the run is recorded as when the result names no model: the pinned ID it was started on.
     if (!usage.model) usage.model = resolveEngine(engine).modelId;
     if (usage.durationMs === 0) usage.durationMs = Date.now() - t0;
-    if (!(failure instanceof RunNoCredentialError)) await this.record({ pack, engine, model: usage.model, client, ok: failure === null, error: failure?.message ?? null, turns: usage.turns, durationMs: usage.durationMs, costUsd: usage.costUsd, startedAt: startedAt.toISOString(), endedAt: this.now().toISOString() });
+    if (!(failure instanceof RunNoCredentialError)) await this.record({ pack, engine, model: usage.model, client, ok: failure === null, error: failure?.message ?? null, turns: usage.turns, durationMs: usage.durationMs, costUsd: usage.costUsd, startedAt: startedAt.toISOString(), endedAt: this.now().toISOString(), ...facts });
     if (usage.costUsd) await this.deps.engineBudgets?.afterRun(engine, { taskId: null, repo: null }).catch((thrown: unknown) => console.warn(`run: could not check the engine's cap: ${thrown instanceof Error ? thrown.message : String(thrown)}`));
     const cost = usage.costUsd === null ? "" : ` · $${usage.costUsd.toFixed(4)}`;
     this.log(failure ? `run: ${pack} on ${engine}${client ? ` for ${client}` : ""} failed: ${failure.message}` : `run: ${pack} on ${engine}${client ? ` for ${client}` : ""}, ${usage.turns} turn(s)${cost}`);

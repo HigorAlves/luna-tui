@@ -219,6 +219,13 @@ export interface StageRun {
   cases: StageRunCase[] | null;
   /** The engine the run started on; null for a host-only stage, or a run from before engines. */
   engine: EngineId | null;
+  /** What the run's result named it ran on (RFC 0003 §7): its runtime, the pinned model ID, the
+   *  SDK version and the fingerprint of the harness it ran. Null for a host-only stage, a run still
+   *  going, or a run from before fingerprints. */
+  runtime: string | null;
+  modelId: string | null;
+  sdkVersion: string | null;
+  fingerprint: string | null;
   startedAt: string;
   endedAt: string | null;
 }
@@ -392,6 +399,25 @@ export interface EngineMetrics {
   costUsd: number;
 }
 
+/** One fingerprint's slice of the window's stage runs, for `GET /metrics?groupBy=fingerprint`. */
+export interface FingerprintMetrics {
+  /** Null for runs from before fingerprints, and host-only stages. */
+  fingerprint: string | null;
+  /** Stage runs started in the window. */
+  runs: number;
+  /** Passed over passed and failed. */
+  passRate: number | null;
+  costUsd: number;
+  /** Started to ended, for passed and failed runs. */
+  durationMs: Stats;
+  stages: string[];
+  engines: string[];
+}
+
+/** What `GET /metrics?groupBy=` can add a row per: one switch, one `by…` list per value. */
+export const METRICS_GROUP_BY = ["repo", "engine", "fingerprint"] as const;
+export type MetricsGroupBy = (typeof METRICS_GROUP_BY)[number];
+
 export interface Metrics {
   since: string;
   until: string;
@@ -401,6 +427,8 @@ export interface Metrics {
   byRepo?: RepoMetrics[];
   /** One row per engine, when asked for with `?groupBy=engine`: named engines first, then null. */
   byEngine?: EngineMetrics[];
+  /** One row per fingerprint, when asked for with `?groupBy=fingerprint`. */
+  byFingerprint?: FingerprintMetrics[];
   tasks: {
     created: number;
     closed: number;

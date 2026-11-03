@@ -1431,6 +1431,28 @@ describe("the engine a stage run started on", () => {
   });
 });
 
+describe("the run record a stage run ended with", () => {
+  it("stores the runtime, the pinned model, the SDK version and the fingerprint, and shows them with the run", async () => {
+    const task = await newTask();
+    const info = { runtime: "eve", engine: "codex:sol", modelId: "gpt-5.6-terra", sdk: { name: "eve", version: "1.0.0-rc.1" }, fingerprint: "f".repeat(64) };
+    const runnerFor = (stage: TaskState): StageRunner =>
+      stage === "triage" ? async (context) => ({ ...(await stubs.runnerFor(stage)(context)), run: { info } }) : stubs.runnerFor(stage);
+    const p = new Pipeline(db, runnerFor, { inline: true, hasConfig: () => true });
+    await p.start(task.id);
+    const [run] = await p.stageRuns(task.id);
+    expect(run).toMatchObject({ runtime: "eve", modelId: "gpt-5.6-terra", sdkVersion: "1.0.0-rc.1", fingerprint: info.fingerprint });
+    expect(toStageRun(run!)).toMatchObject({ runtime: "eve", modelId: "gpt-5.6-terra", sdkVersion: "1.0.0-rc.1", fingerprint: info.fingerprint });
+  });
+
+  it("is null on a run whose result named none", async () => {
+    const task = await newTask();
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
+    await p.start(task.id);
+    const [run] = await p.stageRuns(task.id);
+    expect(toStageRun(run!)).toMatchObject({ runtime: null, modelId: null, sdkVersion: null, fingerprint: null });
+  });
+});
+
 describe("re-attaching to a container after a restart", () => {
   const running = (id: string, container: string) =>
     db
