@@ -15,6 +15,7 @@ import { AddTaskStateSince1793900000000 } from "./1793900000000-AddTaskStateSinc
 import { AddTaskIdempotencyKey1794000000000 } from "./1794000000000-AddTaskIdempotencyKey.ts";
 import { AddTaskSeq1794100000000 } from "./1794100000000-AddTaskSeq.ts";
 import { AddTaskStages1794200000000 } from "./1794200000000-AddTaskStages.ts";
+import { AddRunEngine1794300000000 } from "./1794300000000-AddRunEngine.ts";
 
 export const MIGRATIONS: Function[] = [
   Init1792712166445,
@@ -33,4 +34,5 @@ export const MIGRATIONS: Function[] = [
   AddTaskIdempotencyKey1794000000000,
   AddTaskSeq1794100000000,
   AddTaskStages1794200000000,
+  AddRunEngine1794300000000,
 ];

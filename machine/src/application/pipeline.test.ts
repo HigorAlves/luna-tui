@@ -17,6 +17,7 @@ import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan } from "../domain/stage-input.ts";
 import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
 import type { CloseReport } from "./close-task.ts";
+import { toStageRun } from "../adapters/http/serialize.ts";
 
 let db: DataSource;
 const stubs = new StubStages();
@@ -1179,14 +1180,32 @@ describe("ci_watch outside the pool", () => {
   }, WIND_DOWN_TIMEOUT_MS);
 });
 
+describe("the engine a stage run started on", () => {
+  it("is recorded on the run as soon as the runner knows it, and shown with the run", async () => {
+    const task = await newTask();
+    const runnerFor = (stage: TaskState): StageRunner =>
+      stage === "triage"
+        ? async (context) => {
+            await context.started?.({ container: "hardness-t1", inputCommit: null, engine: "claude:opus" });
+            return stubs.runnerFor(stage)(context);
+          }
+        : stubs.runnerFor(stage);
+    const p = new Pipeline(db, runnerFor, { inline: true, hasConfig: () => true });
+    await p.start(task.id);
+    const [run] = await p.stageRuns(task.id);
+    expect(run).toMatchObject({ stage: "triage", containerId: "hardness-t1", engine: "claude:opus" });
+    expect(toStageRun(run!).engine).toBe("claude:opus");
+  });
+});
+
 describe("re-attaching to a container after a restart", () => {
   const running = (id: string, container: string) =>
     db
       .query("update tasks set state = 'implementing', queued = false, updated_at = now() - interval '5 minutes' where id = $1", [id])
       .then(() =>
         db.query(
-          `insert into stage_runs (task_id, stage, attempt, status, container_id, input_commit, started_at)
-           values ($1, 'implementing', 1, 'running', $2, 'abc123', now() - interval '5 minutes')`,
+          `insert into stage_runs (task_id, stage, attempt, status, container_id, input_commit, engine, started_at)
+           values ($1, 'implementing', 1, 'running', $2, 'abc123', 'claude:sonnet', now() - interval '5 minutes')`,
           [id, container],
         ),
       );
@@ -1204,7 +1223,8 @@ describe("re-attaching to a container after a restart", () => {
         : stubs.runnerFor(stage);
     const restarted = new Pipeline(db, runnerFor, { inline: true, hasConfig: () => true, containerRunning: async (name) => name === "hardness-c1" });
     expect(await restarted.recover()).toBe(0);
-    expect(resumed).toEqual({ container: "hardness-c1", inputCommit: "abc123" });
+    // The engine it started on comes along, so the stage carries on with the same one.
+    expect(resumed).toEqual({ container: "hardness-c1", inputCommit: "abc123", engine: "claude:sonnet" });
     expect((await restarted.get(task.id)).state).toBe("awaiting_ship");
     const runs = await restarted.stageRuns(task.id);
     expect(runs.filter((r) => r.stage === "implementing")).toMatchObject([{ attempt: 1, status: "passed", containerId: "hardness-c1" }]);

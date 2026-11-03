@@ -1,6 +1,6 @@
 // Postgres implementation of the TaskStore port. Pure code motion from pipeline.ts: every
 // query here is the same TypeORM call pipeline.ts used to make directly.
-import type { TaskState } from "@hardness/contracts";
+import type { EngineId, TaskState } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { In, IsNull, Not } from "typeorm";
 
@@ -147,7 +147,7 @@ export class PgTaskStore implements TaskStore {
       );
   }
 
-  async markStageRunStarted(id: string, facts: { containerId: string; inputCommit: string | null }): Promise<void> {
+  async markStageRunStarted(id: string, facts: { containerId: string; inputCommit: string | null; engine?: EngineId | null }): Promise<void> {
     await this.db.getRepository(StageRunEntity).update({ id }, facts);
   }
 

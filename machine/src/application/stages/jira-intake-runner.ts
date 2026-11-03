@@ -1,5 +1,5 @@
 // The jira_intake pack as a runner: one Jira issue goes through the factory runner in the stage
-// container, like every stage, with the same image and credential, before any ticket exists.
+// container, like every stage, with the same image and its engine's credential, before any ticket exists.
 // /work is a clean checkout of the repo's default branch (`<worktrees>/<repo>/jira-intake`,
 // fetched and reset before every run; never your live checkout, with whatever sits uncommitted
 // in it), mounted read-only (the pack has Read, Glob and Grep, so it can check the ask against
@@ -10,16 +10,21 @@ import { JiraIntakeAnswer, type JiraIntakeContext, PACKS, StageOutput, resolveEn
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { Credential } from "../../adapters/credentials/claude.ts";
+import type { Credentials } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
 import { ensureCleanCheckout, intakeCheckoutPath } from "../../adapters/git/worktree.ts";
 import { buildJiraIntakeInput } from "../../domain/stage-input.ts";
 import type { JiraIssue } from "../jira.ts";
+import { pickEngine } from "../engine.ts";
+import { PolicyStore } from "../policy.ts";
 
 export interface JiraIntakeDeps {
   /** The base stage image; the same one the packs run in. */
   image: string;
-  credential: Credential;
+  /** Each engine's credential; a run gets only its own engine's. */
+  credentials: Credentials;
+  /** Each repo's luna.yaml, whose `engines.jira_intake` the run follows; defaults to a store of its own. */
+  policies?: PolicyStore;
   stateDir: string;
   /** Where the intake checkouts live, beside the task worktrees. */
   worktreesDir: string;
@@ -61,8 +66,7 @@ export function jiraContext(issue: JiraIssue, repoPath: string | null): JiraInta
 /** The JiraTriager that runs the jira_intake pack in the stage container, one run per issue. */
 export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
   const pack = PACKS.jira_intake;
-  // What the run is recorded as when the result names no model: the pinned ID it was started on.
-  const model = resolveEngine(pack.engines.default).modelId;
+  const policies = deps.policies ?? new PolicyStore();
   const now = deps.now ?? (() => new Date());
   const log = deps.log ?? ((line: string) => console.log(line));
   const sandbox = deps.sandbox ?? runSandbox;
@@ -74,7 +78,11 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
       const stamp = `${issue.key}-${startedAt.toISOString().replace(/[:.]/g, "-")}`;
       const runDir = join(deps.stateDir, JIRA_INTAKE_DIR, stamp);
       await mkdir(runDir, { recursive: true });
-      const input = buildJiraIntakeInput(jiraContext(issue, repoPath));
+      // No task yet: the repo's luna.yaml, else the pack's default.
+      const { engine } = await pickEngine(deps.credentials, pack, null, (await policies.for(repoPath)).engines);
+      // What the run is recorded as when the result names no model: the pinned ID it was started on.
+      const model = resolveEngine(engine).modelId;
+      const input = buildJiraIntakeInput(jiraContext(issue, repoPath), engine);
       let answer: JiraIntakeAnswer | null = null;
       let error: string | null = null;
       let usage: { model: string; turns: number; costUsd: number | null } = { model, turns: 0, costUsd: null };
@@ -91,6 +99,7 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
           work = join(runDir, "work");
           await mkdir(work, { recursive: true });
         }
+        const credential = await deps.credentials.prepare(engine, runDir);
         const result = await sandbox({
           name: `hardness-jira-intake-${stamp.toLowerCase()}`,
           image: deps.image,
@@ -100,9 +109,9 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
           gitDir: null,
           input: input as unknown as Record<string, unknown>,
           timeoutMs: input.limits.timeoutMs,
-          credential: deps.credential,
+          credential: { env: credential.env, mounts: credential.mounts },
           labels: { luna: "jira-intake" },
-        });
+        }).finally(() => credential.release());
         if (result.aborted) error = "aborted";
         else if (result.timedOut) error = `timed out after ${input.limits.timeoutMs / MINUTE} minutes`;
         else {

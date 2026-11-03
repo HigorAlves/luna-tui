@@ -12,7 +12,7 @@ function run(over: Partial<SandboxRun> = {}): SandboxRun {
     gitDir: null,
     input: {},
     timeoutMs: 1000,
-    credential: { name: "ANTHROPIC_API_KEY", value: "sk-secret-value" } as SandboxRun["credential"],
+    credential: { env: { ANTHROPIC_API_KEY: "sk-secret-value" }, mounts: [] },
     labels: { "dev.hardness.task": "t1" },
     ...over,
   };
@@ -109,6 +109,15 @@ describe("sandboxArgs", () => {
     const args = sandboxArgs(run(), "/i", "/o");
     expect(args).toContain("ANTHROPIC_API_KEY");
     expect(args.join(" ")).not.toContain("sk-secret-value");
+  });
+
+  it("mounts the engine's credential files where its runtime reads them: the Codex login's per-run copy, writable", () => {
+    const codex = { env: { CODEX_HOME: "/tmp/.codex" }, mounts: [{ host: "/state/runs/r1/codex", container: "/tmp/.codex", readOnly: false }] };
+    const args = sandboxArgs(run({ credential: codex }), "/i", "/o");
+    expect(args).toEqual(expect.arrayContaining(["-e", "CODEX_HOME", "-v", "/state/runs/r1/codex:/tmp/.codex"]));
+    expect(args).not.toContain("ANTHROPIC_API_KEY");
+    const readOnly = sandboxArgs(run({ credential: { env: {}, mounts: [{ host: "/h", container: "/c", readOnly: true }] } }), "/i", "/o");
+    expect(readOnly).toEqual(expect.arrayContaining(["-v", "/h:/c:ro"]));
   });
 });
 

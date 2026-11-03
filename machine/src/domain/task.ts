@@ -1,6 +1,6 @@
 // Plain domain types for a task and everything attached to it. No TypeORM here — see
 // ../adapters/persistence/schemas.ts for the persistence mapping of these same shapes.
-import type { ArtifactKind, JiraLink, StageEngines, StageRunCase, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
+import type { ArtifactKind, EngineId, JiraLink, StageEngines, StageRunCase, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
 
 import type { Retries } from "./transition.ts";
 
@@ -65,6 +65,8 @@ export interface StageRunRow {
   transcriptPath: string | null;
   /** Verifying only: one verdict per approved case, when the run reported them. */
   cases: StageRunCase[] | null;
+  /** The engine the run started on; null for a host-only stage, or a run from before engines. */
+  engine: EngineId | null;
   startedAt: Date;
   endedAt: Date | null;
 }

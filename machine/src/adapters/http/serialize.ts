@@ -57,6 +57,7 @@ export const toStageRun = (row: StageRunRow): StageRun => ({
   costUsd: row.costUsd === null ? null : Number(row.costUsd),
   turns: row.turns,
   cases: row.cases,
+  engine: row.engine ?? null,
   startedAt: row.startedAt.toISOString(),
   endedAt: iso(row.endedAt),
 });

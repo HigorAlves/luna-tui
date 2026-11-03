@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 
 import type { ServiceSpec } from "@hardness/contracts";
 
-import type { Credential } from "../credentials/claude.ts";
+import type { RunCredential } from "../credentials/index.ts";
 import { startServices } from "./services.ts";
 import { type ExecResult, exec, execOrThrow } from "../process/exec.ts";
 
@@ -66,7 +66,8 @@ export interface SandboxRun {
   gitIdentity?: { name: string; email: string } | null;
   input: Record<string, unknown>;
   timeoutMs: number;
-  credential: Credential;
+  /** Only the stage's own engine's credential: variables passed by name, and mounts (the Codex login's per-run copy). */
+  credential: Pick<RunCredential, "env" | "mounts">;
   labels: Record<string, string>;
   /** Extra container env, for tooling such as the sandbox smoke. Not used by the machine. */
   extraEnv?: Record<string, string>;
@@ -109,7 +110,7 @@ export interface SandboxResult {
   transcriptPath: string;
 }
 
-/** The `docker run` argument list for one stage. Pure: the credential is named, never valued. */
+/** The `docker run` argument list for one stage. Pure: the credential's variables are named, never valued. */
 export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): string[] {
   const args = ["run", "-d", "--name", run.name, "--label", `${CONTAINER_LABEL}=1`];
   for (const [key, value] of Object.entries(run.labels)) args.push("--label", `${key}=${value}`);
@@ -129,7 +130,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     "-e", "TMPDIR=/tmp",
     "-e", `CLAUDE_CONFIG_DIR=${run.sessionMount ? "/session" : "/tmp/claude"}`,
     // The credential is passed by name; its value is only in docker's environment.
-    "-e", run.credential.name,
+    ...Object.keys(run.credential.env).flatMap((name) => ["-e", name]),
     // The worktree is owned by the host user, not the container's; and there is no gpg key
     // in here, so a commit must not try to sign.
     ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]),
@@ -138,6 +139,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     "-v", `${outDir}:/out`,
   );
   if (run.sessionMount) args.push("-v", `${run.sessionMount}:/session`);
+  for (const mount of run.credential.mounts) args.push("-v", `${mount.host}:${mount.container}${mount.readOnly ? ":ro" : ""}`);
   args.push(...cacheArgs(run.cacheVolume));
   if (run.gitDir) {
     args.push("-v", `${run.gitDir}:${run.gitDir}${run.writable ? "" : ":ro"}`);
@@ -173,7 +175,7 @@ export async function runSandbox(run: SandboxRun): Promise<SandboxResult> {
       await mkdir(outDir, { recursive: true });
       await writeFile(join(inDir, "stage.json"), JSON.stringify(run.input, null, 2));
       await execOrThrow("docker", sandboxArgs({ ...run, network: services.network, serviceEnv: services.env }, inDir, outDir), {
-        env: { ...process.env, [run.credential.name]: run.credential.value },
+        env: { ...process.env, ...run.credential.env },
       });
     }
     return await waitSandbox(run);

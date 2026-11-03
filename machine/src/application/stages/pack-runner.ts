@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import type { CiContext, Ledger, PackId, ReviewContext, RunSummary, ServiceSpec, TaskState, ThreadsContext } from "@hardness/contracts";
+import { type CiContext, type Ledger, PACKS, type PackId, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext } from "@hardness/contracts";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -19,7 +19,7 @@ import {
   resetWorktree,
   restoreFiles,
 } from "../../adapters/git/worktree.ts";
-import type { Credential } from "../../adapters/credentials/claude.ts";
+import { type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
@@ -28,6 +28,7 @@ import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
+import { pickEngine } from "../engine.ts";
 import { PolicyStore } from "../policy.ts";
 import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
 
@@ -36,7 +37,8 @@ export interface AgentDeps {
   image: string;
   /** The image with browsers, used by the e2e pack. */
   qaImage: string;
-  credential: Credential;
+  /** Each engine's credential; a stage gets only its own engine's. */
+  credentials: Credentials;
   worktreesDir: string;
   stateDir: string;
   watcher: Watcher;
@@ -121,11 +123,18 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   const gitDir = await commonGitDir(task.repoPath);
   const container = resume?.container ?? `hardness-${task.id.slice(0, 8)}-${context.stage.replaceAll("_", "-")}-${context.attempt}`;
   const runDir = join(deps.stateDir, "runs", context.runId);
-  if (!resume) await context.started?.({ container, inputCommit });
+  // The task's own engine for the pack, else luna.yaml's, else the default; a re-attached run
+  // keeps the engine its container started on. An engine passed over is logged with why.
+  const choice = resume?.engine
+    ? { engine: resume.engine, reason: null }
+    : await pickEngine(deps.credentials, PACKS[pack], task.stages ?? null, policy.engines);
+  const engineEvents = choice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: choice.reason } }] : [];
+  if (!resume) await context.started?.({ container, inputCommit, engine: choice.engine });
 
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
+    engine: choice.engine,
     attempt: context.attempt,
     approvals: context.approvals,
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
@@ -145,6 +154,14 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   // you can read it, and a later run can resume it.
   const sessionMount = join(deps.stateDir, "tasks", task.id, "session");
   await mkdir(sessionMount, { recursive: true });
+  // Only this engine's credential, prepared under the run folder and released once the container is gone.
+  let credential;
+  try {
+    credential = await deps.credentials.prepare(choice.engine, runDir);
+  } catch (error) {
+    if (!(error instanceof NoCredentialError)) throw error;
+    return { outcome: "fail", detail: { error: error.message }, ...(engineEvents.length ? { events: engineEvents } : {}) };
+  }
   const sandbox = await (deps.sandbox ?? runSandbox)({
     name: container,
     attach: Boolean(resume),
@@ -162,17 +179,18 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     input: input as unknown as Record<string, unknown>,
     // The input's budget, which implementing scales with the plan's slice count.
     timeoutMs: input.limits.timeoutMs,
-    credential: deps.credential,
+    credential: { env: credential.env, mounts: credential.mounts },
     labels: { "dev.hardness.task": task.id },
     signal: context.signal,
     // The tab's label names the repo too: five repos' Build tabs read apart.
     onStarted: (name) =>
       void deps.watcher.follow(task.id, `#${task.id.slice(0, 8)} ${basename(task.repoPath!)} · ${task.title}`, workspace.path, name),
     onLine: (line) => detector.feed(line),
-  });
+  }).finally(() => credential.release());
 
   const base: StageResult = {
     outcome: "fail",
+    ...(engineEvents.length ? { events: engineEvents } : {}),
     // A checkout run has no workspace of the task's own to record.
     ...(extra.checkout ? {} : { workspace: { branch: workspace.branch, worktreePath: workspace.path } }),
     run: { containerId: container, transcriptPath: sandbox.transcriptPath, inputCommit },
@@ -206,6 +224,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     ...base,
     ...result,
     run: { ...base.run, ...result.run },
+    ...(engineEvents.length ? { events: [...engineEvents, ...(result.events ?? [])] } : {}),
   });
 
   // A usage window spent mid-run leaves no answer: pause until it resets. A run that still

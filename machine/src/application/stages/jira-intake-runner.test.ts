@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { StageInput, type StageOutput } from "@hardness/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { fixedCredentials } from "../../adapters/credentials/index.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { issueOf } from "../../test/jira.ts";
 import { createJiraTriager, jiraContext } from "./jira-intake-runner.ts";
@@ -42,7 +43,7 @@ beforeEach(() => {
 
 const deps = (sandbox: (run: SandboxRun) => Promise<SandboxResult>, checkout?: (repoPath: string) => Promise<string>) => ({
   image: "hardness-runner:dev",
-  credential: { kind: "token" as const, value: "x" } as never,
+  credentials: fixedCredentials({ CLAUDE_CODE_OAUTH_TOKEN: "x" }),
   stateDir,
   worktreesDir: "/wt",
   sandbox,
@@ -64,6 +65,9 @@ describe("createJiraTriager", () => {
     expect(run.runDir).toBe(join(stateDir, "jira-intake", "PLAT-123-2026-10-28T12-00-00-000Z"));
     const input = StageInput.parse(run.input);
     expect(input.pack).toBe("jira_intake");
+    // The pack's default, with only its credential.
+    expect(input.engine).toBe("claude:sonnet");
+    expect(run.credential).toEqual({ env: { CLAUDE_CODE_OAUTH_TOKEN: "x" }, mounts: [] });
     expect(input.context.jira).toEqual(jiraContext(issue, "/r/a"));
     expect(input.context.jira).toMatchObject({ key: "PLAT-123", comments: ["Marta: please"], repoPath: "/r/a", labels: ["luna"], dueAt: "2026-10-31" });
     expect(logs).toEqual(["jira intake: PLAT-123 ready: clear (4 turn(s) · $0.0310)"]);
