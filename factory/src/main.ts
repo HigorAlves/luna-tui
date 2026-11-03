@@ -9,13 +9,14 @@
 // LUNA_STAGE_DEBUG=1 also writes every SDK message to /out/raw.jsonl.
 // This file reads the input, renders the prompt and writes the result; the run itself is the
 // runtime's (src/runtimes/).
-import { PACKS, type RunEvent, resolveEngine } from "@hardness/contracts";
+import { PACKS, type RunEvent, type RunInfo, answerJsonSchema, resolveEngine } from "@hardness/contracts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { Emit } from "./core/events.ts";
+import { fingerprint, sdkInfo } from "./core/fingerprint.ts";
 import { lunaHandlers } from "./core/luna-tools.ts";
 import { EMPTY_RUN, type RunOutcome, finish, settle } from "./core/output.ts";
 import { renderPrompt } from "./core/render.ts";
@@ -62,6 +63,8 @@ if (pack.kind === "script") {
 
 // The model's scratch space: under /tmp, but neither /tmp itself (HOME) nor the Codex home in it.
 const scratch = mkdtempSync(join(tmpdir(), "luna-scratch-"));
+// What the run ran on and its fingerprint, once its runtime is known.
+let info: RunInfo | null = null;
 let run: RunOutcome;
 try {
   run = await runStage();
@@ -73,13 +76,14 @@ try {
 }
 // A rate limit, however the runtime learned of it, is one event.
 if (run.rateLimited) emit({ kind: "rate_limit", payload: { resetsAt: run.resetsAt } });
-finish(OUT, pack, run, { ledger: luna.state.ledger, events });
+finish(OUT, pack, run, { ledger: luna.state.ledger, events, run: info });
 
 async function runStage(): Promise<RunOutcome> {
   // A decision pack has no prompt: its runtime sends the pack's questions and the input as data.
   let prompt = "";
+  let template = JSON.stringify(pack.kind === "decision" ? pack.questions : null);
   if (pack.kind !== "decision") {
-    const template = readFileSync(join(FACTORY_ROOT, "prompts", pack.template), "utf8");
+    template = readFileSync(join(FACTORY_ROOT, "prompts", pack.template), "utf8");
     const contextFile = join(WORK, "docs", "agents", "project-context.md");
     const projectContext = existsSync(contextFile) ? readFileSync(contextFile, "utf8") : null;
     prompt = renderPrompt({ pack, input: input!, template, projectContext });
@@ -90,6 +94,14 @@ async function runStage(): Promise<RunOutcome> {
   const engine = resolveEngine(input!.engine ?? pack.engines.default);
   const runtime = RUNTIMES[engine.runtime];
   if (!runtime) return { ...EMPTY_RUN, error: `engine ${engine.id} runs on ${engine.runtime}, which is not available in this factory yet` };
+  const hash = fingerprint({
+    template,
+    ...runtime.instructions(pack, FACTORY_ROOT),
+    skillsDir: join(FACTORY_ROOT, "plugin", "skills"),
+    access: pack.kind === "agent" ? pack.access : null,
+    answer: answerJsonSchema(pack),
+  });
+  info = { runtime: runtime.id, engine: engine.id, modelId: engine.modelId, sdk: sdkInfo(runtime.sdk), fingerprint: hash };
   const paths = { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT, input: dirname(IN), scratch };
   const run = await runtime.run({ pack, engine, input: input!, prompt, paths, luna, dry: DRY, emit });
   // A dry run answers nothing unless the test seam gave it an answer; that one is settled.

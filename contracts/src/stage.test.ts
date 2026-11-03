@@ -137,6 +137,13 @@ describe("StageOutput", () => {
     expect(StageOutput.safeParse({ ...stageOutputExample, rateLimited: true, resetsAt: 1761300000 }).success).toBe(true);
   });
 
+  it("accepts what the run ran on and its fingerprint, and a result from a runner that wrote none", () => {
+    const run = { runtime: "claude", engine: "claude:sonnet", modelId: "claude-sonnet-5-5", sdk: { name: "@anthropic-ai/claude-agent-sdk", version: "0.3.311" }, fingerprint: "a".repeat(64) };
+    expect(StageOutput.parse({ ...stageOutputExample, run }).run).toEqual(run);
+    expect(StageOutput.safeParse({ ...stageOutputExample, run: null }).success).toBe(true);
+    expect(StageOutput.safeParse({ ...stageOutputExample, run: { ...run, fingerprint: "short" } }).success).toBe(false);
+  });
+
   it("accepts a question with no recommended answer, and an object error", () => {
     expect(StageOutput.safeParse({ ...stageOutputExample, outcome: "needs_input", needsInput: [{ question: "which db?", recommended: null }] }).success).toBe(true);
     expect(StageOutput.safeParse({ ...stageOutputExample, ok: false, outcome: "fail", error: { code: "E", message: "boom" } }).success).toBe(true);

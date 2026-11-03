@@ -1,7 +1,7 @@
 // What a stage leaves behind: /out/result.json (the StageOutput contract), /out/events.jsonl
 // and the artifact index over /out/files/**. One function, called however the run ended, so
 // the machine always finds a result.
-import type { Ledger, Pack, RunEvent, StageArtifact, StageOutcome, StageOutput } from "@hardness/contracts";
+import type { Ledger, Pack, RunEvent, RunInfo, StageArtifact, StageOutcome, StageOutput } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
@@ -11,6 +11,8 @@ import { basename, join, relative } from "node:path";
 export interface RunRecord {
   ledger: Ledger;
   events: RunEvent[];
+  /** What the run ran on and its fingerprint; null when no runtime ran it (a script pack). */
+  run?: RunInfo | null;
 }
 
 /** How the model run ended, as the runner saw it. */
@@ -162,6 +164,7 @@ export function finish(outDir: string, pack: Pack, run: RunOutcome, state: RunRe
     resetsAt: run.resetsAt,
     ledger: state.ledger,
     sessionId: run.sessionId,
+    run: state.run ?? null,
   };
   writeFileSync(join(outDir, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
   const lines: RunEvent[] = [...state.events, { kind: "note", payload: { phase: "stage_end", outcome, pack: pack.id } }];

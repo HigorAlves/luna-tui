@@ -53,6 +53,17 @@ export const tokenBudgetPerTurn = { input: 60_000, output: 8_000 };
 const usageLimit = (pack: AgentPack): string =>
   `({ window }) => { const turns = Number(process.env.LUNA_EVE_MAX_TURNS) || ${pack.maxTurns}; return window.inputTokens - window.cacheReadTokens >= turns * ${tokenBudgetPerTurn.input} || window.outputTokens >= turns * ${tokenBudgetPerTurn.output}; }`;
 
+/** What agent/instructions.md is made of: the role's body, the factory rules in eve's tool names,
+ *  and the role's eve.md addendum when it has one. */
+export function instructionParts(pack: AgentPack, factoryRoot: string): { body: string; rules: string; addendum: string } {
+  const rolesDir = join(factoryRoot, "roles");
+  const addendumFile = join(rolesDir, pack.agent!, "eve.md");
+  const addendum = existsSync(addendumFile) ? `\n${readFileSync(addendumFile, "utf8").trimEnd()}\n` : "";
+  // Role bodies call the luna tools by their Claude names (`mcp__luna__step`); eve serves them bare.
+  const body = readRole(rolesDir, pack.agent!).body.trimEnd().replaceAll("mcp__luna__", "");
+  return { body, rules: factoryRules(EVE_TOOL_NAMES), addendum };
+}
+
 /** Every file of the pack's agent app but its skills, by path relative to the app. */
 export function agentFiles(pack: AgentPack, options: CompileOptions): Record<string, string> {
   if (!pack.agent) throw new Error(`pack ${pack.id} has no agent to compile`);
@@ -79,12 +90,8 @@ export function agentFiles(pack: AgentPack, options: CompileOptions): Record<str
     "",
   ].join("\n");
 
-  const rolesDir = join(options.factoryRoot, "roles");
-  const addendumFile = join(rolesDir, pack.agent, "eve.md");
-  const addendum = existsSync(addendumFile) ? `\n${readFileSync(addendumFile, "utf8").trimEnd()}\n` : "";
-  // Role bodies call the luna tools by their Claude names (`mcp__luna__step`); eve serves them bare.
-  const body = readRole(rolesDir, pack.agent).body.trimEnd().replaceAll("mcp__luna__", "");
-  const instructions = `${body}\n\n${factoryRules(EVE_TOOL_NAMES)}\n${addendum}`;
+  const { body, rules, addendum } = instructionParts(pack, options.factoryRoot);
+  const instructions = `${body}\n\n${rules}\n${addendum}`;
 
   const tools = Object.fromEntries(
     eveTools(pack.access).map((tool) => {

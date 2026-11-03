@@ -6,7 +6,7 @@ import type { StageInput } from "@hardness/contracts";
 import type { JsonValue, Questions, RequestOptions, SystemOneRequest, SystemOneResult } from "@typesafe-ai/sdk";
 
 import { EMPTY_RUN, type RunOutcome } from "../../core/output.ts";
-import { type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
+import { NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
 
 type Sdk = typeof import("@typesafe-ai/sdk");
 
@@ -59,6 +59,9 @@ function failed(e: unknown, { APIConnectionError, APIError, APIUserAbortError, R
 export function jevRuntime(client: () => JevClient | Promise<JevClient> = typesafeClient): Runtime {
   return {
     id: "jev",
+    sdk: "@typesafe-ai/sdk",
+    // No role, rules or skills: the pack's questions are all it is told.
+    instructions: () => NO_INSTRUCTIONS,
     async run({ pack, engine, input, dry, emit }: RunContext): Promise<RunOutcome> {
       if (pack.kind !== "decision") return { ...EMPTY_RUN, error: `pack ${pack.id} is not a decision pack` };
       const t0 = Date.now();

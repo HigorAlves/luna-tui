@@ -7,7 +7,7 @@
 // this process over a loopback bridge with a per-run bearer token. The server always stops.
 // LUNA_STAGE_DEBUG=1 also writes every session event to /out/raw.jsonl and the server's log to
 // /out/eve-server.log.
-import { type AgentPack, ENGINES, answerJsonSchema } from "@hardness/contracts";
+import { type AgentPack, ENGINES, type Pack, answerJsonSchema } from "@hardness/contracts";
 import type { SendTurnOptions } from "eve/client";
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -20,8 +20,8 @@ import { dirname, join } from "node:path";
 import { CallJoin, type Emit } from "../../core/events.ts";
 import { type GuardContext, branchPrefixFor } from "../../core/guards.ts";
 import { EMPTY_RUN, type RunOutcome, budgetSpent, timeRanOut } from "../../core/output.ts";
-import { type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
-import { GUARDED, eveTools, tokenBudgetPerTurn } from "./compile.ts";
+import { type Instructions, NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
+import { GUARDED, eveTools, instructionParts, tokenBudgetPerTurn } from "./compile.ts";
 import type { EveSecrets } from "./agent/secrets.ts";
 
 const env = process.env;
@@ -38,7 +38,14 @@ export interface EveOptions {
 
 /** The eve runtime over the agents in `options.agentsDir`. */
 export function eveRuntime(options: EveOptions = {}): Runtime {
-  return { id: "eve", run: (ctx) => run(ctx, options) };
+  return { id: "eve", sdk: "eve", instructions, run: (ctx) => run(ctx, options) };
+}
+
+/** The agent's instructions.md as compile.ts writes it, and the skills it copies in. */
+function instructions(pack: Pack, factoryRoot: string): Instructions {
+  if (pack.kind !== "agent" || pack.agent === null) return NO_INSTRUCTIONS;
+  const { body, rules, addendum } = instructionParts(pack, factoryRoot);
+  return { role: `${body}\n${addendum}`, rules, skills: pack.access.skills ? pack.skills : [] };
 }
 
 export const eve: Runtime = eveRuntime();

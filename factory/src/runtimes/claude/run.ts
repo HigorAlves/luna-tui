@@ -3,7 +3,7 @@
 // guards as PreToolUse hooks, the luna tools as an in-process MCP server) and `query()` is
 // followed to its result, its messages and the hooks' decisions turned into run events as it goes.
 import type { Options, Query } from "@anthropic-ai/claude-agent-sdk";
-import { answerJsonSchema } from "@hardness/contracts";
+import { type Pack, answerJsonSchema } from "@hardness/contracts";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -12,9 +12,9 @@ import type { GuardContext } from "../../core/guards.ts";
 
 import { EMPTY_RUN, type RunOutcome, timeRanOut } from "../../core/output.ts";
 import { FACTORY_RULES } from "../../core/render.ts";
-import { type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
+import { type Instructions, NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
 import { claudeTools } from "./access.ts";
-import { agentDefinitions } from "./agents.ts";
+import { PLUGIN_NAME, agentDefinitions } from "./agents.ts";
 import { branchPrefixFor, isGuarded, preToolUseGuards } from "./guards.ts";
 import { lunaServer } from "./luna.ts";
 
@@ -25,7 +25,19 @@ export type Transport = (params: { prompt: string; options?: Options }) => Query
 
 /** The Claude runtime on `transport`; without one, on the SDK's own `query()`. */
 export function claudeRuntime(transport?: Transport): Runtime {
-  return { id: "claude", run: (ctx) => run(ctx, transport) };
+  return { id: "claude", sdk: "@anthropic-ai/claude-agent-sdk", instructions, run: (ctx) => run(ctx, transport) };
+}
+
+/** The role and its helpers as their definitions carry them, the rules the system prompt appends,
+ *  and every skill a definition names. */
+function instructions(pack: Pack, factoryRoot: string): Instructions {
+  if (pack.kind !== "agent" || pack.agent === null) return NO_INSTRUCTIONS;
+  const definitions = Object.entries(agentDefinitions(pack, join(factoryRoot, "roles"), ""));
+  return {
+    role: definitions.map(([name, d]) => `${name}\n${d.prompt}`).join("\n\n"),
+    rules: FACTORY_RULES,
+    skills: definitions.flatMap(([, d]) => d.skills ?? []).map((skill) => skill.replace(`${PLUGIN_NAME}:`, "")),
+  };
 }
 
 export const claude: Runtime = claudeRuntime();
