@@ -9,11 +9,11 @@ import { StreamWatcher } from "./adapters/http/watch.ts";
 import { parseSince } from "./adapters/http/metrics.ts";
 import { toEvent, toTask } from "./adapters/http/serialize.ts";
 
-import { buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
+import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
-import { pruneOldRuns } from "./adapters/persistence/prune.ts";
+import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { GitHubIntake } from "./application/intake.ts";
@@ -37,6 +37,7 @@ import { JiraTasks, TokenExpiry } from "./application/jira-tasks.ts";
 import { JiraWatch } from "./application/jira-watch.ts";
 import { SlaClocks } from "./application/sla.ts";
 import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
+import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
@@ -75,6 +76,14 @@ async function sweep(): Promise<void> {
     if (config.retentionDays <= 0) return null;
     const pruned = await pruneOldRuns(db, config.retentionDays, config.stateDir);
     return pruned.events > 0 || pruned.stageRuns > 0 ? `pruned ${pruned.events} old event(s), ${pruned.stageRuns} old stage run(s)` : null;
+  });
+  await step("pack runs", async () => {
+    const pruned = await prunePackRuns(db, config.retentionDays);
+    return pruned > 0 ? `pruned ${pruned} pack run(s) older than ${config.retentionDays} day(s)` : null;
+  });
+  await step("tombstones", async () => {
+    const pruned = await pruneTombstones(db);
+    return pruned > 0 ? `pruned ${pruned} task tombstone(s) older than ${TOMBSTONE_RETENTION_DAYS} days` : null;
   });
   await step("worktrees", async () => {
     const swept = await sweepWorktrees(db, config.worktreeRetentionDays);
@@ -282,6 +291,15 @@ const slackInbox = new SlackInbox({
   socketToken: config.slackInbox.appToken,
   retentionDays: config.retentionDays,
 });
+/** Packs on demand (`POST /runs`): the stage image, each call with its own engine's credential;
+ *  off only with MACHINE_AGENTS=off. Their cost counts toward the day's ceiling, which they obey. */
+const packRuns = buildPackRuns(config, {
+  ...(agentDeps ? { credentials: agentDeps.credentials } : {}),
+  store: new PgPackRunStore(db),
+  budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },
+});
+// A run folder a crash left holds a client's context: never kept.
+await packRuns?.clearLeftovers();
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 const app = createApp({
   db,
@@ -293,6 +311,7 @@ const app = createApp({
   prTasks,
   slack: slackInbox,
   ...(jiraTasks ? { jira: jiraTasks } : {}),
+  ...(packRuns ? { runs: packRuns } : {}),
   sla: (task) => slaClocks.for(task),
   slaAll: (tasks) => slaClocks.forAll(tasks),
   taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file),
