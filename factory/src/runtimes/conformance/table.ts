@@ -94,6 +94,22 @@ export const SCENARIOS: Scenario[] = [
     },
   },
   {
+    name: "a command a shell would expand is refused before it runs",
+    script: [{ call: "bash", command: "echo $(id)" }, { answer: DONE, echo: true }],
+    check: ({ run }) => {
+      expect(run.ok).toBe(true);
+      expect(run.structured?.summary).toMatch(/command substitution|not a shell/);
+    },
+  },
+  {
+    name: "a path outside the run's roots is refused before it runs",
+    script: [{ call: "bash", command: "cat /proc/1/environ" }, { answer: DONE, echo: true }],
+    check: ({ run }) => {
+      expect(run.ok).toBe(true);
+      expect(run.structured?.summary).toMatch(/outside this stage's roots/);
+    },
+  },
+  {
     name: "a ledger tool call updates /out/ledger.json",
     script: [{ call: "luna", tool: "slice_init", args: { slices: [{ id: 1, title: "parse the input" }] } }, { answer: DONE }],
     check: ({ run, out }) => {
@@ -127,8 +143,10 @@ export async function runScenario(runtime: Runtime, engine: EngineId): Promise<C
   const root = mkdtempSync(join(tmpdir(), "conformance-"));
   const work = join(root, "work");
   const out = join(root, "out");
+  const scratch = join(root, "scratch");
   mkdirSync(work);
   mkdirSync(out);
+  mkdirSync(scratch);
   const transcript: string[] = [];
   const luna = lunaTools({ ledgerPath: join(out, "ledger.json"), decisions: [], onStep: () => {} });
   const input = stageInput(engine);
@@ -137,7 +155,7 @@ export async function runScenario(runtime: Runtime, engine: EngineId): Promise<C
     engine: resolveEngine(engine),
     input,
     prompt: "Do the job.",
-    paths: { factoryRoot: FACTORY_ROOT, work, out },
+    paths: { factoryRoot: FACTORY_ROOT, work, out, input: root, scratch },
     luna,
     dry: false,
     out: (line) => transcript.push(line),

@@ -33,7 +33,7 @@ function context(over: Partial<RunContext> = {}) {
     engine: resolveEngine("jev"),
     input: input(),
     prompt: "",
-    paths: { factoryRoot: "/factory", work: "/work", out: "/out" },
+    paths: { factoryRoot: "/factory", work: "/work", out: "/out", input: "/in", scratch: "/tmp/luna-scratch" },
     luna: { state, server: null, call: async () => null },
     dry: false,
     out: (line) => lines.push(line),

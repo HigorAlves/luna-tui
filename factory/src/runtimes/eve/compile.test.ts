@@ -45,7 +45,8 @@ describe("agentFiles", () => {
     );
     expect(files["agent/tools/bash.ts"]).toBe('export { bash as default } from "../../../../src/runtimes/eve/agent/tools.ts";\n');
     expect(files["agent/tools/step.ts"]).toContain('export default lunaTool("step");');
-    expect(files["agent/tools/glob.ts"]).toBe('export { default } from "eve/tools/glob";\n');
+    expect(files["agent/tools/glob.ts"]).toBe('export { glob as default } from "../../../../src/runtimes/eve/agent/tools.ts";\n');
+    expect(files["agent/tools/web_fetch.ts"]).toBe('export { default } from "eve/tools/web_fetch";\n');
     expect(files["agent/channels/eve.ts"]).toContain("src/runtimes/eve/agent/channel.ts");
     expect(files["agent/sandbox.ts"]).toContain("src/runtimes/eve/sandbox.ts");
   });

@@ -50,8 +50,9 @@ function guardPolicy(pack: AgentPack, { input, paths }: RunContext): GuardContex
     outRoot: paths.out,
     // eve's bash has no allow-list of its own: the pack's commands are enforced by the guard.
     commands: pack.access.commands,
-    // The model's shell runs as the same user as Codex: its home, and the token in it, are off limits.
-    deniedRoots: [env.CODEX_HOME || "/tmp/.codex"],
+    // The model's tools run as the same user as Codex and the runner: only the run's own roots
+    // may be named, never the Codex home, HOME or /proc.
+    roots: { scratch: paths.scratch, read: [paths.input] },
   };
 }
 
@@ -115,6 +116,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
       LUNA_EVE_MODEL: engine.modelId,
       LUNA_EVE_AUTH: apiKey ? "api-key" : "chatgpt",
       LUNA_EVE_WORKSPACE: paths.work,
+      LUNA_EVE_SCRATCH: paths.scratch,
       LUNA_EVE_GUARD: JSON.stringify(guard),
       LUNA_EVE_BRIDGE_URL: bridge.url,
       LUNA_EVE_BRIDGE_TOKEN: bridgeToken,

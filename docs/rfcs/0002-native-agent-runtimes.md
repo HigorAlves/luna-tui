@@ -275,7 +275,7 @@ What the eve runtime has to do because of them:
 - Bind to loopback with `httpBasic` and a password made per run; the local-dev authenticator only works under `eve dev`.
 - Set `limits` in `defineAgent`: schema retries are invisible and were 14 model calls once.
 - Set `EVE_TELEMETRY_DISABLED=1` at build and run, and pin `eve` exactly (it rides on a nitro beta).
-- The guard refuses any path under the Codex home: the model's `bash` runs as the same user and could read the token.
+- The guard refuses any path under the Codex home: the model's `bash` runs as the same user and could read the token. (Superseded after review: a denylist of names could be spelled another way, so every path must now lie in the run's roots, and eve's `bash` runs one argv without a shell; see `docs/architecture.md`, Factory mode.)
 - Decide how a refreshed Codex token gets back to the host (copy back on change, or one copy with eve stages serialized) before more than one eve stage runs at a time.
 
 `@typesafe-ai/sdk` 0.7.0 (MIT, no runtime dependencies): `new TypeSafeClient()`, `client.systemOne({ state, questions, model? })`, helpers `noul`, `choice`, `score`, `box`; `TYPESAFE_API_KEY` (required), `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL` (`jev-latest`); 10 s per attempt, two retries. A yes/no answer is `{ noul: P(yes) }`, a probability with no separate confidence, so a pack sets its own threshold; a choice carries `confidence` and `probabilities`; a score is a fractional expected value that can fall between rubric levels.

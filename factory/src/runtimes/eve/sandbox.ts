@@ -17,7 +17,7 @@ import { commandEnv } from "./exec.ts";
 // a credential, and a non-login shell with no profile or rc file, so nothing a command wrote can
 // run later and PATH keeps the image's toolchains.
 function scriptEnv(extra: Readonly<Record<string, string>>): Record<string, string> {
-  return { ...commandEnv("bash", { home: process.env.HOME || "/tmp" }), ...SANDBOX_AGENT_ENV, ...extra };
+  return { ...commandEnv("bash", { home: process.env.LUNA_EVE_SCRATCH || "/nonexistent" }), ...SANDBOX_AGENT_ENV, ...extra };
 }
 
 function connect(root: string): SandboxConnection {

@@ -7,6 +7,8 @@ import { answerJsonSchema } from "@hardness/contracts";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
+import type { GuardContext } from "../../core/guards.ts";
+
 import { EMPTY_RUN, type RunOutcome } from "../../core/output.ts";
 import { FACTORY_RULES, callLine } from "../../core/render.ts";
 import type { RunContext, Runtime } from "../../core/runtime.ts";
@@ -26,7 +28,24 @@ export function claudeRuntime(transport?: Transport): Runtime {
 
 export const claude: Runtime = claudeRuntime();
 
-async function run({ pack, engine, input, prompt, paths, luna, dry, out }: RunContext, transport?: Transport): Promise<RunOutcome> {
+/** The stage's guard policy: the pack's write access and branch, and the roots every path a tool
+ *  names must lie in. The skills' own files are read-only roots, as is the stage input. */
+export function guardPolicy({ pack, input, paths }: Pick<RunContext, "pack" | "input" | "paths">): GuardContext {
+  return {
+    writable: pack.writable,
+    branch: input.task.branch || null,
+    // A PR task commits on the PR's own branch, not a task/ branch.
+    branchPrefix: branchPrefixFor(input.task),
+    workRoot: paths.work,
+    outRoot: paths.out,
+    roots: { scratch: paths.scratch, read: [paths.input, join(paths.factoryRoot, "plugin")] },
+    // e2e signs in with the credentials its targets name (`env:QA_PASSWORD`), inline as "$QA_PASSWORD".
+    expandable: (input.context.qaTargets ?? []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])),
+  };
+}
+
+async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> {
+  const { pack, engine, input, prompt, paths, luna, dry, out } = ctx;
   if (pack.kind !== "agent" || pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
   const options = {
     cwd: paths.work,
@@ -42,19 +61,13 @@ async function run({ pack, engine, input, prompt, paths, luna, dry, out }: RunCo
     // The server lunaTools() built; RunContext keeps it opaque so core needs no SDK types.
     mcpServers: { luna: luna.server as McpSdkServerConfigWithInstance },
     hooks: {
-      PreToolUse: preToolUseGuards({
-        writable: pack.writable,
-        branch: input.task.branch || null,
-        // A PR task commits on the PR's own branch, not a task/ branch.
-        branchPrefix: branchPrefixFor(input.task),
-        workRoot: paths.work,
-        outRoot: paths.out,
-      }),
+      PreToolUse: preToolUseGuards(guardPolicy(ctx)),
     },
     // The pinned ID, never an alias: the model does not change under the stage between runs.
     model: engine.modelId,
     effort: pack.effort,
-    env: { ...env, LUNA_FACTORY: "1" },
+    // The scratch folder is the model's TMPDIR: the one place outside /work and /out it may write.
+    env: { ...env, LUNA_FACTORY: "1", TMPDIR: paths.scratch },
   };
 
   if (dry) {
