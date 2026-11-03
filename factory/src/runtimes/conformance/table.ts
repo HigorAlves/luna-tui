@@ -20,7 +20,8 @@ export type ScriptStep =
   | { call: "bash"; command: string }
   | { call: "luna"; tool: LunaTool; args: Record<string, unknown> }
   | { answer: Record<string, unknown>; as?: "structured" | "text"; echo?: boolean }
-  | { rateLimit: { resetsAt?: number } };
+  | { rateLimit: { resetsAt?: number } }
+  | { fail: string };
 
 export interface Scenario {
   name: string;
@@ -38,6 +39,9 @@ export interface ConformanceResult {
 export interface RuntimeCapabilities {
   /** The SDK says when a rate limit resets. */
   resetsAt: boolean;
+  /** An answer off the schema reaches the runtime, so core can name the issue (eve validates on
+   *  its server and retries instead: the runtime only learns the schema was never met). */
+  schemaIssue: boolean;
 }
 
 /** The pack every scenario runs: it has shell commands, the ledger tools and an answer schema. */
@@ -59,9 +63,9 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "an answer off the schema fails the run with the issue",
     script: [{ answer: { kind: "maybe", summary: "x" } }],
-    check: ({ run }) => {
+    check: ({ run }, can) => {
       expect(run).toMatchObject({ ok: false, structured: null });
-      expect(run.error).toMatch(/kind/);
+      expect(run.error).toMatch(can.schemaIssue ? /kind/ : /schema/);
     },
   },
   {
@@ -70,6 +74,14 @@ export const SCENARIOS: Scenario[] = [
     check: ({ run }, can) => {
       expect(run).toMatchObject({ ok: false, rateLimited: true });
       if (can.resetsAt) expect(run.resetsAt).toBe(RESETS_AT);
+    },
+  },
+  {
+    name: "a model error the provider will not retry fails the run with its message",
+    script: [{ fail: "The 'x-model' model is not supported" }],
+    check: ({ run }) => {
+      expect(run).toMatchObject({ ok: false, structured: null, rateLimited: false });
+      expect(run.error).toMatch(/The 'x-model' model is not supported/);
     },
   },
   {

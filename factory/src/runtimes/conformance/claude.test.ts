@@ -3,4 +3,4 @@ import { claudeRuntime } from "../claude/run.ts";
 import { scriptedQuery } from "../claude/fake.ts";
 import { conformance } from "./table.ts";
 
-conformance("claude", "claude:sonnet", (script) => claudeRuntime(scriptedQuery(script)), { resetsAt: true });
+conformance("claude", "claude:sonnet", (script) => claudeRuntime(scriptedQuery(script)), { resetsAt: true, schemaIssue: true });

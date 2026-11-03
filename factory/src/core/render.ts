@@ -205,11 +205,11 @@ const CALL_TARGET_MAX = 160;
  *  counts identical lines, so an edit carries a fingerprint of what it changes: four
  *  different edits of one file are four calls, the same failing edit four times is a loop. */
 export function callLine(name: string, input: Record<string, unknown>): string {
-  const target = input.file_path ?? input.path ?? input.command ?? input.pattern ?? input.url ?? input.label ?? "";
+  const target = input.file_path ?? input.filePath ?? input.path ?? input.command ?? input.pattern ?? input.url ?? input.label ?? "";
   // A paged read is a different call per page: a long file read in four pages is not a loop.
   const page = name === "Read" && (input.offset !== undefined || input.limit !== undefined) ? `:${input.offset ?? 0}+${input.limit ?? ""}` : "";
   const first = `${String(target).split("\n")[0]!}${page}`.slice(0, CALL_TARGET_MAX);
-  const change = name === "Edit" || name === "MultiEdit" ? `${input.old_string ?? ""}\u0000${input.new_string ?? ""}${JSON.stringify(input.edits ?? "")}` : name === "Write" ? String(input.content ?? "") : null;
+  const change = name === "Edit" || name === "MultiEdit" ? `${input.old_string ?? ""}\u0000${input.new_string ?? ""}${JSON.stringify(input.edits ?? "")}` : name === "Write" || name === "write_file" ? String(input.content ?? "") : null;
   const fingerprint = change === null ? "" : ` ·${createHash("sha1").update(change).digest("hex").slice(0, 8)}`;
   return `→ ${name} ${first}`.trimEnd() + fingerprint;
 }

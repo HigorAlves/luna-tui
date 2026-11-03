@@ -148,11 +148,26 @@ describe("factory main (dry run)", () => {
     expect(options.model).toBe("claude-haiku-5-5");
   });
 
-  it("ends the stage, without a crash, on an engine whose runtime this factory does not have", () => {
-    const { code, result } = run(stageInput("triage", { engine: "codex:sol" }));
+  it("ends the stage, without a crash, on an engine whose runtime cannot run the pack", () => {
+    // Every runtime is registered now, so the mismatch left is a decision engine on an agent pack.
+    const { code, result } = run(stageInput("triage", { engine: "jev" }));
     expect(code).toBe(0);
     expect(StageOutput.safeParse(result).error).toBeUndefined();
-    expect(result).toMatchObject({ ok: false, outcome: "fail", error: "engine codex:sol runs on eve, which is not available in this factory yet" });
+    expect(result).toMatchObject({ ok: false, outcome: "fail", error: "pack triage is not a decision pack" });
+  });
+
+  it("runs an eve engine on eve: the compiled agent, the engine's model through the Codex login, the pack's guard", () => {
+    const { code, stdout, result } = run(stageInput("triage", { engine: "codex:sol" }));
+    expect(code).toBe(0);
+    const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(options).toMatchObject({
+      agent: expect.stringMatching(/\.eve-agents\/triage$/),
+      model: "chatgpt(gpt-6-sol)",
+      reasoning: "high",
+      tools: ["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get"],
+      guard: { writable: false, commands: expect.arrayContaining(["gh issue view"]), deniedRoots: ["/tmp/.codex"] },
+    });
+    expect(result).toMatchObject({ ok: true, summary: "dry-run" });
   });
 
   it("takes a structured answer through the test seam and maps its kind to the outcome", () => {
