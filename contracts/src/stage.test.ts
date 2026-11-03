@@ -5,6 +5,8 @@ import {
   AgentRole,
   ArtifactKind,
   CloneInput,
+  EvalJudgeAnswer,
+  EvalJudgeContext,
   COLUMN_OF,
   MergeInput,
   NO_ACCESS,
@@ -177,14 +179,28 @@ describe("StageOutput", () => {
 });
 
 describe("PackId", () => {
-  it("has the eleven stage packs, each named after a task state, plus the Slack and Jira intake triages and the issue classifier", () => {
+  it("has the eleven stage packs, each named after a task state, plus the Slack and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "issue_classify"].sort(),
+      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "issue_classify", "eval_judge"].sort(),
     );
     for (const pack of PackId.options) {
-      if (pack === "slack_triage" || pack === "jira_intake" || pack === "issue_classify") expect(TaskState.options).not.toContain(pack);
+      if (pack === "slack_triage" || pack === "jira_intake" || pack === "issue_classify" || pack === "eval_judge") expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
     }
+  });
+});
+
+describe("eval_judge", () => {
+  it("runs as the eval-judge on opus only, no tools and no worktree, and answers a score, a pass and the reasons", () => {
+    expect(PACKS.eval_judge).toMatchObject({ agent: "eval-judge", helpers: [], skills: [], access: NO_ACCESS, writable: false, maxTurns: 3, engines: { default: "claude:opus", allowed: ["claude:opus"] }, template: "eval_judge.md" });
+    expect(EvalJudgeAnswer.safeParse({ score: 0.8, pass: true, reasons: ["item m2: right priority"] }).success).toBe(true);
+    expect(EvalJudgeAnswer.safeParse({ score: 1.2, pass: true, reasons: [] }).success).toBe(false);
+  });
+
+  it("reads the case from the stage input's context", () => {
+    const judged = { pack: "slack_triage", caseId: "incident", rubric: "P0 for the outage", input: "{}", checks: "[]", answer: "{}" };
+    expect(EvalJudgeContext.safeParse(judged).success).toBe(true);
+    expect(EvalJudgeContext.safeParse({ ...judged, pack: "nope" }).success).toBe(false);
   });
 });
 

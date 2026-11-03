@@ -27,6 +27,8 @@ export const AgentRole = z.enum([
   "slack-triager",
   // Jira intake: reads an issue (and, read-only, the repo) before it becomes a ticket.
   "jira-triager",
+  // The replay evals' judge: grades another pack's answer against a case's rubric; no tools.
+  "eval-judge",
   // Helpers a PR task's role dispatches through the Agent tool; never a pack's own role.
   "security-reviewer",
   "reply-drafter",
@@ -197,6 +199,16 @@ export const SlackTriageAnswer = z.object({
   ),
 });
 export type SlackTriageAnswer = z.infer<typeof SlackTriageAnswer>;
+
+/** eval_judge: how well one answer meets its case, after the schema and the deterministic checks. */
+export const EvalJudgeAnswer = z.object({
+  /** 0 is useless, 1 is what a careful senior engineer would have answered. */
+  score: z.number().min(0).max(1),
+  pass: z.boolean(),
+  /** One line per point that moved the score, worst first. */
+  reasons: z.array(z.string()),
+});
+export type EvalJudgeAnswer = z.infer<typeof EvalJudgeAnswer>;
 
 /** What every pack has, whatever runs it: the machine reads the limits, the runner the rest. */
 interface PackBase {
@@ -505,6 +517,23 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: SlackTriageAnswer,
     template: "slack_triage.md",
+  },
+  eval_judge: {
+    id: "eval_judge",
+    kind: "agent",
+    // The replay evals' judge (evals/run.ts): not a task stage. One fixed engine, so scores
+    // compare across the engines it judges; no tools and no worktree, the case is in the input.
+    agent: "eval-judge",
+    helpers: [],
+    skills: [],
+    access: NO_ACCESS,
+    writable: false,
+    maxTurns: 3,
+    timeoutMs: 5 * MINUTE,
+    engines: only("claude:opus"),
+    effort: "medium",
+    answer: EvalJudgeAnswer,
+    template: "eval_judge.md",
   },
   issue_classify: {
     id: "issue_classify",

@@ -150,6 +150,15 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.jira_intake, input, template })).toContain("issue:\n(none)\ndescription:\n(none)");
   });
 
+  it("renders the case for eval_judge: the pack, the rubric and the JSON as the runner wrote it", () => {
+    const template = "{{context.eval.pack}} {{context.eval.case}}\nrubric: {{context.eval.rubric}}\ninput: {{context.eval.input}}\nchecks: {{context.eval.checks}}\nanswer: {{context.eval.answer}}";
+    const judged = { pack: "slack_triage" as const, caseId: "incident", rubric: "  P0 for the outage\n", input: '{"a":1}', checks: "[]", answer: '{"items":[]}' };
+    const prompt = renderPrompt({ pack: PACKS.eval_judge, input: { ...input, pack: "eval_judge", stage: "eval_judge", context: { projectContext: null, eval: judged } }, template });
+    expect(prompt).toContain("`eval-judge` role running the `eval_judge` stage");
+    expect(prompt).toContain('slack_triage incident\nrubric: P0 for the outage\ninput: {"a":1}\nchecks: []\nanswer: {"items":[]}');
+    expect(renderPrompt({ pack: PACKS.eval_judge, input, template })).toContain("(none) (none)\nrubric: (none)");
+  });
+
   it("names a script pack's agent as script", () => {
     expect(renderPrompt({ pack: PACKS.evidence, input: { ...input, pack: "evidence", stage: "evidence" }, template: "{{agent}}" })).toMatch(/\nscript$/);
   });
