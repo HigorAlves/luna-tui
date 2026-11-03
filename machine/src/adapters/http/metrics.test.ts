@@ -214,7 +214,8 @@ describe("GET /metrics", () => {
 
   it("groups the window's stage runs by fingerprint, runs from before fingerprints last", async () => {
     const task = await pipeline.createTask({ title: "a", repoPath: "/r/a" });
-    const at = (msAgo: number) => new Date(Date.now() - msAgo);
+    const now = Date.now();
+    const at = (msAgo: number) => new Date(now - msAgo);
     const runs = db.getRepository(StageRunEntity);
     const A = "a".repeat(64);
     const B = "b".repeat(64);
@@ -240,7 +241,8 @@ describe("GET /metrics", () => {
     const a = await pipeline.createTask({ title: "a", repoPath: "/r/x" });
     const b = await pipeline.createTask({ title: "b", repoPath: "/r/x" });
     const c = await pipeline.createTask({ title: "c", repoPath: "/r/x" });
-    const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000);
+    const now = Date.now();
+    const at = (secondsAgo: number) => new Date(now - secondsAgo * 1000);
     const run = (taskId: string, stage: string, attempt: number, engine: EngineId | null, status: StageRunRow["status"], outcome: string, turns: number | null, costUsd: string | null, startedAgo: number, seconds: number) =>
       db.getRepository(StageRunEntity).save({ taskId, stage: stage as TaskState, attempt, engine, status, outcome, turns, costUsd, startedAt: at(startedAgo), endedAt: at(startedAgo - seconds) });
     // a: Codex hit its limit, Claude answered. b: Codex passed triage, Claude failed verifying and the task escalated.
