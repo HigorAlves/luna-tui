@@ -5,10 +5,11 @@ import { describe, expect, it } from "vitest";
 
 import type { StageInput } from "@hardness/contracts";
 
-import { lunaTools } from "./luna.ts";
+import { type LunaToolsOptions, lunaHandlers } from "../../core/luna-tools.ts";
+import { lunaServer } from "./luna.ts";
 
 /** Calls a tool on the in-process server the way the SDK would, returning the parsed text. */
-async function call(server: ReturnType<typeof lunaTools>["server"], name: string, args: Record<string, unknown>): Promise<unknown> {
+async function call(server: ReturnType<typeof lunaServer>, name: string, args: Record<string, unknown>): Promise<unknown> {
   const instance = server.instance as unknown as { _registeredTools?: Record<string, { handler: (a: unknown, extra: unknown) => Promise<{ content: Array<{ text: string }> }> }> };
   const tool = instance._registeredTools?.[name];
   if (!tool) throw new Error(`no tool ${name}: ${Object.keys(instance._registeredTools ?? {}).join(",")}`);
@@ -22,11 +23,11 @@ async function call(server: ReturnType<typeof lunaTools>["server"], name: string
 }
 
 describe("luna tools", () => {
-  const setup = (over: Partial<Parameters<typeof lunaTools>[0]> = {}) => {
+  const setup = (over: Partial<LunaToolsOptions> = {}) => {
     const dir = mkdtempSync(join(tmpdir(), "luna-"));
     const steps: string[] = [];
-    const luna = lunaTools({ ledgerPath: join(dir, "ledger.json"), decisions: [], onStep: (label, n, of) => steps.push(`${label} ${n}/${of}`), ...over });
-    return { dir, steps, ...luna };
+    const luna = lunaHandlers({ ledgerPath: join(dir, "ledger.json"), decisions: [], onStep: (label, n, of) => steps.push(`${label} ${n}/${of}`), ...over });
+    return { dir, steps, ...luna, server: lunaServer(luna.call) };
   };
 
   it("serves the five tools under the luna name", () => {

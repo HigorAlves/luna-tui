@@ -255,8 +255,9 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{agent}}": agent,
     "{{skills}}": pack.skills.length > 0 ? pack.skills.join(", ") : NONE,
   };
-  let body = template;
-  for (const [key, value] of Object.entries(subs)) body = body.split(key).join(value);
+  // One pass over the template: a value is never scanned again, so client text that looks like a
+  // placeholder ({{agent}} in a task title) stays as written.
+  const body = template.replace(/\{\{[A-Za-z.]+\}\}/g, (key) => subs[key] ?? key);
   const header = [`You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1); no person is present. ${escalationLine(pack)}`, ""].join("\n");
   return header + body;
 }
@@ -271,7 +272,7 @@ export function callLine(name: string, input: Record<string, unknown>): string {
   const search = input.pattern !== undefined && input.path !== undefined ? `${input.pattern} in ${input.path}` : undefined;
   const target = input.file_path ?? input.filePath ?? search ?? input.path ?? input.command ?? input.pattern ?? input.url ?? input.label ?? "";
   // A paged read is a different call per page: a long file read in four pages is not a loop.
-  const page = name === "Read" && (input.offset !== undefined || input.limit !== undefined) ? `:${input.offset ?? 0}+${input.limit ?? ""}` : "";
+  const page = (name === "Read" || name === "read_file") && (input.offset !== undefined || input.limit !== undefined) ? `:${input.offset ?? 0}+${input.limit ?? ""}` : "";
   const first = `${String(target).split("\n")[0]!}${page}`.slice(0, CALL_TARGET_MAX);
   const change = name === "Edit" || name === "MultiEdit" ? `${input.old_string ?? ""}\u0000${input.new_string ?? ""}${JSON.stringify(input.edits ?? "")}` : name === "Write" || name === "write_file" ? String(input.content ?? "") : null;
   const fingerprint = change === null ? "" : ` ·${createHash("sha1").update(change).digest("hex").slice(0, 8)}`;

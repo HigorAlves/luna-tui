@@ -61,20 +61,20 @@ export function jevRuntime(client: () => JevClient | Promise<JevClient> = typesa
     id: "jev",
     async run({ pack, engine, input, luna, dry, out }: RunContext): Promise<RunOutcome> {
       if (pack.kind !== "decision") return { ...EMPTY_RUN, error: `pack ${pack.id} is not a decision pack` };
-      const sdk = await import("@typesafe-ai/sdk");
-      const { fromJev, toJev } = await import("./questions.ts");
-      const request = { state: stateOf(input), questions: toJev(pack.questions), model: engine.modelId };
-      if (dry) {
-        out(JSON.stringify(request, null, 2));
-        let structured: Record<string, unknown> | null = null;
-        try {
-          structured = process.env.LUNA_STAGE_DRY_STRUCTURED ? (JSON.parse(process.env.LUNA_STAGE_DRY_STRUCTURED) as Record<string, unknown>) : null; // test seam
-        } catch {}
-        return { ...EMPTY_RUN, ok: true, structured, text: "dry-run" };
-      }
-
       const t0 = Date.now();
+      let sdk: Sdk | null = null;
       try {
+        sdk = await import("@typesafe-ai/sdk");
+        const { fromJev, toJev } = await import("./questions.ts");
+        const request = { state: stateOf(input), questions: toJev(pack.questions), model: engine.modelId };
+        if (dry) {
+          out(JSON.stringify(request, null, 2));
+          let structured: Record<string, unknown> | null = null;
+          try {
+            structured = process.env.LUNA_STAGE_DRY_STRUCTURED ? (JSON.parse(process.env.LUNA_STAGE_DRY_STRUCTURED) as Record<string, unknown>) : null; // test seam
+          } catch {}
+          return { ...EMPTY_RUN, ok: true, structured, text: "dry-run" };
+        }
         const result = await (await client()).systemOne(request, { signal: AbortSignal.timeout(input.limits.timeoutMs) });
         const durationMs = Date.now() - t0;
         const { input_tokens: tokensIn, output_tokens: tokensOut } = result.usage;
@@ -91,7 +91,8 @@ export function jevRuntime(client: () => JevClient | Promise<JevClient> = typesa
         out(text);
         return { ...run, ok: true, structured: answer, text };
       } catch (e) {
-        return { ...EMPTY_RUN, ...failed(e, sdk), durationMs: Date.now() - t0 };
+        const reason = sdk ? failed(e, sdk) : { error: `jev: ${e instanceof Error ? e.message : String(e)}`, rateLimited: false, resetsAt: null };
+        return { ...EMPTY_RUN, ...reason, durationMs: Date.now() - t0 };
       }
     },
   };

@@ -4,17 +4,15 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import type { LunaTool } from "@hardness/contracts";
 
-import { LUNA_TOOLS, type LunaToolsOptions, lunaHandlers } from "../../core/luna-tools.ts";
-
-export type { LunaToolsOptions } from "../../core/luna-tools.ts";
+import { LUNA_TOOLS } from "../../core/luna-tools.ts";
+import type { RunContext } from "../../core/runtime.ts";
 
 const text = (value: unknown) => ({ content: [{ type: "text" as const, text: typeof value === "string" ? value : JSON.stringify(value) }] });
 
-/** The server config for `mcpServers.luna`, the state the runner reads at the end, and `call`
- *  for a runtime that serves the same handlers its own way. */
-export function lunaTools(options: LunaToolsOptions) {
-  const { state, call } = lunaHandlers(options);
-  const server = createSdkMcpServer({
+/** The server config for `mcpServers.luna`, over the handlers' `call` (core/luna-tools.ts keeps
+ *  the state). Built by the Claude runtime only, so no other runtime loads the SDK for it. */
+export function lunaServer(call: RunContext["luna"]["call"]) {
+  return createSdkMcpServer({
     name: "luna",
     version: "1.0.0",
     alwaysLoad: true,
@@ -22,5 +20,4 @@ export function lunaTools(options: LunaToolsOptions) {
       tool(name, LUNA_TOOLS[name].description, LUNA_TOOLS[name].input, async (args) => text(await call(name, args))),
     ),
   });
-  return { server, state, call };
 }

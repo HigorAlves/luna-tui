@@ -85,14 +85,20 @@ export function scanArtifacts(outDir: string): StageArtifact[] {
 const issuesLine = (error: { issues: { path: PropertyKey[]; message: string }[] }): string =>
   error.issues.map((i) => `${i.path.map(String).join(".") || "(root)"}: ${i.message}`).join("; ");
 
+/** The error a runtime reports when the pack's own budget for the run (its turns, its token
+ *  budget) ran out: never a rate limit, since no provider reset would resume it. */
+const BUDGET_SPENT = "the pack's own budget for this run is spent";
+export const budgetSpent = (detail: string): string => `${BUDGET_SPENT}: ${detail}`;
+
 /** The run as the result reports it, whatever runtime produced it: an answer given as JSON text
  *  is taken when it is one the pack's schema accepts, so a stage is not lost to the channel; an
- *  answer off the schema fails the run with the issue; a usage or rate limit error is a rate
- *  limit; a run that answered nothing failed. */
+ *  answer off the schema fails the run with the issue, and so does a run that ended with no
+ *  answer at all, whatever text it left; a provider's usage or rate limit error is a rate limit,
+ *  the pack's own spent budget is not. */
 export function settle(run: RunOutcome, pack: Pack): RunOutcome {
   const settled = { ...run };
   let answer: unknown = settled.structured;
-  if (settled.ok && answer === null && settled.text.trim().startsWith("{")) {
+  if (settled.ok && answer === null && settled.text.trim() !== "") {
     try {
       answer = JSON.parse(settled.text);
     } catch {}
@@ -105,11 +111,12 @@ export function settle(run: RunOutcome, pack: Pack): RunOutcome {
       settled.error = `answer off the ${pack.id} schema: ${issuesLine(parsed.error)}`;
     }
   }
-  if (settled.error && /usage limit|rate limit/i.test(String(settled.error))) settled.rateLimited = true;
-  if (settled.ok && settled.structured === null && !settled.text) {
+  if (settled.ok && settled.structured === null) {
     settled.ok = false;
-    settled.error = "no structured output";
+    const text = settled.text.trim();
+    settled.error = text ? `no answer the ${pack.id} schema accepts: the run ended with text, not a structured answer: ${text.slice(0, 200)}` : "no structured output";
   }
+  if (settled.error && !settled.error.startsWith(BUDGET_SPENT) && /usage limit|rate limit/i.test(settled.error)) settled.rateLimited = true;
   return settled;
 }
 

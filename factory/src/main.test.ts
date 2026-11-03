@@ -34,7 +34,7 @@ const slack = {
   items: [{ id: "C1:1", channel: "#eng", author: "@marta", isBot: false, text: "can you review?", context: [], matched: ["me"], threadReplies: 0 }],
 };
 
-function run(input: unknown, env: Record<string, string> = {}, files: Record<string, string> = {}, { emptyWork = false } = {}) {
+function run(input: unknown, env: Record<string, string> = {}, files: Record<string, string> = {}, { emptyWork = false, contextIsDir = false } = {}) {
   const root = mkdtempSync(join(tmpdir(), "factory-main-"));
   const inDir = join(root, "in");
   const out = join(root, "out");
@@ -42,7 +42,9 @@ function run(input: unknown, env: Record<string, string> = {}, files: Record<str
   mkdirSync(inDir);
   mkdirSync(out);
   mkdirSync(work);
-  if (!emptyWork) {
+  if (contextIsDir) {
+    mkdirSync(join(work, "docs", "agents", "project-context.md"), { recursive: true });
+  } else if (!emptyWork) {
     mkdirSync(join(work, "docs", "agents"), { recursive: true });
     writeFileSync(join(work, "docs", "agents", "project-context.md"), "# Project context\n\n- Keep it small.\n");
   }
@@ -215,6 +217,20 @@ describe("factory main (dry run)", () => {
     expect(skipped.result).toMatchObject({ ok: true, outcome: "pass" });
     const missing = run(stageInput("evidence"));
     expect(missing.result).toMatchObject({ ok: false, outcome: "fail", error: expect.stringContaining("missing") });
+  });
+
+  it("leaves a result that names the problem when the stage fails partway, instead of crashing", () => {
+    // A project context that cannot be read (a folder where the file should be) throws while the
+    // prompt is rendered.
+    const { code, result } = run(stageInput("triage"), {}, {}, { contextIsDir: true });
+    expect(code).toBe(0);
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ ok: false, outcome: "fail", error: expect.stringMatching(/EISDIR/) });
+  });
+
+  it("takes the luna tools from core: no runtime's SDK is loaded for another runtime's stage", () => {
+    expect(readFileSync(MAIN, "utf8")).not.toMatch(/claude/);
+    expect(readFileSync(join(import.meta.dirname, "runtimes", "index.ts"), "utf8")).not.toMatch(/luna/);
   });
 
   it("leaves a result that names the problem when the stage input is invalid", () => {

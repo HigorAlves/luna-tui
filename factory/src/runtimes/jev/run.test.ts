@@ -34,7 +34,7 @@ function context(over: Partial<RunContext> = {}) {
     input: input(),
     prompt: "",
     paths: { factoryRoot: "/factory", work: "/work", out: "/out", input: "/in", scratch: "/tmp/luna-scratch" },
-    luna: { state, server: null, call: async () => null },
+    luna: { state, call: async () => null },
     dry: false,
     out: (line) => lines.push(line),
     ...over,
@@ -127,6 +127,13 @@ describe("the Jev runtime", () => {
     const run = await jevRuntime().run(context().ctx);
     expect(run).toMatchObject({ ok: false, structured: null });
     expect(run.error).toMatch(/TYPESAFE_API_KEY/);
+  });
+
+  it("ends the stage with the reason when the questions cannot be put in Jev's words, never throws", async () => {
+    const { client } = fake();
+    const pack = { ...PACKS.issue_classify, questions: { kind: { type: "choice", instructions: "x", criteria: [] } } } as unknown as RunContext["pack"];
+    const run = await jevRuntime(() => client).run(context({ pack }).ctx);
+    expect(run).toMatchObject({ ok: false, structured: null, error: expect.stringMatching(/^jev: .*criteria/) });
   });
 
   it("dry: prints the questions and the state it would send, and calls nothing", async () => {

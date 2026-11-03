@@ -13,10 +13,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { EMPTY_RUN, finish, settle } from "./core/output.ts";
+import { lunaHandlers } from "./core/luna-tools.ts";
+import { EMPTY_RUN, type RunOutcome, finish, settle } from "./core/output.ts";
 import { renderPrompt } from "./core/render.ts";
 import { readJson, readStageInput } from "./core/stage-io.ts";
-import { RUNTIMES, lunaTools } from "./runtimes/index.ts";
+import { RUNTIMES } from "./runtimes/index.ts";
 
 const env = process.env;
 const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -31,17 +32,9 @@ mkdirSync(OUT, { recursive: true });
 const input = readStageInput(IN, OUT);
 if (!input) process.exit(1);
 const pack = PACKS[input.pack];
-// A decision pack has no prompt: its runtime sends the pack's questions and the input as data.
-let prompt = "";
-if (pack.kind !== "decision") {
-  const template = readFileSync(join(FACTORY_ROOT, "prompts", pack.template), "utf8");
-  const contextFile = join(WORK, "docs", "agents", "project-context.md");
-  const projectContext = existsSync(contextFile) ? readFileSync(contextFile, "utf8") : null;
-  prompt = renderPrompt({ pack, input, template, projectContext });
-  writeFileSync(join(OUT, "prompt.md"), prompt);
-}
 
-const luna = lunaTools({
+// The luna tools' state lives here, whatever runtime serves them: the result reads it.
+const luna = lunaHandlers({
   ledgerPath: join(OUT, "ledger.json"),
   ledger: input.context.ledger ?? null,
   decisions: input.decisions,
@@ -60,18 +53,36 @@ if (pack.kind === "script") {
   process.exit(0);
 }
 
-// The engine the machine chose, else the pack's default; its runtime runs the stage. An engine
-// on a runtime this factory does not carry yet fails the stage with a reason, not a crash.
-const engine = resolveEngine(input.engine ?? pack.engines.default);
-const runtime = RUNTIMES[engine.runtime];
-if (!runtime) {
-  finish(OUT, pack, { ...EMPTY_RUN, error: `engine ${engine.id} runs on ${engine.runtime}, which is not available in this factory yet` }, luna.state);
-  process.exit(0);
-}
-
 // The model's scratch space: under /tmp, but neither /tmp itself (HOME) nor the Codex home in it.
 const scratch = mkdtempSync(join(tmpdir(), "luna-scratch-"));
-const paths = { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT, input: dirname(IN), scratch };
-const run = await runtime.run({ pack, engine, input, prompt, paths, luna, dry: DRY, out });
-finish(OUT, pack, settle(run, pack), luna.state);
-rmSync(scratch, { recursive: true, force: true });
+let run: RunOutcome;
+try {
+  run = await runStage();
+} catch (e) {
+  // Whatever failed, the machine still finds a result that says why.
+  run = { ...EMPTY_RUN, error: `the stage failed before it finished: ${e instanceof Error ? e.message : String(e)}` };
+} finally {
+  rmSync(scratch, { recursive: true, force: true });
+}
+finish(OUT, pack, run, luna.state);
+
+async function runStage(): Promise<RunOutcome> {
+  // A decision pack has no prompt: its runtime sends the pack's questions and the input as data.
+  let prompt = "";
+  if (pack.kind !== "decision") {
+    const template = readFileSync(join(FACTORY_ROOT, "prompts", pack.template), "utf8");
+    const contextFile = join(WORK, "docs", "agents", "project-context.md");
+    const projectContext = existsSync(contextFile) ? readFileSync(contextFile, "utf8") : null;
+    prompt = renderPrompt({ pack, input: input!, template, projectContext });
+    writeFileSync(join(OUT, "prompt.md"), prompt);
+  }
+  // The engine the machine chose, else the pack's default; its runtime runs the stage. An engine
+  // on a runtime this factory does not carry yet fails the stage with a reason, not a crash.
+  const engine = resolveEngine(input!.engine ?? pack.engines.default);
+  const runtime = RUNTIMES[engine.runtime];
+  if (!runtime) return { ...EMPTY_RUN, error: `engine ${engine.id} runs on ${engine.runtime}, which is not available in this factory yet` };
+  const paths = { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT, input: dirname(IN), scratch };
+  const run = await runtime.run({ pack, engine, input: input!, prompt, paths, luna, dry: DRY, out });
+  // A dry run answers nothing unless the test seam gave it an answer; that one is settled.
+  return DRY && run.structured === null ? run : settle(run, pack);
+}

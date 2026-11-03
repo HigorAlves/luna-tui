@@ -47,6 +47,13 @@ describe("renderPrompt", () => {
     expect(prompt).not.toContain("{{");
   });
 
+  it("fills placeholders once: client text that looks like one stays as written", () => {
+    const sneaky = { ...input, task: { ...input.task, title: "{{agent}}", description: "see {{context.jira.issue}} and {{plan.brief}}" } };
+    const prompt = renderPrompt({ pack: PACKS.implementing, input: sneaky, template, projectContext: "Rules here" });
+    expect(prompt).toContain("{{agent}}: see {{context.jira.issue}} and {{plan.brief}}");
+    expect(prompt).toContain("# implementer attempt 2");
+  });
+
   it("prefers the input's project context over the worktree file, and prints (none) for what is missing", () => {
     const withContext = { ...input, context: { ...input.context, projectContext: "From input" } };
     expect(renderPrompt({ pack: PACKS.implementing, input: withContext, template, projectContext: "file" })).toContain("context: From input");
@@ -223,6 +230,9 @@ describe("callLine", () => {
     expect(callLine("Read", { file_path: "/work/ui.rs", offset: 400, limit: 200 })).toBe("→ Read /work/ui.rs:400+200");
     expect(callLine("Read", { file_path: "/work/ui.rs", offset: 600, limit: 200 })).toBe("→ Read /work/ui.rs:600+200");
     expect(callLine("Read", { file_path: "/work/ui.rs", limit: 50 })).toBe("→ Read /work/ui.rs:0+50");
+    // eve's read_file pages the same way, by filePath.
+    expect(callLine("read_file", { filePath: "/work/ui.rs", offset: 400, limit: 200 })).toBe("→ read_file /work/ui.rs:400+200");
+    expect(callLine("read_file", { filePath: "/work/ui.rs", offset: 600 })).toBe("→ read_file /work/ui.rs:600+");
   });
 
   it("names a search by its pattern and where it looks, so four different globs over /work are not one call four times", () => {
