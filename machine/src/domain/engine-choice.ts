@@ -13,7 +13,8 @@ export interface EngineChoice {
   /** Why an engine someone asked for was passed over; null when nothing was. */
   reason: string | null;
   /** One line for the task's activity when the engine asked for gave way to the default for want of
-   *  its credential (`triage ran on claude:opus: codex:sol has no Codex login on this machine`). */
+   *  its credential (`triage ran on claude:opus: codex:sol has no Codex login on this machine`), or
+   *  because the machine holds it back (`… codex:sol is disabled by MACHINE_DISABLE_RUNTIMES`). */
   note?: string;
 }
 
@@ -61,6 +62,9 @@ export function chooseEngine(opts: {
   config?: StageEngines | null;
   /** Why this machine cannot run an engine (its credential is missing), or null when it can. */
   missing: (engine: EngineId) => string | null;
+  /** Why this machine holds an engine back though it may have the credential (`disabled by
+   *  MACHINE_DISABLE_RUNTIMES`), or null. Said on the task the same way. */
+  unavailable?: (engine: EngineId) => string | null;
 }): EngineChoice {
   const { pack } = opts;
   const fallback = pack.engines.default;
@@ -77,6 +81,11 @@ export function chooseEngine(opts: {
       continue;
     }
     if (engine === fallback) return { engine, source, reason: reasons.join("; ") || null };
+    const held = opts.unavailable?.(engine) ?? null;
+    if (held) {
+      reasons.push(`${engine} is ${held}; ran ${fallback}, the pack's default`);
+      return { engine: fallback, source: "default", reason: reasons.join("; "), note: `${pack.id} ran on ${fallback}: ${engine} is ${held}` };
+    }
     const lacking = opts.missing(engine);
     if (lacking) {
       reasons.push(`${engine} has no credential on this machine (${lacking}); ran ${fallback}, the pack's default`);

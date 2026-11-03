@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { RUNNING, type TaskState } from "@hardness/contracts";
+import { RUNNING, type RuntimeId, type TaskState } from "@hardness/contracts";
 
 import { isLoopback } from "./adapters/http/access.ts";
 import { DEFAULT_GATE_SECS, parseDuration } from "./domain/sla.ts";
@@ -60,6 +60,9 @@ export interface Config {
   taskBudgetUsd: number | null;
   /** Spend ceiling over the trailing 24 hours; null means none. Over it, nothing new is claimed. */
   dailyBudgetUsd: number | null;
+  /** Runtimes whose engines this machine treats as unavailable (`MACHINE_DISABLE_RUNTIMES`): `eve`,
+   *  `jev`; never `claude`, which every pack's default runs on. Read at boot. */
+  disabledRuntimes: RuntimeId[];
   /** What happens to a task mid-stage when the machine stops: back to the queue (its stage re-runs
    *  on boot, no approval needed) or escalated for you to resume, as before. */
   restartPolicy: RestartPolicy;
@@ -101,6 +104,19 @@ function optionalPositiveInt(env: NodeJS.ProcessEnv, key: string): number | null
   const value = Number(raw);
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${key} must be a positive integer, got "${raw}"`);
   return value;
+}
+
+/** The runtimes a kill switch may turn off: every pack's default runs on claude, so it stays on. */
+const SWITCHABLE: readonly RuntimeId[] = ["eve", "jev"];
+
+/** `MACHINE_DISABLE_RUNTIMES`: a comma list of eve and jev; claude is refused, as is anything else. */
+function disabledRuntimes(env: NodeJS.ProcessEnv): RuntimeId[] {
+  const names = (env.MACHINE_DISABLE_RUNTIMES ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+  for (const name of names) {
+    if (name === "claude") throw new Error("MACHINE_DISABLE_RUNTIMES cannot turn off claude: every pack's default engine runs on it");
+    if (!SWITCHABLE.includes(name as RuntimeId)) throw new Error(`MACHINE_DISABLE_RUNTIMES lists runtimes (${SWITCHABLE.join(", ")}), got "${name}"`);
+  }
+  return [...new Set(names)] as RuntimeId[];
 }
 
 function optionalUsd(env: NodeJS.ProcessEnv, key: string): number | null {
@@ -275,6 +291,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     maxPerStage,
     taskBudgetUsd: optionalUsd(env, "MACHINE_TASK_BUDGET_USD"),
     dailyBudgetUsd: optionalUsd(env, "MACHINE_DAILY_BUDGET_USD"),
+    disabledRuntimes: disabledRuntimes(env),
     restartPolicy,
   };
 }

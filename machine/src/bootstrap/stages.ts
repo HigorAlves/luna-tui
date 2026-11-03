@@ -48,6 +48,8 @@ export async function buildRealStages(
   policies: PolicyStore = new PolicyStore(),
   history?: TaskHistory,
   github: GitHub = noTokenGitHub(),
+  /** Each engine's credential, gated by what the machine holds back; defaults to the credentials alone. */
+  engineCredentials: Credentials = machineCredentials(),
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -75,7 +77,7 @@ export async function buildRealStages(
   // (node_modules with Linux binaries, a Go cache) does not run on the host.
   const checksExec = sandboxExecutor(config.runnerImage);
   // Each stage gets only its own engine's credential, read when the stage starts.
-  const credentials = machineCredentials();
+  const credentials = engineCredentials;
   const deps = {
     image: config.runnerImage,
     qaImage: config.runnerQaImage,

@@ -6,7 +6,8 @@ import type { EngineId, StageOutput } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import type { Credentials } from "../credentials/index.ts";
+import { type Credentials, fixedCredentials } from "../credentials/index.ts";
+import { gatedCredentials, runtimeKillSwitch } from "../../application/engine-gates.ts";
 import type { SandboxResult, SandboxRun } from "../docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../../application/pack-runs.ts";
 import { buildPackRuns } from "../../bootstrap/stages.ts";
@@ -89,6 +90,14 @@ describe("POST /runs", () => {
     }
     expect((await post(app, { pack: "chat_triage", context: { chat } }, "no spaces please")).status).toBe(400);
     expect(await db.query("select * from pack_runs")).toEqual([]);
+  });
+
+  it("is 409 runtime_disabled for an engine on a runtime MACHINE_DISABLE_RUNTIMES turned off, without running", async () => {
+    const credentials = gatedCredentials(fixedCredentials({}), [runtimeKillSwitch(["jev"])]);
+    const response = await post(appWith(output(), { deps: { credentials } }), { pack: "issue_classify", context: { issue: { title: "t", description: "d" } } });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({ error: "runtime_disabled", message: "jev: disabled by MACHINE_DISABLE_RUNTIMES" });
+    expect(await db.query("select 1 from pack_runs")).toEqual([]);
   });
 
   it("is 409 no_credential when this machine lacks the engine's credential", async () => {

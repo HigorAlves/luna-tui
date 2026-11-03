@@ -60,6 +60,19 @@ describe("engineProblem and stagesProblem", () => {
   });
 });
 
+describe("chooseEngine with an engine this machine has turned off", () => {
+  it("runs the pack's default and says why on the task, as for a missing credential", () => {
+    const unavailable = (engine: EngineId) => (engine === "codex:sol" ? "disabled by MACHINE_DISABLE_RUNTIMES" : null);
+    expect(chooseEngine({ pack: triage, task: { triage: "codex:sol" }, missing: everything, unavailable })).toEqual({
+      engine: "claude:opus",
+      source: "default",
+      reason: "codex:sol is disabled by MACHINE_DISABLE_RUNTIMES; ran claude:opus, the pack's default",
+      note: "triage ran on claude:opus: codex:sol is disabled by MACHINE_DISABLE_RUNTIMES",
+    });
+    expect(chooseEngine({ pack: triage, config: { triage: "openai:sol" }, missing: everything, unavailable }).engine).toBe("openai:sol");
+  });
+});
+
 describe("fallbackCandidates", () => {
   it("is the pack's fallback list, in order, less the engines that already ran the stage", () => {
     expect(fallbackCandidates(PACKS.triage, ["claude:opus"])).toEqual(["codex:sol"]);
