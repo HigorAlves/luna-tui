@@ -460,6 +460,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
         changesSince: (after: number, kind: string | null) => pipeline.changesSince(after, kind),
         lastSeq: () => pipeline.lastSeq(),
         serialize: async (row: TaskRow) => serialize(row, await pipeline.taskUsage(row.id)),
+        sourceOf: (taskId: string) => pipeline.get(taskId).then((task) => task.source?.kind ?? null, () => null),
         write,
       };
       const feed = since === undefined && source === null ? null : new ReplayFeed(deps, since === undefined ? null : Number(since), source);
