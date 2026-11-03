@@ -5367,9 +5367,10 @@ mod workspace_key_tests {
         let mut app = open("implementing");
         app.online = true;
         press(&mut app, KeyCode::Char('5'));
-        app.ensure_diff();
+        // A fetch in flight, set by hand: `ensure_diff` would start a real fetch against the offline
+        // machine, whose failed answer can reach the channel before the update below and clear it.
+        app.diff_pending = Some((app.tasks[0].id.clone(), None));
         let generation = app.diff_generation;
-        assert!(app.diff_pending.is_some());
         // A stage starts while the fetch is in flight: the branch may move, so the answer is stale.
         let mut moved = task("implementing");
         moved.running = true;
