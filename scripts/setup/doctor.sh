@@ -54,7 +54,7 @@ if docker_running; then
   done
 fi
 port="$(env_get MACHINE_DOCKER_PORT)"; port="${port:-4318}"
-token="${MACHINE_API_TOKEN:-$(cat "$CONFIG_DIR/machine-api-token" 2>/dev/null | tr -d '[:space:]')}"
+token="${MACHINE_API_TOKEN:-$(tr -d '[:space:]' <"$CONFIG_DIR/machine-api-token" 2>/dev/null)}"
 # The header from a file descriptor, so the token is never in curl's argv.
 if curl -fsS -m 3 -H @<(printf 'authorization: Bearer %s\n' "$token") "http://127.0.0.1:$port/health" &>/dev/null; then
   ok "machine" "http://127.0.0.1:$port"
