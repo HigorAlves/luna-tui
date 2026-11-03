@@ -39,7 +39,7 @@ pub struct Retries {
 /// Where a task came from, when it was created from an outside issue, a Slack message or a
 /// Jira issue. `kind` stays a plain string so kinds this board does not know still load; an
 /// issue has `repo`, `number` and `url`, a Slack message `channel`, `ts` and `permalink`, a
-/// Jira issue `key`, `url` and `issueType`.
+/// Jira issue `key`, `url` and `issueType`, a Luna Notch work order `ref`, `id` and `jiraKey`.
 #[derive(Deserialize, Clone, Debug)]
 pub struct TaskSource {
     pub kind: String,
@@ -61,6 +61,14 @@ pub struct TaskSource {
     #[serde(default, rename = "issueType")]
     #[allow(dead_code)] // part of the contract; the link carries the type once synced
     pub issue_type: Option<String>,
+    /// A Luna Notch work order's ticket (`LUNA-14`).
+    #[serde(default, rename = "ref")]
+    pub reference: Option<String>,
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; the board names the work order by its ref
+    pub id: Option<String>,
+    #[serde(default, rename = "jiraKey")]
+    pub jira_key: Option<String>,
 }
 
 impl TaskSource {
@@ -69,12 +77,21 @@ impl TaskSource {
         self.url.as_deref().or(self.permalink.as_deref())
     }
 
-    /// `GitHub     acme/app#42 · url`, `Jira       PLAT-123 · url` or `Slack      #channel ·
-    /// permalink`, for the ticket popup.
+    /// `notch LUNA-14` for a task Luna Notch sent, else None: the card and the popup header wear it.
+    pub fn notch_tag(&self) -> Option<String> {
+        (self.kind == "notch").then(|| format!("notch {}", self.reference.as_deref().unwrap_or_default()).trim_end().to_string())
+    }
+
+    /// `GitHub     acme/app#42 · url`, `Jira       PLAT-123 · url`, `Luna Notch LUNA-14 · PLAT-9`
+    /// or `Slack      #channel · permalink`, for the ticket popup.
     pub fn detail_line(&self) -> String {
         match (self.repo.as_deref(), self.number) {
             (Some(repo), Some(number)) => format!("GitHub     {repo}#{number} · {}", self.url.as_deref().unwrap_or("")),
             _ if self.kind == "jira" => format!("Jira       {} · {}", self.key.as_deref().unwrap_or("?"), self.url.as_deref().unwrap_or("")),
+            _ if self.kind == "notch" => {
+                let jira = self.jira_key.as_deref().map(|k| format!(" · {k}")).unwrap_or_default();
+                format!("Luna Notch {}{jira}", self.reference.as_deref().unwrap_or("?"))
+            }
             _ => format!(
                 "Slack      {} · {}",
                 self.channel.as_deref().unwrap_or("?"),
@@ -1542,8 +1559,12 @@ impl Task {
     }
 
     /// `#42 ` when the task came from an issue, `⌁ ` when it came from a Slack message,
-    /// `PLAT-123 ` when it came from a Jira issue, else empty. The card shows it dim.
+    /// `PLAT-123 ` when it came from a Jira issue, `notch LUNA-14 ` when Luna Notch sent it,
+    /// else empty. The card shows it dim.
     pub fn issue_prefix(&self) -> String {
+        if let Some(tag) = self.source.as_ref().and_then(TaskSource::notch_tag) {
+            return format!("{tag} ");
+        }
         match self.source.as_ref() {
             Some(TaskSource { number: Some(number), .. }) => format!("#{number} "),
             Some(TaskSource { kind, .. }) if kind == "slack" => "⌁ ".to_string(),
@@ -2151,6 +2172,18 @@ pub(crate) mod tests {
         assert_eq!(source.detail_line(), "Jira       PLAT-123 · https://acme.atlassian.net/browse/PLAT-123");
         assert_eq!(task.issue_prefix(), "PLAT-123 ");
         assert_eq!(task.card_label(), "PLAT-123 Login page");
+    }
+
+    #[test]
+    fn task_from_luna_notch_wears_notch_and_its_ref() {
+        let task: Task = serde_json::from_str(&task_json(r#","source":{"kind":"notch","ref":"LUNA-14","id":"wo_1","jiraKey":"PLAT-9"}"#)).unwrap();
+        let source = task.source.clone().expect("source present");
+        assert_eq!(source.notch_tag().as_deref(), Some("notch LUNA-14"));
+        assert_eq!(source.detail_line(), "Luna Notch LUNA-14 · PLAT-9");
+        assert_eq!(task.issue_prefix(), "notch LUNA-14 ");
+        let bare: Task = serde_json::from_str(&task_json(r#","source":{"kind":"notch"}"#)).unwrap();
+        assert_eq!(bare.issue_prefix(), "notch ", "a notch source without its ref still loads and says notch");
+        assert_eq!(bare.source.unwrap().detail_line(), "Luna Notch ?");
     }
 
     /// A task linked to PLAT-123, waiting at the plan gate 40 minutes past its hour, its stage

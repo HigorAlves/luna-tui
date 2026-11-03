@@ -198,7 +198,7 @@ and a test fails when they drift from the registry.
 left (a tab strip on a terminal under 100 columns) and one pane on the right; `h`/`l` or `1`…`9`
 switch, `j`/`k` scroll the pane or pick a row where the section lists some (`J`/`K` scroll a line
 there, `ctrl+d`/`ctrl+u` and PgDn/PgUp half a page anywhere; picking a row brings it into view),
-`+` toggles the popup between most of the screen and all of it. Every section draws from everything the machine knows
+`+` toggles the popup between most of the screen and all of it. A ticket Luna Notch sent wears `notch LUNA-14` (its work order's ref), dim, on its card and in the popup's title, as an issue's `#42` or a Jira issue's `PLAT-123` does on the card. Every section draws from everything the machine knows
 about the ticket, whether or not a gate was decided: the approved plan stays readable after `a`.
 While a gate is open, its strip sits on top of every section with the keys that answer it.
 
