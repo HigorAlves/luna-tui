@@ -24,6 +24,16 @@ let pipeline: Pipeline;
 
 const fail: StageResult = { outcome: "fail" };
 
+/** A stage that holds its slot until the task is aborted, the way a real container does. The
+ *  abort can land before the runner is called (the loop is still recording the run, slow on a
+ *  CI runner): an already-aborted signal ends it at once, as the docker and exec adapters do,
+ *  or the loop never ends and abort()/shutdown() wait out their deadlines. */
+const holding: StageRunner = ({ signal }) =>
+  new Promise<StageResult>((resolve) => {
+    if (signal.aborted) resolve({ outcome: "fail" });
+    else signal.addEventListener("abort", () => resolve({ outcome: "fail" }), { once: true });
+  });
+
 beforeAll(async () => {
   db = await freshTestDatabase();
 });
@@ -999,13 +1009,9 @@ describe("aborting a running stage", () => {
 });
 
 describe("fair claims", () => {
-  /** A triage that holds its slot until the task is aborted. */
-  const holding: StageRunner = ({ signal }) =>
-    new Promise<StageResult>((resolve) => signal.addEventListener("abort", () => resolve({ outcome: "fail" }), { once: true }));
   const runnerFor = (stage: TaskState) => (stage === "triage" ? holding : stubs.runnerFor(stage));
   /** A ticket in Intake, one `start` away from running. */
   const create = (repoPath: string) => pipeline.createTask({ title: `t ${repoPath}`, criteria: ["c"], repoPath });
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
 
   it("claims in the order tasks joined the queue, even when a queued ticket was edited meanwhile", async () => {
     pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 1 });
@@ -1019,8 +1025,8 @@ describe("fair claims", () => {
     await pipeline.update(b.id, { description: "clarified" });
 
     await pipeline.abort(a.id);
-    await settle();
-    expect((await pipeline.get(b.id)).queued).toBe(false);
+    await until(async () => !(await pipeline.get(b.id)).queued, "b to be claimed");
+    // b holds the one slot, so c stays queued.
     expect((await pipeline.get(c.id)).queued).toBe(true);
   });
 
@@ -1036,9 +1042,8 @@ describe("fair claims", () => {
     expect((await pipeline.start(b1.id)).queued).toBe(true);
 
     await pipeline.abort(b0.id);
-    await settle();
     // a1 still runs for repo a, so repo b's b1 goes first although a2 queued earlier.
-    expect((await pipeline.get(b1.id)).queued).toBe(false);
+    await until(async () => !(await pipeline.get(b1.id)).queued, "b1 to be claimed");
     expect((await pipeline.get(a2.id)).queued).toBe(true);
   });
 
@@ -1050,7 +1055,8 @@ describe("fair claims", () => {
     expect((await pipeline.start(a2.id)).queued).toBe(true);
     const b1 = await create("/r/b");
     expect((await pipeline.start(b1.id)).queued).toBe(false);
-    await settle();
+    // A fill pass, finished, with a slot free: a2 still waits for its repo.
+    await pipeline.tick();
     expect((await pipeline.get(a2.id)).queued).toBe(true);
   });
 });
@@ -1065,12 +1071,12 @@ async function until(check: () => Promise<boolean>, what: string): Promise<void>
   }
 }
 
-describe("per-stage caps", () => {
-  /** A stage that holds its slot until the task is aborted. */
-  const holding: StageRunner = ({ signal }) =>
-    new Promise<StageResult>((resolve) => signal.addEventListener("abort", () => resolve({ outcome: "fail" }), { once: true }));
-  const settle = () => new Promise((resolve) => setTimeout(resolve, 30));
+/** For the tests that abort or shut down holding loops and then wait on what follows: each
+ *  step is a round of database writes and a 20-50 ms poll (abort's untilLoopEnds, shutdown's
+ *  wind-down), which on a loaded CI runner adds up past the 5 s default with nothing wrong. */
+const WIND_DOWN_TIMEOUT_MS = 15_000;
 
+describe("per-stage caps", () => {
   it("holds a stage at its cap in the queue while another stage still takes the free slots", async () => {
     const runnerFor = (stage: TaskState) => (stage === "triage" || stage === "implementing" ? holding : stubs.runnerFor(stage));
     pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 4, maxPerStage: { triage: 1 } });
@@ -1078,13 +1084,12 @@ describe("per-stage caps", () => {
     await pipeline.start(a.id);
     const b = await newTask();
     expect(await pipeline.start(b.id)).toMatchObject({ state: "triage", queued: true });
-    await settle();
+    await pipeline.tick();
     expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: true });
 
     // Another stage is not held by triage's cap: c reaches implementing (and holds there) with its own slot.
     await db.query("update tasks set state = 'implementing', queued = true, queued_at = now() where id = $1", [(await newTask()).id]);
     await pipeline.tick();
-    await settle();
     expect((await pipeline.list()).filter((t) => t.state === "implementing" && !t.queued)).toHaveLength(1);
     expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: true });
 
@@ -1093,7 +1098,7 @@ describe("per-stage caps", () => {
     await until(async () => !(await pipeline.get(b.id)).queued, "b to be claimed");
     expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: false });
     await pipeline.shutdown();
-  });
+  }, WIND_DOWN_TIMEOUT_MS);
 
   it("parks a task between stages when its next stage is at cap, and the supervisor picks it up later", async () => {
     // The first test_design holds its slot until aborted; later ones pass.
@@ -1108,14 +1113,14 @@ describe("per-stage caps", () => {
     await db.query("update tasks set state = 'test_design', queued = true, queued_at = now() where id = $1", [a.id]);
     // a takes test_design's one slot (and holds); b, approved, is parked before test_design.
     const ticked = pipeline.tick();
-    await settle();
+    await until(async () => held === 1, "a to hold test_design");
     expect(await pipeline.decide(b.id, "approved")).toMatchObject({ state: "test_design", queued: true });
     expect((await pipeline.events(b.id)).map((e) => e.kind)).toContain("stage.held");
     await pipeline.abort(a.id);
     await ticked;
     await pipeline.tick();
     expect(await pipeline.get(b.id)).toMatchObject({ state: "awaiting_test_check", queued: false });
-  });
+  }, WIND_DOWN_TIMEOUT_MS);
 
   it("reads MACHINE_MAX_PER_STAGE as stage=n pairs", () => {
     expect(loadConfig({ HOME: "/h" }).maxPerStage).toEqual({});
@@ -1134,7 +1139,7 @@ describe("per-stage caps", () => {
     expect((await pipeline.start(a2.id)).queued).toBe(true);
     const b1 = await pipeline.createTask({ title: "b1", repoPath: "/r/b" });
     expect((await pipeline.start(b1.id)).queued).toBe(false);
-    await settle();
+    await pipeline.tick();
     expect((await pipeline.get(a2.id)).queued).toBe(true);
     await pipeline.shutdown();
   });
@@ -1144,8 +1149,6 @@ describe("ci_watch outside the pool", () => {
   /** A ci_watch that polls until told the checks are green. */
   let green: (() => void) | undefined;
   const polling: StageRunner = () => new Promise<StageResult>((resolve) => { green = () => resolve({ outcome: "pass" }); });
-  const holding: StageRunner = ({ signal }) =>
-    new Promise<StageResult>((resolve) => signal.addEventListener("abort", () => resolve({ outcome: "fail" }), { once: true }));
   beforeEach(() => {
     green = undefined;
   });
@@ -1173,7 +1176,7 @@ describe("ci_watch outside the pool", () => {
     await until(async () => (await pipeline.get(a.id)).state === "awaiting_ship", "a to reach the ship gate");
     expect(await pipeline.get(a.id)).toMatchObject({ state: "awaiting_ship", queued: false });
     await pipeline.shutdown();
-  });
+  }, WIND_DOWN_TIMEOUT_MS);
 });
 
 describe("re-attaching to a container after a restart", () => {
@@ -1233,13 +1236,10 @@ describe("re-attaching to a container after a restart", () => {
 });
 
 describe("restart policy", () => {
-  /** A stage that runs until the machine stops it, the way a real container does. */
-  const untilAborted: StageRunner = ({ signal }) =>
-    new Promise<StageResult>((resolve) => signal.addEventListener("abort", () => resolve({ outcome: "fail" }), { once: true }));
   let reached = 0;
   const counting: StageRunner = (context) => {
     reached++;
-    return untilAborted(context);
+    return holding(context);
   };
   const runnerFor = (stage: TaskState) => (stage === "triage" ? counting : stubs.runnerFor(stage));
 
@@ -1265,6 +1265,34 @@ describe("restart policy", () => {
     expect(await restarted.recover()).toBe(0);
     expect((await restarted.get(a.id)).state).toBe("awaiting_approval");
     expect((await restarted.get(b.id)).state).toBe("awaiting_approval");
+  }, WIND_DOWN_TIMEOUT_MS);
+
+  it("starts nothing from a fill pass already under way when shutdown begins", async () => {
+    reached = 0;
+    // The pass stops on its repo-policy lookup until let go, so shutdown begins while it is in flight.
+    let inFlight = 0;
+    let letGo = () => {};
+    const gate = new Promise<void>((resolve) => (letGo = resolve));
+    const policies = { for: async () => (inFlight++, await gate, DEFAULT_POLICY) };
+    pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 1, policies });
+    const a = await newTask();
+    await pipeline.start(a.id);
+    while (reached < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    const b = await pipeline.createTask({ title: "b", repoPath: "/r/b" });
+    expect(await pipeline.start(b.id)).toMatchObject({ state: "triage", queued: true });
+    pipeline.setSlots(2);
+    while (inFlight < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const stopped = pipeline.shutdown();
+    letGo();
+    await stopped;
+
+    // The pass's claim lands after shutdown parked a: neither a nor b may start a stage.
+    expect(pipeline.slots.active).toBe(0);
+    expect(await pipeline.get(a.id)).toMatchObject({ state: "triage", queued: true });
+    expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: true });
+    expect(await stagesRun(b.id)).toEqual([]);
+    expect(reached).toBe(1);
   });
 
   it("escalates them instead under the escalate policy, as before", async () => {
@@ -1303,8 +1331,6 @@ describe("deleting a task", () => {
 });
 
 describe("drain and slots", () => {
-  const holding: StageRunner = ({ signal }) =>
-    new Promise<StageResult>((resolve) => signal.addEventListener("abort", () => resolve({ outcome: "fail" }), { once: true }));
   let reached = 0;
   const runnerFor = (stage: TaskState) =>
     stage === "triage"
@@ -1329,9 +1355,8 @@ describe("drain and slots", () => {
     expect((await pipeline.get(b.id)).queued).toBe(true);
 
     expect(pipeline.resumeClaims()).toMatchObject({ draining: false });
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await until(async () => reached === 2, "b to be claimed and running");
     expect((await pipeline.get(b.id)).queued).toBe(false);
-    expect(reached).toBe(2);
   });
 
   it("slots can be resized at run time; a smaller pool queues new work, a larger one fills", async () => {
@@ -1343,7 +1368,7 @@ describe("drain and slots", () => {
     const b = await newTask();
     expect((await pipeline.start(b.id)).queued).toBe(true);
     expect(pipeline.setSlots(2)).toMatchObject({ max: 2 });
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await until(async () => reached === 2, "b to be claimed and running");
     expect((await pipeline.get(b.id)).queued).toBe(false);
     expect(() => pipeline.setSlots(0)).toThrow(/at least 1/);
     expect(pipeline.slots).toMatchObject({ max: 2, active: 2, draining: false });
@@ -1410,9 +1435,11 @@ describe("invalid requests", () => {
 describe("concurrency", () => {
   it("queues a task past the limit and runs it once a slot frees", async () => {
     let finishFirst: (() => void) | undefined;
-    const blocking: StageRunner = () =>
+    // Ends on an abort too: b still runs when the test ends, and the next beforeEach's shutdown stops it.
+    const blocking: StageRunner = (context) =>
       new Promise<StageResult>((resolve) => {
         finishFirst = () => resolve({ outcome: "pass" });
+        void holding(context).then(resolve);
       });
     pipeline = new Pipeline(db, (stage) => (stage === "triage" ? blocking : stubs.runnerFor(stage)), {
       maxConcurrentTasks: 1,
