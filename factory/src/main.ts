@@ -8,7 +8,8 @@
 // This file reads the input, renders the prompt and writes the result; the run itself is the
 // runtime's (src/runtimes/).
 import { PACKS, resolveEngine } from "@hardness/contracts";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -68,5 +69,9 @@ if (!runtime) {
   process.exit(0);
 }
 
-const run = await runtime.run({ pack, engine, input, prompt, paths: { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT }, luna, dry: DRY, out });
+// The model's scratch space: under /tmp, but neither /tmp itself (HOME) nor the Codex home in it.
+const scratch = mkdtempSync(join(tmpdir(), "luna-scratch-"));
+const paths = { factoryRoot: FACTORY_ROOT, work: WORK, out: OUT, input: dirname(IN), scratch };
+const run = await runtime.run({ pack, engine, input, prompt, paths, luna, dry: DRY, out });
 finish(OUT, pack, settle(run, pack), luna.state);
+rmSync(scratch, { recursive: true, force: true });

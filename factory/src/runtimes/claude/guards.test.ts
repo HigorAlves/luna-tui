@@ -426,10 +426,13 @@ describe("preToolUseGuards", () => {
     return hook(hookInput(toolName, toolInput), "toolu_1", options);
   };
 
-  it("builds one matcher for Bash and one for the write tools", () => {
+  it("builds one matcher for Bash, one for the write tools and one for the read tools", () => {
     const matchers = preToolUseGuards(WRITABLE);
-    expect(matchers).toHaveLength(2);
-    const [bash, write] = matchers;
+    expect(matchers).toHaveLength(3);
+    const [bash, write, read] = matchers;
+    const readRe = new RegExp(read?.matcher ?? "");
+    for (const tool of ["Read", "Glob", "Grep"]) expect(readRe.test(tool)).toBe(true);
+    expect(readRe.test("Bash")).toBe(false);
     expect(bash?.hooks).toHaveLength(1);
     expect(write?.hooks).toHaveLength(1);
     const bashRe = new RegExp(bash?.matcher ?? "");

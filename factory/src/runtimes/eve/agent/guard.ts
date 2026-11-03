@@ -9,7 +9,7 @@ function policy(): GuardContext {
   try {
     return JSON.parse(process.env.LUNA_EVE_GUARD ?? "") as GuardContext;
   } catch {
-    return { writable: false, commands: [], deniedRoots: ["/"] };
+    return { writable: false, commands: [], workRoot: "/nonexistent", outRoot: "/nonexistent", roots: { scratch: "/nonexistent" } };
   }
 }
 
@@ -27,3 +27,9 @@ export function approve(tool: GuardedCall["tool"], input: unknown): ApprovalStat
 
 /** eve's file tools name their target `filePath`; the guards read `path`. */
 export const fileInput = (input: unknown): { path: unknown } => ({ path: (input as { filePath?: unknown } | undefined)?.filePath });
+
+/** eve's glob and grep search a folder `path` (the workspace when absent) for a `pattern`. */
+export const searchInput = (input: unknown): { path: unknown; pattern: unknown } => {
+  const fields = (input ?? {}) as { path?: unknown; pattern?: unknown };
+  return { path: fields.path ?? ".", pattern: fields.pattern };
+};

@@ -10,6 +10,7 @@ import type { StageInput } from "@hardness/contracts";
 import { posix } from "node:path";
 
 import { splitArgv } from "./argv.ts";
+import { inRoots, pathsIn, resolvePath } from "./roots.ts";
 
 export interface GuardContext {
   /** Whether this stage may edit the worktree and commit. */
@@ -24,9 +25,20 @@ export interface GuardContext {
   /** The command prefixes the shell may run (the pack's access), for a runtime whose SDK does not
    *  enforce them itself; absent means any command the rules let through. */
   commands?: string[];
-  /** Paths no tool may read or write and no command may name: the Codex home, whose token the
-   *  model's shell could otherwise read as the same user. */
-  deniedRoots?: string[];
+  /** The roots every path a tool names must lie in, symlinks followed (core/roots.ts): the
+   *  worktree, the output, the run's scratch folder and `read`. Absent, paths are left to the
+   *  rules above (the rule tests; a runtime always sets them). */
+  roots?: StageRoots;
+  /** Variables a shell command may expand: the QA credentials the stage input names
+   *  (`env:QA_PASSWORD`). Any other `$` expansion is refused when roots are set. */
+  expandable?: string[];
+}
+
+export interface StageRoots {
+  /** The run's scratch folder under /tmp, HOME and TMPDIR for commands: read and written. */
+  scratch: string;
+  /** Read-only roots besides the worktree and the output: the stage input, the skills. */
+  read?: string[];
 }
 
 const WORK = "/work";
@@ -208,7 +220,7 @@ function guardPipeline(pipeline: Pipeline, ctx: GuardContext): string | null {
   // `curl ... | sh`: a downloader anywhere upstream of a shell or interpreter in one pipeline.
   const downloaderAt = commands.findIndex((tokens) => DOWNLOADERS.has(basename(tokens[0])));
   if (downloaderAt !== -1 && commands.slice(downloaderAt + 1).some((tokens) => INTERPRETERS.has(basename(tokens[0])))) {
-    return "piping a download into a shell is not allowed in a stage: save it to a file under /tmp, read it, then run it";
+    return "piping a download into a shell is not allowed in a stage: save it to a file in the scratch folder (TMPDIR), read it, then run it";
   }
   for (const tokens of pipeline) {
     const reason = guardRedirections(tokens);
@@ -434,31 +446,117 @@ function field(input: unknown, key: string): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
-/** A path's segments, resolved against the worktree: `$HOME/.codex` and `/tmp/x/../.codex` both
- *  name a `.codex` segment. */
-const segments = (path: string, workRoot: string): string[] => posix.normalize(path.startsWith("/") ? path : posix.join(workRoot, path)).split("/");
+/** Every simple command's tokens, quotes removed. */
+const simpleCommands = (command: string): SimpleCommand[] => parseCommand(command).flat();
 
-/** The reason a path or a command token reaches under a denied root, or null. */
-function deniedReason(path: string, policy: GuardContext): string | null {
+const outsideReason = (path: string, policy: GuardContext, roots: StageRoots): string =>
+  `${path} is outside this stage's roots: a tool may only name paths under ${[policy.workRoot ?? WORK, policy.outRoot ?? OUT, roots.scratch, ...(roots.read ?? [])].join(", ")} (scratch space is ${roots.scratch})`;
+
+/** The reason `path`, as the kernel would open it, lies outside the roots a read may name, or null. */
+function readRootReason(path: string, policy: GuardContext): string | null {
+  const roots = policy.roots;
+  if (roots === undefined) return null;
   const work = policy.workRoot ?? WORK;
-  for (const root of policy.deniedRoots ?? []) {
-    const resolved = posix.normalize(path.startsWith("/") ? path : posix.join(work, path));
-    if (isUnder(resolved, root) || segments(path, work).includes(posix.basename(root))) {
-      return `${root} is off limits in a stage: it holds the model's credentials`;
+  const { real, device } = resolvePath(path, work, roots.scratch);
+  if (device) return null;
+  if (real !== null && inRoots(real, [work, policy.outRoot ?? OUT, roots.scratch, ...(roots.read ?? [])])) return null;
+  return outsideReason(path, policy, roots);
+}
+
+/** The reason a write to `path`, as the kernel would open it, is refused, or null: the write
+ *  rules, on the resolved path and with the scratch folder in place of /tmp. */
+function writeRootReason(path: string, policy: GuardContext): string | null {
+  const roots = policy.roots;
+  if (roots === undefined) return guardWrite(path, policy);
+  const work = policy.workRoot ?? WORK;
+  const out = policy.outRoot ?? OUT;
+  const { real } = resolvePath(path, work, roots.scratch);
+  if (real === null) return outsideReason(path, policy, roots);
+  const [realWork, realOut, realScratch] = [work, out, roots.scratch].map((root) => resolvePath(root, "/", roots.scratch).real as string);
+  if (inRoots(real, [realWork as string]) && real.slice((realWork as string).length).split("/").includes(".git")) {
+    return `${work}/.git is never written by a stage: hooks and config belong to the machine`;
+  }
+  if (inRoots(real, [realOut as string, realScratch as string])) return null;
+  if (inRoots(real, [realWork as string])) return policy.writable ? null : `read-only stage: only ${out} and ${roots.scratch} may be written; ${path} is in the worktree`;
+  return `${path} is outside the writable roots: only ${out}, ${roots.scratch} (scratch space) and (in a writable stage) ${work} may be written`;
+}
+
+/** The reason one command's words name a path outside the roots, or null. A shell's redirection
+ *  operator is not part of the path; a nested shell's script is checked as a command. */
+function argsRootReason(tokens: SimpleCommand, policy: GuardContext): string | null {
+  if (policy.roots === undefined) return null;
+  const cmd = basename(unwrap(tokens)[0]);
+  const script = SHELLS.has(cmd) ? tokens[tokens.findIndex((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a)) + 1] : cmd === "eval" ? tokens.slice(1).join(" ") : undefined;
+  if (script !== undefined && script !== tokens[0]) {
+    for (const nested of simpleCommands(script)) {
+      const reason = argsRootReason(nested, policy);
+      if (reason !== null) return reason;
+    }
+  }
+  for (const token of tokens) {
+    for (const path of pathsIn(token.replace(/^(\d*|&)[<>]+[&|]?/, ""), policy.workRoot ?? WORK)) {
+      const reason = readRootReason(path, policy);
+      if (reason !== null) return reason;
     }
   }
   return null;
 }
 
-/** Every simple command's tokens, quotes removed. */
-const simpleCommands = (command: string): SimpleCommand[] => parseCommand(command).flat();
+/** The reason a shell redirection (`> x`, `2>>x`, `&>x`) writes where a write may not, or null. */
+function redirectRootReason(tokens: SimpleCommand, policy: GuardContext): string | null {
+  if (policy.roots === undefined) return null;
+  for (let i = 0; i < tokens.length; i++) {
+    const match = /^(?:\d*|&)>>?\|?(.*)$/s.exec(tokens[i] as string);
+    if (match === null) continue;
+    const target = match[1] !== "" ? (match[1] as string) : tokens[i + 1];
+    if (target === undefined || target.startsWith("&")) continue;
+    const reason = writeRootReason(target, policy);
+    if (reason !== null && !resolvePath(target, policy.workRoot ?? WORK, policy.roots.scratch).device) return reason;
+  }
+  return null;
+}
 
-/** The reason a command names a path under a denied root, or null. */
-function guardDeniedRoots(command: string, policy: GuardContext): string | null {
-  if (!policy.deniedRoots?.length) return null;
-  for (const token of simpleCommands(command).flat()) {
-    const reason = deniedReason(token.replace(/^\d*[<>]+&?/, ""), policy);
-    if (reason !== null) return reason;
+/** The reason a shell command expands something, or null. Claude's Bash runs a real shell: a
+ *  `$NAME`, `$(...)`, backtick or `<(...)` would turn into text the guard never saw (an env
+ *  token, /proc/$PPID/environ). A literal `$` in single quotes, and a credential the stage names,
+ *  stay allowed. A nested shell's script is checked too. */
+function guardExpansion(command: string, policy: GuardContext): string | null {
+  const allowed = new Set(policy.expandable ?? []);
+  const refuse = (what: string, kind: string) => `\`${what}\` is ${kind}: a stage's shell expands nothing; write the value itself, or single-quote a literal $`;
+  let dq = false;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i] as string;
+    const next = command[i + 1];
+    if (!dq && c === "'") {
+      const close = command.indexOf("'", i + 1);
+      if (close === -1) break;
+      i = close;
+    } else if (c === "\\") {
+      i++;
+    } else if (c === '"') {
+      dq = !dq;
+    } else if (c === "`") {
+      return refuse("`", "a command substitution");
+    } else if (!dq && (c === "<" || c === ">") && next === "(") {
+      return refuse(`${c}(`, "a process substitution");
+    } else if (c === "$") {
+      if (next === undefined || /\s/.test(next) || (dq && next === '"')) continue;
+      if (next === "(") return refuse("$(", "a command substitution");
+      const name = /^\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})/.exec(command.slice(i));
+      const variable = name?.[1] ?? name?.[2];
+      if (variable === undefined || !allowed.has(variable)) return refuse(name?.[0] ?? `$${next}`, "an expansion");
+      i += (name?.[0].length ?? 1) - 1;
+    }
+  }
+  for (const tokens of simpleCommands(command)) {
+    const unwrapped = unwrap(tokens);
+    const cmd = basename(unwrapped[0]);
+    const at = SHELLS.has(cmd) ? unwrapped.findIndex((a) => /^-[a-zA-Z]*c[a-zA-Z]*$/.test(a)) : -1;
+    const script = at > 0 ? unwrapped[at + 1] : cmd === "eval" ? unwrapped.slice(1).join(" ") : undefined;
+    if (script !== undefined) {
+      const reason = guardExpansion(script, policy);
+      if (reason !== null) return reason;
+    }
   }
   return null;
 }
@@ -492,17 +590,36 @@ function decide(call: GuardedCall, policy: GuardContext): string | null {
     const command = field(call.input, "command");
     if (command === undefined) return "malformed tool input: a command needs a string command";
     const parsed = splitArgv(command);
-    return "refused" in parsed ? parsed.refused : guardArgv(parsed.argv, policy);
+    return "refused" in parsed ? parsed.refused : (guardArgv(parsed.argv, policy) ?? argsRootReason(parsed.argv, policy));
   }
   if (call.tool === "bash") {
     const command = field(call.input, "command");
     if (command === undefined) return "malformed tool input: Bash needs a string command";
-    return guardDeniedRoots(command, policy) ?? guardBash(command, policy) ?? guardAllowList(command, policy);
+    const expansion = policy.roots === undefined ? null : guardExpansion(command, policy);
+    return (
+      expansion ??
+      guardBash(command, policy) ??
+      guardAllowList(command, policy) ??
+      firstReason(simpleCommands(command), (tokens) => argsRootReason(tokens, policy) ?? redirectRootReason(tokens, policy))
+    );
   }
   if (call.tool === "write" || call.tool === "read") {
     const path = field(call.input, "path");
     if (path === undefined) return `malformed tool input: a ${call.tool} needs a string file_path`;
-    return deniedReason(path, policy) ?? (call.tool === "write" ? guardWrite(path, policy) : null);
+    if (call.tool === "write") return writeRootReason(path, policy);
+    // A search names its folder, and its pattern may name another (`/proc/*/environ`, `../..`).
+    const pattern = field(call.input, "pattern");
+    const fixed = pattern === undefined ? undefined : /^[^*?[{]*\//.exec(pattern)?.[0];
+    const patternRoot = fixed !== undefined && (fixed.startsWith("/") || fixed.startsWith("~") || fixed.startsWith("$") || fixed.split("/").includes("..")) ? (fixed.startsWith("/") || fixed.startsWith("~") || fixed.startsWith("$") ? fixed : posix.join(path, fixed)) : undefined;
+    return readRootReason(path, policy) ?? (patternRoot === undefined ? null : readRootReason(patternRoot, policy));
+  }
+  return null;
+}
+
+function firstReason<T>(items: T[], check: (item: T) => string | null): string | null {
+  for (const item of items) {
+    const reason = check(item);
+    if (reason !== null) return reason;
   }
   return null;
 }

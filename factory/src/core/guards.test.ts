@@ -21,6 +21,7 @@ describe("checkCall", () => {
     expect(checkCall({ tool: "write", input: { path: "/work/src/x.ts" } }, READ_ONLY)).toEqual({ allow: false, reason: expect.stringMatching(/read-only stage/) });
   });
 
+  // Paths are the roots' business (roots.test.ts); without roots a read is not guarded.
   it("lets a read and any other tool through", () => {
     expect(checkCall({ tool: "read", input: { path: "/etc/hosts" } }, READ_ONLY)).toEqual({ allow: true });
     expect(checkCall({ tool: "step", input: { label: "x" } }, READ_ONLY)).toEqual({ allow: true });
@@ -57,24 +58,6 @@ describe("checkCall", () => {
 
     it("still applies the rules to a listed command", () => {
       expect(checkCall({ tool: "bash", input: { command: "cat x > /etc/y" } }, LISTED)).toEqual({ allow: false, reason: expect.stringMatching(/writing to \/etc\/y/) });
-    });
-  });
-
-  describe("with denied roots (the Codex home, which the model's shell could read)", () => {
-    const DENIED = { ...WRITABLE, deniedRoots: ["/tmp/.codex"] };
-
-    it("refuses reading, writing or naming a path under them", () => {
-      expect(checkCall({ tool: "read", input: { path: "/tmp/.codex/auth.json" } }, DENIED)).toEqual({ allow: false, reason: expect.stringMatching(/\/tmp\/\.codex is off limits/) });
-      expect(checkCall({ tool: "read", input: { path: "/tmp/x/../.codex/auth.json" } }, DENIED)).toMatchObject({ allow: false });
-      expect(checkCall({ tool: "write", input: { path: "/tmp/.codex/config.toml" } }, DENIED)).toMatchObject({ allow: false });
-      expect(checkCall({ tool: "bash", input: { command: "cat /tmp/.codex/auth.json" } }, DENIED)).toMatchObject({ allow: false });
-      expect(checkCall({ tool: "bash", input: { command: 'cat "/tmp/.co"dex/auth.json' } }, DENIED)).toMatchObject({ allow: false });
-      expect(checkCall({ tool: "bash", input: { command: "cat ~/.codex/auth.json" } }, DENIED)).toMatchObject({ allow: false });
-    });
-
-    it("leaves everything else alone", () => {
-      expect(checkCall({ tool: "read", input: { path: "/work/src/codex.ts" } }, DENIED)).toEqual({ allow: true });
-      expect(checkCall({ tool: "bash", input: { command: "cat /tmp/notes.txt" } }, DENIED)).toEqual({ allow: true });
     });
   });
 

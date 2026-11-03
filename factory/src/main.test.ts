@@ -196,7 +196,7 @@ describe("factory main (dry run)", () => {
       model: "chatgpt(gpt-5.6-terra)",
       reasoning: "high",
       tools: ["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get"],
-      guard: { writable: false, commands: expect.arrayContaining(["gh issue view"]), deniedRoots: ["/tmp/.codex"] },
+      guard: { writable: false, commands: expect.arrayContaining(["gh issue view"]), roots: { scratch: expect.stringMatching(/luna-scratch-/), read: [expect.stringMatching(/\/in$/)] } },
     });
     expect(result).toMatchObject({ ok: true, summary: "dry-run" });
   });

@@ -17,6 +17,11 @@ export interface RunContext {
     work: string;
     /** Where the run's files go (/out). */
     out: string;
+    /** The folder the stage input was read from (/in): the model may read it. */
+    input: string;
+    /** The run's scratch folder under /tmp, made fresh per run: the model's HOME and TMPDIR, the
+     *  one place outside the worktree and the output its tools may write. */
+    scratch: string;
   };
   /** The luna tools: the state the result reads, the server the Claude runtime serves them from,
    *  and `call` for a runtime that serves the same handlers its own way. */
