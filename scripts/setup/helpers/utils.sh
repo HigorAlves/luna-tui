@@ -23,7 +23,7 @@ require_cmd() {
 show_header() {
     local title="$1"
     echo
-    colorize "$BOLD_CYAN" "🌙 ====================================="
+    colorize "$BOLD_CYAN" "====================================="
     colorize "$BOLD_WHITE" "    $title"
     colorize "$BOLD_CYAN" "====================================="
     echo

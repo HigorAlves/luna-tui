@@ -2,13 +2,22 @@
 # ui.sh - prompts, menus and spinners: gum (charmbracelet) when it is installed and we talk to a
 # terminal, plain `read` otherwise, so every script also runs piped (the tests) and before gum is in.
 source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/banner.sh"
 
 has_gum() { command -v gum &>/dev/null && [ -t 0 ] && [ -t 1 ]; }
 
-# ui_header "Title" ["one line under it"]
+# The banner's line under LUNA.
+LUNA_TAGLINE="tickets in, pull requests out"
+
+# ui_header "Title" ["one line under it"]: the animated banner the first time in a run (a step
+# started by `make setup` inherits LUNA_BANNER_SHOWN and skips it), then the title.
 ui_header() {
+  if [ -z "${LUNA_BANNER_SHOWN:-}" ]; then
+    banner_show "$LUNA_TAGLINE"
+    export LUNA_BANNER_SHOWN=1
+  fi
   if has_gum; then
-    gum style --border rounded --border-foreground 141 --padding "0 2" --margin "1 0" --bold "🌙 $1" ${2:+"$2"}
+    gum style --border rounded --border-foreground 141 --padding "0 2" --margin "0 0 1 0" --bold "$1" ${2:+"$2"}
   else
     show_header "$1"
     [ -n "${2:-}" ] && echo "$2"

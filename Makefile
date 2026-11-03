@@ -7,7 +7,7 @@ SETUP := scripts/setup
 .PHONY: help setup doctor tools credentials integrations luna-yaml up down board
 
 help: ## Show these targets
-	@printf "\n\033[1;35m🌙 Luna\033[0m  make <target>\n\n"
+	@LUNA_NO_ANIMATION=1 bash -c 'source $(SETUP)/helpers/banner.sh && banner_show "make <target>"'
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN { FS = ":.*## " } { printf "  \033[1;36m%-14s\033[0m %s\n", $$1, $$2 }'
 	@echo
 
