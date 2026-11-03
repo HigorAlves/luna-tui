@@ -483,7 +483,7 @@ export class Pipeline {
    *  change is refused with `StageStartedError`. The caller checks the engines against the packs. */
   async setStages(id: string, change: Partial<Record<PackId, EngineId | null>>): Promise<TaskRow> {
     await this.store.withTaskLock(id, async (task, tx) => {
-      const ran = new Set<string>((await this.store.listStageRuns(id)).map((run) => run.stage));
+      const ran = new Set<string>((await tx.listStageRuns(id)).map((run) => run.stage));
       const packs = Object.keys(change) as PackId[];
       const started = packs.find((pack) => packStates(pack).some((state) => ran.has(state)));
       if (started) throw new StageStartedError(id, started);

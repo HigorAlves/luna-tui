@@ -77,6 +77,19 @@ describe("PATCH /tasks/:id/stages", () => {
     expect((await call("PATCH", `/tasks/${task.id}/stages`, { stages: { implementing: "claude:sonnet" } })).status).toBe(200);
   });
 
+  it("finishes every one of more concurrent PATCHes on one task than the pool has connections", async () => {
+    const { max } = (db.driver as unknown as { options: { extra: { max: number } } }).options.extra;
+    const task = await pipeline.createTask({ title: "Login page" });
+    const patches = Array.from({ length: max + 8 }, (_, i) => call("PATCH", `/tasks/${task.id}/stages`, { stages: { triage: i % 2 ? "claude:opus" : null } }));
+    let timer: NodeJS.Timeout | undefined;
+    const stalled = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("the PATCHes deadlocked on the pool")), 10_000);
+    });
+    const answers = await Promise.race([Promise.all(patches), stalled]).finally(() => clearTimeout(timer));
+    expect(answers.map((answer) => answer.status)).toEqual(Array.from({ length: max + 8 }, () => 200));
+    expect((await pipeline.events(task.id)).filter((e) => e.kind === "task.stages")).toHaveLength(max + 8);
+  }, 20_000);
+
   it("is 404 for a task that does not exist", async () => {
     expect((await call("PATCH", "/tasks/00000000-0000-0000-0000-000000000000/stages", { stages: {} })).status).toBe(404);
   });

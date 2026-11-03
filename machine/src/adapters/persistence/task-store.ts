@@ -217,6 +217,9 @@ export class PgTaskStore implements TaskStore {
         recordEvent(input: RecordEventInput) {
           return manager.save(EventEntity, manager.create(EventEntity, input));
         },
+        listStageRuns(taskId) {
+          return manager.find(StageRunEntity, { where: { taskId }, order: { startedAt: "ASC" } });
+        },
       };
       return fn(task, tx);
     });
