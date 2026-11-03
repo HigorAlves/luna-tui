@@ -2,13 +2,28 @@
 
 ## Credentials
 
-Put `claude-oauth-token` or `anthropic-api-key` in `~/.config/hardness/`. Without one, the agent stages do not run for real.
+Put `claude-oauth-token` or `anthropic-api-key` in `~/.config/hardness/`. Without one, the agent stages do not run for real: every pack's default engine is a Claude one.
+
+Each engine runs on its own credential, and a stage gets only its own engine's: a Claude stage never sees the Codex login or an API key, a `codex:*` stage never the Claude token. The machine reads them when a stage starts, so a login or key added later counts without a restart. `GET /engines` says which engines this machine can run and, for the others, what is missing.
+
+| Engines | Credential | Read from | Reaches the stage as |
+|---|---|---|---|
+| `claude:*` | the subscription token, else an API key | `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, then `claude-oauth-token`, `anthropic-api-key` in `~/.config/hardness/` | that one variable |
+| `codex:*` | the Codex (ChatGPT) login | `$CODEX_HOME/auth.json`, else `~/.codex/auth.json`, as `codex login` writes it | a per-run copy (below), `CODEX_HOME=/tmp/.codex` |
+| `openai:*` | an OpenAI API key, opt-in and metered | `OPENAI_API_KEY`, then `~/.config/hardness/openai-api-key` | `OPENAI_API_KEY` |
+| `jev` | a TypeSafe API key, opt-in and metered | `TYPESAFE_API_KEY`, then `~/.config/hardness/typesafe-api-key` | `TYPESAFE_API_KEY` |
+
+An engine a task or a repo's `luna.yaml` picked for a stage whose credential this machine lacks gives way to the pack's default, and the task logs `stage.engine` with the reason; the default itself without its credential fails the stage with the reason.
+
+The Codex CLI owns its login and rewrites `auth.json` when it refreshes the token, so no stage shares the host's file. Each `codex:*` run gets its own copy, `auth.json` (0600) in a `codex/` folder (0700) under the run's folder in the state dir, mounted writable at `/tmp/.codex`. Once the container is gone, a copy the run changed (Codex refreshed the token) is written back to the host file, atomically (a temporary file, then a rename, 0600), but only while the host file still holds what was copied; if it changed meanwhile (you logged in again, or another run wrote back first) the host's is kept and the machine logs it. A copy that no longer reads as JSON is never written back. The copy is deleted either way. Under compose (`pnpm start`) the machine container has no `~/.codex`, so `codex:*` engines show as unavailable there; run the machine with `pnpm dev` to use them.
 
 Jev, the decision model behind `issue_classify`, is opt-in and metered: TypeSafe bills each call, unlike the Claude subscription. It runs only with a TypeSafe API key, and nothing about intake changes without one.
 
 | Variable | Default | What it does |
 |---|---|---|
-| `TYPESAFE_API_KEY` | unset, Jev off | the key the Jev runtime (`@typesafe-ai/sdk`) calls `systemOne` with. Unset: a decision pack's stage ends `ok: false` with the reason, and intake goes on without the labels. The machine will also read it from `~/.config/hardness/typesafe-api-key` once it passes it to the stage container (a later change) |
+| `OPENAI_API_KEY` | unset, `openai:*` off | the key an `openai:*` stage runs on; also read from `~/.config/hardness/openai-api-key`. The `codex:*` engines run the same models on the Codex login instead |
+| `CODEX_HOME` | `~/.codex` | where the machine finds the Codex login (`auth.json`) to copy into a `codex:*` stage |
+| `TYPESAFE_API_KEY` | unset, Jev off | the key the Jev runtime (`@typesafe-ai/sdk`) calls `systemOne` with; also read from `~/.config/hardness/typesafe-api-key`, and passed only to a `jev` stage. Unset: a decision pack's stage ends `ok: false` with the reason, and intake goes on without the labels |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | the TypeSafe API root, for a proxy or a test server |
 
 ## Environment
@@ -109,9 +124,13 @@ sla:                                      # ticket clocks; the machine's env def
     implementing: 4h
     verifying: 1h
   cycle: 3d                               # created → closed (MACHINE_SLA_CYCLE)
+engines:                                  # the engine a pack runs on in this repo, over its default
+  triage: claude:opus                     # must be one of the pack's engines.allowed (GET /packs)
 ```
 
 Every key is optional and unknown keys are ignored. Under `jira.on`, `jira.fields` and `sla.stage` the keys must be task states (`sla.stage`: running ones); an unknown one is dropped with one warning per version of the file, the rest applies. Durations are `30m`, `4h`, `3d` or `off`. `jira.on` works by status *name*, matched without regard to case against the transitions Jira offers from the issue's current status: already there, nothing happens; no transition leads there, the task gets a `jira.blocked` event (with Jira's own words when it refused), the board shows it, and the pipeline goes on. Comments and created issues are posted as Atlassian Document Format built from markdown (paragraphs, `#` headings, `- ` bullets, `- [ ]`/`- [x]` task lists, `1.` ordered lists, `**bold**`, `` `code` ``, bare urls as links), so a ticket's criteria arrive as checkboxes. `branch` also takes `{slug}`, `{route}` and `{id}`, and must contain `{key}` or `{id}` (a pattern without either is dropped with a warning and the default used, so two tasks never share a branch and no render is ever `main`); when the repo already has the branch the pattern names (an older task on the same issue), `-<id8>` is appended for patterns without `{id}` or `{slug}`. Once a task works on its branch that branch stays, whatever the issue's type becomes, and its link cannot be changed or removed until it closes. An unknown issue type renders `{type}` as `task`; unlinked tasks keep `task/<id>-<slug>`; a writable stage never runs on `main`, `master`, `develop` or the repo's default branch. `auto_approve_plan_minutes` needs triage to report `confidence: high` and `risk: low` and to have asked nothing; anything less waits for you as always, and the approval it does make is logged as `plan.auto_approved` with the reason on the approval.
+
+`engines` maps a pack to the engine it runs on in this repo. An engine outside the pack's `engines.allowed` makes the file invalid, reported like any other bad value (the last good version stays in force; a setup proposal with one fails the stage, like any proposal the machine cannot read). A task's own choice (`stages` on `POST /tasks`, `PATCH /tasks/:id/stages`) wins over the file, and the file over the pack's default. A pack's engine is read when its stage starts, so an edit counts from the next stage on; a stage already running keeps its engine, also across a restart.
 
 Each `services` entry runs as its own container beside every stage that runs the repo's code (implementing, verifying, e2e) and every check run, on a private docker network for that run, reachable by its key as hostname; the `exports` become env in the stage or check container. They are torn down with it, so two tasks of one repo never share a database. A service whose `ready` line does not exit 0 within a minute escalates the stage with the service's log tail.
 
