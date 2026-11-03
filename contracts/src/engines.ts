@@ -31,12 +31,15 @@ export interface ResolvedEngine {
   runtime: RuntimeId;
   /** The pinned ID the runtime passes to its SDK. */
   modelId: string;
+  /** The model's ID on the Vercel AI Gateway, when it is served there. */
+  gatewayId?: string;
+  pricing?: ModelEntry["pricing"];
   caps: ModelEntry["caps"];
 }
 
 export function resolveEngine(id: EngineId): ResolvedEngine {
   const model = MODELS[ENGINES[id].model];
-  return { id, runtime: model.runtime, modelId: model.id, caps: model.caps };
+  return { id, runtime: model.runtime, modelId: model.id, ...(model.gatewayId && { gatewayId: model.gatewayId }), ...(model.pricing && { pricing: model.pricing }), caps: model.caps };
 }
 
 /** Whose credential an engine spends, and so whose usage window it shares: a ChatGPT limit on

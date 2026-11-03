@@ -172,11 +172,11 @@ describe("factory main (dry run)", () => {
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
-  it("issue_classify without TYPESAFE_API_KEY: ends the stage with ok false and the reason, without a crash", () => {
-    const { code, result } = run(stageInput("issue_classify"), { LUNA_STAGE_DRY_RUN: "0", TYPESAFE_API_KEY: "" });
+  it("issue_classify without a Jev key: ends the stage with ok false and the reason, without a crash", () => {
+    const { code, result } = run(stageInput("issue_classify"), { LUNA_STAGE_DRY_RUN: "0", TYPESAFE_API_KEY: "", AI_GATEWAY_API_KEY: "" });
     expect(code).toBe(0);
     expect(StageOutput.safeParse(result).error).toBeUndefined();
-    expect(result).toMatchObject({ ok: false, outcome: "fail", rateLimited: false, error: expect.stringContaining("TYPESAFE_API_KEY is not set") });
+    expect(result).toMatchObject({ ok: false, outcome: "fail", rateLimited: false, error: expect.stringContaining("neither AI_GATEWAY_API_KEY nor TYPESAFE_API_KEY is set") });
   });
 
   it("records what the run ran on and a fingerprint that holds across attempts and changes with the runtime and the pack", () => {

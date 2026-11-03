@@ -1,30 +1,59 @@
-// The Jev runtime: a decision pack's questions to TypeSafe's `systemOne` in one call. No prompt,
-// tools or turns: the issue is the state, and the answer comes back in the pack's derived schema.
-// Jev is opt-in and metered: without TYPESAFE_API_KEY the stage ends with a reason, not a crash.
-// The SDK is loaded on a Jev run only, so an agent stage does not pay for it at start.
-import type { StageInput } from "@hardness/contracts";
-import type { JsonValue, Questions, RequestOptions, SystemOneRequest, SystemOneResult } from "@typesafe-ai/sdk";
+// The Jev runtime: a decision pack's questions to Jev in one call. No prompt, tools or turns: the
+// issue is the state, and the answer comes back in the pack's derived schema. Two transports reach
+// the same model: the Vercel AI Gateway through the AI SDK's decision API (AI_GATEWAY_API_KEY,
+// preferred when set) and TypeSafe's own SDK (TYPESAFE_API_KEY). Jev is opt-in and metered: with
+// neither key the stage ends with a reason, not a crash. A call's cost is its tokens at the
+// catalog's price.
+import type { QuestionSet, ResolvedEngine, StageInput } from "@hardness/contracts";
 
 import { EMPTY_RUN, type RunOutcome } from "../../core/output.ts";
 import { NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
+import { gatewayTransport } from "./gateway.ts";
+import { typesafeTransport } from "./typesafe.ts";
 
-type Sdk = typeof import("@typesafe-ai/sdk");
+type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
 
-/** The part of the SDK's client the runtime uses; tests pass a fake. */
-export interface JevClient {
-  systemOne(request: SystemOneRequest<Questions>, options?: RequestOptions): PromiseLike<SystemOneResult<Questions>>;
+/** What one call asks, in no transport's words. */
+export interface JevCall {
+  state: Record<string, Json>;
+  questions: QuestionSet;
+  engine: ResolvedEngine;
 }
 
-async function typesafeClient(): Promise<JevClient> {
-  if (!process.env.TYPESAFE_API_KEY?.trim()) throw new Error("TYPESAFE_API_KEY is not set: Jev is opt-in and metered, so a decision pack does not run without it");
-  const { TypeSafeClient } = await import("@typesafe-ai/sdk");
-  return new TypeSafeClient();
+/** What one call answered: the answers already in the pack's words, not yet validated. */
+export interface JevReply {
+  model: string;
+  answer: Record<string, unknown>;
+  inputTokens: number | null;
+  outputTokens: number | null;
+}
+
+/** One way to Jev: the request it would send (what a dry run prints), the call, and its failure as the stage's. */
+export interface JevTransport {
+  via: "typesafe" | "gateway";
+  request(call: JevCall): Promise<Record<string, unknown>>;
+  decide(call: JevCall, signal: AbortSignal): Promise<JevReply>;
+  failed(e: unknown): Pick<RunOutcome, "error" | "rateLimited" | "resetsAt">;
+}
+
+/** The credential decides: the Gateway when its key is set, else TypeSafe's API (which says so
+ *  when its key is missing too). */
+export function jevTransport(env: NodeJS.ProcessEnv = process.env): JevTransport {
+  return env.AI_GATEWAY_API_KEY?.trim() ? gatewayTransport() : typesafeTransport();
 }
 
 /** What Jev reads: the issue the notch or intake sent, else the task's own title and description. */
-export function stateOf(input: StageInput): Record<string, JsonValue> {
+export function stateOf(input: StageInput): Record<string, Json> {
   const { title, description, labels, source } = input.context.issue ?? { title: input.task.title, description: input.task.description };
   return { title, description, ...(labels && { labels }), ...(source && { source }) };
+}
+
+/** The call's cost at the catalog's price; null without a price or a token count. */
+export function costOf(pricing: ResolvedEngine["pricing"], inputTokens: number | null, outputTokens: number | null): number | null {
+  if (!pricing || inputTokens === null) return null;
+  // Rounded to 8 decimals, what pack_runs keeps: float noise (0.00003255000000000001) stops there.
+  const usd = (inputTokens * pricing.inputPerMTokUsd + (outputTokens ?? 0) * (pricing.outputPerMTokUsd ?? 0)) / 1_000_000;
+  return Math.round(usd * 1e8) / 1e8;
 }
 
 const two = (n: number) => n.toFixed(2);
@@ -42,49 +71,39 @@ function summary(answer: Record<string, any>, minConfidence: number): string {
   return [...parts, ...(low.length > 0 ? [`below ${minConfidence}: ${low.join(", ")}`] : [])].join(" · ");
 }
 
-/** The SDK's failure as the stage's: a 429 is a rate limit with when to retry, the rest a reason. */
-function failed(e: unknown, { APIConnectionError, APIError, APIUserAbortError, RateLimitError }: Sdk): Pick<RunOutcome, "error" | "rateLimited" | "resetsAt"> {
-  const message = e instanceof Error ? e.message : String(e);
-  if (e instanceof APIError) {
-    const retryMs = e instanceof RateLimitError ? e.retryAfterMs : undefined;
-    const resetsAt = retryMs !== undefined ? Math.ceil((Date.now() + retryMs) / 1000) : null;
-    return { error: `jev: HTTP ${e.status}: ${message}`, rateLimited: e.status === 429, resetsAt: e.status === 429 ? resetsAt : null };
-  }
-  // The stage's own deadline, passed as the call's signal, cut the SDK's retries short.
-  if (e instanceof APIUserAbortError) return { error: "jev: no answer before the stage's time ran out", rateLimited: false, resetsAt: null };
-  if (e instanceof APIConnectionError) return { error: `jev: could not reach the API: ${message}`, rateLimited: false, resetsAt: null };
-  return { error: `jev: ${message}`, rateLimited: false, resetsAt: null };
-}
-
-export function jevRuntime(client: () => JevClient | Promise<JevClient> = typesafeClient): Runtime {
+export function jevRuntime(transport: () => JevTransport = jevTransport): Runtime {
   return {
     id: "jev",
-    sdk: "@typesafe-ai/sdk",
+    // The SDK this run's transport loads, so the run record names the one that answered.
+    get sdk() {
+      return jevTransport().via === "gateway" ? "ai" : "@typesafe-ai/sdk";
+    },
     // No role, rules or skills: the pack's questions are all it is told.
     instructions: () => NO_INSTRUCTIONS,
     async run({ pack, engine, input, dry, emit }: RunContext): Promise<RunOutcome> {
       if (pack.kind !== "decision") return { ...EMPTY_RUN, error: `pack ${pack.id} is not a decision pack` };
       const t0 = Date.now();
-      let sdk: Sdk | null = null;
+      let via: JevTransport | null = null;
       try {
-        sdk = await import("@typesafe-ai/sdk");
-        const { fromJev, toJev } = await import("./questions.ts");
-        const request = { state: stateOf(input), questions: toJev(pack.questions), model: engine.modelId };
+        via = transport();
+        const call: JevCall = { state: stateOf(input), questions: pack.questions, engine };
         if (dry) {
-          emit({ kind: "session", payload: { model: engine.modelId, text: JSON.stringify(request, null, 2) } });
+          emit({ kind: "session", payload: { model: engine.modelId, text: JSON.stringify(await via.request(call), null, 2) } });
           let structured: Record<string, unknown> | null = null;
           try {
             structured = process.env.LUNA_STAGE_DRY_STRUCTURED ? (JSON.parse(process.env.LUNA_STAGE_DRY_STRUCTURED) as Record<string, unknown>) : null; // test seam
           } catch {}
           return { ...EMPTY_RUN, ok: true, structured, text: "dry-run" };
         }
-        const result = await (await client()).systemOne(request, { signal: AbortSignal.timeout(deadlineMs(input.limits.timeoutMs)) });
+        const reply = await via.decide(call, AbortSignal.timeout(deadlineMs(input.limits.timeoutMs)));
         const durationMs = Date.now() - t0;
-        const { input_tokens: tokensIn, output_tokens: tokensOut } = result.usage;
-        emit({ kind: "session", payload: { model: result.model, text: `jev · model ${result.model} · ${tokensIn ?? "?"} in · ${tokensOut ?? "?"} out · ${durationMs} ms` } });
-        emit({ kind: "usage", payload: { model: result.model, ...(tokensIn != null && { inputTokens: tokensIn }), ...(tokensOut != null && { outputTokens: tokensOut }) } });
-        const run = { ...EMPTY_RUN, turns: 1, durationMs, model: result.model };
-        const parsed = pack.answer.safeParse(fromJev(pack.questions, result.answers));
+        const { model, inputTokens, outputTokens } = reply;
+        const costUsd = costOf(engine.pricing, inputTokens, outputTokens);
+        const cost = costUsd === null ? "" : ` · $${costUsd.toFixed(8)}`;
+        emit({ kind: "session", payload: { model, text: `jev · model ${model} via ${via.via} · ${inputTokens ?? "?"} in · ${outputTokens ?? "?"} out${cost} · ${durationMs} ms` } });
+        emit({ kind: "usage", payload: { model, ...(inputTokens != null && { inputTokens }), ...(outputTokens != null && { outputTokens }), ...(costUsd != null && { costUsd }) } });
+        const run = { ...EMPTY_RUN, turns: 1, durationMs, model, costUsd };
+        const parsed = pack.answer.safeParse(reply.answer);
         if (!parsed.success) {
           const issues = parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
           return { ...run, error: `jev: the answer does not fit ${pack.id}: ${issues}` };
@@ -94,7 +113,7 @@ export function jevRuntime(client: () => JevClient | Promise<JevClient> = typesa
         emit({ kind: "text", payload: { text } });
         return { ...run, ok: true, structured: answer, text };
       } catch (e) {
-        const reason = sdk ? failed(e, sdk) : { error: `jev: ${e instanceof Error ? e.message : String(e)}`, rateLimited: false, resetsAt: null };
+        const reason = via ? via.failed(e) : { error: `jev: ${e instanceof Error ? e.message : String(e)}`, rateLimited: false, resetsAt: null };
         return { ...EMPTY_RUN, ...reason, durationMs: Date.now() - t0 };
       }
     },
