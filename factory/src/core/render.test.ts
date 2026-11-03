@@ -177,6 +177,9 @@ describe("renderPrompt", () => {
 describe("callLine", () => {
   it("names the tool and its target, one line, cut to 160 columns", () => {
     expect(callLine("Read", { file_path: "/work/a.ts" })).toBe("→ Read /work/a.ts");
+    // eve's file tools name the target filePath; a read of four files is four lines, not a loop.
+    expect(callLine("read_file", { filePath: "/work/b.ts" })).toBe("→ read_file /work/b.ts");
+    expect(callLine("write_file", { filePath: "/work/b.ts", content: "a" })).not.toBe(callLine("write_file", { filePath: "/work/b.ts", content: "b" }));
     expect(callLine("Bash", { command: "cargo test\n--verbose" })).toBe("→ Bash cargo test");
     expect(callLine("Grep", { pattern: "x".repeat(200) })).toHaveLength("→ Grep ".length + 160);
     expect(callLine("mcp__luna__step", { label: "slice 1" })).toBe("→ mcp__luna__step slice 1");
