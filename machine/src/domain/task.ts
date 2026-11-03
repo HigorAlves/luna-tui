@@ -36,6 +36,9 @@ export interface TaskRow {
   jira: JiraLink | null;
   /** When the task entered its current state (its latest transition; creation for a draft). Null only on rows older than the column. */
   stateSince: Date | null;
+  /** The `Idempotency-Key` the work order that made the task came with, and a hash of its body. */
+  idempotencyKey: string | null;
+  requestHash: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -120,6 +123,14 @@ export class NoPlanToEditError extends Error {
   constructor(id: string) {
     super(`task ${id} has no plan awaiting approval`);
     this.name = "NoPlanToEditError";
+  }
+}
+
+/** A work order reused an `Idempotency-Key` with another body. */
+export class IdempotencyConflictError extends Error {
+  constructor(key: string) {
+    super(`Idempotency-Key "${key}" already made a task from another body`);
+    this.name = "IdempotencyConflictError";
   }
 }
 

@@ -6,16 +6,17 @@ import { type BudgetAlert, type Finding, type JiraLink, RUNNING, type StageRunCa
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
-import type { TaskStore } from "./task-store.ts";
+import type { NewTaskRow, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { NoCasesToEditError, NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import type { StageResult, StageRunner } from "./ports.ts";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -26,7 +27,7 @@ import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { NoCasesToEditError, NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+export { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -35,6 +36,13 @@ export function resetSeconds(value: unknown): number | null {
   if (/^\d+(\.\d+)?$/.test(value.trim())) return Number(value);
   const parsed = Date.parse(value);
   return Number.isNaN(parsed) ? null : Math.floor(parsed / 1000);
+}
+
+/** JSON with every object's keys sorted, so two bodies that differ only in key order hash alike. */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, v: unknown) =>
+    v && typeof v === "object" && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : v,
+  );
 }
 
 export interface NewTask {
@@ -245,8 +253,25 @@ export class Pipeline {
   }
 
   async createTask(input: NewTask): Promise<TaskRow> {
+    const task = await this.store.createTask(this.newRow(input));
+    await this.log(task.id, "task.created", { title: task.title, ...(input.route && input.route !== "feature" ? { route: input.route } : {}) });
+    return this.get(task.id);
+  }
+
+  /** A work order under an `Idempotency-Key`: the first call makes the task, a retry with the same
+   *  body answers that task (`created: false`), another body under the key is an `IdempotencyConflictError`.
+   *  `order` is the whole body as sent; its hash is what "the same body" means. */
+  async createTaskOnce(order: NewTask & Record<string, unknown>, key: string): Promise<{ task: TaskRow; created: boolean }> {
+    const hash = createHash("sha256").update(canonicalJson(order)).digest("hex");
+    const { task, created } = await this.store.createTaskOnce(this.newRow(order), key, hash);
+    if (task.requestHash !== hash) throw new IdempotencyConflictError(key);
+    if (created) await this.log(task.id, "task.created", { title: task.title });
+    return { task: created ? await this.get(task.id) : task, created };
+  }
+
+  private newRow(input: NewTask): NewTaskRow {
     const source = input.source ?? null;
-    const task = await this.store.createTask({
+    return {
       title: input.title,
       description: input.description ?? "",
       criteria: input.criteria ?? [],
@@ -256,9 +281,7 @@ export class Pipeline {
       ...(input.branch !== undefined ? { branch: input.branch } : {}),
       ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
       jira: input.jira ?? this.detectJira(input.title, input.description ?? "", source),
-    });
-    await this.log(task.id, "task.created", { title: task.title, ...(input.route && input.route !== "feature" ? { route: input.route } : {}) });
-    return this.get(task.id);
+    };
   }
 
   /** The link a new ticket starts with: its intake source's issue, else the first key in its text when Jira is set up. A notch ticket gets none. */

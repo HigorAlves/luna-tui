@@ -36,7 +36,7 @@ import { computeMetrics } from "../persistence/metrics-query.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { NoCasesToEditError, NoPlanToEditError, type Pipeline, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, type Pipeline, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
 import { CloneError, NoPullError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
@@ -50,6 +50,7 @@ import { InvalidSince, parseSince } from "./metrics.ts";
 import { toApproval, toArtifact, toEvent, toStageRun, toTask } from "./serialize.ts";
 
 const PING_EVERY_MS = 15_000;
+const IDEMPOTENCY_KEY_MAX = 200;
 /** Activity entries returned with one task. */
 const RECENT_EVENTS = 50;
 
@@ -119,6 +120,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof TaskNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof TransitionError) return fail(c, 409, "invalid_transition", error.message);
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
+    if (error instanceof IdempotencyConflictError) return fail(c, 409, "idempotency_conflict", error.message);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
     if (error instanceof NoCasesToEditError) return fail(c, 409, "no_cases", error.message);
     if (error instanceof NoWorktreeError) return fail(c, 404, "no_worktree", error.message);
@@ -190,9 +192,20 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     return c.json(await Promise.all(rows.map((row) => serialize(row, usage.get(row.id) ?? null))));
   });
 
+  /** A work order: with an `Idempotency-Key`, a retry answers the task already made (200); `start` starts it too. */
   app.post("/tasks", async (c) => {
     const input = await body(c, NewTaskInput);
-    return c.json(await serialize(await pipeline.createTask(input)), 201);
+    const key = c.req.header("idempotency-key");
+    if (key !== undefined && (key.length === 0 || key.length > IDEMPOTENCY_KEY_MAX)) {
+      throw new BadRequest(`Idempotency-Key must be 1 to ${IDEMPOTENCY_KEY_MAX} characters`);
+    }
+    const { task, created } = key === undefined ? { task: await pipeline.createTask(input), created: true } : await pipeline.createTaskOnce(input, key);
+    // A retry may race the first call's start, or follow a first call that died before it: start once.
+    const started = input.start && task.state === "draft" ? await pipeline.start(task.id).catch((error: unknown) => {
+      if (error instanceof TransitionError) return pipeline.get(task.id);
+      throw error;
+    }) : task;
+    return c.json(await serialize(started), created ? 201 : 200);
   });
 
   app.get("/tasks/:id", async (c) => {
