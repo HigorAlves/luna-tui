@@ -4,7 +4,7 @@
 // Codex home and its token, HOME, /proc's environ files, /etc, other runs' /tmp. A denylist of
 // names could always be spelled another way (a glob, a symlink, /proc/self/cwd/..); a root
 // cannot.
-import { existsSync, lstatSync, readlinkSync, realpathSync } from "node:fs";
+import { lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { posix } from "node:path";
 
 /** Devices a command may name: they hold nothing and reach nothing. */
@@ -59,6 +59,16 @@ const realRoot = (root: string): string => {
   }
 };
 
+/** Whether a directory entry is there, a link counting even when what it points at is not. */
+const entryExists = (path: string): boolean => {
+  try {
+    lstatSync(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 export const isUnder = (path: string, root: string): boolean => path === root || path.startsWith(root === "/" ? "/" : `${root}/`);
 
 export interface ResolvedPath {
@@ -98,7 +108,7 @@ export function pathsIn(token: string, cwd: string): string[] {
     const file = /^file:(\/\/)?/i.exec(raw);
     const candidate = file ? raw.slice(file[0].length).replace(/^[^/]*(?=\/)/, "") : raw;
     if (candidate === "" || (!file && /^[a-z][a-z0-9+.-]*:\/\//i.test(candidate))) continue;
-    if (candidate.includes("/") || candidate.startsWith(".") || candidate.startsWith("~") || existsSync(posix.join(cwd, candidate))) paths.push(candidate);
+    if (candidate.includes("/") || candidate.startsWith(".") || candidate.startsWith("~") || entryExists(posix.join(cwd, candidate))) paths.push(candidate);
   }
   return paths;
 }

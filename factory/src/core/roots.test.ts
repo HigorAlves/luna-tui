@@ -160,6 +160,8 @@ describe("a symlink whose target does not exist yet", () => {
     expect(write(join(work, "dangling-file"), WRITABLE)).toMatchObject(outside);
     expect(write(join(work, "dangling-dir", "auth.json"), WRITABLE)).toMatchObject(outside);
     expect(exec(`cat ${join(work, "dangling-file")}`)).toMatchObject(refused);
+    // A bare name is a path when an entry by that name is there, link or not.
+    expect(checkCall({ tool: "exec", input: { command: "cat dangling-file", cwd: work } }, READ_ONLY)).toMatchObject(refused);
   });
 
   it("refuses a loop of links instead of hanging", () => {
