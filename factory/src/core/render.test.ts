@@ -135,6 +135,28 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.slack_triage, input, template })).toContain("me (none)\nwatches:\n(none)\nrules:\n(none)\nitems:\n(none)");
   });
 
+  it("renders the chat batch for chat_triage: the source, the person, the rules and one block per item with its kind, flag and floor", () => {
+    const template = "from {{context.chat.source}}\nme {{context.chat.me}}\nrules:\n{{context.chat.rules}}\nitems:\n{{context.chat.items}}";
+    const chat = {
+      source: "teams" as const,
+      me: { id: "8f2c", name: "Higor Alves" },
+      items: [
+        { id: "chat:19:abc", place: "Rafa Souza", kind: "dm" as const, author: "Rafa Souza", isBot: false, text: "approve the rollout?", context: [{ author: "Rafa Souza", text: "staging is green" }], matched: ["dm"], flag: "urgent" as const, floor: "P0" as const },
+        { id: "post:t:c:m", place: "Platform › incidents", kind: "channel" as const, author: "Azure DevOps", isBot: true, text: "build 4411 failed", replies: 1 },
+      ],
+    };
+    const prompt = renderPrompt({ pack: PACKS.chat_triage, input: { ...input, pack: "chat_triage", stage: "chat_triage", context: { projectContext: null, chat } }, template });
+    expect(prompt).toContain("from Microsoft Teams\nme Higor Alves (8f2c)\nrules:\n(none)");
+    expect(prompt).toContain("1. id chat:19:abc · dm Rafa Souza · Rafa Souza · matched dm · flag urgent · floor P0\n   earlier · Rafa Souza: staging is green\n   text: approve the rollout?");
+    expect(prompt).toContain("2. id post:t:c:m · channel Platform › incidents · Azure DevOps (app) · matched (none) · 1 reply\n   text: build 4411 failed");
+    expect(prompt).toContain("`chat-triager` role running the `chat_triage` stage");
+    expect(prompt).toContain("no escalation");
+    const slack = renderPrompt({ pack: PACKS.chat_triage, input: { ...input, pack: "chat_triage", stage: "chat_triage", context: { projectContext: null, chat: { ...chat, source: "slack", rules: "## VIPs\n- @cto\n" } } }, template });
+    expect(slack).toContain("from Slack\n");
+    expect(slack).toContain("rules:\n## VIPs\n- @cto\nitems:");
+    expect(renderPrompt({ pack: PACKS.chat_triage, input, template })).toContain("from (none)\nme (none)\nrules:\n(none)\nitems:\n(none)");
+  });
+
   it("renders the issue for jira_intake: the facts line, the description, the comments and the repo", () => {
     const template = "issue:\n{{context.jira.issue}}\ndescription:\n{{context.jira.description}}\ncomments:\n{{context.jira.comments}}\nrepo: {{context.jira.repoPath}}";
     const jira = { key: "PLAT-123", url: "https://acme.atlassian.net/browse/PLAT-123", summary: "Login page", description: "Users sign in.\n\n- bad password errors", issueType: "Story", priority: "High", labels: ["luna"], dueAt: "2026-10-31", comments: ["Marta: please", "Lee: by Friday"], repoPath: "/work" };

@@ -11,6 +11,7 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   jira_intake: [],
   issue_classify: [],
   eval_judge: [],
+  chat_triage: [],
 };
 
 /** The task states in which the pipeline runs the pack. */

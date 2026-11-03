@@ -418,5 +418,9 @@
   "eval_judge": {
     "allowedTools": [],
     "tools": []
+  },
+  "chat_triage": {
+    "allowedTools": [],
+    "tools": []
   }
 }

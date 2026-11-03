@@ -10,10 +10,11 @@ describe("packStates", () => {
     }
   });
 
-  it("runs the memory review inside shipping, and the inbox packs in no task state", () => {
+  it("runs the memory review inside shipping, and the inbox and on-demand packs in no task state", () => {
     expect(packStates("reviewing_memory")).toEqual(["shipping"]);
     expect(packStates("slack_triage")).toEqual([]);
     expect(packStates("jira_intake")).toEqual([]);
+    expect(packStates("chat_triage")).toEqual([]);
   });
 
   it("names only states in which a stage runs", () => {
