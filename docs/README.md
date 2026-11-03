@@ -10,9 +10,15 @@
 
 For the board (the Rust TUI): [`board/README.md`](../board/README.md).
 
+## Runbooks
+
+| Runbook | When |
+|---|---|
+| [upgrade-a-model.md](./runbooks/upgrade-a-model.md) | A new Claude, OpenAI or Jev model, or a runtime SDK bump |
+
 ## RFCs
 
-Design proposals, numbered in the order they were written. Each one says its status at the top.
+Design proposals, numbered in the order they were written. Each one says its status at the top; 0002 to 0004 end with notes on what was built and how it differs.
 
 | RFC | What it proposes |
 |---|---|

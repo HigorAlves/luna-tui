@@ -5,7 +5,7 @@
 - Docker (for Postgres and the stage containers)
 - Node 24+ and pnpm
 - Rust (to build the board)
-- Nothing else. `pnpm start` and `pnpm dev` build both stage images first (`pnpm images`) from this checkout: the runner image (the factory runner and the Agent SDK) and the QA image on top of it, which adds Playwright with Chromium, ffmpeg and agent-browser (about 2 GB more disk: 3.9 GB against 1.9 GB). The first build takes a while; later ones reuse Docker's cache.
+- Nothing else. `pnpm start` and `pnpm dev` build both stage images first (`pnpm images`) from this checkout: the runner image (Node, `gh`, Go and Rust toolchains, the Codex CLI, and the factory with its three runtimes' SDKs and the prebuilt eve agents; about 3.2 GB on disk) and the QA image on top of it, which adds Playwright with Chromium, ffmpeg and agent-browser (about 2 GB more: 5.2 GB). The first build takes a while; later ones reuse Docker's cache.
 - [herdr](https://herdr.dev/), to run the board as a plugin
 
 ## Quick start
@@ -39,7 +39,7 @@ Both use the same database, so tasks carry over when you switch. For board usage
 
 5. Start the machine, press `S` on the board, then `W` to add the team handles (`@platform-team`), keywords or channels it should treat as addressed to you.
 
-The token is yours, so replies sent from the board post as you. Nothing is posted without `ctrl+s` in the reply editor. `d` clears an item on the board only; `MACHINE_SLACK_MARK_READ=on` also marks it read in Slack. Priorities and drafts come from the `slack_triage` pack: a harness agent (Haiku, low effort, no tools) that runs in the stage container with your Claude Code credential, the same way every stage does, one short run per batch of new messages after the poll has published; without Docker or a credential (or with `MACHINE_AGENTS=off`) the inbox still fills, sorted by time, with no priorities. The rules the triage follows (VIPs, muted channels, quiet hours, always-P0 keywords, your notes) live in `~/.local/state/hardness/slack-triage.md` (`MACHINE_STATE_DIR`; the machine writes it from the template in [`docs/agents/slack-triage.md`](./agents/slack-triage.md) on first run, and `MACHINE_SLACK_RULES` moves it); its `## SLA` section sets how long you give yourself to reply by priority (10m for P0, 30m for P1, 1h for P2 and P3 unless you change it), and an item past its target turns red on the board. Inside its `## Quiet hours` window the board raises notices for P0 only. What the inbox learns from what you clear and answer is kept next to it in `slack-triage.learned.md`. Every variable is in [configuration.md](./configuration.md).
+The token is yours, so replies sent from the board post as you. Nothing is posted without `ctrl+s` in the reply editor. `d` clears an item on the board only; `MACHINE_SLACK_MARK_READ=on` also marks it read in Slack. Priorities and drafts come from the `slack_triage` pack: a harness agent (its default engine, `claude:haiku`, at low effort, no tools) that runs in the stage container with your Claude credential, the same way every stage does, one short run per batch of new messages after the poll has published; without Docker or a credential (or with `MACHINE_AGENTS=off`) the inbox still fills, sorted by time, with no priorities. The rules the triage follows (VIPs, muted channels, quiet hours, always-P0 keywords, your notes) live in `~/.local/state/hardness/slack-triage.md` (`MACHINE_STATE_DIR`; the machine writes it from the template in [`docs/agents/slack-triage.md`](./agents/slack-triage.md) on first run, and `MACHINE_SLACK_RULES` moves it); its `## SLA` section sets how long you give yourself to reply by priority (10m for P0, 30m for P1, 1h for P2 and P3 unless you change it), and an item past its target turns red on the board. Inside its `## Quiet hours` window the board raises notices for P0 only. What the inbox learns from what you clear and answer is kept next to it in `slack-triage.learned.md`. Every variable is in [configuration.md](./configuration.md).
 
 ## Jira
 
@@ -75,7 +75,7 @@ The issue moves when the task enters a mapped state, gets a comment when the tas
 ## Checks
 
 ```sh
-pnpm test             # machine, contracts and factory
+pnpm test             # machine, contracts, factory and the evals' grading
 pnpm typecheck
 pnpm board:test       # board
 pnpm golden           # end-to-end, needs a running machine
@@ -86,7 +86,8 @@ pnpm golden           # end-to-end, needs a running machine
 - `pnpm golden:live`: abort, retry and concurrency paths in sequence. Needs a running machine with a credential and docker; concurrency needs the machine started with `MACHINE_MAX_CONCURRENT=1`.
 - `pnpm --filter @hardness/machine smoke:sandbox`: runs the `evidence` and a dry-run `implementing` pack in the hardened container. Needs docker and `runner:build`; no machine or credential.
 - `pnpm golden --selftest`: fixtures only. No machine, credential or docker.
-- `pnpm --filter @hardness/factory test`: the runner's own tests: the guards, the prompt renderer, the ledger tools, the result writer, and a dry run of every pack.
+- `pnpm --filter @hardness/factory test`: the runner's own tests: the guards and roots, the prompt renderer, the ledger tools, the result writer, a dry run of every pack, and the conformance table on each runtime's fake (Claude, eve, Jev). No credential.
+- `pnpm eval`: replay evals of a pack on an engine, in the stage image. Needs a credential and docker; local only. See [evals/README.md](../evals/README.md).
 
 `pnpm golden --matrix` runs every ticket of `fixtures/golden-task`, `golden-web` and `golden-cli` (a bug and a feature each) and grades the suite, stages, stubs, evidence verdict, cost and diff size. It exits 1 under an 80% pass rate and writes `golden-result.json`; `--only <fixture>`, `--ceiling-usd` and `--threshold` tune it. The nightly `golden` workflow runs it. `node machine/scripts/golden-task.mjs --selftest` checks the fixtures without a machine.
 
