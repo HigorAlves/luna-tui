@@ -6,7 +6,6 @@ import { Pipeline } from "../../application/pipeline.ts";
 import type { StageResult } from "../../application/ports.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
 import { freshTestDatabase } from "../../test/database.ts";
-import { StageRunEntity } from "../persistence/schemas.ts";
 import { createApp } from "./app.ts";
 import { Bus } from "./bus.ts";
 import { percentile } from "./metrics.ts";
@@ -210,7 +209,7 @@ describe("GET /metrics", () => {
     expect((await getMetrics()).byRepo).toBeUndefined();
     const refused = await app().request("/metrics?groupBy=stage");
     expect(refused.status).toBe(400);
-    expect(JSON.stringify(await refused.json())).toMatch(/repo, fingerprint/);
+    expect(JSON.stringify(await refused.json())).toMatch(/repo, engine, fingerprint/);
   });
 
   it("groups the window's stage runs by fingerprint, runs from before fingerprints last", async () => {
