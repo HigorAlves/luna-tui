@@ -11,7 +11,7 @@ Each engine runs on its own credential, and a stage gets only its own engine's: 
 | `claude:*` | the subscription token, else an API key | `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, then `claude-oauth-token`, `anthropic-api-key` in `~/.config/hardness/` | that one variable |
 | `codex:*` | the Codex (ChatGPT) login | `$CODEX_HOME/auth.json`, else `~/.codex/auth.json`, as `codex login` writes it | a per-run copy (below), `CODEX_HOME=/tmp/.codex` |
 | `openai:*` | an OpenAI API key, opt-in and metered | `OPENAI_API_KEY`, then `~/.config/hardness/openai-api-key` | `OPENAI_API_KEY` |
-| `jev` | a TypeSafe API key, opt-in and metered | `TYPESAFE_API_KEY`, then `~/.config/hardness/typesafe-api-key` | `TYPESAFE_API_KEY` |
+| `jev` | a Vercel AI Gateway key or a TypeSafe API key, opt-in and metered | `AI_GATEWAY_API_KEY`, then `~/.config/hardness/ai-gateway-api-key`, then `TYPESAFE_API_KEY`, then `~/.config/hardness/typesafe-api-key`: the first found | that one variable |
 
 An engine a task or a repo's `luna.yaml` picked for a stage whose credential this machine lacks gives way to the pack's default, and the task logs `stage.engine` with the reason; the default itself without its credential fails the stage with the reason.
 
@@ -19,13 +19,14 @@ The Codex CLI owns its login and rewrites `auth.json` when it refreshes the toke
 
 A refresh rotates the token, so two runs on one copy could revoke the login: `codex:*` runs take turns, one at a time on the machine (stages and context-only packs alike). A run takes the login before it copies it and hands it on after its write-back, so the next run starts from the refreshed token. A stage waiting its turn says so on the task's activity (`stage.note`), and one that does not get the login within its own timeout fails with that reason. Under compose (`pnpm start`) your Codex home (`$CODEX_HOME`, else `~/.codex`) is mounted read-write into the machine container, which sets `CODEX_HOME` to it; see [Compose](#compose).
 
-Jev, the decision model behind `issue_classify`, is opt-in and metered: TypeSafe bills each call, unlike the Claude subscription. It runs only with a TypeSafe API key and only when a client asks for `issue_classify` through `POST /runs`; no intake calls it, so nothing else changes without the key.
+Jev, the decision model behind `issue_classify`, is opt-in and metered: each call is billed per input token ($0.042 per million, the price in `contracts/src/models.ts`, from which a run's `costUsd` is computed), unlike the Claude subscription. It is reached two ways, and the key the machine finds first decides which: the Vercel AI Gateway (model `typesafe-ai/jev`, through the AI SDK's `experimental_decide`) with a Gateway key, else TypeSafe's own API with a TypeSafe key. With either, intake classifies each new GitHub or Jira issue before it becomes a task (see [architecture](architecture.md#jira)), and `POST /runs` runs `issue_classify` for clients; without one, intake behaves exactly as before and nothing else changes. Keep the key in the file (`umask 077`), never in a shell history or a command line.
 
 | Variable | Default | What it does |
 |---|---|---|
 | `OPENAI_API_KEY` | unset, `openai:*` off | the key an `openai:*` stage runs on; also read from `~/.config/hardness/openai-api-key`. The `codex:*` engines run the same models on the Codex login instead |
 | `CODEX_HOME` | `~/.codex` | where the machine finds the Codex login (`auth.json`) to copy into a `codex:*` stage |
-| `TYPESAFE_API_KEY` | unset, Jev off | the key the Jev runtime (`@typesafe-ai/sdk`) calls `systemOne` with; also read from `~/.config/hardness/typesafe-api-key`, and passed only to a `jev` stage. Unset: `GET /engines` shows `jev` unavailable and `POST /runs` answers 409 `no_credential` for `issue_classify`; nothing else uses it |
+| `AI_GATEWAY_API_KEY` | unset | the Vercel AI Gateway key the Jev runtime calls `experimental_decide` with (model `typesafe-ai/jev`); also read from `~/.config/hardness/ai-gateway-api-key`, preferred over the TypeSafe key when both are there, and passed by name only to a `jev` stage |
+| `TYPESAFE_API_KEY` | unset | the key the Jev runtime (`@typesafe-ai/sdk`) calls `systemOne` with when there is no Gateway key; also read from `~/.config/hardness/typesafe-api-key`, and passed only to a `jev` stage. With neither key, Jev is off: `GET /engines` shows `jev` unavailable, `POST /runs` answers 409 `no_credential` for `issue_classify`, and intake classifies nothing |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | the TypeSafe API root, for a proxy or a test server |
 
 ## Environment

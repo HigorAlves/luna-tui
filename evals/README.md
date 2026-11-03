@@ -31,7 +31,7 @@ pnpm eval --pack triage --engine claude:opus --case task-price-decimals --no-jud
 
 On a laptop, keep it awake for the run (`caffeinate -s pnpm eval …` on macOS): a container frozen through a sleep is graded as timed out.
 
-The credentials are the machine's: the Claude subscription token, the Codex login, an OpenAI or TypeSafe key, found the same way (see [configuration](../docs/configuration.md)). The judge needs the Claude one.
+The credentials are the machine's: the Claude subscription token, the Codex login, an OpenAI key, the Jev credential (a Vercel AI Gateway or TypeSafe key), found the same way (see [configuration](../docs/configuration.md)). The judge needs the Claude one.
 
 The scorecard gives, per pack and engine, the pass rate, the mean judge score, the mean turns and duration, and the summed cost (`n/a` when the runtime reports none). Without `--save-baseline` it is compared with the engine's saved baseline, over the cases both ran. Every run folder (the input, the output, the transcript) stays under `evals/.runs/`, which git ignores; delete it whenever.
 
