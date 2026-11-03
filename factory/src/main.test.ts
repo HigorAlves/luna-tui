@@ -162,7 +162,7 @@ describe("factory main (dry run)", () => {
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     expect(options).toMatchObject({
       agent: expect.stringMatching(/\.eve-agents\/triage$/),
-      model: "chatgpt(gpt-6-sol)",
+      model: "chatgpt(gpt-5.6-terra)",
       reasoning: "high",
       tools: ["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get"],
       guard: { writable: false, commands: expect.arrayContaining(["gh issue view"]), deniedRoots: ["/tmp/.codex"] },

@@ -189,8 +189,8 @@ describe("PackId", () => {
 });
 
 describe("slack_triage", () => {
-  it("runs as the slack-triager on haiku, low effort, three turns, no tools and no worktree", () => {
-    expect(PACKS.slack_triage).toMatchObject({ agent: "slack-triager", helpers: [], skills: [], access: NO_ACCESS, writable: false, maxTurns: 3, engines: { default: "claude:haiku", allowed: ["claude:haiku"] }, effort: "low", template: "slack_triage.md" });
+  it("runs as the slack-triager on haiku (Codex luna allowed), low effort, three turns, no tools and no worktree", () => {
+    expect(PACKS.slack_triage).toMatchObject({ agent: "slack-triager", helpers: [], skills: [], access: NO_ACCESS, writable: false, maxTurns: 3, engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"] }, effort: "low", template: "slack_triage.md" });
     expect(PACKS.slack_triage.timeoutMs).toBe(3 * 60_000);
     expect(AgentRole.options).toContain("slack-triager");
   });

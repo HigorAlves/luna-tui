@@ -62,6 +62,11 @@ describe("the engines each pack may run on", () => {
     }
   });
 
+  it("lets Codex take the Slack inbox and triage, as candidates beside their Claude defaults", () => {
+    expect(PACKS.slack_triage.engines).toEqual({ default: "claude:haiku", allowed: ["claude:haiku", "codex:luna"] });
+    expect(PACKS.triage.engines).toEqual({ default: "claude:opus", allowed: ["claude:opus", "codex:sol"] });
+  });
+
   it("keeps today's models as the defaults", () => {
     const defaults = Object.fromEntries(Object.values(PACKS).map((p) => [p.id, p.engines.default]));
     expect(defaults).toMatchObject({ setup: "claude:opus", triage: "claude:opus", implementing: "claude:sonnet", verifying: "claude:opus", slack_triage: "claude:haiku", jira_intake: "claude:sonnet", issue_classify: "jev" });

@@ -33,6 +33,8 @@ const CATALOG = {
   "anthropic/haiku-5.5": { runtime: "claude", id: "claude-haiku-5-5", status: "ga", caps: AGENT },
   "openai/gpt-6-sol": { runtime: "eve", id: "gpt-6-sol", status: "preview", caps: AGENT },
   "openai/gpt-6-luna": { runtime: "eve", id: "gpt-6-luna-fast", status: "preview", caps: AGENT },
+  // What a ChatGPT (Codex) login serves for the stronger engine: gpt-6-sol is API-only on it.
+  "openai/gpt-5.6-terra": { runtime: "eve", id: "gpt-5.6-terra", status: "preview", caps: AGENT },
   // A decision model: typed answers to typed questions, no tools and no effort setting.
   "typesafe/jev": { runtime: "jev", id: "jev-latest", status: "preview", caps: { tools: false, structured: true, effort: [] } },
 } as const satisfies Record<string, ModelEntry>;

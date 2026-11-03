@@ -16,7 +16,7 @@ export const ENGINES = {
   "claude:sonnet": { model: "anthropic/sonnet-5.5" },
   "claude:haiku": { model: "anthropic/haiku-5.5" },
   // The same OpenAI models twice: on the Codex (ChatGPT) login, and on an OpenAI API key.
-  "codex:sol": { model: "openai/gpt-6-sol", auth: "chatgpt" },
+  "codex:sol": { model: "openai/gpt-5.6-terra", auth: "chatgpt" },
   "codex:luna": { model: "openai/gpt-6-luna", auth: "chatgpt" },
   "openai:sol": { model: "openai/gpt-6-sol", auth: "api-key" },
   "openai:luna": { model: "openai/gpt-6-luna", auth: "api-key" },
