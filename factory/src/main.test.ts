@@ -3,7 +3,7 @@
 // pack reads the QA manifest; a bad input still leaves a result that says why.
 import { AGENT_PACKS, type AgentPack, PACKS, type PackId, StageOutput, resolveEngine } from "@hardness/contracts";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -121,6 +121,25 @@ describe("factory main (dry run)", () => {
     expect(options).toMatchObject({ agent: "jira-triager", agents: ["jira-triager"], model: "claude-sonnet-5-5", effort: "low", tools: ["Read", "Glob", "Grep"], allowedTools: ["Read", "Glob", "Grep"] });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
+  it("issue_classify: renders no prompt, prints the questions and the issue it would send to Jev, and leaves a valid result", () => {
+    const issue = { title: "Board crashes on resize", description: "It panics.", labels: ["bug"] };
+    const { code, stdout, out, result } = run(stageInput("issue_classify", { plan: null, context: { projectContext: null, issue } }), {}, {}, { emptyWork: true });
+    expect(code).toBe(0);
+    expect(existsSync(join(out, "prompt.md"))).toBe(false);
+    expect(stdout).toContain("pack issue_classify as a decision");
+    const request = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
+    expect(request).toMatchObject({ model: resolveEngine("jev").modelId, state: issue, questions: { kind: { type: "choice" }, ready: { type: "noul" }, size: { type: "score" } } });
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
+  });
+
+  it("issue_classify without TYPESAFE_API_KEY: ends the stage with ok false and the reason, without a crash", () => {
+    const { code, result } = run(stageInput("issue_classify"), { LUNA_STAGE_DRY_RUN: "0", TYPESAFE_API_KEY: "" });
+    expect(code).toBe(0);
+    expect(StageOutput.safeParse(result).error).toBeUndefined();
+    expect(result).toMatchObject({ ok: false, outcome: "fail", rateLimited: false, error: expect.stringContaining("TYPESAFE_API_KEY is not set") });
   });
 
   it("runs the engine the input names, by its pinned model ID", () => {
