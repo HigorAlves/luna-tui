@@ -87,3 +87,10 @@ export function chooseEngine(opts: {
   }
   return { engine: fallback, source: "default", reason: reasons.join("; ") || null };
 }
+
+/** The engines a pack may move to after a usage limit, in its order: its `fallback` list less the
+ *  engines that already ran the stage this time. The caller drops those it cannot run now. */
+export function fallbackCandidates(pack: Pick<Pack, "engines">, tried: Iterable<EngineId>): EngineId[] {
+  const done = new Set(tried);
+  return (pack.engines.fallback ?? []).filter((engine) => !done.has(engine));
+}

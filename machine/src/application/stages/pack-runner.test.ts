@@ -605,6 +605,18 @@ describe("the engine a stage runs on", () => {
     expect((seen!.input as unknown as StageInput).engine).toBe("claude:opus");
   });
 
+  it("runs the fallback engine the machine hands it, over the task's pick, and gives the sandbox that engine's credential", async () => {
+    const { credentials, log } = recordingCredentials();
+    const started = vi.fn(async () => {});
+    const task = { ...context("triage").task, stages: { triage: "codex:sol" } } as TaskRow;
+    const result = await runAgent({ ...deps(fakeSandbox(output())), credentials }, { ...context("triage"), task, started, engine: "claude:opus" }, "triage");
+    expect((seen!.input as unknown as StageInput).engine).toBe("claude:opus");
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({ engine: "claude:opus" }));
+    expect(log).toContain("prepare claude:opus");
+    // The machine logs the fallback itself; the runner adds no engine event of its own.
+    expect(result.events?.find((e) => e.kind === "engine")).toBeUndefined();
+  });
+
   it("says on the task's activity when the engine asked for gave way to the default for want of its credential", async () => {
     const { credentials, log } = recordingCredentials(["codex:sol"]);
     const note = vi.fn(async () => {});

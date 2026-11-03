@@ -15,6 +15,7 @@ import { type PipelineEvent, type Step, transition } from "../domain/transition.
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { Credentials } from "../adapters/credentials/index.ts";
+import { fallbackCandidates } from "../domain/engine-choice.ts";
 import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
@@ -714,6 +715,33 @@ export class Pipeline {
     return { owner: engine ? credentialOwner(engine) : "claude", engine };
   }
 
+  /** After `stage` hit a usage limit: the pack's next fallback engine that has not run it this time,
+   *  whose window is open and whose credential this machine has, else null. When there is one,
+   *  the window just hit is latched here (the pause does it otherwise), so the queue waits on it. */
+  private async fallbackAfterLimit(id: string, stage: TaskState, tried: Set<EngineId>, resetsAt: unknown): Promise<{ engine: EngineId; reason: string } | null> {
+    const pack = packForState(stage);
+    if (!pack || !PACKS[pack].engines.fallback?.length) return null;
+    const task = await this.get(id);
+    const { owner, engine } = await this.spentOn(task, stage);
+    if (!engine) return null;
+    tried.add(engine);
+    const held = new Set([owner, ...this.openLatches().map(([latched]) => latched)]);
+    let next: EngineId | null = null;
+    for (const candidate of fallbackCandidates(PACKS[pack], tried)) {
+      if (held.has(credentialOwner(candidate))) continue;
+      if ((await this.credentials.check(candidate)).available) {
+        next = candidate;
+        break;
+      }
+    }
+    if (!next) return null;
+    const at = resetSeconds(resetsAt);
+    this.latch(owner, at !== null ? at * 1000 + RESUME_MARGIN_MS : Date.now() + LATCH_FALLBACK_MS);
+    const until = this.latches.get(owner);
+    await this.log(id, "usage.latched", { owner, engine, until: until ? new Date(until).toISOString() : null });
+    return { engine: next, reason: `fallback after ${engine} rate limit` };
+  }
+
   /** True when a credential's window is latched and `stage` of the task would spend it. */
   private async heldForUsage(id: string, stage: TaskState): Promise<boolean> {
     const latched = new Set(this.openLatches().map(([owner]) => owner));
@@ -737,12 +765,29 @@ export class Pipeline {
    *  reset (or the fallback after its pause, when it named none). */
   private async relatch(): Promise<void> {
     for (const task of await this.store.findStuckTasks(new Set<TaskState>(["paused_rate_limit"]))) {
-      const latest = (await this.store.findFinishedEvents(task.id))[0];
-      const { owner } = await this.spentOn(task, task.resumeTo ?? task.state);
+      const stage = task.resumeTo ?? task.state;
+      const finished = await this.store.findFinishedEvents(task.id);
+      const { owner } = await this.spentOn(task, stage);
       this.pausedOn.set(task.id, owner);
-      const at = resetSeconds((latest?.payload.detail as Record<string, unknown> | undefined)?.resetsAt);
-      this.latch(owner, at !== null ? at * 1000 + RESUME_MARGIN_MS : (latest?.at.getTime() ?? 0) + LATCH_FALLBACK_MS);
+      // The runs that hit a limit before the pause, newest first: the one it paused on and those
+      // it fell back from. Each holds its own engine's window until that run's reset.
+      const runs = (await this.store.listStageRuns(task.id)).filter((run) => run.stage === stage).reverse();
+      const firstOk = runs.findIndex((run) => run.outcome !== "rate_limited");
+      const limited = runs.slice(0, firstOk === -1 ? runs.length : Math.max(1, firstOk));
+      if (limited.length === 0) {
+        this.latchFrom(owner, finished[0]);
+        continue;
+      }
+      for (const run of limited) {
+        this.latchFrom(run.engine ? credentialOwner(run.engine) : owner, finished.find((event) => event.stageRunId === run.id) ?? finished[0]);
+      }
     }
+  }
+
+  /** Latches `owner` until the reset a run's `stage.finished` named, or the fallback after it. */
+  private latchFrom(owner: CredentialOwner, finished: EventRow | undefined): void {
+    const at = resetSeconds((finished?.payload.detail as Record<string, unknown> | undefined)?.resetsAt);
+    this.latch(owner, at !== null ? at * 1000 + RESUME_MARGIN_MS : (finished?.at.getTime() ?? 0) + LATCH_FALLBACK_MS);
   }
 
   /** Runs tick() every `intervalMs` until stopSupervisor(). */
@@ -1078,6 +1123,9 @@ export class Pipeline {
   private async drive(id: string, first: TaskState, controller: AbortController, resume?: Resume): Promise<void> {
     try {
       let stage: TaskState | null = first;
+      /** The engines that hit their usage limit on this stage, this time round; and the next one to try. */
+      const tried = new Set<EngineId>();
+      let fallback: { engine: EngineId; reason: string } | undefined;
       while (stage) {
         this.stages.set(id, stage);
         if (await this.holdForBudget(id, stage)) return;
@@ -1097,13 +1145,21 @@ export class Pipeline {
         }
         let result: StageResult;
         try {
-          result = await this.runStage(id, stage, controller.signal, resume);
+          result = await this.runStage(id, stage, controller.signal, resume, fallback);
         } finally {
           this.offPool.delete(id);
         }
         resume = undefined;
+        fallback = undefined;
         // An abort already moved the task on; this stage's result no longer applies.
         if (controller.signal.aborted) return;
+        // A usage limit on one engine: the stage runs again at once on the pack's next fallback
+        // that can run, and the task pauses only once there is none.
+        if (result.rateLimited) {
+          fallback = (await this.fallbackAfterLimit(id, stage, tried, result.detail?.resetsAt)) ?? undefined;
+          if (fallback) continue;
+        }
+        tried.clear();
         const stuck = result.outcome === "fail" ? await this.stuckReason(id, stage) : null;
         // A test_change sends the task back to test_design; verifying's tests, the ones
         // implementing says are wrong, must not stay locked in the branch meanwhile.
@@ -1380,11 +1436,12 @@ export class Pipeline {
     return Array.isArray(findings) ? (findings as Finding[]) : [];
   }
 
-  private async runStage(id: string, stage: TaskState, signal: AbortSignal, resume?: Resume): Promise<StageResult> {
+  private async runStage(id: string, stage: TaskState, signal: AbortSignal, resume?: Resume, fallback?: { engine: EngineId; reason: string }): Promise<StageResult> {
     // Re-attaching after a restart: the run row and its container already exist.
     const attempt = resume?.attempt ?? (await this.store.countStageRunAttempts(id, stage)) + 1;
     const runId = resume?.runId ?? (await this.store.insertStageRun({ taskId: id, stage, attempt }));
     if (!resume) await this.log(id, "stage.started", { stage, attempt }, runId);
+    if (fallback) await this.log(id, "stage.engine", { stage, pack: packForState(stage), engine: fallback.engine, reason: fallback.reason }, runId);
 
     let result: StageResult;
     let error: string | undefined;
@@ -1403,6 +1460,7 @@ export class Pipeline {
         priorFindings,
         signal,
         ...(resume ? { resume: { container: resume.container, inputCommit: resume.inputCommit, engine: resume.engine } } : {}),
+        ...(fallback ? { engine: fallback.engine } : {}),
         started: (facts) => this.store.markStageRunStarted(runId, { containerId: facts.container, inputCommit: facts.inputCommit, ...(facts.engine ? { engine: facts.engine } : {}) }),
         note: (text) => this.log(id, "stage.note", { stage, note: text }, runId),
       });

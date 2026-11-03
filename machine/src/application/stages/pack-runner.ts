@@ -124,10 +124,13 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   const container = resume?.container ?? `hardness-${task.id.slice(0, 8)}-${context.stage.replaceAll("_", "-")}-${context.attempt}`;
   const runDir = join(deps.stateDir, "runs", context.runId);
   // The task's own engine for the pack, else luna.yaml's, else the default; a re-attached run
-  // keeps the engine its container started on. An engine passed over is logged with why.
+  // keeps the engine its container started on, and a fallback after a usage limit runs the engine
+  // the machine handed it (which logs why). An engine passed over is logged with why.
   const choice = resume?.engine
     ? { engine: resume.engine, reason: null }
-    : await pickEngine(deps.credentials, PACKS[pack], task.stages ?? null, policy.engines);
+    : context.engine
+      ? { engine: context.engine, reason: null }
+      : await pickEngine(deps.credentials, PACKS[pack], task.stages ?? null, policy.engines);
   const engineEvents = choice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: choice.reason } }] : [];
   if (!resume) await context.started?.({ container, inputCommit, engine: choice.engine });
   // An engine asked for that gave way to the default is said on the task as it starts, not only in the run's events.
