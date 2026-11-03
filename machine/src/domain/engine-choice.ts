@@ -23,7 +23,7 @@ const CREDENTIAL_NAMES: Record<CredentialOwner, string> = {
   claude: "Claude credential",
   codex: "Codex login",
   openai: "OpenAI API key",
-  typesafe: "TypeSafe API key",
+  typesafe: "Jev credential (a Vercel AI Gateway or TypeSafe key)",
 };
 
 /** Why `engine` cannot run `pack`, or null when the pack allows it. */

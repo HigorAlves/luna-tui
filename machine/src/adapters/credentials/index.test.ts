@@ -26,7 +26,7 @@ describe("credentialsFor", () => {
     expect(reasons["claude:opus"]).toEqual({ available: false, reason: expect.stringMatching(/CLAUDE_CODE_OAUTH_TOKEN/) });
     expect(reasons["codex:sol"]).toEqual({ available: false, reason: expect.stringMatching(/codex login/) });
     expect(reasons["openai:luna"]).toEqual({ available: false, reason: expect.stringMatching(/OPENAI_API_KEY.*openai-api-key/) });
-    expect(reasons.jev).toEqual({ available: false, reason: expect.stringMatching(/TYPESAFE_API_KEY.*typesafe-api-key/) });
+    expect(reasons.jev).toEqual({ available: false, reason: expect.stringMatching(/AI_GATEWAY_API_KEY.*ai-gateway-api-key.*TYPESAFE_API_KEY.*typesafe-api-key/) });
     await expect(credentials.prepare("openai:sol", home)).rejects.toThrow(/no OpenAI API key/);
   });
 
@@ -46,6 +46,20 @@ describe("credentialsFor", () => {
     expect(await credentialsFor("jev", { env: {}, home }).check()).toEqual({ available: true });
   });
 
+  it("gives a jev stage one key, the Vercel AI Gateway's first (env, then file), else TypeSafe's", async () => {
+    const jev = (env: Record<string, string>) => credentialsFor("jev", { env, home });
+    expect((await jev({ AI_GATEWAY_API_KEY: "gw-env", TYPESAFE_API_KEY: "ts-env" }).prepare(home)).env).toEqual({ AI_GATEWAY_API_KEY: "gw-env" });
+    expect((await jev({ TYPESAFE_API_KEY: "ts-env" }).prepare(home)).env).toEqual({ TYPESAFE_API_KEY: "ts-env" });
+    secret("ai-gateway-api-key", "gw-file");
+    expect((await jev({ TYPESAFE_API_KEY: "ts-env" }).prepare(home)).env).toEqual({ AI_GATEWAY_API_KEY: "gw-file" });
+    expect((await jev({ AI_GATEWAY_API_KEY: "gw-env" }).prepare(home)).env).toEqual({ AI_GATEWAY_API_KEY: "gw-env" });
+    expect(await jev({}).check()).toEqual({ available: true });
+  });
+
+  it("refuses a jev stage with neither key, naming both", async () => {
+    await expect(credentialsFor("jev", { env: {}, home }).prepare(home)).rejects.toThrow(/no Jev credential: set AI_GATEWAY_API_KEY.*TYPESAFE_API_KEY/);
+  });
+
   it("gives a codex:* stage the run's copy of the Codex login and no Claude token", async () => {
     mkdirSync(join(home, ".codex"));
     writeFileSync(join(home, ".codex", "auth.json"), "{}");
@@ -57,7 +71,7 @@ describe("credentialsFor", () => {
   });
 
   it("never answers a value from check", async () => {
-    const credentials = machineCredentials({ env: { CLAUDE_CODE_OAUTH_TOKEN: "secret-token", OPENAI_API_KEY: "sk-secret", TYPESAFE_API_KEY: "ts-secret" }, home });
+    const credentials = machineCredentials({ env: { CLAUDE_CODE_OAUTH_TOKEN: "secret-token", OPENAI_API_KEY: "sk-secret", TYPESAFE_API_KEY: "ts-secret", AI_GATEWAY_API_KEY: "gw-secret" }, home });
     const all = await Promise.all(EngineId.options.map((engine) => credentials.check(engine)));
     expect(JSON.stringify(all)).not.toMatch(/secret/);
   });
