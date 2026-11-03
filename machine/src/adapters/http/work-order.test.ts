@@ -1,9 +1,12 @@
 // `POST /tasks` as a work order: an Idempotency-Key makes a retry answer the task already made,
 // and `start: true` starts the pipeline in the same call.
+import { createHash } from "node:crypto";
+
+import { NewTaskInput } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { Pipeline } from "../../application/pipeline.ts";
+import { Pipeline, canonicalJson } from "../../application/pipeline.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
 import { freshTestDatabase } from "../../test/database.ts";
 import { createApp } from "./app.ts";
@@ -57,8 +60,29 @@ describe("POST /tasks with an Idempotency-Key", () => {
   it("is 409 idempotency_conflict for the same key with another body, and leaves the task as it was", async () => {
     const first = await post(order, "ticket-1:1");
     const other = await post({ ...order, title: "Logout page" }, "ticket-1:1");
-    expect(other).toMatchObject({ status: 409, body: { error: "idempotency_conflict" } });
+    expect(other).toMatchObject({ status: 409, body: { error: "idempotency_conflict", taskId: first.body.id } });
     expect((await pipeline.list()).map((t) => [t.id, t.title])).toEqual([[first.body.id, "Login page"]]);
+  });
+
+  it("takes an equivalent retry as the same body: defaults spelled out, an absent jiraKey as null, start left out", async () => {
+    const lean = { title: "Login page", source: { kind: "notch", ref: "LUNA-14", id: "8f1c0d7e-0000-0000-0000-000000000000" } };
+    const first = await post({ ...lean, start: true }, "ticket-6:1");
+    expect(first.status).toBe(201);
+    const spelled = { ...lean, description: "", criteria: [], repoPath: null, stages: {}, source: { ...lean.source, jiraKey: null } };
+    expect(await post(spelled, "ticket-6:1")).toMatchObject({ status: 200, body: { id: first.body.id } });
+    expect(await post({ ...spelled, start: false }, "ticket-6:1")).toMatchObject({ status: 200, body: { id: first.body.id } });
+    expect(await post({ ...lean, description: "more" }, "ticket-6:1")).toMatchObject({ status: 409, body: { error: "idempotency_conflict", taskId: first.body.id } });
+    expect(await pipeline.list()).toHaveLength(1);
+  });
+
+  it("still matches a retry of a request made before bodies were canonical, by the hash stored then", async () => {
+    const legacy = { ...order, start: true };
+    const first = await post(legacy, "ticket-7:1");
+    // The hash the machine stored before: the parsed body as sent, start included.
+    const parsed = NewTaskInput.parse(legacy);
+    await db.query("update tasks set request_hash = $1 where id = $2", [createHash("sha256").update(canonicalJson(parsed)).digest("hex"), first.body.id]);
+    expect(await post(legacy, "ticket-7:1")).toMatchObject({ status: 200, body: { id: first.body.id } });
+    expect(await post({ ...order, title: "Logout page" }, "ticket-7:1")).toMatchObject({ status: 409, body: { taskId: first.body.id } });
   });
 
   it("makes one task when a retry races the first request", async () => {

@@ -48,6 +48,22 @@ export function canonicalJson(value: unknown): string {
   );
 }
 
+/** A work order's hash: its fields with every default filled (`description: ""`, `criteria: []`,
+ *  `repoPath: null`, `source: null`, `stages: {}`, a source's absent fields as null) and `start`
+ *  left out, so an equivalent retry is the same order. */
+export function orderHash(order: NewTask & Record<string, unknown>): string {
+  const source = order.source ? Object.fromEntries(Object.entries(order.source).filter(([, value]) => value !== null && value !== undefined)) : null;
+  const canonical = {
+    title: order.title,
+    description: order.description ?? "",
+    criteria: order.criteria ?? [],
+    repoPath: order.repoPath ?? null,
+    source,
+    stages: order.stages ?? {},
+  };
+  return createHash("sha256").update(canonicalJson(canonical)).digest("hex");
+}
+
 export interface NewTask {
   title: string;
   description?: string;
@@ -273,12 +289,14 @@ export class Pipeline {
   }
 
   /** A work order under an `Idempotency-Key`: the first call makes the task, a retry with the same
-   *  body answers that task (`created: false`), another body under the key is an `IdempotencyConflictError`.
-   *  `order` is the whole body as sent; its hash is what "the same body" means. */
+   *  body answers that task (`created: false`), another body under the key is an `IdempotencyConflictError`
+   *  naming the task. "The same body" is the same canonical order (`orderHash`); a key stored before
+   *  bodies were canonical keeps its hash of the body as it was sent, which a retry still matches. */
   async createTaskOnce(order: NewTask & Record<string, unknown>, key: string): Promise<{ task: TaskRow; created: boolean }> {
-    const hash = createHash("sha256").update(canonicalJson(order)).digest("hex");
+    const hash = orderHash(order);
     const { task, created } = await this.store.createTaskOnce(this.newRow(order), key, hash);
-    if (task.requestHash !== hash) throw new IdempotencyConflictError(key);
+    const legacy = () => createHash("sha256").update(canonicalJson(order)).digest("hex");
+    if (task.requestHash !== hash && task.requestHash !== legacy()) throw new IdempotencyConflictError(key, task.id);
     if (created) await this.log(task.id, "task.created", { title: task.title });
     return { task: created ? await this.get(task.id) : task, created };
   }

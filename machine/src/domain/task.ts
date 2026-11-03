@@ -134,8 +134,9 @@ export class NoPlanToEditError extends Error {
 
 /** A work order reused an `Idempotency-Key` with another body. */
 export class IdempotencyConflictError extends Error {
-  constructor(key: string) {
-    super(`Idempotency-Key "${key}" already made a task from another body`);
+  /** The task the key already made, for the client to follow. */
+  constructor(key: string, readonly taskId: string) {
+    super(`Idempotency-Key "${key}" already made task ${taskId} from another body`);
     this.name = "IdempotencyConflictError";
   }
 }

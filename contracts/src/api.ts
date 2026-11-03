@@ -390,4 +390,6 @@ export interface Metrics {
 export interface ApiError {
   error: string;
   message: string;
+  /** With 409 `idempotency_conflict`: the task the key already made. */
+  taskId?: string;
 }
