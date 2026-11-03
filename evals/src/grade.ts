@@ -1,0 +1,162 @@
+// Grading one case, then a scorecard per pack and engine, then the diff between two scorecards.
+// The order is RFC 0003's: the StageOutput and the pack's answer schema first, the case's
+// deterministic checks second, the judge last. Pure: runs and verdicts come in as data.
+import { type EngineId, PACKS, type PackId, type StageOutput } from "@hardness/contracts";
+
+import { type CheckResult, type Expect, runCheck } from "./expect.ts";
+
+/** What one case's container left: a readable output, or why there is none. */
+export interface CaseRun {
+  id: string;
+  output: StageOutput | null;
+  error: string | null;
+  /** Wall time around the container; the duration when the output reports none. */
+  wallMs: number;
+}
+
+/** The judge's verdict on a case, or why there is none. */
+export type JudgeVerdict = { score: number; pass: boolean; reasons: string[]; costUsd: number | null } | { error: string };
+
+export interface CaseResult {
+  id: string;
+  pass: boolean;
+  /** The StageOutput answered, and its answer is on the pack's schema. */
+  schema: CheckResult;
+  checks: CheckResult[];
+  /** Null when the judge was skipped. */
+  judge: JudgeVerdict | null;
+  turns: number;
+  durationMs: number;
+  /** Null when the runtime reported no cost. */
+  costUsd: number | null;
+  model: string | null;
+}
+
+/** (a) and (b): the schema, then the deterministic checks. The answer is returned for the judge. */
+export function gradeAnswer(pack: PackId, expect: Expect, run: CaseRun): { answer: Record<string, unknown> | null; schema: CheckResult; checks: CheckResult[] } {
+  const schemaCheck = `answer on the ${pack} schema`;
+  const failed = (detail: string) => ({ answer: null, schema: { check: schemaCheck, pass: false, detail }, checks: expect.checks.map((c) => ({ ...runCheck(null, c), detail: "no answer" })) });
+  const output = run.output;
+  if (!output) return failed(run.error ?? "no output");
+  if (!output.ok) return failed(typeof output.error === "string" ? output.error : output.error ? JSON.stringify(output.error) : output.summary || "the stage failed");
+  const parsed = PACKS[pack].answer.safeParse(output.answer);
+  if (!parsed.success) return failed(parsed.error.issues.map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`).join("; "));
+  const answer = output.answer as Record<string, unknown>;
+  const checks = expect.checks.map((check) => runCheck(answer, check));
+  if (expect.outcome) {
+    const pass = output.outcome === expect.outcome;
+    checks.unshift({ check: `outcome = ${expect.outcome}`, pass, detail: pass ? null : `found ${output.outcome}` });
+  }
+  return { answer, schema: { check: schemaCheck, pass: true, detail: null }, checks };
+}
+
+/** The case's result: it passes when the schema, every check and (unless skipped) the judge pass. */
+export function caseResult(pack: PackId, expect: Expect, run: CaseRun, judge: JudgeVerdict | null): CaseResult {
+  const { schema, checks } = gradeAnswer(pack, expect, run);
+  const judged = judge === null || ("pass" in judge && judge.pass);
+  const usage = run.output?.usage;
+  return {
+    id: run.id,
+    pass: schema.pass && checks.every((c) => c.pass) && judged,
+    schema,
+    checks,
+    judge,
+    turns: usage?.turns ?? 0,
+    durationMs: usage?.durationMs || run.wallMs,
+    costUsd: usage?.costUsd ?? null,
+    model: usage?.model || null,
+  };
+}
+
+export interface Summary {
+  cases: number;
+  passed: number;
+  passRate: number;
+  /** Over the cases the judge scored; null when it scored none. */
+  meanJudgeScore: number | null;
+  meanTurns: number;
+  meanDurationMs: number;
+  /** The engine under test's cost, summed; null when no case reported one. */
+  costUsd: number | null;
+  judgeCostUsd: number | null;
+}
+
+export interface Scorecard {
+  schema: 1;
+  pack: PackId;
+  engine: EngineId;
+  /** The model the runs reported, else null. */
+  model: string | null;
+  /** The judge's engine, or null when it was skipped. */
+  judge: EngineId | null;
+  at: string;
+  summary: Summary;
+  cases: CaseResult[];
+}
+
+const mean = (values: number[]): number => (values.length === 0 ? 0 : values.reduce((a, b) => a + b, 0) / values.length);
+const sumOrNull = (values: (number | null)[]): number | null => {
+  const known = values.filter((v): v is number => v !== null);
+  return known.length === 0 ? null : known.reduce((a, b) => a + b, 0);
+};
+const scored = (judge: JudgeVerdict | null): judge is Extract<JudgeVerdict, { score: number }> => judge !== null && "score" in judge;
+
+export function summarize(cases: CaseResult[]): Summary {
+  const passed = cases.filter((c) => c.pass).length;
+  const scores = cases.map((c) => c.judge).filter(scored);
+  return {
+    cases: cases.length,
+    passed,
+    passRate: cases.length === 0 ? 0 : passed / cases.length,
+    meanJudgeScore: scores.length === 0 ? null : mean(scores.map((j) => j.score)),
+    meanTurns: mean(cases.map((c) => c.turns)),
+    meanDurationMs: mean(cases.map((c) => c.durationMs)),
+    costUsd: sumOrNull(cases.map((c) => c.costUsd)),
+    judgeCostUsd: sumOrNull(scores.map((j) => j.costUsd)),
+  };
+}
+
+export function scorecard(meta: { pack: PackId; engine: EngineId; judge: EngineId | null; at: string }, cases: CaseResult[]): Scorecard {
+  return { schema: 1, ...meta, model: cases.find((c) => c.model)?.model ?? null, summary: summarize(cases), cases };
+}
+
+export interface ScorecardDiff {
+  base: { engine: EngineId; at: string };
+  next: { engine: EngineId; at: string };
+  /** How many cases both ran; every delta below is over these alone. */
+  common: number;
+  /** next minus base. */
+  passRate: number;
+  meanJudgeScore: number | null;
+  meanTurns: number;
+  meanDurationMs: number;
+  costUsd: number | null;
+  /** Cases that passed on one side and failed on the other. */
+  flips: { id: string; base: boolean; next: boolean }[];
+  onlyBase: string[];
+  onlyNext: string[];
+}
+
+const delta = (a: number | null, b: number | null): number | null => (a === null || b === null ? null : b - a);
+
+/** `next` against `base`, over the cases both ran: a subset run compares like for like. */
+export function diffScorecards(base: Scorecard, next: Scorecard): ScorecardDiff {
+  const baseIds = new Map(base.cases.map((c) => [c.id, c]));
+  const nextIds = new Map(next.cases.map((c) => [c.id, c]));
+  const common = [...nextIds.keys()].filter((id) => baseIds.has(id));
+  const a = summarize(common.map((id) => baseIds.get(id)!));
+  const b = summarize(common.map((id) => nextIds.get(id)!));
+  return {
+    base: { engine: base.engine, at: base.at },
+    next: { engine: next.engine, at: next.at },
+    common: common.length,
+    passRate: b.passRate - a.passRate,
+    meanJudgeScore: delta(a.meanJudgeScore, b.meanJudgeScore),
+    meanTurns: b.meanTurns - a.meanTurns,
+    meanDurationMs: b.meanDurationMs - a.meanDurationMs,
+    costUsd: delta(a.costUsd, b.costUsd),
+    flips: common.filter((id) => baseIds.get(id)!.pass !== nextIds.get(id)!.pass).map((id) => ({ id, base: baseIds.get(id)!.pass, next: nextIds.get(id)!.pass })),
+    onlyBase: [...baseIds.keys()].filter((id) => !nextIds.has(id)),
+    onlyNext: [...nextIds.keys()].filter((id) => !baseIds.has(id)),
+  };
+}

@@ -82,6 +82,24 @@ jobs:
       - name: Typecheck
         run: pnpm --filter @hardness/factory typecheck
 
+  # The replay evals' grading only: a live eval needs a model credential, so it never runs here.
+  evals:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Unit tests
+        run: pnpm --filter @hardness/evals test
+      - name: Typecheck
+        run: pnpm --filter @hardness/evals typecheck
+
   # A fresh clone, nothing else installed: the stage image builds from this checkout alone
   # and a dry-run stage goes through the hardened sandbox without a model call.
   fresh-clone:
