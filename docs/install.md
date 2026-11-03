@@ -26,7 +26,7 @@ It walks a fresh Mac through everything below, one step at a time, and every ste
 | `make luna-yaml REPO=<path>` | a repo's `luna.yaml`: Jira (the statuses listed from your project when the Jira keys are set), engines, policy, budgets and SLAs; an existing file keeps its comments, the change is shown as a diff, and nothing is written that the machine would refuse. Checks and services come from the board's `:setup <repo>`, which proves them |
 | `make doctor` | what is installed, set and running, and what is missing; never prints a secret |
 
-No key ever goes into `luna.yaml`: it lives in the repo and is usually committed. The scripts are in `scripts/setup/` (gum for the prompts when it is installed, plain prompts otherwise).
+No key ever goes into `luna.yaml`: it lives in the repo and is usually committed. The scripts are in `scripts/setup/` (gum for the prompts when it is installed, plain prompts otherwise). Each opens with Luna's mark drawn in the terminal, animated on a real terminal; `LUNA_NO_ANIMATION=1` keeps it still and `NO_COLOR=1` drops the colours.
 
 ## Quick start (by hand)
 

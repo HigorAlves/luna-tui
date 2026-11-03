@@ -50,5 +50,11 @@ check "out-of-range numbers are asked again" c "$(printf '9\nx\n3\n' | ui_choose
 check "many: y, n, and Enter on a preselected one" $'a\nc' "$(printf 'y\nn\n\n' | ui_choose_many h c a b c 2>/dev/null)"
 check "a secret reads whole" 'xoxp-1/2=3' "$(printf 'xoxp-1/2=3\n' | ui_secret k 2>/dev/null)"
 
+echo "banner"
+still=$(banner_show "tickets in, pull requests out" | cat)
+check "off a terminal it is plain text: no escape codes" 0 "$(printf '%s' "$still" | LC_ALL=C grep -c $'\033' || true)"
+check "LUNA beside the mark" 1 "$(printf '%s\n' "$still" | grep -c '███████╗╚██████╔╝██║ ╚████║██║  ██║')"
+check "the tagline under it" 1 "$(printf '%s\n' "$still" | grep -c 'tickets in, pull requests out')"
+
 echo
 if [ "$FAILED" -eq 0 ]; then echo "all passed"; else echo "$FAILED failed"; exit 1; fi
