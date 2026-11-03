@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "count",
+      "path": "items",
+      "min": 3,
+      "max": 3
+    },
+    {
+      "kind": "equals",
+      "path": "items[id=C0EVAL01:1].priority",
+      "value": "P0"
+    },
+    {
+      "kind": "oneOf",
+      "path": "items[id=C0EVAL01:1].category",
+      "values": [
+        "blocker",
+        "decision",
+        "request"
+      ]
+    },
+    {
+      "kind": "equals",
+      "path": "items[id=C0EVAL01:1].expectsReply",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "items[id=C0EVAL02:2].category",
+      "value": "automated"
+    },
+    {
+      "kind": "equals",
+      "path": "items[id=C0EVAL02:2].priority",
+      "value": "P3"
+    },
+    {
+      "kind": "equals",
+      "path": "items[id=C0EVAL02:2].expectsReply",
+      "value": false
+    },
+    {
+      "kind": "oneOf",
+      "path": "items[id=C0EVAL03:3].priority",
+      "values": [
+        "P2",
+        "P3"
+      ]
+    },
+    {
+      "kind": "equals",
+      "path": "items[id=C0EVAL03:3].draft",
+      "value": null
+    }
+  ],
+  "rubric": "Three verdicts, one per id. The checkout outage is P0: production is down after the person's own deploy and Robin waits on a rollback decision; the summary says that (roll back or confirm it is safe), and the draft is a short, decisive reply in the person's voice (rolling back now, or looking now) with no greeting and no mention of being drafted. The deploy bot's notice is automated and P3 with no reply expected. The @here pizza broadcast is social, P2 or P3, no reply expected and no draft. Summaries say what is wanted, not what was said, and stay under 90 characters."
+}

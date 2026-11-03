@@ -1,0 +1,55 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "kind",
+      "value": "brief"
+    },
+    {
+      "kind": "count",
+      "path": "slices",
+      "min": 1,
+      "max": 2
+    },
+    {
+      "kind": "mentions",
+      "path": "slices[].touchpoints[]",
+      "words": [
+        "main.go"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "summary",
+      "words": [
+        "main.go"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "words": [
+        "+=",
+        "add up",
+        "sum",
+        "accumulat"
+      ],
+      "any": true
+    },
+    {
+      "kind": "mentions",
+      "words": [
+        "go test"
+      ]
+    },
+    {
+      "kind": "avoids",
+      "words": [
+        ".golden",
+        "patches/"
+      ]
+    }
+  ],
+  "rubric": "A brief: the ticket is precise. The plan places the bug in Run in main.go, where `totals[name] = amount` overwrites instead of adding (`+=`), fixes it in one small slice and adds a test case in main_test.go with a repeated name (the ticket's alice/bob input), checked with `go test ./...`. Output stays sorted by name and the existing error handling for bad lines and amounts is kept. No new features (blank lines and comments are a different ticket), no refactor of main(). Risk none or low."
+}

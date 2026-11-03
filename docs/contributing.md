@@ -5,11 +5,13 @@ Issues and pull requests are welcome.
 Before sending a change, run:
 
 ```sh
-pnpm test             # machine, contracts and factory
+pnpm test             # machine, contracts, factory and the evals' grading
 pnpm typecheck
 pnpm board:test       # board (Rust)
 pnpm golden           # end-to-end, needs a running machine (see docs/install.md)
 ```
+
+A change of engine or model (a new catalog entry in `contracts/src/models.ts`, an engine pointed at another model, a pack's default engine, or a runtime SDK bump) carries an eval scorecard in its description: `pnpm eval --pack <pack> --engine <new> --against <old>` for every pack it touches (see [evals/README.md](../evals/README.md)). Evals need a model credential, so they run on your machine, not in CI.
 
 A change to the board's keys goes in `board/src/keys.rs` alone; `pnpm board:keys` then regenerates the key tables in `board/README.md`, which `pnpm board:test` checks.
 

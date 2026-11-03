@@ -1,0 +1,32 @@
+{
+  "schema": 3,
+  "stage": "triage",
+  "pack": "triage",
+  "attempt": 1,
+  "task": {
+    "id": "eval-task-price-decimals",
+    "title": "Cart totals show wrong price",
+    "description": "formatPrice drops the second decimal digit for round dollar amounts, e.g. $1.00 shows as $1.0. Fix formatPrice in src/cart.js so prices always show two decimals.",
+    "criteria": [
+      "formatPrice(1234) returns \"$12.34\"",
+      "formatPrice(100) returns \"$1.00\"",
+      "`npm test` passes"
+    ],
+    "repoPath": "fixtures/golden-task",
+    "branch": "task/eval-task-price-decimals",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

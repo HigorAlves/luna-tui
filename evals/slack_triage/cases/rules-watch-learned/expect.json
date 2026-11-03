@@ -1,0 +1,60 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "count",
+      "path": "items",
+      "min": 3,
+      "max": 3
+    },
+    {
+      "kind": "oneOf",
+      "path": "items[id=C0EVAL07:7].priority",
+      "values": [
+        "P2",
+        "P3"
+      ]
+    },
+    {
+      "kind": "oneOf",
+      "path": "items[id=C0EVAL08:8].priority",
+      "values": [
+        "P0",
+        "P1"
+      ]
+    },
+    {
+      "kind": "oneOf",
+      "path": "items[id=C0EVAL09:9].priority",
+      "values": [
+        "P0",
+        "P1"
+      ]
+    },
+    {
+      "kind": "oneOf",
+      "path": "items[id=C0EVAL09:9].category",
+      "values": [
+        "decision",
+        "request",
+        "blocker"
+      ]
+    },
+    {
+      "kind": "equals",
+      "path": "items[id=C0EVAL09:9].expectsReply",
+      "value": true
+    },
+    {
+      "kind": "avoids",
+      "path": "items[].draft",
+      "words": [
+        "drafted",
+        "suggested reply",
+        "as an ai"
+      ]
+    }
+  ],
+  "rubric": "Three verdicts, one per id, and the person's rules obeyed. The coffee-machine question sits in #random-example, which the Learned section says they clear without replying: P2 or P3, social. The billing incident reaches them through their `billing` keyword watch, which counts as addressed to them: customers are charged twice, so P0 (P1 at the least), a blocker or request, and a draft only if a reply is expected. The merge-freeze question to the @platform-example usergroup they watch asks for a decision today: P0 or P1, category decision, a reply expected. Every draft follows the Notes: in Portuguese and one sentence. A draft in English, or longer than one sentence, is a real error."
+}

@@ -76,6 +76,7 @@ Four pieces use it, each a twin of something that exists:
 | `factory/` | What runs inside a stage container: the runner (Agent SDK), the eight agent roles, the prompt templates, the skills plugin, the guards and the `luna` tool server. |
 | `contracts/` | Types shared by the machine, the factory and the board, including the pack registry. |
 | `fixtures/` | Fixture repos used by `pnpm golden` (one seeded bug or feature each). |
+| `evals/` | Replay evals (`pnpm eval`): eval cases per pack, graded by schema, checks and the `eval_judge` pack, with a scorecard per engine. See [evals/README.md](../evals/README.md). |
 | `docs/` | This folder. |
 | `compose.yaml` | Postgres and the machine (`docker compose up`); `pnpm dev` starts only Postgres. |
 

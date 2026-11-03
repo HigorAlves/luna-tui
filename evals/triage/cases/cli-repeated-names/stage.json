@@ -1,0 +1,31 @@
+{
+  "schema": 3,
+  "stage": "triage",
+  "pack": "triage",
+  "attempt": 1,
+  "task": {
+    "id": "eval-cli-repeated-names",
+    "title": "Repeated names overwrite their total",
+    "description": "When the same name appears on several input lines, tally prints only the last amount instead of the sum. Fix Run in main.go so repeated names add up.",
+    "criteria": [
+      "input \"alice 3\\nbob 1\\nalice 4\\n\" prints \"alice: 7\\nbob: 1\\n\"",
+      "`go test ./...` passes"
+    ],
+    "repoPath": "fixtures/golden-cli",
+    "branch": "task/eval-cli-repeated-names",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

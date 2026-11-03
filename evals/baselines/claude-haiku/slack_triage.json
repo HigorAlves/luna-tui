@@ -1,0 +1,242 @@
+{
+  "schema": 1,
+  "pack": "slack_triage",
+  "engine": "claude:haiku",
+  "judge": "claude:opus",
+  "at": "2026-11-03T04:06:11.378Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 3,
+    "passed": 3,
+    "passRate": 1,
+    "meanJudgeScore": 0.8433333333333334,
+    "meanTurns": 2,
+    "meanDurationMs": 5613,
+    "costUsd": 0.00224052,
+    "judgeCostUsd": 0.1011117
+  },
+  "cases": [
+    {
+      "id": "incident-bot-social",
+      "pass": true,
+      "schema": {
+        "check": "answer on the slack_triage schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items count 3..3",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL01:1].priority = \"P0\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL01:1].category in [\"blocker\",\"decision\",\"request\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL01:1].expectsReply = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL02:2].category = \"automated\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL02:2].priority = \"P3\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL02:2].expectsReply = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL03:3].priority in [\"P2\",\"P3\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL03:3].draft = null",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": {
+        "score": 0.85,
+        "pass": true,
+        "reasons": [
+          "item C0EVAL03:3: the summary 'pizza in the kitchen in 5 minutes, come grab some' copies the message instead of saying what is wanted (nothing needed, optional social). The rubric asks summaries to say what is wanted, not what was said.",
+          "item C0EVAL02:2: the summary 'deploy of web-example 4f2a1c finished, 42 files changed' also repeats the bot text. It should say that no action is needed, ideally flagging that this is the deploy behind the outage.",
+          "item C0EVAL01:1: P0 blocker with expectsReply true is correct. The summary states the rollback-or-confirm decision Robin wants, in under 90 characters.",
+          "item C0EVAL01:1: the draft 'Rolling back now. I'll confirm in this DM…' is short, decisive and in Sam's voice, with no greeting and no mention of being drafted.",
+          "items C0EVAL02:2 and C0EVAL03:3: the bot notice is automated, P3, with no reply expected. The pizza broadcast is social, P2, with no reply and no draft, as the rubric requires."
+        ],
+        "costUsd": 0.0333266
+      },
+      "turns": 2,
+      "durationMs": 4420,
+      "costUsd": 0.0005731099999999999,
+      "model": "claude-haiku-5-5"
+    },
+    {
+      "id": "review-deadline-answered-vip",
+      "pass": true,
+      "schema": {
+        "check": "answer on the slack_triage schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items count 3..3",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL04:4].priority in [\"P0\",\"P1\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL04:4].expectsReply = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL04:4].deadline = \"2026-11-05\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL04:4].refs[].ref mentions 212",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL05:5].expectsReply = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL05:5].priority in [\"P2\",\"P3\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL06:6].priority in [\"P0\",\"P1\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL06:6].expectsReply = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": {
+        "score": 0.9,
+        "pass": true,
+        "reasons": [
+          "item C0EVAL04:4 draft: 'I'll review PR 212 today' commits the person to a timing the input doesn't give; minor, but a softer commitment would be safer",
+          "item C0EVAL06:6: P1, request, reply expected, deadline null for 'this week' as the rubric asks; the draft invents no reasons for the runner move",
+          "item C0EVAL05:5: P3, no reply, no draft; the 'why' correctly says Alex already answered Lee's question",
+          "item C0EVAL04:4: P1 (not P0), category request, refs example-org/web-example#212, deadline 2026-11-05; all match the rubric",
+          "All drafts are at most two sentences, in the person's voice, and claim no facts the text does not give"
+        ],
+        "costUsd": 0.032449099999999995
+      },
+      "turns": 2,
+      "durationMs": 5504,
+      "costUsd": 0.0007238100000000001,
+      "model": "claude-haiku-5-5"
+    },
+    {
+      "id": "rules-watch-learned",
+      "pass": true,
+      "schema": {
+        "check": "answer on the slack_triage schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items count 3..3",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL07:7].priority in [\"P2\",\"P3\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL08:8].priority in [\"P0\",\"P1\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL09:9].priority in [\"P0\",\"P1\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL09:9].category in [\"decision\",\"request\",\"blocker\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL09:9].expectsReply = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[].draft avoids drafted, suggested reply, as an ai",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": {
+        "score": 0.78,
+        "pass": true,
+        "reasons": [
+          "item C0EVAL07:7: expectsReply is true and a draft is written, but the Learned rule says #random-example is cleared without replying; it should be expectsReply false with no draft.",
+          "item C0EVAL07:7: the 'why' says the person usually clears this author, but Learned only lowers the channel #random-example and says nothing about @jo.example.",
+          "item C0EVAL09:9: the draft answers 'Sim' and commits to the freeze on the person's behalf. The input gives no basis for picking yes, so a neutral draft would have been safer.",
+          "item C0EVAL08:8: P0 blocker with a reply expected is right for customers being charged twice, reached through the billing keyword watch.",
+          "item C0EVAL09:9: P1 decision with a reply expected and today's deadline (2026-11-03) is right for the @platform-example usergroup watch.",
+          "All three drafts are in Portuguese and one sentence each, as the Notes ask."
+        ],
+        "costUsd": 0.035336
+      },
+      "turns": 2,
+      "durationMs": 6915,
+      "costUsd": 0.0009436,
+      "model": "claude-haiku-5-5"
+    }
+  ]
+}

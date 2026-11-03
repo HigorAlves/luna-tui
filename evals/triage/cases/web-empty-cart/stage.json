@@ -1,0 +1,32 @@
+{
+  "schema": 3,
+  "stage": "triage",
+  "pack": "triage",
+  "attempt": 1,
+  "task": {
+    "id": "eval-web-empty-cart",
+    "title": "Show a message for an empty cart",
+    "description": "An empty cart renders an empty list. Make renderCart in src/cart.ts return a paragraph that says the cart is empty, so the page tells the shopper what is going on.",
+    "criteria": [
+      "renderCart([]) returns the string '<p class=\"empty\">Your cart is empty</p>'",
+      "renderCart with items still returns the list",
+      "`npm test` passes"
+    ],
+    "repoPath": "fixtures/golden-web",
+    "branch": "task/eval-web-empty-cart",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

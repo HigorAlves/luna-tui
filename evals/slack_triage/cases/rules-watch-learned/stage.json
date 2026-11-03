@@ -1,0 +1,83 @@
+{
+  "schema": 3,
+  "stage": "slack_triage",
+  "pack": "slack_triage",
+  "attempt": 1,
+  "task": {
+    "id": "slack-triage",
+    "title": "Slack triage",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "slack": {
+      "me": {
+        "id": "U0EVAL0001",
+        "name": "sam.example"
+      },
+      "watches": [
+        {
+          "label": "@platform-example",
+          "kind": "usergroup"
+        },
+        {
+          "label": "billing",
+          "kind": "keyword"
+        }
+      ],
+      "rules": "## VIPs (at least P1)\n- none\n\n## Notes\n- Write drafts in Portuguese.\n- Keep drafts to one sentence.\n\n## Learned (lowered: they clear this author or channel without replying; raised: they answer it fast)\n- #random-example: lowered (6)",
+      "items": [
+        {
+          "id": "C0EVAL07:7",
+          "channel": "#random-example",
+          "author": "@jo.example",
+          "isBot": false,
+          "text": "@sam.example did you see the new coffee machine? thoughts?",
+          "context": [],
+          "matched": [
+            "me"
+          ],
+          "threadReplies": 0
+        },
+        {
+          "id": "C0EVAL08:8",
+          "channel": "#support-example",
+          "author": "@nina.example",
+          "isBot": false,
+          "text": "billing webhooks have been failing since 09:00, customers are being charged twice, who owns this?",
+          "context": [],
+          "matched": [
+            "keyword:billing"
+          ],
+          "threadReplies": 0
+        },
+        {
+          "id": "C0EVAL09:9",
+          "channel": "#platform-example",
+          "author": "@max.example",
+          "isBot": false,
+          "text": "@platform-example we need a decision today: do we freeze merges to main until the flaky CI is fixed? yes/no from someone on the team please",
+          "context": [],
+          "matched": [
+            "usergroup:S0EVAL01"
+          ],
+          "threadReplies": 0
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}
