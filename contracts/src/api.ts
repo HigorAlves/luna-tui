@@ -375,6 +375,23 @@ export interface RepoMetrics {
   costUsd: number;
 }
 
+/** One engine's stage runs in the window, for `GET /metrics?groupBy=engine`. */
+export interface EngineMetrics {
+  /** The engine the runs started on; null for host-only stages and runs from before engines. */
+  engine: EngineId | null;
+  stageRuns: number;
+  /** Of the first attempts that passed or failed, the share that passed; null when there were none. */
+  firstPassRate: number | null;
+  /** Tasks that escalated in the window with a run on this engine as their latest before it. */
+  escalations: number;
+  /** Runs that ended on a usage limit. */
+  rateLimited: number;
+  /** Over the runs that passed or failed; null when none reported turns. */
+  meanTurns: number | null;
+  meanDurationMs: number | null;
+  costUsd: number;
+}
+
 export interface Metrics {
   since: string;
   until: string;
@@ -382,6 +399,8 @@ export interface Metrics {
   repo?: string | null;
   /** One row per repo, when asked for with `?groupBy=repo`. */
   byRepo?: RepoMetrics[];
+  /** One row per engine, when asked for with `?groupBy=engine`: named engines first, then null. */
+  byEngine?: EngineMetrics[];
   tasks: {
     created: number;
     closed: number;

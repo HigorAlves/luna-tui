@@ -1,6 +1,6 @@
 // Factory metrics: how the pipeline is doing over a window. Rows come from Postgres and
 // the numbers are computed here, so a window with no data gives null, never NaN.
-import { type Metrics, type RepoMetrics, RUNNING, type Slots, WAITING_ON_USER } from "@hardness/contracts";
+import { type EngineId, type EngineMetrics, type Metrics, type RepoMetrics, RUNNING, type Slots, WAITING_ON_USER } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import { ratio, stats } from "../http/metrics.ts";
@@ -13,8 +13,8 @@ export interface MetricsOptions {
   budget?: { taskUsd: number | null; dailyUsd: number | null; spentTodayUsd: number };
   /** Only this repo's tasks (null: only tasks with no repo); absent means every task. */
   repo?: string | null;
-  /** Adds one slim row per repo to the answer. */
-  groupBy?: "repo";
+  /** Adds one slim row per repo, or per engine, to the answer. */
+  groupBy?: "repo" | "engine";
   /** The gate SLA a wait is judged by, in seconds (the machine's default; a repo's own is approximated by it). */
   gateSlaSecs?: number | null;
 }
@@ -31,6 +31,33 @@ function slim(repo: string | null, m: Metrics): RepoMetrics {
 }
 
 const FIRST_PASS_STAGES = ["verifying", "ci_watch", "implementing"] as const;
+
+const mean = (values: number[]): number | null => (values.length === 0 ? null : values.reduce((a, b) => a + b, 0) / values.length);
+
+/** The window's stage runs as one row per engine, named engines in order and then null. */
+function engineRows(
+  runs: Array<{ attempt: number; status: string; outcome: string | null; engine: EngineId | null; turns: number | null; cost: string | null; ms: string | null }>,
+  escalatedOn: Array<EngineId | null>,
+): EngineMetrics[] {
+  const engines = [...new Set(runs.map((r) => r.engine))].sort((a, b) => (a === null ? 1 : b === null ? -1 : a.localeCompare(b)));
+  return engines.map((engine) => {
+    const mine = runs.filter((r) => r.engine === engine);
+    const finished = mine.filter((r) => r.status === "passed" || r.status === "failed");
+    const firsts = finished.filter((r) => r.attempt === 1);
+    const turns = finished.flatMap((r) => (r.turns === null ? [] : [r.turns]));
+    const ms = finished.flatMap((r) => (r.ms === null ? [] : [Number(r.ms)]));
+    return {
+      engine,
+      stageRuns: mine.length,
+      firstPassRate: ratio(firsts.filter((r) => r.status === "passed").length, firsts.length),
+      escalations: escalatedOn.filter((on) => on === engine).length,
+      rateLimited: mine.filter((r) => r.outcome === "rate_limited").length,
+      meanTurns: mean(turns),
+      meanDurationMs: mean(ms),
+      costUsd: mine.reduce((sum, r) => sum + (r.cost === null ? 0 : Number(r.cost)), 0),
+    };
+  });
+}
 const DEFAULT_GATE_SLA_SECS = 3600;
 
 /** Every gate answered in the window: the wait from entering a waiting state to leaving it, by gate. */
@@ -72,9 +99,9 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
       where e.kind = 'transition' and e.payload->>'to' = 'closed' and e.at >= $1 and e.at <= $2 and ${inScope}`,
     params,
   );
-  const runs: { task_id: string; stage: string; attempt: number; status: string; cost: string | null; ms: string | null }[] =
+  const runs: { task_id: string; stage: string; attempt: number; status: string; outcome: string | null; engine: EngineId | null; turns: number | null; cost: string | null; ms: string | null }[] =
     await db.query(
-      `select r.task_id, r.stage, r.attempt, r.status, r.cost_usd as cost,
+      `select r.task_id, r.stage, r.attempt, r.status, r.outcome, r.engine, r.turns, r.cost_usd as cost,
               extract(epoch from (r.ended_at - r.started_at)) * 1000 as ms
          from stage_runs r join tasks t on t.id = r.task_id
         where r.started_at >= $1 and r.started_at <= $2 and ${inScope}`,
@@ -177,11 +204,25 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
     }
   }
 
+  // One row per engine the window's stage runs started on; an escalation counts against the engine
+  // of the task's latest run before it.
+  let byEngine: EngineMetrics[] | undefined;
+  if (options.groupBy === "engine") {
+    const escalatedOn: { engine: EngineId | null }[] = await db.query(
+      `select (select r.engine from stage_runs r where r.task_id = e.task_id and r.started_at <= e.at order by r.started_at desc limit 1) as engine
+         from events e join tasks t on t.id = e.task_id
+        where e.kind = 'transition' and e.payload->>'to' = 'escalated' and e.at >= $1 and e.at <= $2 and ${inScope}`,
+      params,
+    );
+    byEngine = engineRows(runs, escalatedOn.map((row) => row.engine));
+  }
+
   return {
     since: since.toISOString(),
     until: until.toISOString(),
     ...(byRepo ? { repo: options.repo ?? null } : {}),
     ...(grouped ? { byRepo: grouped } : {}),
+    ...(byEngine ? { byEngine } : {}),
     tasks,
     cycleTimeMs: { task: stats(closedRows.map((r) => Number(r.ms))), perStage },
     gates,
