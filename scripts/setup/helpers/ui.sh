@@ -15,12 +15,15 @@ ui_header() {
   fi
 }
 
-# ui_step 2 6 "Credentials"
-ui_step() {
+# ui_section "Jira"
+ui_section() {
   echo
-  colorize "$BOLD_PURPLE" "[$1/$2] $3"
+  colorize "$BOLD_PURPLE" "$1"
   show_separator
 }
+
+# ui_step 2 6 "Credentials"
+ui_step() { ui_section "[$1/$2] $3"; }
 
 # ui_confirm "Question" [yes]: exit 0 for yes. The default is no unless the second argument is yes.
 ui_confirm() {

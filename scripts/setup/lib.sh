@@ -81,6 +81,12 @@ tool_version() {
 
 docker_running() { docker info &>/dev/null; }
 
+# json_get EXPR: reads JSON on stdin and prints EXPR of it (the parsed value is j), nothing when it is
+# empty or the input is not JSON: curl … | json_get 'j.ok && j.user'
+json_get() {
+  node -e 'let s = ""; process.stdin.on("data", (d) => (s += d)).on("end", () => { try { const v = new Function("j", "return " + process.argv[1])(JSON.parse(s)); if (v) console.log(v); } catch {} });' "$1"
+}
+
 # Rust from Homebrew's rustup is keg-only: put its proxies and cargo's bin on PATH for this run.
 rust_path() {
   local prefix

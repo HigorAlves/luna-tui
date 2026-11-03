@@ -4,7 +4,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 SETUP := scripts/setup
 
-.PHONY: help doctor tools up down board
+.PHONY: help doctor tools credentials integrations up down board
 
 help: ## Show these targets
 	@printf "\n\033[1;35m🌙 Luna\033[0m  make <target>\n\n"
@@ -16,6 +16,12 @@ doctor: ## Check tools, credentials, integrations and the running machine
 
 tools: ## Install the tools Luna needs (Homebrew)
 	@bash $(SETUP)/tools.sh
+
+credentials: ## Engine credentials (Claude, Codex, OpenAI, Jev), the API token, GitHub
+	@bash $(SETUP)/credentials.sh
+
+integrations: ## Jira, the Slack inbox and machine settings, into .env
+	@bash $(SETUP)/integrations.sh
 
 up: ## Build the stage images and start Postgres + the machine (pnpm start)
 	@pnpm start
