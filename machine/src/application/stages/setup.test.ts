@@ -81,6 +81,12 @@ describe("setup stage", () => {
     expect(exec).not.toHaveBeenCalled();
   });
 
+  it("fails the stage when the proposal puts a pack on an engine the pack does not allow", async () => {
+    const bad = { outcome: "pass", detail: { answer: { kind: "proposal", summary: "s", config: { engines: { triage: "jev" } } } } } as StageResult;
+    const { run, context } = setup({ pack: bad });
+    expect(await run(context)).toMatchObject({ outcome: "fail", detail: { error: expect.stringMatching(/engines\.triage: jev is not allowed for triage/) } });
+  });
+
   it("passes an escalated or failed pack through unchanged", async () => {
     const escalated = { outcome: "escalated", detail: { reason: "no package manager I know", options: [] } } as StageResult;
     expect(await setup({ pack: escalated }).run(setup({}).context)).toEqual(escalated);
