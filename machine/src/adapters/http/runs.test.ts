@@ -69,7 +69,7 @@ describe("POST /runs", () => {
     expect(await response.json()).toEqual({ answer: { items: [verdict] }, usage: { model: "gpt-6-luna", engine: "codex:luna", turns: 1, durationMs: 4200, costUsd: 0.0031 } });
     const rows = await db.query("select * from pack_runs");
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ pack: "chat_triage", engine: "codex:luna", model: "gpt-6-luna", client: "notch", ok: true, error: null, turns: 1, duration_ms: 4200, cost_usd: "0.0031" });
+    expect(rows[0]).toMatchObject({ pack: "chat_triage", engine: "codex:luna", model: "gpt-6-luna", client: "notch", ok: true, error: null, turns: 1, duration_ms: 4200, cost_usd: "0.00310000" });
     expect(JSON.stringify(rows)).not.toMatch(/rollout|Approved/);
   });
 

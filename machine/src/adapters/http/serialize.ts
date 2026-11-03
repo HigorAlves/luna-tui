@@ -47,6 +47,7 @@ export const toTask = (
   jira: jiraOf(row),
   sla,
   stages: row.stages ?? {},
+  classification: row.classification ?? null,
   seq: Number(row.seq),
   lastRun: glance?.lastRun ?? null,
   gate: glance?.gate ?? null,

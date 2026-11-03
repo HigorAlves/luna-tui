@@ -9,6 +9,8 @@ import {
   CloneInput,
   EvalJudgeAnswer,
   EvalJudgeContext,
+  JiraIntakeContext,
+  TaskClassification,
   COLUMN_OF,
   MergeInput,
   NO_ACCESS,
@@ -268,6 +270,21 @@ describe("chat_triage", () => {
     expect(ChatTriageContext.safeParse({ ...teams, items: Array.from({ length: 26 }, (_, i) => ({ ...teams.items[1], id: `i${i}` })) }).success).toBe(false);
     expect(ChatTriageContext.safeParse({ ...teams, source: "discord" }).success).toBe(false);
     expect(ChatTriageContext.safeParse({ ...teams, items: [{ ...teams.items[0], kind: "oneOnOne" }] }).success).toBe(false);
+  });
+});
+
+describe("TaskClassification", () => {
+  const classification = { kind: "question", area: "machine", ready: false, size: 0.2, confidence: 0.85, at: "2026-11-03T12:00:00.000Z", model: "typesafe-ai/jev" };
+  const jira = { key: "HAR-1", url: "u", summary: "s", description: "", issueType: null, priority: null, labels: [], dueAt: null, comments: [], repoPath: null };
+
+  it("is what intake stores, with a confidence between 0 and 1", () => {
+    expect(TaskClassification.parse(classification)).toEqual(classification);
+    expect(TaskClassification.safeParse({ ...classification, confidence: 1.2 }).success).toBe(false);
+  });
+
+  it("rides jira_intake's context as a hint, and its absence changes nothing", () => {
+    expect(JiraIntakeContext.parse({ ...jira, classification }).classification).toEqual(classification);
+    expect(JiraIntakeContext.parse(jira).classification).toBeUndefined();
   });
 });
 

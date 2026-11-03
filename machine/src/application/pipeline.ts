@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type BudgetAlert, type CredentialOwner, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, type Slots, type StageEngines, type StageRunCase, type Task, type TaskRoute, type TaskSource, type TaskState, type TestCase, credentialOwner } from "@hardness/contracts";
+import { type BudgetAlert, type CredentialOwner, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskRoute, type TaskSource, type TaskState, type TestCase, credentialOwner } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -83,6 +83,8 @@ export interface NewTask {
   jira?: JiraLink | null;
   /** The task's own engine per pack (the work order's `stages`); checked against the packs by the caller. */
   stages?: StageEngines;
+  /** What issue_classify said about the issue, when intake ran it. */
+  classification?: TaskClassification | null;
 }
 
 export interface PipelineOptions {
@@ -323,6 +325,7 @@ export class Pipeline {
       ...(input.worktreePath !== undefined ? { worktreePath: input.worktreePath } : {}),
       jira: input.jira ?? this.detectJira(input.title, input.description ?? "", source),
       ...(input.stages ? { stages: input.stages } : {}),
+      ...(input.classification ? { classification: input.classification } : {}),
     };
   }
 

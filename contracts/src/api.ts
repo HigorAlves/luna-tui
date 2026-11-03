@@ -9,7 +9,7 @@ import type { JiraLink, TaskSla } from "./jira.ts";
 import type { AgentPack, AgentRole, Pack } from "./packs.ts";
 import { type CredentialOwner, EngineId } from "./engines.ts";
 import type { ModelEntry, RuntimeId } from "./models.ts";
-import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskRoute, TaskSource, TestCase } from "./stage.ts";
+import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskClassification, type TaskRoute, TaskSource, TestCase } from "./stage.ts";
 
 export const NewTaskInput = z.object({
   title: z.string().trim().min(1),
@@ -178,6 +178,8 @@ export interface Task {
   sla: TaskSla | null;
   /** The task's own engine per pack (`PATCH /tasks/:id/stages`); a pack left out runs on luna.yaml's, else its default. */
   stages: StageEngines;
+  /** What issue_classify said about the issue the task came from; null when intake did not run it. */
+  classification: TaskClassification | null;
   /** The task's place in the change sequence: every change to it takes a higher one (`GET /events?since=`). */
   seq: number;
   /** The latest stage run that ended, and what it said; null before one has. */

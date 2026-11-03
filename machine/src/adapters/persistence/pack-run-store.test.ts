@@ -71,3 +71,11 @@ describe("record", () => {
     ]);
   });
 });
+
+describe("a pack run's cost", () => {
+  it("keeps a Jev call's few millionths of a dollar instead of rounding them to nothing", async () => {
+    await new PgPackRunStore(db).record({ ...run(new Date(), 0.000031122), pack: "issue_classify", engine: "jev", client: "intake" });
+    const [row] = (await db.query("select cost_usd from pack_runs")) as Array<{ cost_usd: string }>;
+    expect(Number(row!.cost_usd)).toBeCloseTo(0.000031122, 8);
+  });
+});
