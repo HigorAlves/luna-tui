@@ -2,7 +2,7 @@
 // luna.yaml, else the pack's default. An engine the pack does not allow is never run, and one
 // whose credential this machine lacks gives way to the default; either way the reason says so,
 // for the task's log. Pure: the caller says which credentials are missing. See RFC 0002.
-import { type EngineId, PACKS, type Pack, type PackId, type StageEngines } from "@hardness/contracts";
+import { type CredentialOwner, type EngineId, PACKS, type Pack, type PackId, type StageEngines, credentialOwner } from "@hardness/contracts";
 
 import { packStates } from "./packs.ts";
 
@@ -12,7 +12,18 @@ export interface EngineChoice {
   source: "task" | "config" | "default";
   /** Why an engine someone asked for was passed over; null when nothing was. */
   reason: string | null;
+  /** One line for the task's activity when the engine asked for gave way to the default for want of
+   *  its credential (`triage ran on claude:opus: codex:sol has no Codex login on this machine`). */
+  note?: string;
 }
+
+/** What each credential is called in a line for you. */
+const CREDENTIAL_NAMES: Record<CredentialOwner, string> = {
+  claude: "Claude credential",
+  codex: "Codex login",
+  openai: "OpenAI API key",
+  typesafe: "TypeSafe API key",
+};
 
 /** Why `engine` cannot run `pack`, or null when the pack allows it. */
 export function engineProblem(pack: PackId, engine: EngineId): string | null {
@@ -69,7 +80,8 @@ export function chooseEngine(opts: {
     const lacking = opts.missing(engine);
     if (lacking) {
       reasons.push(`${engine} has no credential on this machine (${lacking}); ran ${fallback}, the pack's default`);
-      break;
+      const note = `${pack.id} ran on ${fallback}: ${engine} has no ${CREDENTIAL_NAMES[credentialOwner(engine)]} on this machine`;
+      return { engine: fallback, source: "default", reason: reasons.join("; "), note };
     }
     return { engine, source, reason: reasons.join("; ") || null };
   }

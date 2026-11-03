@@ -10,7 +10,7 @@
 // file and gives it back after its write-back, so the next run copies the refreshed token.
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, chmod, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, chmod, chown, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -211,6 +211,9 @@ async function writeBack(run: { file: string; copy: string; copiedFrom: string; 
   try {
     await writeFile(temp, now, { mode: 0o600 });
     await chmod(temp, 0o600);
+    // Under compose the machine runs as root on your bind-mounted Codex home: the file stays yours.
+    const owner = await stat(run.file);
+    await chown(temp, owner.uid, owner.gid).catch(() => {});
     await rename(temp, run.file);
   } catch (error) {
     await rm(temp, { force: true });

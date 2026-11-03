@@ -605,6 +605,26 @@ describe("the engine a stage runs on", () => {
     expect((seen!.input as unknown as StageInput).engine).toBe("claude:opus");
   });
 
+  it("says on the task's activity when the engine asked for gave way to the default for want of its credential", async () => {
+    const { credentials, log } = recordingCredentials(["codex:sol"]);
+    const note = vi.fn(async () => {});
+    const task = { ...context("triage").task, stages: { triage: "codex:sol" } } as TaskRow;
+    const result = await runAgent({ ...deps(fakeSandbox(output())), credentials }, { ...context("triage"), task, note }, "triage");
+    expect(log).toEqual(["prepare claude:opus", "release claude:opus"]);
+    expect(note).toHaveBeenCalledWith("triage ran on claude:opus: codex:sol has no Codex login on this machine");
+    expect(result.events?.find((e) => e.kind === "engine")?.payload).toMatchObject({ engine: "claude:opus", reason: expect.stringMatching(/^codex:sol has no credential/) });
+  });
+
+  it("puts no note on the task when the engine asked for runs, or a disallowed one is passed over", async () => {
+    const { credentials } = recordingCredentials();
+    const note = vi.fn(async () => {});
+    for (const engine of ["codex:sol", "openai:sol"]) {
+      const task = { ...context("triage").task, stages: { triage: engine } } as TaskRow;
+      await runAgent({ ...deps(fakeSandbox(output())), credentials }, { ...context("triage"), task, note }, "triage");
+    }
+    expect(note).not.toHaveBeenCalled();
+  });
+
   it("fails the stage with the reason when this machine has no credential for its engine, and starts no container", async () => {
     const { credentials } = recordingCredentials(["claude:opus"]);
     const result = await runAgent({ ...deps(fakeSandbox(output())), credentials }, context("triage"), "triage");
