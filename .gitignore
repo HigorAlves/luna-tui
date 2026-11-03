@@ -25,3 +25,6 @@ site/*.tsbuildinfo
 
 # Replay eval run folders (evals/run.ts)
 evals/.runs/
+
+# orc session state, local only
+.orc/
