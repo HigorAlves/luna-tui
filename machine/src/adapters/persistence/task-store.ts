@@ -9,6 +9,7 @@ import type {
   TaskChange,
   TaskUsage,
   DecideApprovalInput,
+  GlanceRows,
   InsertStageRunInput,
   NewTaskRow,
   RecordEventInput,
@@ -228,6 +229,25 @@ export class PgTaskStore implements TaskStore {
   async runningStageStarts(): Promise<Map<string, Date>> {
     const rows = (await this.db.query("select task_id, max(started_at) as started_at from stage_runs where status = 'running' group by task_id")) as { task_id: string; started_at: Date | string }[];
     return new Map(rows.map((r) => [r.task_id, new Date(r.started_at)]));
+  }
+
+  async glanceRows(ids: readonly string[]): Promise<GlanceRows> {
+    if (ids.length === 0) return { runs: [], gates: [] };
+    const [runs, gates] = await Promise.all([
+      this.db.query(
+        `select distinct on (r.task_id) r.task_id as "taskId", r.stage, r.engine, r.outcome, r.status, r.ended_at as "endedAt",
+           (select e.payload from events e where e.task_id = r.task_id and e.stage_run_id = r.id and e.kind = 'stage.finished' order by e.id desc limit 1) as finished
+         from stage_runs r where r.task_id = any($1::uuid[]) and r.ended_at is not null
+         order by r.task_id, r.ended_at desc, r.started_at desc`,
+        [ids],
+      ) as Promise<GlanceRows["runs"]>,
+      this.db.query(
+        `select distinct on (task_id) task_id as "taskId", kind, requested from approvals
+         where task_id = any($1::uuid[]) and decision is null order by task_id, created_at desc`,
+        [ids],
+      ) as Promise<GlanceRows["gates"]>,
+    ]);
+    return { runs: runs.map((run) => ({ ...run, endedAt: new Date(run.endedAt) })), gates };
   }
 
   listStageRuns(taskId: string): Promise<StageRunRow[]> {

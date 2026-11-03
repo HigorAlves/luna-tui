@@ -201,7 +201,8 @@ function publish(event: EventRow): void {
   void jiraSync.handle(event);
   if (event.kind === "transition" || event.kind === "task.created" || event.kind.startsWith("jira.")) {
     pipeline.get(event.taskId).then(
-      async (task) => bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id), await slaClocks.for(task)), seq: Number(task.seq) }),
+      async (task) =>
+        bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id), await slaClocks.for(task), await pipeline.glance(task.id)), seq: Number(task.seq) }),
       (error: unknown) => console.error("could not publish task update", error),
     );
   }
@@ -356,7 +357,8 @@ if (config.jira) {
     intervalMs: 5 * MINUTE_MS,
     expiry: jiraExpiry,
     retryBlocked: (task) => jiraSync.retry(task),
-    publish: (task) => void slaClocks.for(task).then((sla) => bus.publish({ type: "task.updated", task: toTask(task, null, sla), seq: Number(task.seq) })),
+    publish: (task) =>
+      void Promise.all([slaClocks.for(task), pipeline.glance(task.id)]).then(([sla, glance]) => bus.publish({ type: "task.updated", task: toTask(task, null, sla, glance), seq: Number(task.seq) })),
   });
   jiraWatch.start();
   const jiraTriager = agentDeps ? createJiraTriager(agentDeps) : null;
@@ -384,7 +386,7 @@ const slaTicker = new Ticker(() => {
     .list()
     .then((tasks) => slaClocks.flipped(tasks))
     .then(async (flipped) => {
-      for (const { task, sla } of flipped) bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id), sla), seq: Number(task.seq) });
+      for (const { task, sla } of flipped) bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id), sla, await pipeline.glance(task.id)), seq: Number(task.seq) });
     })
     .catch((error: unknown) => console.warn("sla tick failed", error));
 }, MINUTE_MS);

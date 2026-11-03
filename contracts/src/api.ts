@@ -163,8 +163,30 @@ export interface Task {
   stages: StageEngines;
   /** The task's place in the change sequence: every change to it takes a higher one (`GET /events?since=`). */
   seq: number;
+  /** The latest stage run that ended, and what it said; null before one has. */
+  lastRun: TaskLastRun | null;
+  /** The gate the task waits at, with what it asks (the open approval's `requested`); null when it waits at none. */
+  gate: TaskGate | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** The latest ended stage run on a task, as a snapshot carries it. */
+export interface TaskLastRun {
+  stage: TaskState;
+  engine: EngineId | null;
+  /** The stage's outcome (`pass`, `fail`, …), else how the run ended (`aborted`). */
+  outcome: string | null;
+  /** What it said: the pack's `summary`, else its error, else triage's `brief`; at most 2000 characters. */
+  summary: string | null;
+  /** When it ended. */
+  at: string;
+}
+
+/** The open approval a task waits at. */
+export interface TaskGate {
+  state: TaskState;
+  requested: Record<string, unknown>;
 }
 
 export interface StageRun {

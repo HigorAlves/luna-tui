@@ -2,14 +2,14 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type BudgetAlert, type CredentialOwner, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, type Slots, type StageEngines, type StageRunCase, type TaskRoute, type TaskSource, type TaskState, type TestCase, credentialOwner } from "@hardness/contracts";
+import { type BudgetAlert, type CredentialOwner, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, type Slots, type StageEngines, type StageRunCase, type Task, type TaskRoute, type TaskSource, type TaskState, type TestCase, credentialOwner } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, sameSource } from "../domain/task.ts";
+import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, runSummary, sameSource } from "../domain/task.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
@@ -63,6 +63,9 @@ export function orderHash(order: NewTask & Record<string, unknown>): string {
   };
   return createHash("sha256").update(canonicalJson(canonical)).digest("hex");
 }
+
+/** What a task snapshot says about its last stage run and its gate. */
+export type TaskGlance = Pick<Task, "lastRun" | "gate">;
 
 export interface NewTask {
   title: string;
@@ -407,6 +410,21 @@ export class Pipeline {
   }
 
   /** What one task has spent, and how long its runs took. */
+  /** Each task's `lastRun` and `gate`, for its snapshot; two queries for a whole list. */
+  async glances(ids: readonly string[]): Promise<Map<string, TaskGlance>> {
+    const { runs, gates } = await this.store.glanceRows(ids);
+    const out = new Map<string, TaskGlance>(ids.map((id) => [id, { lastRun: null, gate: null }]));
+    for (const run of runs) {
+      out.get(run.taskId)!.lastRun = { stage: run.stage, engine: run.engine, outcome: run.outcome ?? run.status, summary: runSummary(run.finished), at: run.endedAt.toISOString() };
+    }
+    for (const gate of gates) out.get(gate.taskId)!.gate = { state: gate.kind, requested: gate.requested };
+    return out;
+  }
+
+  async glance(id: string): Promise<TaskGlance> {
+    return (await this.glances([id])).get(id)!;
+  }
+
   taskUsage(id: string): Promise<TaskUsage> {
     return this.store.taskUsage(id);
   }
