@@ -2,6 +2,11 @@
   "name": "@hardness/machine",
   "private": true,
   "type": "module",
+  "exports": {
+    "./run-once": "./src/application/stages/run-once.ts",
+    "./credentials": "./src/adapters/credentials/index.ts",
+    "./docker": "./src/adapters/docker/docker.ts"
+  },
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
     "start": "tsx --env-file-if-exists=.env src/main.ts",

@@ -4,15 +4,16 @@
 // `context.slack`, and the structured answer comes back in /out/result.json. One row per run
 // goes to slack_triage_runs so the Floor can show what triage costs. A run that answered has
 // its folder removed at once; a failed one keeps it for the retention sweep (sweepSlackTriageRuns).
-import { PACKS, SlackTriageAnswer, type SlackTriageContext, StageOutput, resolveEngine } from "@hardness/contracts";
-import { mkdir, readFile, rm } from "node:fs/promises";
+import { PACKS, SlackTriageAnswer, type SlackTriageContext, resolveEngine } from "@hardness/contracts";
+import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { Credentials } from "../../adapters/credentials/index.ts";
-import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
+import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { buildSlackTriageInput } from "../../domain/stage-input.ts";
 import { pickEngine } from "../engine.ts";
 import type { SlackStore } from "../slack-store.ts";
+import { outputError, runPackOnce } from "./run-once.ts";
 import { TRIAGE_BATCH, type TriageAnswer, type TriageContext, type TriageItem, TriageRunError, type Triager } from "../slack-triage.ts";
 
 export interface SlackTriageDeps {
@@ -32,7 +33,6 @@ export interface SlackTriageDeps {
 
 /** Where the runs live under the state dir; each run is a folder named by its start time. */
 export const SLACK_TRIAGE_DIR = "slack-triage";
-const MINUTE = 60_000;
 
 /** The rules file's sections the model reads, as one markdown block. */
 export function rulesText(context: TriageContext): string {
@@ -76,7 +76,6 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
   const pack = PACKS.slack_triage;
   const now = deps.now ?? (() => new Date());
   const log = deps.log ?? ((line: string) => console.log(line));
-  const sandbox = deps.sandbox ?? runSandbox;
 
   async function runBatch(batch: TriageItem[], context: TriageContext, ordinal: number): Promise<{ answers: Map<string, TriageAnswer>; error: string | null }> {
     const startedAt = now();
@@ -94,40 +93,24 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
     let error: string | null = null;
     let usage: { model: string; turns: number; costUsd: number | null } = { model, turns: 0, costUsd: null };
     try {
-      const credential = await deps.credentials.prepare(engine, runDir);
-      const result = await sandbox({
-        name: `hardness-slack-triage-${stamp}`,
-        image: deps.image,
-        runDir,
-        worktree: work,
-        writable: false,
-        gitDir: null,
-        input: input as unknown as Record<string, unknown>,
-        timeoutMs: input.limits.timeoutMs,
-        credential: { env: credential.env, mounts: credential.mounts },
-        labels: { luna: "slack-triage" },
-      }).finally(() => credential.release());
-      if (result.aborted) error = "aborted";
-      else if (result.timedOut) error = `timed out after ${input.limits.timeoutMs / MINUTE} minutes`;
+      const run = await runPackOnce(
+        { name: `hardness-slack-triage-${stamp}`, image: deps.image, runDir, worktree: work, input, engine, labels: { luna: "slack-triage" } },
+        { credentials: deps.credentials, sandbox: deps.sandbox },
+      );
+      if (run.error !== null) error = run.error;
       else {
-        const raw = await readFile(join(runDir, "out", "result.json"), "utf8").catch(() => null);
-        const output = raw === null ? null : StageOutput.safeParse(JSON.parse(raw));
-        if (!output) error = `the container left no result (exit code ${result.exitCode})`;
-        else if (!output.success) error = `unreadable result: ${output.error.issues.map((i) => i.message).join("; ")}`;
+        const out = run.output;
+        usage = { model: out.usage.model || model, turns: out.usage.turns, costUsd: out.usage.costUsd };
+        if (!out.ok) error = outputError(out);
         else {
-          const out = output.data;
-          usage = { model: out.usage.model || model, turns: out.usage.turns, costUsd: out.usage.costUsd };
-          if (!out.ok) error = typeof out.error === "string" ? out.error : out.error ? JSON.stringify(out.error) : out.summary || "the stage failed";
+          const answer = SlackTriageAnswer.safeParse(out.answer);
+          if (!answer.success) error = `the answer did not match the schema: ${answer.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`;
           else {
-            const answer = SlackTriageAnswer.safeParse(out.answer);
-            if (!answer.success) error = `the answer did not match the schema: ${answer.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`;
-            else {
-              ok = true;
-              const ids = new Set(batch.map((i) => i.id));
-              for (const { id, ...verdict } of answer.data.items) {
-                // The schema caps `summary` at 90 characters; structured output enforces it in the container.
-                if (ids.has(id) && !answers.has(id)) answers.set(id, verdict);
-              }
+            ok = true;
+            const ids = new Set(batch.map((i) => i.id));
+            for (const { id, ...verdict } of answer.data.items) {
+              // The schema caps `summary` at 90 characters; structured output enforces it in the container.
+              if (ids.has(id) && !answers.has(id)) answers.set(id, verdict);
             }
           }
         }
