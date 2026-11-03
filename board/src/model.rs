@@ -1270,25 +1270,33 @@ pub enum StreamMessage {
     Slack { snapshot: SlackSnapshot },
 }
 
-/// `budget.alert`: a task's, a repo's month's or the day's spend passing a threshold.
+/// `budget.alert`: a task's, a repo's month's, the day's or an engine's monthly spend passing a threshold.
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BudgetAlert {
     pub scope: String,
-    pub task_id: String,
+    /// None for an engine alert from a `POST /runs` call, which has no task.
+    pub task_id: Option<String>,
     pub repo: Option<String>,
+    /// The engine or credential an `engine` alert's cap names.
+    #[serde(default)]
+    pub engine: Option<String>,
     pub pct: u8,
     pub spent_usd: f64,
     pub limit_usd: f64,
 }
 
 impl BudgetAlert {
-    /// `repo luna-tui at 90%: $18.00 of $20.00 this month`.
+    /// `repo luna-tui at 90%: $18.00 of $20.00 this month`; `engine openai at 80%: …`.
     pub fn line(&self) -> String {
-        let repo = self.repo.as_deref().and_then(|p| p.trim_end_matches('/').rsplit('/').next()).unwrap_or("?");
+        let repo = self.repo.as_deref().and_then(|p| p.trim_end_matches('/').rsplit('/').next());
         let (what, when) = match self.scope.as_str() {
-            "task" => (format!("task #{}", short_id(&self.task_id)), ""),
-            "repo" => (format!("repo {repo}"), " this month"),
+            "task" => (format!("task #{}", short_id(self.task_id.as_deref().unwrap_or("?"))), ""),
+            "repo" => (format!("repo {}", repo.unwrap_or("?")), " this month"),
+            "engine" => {
+                let engine = self.engine.as_deref().unwrap_or("?");
+                (repo.map_or_else(|| format!("engine {engine}"), |repo| format!("engine {engine} in {repo}")), " this month")
+            }
             _ => ("the day".to_string(), ""),
         };
         format!("{what} at {}%: ${:.2} of ${:.2}{when}", self.pct, self.spent_usd, self.limit_usd)

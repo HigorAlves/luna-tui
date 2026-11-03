@@ -1,8 +1,8 @@
-import type { EngineId } from "@hardness/contracts";
+import type { BudgetAlert, EngineId } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { Credentials } from "../adapters/credentials/index.ts";
-import { DISABLED_REASON, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./engine-gates.ts";
+import { DISABLED_REASON, EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./engine-gates.ts";
 
 /** Every credential present, except `missing`; `prepare` says which engine it prepared. */
 const inner = (missing: EngineId[] = []): Credentials => ({
@@ -62,5 +62,54 @@ describe("the monthly cap per engine", () => {
     const credentials = gatedCredentials(inner(), [engineBudgetGate({ budgets: {}, repoBudgets: async () => ({}), spend: counting })]);
     await credentials.check("openai:sol", { repo: "/r/app" });
     expect(asked).toBe(0);
+  });
+});
+
+describe("EngineBudgetWatch", () => {
+  const month = new Map<string, number>();
+  const spend = { engineSpendSinceUsd: async (_since: Date, repo?: string) => (repo ? new Map([["openai:sol", (month.get("openai:sol") ?? 0) / 2]]) : new Map(month)) };
+
+  it("raises a budget.alert naming the cap the first time a run takes its spend past 80, 90 and 100%", async () => {
+    const alerts: BudgetAlert[] = [];
+    const watch = new EngineBudgetWatch({ budgets: { openai: 20, jev: 5 }, spend, onAlert: (alert) => alerts.push(alert) });
+    month.clear();
+    month.set("openai:sol", 10);
+    await watch.afterRun("openai:sol", { taskId: "t1", repo: "/r/app" });
+    expect(alerts).toEqual([]);
+    month.set("openai:sol", 16.5);
+    await watch.afterRun("openai:sol", { taskId: "t1", repo: "/r/app" });
+    month.set("openai:luna", 2);
+    await watch.afterRun("openai:luna", { taskId: null, repo: null });
+    await watch.afterRun("openai:sol", { taskId: "t2", repo: "/r/app" });
+    expect(alerts).toEqual([
+      { scope: "engine", engine: "openai", taskId: "t1", repo: null, pct: 80, spentUsd: 16.5, limitUsd: 20 },
+      { scope: "engine", engine: "openai", taskId: null, repo: null, pct: 90, spentUsd: 18.5, limitUsd: 20 },
+    ]);
+    month.set("openai:sol", 30);
+    await watch.afterRun("openai:sol", { taskId: "t3", repo: null });
+    expect(alerts.at(-1)).toMatchObject({ engine: "openai", pct: 100, spentUsd: 32 });
+    expect(alerts).toHaveLength(3);
+  });
+
+  it("raises a repo's own cap with the repo, against that repo's spend", async () => {
+    const alerts: BudgetAlert[] = [];
+    const watch = new EngineBudgetWatch({ budgets: {}, repoBudgets: async () => ({ "openai:sol": 5 }), spend, onAlert: (alert) => alerts.push(alert) });
+    month.clear();
+    month.set("openai:sol", 10);
+    await watch.afterRun("openai:sol", { taskId: "t1", repo: "/r/app" });
+    expect(alerts).toEqual([{ scope: "engine", engine: "openai:sol", taskId: "t1", repo: "/r/app", pct: 100, spentUsd: 5, limitUsd: 5 }]);
+  });
+
+  it("says each engine's spend this month and the cap that binds it: the one reached, else the one with least left", async () => {
+    month.clear();
+    month.set("openai:sol", 12);
+    month.set("openai:luna", 1);
+    month.set("jev", 0.5);
+    const watch = new EngineBudgetWatch({ budgets: { "openai:sol": 15, openai: 14, jev: 5 }, spend, onAlert: () => {} });
+    const standings = await watch.standings();
+    expect(standings.get("openai:sol")).toEqual({ spentThisMonthUsd: 13, budgetUsd: 14 });
+    expect(standings.get("openai:luna")).toEqual({ spentThisMonthUsd: 13, budgetUsd: 14 });
+    expect(standings.get("jev")).toEqual({ spentThisMonthUsd: 0.5, budgetUsd: 5 });
+    expect(standings.get("claude:opus")).toEqual({ spentThisMonthUsd: 0, budgetUsd: null });
   });
 });

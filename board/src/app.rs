@@ -4369,6 +4369,20 @@ mod tests {
         assert!(app.toast.as_ref().unwrap().error, "the ceiling itself reads as an error");
     }
 
+    #[test]
+    fn an_engine_budget_alert_names_the_engine_with_or_without_a_task_or_repo() {
+        let mut app = App::new(Machine::from_env());
+        for line in [
+            r#"{"type":"budget.alert","alert":{"scope":"engine","engine":"openai","taskId":null,"repo":null,"pct":80,"spentUsd":16,"limitUsd":20}}"#,
+            r#"{"type":"budget.alert","alert":{"scope":"engine","engine":"openai:sol","taskId":"aaaaaaaa0000","repo":"/r/luna-tui","pct":100,"spentUsd":10,"limitUsd":10}}"#,
+        ] {
+            app.tx.send(Incoming::Message(serde_json::from_str::<StreamMessage>(line).unwrap())).unwrap();
+        }
+        app.pump();
+        let bodies: Vec<String> = app.take_notices().into_iter().map(|n| n.body).collect();
+        assert_eq!(bodies, ["engine openai at 80%: $16.00 of $20.00 this month", "engine openai:sol in luna-tui at 100%: $10.00 of $10.00 this month"]);
+    }
+
     fn questions_detail(id: &str) -> TaskDetail {
         serde_json::from_str(&format!(
             r#"{{"task":{{"id":"{id}","title":"Login page","description":"","criteria":[],

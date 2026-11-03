@@ -34,6 +34,7 @@ import { type Credentials, NoCredentialError } from "../adapters/credentials/ind
 import type { SandboxResult, SandboxRun } from "../adapters/docker/docker.ts";
 import { type ContextPackId, type PackContext, contextSchema, isContextPack } from "../domain/context-packs.ts";
 import { engineProblem, fallbackCandidates } from "../domain/engine-choice.ts";
+import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { buildContextPackInput } from "../domain/stage-input.ts";
 import { outputError, runPackOnce } from "./stages/run-once.ts";
 
@@ -113,6 +114,8 @@ export interface PackRunsDeps {
   queue?: number;
   /** The machine's daily ceiling and the day's spend (stage runs and pack runs); none when absent. */
   budget?: { dailyUsd: number | null; spentTodayUsd: () => Promise<number> };
+  /** The monthly caps per engine: told about every call with a cost, to raise their alerts. */
+  engineBudgets?: Pick<EngineBudgetWatch, "afterRun">;
   /** The credentials whose usage window the pipeline holds right now: a fallback never goes to one. */
   latched?: () => CredentialOwner[];
   /** One line per call; defaults to console.log. Never the context nor the answer. */
@@ -244,6 +247,7 @@ export class PackRuns implements PackRunsPort {
     if (!usage.model) usage.model = resolveEngine(engine).modelId;
     if (usage.durationMs === 0) usage.durationMs = Date.now() - t0;
     if (!(failure instanceof RunNoCredentialError)) await this.record({ pack, engine, model: usage.model, client, ok: failure === null, error: failure?.message ?? null, turns: usage.turns, durationMs: usage.durationMs, costUsd: usage.costUsd, startedAt: startedAt.toISOString(), endedAt: this.now().toISOString() });
+    if (usage.costUsd) await this.deps.engineBudgets?.afterRun(engine, { taskId: null, repo: null }).catch((thrown: unknown) => console.warn(`run: could not check the engine's cap: ${thrown instanceof Error ? thrown.message : String(thrown)}`));
     const cost = usage.costUsd === null ? "" : ` · $${usage.costUsd.toFixed(4)}`;
     this.log(failure ? `run: ${pack} on ${engine}${client ? ` for ${client}` : ""} failed: ${failure.message}` : `run: ${pack} on ${engine}${client ? ` for ${client}` : ""}, ${usage.turns} turn(s)${cost}`);
     if (failure) throw failure;

@@ -42,9 +42,11 @@ const SlotsInput = z.object({ max: z.number().int().min(1) });
 
 import { DEFAULT_PORT } from "../../config.ts";
 import { computeMetrics } from "../persistence/metrics-query.ts";
+import { PgTaskStore } from "../persistence/task-store.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import { packInfo } from "../../domain/packs.ts";
 import { engineInfo } from "../../domain/engines.ts";
+import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
@@ -99,6 +101,8 @@ export interface AppDeps {
   slaAll?: (tasks: TaskRow[]) => Promise<Map<string, TaskSla | null>>;
   /** Whether this machine has each engine's credential, for `GET /engines`; defaults to the machine's own. */
   credentials?: Pick<Credentials, "check">;
+  /** The monthly caps per engine, for `GET /engines`' spend and budget; defaults to no caps over the database's spend. */
+  engineBudgets?: Pick<EngineBudgetWatch, "standings">;
   /** Who may call (see access.ts); defaults to a loopback machine on the default port with no token. */
   access?: ApiAccess;
   /** Packs on demand (`POST /runs`); without it (MACHINE_AGENTS=off) the route answers 503 `agents_off`. */
@@ -150,8 +154,9 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
   const app = new Hono();
+  engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
   /** A task row as the board reads it, clocks included. */
   const serialize = async (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null) =>
@@ -210,7 +215,10 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   app.get("/packs", (c) => c.json(PackId.options.map((id) => packInfo(PACKS[id]))));
 
   /** Every engine, and whether this machine has the credential it needs; never the credential. */
-  app.get("/engines", async (c) => c.json(await Promise.all(EngineId.options.map(async (id) => engineInfo(id, await credentials.check(id))))));
+  app.get("/engines", async (c) => {
+    const standings = await engineBudgets.standings();
+    return c.json(await Promise.all(EngineId.options.map(async (id) => engineInfo(id, await credentials.check(id), standings.get(id)))));
+  });
 
   /** One context-only pack on data the client sends: its validated answer and what it cost. */
   app.post("/runs", async (c) => {
