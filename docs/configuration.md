@@ -37,6 +37,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `DATABASE_URL` | `postgres://hardness:hardness@127.0.0.1:5433/hardness` | Postgres connection string |
 | `MACHINE_PORT` | `4317` | HTTP port the machine listens on |
 | `MACHINE_HOST` | `127.0.0.1` | interface the API binds to (`0.0.0.0` inside the compose container) |
+| `MACHINE_API_TOKEN` | unset; required beyond loopback | the bearer token every API call must carry (`Authorization: Bearer <token>`); also read from `~/.config/hardness/machine-api-token`, which `pnpm start` creates when missing (`pnpm api-token`). With `MACHINE_HOST` beyond loopback and no token the machine refuses to start. The board reads the same variable and file. Never logged. See [api.md](api.md#who-may-call) |
 | `MACHINE_MAX_CONCURRENT` | `4` | tasks driving a stage at once, across every repo |
 | `MACHINE_MAX_PER_REPO` | unset | running tasks one repo may hold at once, so it cannot take every slot; unset means no cap. Claims go oldest-queued first, the repo with the fewest running tasks first. A repo's own `PIPELINE.md` (`max_concurrent`) overrides it for that repo |
 | `MACHINE_MAX_PER_STAGE` | unset | `stage=n` pairs, e.g. `implementing=2,e2e=1`: tasks that may drive one stage at once. A task whose next stage is at cap waits in the queue, state kept (`stage.held`). `ci_watch` never holds a slot: it polls GitHub outside the pool and takes a slot again (or queues) for the stage after |
@@ -158,7 +159,9 @@ Every stage and check container mounts a docker volume named `hardness-cache-<re
 | `GITHUB_TOKEN` / `GH_TOKEN` | unset (`pnpm start` passes `gh auth token` as `GH_TOKEN`) | the token every GitHub API call uses (PRs, checks, reviews, the PR inbox); `GITHUB_TOKEN` wins when both are set. In the container it also lets `git push` reach GitHub over https; `git@github.com:` and `ssh://` remotes are rewritten to https there |
 | `LUNA_GIT_NAME`, `LUNA_GIT_EMAIL` | your `git config` (via `pnpm start`) | identity for commits the machine makes itself (the approved memory rules) |
 
-`~/.config/hardness` is mounted read-only for the Claude credential. Your Codex home (`$CODEX_HOME`, else `~/.codex`) is mounted read-write at `/root/.codex-host`, with `CODEX_HOME` pointing there, for the `codex:*` engines: the machine copies `auth.json` into each run's folder and writes a refreshed token back, keeping the file's owner, so a stage container never sees the folder. Without a `codex login` on the host the folder is empty and `codex:*` picks run on the pack's default, with a line on the task saying so. The other variables in the table above pass through to the container as well.
+`~/.config/hardness` is mounted read-only for the Claude credential and the API token: the container binds `0.0.0.0`, so the machine there asks every call for `machine-api-token`, which `pnpm start` writes once (`openssl rand -hex 32`, mode 0600) and the board reads. The other variables in the table above pass through to the container as well.
+
+Your Codex home (`$CODEX_HOME`, else `~/.codex`) is mounted read-write at `/root/.codex-host`, with `CODEX_HOME` pointing there, for the `codex:*` engines: the machine copies `auth.json` into each run's folder and writes a refreshed token back, keeping the file's owner, so a stage container never sees the folder. Without a `codex login` on the host the folder is empty and `codex:*` picks run on the pack's default, with a line on the task saying so. The other variables in the table above pass through to the container as well.
 
 ## Runner image
 
@@ -170,4 +173,4 @@ Inside a stage container the runner sees `/in/stage.json`, `/out`, `/work` (the 
 
 ## Board
 
-The board uses whichever machine answers: `http://127.0.0.1:4317` (`pnpm dev`) first, then `http://127.0.0.1:4318` (`pnpm start`), checked again on every reconnect. `HARDNESS_MACHINE_URL` pins one address instead. `HARDNESS_REPOS_DIR` is where the board's repo search (`R`) looks for repos (default `~/Developer`).
+The board uses whichever machine answers: `http://127.0.0.1:4317` (`pnpm dev`) first, then `http://127.0.0.1:4318` (`pnpm start`), checked again on every reconnect. `HARDNESS_MACHINE_URL` pins one address instead. When `MACHINE_API_TOKEN` or `~/.config/hardness/machine-api-token` holds a token, the board sends it on every call. `HARDNESS_REPOS_DIR` is where the board's repo search (`R`) looks for repos (default `~/Developer`).

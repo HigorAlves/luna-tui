@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { machineHeaders } from "./golden-lib.mjs";
+
 import { counterFilePath } from "../../fixtures/golden-flaky/counter-path.mjs";
 
 const MACHINE_URL = process.env.HARDNESS_MACHINE_URL ?? "http://127.0.0.1:4317";
@@ -29,7 +31,7 @@ function sh(cmd, args, cwd, env) {
 async function api(path, opts = {}) {
   const res = await fetch(`${MACHINE_URL}${path}`, {
     ...opts,
-    headers: { "content-type": "application/json", ...opts.headers },
+    headers: { ...machineHeaders(), ...opts.headers },
   });
   const text = await res.text();
   const json = text ? JSON.parse(text) : undefined;

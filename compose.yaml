@@ -32,7 +32,8 @@ services:
         condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4317/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      # Bound to 0.0.0.0 in here, the API asks for its token (`pnpm start` writes one), /health too.
+      test: ["CMD", "node", "-e", "const t = process.env.MACHINE_API_TOKEN || require('fs').readFileSync('/root/.config/hardness/machine-api-token', 'utf8'); fetch('http://127.0.0.1:4317/health', { headers: { authorization: 'Bearer ' + t.replace(/\\s+/g, '') } }).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -43,6 +44,8 @@ services:
     environment:
       DATABASE_URL: postgres://hardness:hardness@postgres:5432/hardness
       MACHINE_HOST: 0.0.0.0
+      # Required beyond loopback: from the shell, else ~/.config/hardness/machine-api-token (mounted below).
+      MACHINE_API_TOKEN: ${MACHINE_API_TOKEN:-}
       MACHINE_PORT: "4317"
       # Stage containers are started through the host's Docker, which resolves mounts on the
       # host. So every path the machine hands to `docker run` must be the same path in here:

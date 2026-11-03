@@ -7,6 +7,17 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const MACHINE_URL = process.env.HARDNESS_MACHINE_URL ?? "http://127.0.0.1:4317";
+
+/** Every call's headers: JSON, and the machine's API token when it has one (`MACHINE_API_TOKEN`, else ~/.config/hardness/machine-api-token). */
+export function machineHeaders() {
+  let token = process.env.MACHINE_API_TOKEN?.replace(/\s+/g, "") || "";
+  if (!token) {
+    try {
+      token = readFileSync(join(process.env.HOME ?? "", ".config", "hardness", "machine-api-token"), "utf8").replace(/\s+/g, "");
+    } catch {}
+  }
+  return { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) };
+}
 export const FIXTURES_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "fixtures");
 
 /** Stages whose runs are agent packs: a real run reports usage, a stub run does not. */
@@ -106,7 +117,7 @@ export async function api(path, opts = {}) {
   const request = () =>
     fetch(`${MACHINE_URL}${path}`, {
       ...opts,
-      headers: { "content-type": "application/json", ...opts.headers },
+      headers: { ...machineHeaders(), ...opts.headers },
     });
   let res;
   try {

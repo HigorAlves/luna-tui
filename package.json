@@ -6,8 +6,9 @@
     "node": ">=24"
   },
   "scripts": {
-    "start": "pnpm images && GH_TOKEN=\"${GH_TOKEN:-$(gh auth token 2>/dev/null)}\" LUNA_GIT_NAME=\"${LUNA_GIT_NAME:-$(git config user.name)}\" LUNA_GIT_EMAIL=\"${LUNA_GIT_EMAIL:-$(git config user.email)}\" docker compose up -d --build --wait",
+    "start": "pnpm images && pnpm api-token && GH_TOKEN=\"${GH_TOKEN:-$(gh auth token 2>/dev/null)}\" LUNA_GIT_NAME=\"${LUNA_GIT_NAME:-$(git config user.name)}\" LUNA_GIT_EMAIL=\"${LUNA_GIT_EMAIL:-$(git config user.email)}\" docker compose up -d --build --wait",
     "stop": "docker compose down",
+    "api-token": "test -s \"$HOME/.config/hardness/machine-api-token\" || (umask 077 && mkdir -p \"$HOME/.config/hardness\" && openssl rand -hex 32 > \"$HOME/.config/hardness/machine-api-token\")",
     "dev": "docker compose stop machine 2>/dev/null; pnpm images && pnpm db:up && pnpm --filter @hardness/machine dev",
     "images": "bash machine/runner/build.sh --qa",
     "test": "pnpm -r test",

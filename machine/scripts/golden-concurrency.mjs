@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { machineHeaders } from "./golden-lib.mjs";
+
 const MACHINE_URL = process.env.HARDNESS_MACHINE_URL ?? "http://127.0.0.1:4317";
 const FIXTURE_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "fixtures", "golden-task");
 
@@ -26,7 +28,7 @@ function sh(cmd, args, cwd) {
 async function api(path, opts = {}) {
   const res = await fetch(`${MACHINE_URL}${path}`, {
     ...opts,
-    headers: { "content-type": "application/json", ...opts.headers },
+    headers: { ...machineHeaders(), ...opts.headers },
   });
   const text = await res.text();
   const json = text ? JSON.parse(text) : undefined;

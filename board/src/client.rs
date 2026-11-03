@@ -11,7 +11,12 @@ use std::{
 
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
-use ureq::{Agent, Body, http::Response};
+use ureq::{
+    Agent, Body,
+    config::ConfigBuilder,
+    http::{HeaderValue, Response},
+    typestate::AgentScope,
+};
 
 use crate::model::{
     EngineCatalog, Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
@@ -58,6 +63,8 @@ pub struct Machine {
     agent: Agent,
     /// For the calls that wait on a poll of GitHub or Slack.
     slow: Agent,
+    /// The machine's API token, sent on every call; see `api_token`.
+    token: Option<String>,
 }
 
 type Reply = Result<Response<Body>, ureq::Error>;
@@ -66,22 +73,26 @@ impl Machine {
     /// `HARDNESS_MACHINE_URL`, or whichever of the dev and Docker machines is up (dev first).
     pub fn from_env() -> Self {
         let candidates = candidates(env::var("HARDNESS_MACHINE_URL").ok());
-        let base = pick_up(&candidates);
-        let agent = Agent::config_builder()
-            .http_status_as_error(false)
-            .timeout_global(Some(REQUEST_TIMEOUT))
-            .build()
-            .into();
-        let slow = Agent::config_builder().http_status_as_error(false).timeout_global(Some(POLL_TIMEOUT)).build().into();
-        Self { base: Arc::new(RwLock::new(base)), candidates, agent, slow }
+        let token = api_token();
+        let base = pick_up(&candidates, &token);
+        Self::with(base, candidates, token)
+    }
+
+    fn with(base: String, candidates: Vec<String>, token: Option<String>) -> Self {
+        let agent = builder(&token).http_status_as_error(false).timeout_global(Some(REQUEST_TIMEOUT)).build().into();
+        let slow = builder(&token).http_status_as_error(false).timeout_global(Some(POLL_TIMEOUT)).build().into();
+        Self { base: Arc::new(RwLock::new(base)), candidates, agent, slow, token }
     }
 
     /// A machine at a known address, for tests that stand up their own.
     #[cfg(test)]
     pub fn at(base: &str) -> Self {
-        let agent = Agent::config_builder().http_status_as_error(false).timeout_global(Some(REQUEST_TIMEOUT)).build().into();
-        let slow = Agent::config_builder().http_status_as_error(false).timeout_global(Some(POLL_TIMEOUT)).build().into();
-        Self { base: Arc::new(RwLock::new(base.to_string())), candidates: vec![base.to_string()], agent, slow }
+        Self::at_with_token(base, None)
+    }
+
+    #[cfg(test)]
+    pub fn at_with_token(base: &str, token: Option<String>) -> Self {
+        Self::with(base.to_string(), vec![base.to_string()], token)
     }
 
     pub fn base(&self) -> String {
@@ -90,7 +101,7 @@ impl Machine {
 
     /// Follows `/events` on a background thread; see `spawn_stream`.
     pub fn follow_stream(&self, tx: Sender<Incoming>) {
-        spawn_stream(Arc::clone(&self.base), self.candidates.clone(), tx);
+        spawn_stream(Arc::clone(&self.base), self.candidates.clone(), self.token.clone(), tx);
     }
 
     fn url(&self, path: &str) -> String {
@@ -426,24 +437,50 @@ fn pick(candidates: &[String], healthy: impl Fn(&str) -> bool) -> &str {
     candidates.iter().find(|c| healthy(c)).unwrap_or(&candidates[0])
 }
 
+/// `MACHINE_API_TOKEN`, else `~/.config/hardness/machine-api-token`: the token the machine asks
+/// for when it has one. Never shown.
+fn api_token() -> Option<String> {
+    token_from(env::var("MACHINE_API_TOKEN").ok(), env::var("HOME").ok())
+}
+
+fn token_from(var: Option<String>, home: Option<String>) -> Option<String> {
+    let bare = |value: String| Some(value.split_whitespace().collect::<String>()).filter(|v| !v.is_empty());
+    var.and_then(bare).or_else(|| {
+        let path = std::path::Path::new(&home?).join(".config").join("hardness").join("machine-api-token");
+        std::fs::read_to_string(path).ok().and_then(bare)
+    })
+}
+
+/// An agent's config, sending `Authorization: Bearer <token>` on every call when there is a token.
+fn builder(token: &Option<String>) -> ConfigBuilder<AgentScope> {
+    let config = Agent::config_builder();
+    let Some(value) = token.as_ref().and_then(|t| HeaderValue::from_str(&format!("Bearer {t}")).ok()) else {
+        return config;
+    };
+    config.middleware(move |mut request: ureq::http::Request<ureq::SendBody>, next: ureq::middleware::MiddlewareNext| {
+        request.headers_mut().insert("authorization", value.clone());
+        next.handle(request)
+    })
+}
+
 /// `pick` against the real `/health`; skips probing when there is only one candidate.
-fn pick_up(candidates: &[String]) -> String {
+fn pick_up(candidates: &[String], token: &Option<String>) -> String {
     if candidates.len() == 1 {
         return candidates[0].clone();
     }
-    let probe: Agent = Agent::config_builder().timeout_global(Some(PROBE_TIMEOUT)).build().into();
+    let probe: Agent = builder(token).timeout_global(Some(PROBE_TIMEOUT)).build().into();
     pick(candidates, |base| probe.get(format!("{base}/health")).call().is_ok()).to_string()
 }
 
 /// Follows `/events` on a background thread, reconnecting while the machine is down. Each
 /// (re)connect picks the machine again, so switching between `pnpm start` and `pnpm dev`
 /// needs no restart. Stops once the receiving side is gone.
-fn spawn_stream(shared: Arc<RwLock<String>>, candidates: Vec<String>, tx: Sender<Incoming>) {
+fn spawn_stream(shared: Arc<RwLock<String>>, candidates: Vec<String>, token: Option<String>, tx: Sender<Incoming>) {
     thread::spawn(move || {
         // No timeout: the stream stays open for as long as the board runs.
-        let agent: Agent = Agent::config_builder().http_status_as_error(false).build().into();
+        let agent: Agent = builder(&token).http_status_as_error(false).build().into();
         loop {
-            let base = pick_up(&candidates);
+            let base = pick_up(&candidates, &token);
             if let Ok(mut current) = shared.write() {
                 current.clone_from(&base);
             }
@@ -556,6 +593,60 @@ mod tests {
     fn with_nothing_up_the_dev_machine_is_assumed_and_an_override_is_the_only_candidate() {
         assert_eq!(pick(&candidates(None), |_| false), DEV_URL);
         assert_eq!(candidates(Some("http://box:9000/".into())), vec!["http://box:9000".to_string()]);
+    }
+}
+
+#[cfg(test)]
+mod token_tests {
+    use std::{
+        io::{BufRead, BufReader, Write},
+        net::TcpListener,
+        sync::mpsc,
+    };
+
+    use super::*;
+
+    #[test]
+    fn the_api_token_comes_from_the_environment_else_the_secrets_file_else_none() {
+        let home = env::temp_dir().join(format!("board-token-{}", std::process::id()));
+        let dir = home.join(".config").join("hardness");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(token_from(None, Some(home.to_string_lossy().to_string())), None);
+        std::fs::write(dir.join("machine-api-token"), "from-file\n").unwrap();
+        assert_eq!(token_from(None, Some(home.to_string_lossy().to_string())).as_deref(), Some("from-file"));
+        assert_eq!(token_from(Some(" from-env ".into()), Some(home.to_string_lossy().to_string())).as_deref(), Some("from-env"));
+        assert_eq!(token_from(Some(String::new()), Some(home.to_string_lossy().to_string())).as_deref(), Some("from-file"));
+        assert_eq!(token_from(None, None), None);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn every_call_carries_the_token_when_there_is_one() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut auth = None;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("authorization:") {
+                        auth = Some(value.trim().to_string());
+                    }
+                }
+                let _ = tx.send(auth);
+                let _ = reader.into_inner().write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: 2\r\n\r\n[]");
+            }
+        });
+        let machine = Machine::at_with_token(&format!("http://{addr}"), Some("s3cret".into()));
+        machine.tasks().unwrap();
+        assert_eq!(rx.recv().unwrap().as_deref(), Some("bearer s3cret"));
+        Machine::at(&format!("http://{addr}")).tasks().unwrap();
+        assert_eq!(rx.recv().unwrap(), None);
     }
 }
 

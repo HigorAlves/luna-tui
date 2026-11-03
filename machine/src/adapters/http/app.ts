@@ -38,6 +38,7 @@ import { ZodError, type ZodType, z } from "zod";
 
 const SlotsInput = z.object({ max: z.number().int().min(1) });
 
+import { DEFAULT_PORT } from "../../config.ts";
 import { computeMetrics } from "../persistence/metrics-query.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import { packInfo } from "../../domain/packs.ts";
@@ -55,12 +56,16 @@ import { NoSlackTokenError } from "../../application/slack.ts";
 import { NoJiraTokenError } from "../../application/jira.ts";
 import { AlreadyLinkedElsewhereError, AlreadyLinkedError, HasWorktreeError, type JiraTasksPort, NoIssueError, NoProjectError, NotchTaskError } from "../../application/jira-tasks.ts";
 import type { StubStages } from "../../application/stages/stubs.ts";
+import { type ApiAccess, guard } from "./access.ts";
 import type { Bus } from "./bus.ts";
 import { InvalidSince, parseSince } from "./metrics.ts";
 import { ReplayFeed } from "./replay.ts";
 import { toApproval, toArtifact, toEvent, toStageRun, toTask } from "./serialize.ts";
 
+export type { ApiAccess } from "./access.ts";
+
 const PING_EVERY_MS = 15_000;
+const DEFAULT_ACCESS: ApiAccess = { host: "127.0.0.1", port: DEFAULT_PORT, token: null };
 /** Every `source.kind` a task may carry, for `GET /events?source=`. */
 const SOURCE_KINDS: string[] = TaskSource.options.map((option) => option.shape.kind.value);
 const IDEMPOTENCY_KEY_MAX = 200;
@@ -91,6 +96,8 @@ export interface AppDeps {
   slaAll?: (tasks: TaskRow[]) => Promise<Map<string, TaskSla | null>>;
   /** Whether this machine has each engine's credential, for `GET /engines`; defaults to the machine's own. */
   credentials?: Pick<Credentials, "check">;
+  /** Who may call (see access.ts); defaults to a loopback machine on the default port with no token. */
+  access?: ApiAccess;
 }
 
 class BadRequest extends Error {}
@@ -132,8 +139,9 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials() }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), access = DEFAULT_ACCESS }: AppDeps): Hono {
   const app = new Hono();
+  app.use(guard(access));
   /** A task row as the board reads it, clocks included. */
   const serialize = async (row: TaskRow, usage: { spentUsd: number; workedMs: number } | null = null) => toTask(row, usage, sla ? await sla(row) : null);
 

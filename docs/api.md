@@ -57,6 +57,15 @@ The machine's HTTP API, read straight from `machine/src/adapters/http/app.ts`. S
 
 Errors use `{ "error", "message" }`: 400 for invalid input, 404 for an unknown task, 409 for an action that does not fit the task's state, 500 otherwise.
 
+## Who may call
+
+The machine's clients are the board, Luna Notch and scripts; none is a web page. Every request, on every route (`/events` and `/health` included), passes these checks in order (`machine/src/adapters/http/access.ts`):
+
+- **Host**: while `MACHINE_HOST` is a loopback address, a `Host` header must be `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`, else 403 `forbidden_host` (a DNS name rebound to 127.0.0.1). Beyond loopback the check is skipped and the token is required instead.
+- **Origin**: only browsers send one; any but the machine's own (`http://127.0.0.1:<port>`, `http://localhost:<port>`) is 403 `forbidden_origin`.
+- **Token**: when `MACHINE_API_TOKEN` is set (env, else `~/.config/hardness/machine-api-token`), `Authorization: Bearer <token>`, else 401 `unauthorized`. A machine bound beyond loopback with no token refuses to start. The board and the golden scripts read the same variable and file.
+- **Body**: a request that sends a body must say `Content-Type: application/json` (a `; charset=…` is fine), else 415 `unsupported_media_type`. A page can only send that across sites after a CORS preflight, which the machine never allows, so a cross-site form or `no-cors` fetch cannot create, start, merge or close anything.
+
 ## Example session
 
 ```sh
