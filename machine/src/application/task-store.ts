@@ -144,7 +144,7 @@ export interface TaskStore {
   usageByTask(): Promise<Map<string, TaskUsage>>;
   /** One task's spend and worked time. */
   taskUsage(taskId: string): Promise<TaskUsage>;
-  /** What every stage run started since `since` has cost, in USD. */
+  /** What every stage run and `POST /runs` call (pack_runs) started since `since` has cost, in USD. */
   spendSinceUsd(since: Date): Promise<number>;
   /** What one repo's stage runs started since `since` have cost, in USD. */
   repoSpendSinceUsd(repoPath: string, since: Date): Promise<number>;

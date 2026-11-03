@@ -272,8 +272,13 @@ export class PgTaskStore implements TaskStore {
     return { spentUsd: Number(row?.usd ?? 0), workedMs: Math.round(Number(row?.ms ?? 0)) };
   }
 
+  /** Every run's cost since then: the stage runs and the `POST /runs` calls (pack_runs). */
   async spendSinceUsd(since: Date): Promise<number> {
-    const [row] = (await this.db.query("select coalesce(sum(cost_usd), 0) as usd from stage_runs where started_at >= $1", [since])) as { usd: string }[];
+    const [row] = (await this.db.query(
+      `select (select coalesce(sum(cost_usd), 0) from stage_runs where started_at >= $1)
+            + (select coalesce(sum(cost_usd), 0) from pack_runs where started_at >= $1) as usd`,
+      [since],
+    )) as { usd: string }[];
     return Number(row?.usd ?? 0);
   }
 
