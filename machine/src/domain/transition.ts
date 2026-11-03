@@ -41,6 +41,8 @@ export type PipelineEvent =
   | { type: "rate_limited" }
   | { type: "window_reset" }
   | { type: "abort" }
+  /** A Luna Notch Stop while the task waits at a gate: it escalates as "stopped" (the pipeline sends it for notch tasks only). */
+  | { type: "stop" }
   /** The stage loop threw outside any stage (a DB hiccup, a pool timeout): the task must not stay "running". */
   | { type: "crash"; error: string }
   /** The task spent past its ceiling; `reason` is the budget line shown on the board. */
@@ -150,6 +152,11 @@ function next(task: Snapshot, event: PipelineEvent): Move {
         return escalate("aborted", task.resumeTo, retries);
       }
       break;
+    case "stop": {
+      const stage = gateStage(task);
+      if (stage) return escalate("stopped", stage, retries);
+      break;
+    }
     case "rate_limited":
       if (RUNNING.has(state)) {
         return { state: "paused_rate_limit", retries, resumeTo: state, effect: { kind: "pause" } };
@@ -179,6 +186,23 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       return stageDone(task, event);
   }
   throw new TransitionError(task, event);
+}
+
+/** The stage that opened the gate a task waits at, which a stopped task re-runs when retried; null when it is not at an `awaiting_*` gate. */
+function gateStage(task: Snapshot): TaskState | null {
+  switch (task.state) {
+    case "awaiting_setup":
+      return "setup";
+    case "awaiting_answers":
+    case "awaiting_approval":
+      return "triage";
+    case "awaiting_test_check":
+      return "test_design";
+    case "awaiting_ship":
+      return task.route === "review" ? "reviewing" : "evidence";
+    default:
+      return null;
+  }
 }
 
 /** The first stage each route runs when a task starts. */

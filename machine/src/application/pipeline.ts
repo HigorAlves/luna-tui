@@ -590,6 +590,11 @@ export class Pipeline {
 
   /** Stops the running (or merely queued) stage and waits for you. */
   async abort(id: string): Promise<TaskRow> {
+    // The notch's Stop at a gate ends the run there (RFC 0004); a board task at a gate is a 409, as always.
+    const before = await this.get(id);
+    if (before.source?.kind === "notch" && before.state.startsWith("awaiting_")) {
+      return this.dispatch(id, { type: "stop" }, { decision: { decision: "sent_back", reason: "stopped" } });
+    }
     const task = await this.dispatch(id, { type: "abort" });
     this.loops.get(id)?.abort();
     await this.store.updateTask(id, { queued: false });
