@@ -21,6 +21,10 @@ describe("transcriptLine", () => {
     [{ kind: "rate_limit", payload: { resetsAt: 1 } }, null],
     [{ kind: "ledger.init", payload: { total: 1 } }, null],
     [{ kind: "note", payload: { phase: "stage_end" } }, null],
+    [{ kind: "child", payload: { phase: "start", runId: "child-1", pack: "verifying", role: "security-reviewer", engine: "codex:sol" } }, "↳ security-reviewer on codex:sol"],
+    [{ kind: "child", payload: { phase: "end", runId: "child-1", pack: "verifying", role: "security-reviewer", engine: "codex:sol", ok: true, costUsd: 0.125 } }, "↳ security-reviewer on codex:sol answered · $0.1250"],
+    [{ kind: "child", payload: { phase: "end", runId: "child-1", pack: "verifying", role: "security-reviewer", engine: "codex:sol", ok: true, costUsd: null } }, "↳ security-reviewer on codex:sol answered"],
+    [{ kind: "child", payload: { phase: "end", runId: "child-1", pack: "verifying", role: "security-reviewer", engine: "codex:sol", ok: false, error: "no Codex login in this stage" } }, "↳ security-reviewer on codex:sol failed: no Codex login in this stage"],
   ])("%j prints %j", (event, line) => {
     expect(transcriptLine(event)).toBe(line);
   });

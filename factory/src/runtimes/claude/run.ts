@@ -7,6 +7,7 @@ import { type Pack, answerJsonSchema } from "@hardness/contracts";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { DELEGATE } from "../../core/delegate.ts";
 import { CallJoin } from "../../core/events.ts";
 import type { GuardContext } from "../../core/guards.ts";
 
@@ -64,6 +65,9 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
   if (pack.kind !== "agent" || pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
   // A call's event joins the stream's tool_use and the hook's decision, whichever comes first.
   const calls = new CallJoin(emit, isGuarded);
+  // `delegate` rides on the luna server when the pack hands work to a helper on another runtime.
+  const { tools, allowedTools } = claudeTools(pack.access);
+  const delegating = ctx.delegate ? [`mcp__luna__${DELEGATE}`] : [];
   const options = {
     cwd: paths.work,
     agent: pack.agent,
@@ -71,11 +75,12 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
     systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append: FACTORY_RULES },
     plugins: [{ type: "local" as const, path: join(paths.factoryRoot, "plugin") }],
     settingSources: [] as [],
-    ...claudeTools(pack.access),
+    tools: [...tools, ...delegating],
+    allowedTools: [...allowedTools, ...delegating],
     permissionMode: "dontAsk" as const,
     maxTurns: input.limits.maxTurns,
     outputFormat: { type: "json_schema" as const, schema: answerJsonSchema(pack) },
-    mcpServers: { luna: lunaServer(luna.call) },
+    mcpServers: { luna: lunaServer(luna.call, ctx.delegate ?? null) },
     hooks: {
       PreToolUse: preToolUseGuards(guardPolicy(ctx), (id, tool, toolInput, decision) => calls.decided(id, tool, toolInput, decision)),
     },

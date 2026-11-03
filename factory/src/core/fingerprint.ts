@@ -2,11 +2,13 @@
 // from the task's data. Two runs with one fingerprint gave the model the same template, role (with
 // the runtime's addendum), skills, access, answer schema and factory rules, so a change in quality
 // between them is the model's or the task's; a new fingerprint names a change in the harness.
-import type { Access } from "@hardness/contracts";
+import { type Access, type Pack, type ResolvedEngine, type RunInfo, answerJsonSchema } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import type { Runtime } from "./runtime.ts";
 
 export interface FingerprintInput {
   /** The prompt template, or what a decision pack asks in its place (its questions). */
@@ -61,4 +63,17 @@ export function sdkInfo(name: string): { name: string; version: string } {
     }
   } catch {}
   return { name, version: "unknown" };
+}
+
+/** What a run ran on and its fingerprint: `template` is the prompt template, or what a decision
+ *  pack asks in its place. */
+export function runInfo(runtime: Runtime, engine: ResolvedEngine, pack: Pack, template: string, factoryRoot: string): RunInfo {
+  const hash = fingerprint({
+    template,
+    ...runtime.instructions(pack, factoryRoot),
+    skillsDir: join(factoryRoot, "plugin", "skills"),
+    access: pack.kind === "agent" ? pack.access : null,
+    answer: answerJsonSchema(pack),
+  });
+  return { runtime: runtime.id, engine: engine.id, modelId: engine.modelId, sdk: sdkInfo(runtime.sdk), fingerprint: hash };
 }
