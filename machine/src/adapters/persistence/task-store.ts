@@ -221,6 +221,9 @@ export class PgTaskStore implements TaskStore {
         listStageRuns(taskId) {
           return manager.find(StageRunEntity, { where: { taskId }, order: { startedAt: "ASC" } });
         },
+        listApprovals(taskId) {
+          return manager.find(ApprovalEntity, { where: { taskId }, order: { createdAt: "ASC" } });
+        },
       };
       return fn(task, tx);
     });

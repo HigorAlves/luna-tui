@@ -67,6 +67,8 @@ export interface TaskTx {
   /** The task's stage runs, read on the lock's own connection: another one, taken while the lock
    *  is held, could wait forever on a pool the lock's waiters have filled. */
   listStageRuns(taskId: string): Promise<StageRunRow[]>;
+  /** The task's approvals, oldest first, read on the lock's own connection, for the same reason. */
+  listApprovals(taskId: string): Promise<ApprovalRow[]>;
 }
 
 /** What a task's stage runs add up to: dollars, and wall time in them. */

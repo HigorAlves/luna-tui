@@ -79,6 +79,22 @@ describe("PATCH /tasks/:id/plan at the test check", () => {
     const edited = await call(`/tasks/${task.id}/plan`, json({ criteria: ["c1", "c2"] }));
     expect(edited).toMatchObject({ status: 200, body: { state: "awaiting_test_check", criteria: ["c1", "c2"] } });
   });
+
+  it("finishes every one of more concurrent edits on one task than the pool has connections", async () => {
+    stubs.plan("triage", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved");
+    const { max } = (db.driver as unknown as { options: { extra: { max: number } } }).options.extra;
+    const edits = Array.from({ length: max + 8 }, (_, i) => call(`/tasks/${task.id}/plan`, json({ brief: `b${i}` })));
+    let timer: NodeJS.Timeout | undefined;
+    const stalled = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("the edits deadlocked on the pool")), 10_000);
+    });
+    const answers = await Promise.race([Promise.all(edits), stalled]).finally(() => clearTimeout(timer));
+    expect(answers.map((answer) => answer.status)).toEqual(Array.from({ length: max + 8 }, () => 200));
+    expect((await pipeline.events(task.id)).filter((e) => e.kind === "plan.edited")).toHaveLength(max + 8);
+  }, 20_000);
 });
 
 describe("GET /tasks/:id/diff", () => {

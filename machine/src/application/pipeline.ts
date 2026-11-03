@@ -480,7 +480,7 @@ export class Pipeline {
       let plan: ApprovalRow | undefined;
       if (open?.kind === "awaiting_approval") plan = open;
       else if (open?.kind === "awaiting_test_check") {
-        plan = (await this.store.listApprovals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
+        plan = (await tx.listApprovals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
       }
       if (!open || !plan) throw new NoPlanToEditError(id);
       const before: Record<string, unknown> = {};
