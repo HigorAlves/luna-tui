@@ -1,7 +1,7 @@
 import { PACKS, type StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { FACTORY_RULES, callLine, escalationLine, renderPrompt } from "./render.ts";
+import { EVE_TOOL_NAMES, FACTORY_RULES, callLine, escalationLine, factoryRules, renderPrompt } from "./render.ts";
 
 const input: StageInput = {
   schema: 3,
@@ -162,6 +162,15 @@ describe("renderPrompt", () => {
     expect(FACTORY_RULES).not.toContain('kind "questions"');
     expect(FACTORY_RULES).not.toContain("Answer ONLY");
     expect(FACTORY_RULES).not.toMatch(/human|controller/);
+  });
+
+  it("names the runtime's own tools: the same rules, eve's names", () => {
+    const eve = factoryRules(EVE_TOOL_NAMES);
+    expect(eve).toContain("Never ask a question");
+    expect(eve).toContain("read_file, glob and grep for files");
+    expect(eve).toContain("Report progress with the step tool");
+    expect(eve).not.toMatch(/AskUserQuestion|Read\/Glob\/Grep|mcp__luna__/);
+    expect(eve.split("\n")).toHaveLength(FACTORY_RULES.split("\n").length);
   });
 });
 

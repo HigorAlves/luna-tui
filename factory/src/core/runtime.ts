@@ -18,8 +18,9 @@ export interface RunContext {
     /** Where the run's files go (/out). */
     out: string;
   };
-  /** The luna tools: the state the result reads, and the server the runtime serves them from. */
-  luna: { state: LunaState; server: unknown };
+  /** The luna tools: the state the result reads, the server the Claude runtime serves them from,
+   *  and `call` for a runtime that serves the same handlers its own way. */
+  luna: { state: LunaState; server: unknown; call: (tool: string, args: unknown) => Promise<unknown> };
   /** LUNA_STAGE_DRY_RUN=1: build and print the run's options without a model call. */
   dry: boolean;
   /** A line on the readable transcript (stdout). */

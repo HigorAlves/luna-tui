@@ -34,7 +34,7 @@ function context(over: Partial<RunContext> = {}) {
     input: input(),
     prompt: "",
     paths: { factoryRoot: "/factory", work: "/work", out: "/out" },
-    luna: { state, server: null },
+    luna: { state, server: null, call: async () => null },
     dry: false,
     out: (line) => lines.push(line),
     ...over,
