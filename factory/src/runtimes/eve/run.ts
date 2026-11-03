@@ -7,7 +7,7 @@
 // this process over a loopback bridge with a per-run bearer token. The server always stops.
 // LUNA_STAGE_DEBUG=1 also writes every session event to /out/raw.jsonl and the server's log to
 // /out/eve-server.log.
-import { ENGINES, answerJsonSchema } from "@hardness/contracts";
+import { type AgentPack, ENGINES, answerJsonSchema } from "@hardness/contracts";
 import type { SendTurnOptions } from "eve/client";
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -41,7 +41,7 @@ export function eveRuntime(options: EveOptions = {}): Runtime {
 export const eve: Runtime = eveRuntime();
 
 /** The stage's guard policy, as the agent's tools read it from LUNA_EVE_GUARD. */
-function guardPolicy({ pack, input, paths }: RunContext): GuardContext {
+function guardPolicy(pack: AgentPack, { input, paths }: RunContext): GuardContext {
   return {
     writable: pack.writable,
     branch: input.task.branch || null,
@@ -57,11 +57,11 @@ function guardPolicy({ pack, input, paths }: RunContext): GuardContext {
 
 async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   const { pack, engine, input, prompt, paths, luna, dry, out } = ctx;
-  if (pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
+  if (pack.kind !== "agent" || pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
   const app = join(options.agentsDir ?? join(paths.factoryRoot, ".eve-agents"), pack.id);
   const entry = join(app, ".output", "server", "index.mjs");
   const apiKey = (ENGINES[engine.id] as { auth?: string }).auth === "api-key";
-  const guard = guardPolicy(ctx);
+  const guard = guardPolicy(pack, ctx);
 
   if (dry) {
     out(

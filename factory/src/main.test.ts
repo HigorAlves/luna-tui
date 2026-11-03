@@ -148,11 +148,12 @@ describe("factory main (dry run)", () => {
     expect(options.model).toBe("claude-haiku-5-5");
   });
 
-  it("ends the stage, without a crash, on an engine whose runtime this factory does not have", () => {
+  it("ends the stage, without a crash, on an engine whose runtime cannot run the pack", () => {
+    // Every runtime is registered now, so the mismatch left is a decision engine on an agent pack.
     const { code, result } = run(stageInput("triage", { engine: "jev" }));
     expect(code).toBe(0);
     expect(StageOutput.safeParse(result).error).toBeUndefined();
-    expect(result).toMatchObject({ ok: false, outcome: "fail", error: "engine jev runs on jev, which is not available in this factory yet" });
+    expect(result).toMatchObject({ ok: false, outcome: "fail", error: "pack triage is not a decision pack" });
   });
 
   it("runs an eve engine on eve: the compiled agent, the engine's model through the Codex login, the pack's guard", () => {
