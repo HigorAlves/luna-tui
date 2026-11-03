@@ -9,6 +9,8 @@
 import type { StageInput } from "@hardness/contracts";
 import { posix } from "node:path";
 
+import { splitArgv } from "./argv.ts";
+
 export interface GuardContext {
   /** Whether this stage may edit the worktree and commit. */
   writable: boolean;
@@ -416,7 +418,8 @@ export function guardWrite(filePath: string, ctx: GuardContext): string | null {
 // The call every runtime asks about.
 // ---------------------------------------------------------------------------------------
 
-/** A tool call in no runtime's words: `bash` with a `command`, `write` or `read` with a `path`;
+/** A tool call in no runtime's words: `bash` with a `command` a shell runs, `exec` with a
+ *  `command` run as one process without a shell (core/argv.ts), `write` or `read` with a `path`;
  *  any other tool is not guarded here. */
 export interface GuardedCall {
   tool: string;
@@ -462,17 +465,35 @@ function guardDeniedRoots(command: string, policy: GuardContext): string | null 
 
 /** The reason a command, or any part of a chain, starts with no listed prefix, or null. */
 function guardAllowList(command: string, policy: GuardContext): string | null {
-  if (policy.commands === undefined) return null;
-  const prefixes = policy.commands.map((p) => p.split(/\s+/));
   for (const tokens of simpleCommands(command)) {
-    if (!prefixes.some((p) => p.every((word, i) => tokens[i] === word))) {
-      return `\`${tokens.join(" ")}\` is not on this stage's command allow-list (${policy.commands.join(", ")}): run one listed command per call`;
-    }
+    const reason = guardListed(tokens, policy);
+    if (reason !== null) return reason;
   }
   return null;
 }
 
+/** The reason one simple command starts with no listed prefix (`git add` is argv[0] and its
+ *  subcommand), or null. */
+function guardListed(tokens: SimpleCommand, policy: GuardContext): string | null {
+  if (policy.commands === undefined) return null;
+  const prefixes = policy.commands.map((p) => p.split(/\s+/));
+  if (prefixes.some((p) => p.every((word, i) => tokens[i] === word))) return null;
+  return `\`${tokens.join(" ")}\` is not on this stage's command allow-list (${policy.commands.join(", ")}): run one listed command per call`;
+}
+
+/** The reason one process's argv may not run, or null: the command rules (git, gh, rm, ...) on
+ *  the command a wrapper such as `env` would run, then the allow-list, as for a shell command. */
+function guardArgv(argv: string[], policy: GuardContext): string | null {
+  return guardSimpleCommand(unwrap(argv), policy) ?? guardListed(argv, policy);
+}
+
 function decide(call: GuardedCall, policy: GuardContext): string | null {
+  if (call.tool === "exec") {
+    const command = field(call.input, "command");
+    if (command === undefined) return "malformed tool input: a command needs a string command";
+    const parsed = splitArgv(command);
+    return "refused" in parsed ? parsed.refused : guardArgv(parsed.argv, policy);
+  }
   if (call.tool === "bash") {
     const command = field(call.input, "command");
     if (command === undefined) return "malformed tool input: Bash needs a string command";

@@ -1,18 +1,37 @@
-// The tools a compiled stage agent is given (compile.ts re-exports them from agent/tools/): eve's
-// own bash, read_file and write_file behind the core guards, and the luna tools, which run in the
-// factory process (core/luna-tools.ts keeps the state finish() reads) and are reached over a
-// loopback call to the runner. A tool here runs inside the eve server, never in the factory.
+// The tools a compiled stage agent is given (compile.ts re-exports them from agent/tools/): a
+// `bash` that runs one command as one process (exec.ts), eve's own read_file and write_file, all
+// behind the core guards, and the luna tools, which run in the factory process
+// (core/luna-tools.ts keeps the state finish() reads) and are reached over a loopback call to the
+// runner. A tool here runs inside the eve server, never in the factory.
 import type { LunaTool } from "@hardness/contracts";
 import { defineTool } from "eve/tools";
-import { bash as eveBash } from "eve/tools/bash";
 import { readFile } from "eve/tools/read_file";
 import { writeFile } from "eve/tools/write_file";
 import { z } from "zod";
 
+import { splitArgv } from "../../../core/argv.ts";
 import { LUNA_TOOLS } from "../../../core/luna-tools.ts";
-import { approve, fileInput } from "./guard.ts";
+import { commandEnv, runArgv } from "../exec.ts";
+import { approve, fileInput, refusal } from "./guard.ts";
 
-export const bash = defineTool({ ...eveBash, approval: ({ toolInput }) => approve("bash", toolInput) });
+const WORKSPACE = process.env.LUNA_EVE_WORKSPACE || "/work";
+
+export const bash = defineTool({
+  description: [
+    "Run one command from this stage's allow-list in the worktree and return its exit code, stdout and stderr.",
+    "This is not a shell: the command runs as one process. Quote an argument with spaces ('...' or \"...\"); there are no pipes, redirection, globs, variables, substitution, chaining or cd.",
+  ].join("\n"),
+  inputSchema: z.object({ command: z.string().describe("The command line, e.g. git log --oneline -20") }),
+  approval: ({ toolInput }) => approve("exec", toolInput),
+  async execute({ command }, { abortSignal }) {
+    // The approval ran the same check; this one stands even if a call reaches execute without it.
+    const refused = refusal("exec", { command });
+    const parsed = splitArgv(command);
+    if (refused !== null || "refused" in parsed) return { exitCode: 126, stdout: "", stderr: refused ?? "refused", truncated: false };
+    const env = commandEnv(parsed.argv[0] as string, { home: process.env.HOME || "/tmp", ghToken: process.env.GH_TOKEN || process.env.GITHUB_TOKEN });
+    return await runArgv(parsed.argv, { cwd: WORKSPACE, env, signal: abortSignal });
+  },
+});
 export const read_file = defineTool({ ...readFile, approval: ({ toolInput }) => approve("read", fileInput(toolInput)) });
 export const write_file = defineTool({ ...writeFile, approval: ({ toolInput }) => approve("write", fileInput(toolInput)) });
 

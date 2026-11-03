@@ -13,10 +13,16 @@ function policy(): GuardContext {
   }
 }
 
+/** Why one call may not run, or null. */
+export function refusal(tool: GuardedCall["tool"], input: unknown): string | null {
+  const decision = checkCall({ tool, input }, policy());
+  return decision.allow ? null : decision.reason;
+}
+
 /** The approval for one call: run it, or refuse it with the reason. */
 export function approve(tool: GuardedCall["tool"], input: unknown): ApprovalStatus {
-  const decision = checkCall({ tool, input }, policy());
-  return decision.allow ? "not-applicable" : { type: "denied", reason: decision.reason };
+  const reason = refusal(tool, input);
+  return reason === null ? "not-applicable" : { type: "denied", reason };
 }
 
 /** eve's file tools name their target `filePath`; the guards read `path`. */

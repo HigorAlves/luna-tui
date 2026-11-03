@@ -133,10 +133,24 @@ export interface RuleToolNames {
   step: string;
   /** What refuses a write outside the roots. */
   guard: string;
+  /** How the shell tool runs a command. */
+  shell: string;
 }
 
-export const CLAUDE_TOOL_NAMES: RuleToolNames = { ask: "Never call AskUserQuestion", read: "Read/Glob/Grep", step: "mcp__luna__step", guard: "a hook" };
-export const EVE_TOOL_NAMES: RuleToolNames = { ask: "Never ask a question", read: "read_file, glob and grep", step: "step", guard: "a guard" };
+export const CLAUDE_TOOL_NAMES: RuleToolNames = {
+  ask: "Never call AskUserQuestion",
+  read: "Read/Glob/Grep",
+  step: "mcp__luna__step",
+  guard: "a hook",
+  shell: "Bash runs only the commands on this stage's allow-list, and a chained command (&&, ;, |) runs only when every part is allowed: one simple command per call, no cd",
+};
+export const EVE_TOOL_NAMES: RuleToolNames = {
+  ask: "Never ask a question",
+  read: "read_file, glob and grep",
+  step: "step",
+  guard: "a guard",
+  shell: "bash is not a shell: it runs one command on this stage's allow-list as one process, quotes read as a shell reads them and nothing else (no pipes, redirection, globs, variables, substitution or chaining), no cd",
+};
 
 /** The rules every stage runs under, in the runtime's tool names; the Claude runtime appends them
  *  to the system prompt, eve puts them in the agent's instructions. This is the one place they
@@ -147,7 +161,7 @@ export function factoryRules(names: RuleToolNames): string {
     `${names.ask}: nobody would answer it. A question you cannot settle from the stage input ends the stage, in the shape this stage's answer allows (your prompt names it).`,
     "Never push, never open or edit pull requests, never post reviews or write to a tracker: the machine does those after a person approves. A stage whose answer has requested[] puts the outward action it needs there.",
     `Never write outside /work and /out, and never touch /work/.git directly: everything else is mounted read-only and ${names.guard} denies the write.`,
-    `Bash runs only the commands on this stage's allow-list, and a chained command (&&, ;, |) runs only when every part is allowed: one simple command per call, no cd, and ${names.read} for files. A denied command is not a finding; use an allowed one.`,
+    `${names.shell}, and ${names.read} for files. A denied command is not a finding; use an allowed one.`,
     `Report progress with the ${names.step} tool when it is available; it is a label for the board, not a gate.`,
   ].join("\n");
 }
