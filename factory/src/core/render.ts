@@ -205,7 +205,9 @@ const CALL_TARGET_MAX = 160;
  *  counts identical lines, so an edit carries a fingerprint of what it changes: four
  *  different edits of one file are four calls, the same failing edit four times is a loop. */
 export function callLine(name: string, input: Record<string, unknown>): string {
-  const target = input.file_path ?? input.filePath ?? input.path ?? input.command ?? input.pattern ?? input.url ?? input.label ?? "";
+  // A search names its pattern and where it looks: four globs over /work are four calls, not a loop.
+  const search = input.pattern !== undefined && input.path !== undefined ? `${input.pattern} in ${input.path}` : undefined;
+  const target = input.file_path ?? input.filePath ?? search ?? input.path ?? input.command ?? input.pattern ?? input.url ?? input.label ?? "";
   // A paged read is a different call per page: a long file read in four pages is not a loop.
   const page = name === "Read" && (input.offset !== undefined || input.limit !== undefined) ? `:${input.offset ?? 0}+${input.limit ?? ""}` : "";
   const first = `${String(target).split("\n")[0]!}${page}`.slice(0, CALL_TARGET_MAX);

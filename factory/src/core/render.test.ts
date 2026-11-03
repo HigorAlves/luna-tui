@@ -191,6 +191,13 @@ describe("callLine", () => {
     expect(callLine("Read", { file_path: "/work/ui.rs", limit: 50 })).toBe("→ Read /work/ui.rs:0+50");
   });
 
+  it("names a search by its pattern and where it looks, so four different globs over /work are not one call four times", () => {
+    expect(callLine("glob", { path: "/work", pattern: "**/*.ts" })).toBe("→ glob **/*.ts in /work");
+    expect(callLine("glob", { path: "/work", pattern: "src/**" })).not.toBe(callLine("glob", { path: "/work", pattern: "test/**" }));
+    expect(callLine("Grep", { pattern: "formatPrice", path: "/work/src" })).toBe("→ Grep formatPrice in /work/src");
+    expect(callLine("Glob", { pattern: "**/*.rs" })).toBe("→ Glob **/*.rs");
+  });
+
   it("fingerprints an edit by what it changes, so four different edits of one file are not one call four times", () => {
     const a = callLine("Edit", { file_path: "/work/a.rs", old_string: "x", new_string: "y" });
     const b = callLine("Edit", { file_path: "/work/a.rs", old_string: "y", new_string: "z" });
