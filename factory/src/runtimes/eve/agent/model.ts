@@ -5,7 +5,14 @@
 // agent-config.md, "Set the model").
 import { chatgpt, openai } from "eve/models/openai";
 
+import { secrets } from "./secrets.ts";
+
 export function stageModel() {
   const id = process.env.LUNA_EVE_MODEL || undefined;
-  return process.env.LUNA_EVE_AUTH === "api-key" ? openai(id) : chatgpt(id);
+  if (process.env.LUNA_EVE_AUTH !== "api-key") return chatgpt(id);
+  // openai() reads the key from the environment; it is set here, in this process only, so the
+  // server's environ (what /proc shows) never held it.
+  const key = secrets().openaiApiKey;
+  if (key) process.env.OPENAI_API_KEY = key;
+  return openai(id);
 }

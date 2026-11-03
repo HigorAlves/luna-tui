@@ -15,6 +15,7 @@ import { splitArgv } from "../../../core/argv.ts";
 import { LUNA_TOOLS } from "../../../core/luna-tools.ts";
 import { commandEnv, runArgv } from "../exec.ts";
 import { approve, fileInput, refusal, searchInput } from "./guard.ts";
+import { secrets } from "./secrets.ts";
 
 const WORKSPACE = process.env.LUNA_EVE_WORKSPACE || "/work";
 /** The run's scratch folder: HOME and TMPDIR for every command. */
@@ -32,7 +33,7 @@ export const bash = defineTool({
     const refused = refusal("exec", { command });
     const parsed = splitArgv(command);
     if (refused !== null || "refused" in parsed) return { exitCode: 126, stdout: "", stderr: refused ?? "refused", truncated: false };
-    const env = commandEnv(parsed.argv[0] as string, { home: SCRATCH, ghToken: process.env.GH_TOKEN || process.env.GITHUB_TOKEN });
+    const env = commandEnv(parsed.argv[0] as string, { home: SCRATCH, ghToken: secrets().ghToken });
     return await runArgv(parsed.argv, { cwd: WORKSPACE, env, signal: abortSignal });
   },
 });
@@ -49,7 +50,7 @@ export function lunaTool(name: LunaTool) {
     async execute(input) {
       const response = await fetch(`${process.env.LUNA_EVE_BRIDGE_URL}/${name}`, {
         method: "POST",
-        headers: { authorization: `Bearer ${process.env.LUNA_EVE_BRIDGE_TOKEN}`, "content-type": "application/json" },
+        headers: { authorization: `Bearer ${secrets().bridgeToken}`, "content-type": "application/json" },
         body: JSON.stringify(input),
       });
       if (!response.ok) throw new Error(`luna ${name}: the runner answered ${response.status}`);
