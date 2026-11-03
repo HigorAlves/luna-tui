@@ -21,7 +21,8 @@ import { CallJoin, type Emit } from "../../core/events.ts";
 import { type GuardContext, branchPrefixFor } from "../../core/guards.ts";
 import { EMPTY_RUN, type RunOutcome, budgetSpent, timeRanOut } from "../../core/output.ts";
 import { type Instructions, NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
-import { GUARDED, eveTools, instructionParts, tokenBudgetPerTurn } from "./compile.ts";
+import { DELEGATE, delegatedHelpers } from "../../core/delegate.ts";
+import { GUARDED, appName, eveTools, instructionParts, tokenBudgetPerTurn } from "./compile.ts";
 import type { EveSecrets } from "./agent/secrets.ts";
 
 const env = process.env;
@@ -89,7 +90,7 @@ export function writeSecrets(secrets: EveSecrets): string {
 async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   const { pack, engine, input, prompt, paths, luna, dry, emit } = ctx;
   if (pack.kind !== "agent" || pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
-  const app = join(options.agentsDir ?? join(paths.factoryRoot, ".eve-agents"), pack.id);
+  const app = join(options.agentsDir ?? join(paths.factoryRoot, ".eve-agents"), appName(pack));
   const entry = join(app, ".output", "server", "index.mjs");
   const apiKey = (ENGINES[engine.id] as { auth?: string }).auth === "api-key";
   const guard = guardPolicy(pack, ctx);
@@ -100,7 +101,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
       built: existsSync(entry),
       model: `${apiKey ? "openai" : "chatgpt"}(${engine.modelId})`,
       reasoning: pack.effort,
-      tools: eveTools(pack.access),
+      tools: [...eveTools(pack.access), ...(delegatedHelpers(pack, "eve").length > 0 ? [DELEGATE] : [])],
       skills: pack.access.skills ? pack.skills : [],
       maxModelCalls: input.limits.maxTurns,
       tokenBudget: { input: input.limits.maxTurns * tokenBudgetPerTurn.input, output: input.limits.maxTurns * tokenBudgetPerTurn.output },

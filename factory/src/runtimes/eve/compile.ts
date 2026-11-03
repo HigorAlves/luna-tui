@@ -3,10 +3,11 @@
 // sandbox. Roles and packs are static, so every agent is compiled and `eve build` run at image
 // build (build.ts); a run only starts the built server and sends the prompt. The model is the
 // engine's, read when the server starts (agent/model.ts), so one build serves every eve engine.
-import { type Access, type AgentPack } from "@hardness/contracts";
+import { type Access, type AgentPack, PACKS } from "@hardness/contracts";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
+import { DELEGATE, delegateTool, delegatedHelpers } from "../../core/delegate.ts";
 import { LUNA_TOOLS } from "../../core/luna-tools.ts";
 import { EVE_TOOL_NAMES, factoryRules } from "../../core/render.ts";
 import { readRole } from "../../core/roles.ts";
@@ -38,6 +39,13 @@ export function eveTools(access: Access): string[] {
   ];
 }
 
+/** A pack's agent app folder: its id, or `<pack>--<role>` for a helper's run (helperPack), whose
+ *  id is its parent's. */
+export function appName(pack: AgentPack): string {
+  const own = PACKS[pack.id];
+  return own.kind !== "decision" && own.agent === pack.agent ? pack.id : `${pack.id}--${pack.agent}`;
+}
+
 /** An import path from `from` to the factory source at `to`, POSIX-style and dot-led. */
 const importPath = (from: string, to: string): string => {
   const rel = relative(from, to).split("\\").join("/");
@@ -67,7 +75,8 @@ export function instructionParts(pack: AgentPack, factoryRoot: string): { body: 
 /** Every file of the pack's agent app but its skills, by path relative to the app. */
 export function agentFiles(pack: AgentPack, options: CompileOptions): Record<string, string> {
   if (!pack.agent) throw new Error(`pack ${pack.id} has no agent to compile`);
-  const app = join(options.outDir, pack.id);
+  const name = appName(pack);
+  const app = join(options.outDir, name);
   const lib = join(options.factoryRoot, "src", "runtimes", "eve");
   const fromAgent = (file: string) => importPath(join(app, "agent"), join(lib, file));
   const fromTools = (file: string) => importPath(join(app, "agent", "tools"), join(lib, file));
@@ -77,7 +86,7 @@ export function agentFiles(pack: AgentPack, options: CompileOptions): Record<str
       ? { line: `import { scriptedModel } from "${fromAgent("fake.ts")}";`, expr: "scriptedModel()" }
       : { line: `import { stageModel } from "${fromAgent("agent/model.ts")}";`, expr: "stageModel()" };
   const agent = [
-    `// ${GENERATED} Pack ${pack.id}, role ${pack.agent}.`,
+    `// ${GENERATED} Pack ${pack.id}, role ${pack.agent}${name === pack.id ? "" : " as a helper"}.`,
     `import { defineAgent } from "eve";`,
     model.line,
     "",
@@ -103,9 +112,16 @@ export function agentFiles(pack: AgentPack, options: CompileOptions): Record<str
       return [`agent/tools/${tool}.ts`, body];
     }),
   );
+  // `delegate`, when the pack hands work to helpers: eve runs every helper as a child of the stage.
+  const helpers = delegatedHelpers(pack, "eve");
+  if (helpers.length > 0) {
+    const { description } = delegateTool(helpers, join(options.factoryRoot, "roles"));
+    tools[`agent/tools/${DELEGATE}.ts`] =
+      `import { delegateTool } from "${fromTools("agent/tools.ts")}";\n\nexport default delegateTool(${JSON.stringify(description)}, ${JSON.stringify(helpers.map((h) => h.role))});\n`;
+  }
 
   return {
-    "package.json": `${JSON.stringify({ name: `luna-${pack.id.replaceAll("_", "-")}`, private: true, type: "module", description: GENERATED, dependencies: { eve: EVE_VERSION } }, null, 2)}\n`,
+    "package.json": `${JSON.stringify({ name: `luna-${name.replaceAll("_", "-")}`, private: true, type: "module", description: GENERATED, dependencies: { eve: EVE_VERSION } }, null, 2)}\n`,
     "agent/agent.ts": agent,
     "agent/instructions.md": instructions,
     "agent/channels/eve.ts": `export { default } from "${importPath(join(app, "agent", "channels"), join(lib, "agent", "channel.ts"))}";\n`,
@@ -116,7 +132,7 @@ export function agentFiles(pack: AgentPack, options: CompileOptions): Record<str
 
 /** Writes the pack's agent app afresh, skills included when its access has them; returns its folder. */
 export function compileAgent(pack: AgentPack, options: CompileOptions): string {
-  const app = join(options.outDir, pack.id);
+  const app = join(options.outDir, appName(pack));
   rmSync(join(app, "agent"), { recursive: true, force: true });
   for (const [rel, body] of Object.entries(agentFiles(pack, options))) {
     mkdirSync(dirname(join(app, rel)), { recursive: true });
