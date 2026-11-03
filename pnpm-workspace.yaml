@@ -2,6 +2,7 @@ packages:
   - machine
   - contracts
   - factory
+  - evals
   - site
 allowBuilds:
   esbuild: true
