@@ -1,0 +1,52 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "kind",
+      "value": "brief"
+    },
+    {
+      "kind": "count",
+      "path": "slices",
+      "min": 1,
+      "max": 2
+    },
+    {
+      "kind": "count",
+      "path": "criteria",
+      "min": 2
+    },
+    {
+      "kind": "mentions",
+      "path": "slices[].touchpoints[]",
+      "words": [
+        "src/cart.js"
+      ]
+    },
+    {
+      "kind": "mentions",
+      "path": "summary",
+      "words": [
+        "formatPrice"
+      ]
+    },
+    {
+      "kind": "oneOf",
+      "path": "risk",
+      "values": [
+        "none",
+        "low"
+      ]
+    },
+    {
+      "kind": "avoids",
+      "words": [
+        ".golden",
+        "patches/"
+      ]
+    }
+  ],
+  "rubric": "A brief, not questions: the ticket names the function and the expected outputs. The plan finds the cause in formatPrice in src/cart.js (toFixed(1) where it needs toFixed(2)), fixes it in one small slice, and adds or updates a test in test/ for a round amount such as formatPrice(100) === \"$1.00\" next to the existing cases. It keeps every ticket criterion, keeps `npm test` as the check, and does not widen the scope: cartTotal is correct and stays untouched, no new dependency. Risk none or low; a slice estimated at more than about 20 lines is overestimated."
+}

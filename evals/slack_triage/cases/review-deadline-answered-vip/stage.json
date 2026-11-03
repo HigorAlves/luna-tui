@@ -1,0 +1,83 @@
+{
+  "schema": 3,
+  "stage": "slack_triage",
+  "pack": "slack_triage",
+  "attempt": 1,
+  "task": {
+    "id": "slack-triage",
+    "title": "Slack triage",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "slack": {
+      "me": {
+        "id": "U0EVAL0001",
+        "name": "sam.example"
+      },
+      "watches": [],
+      "rules": "## VIPs (at least P1)\n- @ceo.example\n\n## Notes\n- none\n\n## Learned (lowered: they clear this author or channel without replying; raised: they answer it fast)\n- none",
+      "items": [
+        {
+          "id": "C0EVAL04:4",
+          "channel": "#web-example",
+          "author": "@pat.example",
+          "isBot": false,
+          "text": "@sam.example can you review https://github.com/example-org/web-example/pull/212 before the release on 2026-11-05? it touches the payment retry logic",
+          "context": [],
+          "matched": [
+            "me"
+          ],
+          "threadReplies": 0
+        },
+        {
+          "id": "C0EVAL05:5",
+          "channel": "#platform-example",
+          "author": "@lee.example",
+          "isBot": false,
+          "text": "thanks, that worked!",
+          "context": [
+            {
+              "user": "@lee.example",
+              "text": "@sam.example how do I rotate the staging db password?"
+            },
+            {
+              "user": "@alex.example",
+              "text": "@lee.example run `make rotate-staging` from the infra repo, it does both steps"
+            }
+          ],
+          "matched": [
+            "me"
+          ],
+          "threadReplies": 2
+        },
+        {
+          "id": "C0EVAL06:6",
+          "channel": "dm with @ceo.example",
+          "author": "@ceo.example",
+          "isBot": false,
+          "text": "when you have a minute this week, could you send me two lines on why we moved builds to the new runners?",
+          "context": [],
+          "matched": [
+            "dm"
+          ],
+          "threadReplies": 0
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

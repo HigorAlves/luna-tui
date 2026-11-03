@@ -98,3 +98,23 @@ describe("the runs' inputs", () => {
     expect(baselinePath("/e", "claude:opus", "triage")).toBe("/e/baselines/claude-opus/triage.json");
   });
 });
+
+describe("the seed cases", () => {
+  const EVALS = resolve(import.meta.dirname, "..");
+  const packs = readdirSync(EVALS, { withFileTypes: true }).filter((d) => d.isDirectory() && existsSync(join(EVALS, d.name, "cases"))).map((d) => d.name);
+
+  it("cover triage, slack_triage and issue_classify, three cases each at least", () => {
+    expect(packs.sort()).toEqual(expect.arrayContaining(["issue_classify", "slack_triage", "triage"]));
+    for (const pack of packs) expect(loadCases(EVALS, pack as "triage").length).toBeGreaterThanOrEqual(3);
+  });
+
+  it.each(packs)("%s: every case loads, names a fixture that exists, and carries no token or real address", (pack) => {
+    for (const evalCase of loadCases(EVALS, pack as "triage")) {
+      const repo = evalCase.input.task.repoPath;
+      if (repo !== "") expect(existsSync(join(ROOT, repo)), `${evalCase.id}: ${repo}`).toBe(true);
+      const text = JSON.stringify(evalCase);
+      expect(text, evalCase.id).not.toMatch(/xox[abposr]-|ghp_|github_pat_|\bsk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{12}|eyJ[A-Za-z0-9_-]{20,}/);
+      expect(text, evalCase.id).not.toMatch(/@(?!example)[a-z0-9-]+\.(com|io|dev|net|org)\b/i);
+    }
+  });
+});

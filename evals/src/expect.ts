@@ -15,6 +15,8 @@ export const Check = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("oneOf"), path: Path, values: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).min(1) }),
   /** How many: the array's length, or the number of matches when the path ends in a selector. */
   z.object({ kind: z.literal("count"), path: Path, min: z.number().int().min(0).optional(), max: z.number().int().min(0).optional() }),
+  /** Every value at the path is a number within min..max (and there is at least one). */
+  z.object({ kind: z.literal("between"), path: Path, min: z.number().optional(), max: z.number().optional() }),
   /** The text at the path names these words, case-insensitively: all of them, or with `any`, one. */
   z.object({ kind: z.literal("mentions"), path: Path, words: Words, any: z.boolean().optional() }),
   /** The text at the path names none of these words. */
@@ -76,6 +78,8 @@ export function describeCheck(check: Check): string {
       return `${at(check.path)} in ${show(check.values)}`;
     case "count":
       return `${at(check.path)} count ${check.min ?? 0}..${check.max ?? "∞"}`;
+    case "between":
+      return `${at(check.path)} within ${check.min ?? "-∞"}..${check.max ?? "∞"}`;
     case "mentions":
       return `${at(check.path)} mentions ${check.any ? "any of " : ""}${check.words.join(", ")}`;
     case "avoids":
@@ -100,6 +104,10 @@ export function runCheck(answer: unknown, check: Check): CheckResult {
       // `items[priority=P0]` counts the matches; `slices` counts the array it names (absent: 0).
       const n = check.path.endsWith("]") ? hits.length : Array.isArray(hits[0]) ? hits[0].length : hits.length;
       return result(n >= (check.min ?? 0) && n <= (check.max ?? Number.POSITIVE_INFINITY), `found ${n}`);
+    }
+    case "between": {
+      const wrong = hits.filter((hit) => typeof hit !== "number" || hit < (check.min ?? Number.NEGATIVE_INFINITY) || hit > (check.max ?? Number.POSITIVE_INFINITY));
+      return result(hits.length > 0 && wrong.length === 0, hits.length === 0 ? "nothing there" : `found ${wrong.map(show).join(", ")}`);
     }
     case "mentions": {
       const text = textOf(hits);

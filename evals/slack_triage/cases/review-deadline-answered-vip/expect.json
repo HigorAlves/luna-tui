@@ -1,0 +1,64 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "count",
+      "path": "items",
+      "min": 3,
+      "max": 3
+    },
+    {
+      "kind": "oneOf",
+      "path": "items[id=C0EVAL04:4].priority",
+      "values": [
+        "P0",
+        "P1"
+      ]
+    },
+    {
+      "kind": "equals",
+      "path": "items[id=C0EVAL04:4].expectsReply",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "items[id=C0EVAL04:4].deadline",
+      "value": "2026-11-05"
+    },
+    {
+      "kind": "mentions",
+      "path": "items[id=C0EVAL04:4].refs[].ref",
+      "words": [
+        "212"
+      ]
+    },
+    {
+      "kind": "equals",
+      "path": "items[id=C0EVAL05:5].expectsReply",
+      "value": false
+    },
+    {
+      "kind": "oneOf",
+      "path": "items[id=C0EVAL05:5].priority",
+      "values": [
+        "P2",
+        "P3"
+      ]
+    },
+    {
+      "kind": "oneOf",
+      "path": "items[id=C0EVAL06:6].priority",
+      "values": [
+        "P0",
+        "P1"
+      ]
+    },
+    {
+      "kind": "equals",
+      "path": "items[id=C0EVAL06:6].expectsReply",
+      "value": true
+    }
+  ],
+  "rubric": "Three verdicts, one per id. Pat's review request is P1 (a review with a dated deadline inside a few days; P0 is too high unless it blocks now), category request, a reply expected, the PR in refs and deadline 2026-11-05. Lee's thanks closes a thread where Alex already answered Lee's question to the person: nothing is asked of them, so no reply, P2 or P3, no draft. The CEO is a VIP, so at least P1 even though the ask is not urgent: a request for a two-line explanation, a reply expected, no deadline invented (\"this week\" names no date). Drafts are at most two sentences in the person's voice and never claim facts the text does not give (for example the actual reasons for the runner move)."
+}

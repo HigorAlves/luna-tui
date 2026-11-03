@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "kind.choice",
+      "value": "chore"
+    },
+    {
+      "kind": "equals",
+      "path": "area.choice",
+      "value": "contracts"
+    },
+    {
+      "kind": "equals",
+      "path": "ready.value",
+      "value": true
+    },
+    {
+      "kind": "between",
+      "path": "size.score",
+      "min": 0.5,
+      "max": 2.5
+    }
+  ],
+  "rubric": "A dependency upgrade with call-site updates and no behaviour change: a chore in contracts, ready (it states how to verify), small to medium. Calling it a feature or placing it in machine is wrong."
+}

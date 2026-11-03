@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "kind.choice",
+      "value": "bug"
+    },
+    {
+      "kind": "equals",
+      "path": "area.choice",
+      "value": "board"
+    },
+    {
+      "kind": "equals",
+      "path": "ready.value",
+      "value": true
+    },
+    {
+      "kind": "between",
+      "path": "size.score",
+      "min": 0,
+      "max": 1.5
+    }
+  ],
+  "rubric": "A bug in the board (a panic in the Rust TUI's PR view), with steps, actual and expected behaviour: ready for an agent. Small: one function and its test. High confidence on kind and area is right here."
+}

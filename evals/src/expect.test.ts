@@ -46,6 +46,14 @@ describe("runCheck", () => {
     expect(check({ kind: "count", path: "questions", min: 1 })).toMatchObject({ pass: false, detail: "found 0" });
   });
 
+  it("between: every value at the path is a number in range", () => {
+    const scored = { size: { score: 1.4 }, items: [{ n: 1 }, { n: 5 }] };
+    expect(runCheck(scored, Check.parse({ kind: "between", path: "size.score", min: 0.5, max: 2 }))).toEqual({ check: "size.score within 0.5..2", pass: true, detail: null });
+    expect(runCheck(scored, Check.parse({ kind: "between", path: "items[].n", max: 4 }))).toMatchObject({ pass: false, detail: "found 5" });
+    expect(runCheck(answer, Check.parse({ kind: "between", path: "kind", min: 0 }))).toMatchObject({ pass: false, detail: 'found "brief"' });
+    expect(runCheck(answer, Check.parse({ kind: "between", path: "nope" }))).toMatchObject({ pass: false, detail: "nothing there" });
+  });
+
   it("mentions and avoids: words in the text at the path, case-insensitively", () => {
     expect(check({ kind: "mentions", path: "summary", words: ["formatprice", "toFixed(2)"] }).pass).toBe(true);
     expect(check({ kind: "mentions", path: "summary", words: ["formatPrice", "describeCart"] })).toMatchObject({ pass: false, detail: "missing describeCart" });

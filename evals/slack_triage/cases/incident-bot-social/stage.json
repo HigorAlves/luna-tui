@@ -1,0 +1,72 @@
+{
+  "schema": 3,
+  "stage": "slack_triage",
+  "pack": "slack_triage",
+  "attempt": 1,
+  "task": {
+    "id": "slack-triage",
+    "title": "Slack triage",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "slack": {
+      "me": {
+        "id": "U0EVAL0001",
+        "name": "sam.example"
+      },
+      "watches": [],
+      "rules": "## VIPs (at least P1)\n- none\n\n## Notes\n- none\n\n## Learned (lowered: they clear this author or channel without replying; raised: they answer it fast)\n- none",
+      "items": [
+        {
+          "id": "C0EVAL01:1",
+          "channel": "dm with @robin.example",
+          "author": "@robin.example",
+          "isBot": false,
+          "text": "checkout is returning 500s for every order since your deploy 10 min ago, can you roll back now or tell me it's safe to?",
+          "context": [],
+          "matched": [
+            "dm"
+          ],
+          "threadReplies": 0
+        },
+        {
+          "id": "C0EVAL02:2",
+          "channel": "#deploys-example",
+          "author": "@deploybot",
+          "isBot": true,
+          "text": "Deploy of web-example 4f2a1c finished: 42 files changed.",
+          "context": [],
+          "matched": [],
+          "threadReplies": 0
+        },
+        {
+          "id": "C0EVAL03:3",
+          "channel": "#office-example",
+          "author": "@kim.example",
+          "isBot": false,
+          "text": "@here pizza in the kitchen in 5 minutes, come grab some",
+          "context": [],
+          "matched": [
+            "broadcast:here"
+          ],
+          "threadReplies": 0
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 0,
+    "timeoutMs": 0
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}
