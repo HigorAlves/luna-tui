@@ -1,4 +1,7 @@
 import { ENGINES, type EngineId } from "@hardness/contracts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
@@ -8,7 +11,7 @@ import { freshTestDatabase } from "../../test/database.ts";
 import { EngineBudgetWatch, gatedCredentials, runtimeKillSwitch } from "../../application/engine-gates.ts";
 import { PgPackRunStore } from "../persistence/pack-run-store.ts";
 import { PgTaskStore } from "../persistence/task-store.ts";
-import { fixedCredentials } from "../credentials/index.ts";
+import { fixedCredentials, machineCredentials } from "../credentials/index.ts";
 import { createApp } from "./app.ts";
 import { Bus } from "./bus.ts";
 
@@ -55,5 +58,16 @@ describe("GET /engines", () => {
     const engines = (await (await createApp({ db, pipeline, bus: new Bus(), credentials: fixedCredentials({}), engineBudgets }).request("/engines")).json()) as Array<Record<string, unknown>>;
     expect(engines.find((e) => e.id === "jev")).toMatchObject({ available: true, spentThisMonthUsd: 1.25, budgetUsd: 5 });
     expect(engines.find((e) => e.id === "openai:sol")).toMatchObject({ spentThisMonthUsd: 0, budgetUsd: null });
+  });
+
+  it("shows jev available with either Jev key, the Vercel AI Gateway's or TypeSafe's, and never the key", async () => {
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true });
+    const home = mkdtempSync(join(tmpdir(), "engines-home-"));
+    for (const env of [{ AI_GATEWAY_API_KEY: "gw-secret" }, { TYPESAFE_API_KEY: "ts-secret" }]) {
+      const response = await createApp({ db, pipeline, bus: new Bus(), credentials: machineCredentials({ env, home }) }).request("/engines");
+      const text = await response.text();
+      expect((JSON.parse(text) as Array<Record<string, unknown>>).find((e) => e.id === "jev")).toMatchObject({ available: true });
+      expect(text).not.toMatch(/secret/);
+    }
   });
 });

@@ -5,20 +5,20 @@ import { type CredentialOwner, type EngineId, credentialOwner } from "@hardness/
 import { claudeCredentials } from "./claude.ts";
 import { codexCredentials } from "./codex.ts";
 import type { Availability, CredentialLoader, CredentialOptions, PrepareWait, RunCredential } from "./credential.ts";
+import { jevCredentials } from "./jev.ts";
 import { openaiCredentials } from "./openai.ts";
-import { typesafeCredentials } from "./typesafe.ts";
 
 export type { Availability, CredentialLoader, CredentialMount, CredentialOptions, PrepareWait, RunCredential } from "./credential.ts";
 export { CredentialWaitError, NoCredentialError, noCredential } from "./credential.ts";
 export { removeStaleCodexTemps } from "./codex.ts";
 
-/** The loader for what `engine` needs: Claude's token, the Codex login, an OpenAI key or a TypeSafe key. */
+/** The loader for what `engine` needs: Claude's token, the Codex login, an OpenAI key or the Jev credential. */
 export function credentialsFor(engine: EngineId, opts: CredentialOptions = {}): CredentialLoader {
   const loaders: Record<CredentialOwner, (opts: CredentialOptions) => CredentialLoader> = {
     claude: claudeCredentials,
     codex: codexCredentials,
     openai: openaiCredentials,
-    typesafe: typesafeCredentials,
+    typesafe: jevCredentials,
   };
   return loaders[credentialOwner(engine)](opts);
 }
