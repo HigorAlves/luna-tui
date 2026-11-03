@@ -2,7 +2,7 @@
 
 ## Pipeline
 
-Every ticket moves through these stages, from Intake (not ready yet) to Done:
+Every ticket moves through these stages, from Intake (not ready yet) to Done ([diagrams of the whole path](#a-jira-ticket-end-to-end)):
 
 1. **Intake**: a ticket you're still shaping. Nothing runs until you start it.
 2. **Triage**: an agent reads the ticket and the repo, asks questions if needed, and proposes a plan.
@@ -66,11 +66,118 @@ Four pieces use it, each a twin of something that exists:
 
 - **JiraSync** (`application/jira-sync.ts`, like `threads.ts`) reacts to pipeline events. When a linked task enters a state the repo's `luna.yaml` maps under `jira.on`, it reads the issue's current status and available transitions and performs the one whose target matches the declared name (case does not matter), with `jira.fields[state]` rendered (`{pr_url}`, `{task_id}`, `{branch}`, `{board_url}`); it records `jira.transitioned`, or `jira.blocked` (and marks the link) when nothing leads there or Jira refuses, never a fake status. Reactions for one task run one after another in event order, so two quick transitions read Jira in turn and the later one lands last; a stepping stone the task has already left is skipped when the newer status is reachable directly. A blocked mark is retried by JiraWatch (`JiraSync.retry`) on each of its passes while the issue answers, quietly until a route exists. `escalated: Blocked` plus the stage's own mapping gives the round trip: escalating moves the issue, resuming moves it back. Comments per `jira.comments`: `milestones` writes picked up (left to intake for an imported issue, which already said so), PR opened (once per url, remembered as a `jira.commented` event rather than in memory) and a closing comment (the PR, the criteria, verifying's verdicts per case, the evidence artifacts); `gates` adds every "needs you"; `none` nothing.
 - **JiraIntake** (`application/jira-intake.ts`, like `intake.ts`) polls each repo's `jira.intake.jql` at its `every`. A new issue (no task by its key) first runs through the **`jira_intake` pack**: the `jira-triager` role (`factory/roles/jira-triager/role.md`) on Sonnet at low effort, eight turns, Read/Glob/Grep over a clean detached checkout of the repo's default branch at `<worktrees>/<repo>/jira-intake`, fetched and reset before every run and mounted read-only, never your live checkout with whatever sits uncommitted in it (`application/stages/jira-intake-runner.ts`, modelled on the Slack triage runner; the issue rides in `context.jira`; its run folder, `MACHINE_STATE_DIR/jira-intake/<key>-<time>`, goes once the run answered, and a failed run's stays for the retention sweep like Slack triage's). `ready` makes a Backlog ticket with the pack's title, description and criteria (falling back to the issue's own and its checklist) and comments "Picked up"; `needs_brief` makes no ticket and asks the questions, each with the answer the agent would pick, back on the issue, retrying when the issue changes; `not_for_agent` says why once. An issue whose last comment is the machine's own is left alone until someone else writes or edits it (its `updated` stamp moving past that comment). With agents off, issues are imported as written.
-- **Intake classification** (`application/classify.ts`). With a Jev credential, both intakes first run `issue_classify` on a new issue (its title, description and labels) through `PackRuns`, like a `POST /runs` call from the client `intake`: the stage container, the Jev key by name, a `pack_runs` row for its cost, the day's ceiling. The answer is kept on the task as `classification` (`kind`, `area`, `ready`, `size`, the lowest of the answers' `confidence`, `at`, `model`). Routing is conservative: only when every answer is at or above the pack's `minConfidence` and `kind` is `question` does the issue skip `jira_intake` and become no task, declined the way `not_for_agent` is, once, with the classification in the comment (a GitHub issue is told once per run of the machine, which keeps no record of the comment). Anything else goes on exactly as before, `jira_intake` getting the classification in `context.jira` as a hint. Without a Jev credential nothing is classified and intake is unchanged; a failed or refused run (budget, queue, the model) is logged and intake goes on without it.
+- **Intake classification** (`application/classify.ts`). With a Jev credential, both intakes first run `issue_classify` on a new issue (its title, description and labels) through `PackRuns`, like a `POST /runs` call from the client `intake`: the stage container, the Jev key by name, a `pack_runs` row for its cost, the day's ceiling. The answer is kept on the task as `classification` (`kind`, `area`, `ready`, `size`, the lowest of the answers' `confidence`, `at`, `model`). Routing is conservative: only when `kind` is `question` and the kind's own confidence (`kindConfidence`, else the lowest) is at or above the pack's `minConfidence` does the issue skip `jira_intake` and become no task, declined the way `not_for_agent` is, once, with the classification in the comment (a GitHub issue is told once per run of the machine, which keeps no record of the comment). Anything else goes on exactly as before, `jira_intake` getting the classification in `context.jira` as a hint. Without a Jev credential nothing is classified and intake is unchanged; a failed or refused run (budget, queue, the model) is logged and intake goes on without it.
 - **JiraWatch** (`application/jira-watch.ts`, like `pulls.ts`) refreshes every linked open task's `jira` (status, priority, due date, type, and the site's timezone from `/myself`, read once) every five minutes, retries a blocked transition through JiraSync, and records `jira.moved` when the issue reaches a Done-category status, Cancelled or Won't Do while the task is open. It warns once a day inside the last fourteen days of `MACHINE_JIRA_TOKEN_EXPIRES` (Jira never names the expiry ahead of time; a 401 that does overrides it), which `GET /jira/status` shows as `tokenExpiresAt`.
 - **Branch and PR**: a linked task works on the branch its repo's `jira.branch` pattern names (`{type}/{key}`: `bug/PLAT-123`; the pattern must carry `{key}` or `{id}`, and when the repo already has that branch the task id is appended), so Jira's own GitHub app files the branch and PR under the issue. Once the worktree exists the persisted branch is the owned one: it is not recomputed from the link (an issue whose type changes in Jira keeps its branch), the link cannot be moved or removed (`409 has_worktree`), and no second open task may take the same issue (`409 already_linked_elsewhere`). The pack runner accepts `task/*`, a PR task's head, the branch it named, or a persisted branch carrying the issue key or task id, and never `main`, `master`, `develop` or the repo's default branch; the factory's commit guard matches a named branch exactly (`task/` is the only prefix). The PR title opens with the key and the body ends with the issue's url.
 
 **SLAs** (`domain/sla.ts`, `application/sla.ts`): four clocks per ticket, computed when a task is serialized from the row and one stage-run query, never stored beyond `tasks.state_since` (set on every transition, backfilled from the latest transition event): the gate clock from `state_since` for a waiting state (`sla.gate`, else `MACHINE_SLA_GATE`, 1h; halved for a High or Highest Jira priority, doubled for Lowest), the stage clock from the running stage run's start for stages the repo named (`warn` from 80%), the cycle clock from creation (`sla.cycle`, else `MACHINE_SLA_CYCLE`), and the Jira due date, which ends at 23:59:59 in the Jira site's timezone (UTC until JiraWatch has read it) and counts from the ticket's creation or its link time (`jira.linkedAt`), whichever is later. A minute `Ticker` (`application/ticker.ts`, shared with the Slack inbox) recomputes every open task from one list and one stage-run query and republishes a task when a clock flips; `GET /tasks` prices the whole list the same way. `GET /metrics` adds `gates`: gates answered in the window, the share inside the gate SLA, the median wait per gate.
+
+## A Jira ticket, end to end
+
+The pieces above, put together for the commonest path: an issue in Jira becomes a ticket on the board and runs until Done. The same stages run for a ticket typed into the TUI or sent by the notch; only the first diagram is Jira's.
+
+### From Jira to the board
+
+```mermaid
+flowchart TD
+  jql["Issue matches the repo's jira.intake.jql<br/>(JiraIntake polls at its every)"] --> known{"A task already<br/>has its key?"}
+  known -- yes --> skip["Left alone"]
+  known -- no --> jev{"Jev credential set?"}
+  jev -- yes --> classify["issue_classify on jev<br/>kind, area, ready, size, confidence"]
+  jev -- no --> intake
+  classify --> question{"kind = question, and the kind's<br/>confidence ≥ minConfidence (0.7)?"}
+  question -- yes --> declined["No task<br/>comment on the issue, once"]
+  question -- no --> intake["jira_intake pack<br/>jira-triager on claude:sonnet<br/>read-only checkout of the default branch"]
+  intake -- needs_brief --> brief["No task<br/>questions on the issue"]
+  intake -- not_for_agent --> nfa["No task<br/>says why, once"]
+  intake -- ready --> task["Task in draft (Intake column)<br/>classification kept on the task<br/>comment: Picked up"]
+  task --> start(["You press Start on the board"])
+```
+
+With agents off, the issue is imported as written. A repo with no `luna.yaml` runs `setup` and its `awaiting_setup` gate before triage.
+
+### Through the stages
+
+Each box is a task state, labelled with its board column and the engine its pack runs on by default; `you` marks a gate the board (or the notch) answers.
+
+```mermaid
+stateDiagram-v2
+  direction TB
+  draft: draft · Intake
+  triage: triage · Triage · claude:opus ⇄ codex:sol
+  awaiting_answers: awaiting_answers · Triage · you answer
+  awaiting_approval: awaiting_approval · Triage · you approve
+  test_design: test_design · Approved · claude:sonnet
+  awaiting_test_check: awaiting_test_check · Approved · you approve the cases
+  implementing: implementing · Build · claude:sonnet
+  verifying: verifying · Verify · claude:opus + second opinion on codex:sol
+  e2e: e2e · Verify · claude:sonnet
+  delivering: delivering · Verify · push + draft PR
+  ci_watch: ci_watch · Verify · claude:sonnet on a red check
+  evidence: evidence · Evidence
+  awaiting_ship: awaiting_ship · Ship · you, Looks right
+  shipping: shipping · Ship · PR ready for review
+  reviewing_memory: reviewing_memory · Ship · claude:opus, you apply or skip
+  escalated: escalated · Build · you resume or send back
+  closed: closed · Done
+
+  [*] --> draft
+  draft --> triage: Start
+  triage --> awaiting_answers: needs_input
+  awaiting_answers --> triage: answered
+  triage --> awaiting_approval: pass
+  awaiting_approval --> triage: sent back
+  awaiting_approval --> test_design: approved
+  test_design --> awaiting_test_check: pass
+  awaiting_test_check --> test_design: sent back
+  awaiting_test_check --> implementing: approved
+  implementing --> verifying: pass
+  implementing --> implementing: fail, retried
+  implementing --> test_design: test_change
+  verifying --> e2e: pass
+  e2e --> delivering: pass
+  delivering --> ci_watch: pass
+  ci_watch --> evidence: pass
+  evidence --> awaiting_ship: pass
+  verifying --> implementing: fail
+  e2e --> implementing: fail
+  ci_watch --> implementing: fail
+  evidence --> implementing: fail
+  implementing --> escalated: a loop failed 3 times
+  awaiting_ship --> shipping: approved
+  shipping --> reviewing_memory: pass
+  reviewing_memory --> closed: applied or skipped
+  closed --> [*]
+```
+
+Every loop back to `implementing` counts against its own loop (verify, e2e, CI); the third failure of one escalates, and so does a task that has used all six implementer runs. A stage that fails outright (triage, test design, deliver, ship) escalates at once. A rate limit with no fallback engine left pauses the task in `paused_rate_limit` (Build) until the window resets.
+
+While the task moves, Jira follows it: JiraSync performs the transition the repo's `luna.yaml` maps under `jira.on` for each state it enters (`escalated: Blocked` moves it back on resume) and comments per `jira.comments`; JiraWatch refreshes the link every five minutes and notes it when Jira closes the issue first. The branch is the repo's `jira.branch` pattern (`bug/PLAT-123`), so Jira files the PR under the issue. A notch task skips all of this: the notch talks to Jira.
+
+### Inside every stage box
+
+```mermaid
+flowchart TD
+  pick["Engine asked for: the task's stage override,<br/>else luna.yaml's engines, else the pack's default"] --> held{"Held back or no credential?<br/>runtime off (MACHINE_DISABLE_RUNTIMES),<br/>over its cap (MACHINE_ENGINE_BUDGETS)"}
+  held -- yes --> default["Runs the pack's default instead<br/>a note on the task says why"]
+  held -- no --> cred
+  default --> cred["Credential: the engine's and each helper's<br/>Claude token, Codex login (leased), OpenAI key, Jev key"]
+  cred --> container["Stage container: factory/src/main.ts"]
+  container --> runtime{"Runtime"}
+  runtime --> claude["claude<br/>Claude Agent SDK"]
+  runtime --> eve["eve<br/>codex:* and openai:*"]
+  runtime --> jevrt["jev<br/>Gateway or TypeSafe"]
+  claude & eve --> guards["Guards: no push, no shell expansion,<br/>paths only inside the run's roots"]
+  guards -. delegate .-> child["Helper on another engine<br/>read-only child run in /out/children/n"]
+  claude & eve & jevrt --> events["One RunEvent stream<br/>/out/events.jsonl → task log, watch pane"]
+  events --> result["result.json<br/>answer, usage and cost,<br/>run: engine, model, sdk, fingerprint"]
+  result --> limited{"Rate limited?"}
+  limited -- "yes, a fallback left" --> rerun["Latch that credential,<br/>rerun at once on the fallback"]
+  limited -- "yes, none left" --> paused["paused_rate_limit"]
+  limited -- no --> ingest["Machine ingests the outcome<br/>→ the next state above"]
+```
+
+`GET /metrics` then reads the same runs back by repo, engine (`groupBy=engine`, cost per engine on the TUI) or fingerprint (`groupBy=fingerprint`).
 
 ## Repository layout
 
