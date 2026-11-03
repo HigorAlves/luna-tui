@@ -1,4 +1,7 @@
 import type { HookInput, HookJSONOutput } from "@anthropic-ai/claude-agent-sdk";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { branchPrefixFor, guardBash, guardWrite, preToolUseGuards } from "./guards.ts";
@@ -160,7 +163,6 @@ describe("guardBash", () => {
       expect(guardBash('git commit -m "feat: x"', WRITABLE)).toBeNull();
       expect(guardBash('git add -A && git commit -m "fix: y"', WRITABLE)).toBeNull();
       expect(guardBash("git commit -am 'chore: tidy' --signoff", WRITABLE)).toBeNull();
-      expect(guardBash("git commit -F /tmp/msg.txt", WRITABLE)).toBeNull();
       expect(guardBash('git commit -m "fix: broken" -m "Closes #12"', WRITABLE)).toBeNull();
       expect(guardBash('git commit -m "feat: air quality (AI = air index) detection"', WRITABLE)).toBeNull();
       expect(guardBash('git commit -m "docs: explain the claude-* branch naming"', WRITABLE)).toBeNull();
@@ -219,6 +221,46 @@ describe("guardBash", () => {
       ['git commit -anm "feat: x"', /--no-verify is not allowed/],
     ])("refuses history rewriting and hook skipping: %s", (command, reason) => {
       expect(guardBash(command, WRITABLE)).toMatch(reason);
+    });
+
+    // git takes any unambiguous prefix of a long option: --amen amends, --no-verif skips hooks.
+    it.each([
+      ['git commit --amen -m "feat: x"', /--amend is not allowed/],
+      ['git commit --am -m "feat: x"', /--amend is not allowed/],
+      ["git commit --amend=yes", /--amend is not allowed/],
+      ['git commit -m x --no-verif', /--no-verify is not allowed/],
+      ['git commit --no-ver -m x', /--no-verify is not allowed/],
+      ['git commit -m x -an', /--no-verify is not allowed/],
+      ["git reset --har HEAD~1", /git reset --hard is not allowed/],
+      ["git branch --del task/x", /deleting a branch is not allowed/],
+    ])("refuses an abbreviated forbidden option: %s", (command, reason) => {
+      expect(guardBash(command, WRITABLE)).toMatch(reason);
+    });
+
+    it("reads an abbreviated message option as the message", () => {
+      expect(guardBash('git commit --mess="feat: x\n\nCo-Authored-By: Claude <c@a.com>"', WRITABLE)).toMatch(/without the Co-Authored-By trailer/);
+      expect(guardBash('git commit --trai "Co-authored-by: Claude <c@a.com>" -m x', WRITABLE)).toMatch(/without the Co-Authored-By trailer/);
+    });
+
+    describe("a message from a file (-F)", () => {
+      const work = mkdtempSync(join(tmpdir(), "guards-commit-"));
+      writeFileSync(join(work, "ok.txt"), "feat: x\n\nCloses #12\n");
+      writeFileSync(join(work, "ai.txt"), "feat: x\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n");
+      const ctx: GuardContext = { ...WRITABLE, workRoot: work };
+
+      it("allows a file whose message carries no attribution", () => {
+        expect(guardBash("git commit -F ok.txt", ctx)).toBeNull();
+        expect(guardBash(`git commit --file=${join(work, "ok.txt")}`, ctx)).toBeNull();
+        expect(guardBash("git commit -aF ok.txt", ctx)).toBeNull();
+      });
+
+      it.each(["git commit -F ai.txt", "git commit --file ai.txt", "git commit --fil=ai.txt", "git commit -Fai.txt", "git commit -aF ai.txt"])("refuses %s: the file carries attribution", (command) => {
+        expect(guardBash(command, ctx)).toMatch(/AI attribution/);
+      });
+
+      it.each(["git commit -F missing.txt", "git commit -F -", "git commit -F /dev/stdin"])("refuses %s: the guard cannot read the message", (command) => {
+        expect(guardBash(command, ctx)).toMatch(/-F/);
+      });
     });
   });
 
@@ -426,10 +468,11 @@ describe("preToolUseGuards", () => {
     return hook(hookInput(toolName, toolInput), "toolu_1", options);
   };
 
-  it("builds one matcher for Bash, one for the write tools and one for the read tools", () => {
+  it("builds one matcher for Bash, one for the write tools, one for the read tools and one for WebFetch", () => {
     const matchers = preToolUseGuards(WRITABLE);
-    expect(matchers).toHaveLength(3);
-    const [bash, write, read] = matchers;
+    expect(matchers).toHaveLength(4);
+    const [bash, write, read, web] = matchers;
+    expect(new RegExp(web?.matcher ?? "").test("WebFetch")).toBe(true);
     const readRe = new RegExp(read?.matcher ?? "");
     for (const tool of ["Read", "Glob", "Grep"]) expect(readRe.test(tool)).toBe(true);
     expect(readRe.test("Bash")).toBe(false);
@@ -443,6 +486,12 @@ describe("preToolUseGuards", () => {
     expect(writeRe.test("Bash")).toBe(false);
     expect(writeRe.test("Read")).toBe(false);
     expect(writeRe.test("mcp__x__Write_file")).toBe(false);
+  });
+
+  it("guards WebFetch by its url", async () => {
+    const matcher = preToolUseGuards({ ...READ_ONLY, web: true })[3];
+    await expect(matcher!.hooks[0]!(hookInput("WebFetch", { url: "https://example.com/", prompt: "x" }), "toolu_1", options)).resolves.toEqual({});
+    await expect(matcher!.hooks[0]!(hookInput("WebFetch", { url: "http://169.254.169.254/", prompt: "x" }), "toolu_1", options)).resolves.toEqual(denied(/not on the web/));
   });
 
   it("allows a harmless Bash command with an empty result", async () => {

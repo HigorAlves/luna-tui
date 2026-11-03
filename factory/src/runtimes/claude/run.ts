@@ -39,6 +39,7 @@ export function guardPolicy({ pack, input, paths }: Pick<RunContext, "pack" | "i
     workRoot: paths.work,
     outRoot: paths.out,
     roots: { scratch: paths.scratch, read: [paths.input, join(paths.factoryRoot, "plugin")] },
+    web: pack.kind === "agent" && pack.access.web,
     // e2e signs in with the credentials its targets name (`env:QA_PASSWORD`), inline as "$QA_PASSWORD".
     expandable: (input.context.qaTargets ?? []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])),
   };

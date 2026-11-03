@@ -54,6 +54,7 @@ function guardPolicy(pack: AgentPack, { input, paths }: RunContext): GuardContex
     // The model's tools run as the same user as Codex and the runner: only the run's own roots
     // may be named, never the Codex home, HOME, /proc or the secrets file.
     roots: { scratch: paths.scratch, read: [paths.input] },
+    web: pack.access.web,
   };
 }
 
