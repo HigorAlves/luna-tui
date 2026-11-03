@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 use ureq::{Agent, Body, http::Response};
 
 use crate::model::{
-    Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
+    EngineCatalog, Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
     StreamMessage, Task, TaskDetail, TaskDiff, TestCase, TicketText,
 };
 
@@ -99,7 +99,12 @@ impl Machine {
 
     /// Turns a reply into its JSON body, or the machine's error message.
     fn json(reply: Reply) -> Result<Value, String> {
-        let mut response = reply.map_err(|e| format!("machine unreachable: {e}"))?;
+        Self::coded(reply).map_err(|(_, message)| message)
+    }
+
+    /// `json`, keeping the machine's error code (`stage_started`) beside its message.
+    fn coded(reply: Reply) -> Result<Value, (String, String)> {
+        let mut response = reply.map_err(|e| (String::new(), format!("machine unreachable: {e}")))?;
         let status = response.status().as_u16();
         if status == 204 {
             return Ok(Value::Null);
@@ -107,9 +112,10 @@ impl Machine {
         let body: Value = response
             .body_mut()
             .read_json()
-            .map_err(|e| format!("unexpected reply from the machine: {e}"))?;
+            .map_err(|e| (String::new(), format!("unexpected reply from the machine: {e}")))?;
         if status >= 400 {
-            return Err(body["message"].as_str().unwrap_or("request failed").to_string());
+            let code = body["error"].as_str().unwrap_or_default().to_string();
+            return Err((code, body["message"].as_str().unwrap_or("request failed").to_string()));
         }
         Ok(body)
     }
@@ -205,6 +211,24 @@ impl Machine {
             .map(|c| json!({ "title": c.title, "criterion": c.criterion, "approach": c.approach }))
             .collect();
         Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/cases"))).send_json(json!({ "cases": cases })))
+    }
+
+    /// `GET /packs` and `GET /engines` together: what each stage may run on, and what this
+    /// machine has the credentials for. A machine from before engines answers neither.
+    pub fn engine_catalog(&self) -> Result<EngineCatalog, String> {
+        let packs = Self::typed(self.agent.get(self.url("/packs")).call())?;
+        let engines = Self::typed(self.agent.get(self.url("/engines")).call())?;
+        Ok(EngineCatalog { packs, engines })
+    }
+
+    /// Sets the task's engine for one pack; `None` goes back to luna.yaml's, else the pack's default.
+    pub fn set_stage_engine(&self, id: &str, pack: &str, engine: Option<&str>) -> Result<Task, String> {
+        let reply = self.agent.patch(self.url(&format!("/tasks/{id}/stages"))).send_json(json!({ "stages": { pack: engine } }));
+        let body = Self::coded(reply).map_err(|(code, message)| match code.as_str() {
+            "stage_started" => format!("{pack} already ran on this ticket; its engine stays"),
+            _ => message,
+        })?;
+        serde_json::from_value(body).map_err(|e| format!("unexpected reply: {e}"))
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {

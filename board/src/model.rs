@@ -133,6 +133,10 @@ pub struct Task {
     /// that predate them.
     #[serde(default)]
     pub sla: Option<TaskSla>,
+    /// The task's own engine per pack (`PATCH /tasks/:id/stages`); a pack left out runs on
+    /// luna.yaml's, else its default. Empty from machines that predate engines.
+    #[serde(default)]
+    pub stages: BTreeMap<String, String>,
 }
 
 /// The last declared transition Jira refused, until the next one succeeds.
@@ -376,6 +380,9 @@ pub struct StageRun {
     /// Verifying's per-case verdicts, when the run could tell them apart.
     #[serde(default, deserialize_with = "null_as_empty")]
     pub cases: Vec<CaseResult>,
+    /// The engine the run started on (`codex:sol`); None for a host-only stage or an older run.
+    #[serde(default)]
+    pub engine: Option<String>,
 }
 
 /// The machine sends `"cases": null` for a run with no verdicts; that is an empty list, not
@@ -506,6 +513,16 @@ impl TaskDetail {
         self.approvals.iter().rev().find(|a| a.kind_or_guess() == kind)
     }
 
+    /// The engine the running stage is on, as `codex:sol`; None when nothing runs on one.
+    pub fn running_engine(&self) -> Option<&str> {
+        self.stage_runs.iter().rev().find(|r| r.status == "running")?.engine.as_deref()
+    }
+
+    /// The newest run of `pack`, by the task states it runs in: a stage that ran keeps its engine.
+    pub fn last_run_of(&self, pack: &PackInfo) -> Option<&StageRun> {
+        self.stage_runs.iter().rev().find(|r| pack.states.contains(&r.stage))
+    }
+
     /// The newest verifying run that reported per-case verdicts.
     fn case_results(&self) -> &[CaseResult] {
         self.stage_runs
@@ -549,6 +566,78 @@ impl TaskDetail {
             groups.push(("(no criterion)".to_string(), loose));
         }
         groups
+    }
+}
+
+/// `GET /packs`: the engine a pack runs on unless a task names another, and the ones it may.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct PackEngines {
+    #[serde(default)]
+    pub default: String,
+    #[serde(default)]
+    pub allowed: Vec<String>,
+}
+
+/// One pack of `GET /packs`; `states` are the task states the pipeline runs it in.
+#[derive(Deserialize, Clone, Debug)]
+pub struct PackInfo {
+    pub id: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub engines: PackEngines,
+    #[serde(default)]
+    pub states: Vec<String>,
+}
+
+/// One engine of `GET /engines`: whether this machine has its credential, and what is missing.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct EngineInfo {
+    pub id: String,
+    #[serde(default)]
+    pub model_id: String,
+    #[serde(default)]
+    pub available: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// What the Engines section and its picker read, fetched together.
+#[derive(Clone, Debug, Default)]
+pub struct EngineCatalog {
+    pub packs: Vec<PackInfo>,
+    pub engines: Vec<EngineInfo>,
+}
+
+/// A row of the engine picker: `None` goes back to the default; `off` says why it cannot be picked.
+#[derive(Clone, Debug, PartialEq)]
+pub struct EngineChoice {
+    pub engine: Option<String>,
+    pub label: String,
+    pub off: Option<String>,
+}
+
+impl EngineCatalog {
+    /// The packs that run in a task and call a model, in registry order.
+    pub fn task_packs(&self) -> Vec<&PackInfo> {
+        self.packs.iter().filter(|p| !p.states.is_empty() && p.kind != "script" && !p.engines.allowed.is_empty()).collect()
+    }
+
+    /// The picker for `pack`: the default first, then each allowed engine, the ones this machine
+    /// cannot run kept but off with the reason.
+    pub fn choices(&self, pack: &PackInfo) -> Vec<EngineChoice> {
+        let mut rows = vec![EngineChoice { engine: None, label: format!("default ({})", pack.engines.default), off: None }];
+        for id in &pack.engines.allowed {
+            let off = match self.engines.iter().find(|e| e.id == *id) {
+                Some(e) if e.available => None,
+                Some(e) => Some(e.reason.clone().unwrap_or_else(|| "no credential on this machine".into())),
+                None => Some("unknown to this machine".into()),
+            };
+            let model = self.engines.iter().find(|e| e.id == *id).map(|e| e.model_id.clone()).unwrap_or_default();
+            rows.push(EngineChoice { engine: Some(id.clone()), label: format!("{id}  {model}").trim_end().to_string(), off });
+        }
+        rows
     }
 }
 
@@ -1897,7 +1986,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn task_json(source: &str) -> String {
+    pub(crate) fn task_json(source: &str) -> String {
         format!(
             r#"{{"id":"abcdef123456","title":"Login page","description":"","criteria":[],
             "repoPath":null,"branch":null,"worktreePath":null,"state":"draft","column":"Intake",
@@ -2496,5 +2585,47 @@ mod detail_tests {
         let rows = criteria_summary(&bare);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].planned, None, "no plan yet: the column is empty, not a cross");
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod engine_tests {
+    use super::*;
+
+    pub const PACKS: &str = r#"[
+        {"id":"triage","agent":"triage","kind":"agent","engines":{"default":"claude:opus","allowed":["claude:opus","codex:sol"]},"states":["triage"]},
+        {"id":"test_design","agent":"test-designer","kind":"agent","engines":{"default":"claude:sonnet","allowed":["claude:sonnet"]},"states":["test_design"]},
+        {"id":"evidence","agent":null,"kind":"script","engines":{"default":"claude:haiku","allowed":["claude:haiku"]},"states":["evidence"]},
+        {"id":"slack_triage","agent":"slack-triage","kind":"agent","engines":{"default":"claude:haiku","allowed":["claude:haiku","codex:luna"]},"states":[]}]"#;
+    pub const ENGINES: &str = r#"[
+        {"id":"claude:opus","runtime":"claude","modelId":"claude-opus-5-5","auth":"subscription","status":"ga","available":true},
+        {"id":"claude:sonnet","runtime":"claude","modelId":"claude-sonnet-5-5","auth":"subscription","status":"ga","available":true},
+        {"id":"codex:sol","runtime":"codex","modelId":"gpt-5.6-terra","auth":"chatgpt","status":"preview","available":false,"reason":"no ~/.codex/auth.json"}]"#;
+
+    pub fn catalog() -> EngineCatalog {
+        EngineCatalog { packs: serde_json::from_str(PACKS).unwrap(), engines: serde_json::from_str(ENGINES).unwrap() }
+    }
+
+    #[test]
+    fn a_task_and_a_run_from_before_engines_still_parse() {
+        let task: Task = serde_json::from_str(&tests::task_json("")).unwrap();
+        assert!(task.stages.is_empty());
+        let task: Task = serde_json::from_str(&tests::task_json(r#","stages":{"triage":"codex:sol"}"#)).unwrap();
+        assert_eq!(task.stages.get("triage").map(String::as_str), Some("codex:sol"));
+        let old: StageRun = serde_json::from_str(r#"{"stage":"triage","attempt":1,"status":"running"}"#).unwrap();
+        assert_eq!(old.engine, None);
+    }
+
+    #[test]
+    fn only_the_packs_a_task_runs_are_offered_and_an_engine_without_its_credential_is_off_with_why() {
+        let catalog = catalog();
+        let ids: Vec<&str> = catalog.task_packs().iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(ids, ["triage", "test_design"]);
+        let choices = catalog.choices(catalog.task_packs()[0]);
+        assert_eq!(choices.len(), 3);
+        assert_eq!((choices[0].engine.as_deref(), choices[0].label.as_str()), (None, "default (claude:opus)"));
+        assert_eq!(choices[1].off, None);
+        assert_eq!(choices[2].engine.as_deref(), Some("codex:sol"));
+        assert_eq!(choices[2].off.as_deref(), Some("no ~/.codex/auth.json"));
     }
 }

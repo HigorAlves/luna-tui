@@ -9,6 +9,7 @@
 //! `a approve the plan` instead of `a advance`.
 
 use crate::app::{App, Mode};
+use crate::detail::Section;
 use crate::model::Task;
 use crate::pulls::{self, PrKey};
 use crate::slack::{self, SlackKey};
@@ -530,8 +531,16 @@ const DETAIL: &[Binding] = &[
     SHIP,
     b("e", "edit: the plan, the cases or the ticket", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 80),
     b("o", "open: the file, the PR or the issue", Group::Ticket, Scope::Detail, |app| with_task(app, |_| Avail::On), 50),
+    b(
+        "E",
+        "pick the selected stage's engine",
+        Group::Ticket,
+        Scope::Detail,
+        |app| if app.detail_section == Section::Engines { Avail::On } else { Avail::Off("only in the Engines section (9)") },
+        45,
+    ),
     b("h / l", "previous / next section", Group::Move, Scope::Detail, on, 30),
-    b("1-8", "jump to that section", Group::Move, Scope::Detail, on, 10),
+    b("1-9", "jump to that section", Group::Move, Scope::Detail, on, 10),
     b("j / k", "scroll, or pick a run / file", Group::Move, Scope::Detail, on, 28),
     b("J / K", "scroll a line where j / k pick", Group::Move, Scope::Detail, on, 10),
     b("ctrl+d / ctrl+u", "half a page", Group::Move, Scope::Detail, on, 10),
