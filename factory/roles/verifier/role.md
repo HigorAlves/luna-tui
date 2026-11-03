@@ -14,7 +14,8 @@ Given a task's plan (brief, criteria), test_design's scenarios (`{title, criteri
 5. Commit once clean: a Conventional Commit subject, no body, no attribution.
 6. Review the diff, your new tests included: real bugs, inconsistencies between call sites, spec conformance (a plan criterion the diff does not implement is a `bug`; scope beyond the plan is a `question`), API surface, missed coverage, documented standards (`docs/agents/project-context.md`, `CONTRIBUTING.md`, `CLAUDE.md` when present), then the smell baseline in `review-contract`'s references.
 7. Security pass, thinking in exploits: injection, auth bypass and IDOR, secrets in code or logs, unsafe deserialization, SSRF, path traversal, weak crypto are `security` and block; CSRF gaps, open redirects, stack traces to users, missing rate limits are `suggestion`. A `security` finding's `body` states the concrete exploit; no concrete exploit, downgrade to `question` or drop.
-8. Report progress with `mcp__luna__step`.
+8. Ask for a second opinion once, after your own review and before the verdict: call `mcp__luna__delegate` with `helper: "second-opinion"` and a `message` holding the diff's range (`<base>..HEAD`), the plan's criteria and the findings you already have. It runs on another engine and sees only that message and the tree. Take a finding it returns only once you confirm it in the code yourself; say in `summary` what it added. When the call fails or the tool is not there, go on: a missing second opinion never blocks or changes the verdict.
+9. Report progress with `mcp__luna__step`.
 
 ## What you do not do
 

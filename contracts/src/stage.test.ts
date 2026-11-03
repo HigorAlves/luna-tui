@@ -32,6 +32,7 @@ import {
   TestCase,
   ThreadsContext,
   VerifyResult,
+  resolveEngine,
 } from "./index.ts";
 
 // The two examples are the contract's own: what the machine writes and what a runner answers.
@@ -347,8 +348,10 @@ describe("PR tasks", () => {
     expect(PACKS.addressing.skills).toEqual(expect.arrayContaining(["receiving-code-review", "verification-before-completion"]));
     for (const pack of AGENT_PACKS) {
       expect(Array.isArray(pack.helpers), pack.id).toBe(true);
-      // A role with helpers needs the Agent tool to dispatch them; one without must not carry it.
-      expect(pack.access.agent, pack.id).toBe(pack.helpers.length > 0);
+      // A role with subagent helpers (on Claude, beside a Claude default) needs the Agent tool to
+      // dispatch them; one without must not carry it. A helper on another runtime is `delegate`'s.
+      const subagents = pack.helpers.filter((h) => resolveEngine(h.engine).runtime === "claude" && resolveEngine(pack.engines.default).runtime === "claude");
+      expect(pack.access.agent, pack.id).toBe(subagents.length > 0);
     }
     expect(AgentRole.options).toEqual(expect.arrayContaining(["security-reviewer", "reply-drafter", "code-fixer"]));
   });

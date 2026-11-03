@@ -35,6 +35,7 @@ export const AgentRole = z.enum([
   "security-reviewer",
   "reply-drafter",
   "code-fixer",
+  "second-opinion",
 ]);
 export type AgentRole = z.infer<typeof AgentRole>;
 
@@ -396,7 +397,8 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     id: "verifying",
     kind: "agent",
     agent: "verifier",
-    helpers: [],
+    // A second opinion on another engine before the verdict: a child run through `delegate`.
+    helpers: [{ role: "second-opinion", engine: "codex:sol" }],
     skills: ["review-contract", "caveman-review"],
     access: access(READ_ONLY, {
       write: true,
