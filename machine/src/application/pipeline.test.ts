@@ -813,6 +813,20 @@ describe("the supervisor tick", () => {
   });
 });
 
+describe("a stage's notes", () => {
+  it("logs a note a runner gives while it runs on the task's activity, against the run", async () => {
+    pipeline = new Pipeline(db, (stage) => (stage === "triage" ? async ({ note }) => {
+      await note?.("waiting for the Codex login");
+      return { outcome: "pass" };
+    } : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    const [run] = await pipeline.stageRuns(task.id);
+    const noted = (await pipeline.events(task.id)).find((e) => e.kind === "stage.note");
+    expect(noted).toMatchObject({ stageRunId: run!.id, payload: { stage: "triage", note: "waiting for the Codex login" } });
+  });
+});
+
 describe("one usage window per credential", () => {
   const everyCredential = { check: async () => ({ available: true as const }) };
   const inOneHour = () => Math.floor(Date.now() / 1000) + 3600;

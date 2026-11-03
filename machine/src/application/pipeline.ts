@@ -1354,6 +1354,7 @@ export class Pipeline {
         signal,
         ...(resume ? { resume: { container: resume.container, inputCommit: resume.inputCommit, engine: resume.engine } } : {}),
         started: (facts) => this.store.markStageRunStarted(runId, { containerId: facts.container, inputCommit: facts.inputCommit, ...(facts.engine ? { engine: facts.engine } : {}) }),
+        note: (text) => this.log(id, "stage.note", { stage, note: text }, runId),
       });
     } catch (thrown) {
       error = thrown instanceof Error ? thrown.message : String(thrown);

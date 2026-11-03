@@ -886,6 +886,7 @@ pub(crate) fn describe(event: &TaskEvent) -> String {
         }
         "task.created" => "created".to_string(),
         "task.edited" => "edited".to_string(),
+        "stage.note" => format!("{}: {}", s("stage"), s("note")),
         "loop.crashed" => format!("stage loop stopped: {}", s("error")),
         "jira.transitioned" => format!("jira → {}", s("to")),
         "jira.blocked" => {
@@ -2395,6 +2396,17 @@ mod tests {
             "Continues at: implementing · a retries it (add guidance if you like)"
         );
         assert_eq!(continues_line("paused_rate_limit", "verifying"), "Continues at: verifying");
+    }
+
+    #[test]
+    fn a_stage_note_reads_as_its_own_words_in_the_activity() {
+        let event = TaskEvent {
+            task_id: "t1".into(),
+            kind: "stage.note".into(),
+            payload: serde_json::json!({"stage": "triage", "note": "waiting for the Codex login"}),
+            at: "2026-11-03T10:11:12.000Z".into(),
+        };
+        assert_eq!(describe(&event), "10:11:12  triage: waiting for the Codex login");
     }
 
     #[test]

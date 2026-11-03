@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
+import { CredentialWaitError, NoCredentialError, type PrepareWait } from "../../adapters/credentials/index.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { buildSlackTriageInput } from "../../domain/stage-input.ts";
 import { outputError, runPackOnce } from "./run-once.ts";
@@ -45,6 +46,29 @@ describe("runPackOnce", () => {
     expect((await setup("{}").go()).error).toMatch(/^unreadable result: /);
     expect((await setup(null, { aborted: true }).go()).error).toBe("aborted");
     expect((await setup(null, { timedOut: true }).go()).error).toBe("timed out after 3 minutes");
+  });
+
+  it("waits for a held credential within the pack's timeout; one held past it is the run's error, a missing one still rejects", async () => {
+    const runDir = mkdtempSync(join(tmpdir(), "run-once-"));
+    const waits: Array<PrepareWait | undefined> = [];
+    const once = (error: Error) =>
+      runPackOnce(
+        { name: "c", image: "img", runDir, worktree: runDir, input, engine: "codex:luna", labels: {} },
+        {
+          credentials: {
+            prepare: async (_engine, _dir, wait) => {
+              waits.push(wait);
+              throw error;
+            },
+          },
+          sandbox: async () => {
+            throw new Error("no container should start");
+          },
+        },
+      );
+    expect(await once(new CredentialWaitError("waited 3 min for the Codex login"))).toEqual({ output: null, error: "waited 3 min for the Codex login" });
+    expect(waits[0]).toMatchObject({ timeoutMs: input.limits.timeoutMs });
+    await expect(once(new NoCredentialError("no Codex login"))).rejects.toThrow(/no Codex login/);
   });
 
   it("names a failed result's error, else its summary", () => {

@@ -20,13 +20,25 @@ export interface RunCredential {
   release(): Promise<void>;
 }
 
+/** How long a run may wait for a credential another run holds (the Codex login, one run at a
+ *  time), and how it hears that it is waiting. */
+export interface PrepareWait {
+  /** Gives up waiting when aborted. */
+  signal?: AbortSignal;
+  /** Gives up waiting after this long; absent, waits as long as it takes. */
+  timeoutMs?: number;
+  /** Called once when the run has to wait, with a line saying why. */
+  onWait?: (note: string) => void;
+}
+
 export type Availability = { available: true } | { available: false; reason: string };
 
 export interface CredentialLoader {
   /** Whether this machine has the credential, and if not, what is missing. Never the value. */
   check(): Promise<Availability>;
-  /** The credential one run gets, prepared under its run folder. Rejects with `NoCredentialError` when missing. */
-  prepare(runDir: string): Promise<RunCredential>;
+  /** The credential one run gets, prepared under its run folder. Rejects with `NoCredentialError`
+   *  when missing, and `CredentialWaitError` when another run held it past `wait`'s timeout. */
+  prepare(runDir: string, wait?: PrepareWait): Promise<RunCredential>;
 }
 
 export interface CredentialOptions {
@@ -42,6 +54,14 @@ export class NoCredentialError extends Error {
   constructor(reason: string) {
     super(reason);
     this.name = "NoCredentialError";
+  }
+}
+
+/** Another run held the credential for longer than this one could wait, or the wait was aborted. */
+export class CredentialWaitError extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "CredentialWaitError";
   }
 }
 
