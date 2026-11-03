@@ -31,6 +31,7 @@ describe("loadConfig", () => {
       retentionDays: DEFAULT_RETENTION_DAYS,
       taskBudgetUsd: null,
       dailyBudgetUsd: null,
+      disabledRuntimes: [],
       restartPolicy: "requeue",
       worktreeRetentionDays: 7,
       maxPerRepo: null,
@@ -171,6 +172,14 @@ describe("loadConfig", () => {
   it("rejects a ceiling that is not a positive amount", () => {
     expect(() => loadConfig({ MACHINE_TASK_BUDGET_USD: "0" })).toThrow(/MACHINE_TASK_BUDGET_USD/);
     expect(() => loadConfig({ MACHINE_DAILY_BUDGET_USD: "lots" })).toThrow(/MACHINE_DAILY_BUDGET_USD/);
+  });
+
+  it("turns runtimes off with MACHINE_DISABLE_RUNTIMES, eve and jev only: every pack's default runs on claude", () => {
+    expect(loadConfig({ HOME: "/home/me" }).disabledRuntimes).toEqual([]);
+    expect(loadConfig({ HOME: "/home/me", MACHINE_DISABLE_RUNTIMES: "eve" }).disabledRuntimes).toEqual(["eve"]);
+    expect(loadConfig({ HOME: "/home/me", MACHINE_DISABLE_RUNTIMES: " jev , eve,jev " }).disabledRuntimes).toEqual(["jev", "eve"]);
+    expect(() => loadConfig({ HOME: "/home/me", MACHINE_DISABLE_RUNTIMES: "eve,claude" })).toThrow("MACHINE_DISABLE_RUNTIMES cannot turn off claude: every pack's default engine runs on it");
+    expect(() => loadConfig({ HOME: "/home/me", MACHINE_DISABLE_RUNTIMES: "codex" })).toThrow(/MACHINE_DISABLE_RUNTIMES lists runtimes \(eve, jev\), got "codex"/);
   });
 
   it("reads a custom retention window, including 0 to disable pruning", () => {

@@ -31,7 +31,9 @@ export interface PrepareWait {
   onWait?: (note: string) => void;
 }
 
-export type Availability = { available: true } | { available: false; reason: string };
+/** Whether an engine can run here. Unavailable with a `code` means the machine holds it back
+ *  (a runtime turned off, a monthly cap reached) though its credential may be present. */
+export type Availability = { available: true } | { available: false; reason: string; code?: "disabled" | "budget" };
 
 export interface CredentialLoader {
   /** Whether this machine has the credential, and if not, what is missing. Never the value. */

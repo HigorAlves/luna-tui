@@ -59,7 +59,7 @@ import { NoJiraTokenError } from "../../application/jira.ts";
 import { AlreadyLinkedElsewhereError, AlreadyLinkedError, HasWorktreeError, type JiraTasksPort, NoIssueError, NoProjectError, NotchTaskError } from "../../application/jira-tasks.ts";
 import type { StubStages } from "../../application/stages/stubs.ts";
 import { type ApiAccess, guard } from "./access.ts";
-import { EngineNotAllowedError, NotOnDemandError, type PackRunsPort, QueueFullError, RunAbortedError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "../../application/pack-runs.ts";
+import { EngineNotAllowedError, NotOnDemandError, type PackRunsPort, QueueFullError, RunAbortedError, RunEngineDisabledError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "../../application/pack-runs.ts";
 import type { Bus } from "./bus.ts";
 import { InvalidSince, parseSince } from "./metrics.ts";
 import { ReplayFeed } from "./replay.ts";
@@ -191,6 +191,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof NotOnDemandError) return fail(c, 400, "not_on_demand", error.message);
     if (error instanceof EngineNotAllowedError) return fail(c, 400, "engine_not_allowed", error.message);
     if (error instanceof RunNoCredentialError) return fail(c, 409, "no_credential", error.message);
+    if (error instanceof RunEngineDisabledError) return fail(c, 409, "runtime_disabled", error.message);
     if (error instanceof RunRateLimitedError) return fail(c, 429, "rate_limited", error.message, { resetsAt: error.resetsAt });
     if (error instanceof RunFailedError) return fail(c, 422, "run_failed", error.message);
     if (error instanceof QueueFullError) return fail(c, 429, "queue_full", error.message);

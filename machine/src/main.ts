@@ -39,6 +39,8 @@ import { SlaClocks } from "./application/sla.ts";
 import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
 import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
+import { gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
+import { machineCredentials } from "./adapters/credentials/index.ts";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -127,6 +129,10 @@ const watcher = new StreamWatcher(bus);
 let pipeline: Pipeline;
 /** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
 const policies = new PolicyStore();
+/** Each engine's credential as every part of the machine sees it: an engine on a runtime
+ *  MACHINE_DISABLE_RUNTIMES turned off is unavailable, as if its credential were missing. */
+const credentials = gatedCredentials(machineCredentials(), [runtimeKillSwitch(config.disabledRuntimes)]);
+if (config.disabledRuntimes.length > 0) console.log(`runtimes off (MACHINE_DISABLE_RUNTIMES): ${config.disabledRuntimes.join(", ")}`);
 const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   config,
   watcher,
@@ -145,6 +151,7 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
     return { ledger: ledger.success ? ledger.data : null, runs };
   },
   github,
+  credentials,
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
@@ -294,7 +301,7 @@ const slackInbox = new SlackInbox({
 /** Packs on demand (`POST /runs`): the stage image, each call with its own engine's credential;
  *  off only with MACHINE_AGENTS=off. Their cost counts toward the day's ceiling, which they obey. */
 const packRuns = buildPackRuns(config, {
-  ...(agentDeps ? { credentials: agentDeps.credentials } : {}),
+  credentials,
   store: new PgPackRunStore(db),
   budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },
   // A usage limit moves a call to a fallback engine, never to one whose window the pipeline holds.
@@ -317,6 +324,7 @@ const app = createApp({
   sla: (task) => slaClocks.for(task),
   slaAll: (tasks) => slaClocks.forAll(tasks),
   taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file),
+  credentials,
   access: { host: config.host, port: config.port, token: config.apiToken },
 });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {

@@ -5,6 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { Pipeline } from "../../application/pipeline.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
 import { freshTestDatabase } from "../../test/database.ts";
+import { gatedCredentials, runtimeKillSwitch } from "../../application/engine-gates.ts";
+import { fixedCredentials } from "../credentials/index.ts";
 import { createApp } from "./app.ts";
 import { Bus } from "./bus.ts";
 
@@ -32,5 +34,14 @@ describe("GET /engines", () => {
     expect(engines.find((e) => e.id === "codex:sol")).toEqual({ id: "codex:sol", runtime: "eve", modelId: "gpt-5.6-terra", auth: "chatgpt", status: "preview", available: false, reason: "no credential for codex:sol" });
     expect(engines.find((e) => e.id === "openai:luna")).toMatchObject({ runtime: "eve", auth: "api-key", available: false });
     expect(engines.find((e) => e.id === "jev")).toMatchObject({ runtime: "jev", modelId: "jev-latest", auth: "api-key", available: false });
+  });
+
+  it("says an engine on a runtime MACHINE_DISABLE_RUNTIMES turned off is not available, and why", async () => {
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true });
+    const credentials = gatedCredentials(fixedCredentials({}), [runtimeKillSwitch(["eve"])]);
+    const engines = (await (await createApp({ db, pipeline, bus: new Bus(), credentials }).request("/engines")).json()) as Array<Record<string, unknown>>;
+    expect(engines.find((e) => e.id === "codex:sol")).toMatchObject({ available: false, reason: "disabled by MACHINE_DISABLE_RUNTIMES" });
+    expect(engines.find((e) => e.id === "jev")).toMatchObject({ available: true });
+    expect(engines.find((e) => e.id === "claude:opus")).toMatchObject({ available: true });
   });
 });
