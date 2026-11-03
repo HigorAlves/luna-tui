@@ -7,6 +7,8 @@ import type { AgentPack, Pack, StageInput } from "@hardness/contracts";
 import { answerJsonSchema } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
+import { callText } from "./transcript.ts";
+
 const NONE = "(none)";
 
 const txt = (value: unknown): string => (value == null || value === "" ? NONE : String(value));
@@ -264,10 +266,11 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
 
 const CALL_TARGET_MAX = 160;
 
-/** The transcript line for one tool call: `→ <Tool> <target>`. The machine's stuck detector
- *  counts identical lines, so an edit carries a fingerprint of what it changes: four
- *  different edits of one file are four calls, the same failing edit four times is a loop. */
-export function callLine(name: string, input: Record<string, unknown>): string {
+/** What one tool call names, as its event and its transcript line (`→ <Tool> <target>`) carry
+ *  it. The machine's stuck detector counts identical lines, so an edit carries a fingerprint of
+ *  what it changes: four different edits of one file are four calls, the same failing edit four
+ *  times is a loop. */
+export function callTarget(name: string, input: Record<string, unknown>): { target: string; fingerprint?: string } {
   // A search names its pattern and where it looks: four globs over /work are four calls, not a loop.
   const search = input.pattern !== undefined && input.path !== undefined ? `${input.pattern} in ${input.path}` : undefined;
   const target = input.file_path ?? input.filePath ?? search ?? input.path ?? input.command ?? input.pattern ?? input.url ?? input.label ?? "";
@@ -275,6 +278,11 @@ export function callLine(name: string, input: Record<string, unknown>): string {
   const page = (name === "Read" || name === "read_file") && (input.offset !== undefined || input.limit !== undefined) ? `:${input.offset ?? 0}+${input.limit ?? ""}` : "";
   const first = `${String(target).split("\n")[0]!}${page}`.slice(0, CALL_TARGET_MAX);
   const change = name === "Edit" || name === "MultiEdit" ? `${input.old_string ?? ""}\u0000${input.new_string ?? ""}${JSON.stringify(input.edits ?? "")}` : name === "Write" || name === "write_file" ? String(input.content ?? "") : null;
-  const fingerprint = change === null ? "" : ` ·${createHash("sha1").update(change).digest("hex").slice(0, 8)}`;
-  return `→ ${name} ${first}`.trimEnd() + fingerprint;
+  return change === null ? { target: first } : { target: first, fingerprint: createHash("sha1").update(change).digest("hex").slice(0, 8) };
+}
+
+/** The transcript line for one tool call. */
+export function callLine(name: string, input: Record<string, unknown>): string {
+  const { target, fingerprint } = callTarget(name, input);
+  return callText(name, target, fingerprint);
 }

@@ -16,11 +16,11 @@ function toolUse(step: Extract<ScriptStep, { call: string }>): { name: string; i
 }
 
 /** What the model reads back from one call: the hooks' denial, or what the tool returned. */
-async function execute(options: Options, name: string, input: Record<string, unknown>): Promise<string> {
+async function execute(options: Options, name: string, input: Record<string, unknown>, id: string): Promise<string> {
   const matchers: HookCallbackMatcher[] = options.hooks?.PreToolUse ?? [];
   for (const matcher of matchers.filter((m) => new RegExp(m.matcher ?? ".*").test(name))) {
     for (const hook of matcher.hooks) {
-      const decision = (await hook({ hook_event_name: "PreToolUse", tool_name: name, tool_input: input, tool_use_id: "toolu_1", session_id: SESSION, transcript_path: "", cwd: options.cwd ?? "" } as never, "toolu_1", { signal: new AbortController().signal })) as HookJSONOutput;
+      const decision = (await hook({ hook_event_name: "PreToolUse", tool_name: name, tool_input: input, tool_use_id: id, session_id: SESSION, transcript_path: "", cwd: options.cwd ?? "" } as never, id, { signal: new AbortController().signal })) as HookJSONOutput;
       const specific = "hookSpecificOutput" in decision ? (decision.hookSpecificOutput as { permissionDecision?: string; permissionDecisionReason?: string } | undefined) : undefined;
       if (specific?.permissionDecision === "deny") return specific.permissionDecisionReason ?? "denied";
     }
@@ -44,8 +44,9 @@ export function scriptedQuery(script: ScriptStep[]): (params: { prompt: string; 
         turns++;
         if ("call" in step) {
           const { name, input } = toolUse(step);
-          yield { type: "assistant", session_id: SESSION, message: { content: [{ type: "tool_use", id: `toolu_${turns}`, name, input }] } } as unknown as SDKMessage;
-          last = await execute(options, name, input);
+          const said = step.say ? [{ type: "text", text: step.say }] : [];
+          yield { type: "assistant", session_id: SESSION, message: { content: [...said, { type: "tool_use", id: `toolu_${turns}`, name, input }] } } as unknown as SDKMessage;
+          last = await execute(options, name, input, `toolu_${turns}`);
         } else if ("rateLimit" in step) {
           yield { type: "rate_limit_event", session_id: SESSION, rate_limit_info: { status: "rejected", resetsAt: step.rateLimit.resetsAt } } as unknown as SDKMessage;
           yield { type: "result", subtype: "error_during_execution", is_error: true, errors: ["Claude AI usage limit reached"], num_turns: turns, duration_ms: 1, total_cost_usd: 0, session_id: SESSION } as unknown as SDKMessage;

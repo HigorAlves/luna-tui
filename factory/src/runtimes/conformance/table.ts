@@ -15,11 +15,12 @@ import { lunaHandlers } from "../../core/luna-tools.ts";
 import { type RunOutcome, settle } from "../../core/output.ts";
 import type { Runtime } from "../../core/runtime.ts";
 
-/** One model turn. A call's result is what the model reads next; `echo` puts the last result
- *  into the answer's summary, so a check can see what the model was told; `hang` never answers. */
+/** One model turn. A call's result is what the model reads next, and `say` is text the model
+ *  writes before it; `echo` puts the last result into the answer's summary, so a check can see
+ *  what the model was told; `hang` never answers. */
 export type ScriptStep =
-  | { call: "bash"; command: string }
-  | { call: "luna"; tool: LunaTool; args: Record<string, unknown> }
+  | { call: "bash"; command: string; say?: string }
+  | { call: "luna"; tool: LunaTool; args: Record<string, unknown>; say?: string }
   | { answer: Record<string, unknown>; as?: "structured" | "text"; echo?: boolean }
   | { rateLimit: { resetsAt?: number } }
   | { fail: string }
@@ -159,6 +160,20 @@ export const SCENARIOS: Scenario[] = [
   },
 ];
 
+/** The golden run: text, a progress step, a refused and an allowed command, a ledger call and an
+ *  answer. Each runtime's transcript of it is pinned in its own test, so a change in how a run
+ *  becomes transcript lines (the board's watch pane and the stuck detector read them) shows. */
+export const GOLDEN: ScriptStep[] = [
+  { call: "luna", tool: "step", args: { label: "reading the code", n: 1, of: 3 }, say: "Looking around first." },
+  { call: "bash", command: "git push origin HEAD" },
+  { call: "bash", command: "pwd" },
+  { call: "luna", tool: "slice_init", args: { slices: [{ id: 1, title: "parse the input" }] } },
+  { answer: DONE },
+];
+
+/** A transcript with what changes from run to run (a session id, a duration) masked. */
+export const masked = (lines: string[]): string[] => lines.map((line) => line.replace(/^session \S+/, "session <id>").replace(/\b\d+ ms\b/, "<n> ms"));
+
 const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 
 const stageInput = (pack: Pack, engine: EngineId, timeoutMs: number): StageInput =>
@@ -185,7 +200,8 @@ export async function runScenario(runtime: Runtime, engine: EngineId, root: stri
   const scratch = join(root, "scratch");
   for (const dir of [work, out, scratch]) mkdirSync(dir, { recursive: true });
   const transcript: string[] = [];
-  const luna = lunaHandlers({ ledgerPath: join(out, "ledger.json"), decisions: [], onStep: () => {} });
+  // The step line as main.ts prints it.
+  const luna = lunaHandlers({ ledgerPath: join(out, "ledger.json"), decisions: [], onStep: (label, n, of) => transcript.push(`· ${label}${of ? ` (${n}/${of})` : ""}`) });
   const input = stageInput(t.pack, engine, timeoutMs);
   const started = Date.now();
   const run = await runtime.run({
