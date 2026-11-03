@@ -1,0 +1,2 @@
+# Compiled eve agents (src/runtimes/eve/build.ts); the runner image builds its own.
+.eve-agents*/
