@@ -4,6 +4,7 @@ import type {
   Finding,
   NeedsInputItem,
   RequestedAction,
+  RunInfo,
   TaskState,
 } from "@hardness/contracts";
 
@@ -57,6 +58,8 @@ export interface StageResult {
     transcriptPath?: string;
     inputCommit?: string;
     outputCommit?: string;
+    /** What the run's result.json named it ran on, and its fingerprint. */
+    info?: RunInfo;
   };
 }
 

@@ -6,6 +6,7 @@ import { Pipeline } from "../../application/pipeline.ts";
 import type { StageResult } from "../../application/ports.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
 import { freshTestDatabase } from "../../test/database.ts";
+import { StageRunEntity } from "../persistence/schemas.ts";
 import { createApp } from "./app.ts";
 import { Bus } from "./bus.ts";
 import { percentile } from "./metrics.ts";
@@ -207,7 +208,33 @@ describe("GET /metrics", () => {
       },
     ]);
     expect((await getMetrics()).byRepo).toBeUndefined();
-    expect((await app().request("/metrics?groupBy=stage")).status).toBe(400);
+    const refused = await app().request("/metrics?groupBy=stage");
+    expect(refused.status).toBe(400);
+    expect(JSON.stringify(await refused.json())).toMatch(/repo, fingerprint/);
+  });
+
+  it("groups the window's stage runs by fingerprint, runs from before fingerprints last", async () => {
+    const task = await pipeline.createTask({ title: "a", repoPath: "/r/a" });
+    const at = (msAgo: number) => new Date(Date.now() - msAgo);
+    const runs = db.getRepository(StageRunEntity);
+    const A = "a".repeat(64);
+    const B = "b".repeat(64);
+    const row = (stage: string, status: string, fingerprint: string | null, engine: string, costUsd: string | null, ms: number) =>
+      runs.save({ taskId: task.id, stage: stage as never, attempt: 1, status: status as never, outcome: null, costUsd, fingerprint, engine: engine as never, startedAt: at(ms + 1000), endedAt: at(1000) });
+    await row("triage", "passed", A, "claude:opus", "0.5000", 2000);
+    await row("verifying", "failed", A, "claude:sonnet", "0.2500", 4000);
+    await row("triage", "passed", B, "codex:sol", null, 1000);
+    await row("triage", "passed", null, "claude:opus", "1.0000", 3000);
+
+    const m = await getMetrics("?groupBy=fingerprint");
+    expect(m.byFingerprint).toEqual([
+      { fingerprint: A, runs: 2, passRate: 0.5, costUsd: 0.75, durationMs: { median: 3000, p90: 3800 }, stages: ["triage", "verifying"], engines: ["claude:opus", "claude:sonnet"] },
+      { fingerprint: B, runs: 1, passRate: 1, costUsd: 0, durationMs: { median: 1000, p90: 1000 }, stages: ["triage"], engines: ["codex:sol"] },
+      { fingerprint: null, runs: 1, passRate: 1, costUsd: 1, durationMs: { median: 3000, p90: 3000 }, stages: ["triage"], engines: ["claude:opus"] },
+    ]);
+    expect(m.byRepo).toBeUndefined();
+    expect((await getMetrics("?groupBy=fingerprint&repo=/r/b")).byFingerprint).toEqual([]);
+    expect((await getMetrics()).byFingerprint).toBeUndefined();
   });
 
   it("groups the window's stage runs by the engine they ran on, with groupBy=engine", async () => {

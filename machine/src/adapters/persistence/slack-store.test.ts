@@ -123,4 +123,13 @@ describe("PgSlackStore triage runs", () => {
     expect(all).toHaveLength(3);
     expect(all[2]).toMatchObject({ ok: false, costUsd: null, error: "timed out" });
   });
+
+  it("keeps a run's runtime, pinned model, SDK version and fingerprint, and leaves them out on a run that named none", async () => {
+    const base = { endedAt: daysAgo(0), items: 1, model: "claude-haiku", turns: 1, costUsd: 0.01, ok: true, error: null };
+    const facts = { runtime: "claude", modelId: "claude-haiku-5-5", sdkVersion: "0.3.311", fingerprint: "b".repeat(64) };
+    expect(await store.recordTriageRun({ ...base, ...facts, startedAt: daysAgo(0) })).toMatchObject(facts);
+    const plain = await store.recordTriageRun({ ...base, startedAt: daysAgo(1) });
+    expect(plain).not.toHaveProperty("fingerprint");
+    expect((await store.triageRuns(new Date(0)))[0]).toMatchObject(facts);
+  });
 });

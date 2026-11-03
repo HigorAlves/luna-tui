@@ -9,7 +9,7 @@ import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, runSummary, sameSource } from "../domain/task.ts";
+import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
@@ -1499,6 +1499,7 @@ export class Pipeline {
       outputCommit: result.run?.outputCommit ?? null,
       ...(result.usage ? { turns: result.usage.turns, costUsd: result.usage.costUsd?.toString() ?? null } : {}),
       ...(stage === "verifying" ? { cases: casesOf(result.detail) } : {}),
+      ...runFacts(result.run?.info),
     });
     if (result.usage?.costUsd) {
       await this.raiseAlerts(id);

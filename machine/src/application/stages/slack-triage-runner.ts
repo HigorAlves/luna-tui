@@ -11,6 +11,7 @@ import { join } from "node:path";
 import type { Credentials } from "../../adapters/credentials/index.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { buildSlackTriageInput } from "../../domain/stage-input.ts";
+import { type RunFacts, runFacts } from "../../domain/task.ts";
 import { pickEngine } from "../engine.ts";
 import type { SlackStore } from "../slack-store.ts";
 import { outputError, runPackOnce } from "./run-once.ts";
@@ -92,6 +93,7 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
     let ok = false;
     let error: string | null = null;
     let usage: { model: string; turns: number; costUsd: number | null } = { model, turns: 0, costUsd: null };
+    let facts: RunFacts = {};
     try {
       const run = await runPackOnce(
         { name: `hardness-slack-triage-${stamp}`, image: deps.image, runDir, worktree: work, input, engine, labels: { luna: "slack-triage" } },
@@ -101,6 +103,7 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
       else {
         const out = run.output;
         usage = { model: out.usage.model || model, turns: out.usage.turns, costUsd: out.usage.costUsd };
+        facts = runFacts(out.run);
         if (!out.ok) error = outputError(out);
         else {
           const answer = SlackTriageAnswer.safeParse(out.answer);
@@ -122,7 +125,7 @@ export function createSlackTriager(deps: SlackTriageDeps): Triager {
     const cost = usage.costUsd === null ? "" : ` · $${usage.costUsd.toFixed(4)}`;
     log(ok ? `slack triage: ${batch.length} item(s), ${answers.size} verdict(s), ${usage.turns} turn(s)${cost}` : `slack triage: ${batch.length} item(s) failed: ${error}`);
     try {
-      await deps.store.recordTriageRun({ startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString(), items: batch.length, model: usage.model, engine, turns: usage.turns, costUsd: usage.costUsd, ok, error });
+      await deps.store.recordTriageRun({ startedAt: startedAt.toISOString(), endedAt: endedAt.toISOString(), items: batch.length, model: usage.model, engine, turns: usage.turns, costUsd: usage.costUsd, ok, error, ...facts });
     } catch (thrown) {
       console.warn(`slack triage: could not record the run: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
     }

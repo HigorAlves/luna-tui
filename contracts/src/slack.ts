@@ -178,6 +178,11 @@ export interface SlackTriageRun {
   model: string;
   /** The engine the run ran on; absent on runs from before engines. */
   engine?: EngineId | null;
+  /** What the run's result named it ran on; absent on runs from before fingerprints. */
+  runtime?: string;
+  modelId?: string;
+  sdkVersion?: string;
+  fingerprint?: string;
   turns: number;
   costUsd: number | null;
   ok: boolean;

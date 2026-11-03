@@ -139,6 +139,12 @@ describe("createSlackTriager", () => {
     expect(store.runs).toEqual([{ id: "run-1", startedAt: NOW.toISOString(), endedAt: NOW.toISOString(), items: 2, model: "claude-haiku-5-5", engine: "claude:haiku", turns: 1, costUsd: 0.0042, ok: true, error: null }]);
     expect(lines[0]).toBe("slack triage: 2 item(s), 2 verdict(s), 1 turn(s) · $0.0042");
 
+    // A runner that names its run record: the runtime, pinned model, SDK version and fingerprint ride along.
+    const run = { runtime: "claude", engine: "claude:haiku", modelId: "claude-haiku-5-5", sdk: { name: "@anthropic-ai/claude-agent-sdk", version: "0.3.311" }, fingerprint: "c".repeat(64) };
+    const named = new MemorySlackStore();
+    await createSlackTriager({ image: "img", credentials, stateDir, store: named, sandbox: fakeSandbox((r) => output({ items: idsOf(r).map(verdict) }, { run })), now: () => NOW, log: () => {} }).triage([item("C1:1")], context);
+    expect(named.runs[0]).toMatchObject({ runtime: "claude", modelId: "claude-haiku-5-5", sdkVersion: "0.3.311", fingerprint: run.fingerprint });
+
     const stamps = [new Date("2026-10-28T12:01:00Z"), new Date("2026-10-28T12:02:00Z")];
     let n = 0;
     const later = () => stamps[Math.floor(n++ / 2)]!;

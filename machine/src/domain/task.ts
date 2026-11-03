@@ -1,6 +1,6 @@
 // Plain domain types for a task and everything attached to it. No TypeORM here — see
 // ../adapters/persistence/schemas.ts for the persistence mapping of these same shapes.
-import type { ArtifactKind, EngineId, JiraLink, StageEngines, StageRunCase, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
+import type { ArtifactKind, EngineId, JiraLink, RunInfo, StageEngines, StageRunCase, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
 
 import type { Retries } from "./transition.ts";
 
@@ -67,9 +67,27 @@ export interface StageRunRow {
   cases: StageRunCase[] | null;
   /** The engine the run started on; null for a host-only stage, or a run from before engines. */
   engine: EngineId | null;
+  /** What the run's result named it ran on; null until it ends, and on rows from before. */
+  runtime: string | null;
+  modelId: string | null;
+  sdkVersion: string | null;
+  fingerprint: string | null;
   startedAt: Date;
   endedAt: Date | null;
 }
+
+/** What a run record keeps of the result's `run` (RFC 0003 §7). */
+export interface RunFacts {
+  runtime?: string;
+  modelId?: string;
+  sdkVersion?: string;
+  fingerprint?: string;
+}
+
+/** The run's runtime, pinned model, SDK version and fingerprint; nothing for a result that named
+ *  none (a script pack, an older runner). */
+export const runFacts = (info: RunInfo | null | undefined): RunFacts =>
+  info ? { runtime: info.runtime, modelId: info.modelId, sdkVersion: info.sdk.version, fingerprint: info.fingerprint } : {};
 
 export interface EventRow {
   /** bigint, returned by pg as a string. */

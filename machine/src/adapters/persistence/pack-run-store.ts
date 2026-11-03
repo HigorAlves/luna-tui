@@ -16,6 +16,10 @@ export interface PackRunEntityRow {
   durationMs: number;
   /** numeric comes back from pg as a string. */
   costUsd: string | number | null;
+  runtime: string | null;
+  modelId: string | null;
+  sdkVersion: string | null;
+  fingerprint: string | null;
   startedAt: Date;
   endedAt: Date;
 }
@@ -34,6 +38,10 @@ export class PgPackRunStore implements PackRunStore {
       turns: run.turns,
       durationMs: Math.round(run.durationMs),
       costUsd: run.costUsd,
+      runtime: run.runtime ?? null,
+      modelId: run.modelId ?? null,
+      sdkVersion: run.sdkVersion ?? null,
+      fingerprint: run.fingerprint ?? null,
       startedAt: new Date(run.startedAt),
       endedAt: new Date(run.endedAt),
     });

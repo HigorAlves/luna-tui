@@ -120,6 +120,6 @@ export function toStageResult({ output, events, artifacts }: Ingested): StageRes
     findings: output.findings,
     events,
     artifacts,
-    run: { outputCommit: output.commit ?? undefined },
+    run: { outputCommit: output.commit ?? undefined, ...(output.run ? { info: output.run } : {}) },
   };
 }

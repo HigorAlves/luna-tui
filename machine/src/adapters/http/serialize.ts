@@ -65,6 +65,10 @@ export const toStageRun = (row: StageRunRow): StageRun => ({
   turns: row.turns,
   cases: row.cases,
   engine: row.engine ?? null,
+  runtime: row.runtime ?? null,
+  modelId: row.modelId ?? null,
+  sdkVersion: row.sdkVersion ?? null,
+  fingerprint: row.fingerprint ?? null,
   startedAt: row.startedAt.toISOString(),
   endedAt: iso(row.endedAt),
 });
