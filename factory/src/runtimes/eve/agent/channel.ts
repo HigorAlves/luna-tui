@@ -3,6 +3,8 @@
 import { httpBasic } from "eve/channels/auth";
 import { eveChannel } from "eve/channels/eve";
 
+import { secrets } from "./secrets.ts";
+
 export default eveChannel({
-  auth: [httpBasic({ username: "stage", password: process.env.LUNA_EVE_PASSWORD || crypto.randomUUID() })],
+  auth: [httpBasic({ username: "stage", password: secrets().password })],
 });

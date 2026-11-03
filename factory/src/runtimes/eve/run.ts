@@ -10,18 +10,19 @@
 import { type AgentPack, ENGINES, answerJsonSchema } from "@hardness/contracts";
 import type { SendTurnOptions } from "eve/client";
 import { type ChildProcess, spawn } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { appendFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { appendFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { type IncomingMessage, type Server, createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { type GuardContext, branchPrefixFor } from "../../core/guards.ts";
 import { EMPTY_RUN, type RunOutcome } from "../../core/output.ts";
 import { callLine } from "../../core/render.ts";
 import type { RunContext, Runtime } from "../../core/runtime.ts";
 import { eveTools } from "./compile.ts";
+import type { EveSecrets } from "./agent/secrets.ts";
 
 const env = process.env;
 const HEALTHY_WITHIN_MS = 30_000;
@@ -51,9 +52,28 @@ function guardPolicy(pack: AgentPack, { input, paths }: RunContext): GuardContex
     // eve's bash has no allow-list of its own: the pack's commands are enforced by the guard.
     commands: pack.access.commands,
     // The model's tools run as the same user as Codex and the runner: only the run's own roots
-    // may be named, never the Codex home, HOME or /proc.
+    // may be named, never the Codex home, HOME, /proc or the secrets file.
     roots: { scratch: paths.scratch, read: [paths.input] },
   };
+}
+
+/** Variables that hold a credential: never in the server's environment. */
+const SECRET_ENV = /^(GH_TOKEN|GITHUB_TOKEN|OPENAI_API_KEY|ANTHROPIC_API_KEY|CLAUDE_CODE_OAUTH_TOKEN|TYPESAFE_API_KEY)$|(TOKEN|SECRET|PASSWORD|API_KEY)$/i;
+
+/** The eve server's environment: the runner's without a credential, and the run's settings. */
+export function serverEnv(source: NodeJS.ProcessEnv, extra: Record<string, string>): Record<string, string> {
+  const kept: Record<string, string> = {};
+  for (const [key, value] of Object.entries(source)) if (value !== undefined && !SECRET_ENV.test(key)) kept[key] = value;
+  return { ...kept, ...extra };
+}
+
+/** Writes the run's secrets to a 0600 file in a 0700 folder of its own under /tmp, outside every
+ *  root; returns the file. The caller removes the folder. */
+export function writeSecrets(secrets: EveSecrets): string {
+  const dir = mkdtempSync(join(tmpdir(), "luna-eve-secrets-"));
+  const file = join(dir, "secrets.json");
+  writeFileSync(file, JSON.stringify(secrets), { mode: 0o600 });
+  return file;
 }
 
 async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
@@ -97,13 +117,14 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
   const bridgeToken = randomBytes(24).toString("hex");
   const bridge = await serveLuna(luna.call, bridgeToken);
   const password = randomBytes(24).toString("hex");
+  const ghToken = env.GH_TOKEN || env.GITHUB_TOKEN || undefined;
+  const secretsFile = writeSecrets({ password, bridgeToken, ...(ghToken && { ghToken }), ...(apiKey && env.OPENAI_API_KEY && { openaiApiKey: env.OPENAI_API_KEY }) });
   const port = await freePort();
   const state = mkdtempSync(join(tmpdir(), "eve-"));
   const log: string[] = [];
   const server = spawn(process.execPath, [entry], {
     cwd: state,
-    env: {
-      ...env,
+    env: serverEnv(env, {
       ...options.serverEnv,
       // eve swaps every authored model for its own mock under NODE_ENV=test (vitest sets it).
       NODE_ENV: "production",
@@ -112,15 +133,14 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
       EVE_TELEMETRY_DISABLED: "1",
       EVE_SCHEDULES_DISABLED: "1",
       LUNA_FACTORY: "1",
-      LUNA_EVE_PASSWORD: password,
+      LUNA_EVE_SECRETS: secretsFile,
       LUNA_EVE_MODEL: engine.modelId,
       LUNA_EVE_AUTH: apiKey ? "api-key" : "chatgpt",
       LUNA_EVE_WORKSPACE: paths.work,
       LUNA_EVE_SCRATCH: paths.scratch,
       LUNA_EVE_GUARD: JSON.stringify(guard),
       LUNA_EVE_BRIDGE_URL: bridge.url,
-      LUNA_EVE_BRIDGE_TOKEN: bridgeToken,
-    },
+    }),
     stdio: ["ignore", "pipe", "pipe"],
   });
   const debug = env.LUNA_STAGE_DEBUG === "1";
@@ -206,6 +226,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
     await stop(server);
     bridge.server.close();
     rmSync(state, { recursive: true, force: true });
+    rmSync(dirname(secretsFile), { recursive: true, force: true });
   }
   if (result.error && /\b429\b|too many requests/i.test(result.error)) result.rateLimited = true;
   if (!result.ok && result.structured) result.structured = null;
@@ -248,14 +269,18 @@ const body = async (req: IncomingMessage): Promise<unknown> => {
   return text ? JSON.parse(text) : {};
 };
 
+/** Whether a request carries the run's token, compared in constant time. */
+const sha = (text: string) => createHash("sha256").update(text).digest();
+const carries = (req: IncomingMessage, token: string): boolean => timingSafeEqual(sha(req.headers.authorization ?? ""), sha(`Bearer ${token}`));
+
 /** The luna tools over loopback: POST /<tool> with the run's bearer token, the input as JSON. */
-async function serveLuna(call: RunContext["luna"]["call"], token: string): Promise<{ server: Server; url: string }> {
+export async function serveLuna(call: RunContext["luna"]["call"], token: string): Promise<{ server: Server; url: string }> {
   const server = createServer(async (req, res) => {
     const reply = (status: number, value: unknown) => {
       res.writeHead(status, { "content-type": "application/json" });
       res.end(JSON.stringify(value));
     };
-    if (req.method !== "POST" || req.headers.authorization !== `Bearer ${token}`) return reply(403, { error: "forbidden" });
+    if (req.method !== "POST" || !carries(req, token)) return reply(403, { error: "forbidden" });
     try {
       reply(200, await call((req.url ?? "/").slice(1), await body(req)));
     } catch (e) {
