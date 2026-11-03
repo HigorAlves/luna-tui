@@ -4,12 +4,15 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 SETUP := scripts/setup
 
-.PHONY: help doctor tools credentials integrations up down board
+.PHONY: help setup doctor tools credentials integrations luna-yaml up down board
 
 help: ## Show these targets
 	@printf "\n\033[1;35m🌙 Luna\033[0m  make <target>\n\n"
 	@grep -hE '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | awk 'BEGIN { FS = ":.*## " } { printf "  \033[1;36m%-14s\033[0m %s\n", $$1, $$2 }'
 	@echo
+
+setup: ## Everything, step by step: tools, credentials, integrations, the machine, the board, your repos
+	@bash $(SETUP)/setup.sh
 
 doctor: ## Check tools, credentials, integrations and the running machine
 	@bash $(SETUP)/doctor.sh
@@ -22,6 +25,9 @@ credentials: ## Engine credentials (Claude, Codex, OpenAI, Jev), the API token, 
 
 integrations: ## Jira, the Slack inbox and machine settings, into .env
 	@bash $(SETUP)/integrations.sh
+
+luna-yaml: ## Write or update a repo's luna.yaml (make luna-yaml REPO=~/Developer/app)
+	@bash $(SETUP)/luna-yaml.sh $(REPO)
 
 up: ## Build the stage images and start Postgres + the machine (pnpm start)
 	@pnpm start

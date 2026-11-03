@@ -22,11 +22,11 @@ Every ticket moves Intake → Triage → Build → Verify → E2E/Evidence → D
 ## Install
 
 ```bash
-pnpm install
-pnpm start    # builds the stage images, then Postgres + the machine on http://127.0.0.1:4318
+make setup    # installs the tools, asks for your credentials and integrations, starts the machine, links the board
+make doctor   # what is set up and what is missing, any time
 ```
 
-Working on the harness itself? `pnpm dev` runs only Postgres in Docker and the machine on your host, with hot reload. For the board, Rust prerequisites and the full checks: [docs/install.md](docs/install.md).
+`make` lists every step (`make credentials`, `make integrations`, `make luna-yaml REPO=<path>`, `make up`, …); each one is safe to run again. By hand it is `pnpm install` and `pnpm start` (the stage images, then Postgres + the machine on http://127.0.0.1:4318). Working on the harness itself? `pnpm dev` runs only Postgres in Docker and the machine on your host, with hot reload. For the board, Rust prerequisites and the full checks: [docs/install.md](docs/install.md).
 
 ## Docs
 
