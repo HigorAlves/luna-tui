@@ -42,6 +42,9 @@ jobs:
         run: pnpm --filter @hardness/machine test
       - name: Typecheck
         run: pnpm --filter @hardness/machine typecheck
+      # make setup's scripts: shellcheck, and the .env and credential writes on temp files.
+      - name: Setup scripts
+        run: shellcheck -x -P SCRIPTDIR scripts/setup/*.sh scripts/setup/helpers/*.sh && bash scripts/setup/lib.test.sh
       # Every golden fixture ticket must be red with its seed and green with its reference
       # patch; a fixture that drifts would grade real agent runs against a broken bar.
       - name: Golden fixtures self-validate
