@@ -8,7 +8,27 @@
 - Nothing else. `pnpm start` and `pnpm dev` build both stage images first (`pnpm images`) from this checkout: the runner image (Node, `gh`, Go and Rust toolchains, the Codex CLI, and the factory with its three runtimes' SDKs and the prebuilt eve agents; about 3.2 GB on disk) and the QA image on top of it, which adds Playwright with Chromium, ffmpeg and agent-browser (about 2 GB more: 5.2 GB). The first build takes a while; later ones reuse Docker's cache.
 - [herdr](https://herdr.dev/), to run the board as a plugin
 
-## Quick start
+## Guided setup
+
+```sh
+make setup
+```
+
+It walks a fresh Mac through everything below, one step at a time, and every step is also its own target, safe to run again:
+
+| Target | Does |
+|---|---|
+| `make tools` | installs what is missing with Homebrew after one confirmation (Docker Desktop, Node, pnpm, Rust, gh, herdr; gum, Codex and Claude Code if you want them) |
+| `make credentials` | each engine's credential into `~/.config/hardness/` (0600): Claude through `claude setup-token`, the Codex login, an OpenAI key and a Jev key (Vercel AI Gateway or TypeSafe) if you use them; the machine's API token; `gh auth login` |
+| `make integrations` | Jira, the Slack inbox and machine settings (where your repos live, engine budgets) into the root `.env` (0600), each tried against its service; `machine/.env` is linked to it for `pnpm dev` |
+| `make up`, `make down` | `pnpm start`, `pnpm stop` |
+| `make board` | `pnpm board:link` |
+| `make luna-yaml REPO=<path>` | a repo's `luna.yaml`: Jira (the statuses listed from your project when the Jira keys are set), engines, policy, budgets and SLAs; an existing file keeps its comments, the change is shown as a diff, and nothing is written that the machine would refuse. Checks and services come from the board's `:setup <repo>`, which proves them |
+| `make doctor` | what is installed, set and running, and what is missing; never prints a secret |
+
+No key ever goes into `luna.yaml`: it lives in the repo and is usually committed. The scripts are in `scripts/setup/` (gum for the prompts when it is installed, plain prompts otherwise).
+
+## Quick start (by hand)
 
 ```sh
 pnpm install

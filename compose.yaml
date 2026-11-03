@@ -74,6 +74,16 @@ services:
       MACHINE_SLACK_DIGEST_AT: ${MACHINE_SLACK_DIGEST_AT:-}
       # The triage rules you edit; the machine's own default, spelled out so a host MACHINE_STATE_DIR carries over.
       MACHINE_SLACK_RULES: ${MACHINE_SLACK_RULES:-${MACHINE_STATE_DIR:-${HOME}/.local/state/hardness}/slack-triage.md}
+      # Jira (docs/install.md "Jira"): the site, your email and API token, from a root .env or the shell.
+      MACHINE_JIRA_SITE: ${MACHINE_JIRA_SITE:-}
+      MACHINE_JIRA_EMAIL: ${MACHINE_JIRA_EMAIL:-}
+      MACHINE_JIRA_TOKEN: ${MACHINE_JIRA_TOKEN:-}
+      MACHINE_JIRA_TOKEN_EXPIRES: ${MACHINE_JIRA_TOKEN_EXPIRES:-}
+      MACHINE_JIRA_CLOUD_ID: ${MACHINE_JIRA_CLOUD_ID:-}
+      MACHINE_JIRA: ${MACHINE_JIRA:-on}
+      # The kill switch and the per-engine monthly caps (docs/configuration.md).
+      MACHINE_DISABLE_RUNTIMES: ${MACHINE_DISABLE_RUNTIMES:-}
+      MACHINE_ENGINE_BUDGETS: ${MACHINE_ENGINE_BUDGETS:-}
       RUNNER_IMAGE: ${RUNNER_IMAGE:-hardness-runner:dev}
       RUNNER_QA_IMAGE: ${RUNNER_QA_IMAGE:-hardness-runner-qa:dev}
       # gh and git push to GitHub over https with this token (`pnpm start` passes `gh auth token`).
