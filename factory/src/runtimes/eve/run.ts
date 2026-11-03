@@ -116,7 +116,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
     return { ...EMPTY_RUN, ok: true, structured, text: "dry-run" };
   }
   if (!existsSync(entry)) {
-    return { ...EMPTY_RUN, error: `the eve agent for ${pack.id} is not built (${app}): the runner image builds one for each pack whose engines allow eve (node src/runtimes/eve/build.ts)` };
+    return { ...EMPTY_RUN, error: `the eve agent for ${appName(pack)} is not built (${app}): the runner image builds one for each pack whose engines allow eve, and for each helper on an eve engine (node src/runtimes/eve/build.ts)` };
   }
 
   const t0 = Date.now();
@@ -180,7 +180,7 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
     const outputSchema = answerJsonSchema(pack) as SendTurnOptions["outputSchema"];
     const { session, delivery } = await client.sessions.create({ message: prompt, outputSchema });
     turn.result.sessionId = session.id;
-    emit({ kind: "session", payload: { id: session.id, model: engine.modelId, text: `session ${session.id} · eve agent ${pack.id} · ${apiKey ? "openai" : "chatgpt"}(${engine.modelId})` } });
+    emit({ kind: "session", payload: { id: session.id, model: engine.modelId, text: `session ${session.id} · eve agent ${appName(pack)} · ${apiKey ? "openai" : "chatgpt"}(${engine.modelId})` } });
     // The stage ends itself at its deadline, before the machine kills the container: the turn is
     // cancelled, and if the server does not settle it soon after, the run stops following it.
     const deadline = deadlineMs(input.limits.timeoutMs);
