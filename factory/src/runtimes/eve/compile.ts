@@ -3,7 +3,7 @@
 // sandbox. Roles and packs are static, so every agent is compiled and `eve build` run at image
 // build (build.ts); a run only starts the built server and sends the prompt. The model is the
 // engine's, read when the server starts (agent/model.ts), so one build serves every eve engine.
-import { type Access, type Pack } from "@hardness/contracts";
+import { type Access, type AgentPack } from "@hardness/contracts";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
@@ -45,11 +45,11 @@ const importPath = (from: string, to: string): string => {
 };
 
 /** The usage cap eve stops at; the runner's own model-call cap (run.ts) is the turn limit. */
-const usageLimit = (pack: Pack): string =>
+const usageLimit = (pack: AgentPack): string =>
   `({ window }) => window.inputTokens - window.cacheReadTokens >= ${pack.maxTurns * 60_000} || window.outputTokens >= ${pack.maxTurns * 8_000}`;
 
 /** Every file of the pack's agent app but its skills, by path relative to the app. */
-export function agentFiles(pack: Pack, options: CompileOptions): Record<string, string> {
+export function agentFiles(pack: AgentPack, options: CompileOptions): Record<string, string> {
   if (!pack.agent) throw new Error(`pack ${pack.id} has no agent to compile`);
   const app = join(options.outDir, pack.id);
   const lib = join(options.factoryRoot, "src", "runtimes", "eve");
@@ -103,7 +103,7 @@ export function agentFiles(pack: Pack, options: CompileOptions): Record<string, 
 }
 
 /** Writes the pack's agent app afresh, skills included when its access has them; returns its folder. */
-export function compileAgent(pack: Pack, options: CompileOptions): string {
+export function compileAgent(pack: AgentPack, options: CompileOptions): string {
   const app = join(options.outDir, pack.id);
   rmSync(join(app, "agent"), { recursive: true, force: true });
   for (const [rel, body] of Object.entries(agentFiles(pack, options))) {

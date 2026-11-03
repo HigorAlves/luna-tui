@@ -1,7 +1,7 @@
 // Compiles every agent pack into an eve app and runs `eve build` in each, so a stage starts a
 // ready server. The runner image runs this at build time (machine/runner/Dockerfile); no model
 // call and no Docker daemon is needed. Usage: node src/runtimes/eve/build.ts [outDir] [pack...]
-import { PACKS, type Pack } from "@hardness/contracts";
+import { type AgentPack, PACKS } from "@hardness/contracts";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,7 +19,7 @@ export function buildAgent(app: string, factoryRoot: string): void {
 }
 
 /** Compiles and builds `pack`; returns the app folder. */
-export function compileAndBuild(pack: Pack, options: CompileOptions): string {
+export function compileAndBuild(pack: AgentPack, options: CompileOptions): string {
   const app = compileAgent(pack, options);
   buildAgent(app, options.factoryRoot);
   return app;
@@ -29,7 +29,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const factoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
   const [outArg, ...only] = process.argv.slice(2);
   const outDir = resolve(outArg ?? join(factoryRoot, ".eve-agents"));
-  const packs = Object.values(PACKS).filter((p) => p.agent !== null && (only.length === 0 || only.includes(p.id)));
+  const packs = Object.values(PACKS).filter((p): p is AgentPack => p.kind === "agent" && (only.length === 0 || only.includes(p.id)));
   for (const pack of packs) {
     const t0 = Date.now();
     compileAndBuild(pack, { factoryRoot, outDir });
