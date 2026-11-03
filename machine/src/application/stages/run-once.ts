@@ -6,7 +6,7 @@ import { type EngineId, type StageInput, StageOutput } from "@hardness/contracts
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { Credentials } from "../../adapters/credentials/index.ts";
+import { CredentialWaitError, type Credentials } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, runSandbox } from "../../adapters/docker/docker.ts";
 
 const MINUTE = 60_000;
@@ -35,9 +35,16 @@ export interface OneRunDeps {
 /** The run's result when the container left a readable one; `error` says why when it did not. */
 export type OneRunResult = { output: StageOutput; error: null } | { output: null; error: string };
 
-/** Runs `run.input` once. A missing credential rejects (NoCredentialError); every other failure is in `error`. */
+/** Runs `run.input` once. A missing credential rejects (NoCredentialError); every other failure,
+ *  a credential another run held past the timeout included, is in `error`. */
 export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRunResult> {
-  const credential = await deps.credentials.prepare(run.engine, run.runDir);
+  let credential;
+  try {
+    credential = await deps.credentials.prepare(run.engine, run.runDir, { signal: run.signal, timeoutMs: run.input.limits.timeoutMs });
+  } catch (error) {
+    if (error instanceof CredentialWaitError) return { output: null, error: error.message };
+    throw error;
+  }
   const result = await (deps.sandbox ?? runSandbox)({
     name: run.name,
     image: run.image,

@@ -19,7 +19,7 @@ import {
   resetWorktree,
   restoreFiles,
 } from "../../adapters/git/worktree.ts";
-import { type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
+import { CredentialWaitError, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
@@ -155,11 +155,17 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   const sessionMount = join(deps.stateDir, "tasks", task.id, "session");
   await mkdir(sessionMount, { recursive: true });
   // Only this engine's credential, prepared under the run folder and released once the container is gone.
+  // One only one run may hold at a time (the Codex login) is waited for within the stage's own
+  // timeout, and the wait is said on the task, not left a silent hang.
   let credential;
   try {
-    credential = await deps.credentials.prepare(choice.engine, runDir);
+    credential = await deps.credentials.prepare(choice.engine, runDir, {
+      signal: context.signal,
+      timeoutMs: input.limits.timeoutMs,
+      onWait: (note) => void context.note?.(note).catch(() => {}),
+    });
   } catch (error) {
-    if (!(error instanceof NoCredentialError)) throw error;
+    if (!(error instanceof NoCredentialError || error instanceof CredentialWaitError)) throw error;
     return { outcome: "fail", detail: { error: error.message }, ...(engineEvents.length ? { events: engineEvents } : {}) };
   }
   const sandbox = await (deps.sandbox ?? runSandbox)({

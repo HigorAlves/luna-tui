@@ -99,7 +99,7 @@ export function createJiraTriager(deps: JiraIntakeDeps): JiraTriager {
           work = join(runDir, "work");
           await mkdir(work, { recursive: true });
         }
-        const credential = await deps.credentials.prepare(engine, runDir);
+        const credential = await deps.credentials.prepare(engine, runDir, { timeoutMs: input.limits.timeoutMs });
         const result = await sandbox({
           name: `hardness-jira-intake-${stamp.toLowerCase()}`,
           image: deps.image,

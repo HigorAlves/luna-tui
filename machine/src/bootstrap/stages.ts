@@ -6,7 +6,7 @@ import type { TaskRoute, TaskState } from "@hardness/contracts";
 import type { Ledger, RunSummary } from "@hardness/contracts";
 
 import type { Config } from "../config.ts";
-import { type Credentials, machineCredentials } from "../adapters/credentials/index.ts";
+import { type Credentials, machineCredentials, removeStaleCodexTemps } from "../adapters/credentials/index.ts";
 import type { Watcher } from "../application/ports.ts";
 import { agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
@@ -63,6 +63,9 @@ export async function buildRealStages(
   }
   const removed = await removeLeftoverContainers();
   if (removed > 0) console.log(`removed ${removed} leftover stage container(s)`);
+  // A machine that died mid-write-back left its temp copy of the Codex login beside the real one.
+  const temps = await removeStaleCodexTemps();
+  if (temps > 0) console.log(`removed ${temps} stale Codex login temp file(s)`);
   const qaImage = await imageExists(config.runnerQaImage);
   if (!qaImage) {
     console.warn(`image ${config.runnerQaImage} is missing (pnpm runner-qa:build): e2e will be skipped`);

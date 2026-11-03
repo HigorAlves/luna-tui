@@ -27,6 +27,8 @@ export interface StageContext {
   resume?: { container: string; inputCommit: string | null; engine?: EngineId | null };
   /** Tells the machine the container's name, the commit it started from and the engine it runs on, as soon as they are known. */
   started?: (facts: { container: string; inputCommit: string | null; engine?: EngineId }) => Promise<void>;
+  /** Puts a line on the task's activity while the stage runs (`stage.note`): a wait, a fallback, anything the run should say before it ends. */
+  note?: (text: string) => Promise<void>;
 }
 
 export interface StageResult {

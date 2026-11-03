@@ -4,12 +4,13 @@ import { type CredentialOwner, type EngineId, credentialOwner } from "@hardness/
 
 import { claudeCredentials } from "./claude.ts";
 import { codexCredentials } from "./codex.ts";
-import type { Availability, CredentialLoader, CredentialOptions, RunCredential } from "./credential.ts";
+import type { Availability, CredentialLoader, CredentialOptions, PrepareWait, RunCredential } from "./credential.ts";
 import { openaiCredentials } from "./openai.ts";
 import { typesafeCredentials } from "./typesafe.ts";
 
-export type { Availability, CredentialLoader, CredentialMount, CredentialOptions, RunCredential } from "./credential.ts";
-export { NoCredentialError, noCredential } from "./credential.ts";
+export type { Availability, CredentialLoader, CredentialMount, CredentialOptions, PrepareWait, RunCredential } from "./credential.ts";
+export { CredentialWaitError, NoCredentialError, noCredential } from "./credential.ts";
+export { removeStaleCodexTemps } from "./codex.ts";
 
 /** The loader for what `engine` needs: Claude's token, the Codex login, an OpenAI key or a TypeSafe key. */
 export function credentialsFor(engine: EngineId, opts: CredentialOptions = {}): CredentialLoader {
@@ -25,13 +26,14 @@ export function credentialsFor(engine: EngineId, opts: CredentialOptions = {}): 
 /** The machine's credentials by engine, as the stage runners and `GET /engines` use them. */
 export interface Credentials {
   check(engine: EngineId): Promise<Availability>;
-  prepare(engine: EngineId, runDir: string): Promise<RunCredential>;
+  /** Waits, within `wait`, while another run holds a credential only one run may use at a time (the Codex login). */
+  prepare(engine: EngineId, runDir: string, wait?: PrepareWait): Promise<RunCredential>;
 }
 
 export function machineCredentials(opts: CredentialOptions = {}): Credentials {
   return {
     check: (engine) => credentialsFor(engine, opts).check(),
-    prepare: (engine, runDir) => credentialsFor(engine, opts).prepare(runDir),
+    prepare: (engine, runDir, wait) => credentialsFor(engine, opts).prepare(runDir, wait),
   };
 }
 

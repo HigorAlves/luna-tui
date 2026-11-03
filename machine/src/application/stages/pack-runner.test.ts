@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { StageInput, type StageOutput } from "@hardness/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { type Credentials, NoCredentialError, fixedCredentials } from "../../adapters/credentials/index.ts";
+import { CredentialWaitError, type Credentials, NoCredentialError, fixedCredentials } from "../../adapters/credentials/index.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
@@ -610,6 +610,35 @@ describe("the engine a stage runs on", () => {
     const result = await runAgent({ ...deps(fakeSandbox(output())), credentials }, context("triage"), "triage");
     expect(seen).toBeUndefined();
     expect(result).toMatchObject({ outcome: "fail", detail: { error: "no claude:opus here" } });
+  });
+
+  it("waits for a credential another run holds within the stage's own timeout, and says so on the task", async () => {
+    const waits: unknown[] = [];
+    const credentials: Credentials = {
+      check: async () => ({ available: true }),
+      prepare: async (_engine, _runDir, wait) => {
+        waits.push({ timeoutMs: wait?.timeoutMs, signal: wait?.signal });
+        wait?.onWait?.("waiting for the Codex login: another Codex run on this machine is using it");
+        return { env: {}, mounts: [], release: async () => {} };
+      },
+    };
+    const note = vi.fn(async () => {});
+    const ctx = { ...context("triage"), note };
+    await runAgent({ ...deps(fakeSandbox(output())), credentials }, ctx, "triage");
+    expect(waits).toEqual([{ timeoutMs: (seen!.input as unknown as StageInput).limits.timeoutMs, signal: ctx.signal }]);
+    expect(note).toHaveBeenCalledWith("waiting for the Codex login: another Codex run on this machine is using it");
+  });
+
+  it("fails the stage with the reason when it could not get the credential in time, and starts no container", async () => {
+    const credentials: Credentials = {
+      check: async () => ({ available: true }),
+      prepare: async () => {
+        throw new CredentialWaitError("waited 60 min for the Codex login, which another Codex run on this machine held past this stage's timeout");
+      },
+    };
+    const result = await runAgent({ ...deps(fakeSandbox(output())), credentials }, context("triage"), "triage");
+    expect(seen).toBeUndefined();
+    expect(result).toMatchObject({ outcome: "fail", detail: { error: expect.stringMatching(/^waited 60 min for the Codex login/) } });
   });
 
   it("releases the credential when the sandbox throws", async () => {
