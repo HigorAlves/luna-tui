@@ -211,13 +211,13 @@ export const SCENARIOS: Scenario[] = [
         { kind: "child", payload: { phase: "start", runId: "child-1", pack: PACK.id, role: HELPER.role, engine: HELPER.engine } },
         { kind: "child", payload: { phase: "end", runId: "child-1", pack: PACK.id, role: HELPER.role, engine: HELPER.engine, ok: true, costUsd: CHILD_COST } },
       ]);
-      // The call, the child's start and end, then the call's result.
-      const call = events.findIndex((e) => e.kind === "tool_call" && /delegate$/.test(e.payload.tool));
+      // The child's start and end, then the call's result. The call itself is in the stream too,
+      // but on eve it races the bridge that starts the child, so it is checked apart from the order.
       const start = events.indexOf(children[0]!);
       const end = events.indexOf(children[1]!);
       const result = events.findIndex((e, i) => i > end && e.kind === "tool_result" && /delegate$/.test(e.payload.tool));
-      expect(call).toBeGreaterThanOrEqual(0);
-      expect([call < start, start < end, end < result]).toEqual([true, true, true]);
+      expect(events.some((e) => e.kind === "tool_call" && /delegate$/.test(e.payload.tool) && e.payload.target === HELPER.role)).toBe(true);
+      expect([start < end, end < result]).toEqual([true, true]);
       // The parent's own fake costs nothing: what the run reports is the child's.
       expect(run.costUsd).toBeCloseTo(CHILD_COST);
       const child = JSON.parse(readFileSync(join(out, "children", "1", "result.json"), "utf8"));

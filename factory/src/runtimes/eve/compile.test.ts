@@ -1,11 +1,11 @@
-import { PACKS } from "@hardness/contracts";
+import { PACKS, helperPack } from "@hardness/contracts";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { agentFiles, compileAgent, eveTools, tokenBudgetPerTurn } from "./compile.ts";
+import { agentFiles, appName, compileAgent, eveTools, tokenBudgetPerTurn } from "./compile.ts";
 
 const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const options = (over = {}) => ({ factoryRoot: FACTORY_ROOT, outDir: join(FACTORY_ROOT, ".eve-agents"), ...over });
@@ -68,6 +68,23 @@ describe("agentFiles", () => {
 
   it("runs the conformance fake instead of the engine's model when asked", () => {
     expect(agentFiles(PACKS.implementing, options({ model: "scripted" }))["agent/agent.ts"]).toContain("model: scriptedModel()");
+  });
+
+  it("gives a pack with helpers a delegate tool over the bridge that names each helper, and a helper's run none", () => {
+    const helper = { role: "security-reviewer", engine: "codex:sol" } as const;
+    const pack = { ...PACKS.triage, helpers: [helper] };
+    const tool = agentFiles(pack, options())["agent/tools/delegate.ts"]!;
+    expect(tool).toContain('import { delegateTool } from "../../../../src/runtimes/eve/agent/tools.ts";');
+    expect(tool).toContain('["security-reviewer"]');
+    expect(tool).toMatch(/- security-reviewer \(codex:sol\): Reviews a diff/);
+    expect(agentFiles(PACKS.triage, options())["agent/tools/delegate.ts"]).toBeUndefined();
+    const child = helperPack(pack, helper);
+    expect(appName(pack)).toBe("triage");
+    expect(appName(child)).toBe("triage--security-reviewer");
+    const files = agentFiles(child, options());
+    expect(Object.keys(files).filter((f) => f.startsWith("agent/tools/")).sort()).toEqual(["bash", "glob", "grep", "read_file", "web_fetch"].map((t) => `agent/tools/${t}.ts`));
+    expect(files["agent/agent.ts"]).toContain("role security-reviewer as a helper");
+    expect(JSON.parse(files["package.json"]!).name).toBe("luna-triage--security-reviewer");
   });
 
   it("appends the role's eve addendum when it has one", () => {

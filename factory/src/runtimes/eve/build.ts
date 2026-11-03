@@ -1,12 +1,13 @@
-// Compiles every agent pack an eve engine may run into an eve app and runs `eve build` in each,
-// so a stage starts a ready server; a pack no eve engine may run gets no agent. The runner image runs this at build time (machine/runner/Dockerfile); no model
-// call and no Docker daemon is needed. Usage: node src/runtimes/eve/build.ts [outDir] [pack...]
-import { type AgentPack, PACKS, resolveEngine } from "@hardness/contracts";
+// Compiles every agent pack an eve engine may run, and every helper on an eve engine (as its child
+// run's pack), into an eve app and runs `eve build` in each, so a stage starts a ready server; a
+// pack no eve engine may run gets no agent. The runner image runs this at build time
+// (machine/runner/Dockerfile); no model call and no Docker daemon is needed. Usage: node src/runtimes/eve/build.ts [outDir] [pack...]
+import { type AgentPack, PACKS, helperPack, resolveEngine } from "@hardness/contracts";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { type CompileOptions, compileAgent } from "./compile.ts";
+import { type CompileOptions, appName, compileAgent } from "./compile.ts";
 
 /** Runs `eve build` in a compiled app; throws with eve's output when it fails. */
 export function buildAgent(app: string, factoryRoot: string): void {
@@ -25,12 +26,14 @@ export function compileAndBuild(pack: AgentPack, options: CompileOptions): strin
   return app;
 }
 
-/** The agent packs an eve engine may run (of `only`, when given): the ones the image builds. */
+/** The agent packs an eve engine may run, and each helper on an eve engine as its child run's pack
+ *  (helperPack), of `only` when given (a pack's id, or `<pack>--<role>` for a helper): the ones
+ *  the image builds. */
 export function evePacks(only: string[] = []): AgentPack[] {
-  return Object.values(PACKS).filter(
-    (p): p is AgentPack =>
-      p.kind === "agent" && p.agent !== null && p.engines.allowed.some((id) => resolveEngine(id).runtime === "eve") && (only.length === 0 || only.includes(p.id)),
-  );
+  const agents = Object.values(PACKS).filter((p): p is AgentPack => p.kind === "agent" && p.agent !== null);
+  const own = agents.filter((p) => p.engines.allowed.some((id) => resolveEngine(id).runtime === "eve"));
+  const helpers = agents.flatMap((p) => p.helpers.filter((h) => resolveEngine(h.engine).runtime === "eve").map((h) => helperPack(p, h)));
+  return [...own, ...helpers].filter((p) => only.length === 0 || only.includes(appName(p)));
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
@@ -40,6 +43,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   for (const pack of evePacks(only)) {
     const t0 = Date.now();
     compileAndBuild(pack, { factoryRoot, outDir });
-    process.stdout.write(`eve agent ${pack.id} built in ${Date.now() - t0} ms\n`);
+    process.stdout.write(`eve agent ${appName(pack)} built in ${Date.now() - t0} ms\n`);
   }
 }
