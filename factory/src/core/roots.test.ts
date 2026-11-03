@@ -143,3 +143,30 @@ describe("allow-roots", () => {
     expect(exec("cat /proc/1/environ", open)).toEqual({ allow: true });
   });
 });
+
+describe("a symlink whose target does not exist yet", () => {
+  // realpath fails on a dangling link; resolving its parent instead would keep the link's own
+  // name under /work and let a write through it create a file anywhere.
+  const gone = join(base, "nowhere");
+  symlinkSync(join(gone, "auth.json"), join(work, "dangling-file"));
+  symlinkSync(gone, join(work, "dangling-dir"));
+  symlinkSync(join(work, "loop-b"), join(work, "loop-a"));
+  symlinkSync(join(work, "loop-a"), join(work, "loop-b"));
+  symlinkSync("src/new.ts", join(work, "relative-inside"));
+
+  it("is followed to where it points, even though nothing is there", () => {
+    expect(read(join(work, "dangling-file"))).toMatchObject(refused);
+    const outside = { allow: false, reason: expect.stringMatching(/outside/) };
+    expect(write(join(work, "dangling-file"), WRITABLE)).toMatchObject(outside);
+    expect(write(join(work, "dangling-dir", "auth.json"), WRITABLE)).toMatchObject(outside);
+    expect(exec(`cat ${join(work, "dangling-file")}`)).toMatchObject(refused);
+  });
+
+  it("refuses a loop of links instead of hanging", () => {
+    expect(read(join(work, "loop-a")).allow).toBe(false);
+  });
+
+  it("still allows a dangling link whose target is inside the roots", () => {
+    expect(write(join(work, "relative-inside"), WRITABLE)).toEqual({ allow: true });
+  });
+});

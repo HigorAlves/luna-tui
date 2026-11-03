@@ -4,7 +4,7 @@
 // Codex home and its token, HOME, /proc's environ files, /etc, other runs' /tmp. A denylist of
 // names could always be spelled another way (a glob, a symlink, /proc/self/cwd/..); a root
 // cannot.
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readlinkSync, realpathSync } from "node:fs";
 import { posix } from "node:path";
 
 /** Devices a command may name: they hold nothing and reach nothing. */
@@ -13,19 +13,42 @@ const DEVICES = new Set(["/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"
 /** The deepest existing ancestor of `path`, resolved, with the rest appended. `path` is absolute
  *  and not normalized first, so `link/..` is resolved by the kernel the way open() would. */
 export function realPath(path: string): string {
-  let head = path;
-  const rest: string[] = [];
-  for (;;) {
-    try {
-      return posix.join(realpathSync(head === "" ? "/" : head), ...rest);
-    } catch {
-      if (head === "" || head === "/") return posix.normalize(path);
-      const at = head.lastIndexOf("/");
-      rest.unshift(head.slice(at + 1));
-      head = head.slice(0, at);
+  // One component at a time, so a link is followed even when what it points at does not exist
+  // yet (realpath fails there, and resolving the parent instead would keep the link's own name
+  // under /work while a write through it lands elsewhere). A loop, or too many links, resolves to
+  // a path no root holds.
+  const pending = posix.normalize(path).split("/").filter(Boolean);
+  let current = "/";
+  let hops = 0;
+  while (pending.length > 0) {
+    const part = pending.shift()!;
+    if (part === "..") {
+      current = posix.dirname(current);
+      continue;
     }
+    const next = posix.join(current, part);
+    let link: string | null = null;
+    try {
+      if (lstatSync(next).isSymbolicLink()) link = readlinkSync(next);
+    } catch {
+      // Nothing there: the rest is taken as written.
+    }
+    if (link === null) {
+      current = next;
+      continue;
+    }
+    if (++hops > MAX_LINKS) return LOOP;
+    const target = link.startsWith("/") ? link : posix.join(current, link);
+    pending.unshift(...posix.normalize(target).split("/").filter(Boolean));
+    current = "/";
   }
+  return current;
 }
+
+/** Links followed before a path counts as a loop: Linux's own limit. */
+const MAX_LINKS = 40;
+/** What a loop resolves to: under no root, so whatever names it is refused. */
+const LOOP = "/\u0000symlink-loop";
 
 /** A root as the kernel sees it (macOS's /var is /private/var), or as given when it is missing. */
 const realRoot = (root: string): string => {
