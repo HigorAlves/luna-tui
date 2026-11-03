@@ -560,8 +560,8 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
   },
   issue_classify: {
     id: "issue_classify",
-    // Labels an issue for intake on Jev: one call, no worktree. Above minConfidence the labels
-    // apply and the ticket routes; below it jira_intake reads the issue as it does without Jev.
+    // Labels an issue on Jev: one call, no worktree, reached through POST /runs. Nothing in intake
+    // calls it yet; a caller acts on answers above minConfidence and takes the agent path below.
     kind: "decision",
     questions: ISSUE_QUESTIONS,
     minConfidence: 0.7,
