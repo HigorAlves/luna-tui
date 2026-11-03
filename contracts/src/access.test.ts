@@ -1,11 +1,17 @@
 import { describe, expect, it } from "vitest";
 
-import { NO_ACCESS, access } from "./index.ts";
+import { NO_ACCESS, access, readOnly } from "./index.ts";
 
 describe("access", () => {
   it("joins fragments: a capability any fragment grants, every command and luna tool once", () => {
     const read = access({ read: true, skills: true, commands: ["cat", "ls"], luna: ["step"] });
     expect(access(read, { write: true, commands: ["ls", "git add"], luna: ["step", "slice_set"] })).toEqual({ ...NO_ACCESS, read: true, write: true, skills: true, commands: ["cat", "ls", "git add"], luna: ["step", "slice_set"] });
     expect(access()).toEqual(NO_ACCESS);
+  });
+
+  it("narrows an access to read-only: no writes, subagents, skills or luna tools, and only the commands that read", () => {
+    const parent = access({ read: true, write: true, agent: true, skills: true, web: true, commands: ["cat", "git diff", "git log", "git add", "git commit", "npm"], luna: ["step", "slice_list"] });
+    expect(readOnly(parent)).toEqual({ ...NO_ACCESS, read: true, web: true, commands: ["cat", "git diff", "git log"] });
+    expect(readOnly(NO_ACCESS)).toEqual(NO_ACCESS);
   });
 });

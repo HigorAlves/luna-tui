@@ -20,7 +20,7 @@ describe("runtime instructions", () => {
   it("Claude: the role and every helper as their definitions carry them, the appended rules, every skill named", () => {
     const pack = PACKS.reviewing;
     const given = claude.instructions(pack, FACTORY_ROOT);
-    for (const role of [pack.agent!, ...pack.helpers]) expect(given.role).toContain(readRole(ROLES, role).body);
+    for (const role of [pack.agent!, ...pack.helpers.map((h) => h.role)]) expect(given.role).toContain(readRole(ROLES, role).body);
     expect(given.rules).toBe(FACTORY_RULES);
     expect(given.skills).toEqual(expect.arrayContaining(pack.skills));
     expect(given.skills).toContain("review-contract");

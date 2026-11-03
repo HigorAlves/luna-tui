@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, StageInput, credentialOwner, engineBudgetKeyProblem, resolveEngine, retired } from "./index.ts";
+import { AGENT_PACKS, ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, StageInput, credentialOwner, engineBudgetKeyProblem, helperPack, readOnly, resolveEngine, retired } from "./index.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
@@ -77,6 +77,35 @@ describe("the engines each pack may run on", () => {
       }
       expect(retired(model, today), `${id} → ${engine.model} retired after ${model.retireAfter}`).toBe(false);
     }
+  });
+
+  it.each(AGENT_PACKS.map((p) => [p.id, p] as const))("%s: helpers run as agent roles, each once, on engines that can serve an agent at the pack's effort", (_id, pack) => {
+    expect(new Set(pack.helpers.map((h) => h.role)).size).toBe(pack.helpers.length);
+    for (const helper of pack.helpers) {
+      expect(helper.role, `${pack.id}: a helper is not the pack's own role`).not.toBe(pack.agent);
+      const engine = resolveEngine(helper.engine);
+      // A decision runtime has no role, tools or prompt: it cannot be a helper.
+      expect(engine.runtime, `${pack.id}: ${helper.role} on ${helper.engine}`).not.toBe("jev");
+      expect(engine.caps, helper.engine).toMatchObject({ tools: true, structured: true });
+      expect(engine.caps.effort, `${helper.engine} at ${pack.effort}`).toContain(pack.effort);
+      expect(retired(MODELS[ENGINES[helper.engine].model], today), helper.engine).toBe(false);
+      // A helper on Claude beside a Claude default is a subagent: the role needs the Agent tool.
+      if (engine.runtime === "claude" && resolveEngine(pack.engines.default).runtime === "claude") expect(pack.access.agent, `${pack.id} dispatches ${helper.role}`).toBe(true);
+    }
+  });
+
+  it("keeps today's subagents on their engines", () => {
+    expect(PACKS.reviewing.helpers).toEqual([{ role: "security-reviewer", engine: "claude:opus" }]);
+    expect(PACKS.addressing.helpers).toEqual([{ role: "reply-drafter", engine: "claude:haiku" }]);
+  });
+
+  it("runs a helper as a read-only pack of its own on the helper's engine, answering in a reply and findings", () => {
+    const run = helperPack(PACKS.reviewing, { role: "security-reviewer", engine: "claude:opus" });
+    expect(run).toMatchObject({ id: "reviewing", kind: "agent", agent: "security-reviewer", helpers: [], skills: [], writable: false, engines: { default: "claude:opus", allowed: ["claude:opus"] }, effort: "high", template: "helper.md" });
+    expect(run.access).toEqual(readOnly(PACKS.reviewing.access));
+    expect(run.answer.safeParse({ answer: "looks fine" }).success).toBe(true);
+    expect(run.answer.safeParse({ answer: "one bug", findings: [{ path: "a.ts", line: 1, severity: "bug", title: "t", body: "b", confidence: 0.9 }] }).success).toBe(true);
+    expect(run.answer.safeParse({ findings: [] }).success).toBe(false);
   });
 
   it("lets Codex take the Slack inbox and triage, as candidates beside their Claude defaults, each the other's fallback", () => {
