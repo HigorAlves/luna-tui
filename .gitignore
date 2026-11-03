@@ -22,3 +22,6 @@ machine/runner/vendor/
 site/.next/
 site/next-env.d.ts
 site/*.tsbuildinfo
+
+# Replay eval run folders (evals/run.ts)
+evals/.runs/
