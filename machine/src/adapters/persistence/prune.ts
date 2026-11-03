@@ -37,3 +37,21 @@ export async function pruneOldRuns(db: DataSource, retentionDays: number, stateD
   }
   return result;
 }
+
+/** Deletes the `pack_runs` rows (one per `POST /runs` call) started more than `days` ago: the
+ *  same window as the stage runs' history. 0 disables it. Returns how many went. */
+export async function prunePackRuns(db: DataSource, days: number): Promise<number> {
+  if (days <= 0) return 0;
+  const [, count] = (await db.query("delete from pack_runs where started_at < now() - make_interval(days => $1) returning id", [days])) as [unknown[], number];
+  return count;
+}
+
+/** How long a deleted task's tombstone is kept for `GET /events?since=` to replay its deletion. */
+export const TOMBSTONE_RETENTION_DAYS = 30;
+
+/** Deletes the tombstones of tasks deleted more than `days` ago: a client that has been away
+ *  longer re-reads `GET /tasks` instead of replaying. Returns how many went. */
+export async function pruneTombstones(db: DataSource, days: number = TOMBSTONE_RETENTION_DAYS): Promise<number> {
+  const [, count] = (await db.query("delete from task_tombstones where deleted_at < now() - make_interval(days => $1) returning id", [days])) as [unknown[], number];
+  return count;
+}

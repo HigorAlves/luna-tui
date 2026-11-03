@@ -19,6 +19,7 @@ import {
   NewTaskInput,
   PACKS,
   PackId,
+  RunInput,
   SetupRepoInput,
   SlackItemPatch,
   SlackReplyInput,
@@ -33,6 +34,7 @@ import {
 } from "@hardness/contracts";
 import { type Context, Hono } from "hono";
 import { streamSSE } from "hono/streaming";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DataSource } from "typeorm";
 import { ZodError, type ZodType, z } from "zod";
 
@@ -57,6 +59,7 @@ import { NoJiraTokenError } from "../../application/jira.ts";
 import { AlreadyLinkedElsewhereError, AlreadyLinkedError, HasWorktreeError, type JiraTasksPort, NoIssueError, NoProjectError, NotchTaskError } from "../../application/jira-tasks.ts";
 import type { StubStages } from "../../application/stages/stubs.ts";
 import { type ApiAccess, guard } from "./access.ts";
+import { EngineNotAllowedError, NotOnDemandError, type PackRunsPort, QueueFullError, RunAbortedError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "../../application/pack-runs.ts";
 import type { Bus } from "./bus.ts";
 import { InvalidSince, parseSince } from "./metrics.ts";
 import { ReplayFeed } from "./replay.ts";
@@ -98,12 +101,20 @@ export interface AppDeps {
   credentials?: Pick<Credentials, "check">;
   /** Who may call (see access.ts); defaults to a loopback machine on the default port with no token. */
   access?: ApiAccess;
+  /** Packs on demand (`POST /runs`); without it (MACHINE_AGENTS=off) the route answers 503 `agents_off`. */
+  runs?: PackRunsPort;
 }
 
 class BadRequest extends Error {}
 
-const fail = (c: Context, status: 400 | 404 | 409 | 500, error: string, message: string) =>
-  c.json<ApiError>({ error, message }, status);
+/** The client closed the request first (nginx's 499): nobody reads it, the log does. */
+const CLIENT_CLOSED = 499;
+
+const fail = (c: Context, status: 400 | 404 | 409 | 422 | 429 | 500 | 503 | typeof CLIENT_CLOSED, error: string, message: string, extra: Record<string, unknown> = {}) =>
+  c.json<ApiError>({ error, message, ...extra }, status as ContentfulStatusCode);
+
+/** `X-Luna-Client`: who calls `POST /runs` (`notch`), for its record. */
+const CLIENT_NAME = /^[\w.-]{1,64}$/;
 
 async function body<T>(c: Context, schema: ZodType<T>): Promise<T> {
   let json: unknown;
@@ -139,7 +150,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), access = DEFAULT_ACCESS }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
   const app = new Hono();
   app.use(guard(access));
   /** A task row as the board reads it, clocks included. */
@@ -177,6 +188,14 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof AlreadyLinkedError) return fail(c, 409, "already_linked", error.message);
     if (error instanceof NoProjectError) return fail(c, 409, "no_project", error.message);
     if (error instanceof NotchTaskError) return fail(c, 409, "notch_task", error.message);
+    if (error instanceof NotOnDemandError) return fail(c, 400, "not_on_demand", error.message);
+    if (error instanceof EngineNotAllowedError) return fail(c, 400, "engine_not_allowed", error.message);
+    if (error instanceof RunNoCredentialError) return fail(c, 409, "no_credential", error.message);
+    if (error instanceof RunRateLimitedError) return fail(c, 429, "rate_limited", error.message, { resetsAt: error.resetsAt });
+    if (error instanceof RunFailedError) return fail(c, 422, "run_failed", error.message);
+    if (error instanceof QueueFullError) return fail(c, 429, "queue_full", error.message);
+    if (error instanceof RunOverBudgetError) return fail(c, 429, "budget", error.message);
+    if (error instanceof RunAbortedError) return fail(c, CLIENT_CLOSED, "client_closed", error.message);
     if (error instanceof ZodError) return fail(c, 400, "invalid_request", z.prettifyError(error));
     if (error instanceof BadRequest) return fail(c, 400, "invalid_request", error.message);
     console.error(error);
@@ -190,6 +209,16 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
 
   /** Every engine, and whether this machine has the credential it needs; never the credential. */
   app.get("/engines", async (c) => c.json(await Promise.all(EngineId.options.map(async (id) => engineInfo(id, await credentials.check(id))))));
+
+  /** One context-only pack on data the client sends: its validated answer and what it cost. */
+  app.post("/runs", async (c) => {
+    const input = await body(c, RunInput);
+    const client = c.req.header("x-luna-client") ?? null;
+    if (client !== null && !CLIENT_NAME.test(client)) throw new BadRequest("X-Luna-Client must be 1 to 64 letters, digits, dots, dashes or underscores");
+    if (!runs) return fail(c, 503, "agents_off", "this machine runs no packs: agents are off (MACHINE_AGENTS=off)");
+    // The request's own signal: a client that leaves is dropped from the queue, or its container stopped.
+    return c.json(await runs.run(input, client, c.req.raw.signal));
+  });
 
   // "Stop picking up work" / "carry on" / "run N at once": the knobs for leaving and for debugging.
   app.post("/drain", (c) => c.json(pipeline.drain()));

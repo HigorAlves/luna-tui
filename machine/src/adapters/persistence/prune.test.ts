@@ -8,7 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { NO_RETRIES } from "../../domain/transition.ts";
 import { freshTestDatabase } from "../../test/database.ts";
 import { EventEntity, StageRunEntity, TaskEntity } from "./schemas.ts";
-import { pruneOldRuns } from "./prune.ts";
+import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./prune.ts";
 
 let db: DataSource;
 
@@ -140,5 +140,33 @@ describe("pruneOldRuns", () => {
       await pruneOldRuns(db, 0, stateDir);
       expect(existsSync(dir)).toBe(true);
     });
+  });
+});
+
+describe("prunePackRuns", () => {
+  it("deletes the pack_runs rows started more than `days` ago, keeps the rest, and is off at 0", async () => {
+    await db.query("delete from pack_runs");
+    const insert = (daysAgo: number) =>
+      db.query(
+        "insert into pack_runs (pack, engine, model, ok, turns, duration_ms, started_at, ended_at) values ('chat_triage', 'claude:haiku', 'm', true, 1, 10, now() - make_interval(days => $1), now() - make_interval(days => $1))",
+        [daysAgo],
+      );
+    await insert(91);
+    await insert(89);
+    expect(await prunePackRuns(db, 0)).toBe(0);
+    expect(await prunePackRuns(db, 90)).toBe(1);
+    expect((await db.query("select count(*)::int as n from pack_runs"))[0].n).toBe(1);
+  });
+});
+
+describe("pruneTombstones", () => {
+  it(`deletes the tombstones of tasks deleted more than ${TOMBSTONE_RETENTION_DAYS} days ago and keeps the recent ones`, async () => {
+    await db.query("delete from task_tombstones");
+    const old = await seedClosedTask(new Date());
+    const recent = await seedClosedTask(new Date());
+    await db.query("delete from tasks where id in ($1, $2)", [old, recent]);
+    await db.query("update task_tombstones set deleted_at = now() - make_interval(days => 31) where id = $1", [old]);
+    expect(await pruneTombstones(db)).toBe(1);
+    expect((await db.query("select id from task_tombstones")).map((r: { id: string }) => r.id)).toEqual([recent]);
   });
 });

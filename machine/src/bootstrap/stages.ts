@@ -20,6 +20,7 @@ import { setupRunner } from "../application/stages/setup.ts";
 import { shipRunnerWith } from "../application/stages/ship.ts";
 import { loadCredential } from "../adapters/credentials/claude.ts";
 import { imageExists, removeLeftoverContainers, sandboxExecutor } from "../adapters/docker/docker.ts";
+import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { type GitHub, noTokenGitHub } from "../application/github.ts";
@@ -113,6 +114,18 @@ export async function buildRealStages(
     ),
   };
   return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+}
+
+/** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only
+ *  with MACHINE_AGENTS=off. Not tied to the stages' Claude credential: each call needs only its
+ *  own engine's, which PackRuns checks per call (409 `no_credential` when it is missing), so a
+ *  machine with only a Codex login still runs a `codex:*` pack. */
+export function buildPackRuns(
+  config: Pick<Config, "agents" | "runnerImage" | "stateDir">,
+  deps: Omit<PackRunsDeps, "image" | "stateDir" | "credentials"> & { credentials?: Credentials },
+): PackRuns | undefined {
+  if (!config.agents) return undefined;
+  return new PackRuns({ ...deps, image: config.runnerImage, stateDir: config.stateDir, credentials: deps.credentials ?? machineCredentials() });
 }
 
 export interface RunnerForDeps {
