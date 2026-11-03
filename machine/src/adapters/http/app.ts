@@ -15,6 +15,8 @@ import {
   type TaskDiff,
   type TaskSla,
   NewTaskInput,
+  PACKS,
+  PackId,
   SetupRepoInput,
   SlackItemPatch,
   SlackReplyInput,
@@ -36,6 +38,7 @@ const SlotsInput = z.object({ max: z.number().int().min(1) });
 
 import { computeMetrics } from "../persistence/metrics-query.ts";
 import type { TaskRow } from "../../domain/task.ts";
+import { packInfo } from "../../domain/packs.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
 import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, type Pipeline, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
@@ -156,6 +159,9 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   });
 
   app.get("/health", (c) => c.json({ ok: true, slots: pipeline.slots }));
+
+  /** Every pack in the registry, with the task states it runs in. */
+  app.get("/packs", (c) => c.json(PackId.options.map((id) => packInfo(PACKS[id]))));
 
   // "Stop picking up work" / "carry on" / "run N at once": the knobs for leaving and for debugging.
   app.post("/drain", (c) => c.json(pipeline.drain()));
