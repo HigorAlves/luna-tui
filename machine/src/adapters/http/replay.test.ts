@@ -9,7 +9,7 @@ import { StubStages } from "../../application/stages/stubs.ts";
 import { freshTestDatabase } from "../../test/database.ts";
 import { createApp } from "./app.ts";
 import { Bus } from "./bus.ts";
-import { toTask } from "./serialize.ts";
+import { toEvent, toTask } from "./serialize.ts";
 
 let db: DataSource;
 const stubs = new StubStages();
@@ -210,6 +210,45 @@ describe("GET /events?since=", () => {
     await newTask("new", notch);
     await until(() => changes(messages).includes("new"), "the new task");
     expect(changes(messages)).toEqual(["new"]);
+  });
+
+  /** What main.ts publishes for a stage starting on a task: an activity entry and the watch tab's cue. */
+  const stageStarts = async (id: string) => {
+    const created = (await pipeline.events(id)).find((e) => e.kind === "task.created")!;
+    bus.publish({ type: "task.event", event: toEvent(created) });
+    bus.publish({ type: "stage.started", taskId: id, label: `#${id.slice(0, 8)}`, cwd: "/wt", container: `c-${id}` });
+  };
+  it("with source=notch passes a new notch task's first events, before the stream has sent its snapshot", async () => {
+    const messages = listen(`/events?since=${await pipeline.lastSeq()}&source=notch`);
+    await until(() => ready(messages), "ready");
+    const n = await newTask("n", notch);
+    // main.ts publishes task.created's activity entry at once, the task snapshot only after a read.
+    await stageStarts(n.id);
+    await until(() => messages.some((m) => m.event === "stage.started" && m.taskId === n.id), "the stage start");
+    expect(messages.filter((m) => m.event === "task.event")).toHaveLength(1);
+  });
+
+  it("with source=notch passes the live stage events of a notch task unchanged since the client's cursor", async () => {
+    const n = await newTask("n", notch);
+    const messages = listen(`/events?since=${await seqOf(n.id)}&source=notch`);
+    await until(() => ready(messages), "ready");
+    await stageStarts(n.id);
+    await until(() => messages.some((m) => m.event === "stage.started" && m.taskId === n.id), "the stage start");
+    expect(changes(messages)).toEqual([]);
+  });
+
+  it("with source=notch never passes a board task's events", async () => {
+    const p = await newTask("p");
+    const n = await newTask("n", notch);
+    const messages = listen("/events?since=0&source=notch");
+    await until(() => ready(messages), "ready");
+    await stageStarts(p.id);
+    bus.publish({ type: "task.closed", id: p.id });
+    await stageStarts(n.id);
+    await until(() => messages.some((m) => m.event === "stage.started" && m.taskId === n.id), "the notch stage start");
+    expect(messages.filter((m) => m.event === "stage.started").map((m) => m.taskId)).toEqual([n.id]);
+    expect(messages.some((m) => m.event === "task.closed")).toBe(false);
+    expect(messages.filter((m) => m.event === "task.event")).toHaveLength(1);
   });
 
   it("is 400 for a since that is not a sequence number or an unknown source", async () => {
