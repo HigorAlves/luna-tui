@@ -282,6 +282,9 @@ describe("PR tasks", () => {
     const notch = TaskSource.parse({ kind: "notch", ref: "LUNA-14", id: "t-1", jiraKey: "PLAT-123" });
     expect(notch).toEqual({ kind: "notch", ref: "LUNA-14", id: "t-1", jiraKey: "PLAT-123" });
     expect(TaskSource.parse({ kind: "notch", ref: "LUNA-14", id: "t-1", jiraKey: null }).kind).toBe("notch");
+    // A work order with no ticket to name is not a notch task: the notch always sends both.
+    expect(TaskSource.safeParse({ kind: "notch", ref: "", id: "t-1" }).success).toBe(false);
+    expect(TaskSource.safeParse({ kind: "notch", ref: "LUNA-14", id: "" }).success).toBe(false);
     expect(TaskSource.parse({ kind: "notch", ref: "LUNA-14", id: "t-1" }).kind).toBe("notch");
     expect(() => TaskSource.parse({ kind: "notch", ref: "LUNA-14" })).toThrow();
   });
