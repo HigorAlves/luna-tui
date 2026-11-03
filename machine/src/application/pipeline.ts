@@ -688,6 +688,12 @@ export class Pipeline {
         excludeRepos: await this.reposOverMonth(),
       });
       if (!claimed) return;
+      // shutdown() may have begun while this pass awaited the claim: put the task back, its
+      // place kept, rather than start a stage nothing will stop (shutdown stops the loops it saw).
+      if (this.stopping) {
+        await this.store.updateTask(claimed.id, { queued: true });
+        return;
+      }
       const controller = this.reserveSlot(claimed.id, claimed.state);
       const loop = this.startLoop(claimed.id, claimed.state, controller);
       if (this.inline) await loop;

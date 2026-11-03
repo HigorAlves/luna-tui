@@ -1267,6 +1267,34 @@ describe("restart policy", () => {
     expect((await restarted.get(b.id)).state).toBe("awaiting_approval");
   });
 
+  it("starts nothing from a fill pass already under way when shutdown begins", async () => {
+    reached = 0;
+    // The pass stops on its repo-policy lookup until let go, so shutdown begins while it is in flight.
+    let inFlight = 0;
+    let letGo = () => {};
+    const gate = new Promise<void>((resolve) => (letGo = resolve));
+    const policies = { for: async () => (inFlight++, await gate, DEFAULT_POLICY) };
+    pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 1, policies });
+    const a = await newTask();
+    await pipeline.start(a.id);
+    while (reached < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    const b = await pipeline.createTask({ title: "b", repoPath: "/r/b" });
+    expect(await pipeline.start(b.id)).toMatchObject({ state: "triage", queued: true });
+    pipeline.setSlots(2);
+    while (inFlight < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const stopped = pipeline.shutdown();
+    letGo();
+    await stopped;
+
+    // The pass's claim lands after shutdown parked a: neither a nor b may start a stage.
+    expect(pipeline.slots.active).toBe(0);
+    expect(await pipeline.get(a.id)).toMatchObject({ state: "triage", queued: true });
+    expect(await pipeline.get(b.id)).toMatchObject({ state: "triage", queued: true });
+    expect(await stagesRun(b.id)).toEqual([]);
+    expect(reached).toBe(1);
+  });
+
   it("escalates them instead under the escalate policy, as before", async () => {
     reached = 0;
     pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, restartPolicy: "escalate" });
