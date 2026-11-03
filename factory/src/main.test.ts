@@ -83,7 +83,11 @@ describe("factory main (dry run)", () => {
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
     const def = PACKS[pack] as AgentPack;
     expect(options).toMatchObject({ agent: def.agent, agents: [def.agent, ...def.helpers.filter((h) => resolveEngine(h.engine).runtime === "claude").map((h) => h.role)], model: resolveEngine(def.engines.default).modelId, effort: def.effort, maxTurns: 5, permissionMode: "dontAsk", settingSources: [], hooks: ["PreToolUse"], mcpServers: ["luna"] });
-    expect(options).toMatchObject(claudeTools(def.access));
+    // A helper on another runtime is reached through `delegate`, beside the pack's own tools.
+    const delegating = def.helpers.some((h) => resolveEngine(h.engine).runtime !== "claude") ? ["mcp__luna__delegate"] : [];
+    const { tools, allowedTools } = claudeTools(def.access);
+    expect(options).toMatchObject({ tools: [...tools, ...delegating], allowedTools: [...allowedTools, ...delegating] });
+    if (pack === "verifying") expect(options.allowedTools).toContain("mcp__luna__delegate");
     expect(options.tools.every((t: string) => !t.includes("("))).toBe(true);
     expect(options.plugins[0].path).toMatch(/factory\/plugin$/);
     expect(options.systemPrompt).toMatchObject({ type: "preset", preset: "claude_code" });

@@ -94,9 +94,10 @@ describe("the engines each pack may run on", () => {
     }
   });
 
-  it("keeps today's subagents on their engines", () => {
+  it("keeps today's subagents on their engines, and gives the verifier a second opinion on Codex", () => {
     expect(PACKS.reviewing.helpers).toEqual([{ role: "security-reviewer", engine: "claude:opus" }]);
     expect(PACKS.addressing.helpers).toEqual([{ role: "reply-drafter", engine: "claude:haiku" }]);
+    expect(PACKS.verifying.helpers).toEqual([{ role: "second-opinion", engine: "codex:sol" }]);
   });
 
   it("runs a helper as a read-only pack of its own on the helper's engine, answering in a reply and findings", () => {
