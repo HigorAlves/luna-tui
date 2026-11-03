@@ -2,7 +2,7 @@
 
 ## Credentials
 
-Put `claude-oauth-token` or `anthropic-api-key` in `~/.config/hardness/`. Without one, the agent stages do not run for real: every pack's default engine is a Claude one.
+Put `claude-oauth-token` or `anthropic-api-key` in `~/.config/hardness/`. Without one, nothing runs for real: every task stage's default engine is a Claude one (the Slack inbox's triage and Jira intake's too), so the machine makes every stage a stub. `POST /runs` is the exception: it runs a pack on any engine whose credential is there.
 
 Each engine runs on its own credential, and a stage gets only its own engine's: a Claude stage never sees the Codex login or an API key, a `codex:*` stage never the Claude token. The machine reads them when a stage starts, so a login or key added later counts without a restart. `GET /engines` says which engines this machine can run and, for the others, what is missing.
 
@@ -19,13 +19,13 @@ The Codex CLI owns its login and rewrites `auth.json` when it refreshes the toke
 
 A refresh rotates the token, so two runs on one copy could revoke the login: `codex:*` runs take turns, one at a time on the machine (stages and context-only packs alike). A run takes the login before it copies it and hands it on after its write-back, so the next run starts from the refreshed token. A stage waiting its turn says so on the task's activity (`stage.note`), and one that does not get the login within its own timeout fails with that reason. Under compose (`pnpm start`) your Codex home (`$CODEX_HOME`, else `~/.codex`) is mounted read-write into the machine container, which sets `CODEX_HOME` to it; see [Compose](#compose).
 
-Jev, the decision model behind `issue_classify`, is opt-in and metered: TypeSafe bills each call, unlike the Claude subscription. It runs only with a TypeSafe API key, and nothing about intake changes without one.
+Jev, the decision model behind `issue_classify`, is opt-in and metered: TypeSafe bills each call, unlike the Claude subscription. It runs only with a TypeSafe API key and only when a client asks for `issue_classify` through `POST /runs`; no intake calls it, so nothing else changes without the key.
 
 | Variable | Default | What it does |
 |---|---|---|
 | `OPENAI_API_KEY` | unset, `openai:*` off | the key an `openai:*` stage runs on; also read from `~/.config/hardness/openai-api-key`. The `codex:*` engines run the same models on the Codex login instead |
 | `CODEX_HOME` | `~/.codex` | where the machine finds the Codex login (`auth.json`) to copy into a `codex:*` stage |
-| `TYPESAFE_API_KEY` | unset, Jev off | the key the Jev runtime (`@typesafe-ai/sdk`) calls `systemOne` with; also read from `~/.config/hardness/typesafe-api-key`, and passed only to a `jev` stage. Unset: a decision pack's stage ends `ok: false` with the reason, and intake goes on without the labels |
+| `TYPESAFE_API_KEY` | unset, Jev off | the key the Jev runtime (`@typesafe-ai/sdk`) calls `systemOne` with; also read from `~/.config/hardness/typesafe-api-key`, and passed only to a `jev` stage. Unset: `GET /engines` shows `jev` unavailable and `POST /runs` answers 409 `no_credential` for `issue_classify`; nothing else uses it |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | the TypeSafe API root, for a proxy or a test server |
 
 ## Environment
@@ -165,11 +165,11 @@ Your Codex home (`$CODEX_HOME`, else `~/.codex`) is mounted read-write at `/root
 
 ## Runner image
 
-The image carries Node 24, Go and a pinned Rust toolchain (`RUST_VERSION` in `machine/runner/Dockerfile`, with clippy and rustfmt), so a repo whose suite is `cargo test` runs as is. Every check container also gets your git identity, the `user.name` and `user.email` git resolves for the repo, so a suite that commits in a scratch repo runs as you; a repo with no identity escalates the verifying stage instead of committing as nobody.
+The image carries Node 24, `gh`, Go and a pinned Rust toolchain (`RUST_VERSION` in `machine/runner/Dockerfile`, with clippy and rustfmt), so a repo whose suite is `cargo test` runs as is; the Codex CLI (`CODEX_VERSION`, pinned), which eve's `chatgpt()` asks for the login's token; and the factory with its three SDKs installed, plus an eve agent built for each pack that allows an eve engine (`triage`, `slack_triage`, `chat_triage`). Every check container also gets your git identity, the `user.name` and `user.email` git resolves for the repo, so a suite that commits in a scratch repo runs as you; a repo with no identity escalates the verifying stage instead of committing as nobody.
 
 `pnpm --filter @hardness/machine runner:build` runs `machine/runner/build.sh`, which builds the image from this checkout with the repository root as the build context: `factory/` and `contracts/` are copied in and installed with the workspace lockfile, so the image runs exactly what the checkout tests. Each image is labelled with a key over those files and the Dockerfile and skipped when that key is current, so `pnpm images` (run by `pnpm start` and `pnpm dev`) is instant when nothing changed; `REBUILD=1 pnpm images` builds anyway. The image is tagged `hardness-runner:dev` and `hardness-runner:<key>`. `runner-qa:build` runs the same script with `--qa`, then builds `hardness-runner-qa:dev` from `machine/runner-qa/Dockerfile` on top of it.
 
-Inside a stage container the runner sees `/in/stage.json`, `/out`, `/work` (the worktree) and `/session` (the task's SDK session dir, `CLAUDE_CONFIG_DIR`). `LUNA_FACTORY=1` marks the run; `LUNA_STAGE_DRY_RUN=1` renders the prompt and the SDK options without a model call (the sandbox smoke uses it); for a decision pack it prints the questions and the state it would send to Jev. A repo may keep binding rules for every stage in `docs/agents/project-context.md`; the memory review proposes additions to it.
+Inside a stage container the runner sees `/in/stage.json`, `/out`, `/work` (the worktree) and `/session` (the task's SDK session dir, `CLAUDE_CONFIG_DIR`). `LUNA_FACTORY=1` marks the run; `LUNA_STAGE_DRY_RUN=1` renders the prompt and the SDK options without a model call (the sandbox smoke uses it); on an eve engine it prints the agent, model, tools and guard policy instead, and for a decision pack the questions and the state it would send to Jev. A repo may keep binding rules for every stage in `docs/agents/project-context.md`; the memory review proposes additions to it.
 
 ## Board
 

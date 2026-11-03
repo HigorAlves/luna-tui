@@ -2,7 +2,7 @@
   "name": "@hardness/factory",
   "private": true,
   "type": "module",
-  "description": "Runs one pipeline stage inside the stage container through the Claude Agent SDK",
+  "description": "Runs one stage pack inside the stage container on its engine's runtime: the Claude Agent SDK, eve or TypeSafe's SDK",
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",

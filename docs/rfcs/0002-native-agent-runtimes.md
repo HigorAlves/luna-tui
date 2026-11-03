@@ -279,3 +279,23 @@ What the eve runtime has to do because of them:
 - Decide how a refreshed Codex token gets back to the host (copy back on change, or one copy with eve stages serialized) before more than one eve stage runs at a time.
 
 `@typesafe-ai/sdk` 0.7.0 (MIT, no runtime dependencies): `new TypeSafeClient()`, `client.systemOne({ state, questions, model? })`, helpers `noul`, `choice`, `score`, `box`; `TYPESAFE_API_KEY` (required), `TYPESAFE_BASE_URL`, `TYPESAFE_DEFAULT_MODEL` (`jev-latest`); 10 s per attempt, two retries. A yes/no answer is `{ noul: P(yes) }`, a probability with no separate confidence, so a pack sets its own threshold; a choice carries `confidence` and `probabilities`; a score is a fractional expected value that can fall between rubric levels.
+
+## Implementation notes (2026-11-03)
+
+Phases 0–5 are built, phase 6 in part, phase 7 not at all. Where the build differs from the design above:
+
+- **Skills did not move.** They are still `factory/plugin/skills/` with the manifest in `factory/plugin/.claude-plugin/`; the Claude runtime loads the plugin and the eve compiler copies the skills a pack names into its agent.
+- **Roles** are `factory/roles/<role>/role.md` as proposed. Only an `eve.md` addendum exists (on `triage-planner`); no `claude.md` addendum is read.
+- **Questions live in contracts**, not `factory/questions/`: `contracts/src/questions.ts` holds the question types and `answerSchema()`, and `issue_classify`'s set sits in its `contracts/src/packs.ts` entry. `factory/src/runtimes/jev/questions.ts` turns them into the SDK's helpers.
+- **Effort stays on the pack**, not the engine: it is about the job. An engine is a catalog model plus its `auth`; the contract test checks the pack's effort against the model's `caps.effort`.
+- **`codex:sol` runs `gpt-5.6-terra`**: `gpt-6-sol` is API-only on a ChatGPT login, so only `openai:sol` runs it. `codex:luna` and `openai:luna` share `gpt-6-luna`.
+- **`Runtime.run(ctx)` takes no `emit`**: there is no `RunEvent` stream ([RFC 0003](./0003-upgradable-harness.md) §6); each runtime prints its own transcript.
+- **Helpers carry no engine and there is no `delegate`.** `helpers` is a list of roles the Claude runtime runs as the SDK's subagents (only Claude-only packs have any); `core/delegate.ts`, cross-engine calls and a Codex second opinion (phase 7) are not started.
+- **`chat_triage` is a new pack beside `slack_triage`**, not a rename: the same answer shape for a Slack or Teams batch a client sends through `POST /runs` (`claude:haiku`, `codex:luna` allowed). `slack_triage` is unchanged and still serves the machine's Slack inbox.
+- **`issue_classify` is not in intake.** It exists (`kind: "decision"`, `jev`, `minConfidence: 0.7`) and is reachable only through `POST /runs`; neither Jira nor GitHub intake calls it, so no agreement rate on recorded tickets has been measured beyond its three eval cases.
+- **Which engines are live.** `triage` allows `codex:sol` and `slack_triage`/`chat_triage` allow `codex:luna`; every default is still Claude. No writable pack allows an eve engine.
+- **Credentials** are one loader per runtime in `machine/src/adapters/credentials/` (`claude`, `codex`, `openai`, `typesafe`). The Codex refresh question is settled: each `codex:*` run gets its own copy of `auth.json`, runs take the login one at a time, and a refreshed copy is written back only while the host file is unchanged. A task's or repo's engine pick whose credential is missing falls back to the pack's default with a `stage.engine` note; a missing TypeSafe key makes `POST /runs` answer 409 `no_credential`.
+- **eve agents** are compiled and built at image build for the packs that allow an eve engine (`triage`, `slack_triage`, `chat_triage`), not for every pack.
+- **The guards** are one `checkCall()` in `factory/src/core/guards.ts`, as `PreToolUse` hooks on Claude and tool approvals on eve. After review the Codex-home denylist above became roots: every path a tool names must lie in the run's roots, symlinks followed; eve's `bash` runs one argv with no shell; the eve server reads its secrets from a 0600 file, never its environment; web fetches reach only the public web. `docs/architecture.md`, "Factory mode", has the rules as they stand.
+- **The SDK boundary** holds by review: no lint rule enforces it yet; `contracts/src/engines.test.ts` enforces only that model IDs stay in `models.ts`.
+- **The `CLAUDE.md` rule** landed with the paths as built and one addition: no source file outside `models.ts` names a model ID.

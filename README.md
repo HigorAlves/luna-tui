@@ -11,12 +11,13 @@ Luna waits on Claude in your [notch](https://github.com/HigorAlves/luna-notch); 
 
 Luna TUI is a local dev harness for working with AI coding agents. You plan
 tickets on a board inside [herdr](https://herdr.dev/); a machine then moves each
-ticket through a fixed pipeline, running Claude agents in throwaway Docker
-containers, and stops at approval gates so you stay in control.
+ticket through a fixed pipeline, running agents (Claude by default, Codex where
+you pick it) in throwaway Docker containers, and stops at approval gates so you
+stay in control.
 
 ## Pipeline
 
-Every ticket moves Intake → Triage → Build → Verify → E2E/Evidence → Deliver → CI watch → Ship → Done, with an approval gate at the big steps. The agent stages run as stage packs in a throwaway Docker container through the Claude Agent SDK, with the roles, prompts, skills and guardrails that live in [`factory/`](factory/); Deliver, Ship and CI watch run on the host: git for the pushes, the GitHub API for the rest. Everything needed is in this repository: clone it, run it. Full stage-by-stage detail: [docs/architecture.md](docs/architecture.md).
+Every ticket moves Intake → Triage → Build → Verify → E2E/Evidence → Deliver → CI watch → Ship → Done, with an approval gate at the big steps. The agent stages run as stage packs in a throwaway Docker container, each on the engine its pack, the repo or the task picks: Claude models through the Claude Agent SDK on your subscription, Codex models through Vercel's eve on your Codex login; the roles, prompts, skills and guardrails live in [`factory/`](factory/). Deliver, Ship and CI watch run on the host: git for the pushes, the GitHub API for the rest. Everything needed is in this repository: clone it, run it. Full stage-by-stage detail: [docs/architecture.md](docs/architecture.md).
 
 ## Install
 
