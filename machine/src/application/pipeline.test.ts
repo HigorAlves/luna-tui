@@ -1024,6 +1024,18 @@ describe("budgets", () => {
   const backdateRuns = (taskId: string) =>
     db.query("update stage_runs set started_at = now() - interval '25 hours' where task_id = $1", [taskId]);
 
+  it("tells the engine caps about a run with a cost, naming the engine it ran on, the task and its repo", async () => {
+    const runs: Array<[EngineId, { taskId: string | null; repo: string | null }]> = [];
+    const engineBudgets = { afterRun: async (engine: EngineId, run: { taskId: string | null; repo: string | null }) => void runs.push([engine, run]) };
+    pipeline = new Pipeline(db, (stage) => (stage === "triage" ? async ({ started }) => {
+      await started?.({ container: "c", inputCommit: null, engine: "codex:sol" });
+      return costly(0.5);
+    } : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true, engineBudgets });
+    const task = await pipeline.createTask({ title: "a", repoPath: "/r/a", stages: { triage: "codex:sol" } });
+    await pipeline.start(task.id);
+    expect(runs).toEqual([["codex:sol", { taskId: task.id, repo: "/r/a" }]]);
+  });
+
   it("escalates a task that spent past its own ceiling before its next stage runs", async () => {
     pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, budget: { taskUsd: 2 } });
     stubs.plan("triage", costly(3));

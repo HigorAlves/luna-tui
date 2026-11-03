@@ -133,6 +133,13 @@ describe("PackRuns", () => {
     expect(readdirSync(join(stateDir, PACK_RUNS_DIR))).toEqual([]);
   });
 
+  it("tells the engine caps about a call with a cost, with no task nor repo", async () => {
+    const calls: unknown[] = [];
+    await runs(fakeSandbox(output()), { engineBudgets: { afterRun: async (engine, run) => void calls.push([engine, run]) } }).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, null);
+    await runs(fakeSandbox(output({ usage: { turns: 1, costUsd: null, durationMs: 1, model: "m" } })), { engineBudgets: { afterRun: async (engine, run) => void calls.push([engine, run]) } }).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, null);
+    expect(calls).toEqual([["codex:luna", { taskId: null, repo: null }]]);
+  });
+
   describe("on a usage limit", () => {
     /** A sandbox where the engines in `limited` hit their usage limit and any other answers. */
     const limitedOn = (limited: EngineId[]) => async (run: SandboxRun) => {

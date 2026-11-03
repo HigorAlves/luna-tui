@@ -272,6 +272,10 @@ export interface EngineInfo {
   available: boolean;
   /** What is missing, when it is not available. */
   reason?: string;
+  /** This calendar month's recorded cost against the cap that binds the engine, else the engine's own. */
+  spentThisMonthUsd: number;
+  /** The machine's monthly cap that binds the engine (its own or its credential's, MACHINE_ENGINE_BUDGETS); null when none. */
+  budgetUsd: number | null;
 }
 
 /** `GET /packs`: one row per pack in the registry. `kind` is `script` for a pack that calls no model,
@@ -327,10 +331,13 @@ export type StreamMessage =
 
 /** A spend passing a threshold of a ceiling; raised once per scope and threshold. */
 export interface BudgetAlert {
-  scope: "task" | "repo" | "day";
-  /** The task whose run crossed the line. */
-  taskId: string;
+  /** `engine`: a monthly cap per engine or credential (MACHINE_ENGINE_BUDGETS; with `repo`, that repo's luna.yaml `budget.engines`). */
+  scope: "task" | "repo" | "day" | "engine";
+  /** The task whose run crossed the line; null for a `POST /runs` call, which has none. */
+  taskId: string | null;
   repo: string | null;
+  /** The engine (`openai:sol`) or credential (`openai`) the cap names; only on `engine` alerts. */
+  engine?: string;
   pct: 80 | 90 | 100;
   spentUsd: number;
   limitUsd: number;

@@ -16,6 +16,7 @@ import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } 
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { Credentials } from "../adapters/credentials/index.ts";
 import { fallbackCandidates } from "../domain/engine-choice.ts";
+import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
@@ -119,6 +120,8 @@ export interface PipelineOptions {
   policies?: Pick<PolicyStore, "for">;
   /** Called once per threshold a scope crosses: 80, 90 and 100% of a task's, a repo's month's or the day's ceiling. */
   onAlert?: (alert: BudgetAlert) => void;
+  /** The monthly caps per engine: told about every stage run with a cost, to raise their alerts. */
+  engineBudgets?: Pick<EngineBudgetWatch, "afterRun">;
   /** Which engines this machine has a credential for: a queued task's next stage is held by the
    *  usage window of the engine it would really run on. Absent, every engine counts as available. */
   credentials?: Pick<Credentials, "check">;
@@ -225,6 +228,7 @@ export class Pipeline {
   /** The credential whose window each paused task hit, so resuming it opens that window again. */
   private readonly pausedOn = new Map<string, CredentialOwner>();
   private readonly credentials: Pick<Credentials, "check">;
+  private readonly engineBudgets: Pick<EngineBudgetWatch, "afterRun"> | null;
   private supervisor: NodeJS.Timeout | undefined;
 
   constructor(
@@ -251,6 +255,7 @@ export class Pipeline {
     this.onAlert = options.onAlert ?? (() => {});
     this.jiraSite = options.jiraSite ?? null;
     this.credentials = options.credentials ?? { check: () => Promise.resolve({ available: true }) };
+    this.engineBudgets = options.engineBudgets ?? null;
   }
 
   /** The repo's policy, from its luna.yaml. */
@@ -1445,6 +1450,8 @@ export class Pipeline {
 
     let result: StageResult;
     let error: string | undefined;
+    /** The engine the run is on, as the runner says when it starts: what its cost counts against. */
+    let ranOn: EngineId | null = fallback?.engine ?? resume?.engine ?? null;
     try {
       const [task, approvals, priorFindings] = await Promise.all([
         this.get(id),
@@ -1461,7 +1468,10 @@ export class Pipeline {
         signal,
         ...(resume ? { resume: { container: resume.container, inputCommit: resume.inputCommit, engine: resume.engine } } : {}),
         ...(fallback ? { engine: fallback.engine } : {}),
-        started: (facts) => this.store.markStageRunStarted(runId, { containerId: facts.container, inputCommit: facts.inputCommit, ...(facts.engine ? { engine: facts.engine } : {}) }),
+        started: (facts) => {
+          ranOn = facts.engine ?? ranOn;
+          return this.store.markStageRunStarted(runId, { containerId: facts.container, inputCommit: facts.inputCommit, ...(facts.engine ? { engine: facts.engine } : {}) });
+        },
         note: (text) => this.log(id, "stage.note", { stage, note: text }, runId),
       });
     } catch (thrown) {
@@ -1490,7 +1500,10 @@ export class Pipeline {
       ...(result.usage ? { turns: result.usage.turns, costUsd: result.usage.costUsd?.toString() ?? null } : {}),
       ...(stage === "verifying" ? { cases: casesOf(result.detail) } : {}),
     });
-    if (result.usage?.costUsd) await this.raiseAlerts(id);
+    if (result.usage?.costUsd) {
+      await this.raiseAlerts(id);
+      if (ranOn && this.engineBudgets) await this.engineBudgets.afterRun(ranOn, { taskId: id, repo: (await this.store.getTask(id))?.repoPath ?? null });
+    }
     for (const artifact of result.artifacts ?? []) {
       await this.store.insertArtifact({ taskId: id, stageRunId: runId, ...artifact });
     }

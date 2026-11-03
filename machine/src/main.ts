@@ -1,6 +1,6 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
-import { Ledger, PrAction, type PullRequest } from "@hardness/contracts";
+import { type BudgetAlert, Ledger, PrAction, type PullRequest } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -39,7 +39,7 @@ import { SlaClocks } from "./application/sla.ts";
 import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
 import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
-import { engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
+import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
 import { PgTaskStore } from "./adapters/persistence/task-store.ts";
 import { machineCredentials } from "./adapters/credentials/index.ts";
 import { existsSync } from "node:fs";
@@ -134,9 +134,17 @@ const policies = new PolicyStore();
  *  MACHINE_DISABLE_RUNTIMES turned off, or at a monthly cap (MACHINE_ENGINE_BUDGETS, a repo's
  *  luna.yaml `budget.engines`), is unavailable, as if its credential were missing. */
 const engineSpend = new PgTaskStore(db);
+/** A spend crossing 80, 90 or 100% of a ceiling: logged, and on `/events` for the board. */
+const raiseAlert = (alert: BudgetAlert) => {
+  console.warn(`budget: ${alert.scope}${alert.engine ? ` ${alert.engine}` : ""} at ${alert.pct}% ($${alert.spentUsd.toFixed(2)} of $${alert.limitUsd.toFixed(2)})${alert.repo ? ` · ${alert.repo}` : ""}`);
+  bus.publish({ type: "budget.alert", alert });
+};
+const repoEngineBudgets = async (repo: string) => (await policies.for(repo)).engineBudgets;
+/** The monthly caps per engine: alerts as a run's cost crosses them, and each engine's standing for `GET /engines`. */
+const engineBudgets = new EngineBudgetWatch({ budgets: config.engineBudgets, repoBudgets: repoEngineBudgets, spend: engineSpend, onAlert: raiseAlert });
 const credentials = gatedCredentials(machineCredentials(), [
   runtimeKillSwitch(config.disabledRuntimes),
-  engineBudgetGate({ budgets: config.engineBudgets, repoBudgets: async (repo) => (await policies.for(repo)).engineBudgets, spend: engineSpend }),
+  engineBudgetGate({ budgets: config.engineBudgets, repoBudgets: repoEngineBudgets, spend: engineSpend }),
 ]);
 if (config.disabledRuntimes.length > 0) console.log(`runtimes off (MACHINE_DISABLE_RUNTIMES): ${config.disabledRuntimes.join(", ")}`);
 const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
@@ -247,10 +255,8 @@ pipeline = new Pipeline(db, runnerFor, {
   // The queue's usage windows go by the engine each stage really runs on, credential fallback included.
   ...(agentDeps ? { credentials: agentDeps.credentials } : {}),
   jiraSite: config.jira?.site ?? null,
-  onAlert: (alert) => {
-    console.warn(`budget: ${alert.scope} at ${alert.pct}% ($${alert.spentUsd.toFixed(2)} of $${alert.limitUsd.toFixed(2)})${alert.repo ? ` · ${alert.repo}` : ""}`);
-    bus.publish({ type: "budget.alert", alert });
-  },
+  onAlert: raiseAlert,
+  engineBudgets,
 });
 replies = new ThreadReplies({ pipeline, github, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}) });
 /** One Jira client for every call; without the three variables each call says so and nothing syncs. */
@@ -310,6 +316,7 @@ const packRuns = buildPackRuns(config, {
   credentials,
   store: new PgPackRunStore(db),
   budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },
+  engineBudgets,
   // A usage limit moves a call to a fallback engine, never to one whose window the pipeline holds.
   latched: () => pipeline.slots.latched.map((latch) => latch.owner),
 });
@@ -331,6 +338,7 @@ const app = createApp({
   slaAll: (tasks) => slaClocks.forAll(tasks),
   taskDiff: (worktreePath, repoPath, file) => taskDiff(exec, worktreePath, repoPath, file),
   credentials,
+  engineBudgets,
   access: { host: config.host, port: config.port, token: config.apiToken },
 });
 const server = serve({ fetch: app.fetch, port: config.port, hostname: config.host }, (info) => {
