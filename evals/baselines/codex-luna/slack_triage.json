@@ -1,0 +1,240 @@
+{
+  "schema": 1,
+  "pack": "slack_triage",
+  "engine": "codex:luna",
+  "judge": "claude:opus",
+  "at": "2026-11-03T04:05:22.690Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 3,
+    "passed": 2,
+    "passRate": 0.6666666666666666,
+    "meanJudgeScore": 0.7433333333333333,
+    "meanTurns": 1,
+    "meanDurationMs": 3579,
+    "costUsd": null,
+    "judgeCostUsd": 0.09557009999999999
+  },
+  "cases": [
+    {
+      "id": "incident-bot-social",
+      "pass": true,
+      "schema": {
+        "check": "answer on the slack_triage schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items count 3..3",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL01:1].priority = \"P0\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL01:1].category in [\"blocker\",\"decision\",\"request\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL01:1].expectsReply = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL02:2].category = \"automated\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL02:2].priority = \"P3\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL02:2].expectsReply = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL03:3].priority in [\"P2\",\"P3\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL03:3].draft = null",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": {
+        "score": 0.88,
+        "pass": true,
+        "reasons": [
+          "Item C0EVAL03:3 is labelled category 'fyi', but the rubric calls the @here pizza broadcast social. Priority P2, expectsReply false and the null draft are all correct.",
+          "Item C0EVAL03:3's summary ('Know that pizza is in the kitchen...') is awkward and mostly repeats the message instead of saying what is wanted. It is still under 90 characters.",
+          "Item C0EVAL01:1 is right: P0, blocker, reply expected, and the summary names the rollback-or-confirm-safe decision in under 90 characters.",
+          "Item C0EVAL01:1's draft ('I'm rolling back now; I'll confirm when checkout is stable.') is short, decisive and in the person's voice, with no greeting and no mention of being drafted.",
+          "Item C0EVAL02:2 is right: automated, P3, no reply expected, no draft, and the summary correctly says no action is needed."
+        ],
+        "costUsd": 0.0311403
+      },
+      "turns": 1,
+      "durationMs": 3840,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast"
+    },
+    {
+      "id": "review-deadline-answered-vip",
+      "pass": false,
+      "schema": {
+        "check": "answer on the slack_triage schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items count 3..3",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL04:4].priority in [\"P0\",\"P1\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL04:4].expectsReply = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL04:4].deadline = \"2026-11-05\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL04:4].refs[].ref mentions 212",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL05:5].expectsReply = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL05:5].priority in [\"P2\",\"P3\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL06:6].priority in [\"P0\",\"P1\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL06:6].expectsReply = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": {
+        "score": 0.45,
+        "pass": false,
+        "reasons": [
+          "item C0EVAL06:6: the draft invents the reasons for the runner move ('improve reliability and speed', 'more consistent capacity as build demand grows'). Nothing in the input gives these reasons, and the rubric names exactly this as a fabrication the draft must never make. Sending it as written would give the CEO made-up claims.",
+          "item C0EVAL06:6: otherwise right. Priority is P1 (VIP floor), category request, a reply is expected, and deadline is null, so no date was invented from 'this week'.",
+          "item C0EVAL04:4: correct. P1, request, reply expected, deadline 2026-11-05, PR ref example-org/web-example#212. The one-sentence draft commits to the review and adds no invented facts.",
+          "item C0EVAL05:5: correct. P3, fyi, no reply, no draft. The 'why' correctly says Alex answered and Lee confirmed it worked."
+        ],
+        "costUsd": 0.0337909
+      },
+      "turns": 1,
+      "durationMs": 3521,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast"
+    },
+    {
+      "id": "rules-watch-learned",
+      "pass": true,
+      "schema": {
+        "check": "answer on the slack_triage schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items count 3..3",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL07:7].priority in [\"P2\",\"P3\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL08:8].priority in [\"P0\",\"P1\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL09:9].priority in [\"P0\",\"P1\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL09:9].category in [\"decision\",\"request\",\"blocker\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[id=C0EVAL09:9].expectsReply = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "items[].draft avoids drafted, suggested reply, as an ai",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": {
+        "score": 0.9,
+        "pass": true,
+        "reasons": [
+          "item C0EVAL09:9: deadline is null even though the text says 'we need a decision today'; it should be set to today.",
+          "item C0EVAL09:9: the draft 'Vamos congelar os merges…' answers yes for the person without saying so. It is in Portuguese and one sentence, which the Notes require, but it decides the question for them.",
+          "item C0EVAL08:8: P0 blocker with expectsReply true, reached through the billing keyword watch and the double-charge incident; the draft is one Portuguese sentence. This is right.",
+          "item C0EVAL07:7: P3 social with no draft, which follows the Learned rule that #random-example is lowered (6). This is right.",
+          "All drafts follow the Notes (Portuguese, one sentence), and nothing in the answer is invented."
+        ],
+        "costUsd": 0.0306389
+      },
+      "turns": 1,
+      "durationMs": 3376,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast"
+    }
+  ]
+}
