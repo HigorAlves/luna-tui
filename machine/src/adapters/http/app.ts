@@ -248,7 +248,14 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     }
     const budget = { ...pipeline.budget, spentTodayUsd: await pipeline.spentTodayUsd() };
     const groupBy = c.req.query("groupBy");
-    if (groupBy !== undefined && groupBy !== "repo") throw new BadRequest(`groupBy must be repo, got "${groupBy}"`);
+    switch (groupBy) {
+      case undefined:
+      case "repo":
+      case "engine":
+        break;
+      default:
+        throw new BadRequest(`groupBy must be repo or engine, got "${groupBy}"`);
+    }
     const repo = c.req.query("repo");
     return c.json(
       await computeMetrics(db, {
@@ -256,7 +263,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
         slots: pipeline.slots,
         budget,
         ...(repo !== undefined ? { repo: repo === "" ? null : repo } : {}),
-        ...(groupBy === "repo" ? { groupBy } : {}),
+        ...(groupBy ? { groupBy } : {}),
       }),
     );
   });

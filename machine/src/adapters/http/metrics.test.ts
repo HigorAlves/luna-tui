@@ -1,4 +1,4 @@
-import type { Metrics } from "@hardness/contracts";
+import type { EngineId, Metrics, TaskState } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
@@ -9,6 +9,8 @@ import { freshTestDatabase } from "../../test/database.ts";
 import { createApp } from "./app.ts";
 import { Bus } from "./bus.ts";
 import { percentile } from "./metrics.ts";
+import { EventEntity, StageRunEntity } from "../persistence/schemas.ts";
+import type { StageRunRow } from "../../domain/task.ts";
 
 let db: DataSource;
 const stubs = new StubStages();
@@ -206,6 +208,32 @@ describe("GET /metrics", () => {
     ]);
     expect((await getMetrics()).byRepo).toBeUndefined();
     expect((await app().request("/metrics?groupBy=stage")).status).toBe(400);
+  });
+
+  it("groups the window's stage runs by the engine they ran on, with groupBy=engine", async () => {
+    const a = await pipeline.createTask({ title: "a", repoPath: "/r/x" });
+    const b = await pipeline.createTask({ title: "b", repoPath: "/r/x" });
+    const c = await pipeline.createTask({ title: "c", repoPath: "/r/x" });
+    const at = (secondsAgo: number) => new Date(Date.now() - secondsAgo * 1000);
+    const run = (taskId: string, stage: string, attempt: number, engine: EngineId | null, status: StageRunRow["status"], outcome: string, turns: number | null, costUsd: string | null, startedAgo: number, seconds: number) =>
+      db.getRepository(StageRunEntity).save({ taskId, stage: stage as TaskState, attempt, engine, status, outcome, turns, costUsd, startedAt: at(startedAgo), endedAt: at(startedAgo - seconds) });
+    // a: Codex hit its limit, Claude answered. b: Codex passed triage, Claude failed verifying and the task escalated.
+    await run(a.id, "triage", 1, "codex:sol", "paused", "rate_limited", 1, null, 900, 10);
+    await run(a.id, "triage", 2, "claude:opus", "passed", "pass", 10, "1.5", 880, 120);
+    await run(b.id, "triage", 1, "codex:sol", "passed", "pass", 6, null, 800, 60);
+    await run(b.id, "verifying", 1, "claude:opus", "failed", "fail", 20, "2.5", 600, 300);
+    await db.getRepository(EventEntity).save({ taskId: b.id, kind: "transition", payload: { from: "verifying", to: "escalated" }, at: at(200) });
+    await run(c.id, "triage", 1, null, "passed", "pass", null, null, 500, 30);
+
+    const grouped = await getMetrics("?groupBy=engine");
+    expect(grouped.byRepo).toBeUndefined();
+    expect(grouped.byEngine).toEqual([
+      { engine: "claude:opus", stageRuns: 2, firstPassRate: 0, escalations: 1, rateLimited: 0, meanTurns: 15, meanDurationMs: 210_000, costUsd: 4 },
+      { engine: "codex:sol", stageRuns: 2, firstPassRate: 1, escalations: 0, rateLimited: 1, meanTurns: 6, meanDurationMs: 60_000, costUsd: 0 },
+      { engine: null, stageRuns: 1, firstPassRate: 1, escalations: 0, rateLimited: 0, meanTurns: null, meanDurationMs: 30_000, costUsd: 0 },
+    ]);
+    expect((await getMetrics("?groupBy=engine&repo=/r/other")).byEngine).toEqual([]);
+    expect((await getMetrics()).byEngine).toBeUndefined();
   });
 
   it("rejects a bad since with the error shape", async () => {
