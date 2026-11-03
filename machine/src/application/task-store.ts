@@ -79,6 +79,8 @@ export interface ClaimOptions {
   maxPerRepo: number | null;
   /** Repos whose tasks stay queued for now (over their monthly budget). */
   excludeRepos?: ReadonlySet<string>;
+  /** Tasks that stay queued for now (their next stage would spend a latched usage window). */
+  excludeTasks?: ReadonlySet<string>;
   /** A repo's own cap from its PIPELINE.md, over `maxPerRepo`. */
   repoCaps?: ReadonlyMap<string, number>;
   /** Tasks that may drive one stage at once; a stage not named has no cap. */

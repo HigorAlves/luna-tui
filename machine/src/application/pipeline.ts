@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type BudgetAlert, type EngineId, type Finding, type JiraLink, type PackId, RUNNING, type StageEngines, type StageRunCase, type TaskRoute, type TaskSource, type TaskState, type TestCase } from "@hardness/contracts";
+import { type BudgetAlert, type CredentialOwner, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, type Slots, type StageEngines, type StageRunCase, type TaskRoute, type TaskSource, type TaskState, type TestCase, credentialOwner } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -10,10 +10,12 @@ import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
-import { packStates } from "../domain/packs.ts";
+import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
+import type { Credentials } from "../adapters/credentials/index.ts";
+import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import type { StageResult, StageRunner } from "./ports.ts";
@@ -97,6 +99,9 @@ export interface PipelineOptions {
   policies?: Pick<PolicyStore, "for">;
   /** Called once per threshold a scope crosses: 80, 90 and 100% of a task's, a repo's month's or the day's ceiling. */
   onAlert?: (alert: BudgetAlert) => void;
+  /** Which engines this machine has a credential for: a queued task's next stage is held by the
+   *  usage window of the engine it would really run on. Absent, every engine counts as available. */
+  credentials?: Pick<Credentials, "check">;
 }
 
 export type { BudgetAlert } from "@hardness/contracts";
@@ -148,7 +153,7 @@ const ORPHAN_GRACE_MS = 60_000;
 const ABORT_WIND_DOWN_MS = 15_000;
 /** Identical consecutive failures of one stage before the stuck detector escalates. */
 const STUCK_REPEATS = 3;
-/** How long one rate-limit result holds every claim when it names no reset time. */
+/** How long one rate-limit result holds its credential's claims when it names no reset time. */
 const LATCH_FALLBACK_MS = 5 * 60_000;
 
 /** Verifying's per-case verdicts from its detail (`cases: [{title, ok}]`), or null when it gave none. */
@@ -194,8 +199,12 @@ export class Pipeline {
   /** The abort signal of each task currently driving a stage. Its size is the active count. */
   private readonly loops = new Map<string, AbortController>();
   private readonly resumeTimers = new Map<string, NodeJS.Timeout>();
-  /** While set and in the future, no slot is claimed: one usage window is shared by every stage. */
-  private latch: number | null = null;
+  /** Per credential, the epoch ms until which queued work that would spend it is held: one usage
+   *  window is shared by every stage on that credential, and by no other. */
+  private readonly latches = new Map<CredentialOwner, number>();
+  /** The credential whose window each paused task hit, so resuming it opens that window again. */
+  private readonly pausedOn = new Map<string, CredentialOwner>();
+  private readonly credentials: Pick<Credentials, "check">;
   private supervisor: NodeJS.Timeout | undefined;
 
   constructor(
@@ -221,6 +230,7 @@ export class Pipeline {
     this.policies = options.policies ?? new PolicyStore();
     this.onAlert = options.onAlert ?? (() => {});
     this.jiraSite = options.jiraSite ?? null;
+    this.credentials = options.credentials ?? { check: () => Promise.resolve({ available: true }) };
   }
 
   /** The repo's policy, from its luna.yaml. */
@@ -321,10 +331,12 @@ export class Pipeline {
     return this.dispatch(task.id, { type: "start", setup: true });
   }
 
-  /** Stage slots: how many tasks may drive a stage at once, how many do right now, and
-   *  whether the machine is draining (finishing what runs, claiming nothing new). */
-  get slots(): { max: number; active: number; draining: boolean } {
-    return { max: this.maxConcurrentTasks, active: this.active(), draining: this.draining };
+  /** Stage slots: how many tasks may drive a stage at once, how many do right now, whether the
+   *  machine is draining (finishing what runs, claiming nothing new), and which credentials'
+   *  usage windows hold their queued work, until when. */
+  get slots(): Required<Slots> {
+    const latched = this.openLatches().map(([owner, until]) => ({ owner, until: new Date(until).toISOString() }));
+    return { max: this.maxConcurrentTasks, active: this.active(), draining: this.draining, latched };
   }
 
   /** Loops holding a slot: every stage loop but the ones polling ci_watch. */
@@ -342,13 +354,13 @@ export class Pipeline {
   }
 
   /** "Stop picking up work, I'm leaving": running stages finish, queued tasks wait. */
-  drain(): { max: number; active: number; draining: boolean } {
+  drain(): Required<Slots> {
     this.draining = true;
     return this.slots;
   }
 
   /** Back to normal: the queue is picked up again at once. */
-  resumeClaims(): { max: number; active: number; draining: boolean } {
+  resumeClaims(): Required<Slots> {
     this.draining = false;
     void this.fillSlots().catch((error: unknown) => console.error("could not fill slots after resume", error));
     return this.slots;
@@ -356,7 +368,7 @@ export class Pipeline {
 
   /** Resizes the pool at run time; a bigger one fills from the queue at once, a smaller one
    *  lets running stages finish and claims nothing until the count fits. */
-  setSlots(max: number): { max: number; active: number; draining: boolean } {
+  setSlots(max: number): Required<Slots> {
     if (!Number.isInteger(max) || max < 1) throw new Error(`slots must be at least 1, got ${max}`);
     this.maxConcurrentTasks = max;
     void this.fillSlots().catch((error: unknown) => console.error("could not fill slots after resize", error));
@@ -494,6 +506,7 @@ export class Pipeline {
     if (RUNNING.has(task.state)) throw new TaskBusyError(id, task.state);
     clearTimeout(this.resumeTimers.get(id));
     this.resumeTimers.delete(id);
+    this.pausedOn.delete(id);
     if (task.repoPath && task.worktreePath) {
       await removeWorktreeOnDisk(task.repoPath, task.worktreePath).catch((error: unknown) =>
         console.error(`could not remove the worktree of deleted task ${id}`, error),
@@ -604,9 +617,85 @@ export class Pipeline {
     this.loops.get(id)?.abort();
   }
 
-  /** Epoch ms until which claims are held because a stage hit a usage limit; null when open. */
+  /** Epoch ms until which some credential's claims are held because a stage hit its usage limit
+   *  (the latest such time); null when every window is open. */
   get latchedUntil(): number | null {
-    return this.latch !== null && this.latch > Date.now() ? this.latch : null;
+    const open = this.openLatches();
+    return open.length > 0 ? Math.max(...open.map(([, until]) => until)) : null;
+  }
+
+  /** The credentials whose window is latched right now, with until when. */
+  private openLatches(): Array<[CredentialOwner, number]> {
+    const now = Date.now();
+    return [...this.latches].filter(([, until]) => until > now);
+  }
+
+  /** Holds `owner`'s queued work until `until`, or longer if it is already held longer. */
+  private latch(owner: CredentialOwner, until: number): void {
+    if (until > Date.now()) this.latches.set(owner, Math.max(this.latches.get(owner) ?? 0, until));
+  }
+
+  /** The window `id` paused on is open again; with no record of which (it paused before a
+   *  restart and was never seen paused since), every window is. */
+  private unlatch(id: string): void {
+    const owner = this.pausedOn.get(id);
+    this.pausedOn.delete(id);
+    if (owner) this.latches.delete(owner);
+    else this.latches.clear();
+  }
+
+  /** The engine `stage` would run on for `task` right now, picked as the pack runner picks it;
+   *  null for a stage that runs no pack. */
+  private async engineFor(task: TaskRow, stage: TaskState): Promise<EngineId | null> {
+    const pack = packForState(stage);
+    if (!pack) return null;
+    const { engines } = await this.policies.for(task.repoPath);
+    return (await pickEngine(this.credentials, PACKS[pack], task.stages ?? null, engines ?? null)).engine;
+  }
+
+  /** Whose window `stage` would spend for `task`. A stage with no pack of its own counts as
+   *  Claude's, as every stage did before engines: the loop goes on to the next Claude stage. */
+  private async ownerFor(task: TaskRow, stage: TaskState): Promise<CredentialOwner> {
+    const engine = await this.engineFor(task, stage);
+    return engine ? credentialOwner(engine) : "claude";
+  }
+
+  /** Whose window the latest run of `stage` spent: the engine it started on, else the one it would pick. */
+  private async spentOn(task: TaskRow, stage: TaskState): Promise<{ owner: CredentialOwner; engine: EngineId | null }> {
+    const run = (await this.store.listStageRuns(task.id)).findLast((r) => r.stage === stage);
+    const engine = run?.engine ?? (await this.engineFor(task, stage));
+    return { owner: engine ? credentialOwner(engine) : "claude", engine };
+  }
+
+  /** True when a credential's window is latched and `stage` of the task would spend it. */
+  private async heldForUsage(id: string, stage: TaskState): Promise<boolean> {
+    const latched = new Set(this.openLatches().map(([owner]) => owner));
+    if (latched.size === 0) return false;
+    const task = await this.store.getTask(id);
+    return task !== null && latched.has(await this.ownerFor(task, stage));
+  }
+
+  /** The queued tasks whose next stage would spend a credential whose window is latched. */
+  private async heldByUsage(): Promise<Set<string>> {
+    const held = new Set<string>();
+    const latched = new Set(this.openLatches().map(([owner]) => owner));
+    if (latched.size === 0) return held;
+    for (const task of (await this.store.listTasks()).filter((t) => t.queued)) {
+      if (latched.has(await this.ownerFor(task, task.state))) held.add(task.id);
+    }
+    return held;
+  }
+
+  /** Latches live in memory: after a restart, each paused task's window is held again until its
+   *  reset (or the fallback after its pause, when it named none). */
+  private async relatch(): Promise<void> {
+    for (const task of await this.store.findStuckTasks(new Set<TaskState>(["paused_rate_limit"]))) {
+      const latest = (await this.store.findFinishedEvents(task.id))[0];
+      const { owner } = await this.spentOn(task, task.resumeTo ?? task.state);
+      this.pausedOn.set(task.id, owner);
+      const at = resetSeconds((latest?.payload.detail as Record<string, unknown> | undefined)?.resetsAt);
+      this.latch(owner, at !== null ? at * 1000 + RESUME_MARGIN_MS : (latest?.at.getTime() ?? 0) + LATCH_FALLBACK_MS);
+    }
   }
 
   /** Runs tick() every `intervalMs` until stopSupervisor(). */
@@ -666,7 +755,7 @@ export class Pipeline {
     clearTimeout(this.resumeTimers.get(id));
     this.resumeTimers.delete(id);
     // A reset, from the timer or from you, is the word that the window is open again.
-    this.latch = null;
+    this.unlatch(id);
     return this.dispatch(id, { type: "window_reset" });
   }
 
@@ -709,6 +798,7 @@ export class Pipeline {
         escalated++;
       }
     }
+    await this.relatch();
     await this.rearmPaused();
     return escalated;
   }
@@ -730,15 +820,16 @@ export class Pipeline {
     }
   }
 
-  /** Claims queued tasks into free slots, oldest first, until the pool is full, the queue is
-   *  empty, or a usage window is latched. The one place a slot is ever filled from the queue. */
+  /** Claims queued tasks into free slots, oldest first, until the pool is full or the queue is
+   *  empty, skipping tasks whose next stage would spend a latched usage window. The one place a
+   *  slot is ever filled from the queue. */
   /** Into the queue, stamped: claims go by this time, so an edit while waiting keeps the place. */
   private enqueue(id: string): Promise<void> {
     return this.store.updateTask(id, { queued: true, queuedAt: new Date() });
   }
 
   private async fillSlots(): Promise<void> {
-    while (!this.stopping && !this.draining && this.active() < this.maxConcurrentTasks && this.latchedUntil === null) {
+    while (!this.stopping && !this.draining && this.active() < this.maxConcurrentTasks) {
       if (await this.dayOver()) return;
       const claimed = await this.store.claimNextQueuedTask({
         running: RUNNING,
@@ -746,6 +837,7 @@ export class Pipeline {
         maxPerStage: this.maxPerStage,
         repoCaps: await this.repoCaps(),
         excludeRepos: await this.reposOverMonth(),
+        excludeTasks: await this.heldByUsage(),
       });
       if (!claimed) return;
       // shutdown() may have begun while this pass awaited the claim: put the task back, its
@@ -843,7 +935,7 @@ export class Pipeline {
    * waits for the whole run too in inline mode.
    */
   private async schedule(id: string, stage: TaskState): Promise<void> {
-    if (this.stopping || this.draining || this.active() >= this.maxConcurrentTasks || this.latchedUntil !== null) {
+    if (this.stopping || this.draining || this.active() >= this.maxConcurrentTasks) {
       await this.enqueue(id);
       return;
     }
@@ -861,6 +953,12 @@ export class Pipeline {
       return;
     }
     try {
+      // A stage on a credential whose usage window is latched waits for it with the rest of the queue.
+      if (await this.heldForUsage(id, stage)) {
+        release();
+        await this.enqueue(id);
+        return;
+      }
       if (await this.heldForDay(id, stage)) {
         release();
         return;
@@ -980,10 +1078,15 @@ export class Pipeline {
         const step = await this.apply(id, next, { detail });
         if (step.effect.kind === "pause") {
           this.scheduleResume(id, result.detail?.resetsAt);
-          // One usage window is shared by every stage: hold claims until it resets, or the
-          // whole queue would line up to hit the same wall.
+          // One usage window is shared by every stage on the same credential: hold the queued
+          // work that would spend it until it resets, or the whole queue would line up to hit
+          // the same wall. Work on another credential goes on.
           const at = resetSeconds(result.detail?.resetsAt);
-          this.latch = Math.max(this.latch ?? 0, at !== null ? at * 1000 + RESUME_MARGIN_MS : Date.now() + LATCH_FALLBACK_MS);
+          const { owner, engine } = await this.spentOn(await this.get(id), stage);
+          this.pausedOn.set(id, owner);
+          this.latch(owner, at !== null ? at * 1000 + RESUME_MARGIN_MS : Date.now() + LATCH_FALLBACK_MS);
+          const until = this.latches.get(owner);
+          await this.log(id, "usage.latched", { owner, engine, until: until ? new Date(until).toISOString() : null });
         }
         stage = step.effect.kind === "run" ? step.effect.stage : null;
         // Back from polling with the pool now full: the next stage waits for a slot like any

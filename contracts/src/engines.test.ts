@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { ENGINES, EngineId, MODELS, type ModelEntry, PACKS, StageInput, resolveEngine, retired } from "./index.ts";
+import { ENGINES, EngineId, MODELS, type ModelEntry, PACKS, StageInput, credentialOwner, resolveEngine, retired } from "./index.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
@@ -19,6 +19,20 @@ describe("the model catalog and the engines", () => {
     expect(ENGINES["codex:sol"].auth).toBe("chatgpt");
     expect(ENGINES["openai:sol"].auth).toBe("api-key");
     expect(EngineId.options.sort()).toEqual(["claude:haiku", "claude:opus", "claude:sonnet", "codex:luna", "codex:sol", "jev", "openai:luna", "openai:sol"]);
+  });
+
+  it("names whose credential, and so whose usage window, each engine spends", () => {
+    const owners = Object.fromEntries(EngineId.options.map((engine) => [engine, credentialOwner(engine)]));
+    expect(owners).toEqual({
+      "claude:opus": "claude",
+      "claude:sonnet": "claude",
+      "claude:haiku": "claude",
+      "codex:sol": "codex",
+      "codex:luna": "codex",
+      "openai:sol": "openai",
+      "openai:luna": "openai",
+      jev: "typesafe",
+    });
   });
 
   it("names every engine's model in the catalog", () => {

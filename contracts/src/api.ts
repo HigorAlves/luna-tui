@@ -7,7 +7,7 @@ import type { PrSnapshot } from "./github.ts";
 import type { SlackSnapshot } from "./slack.ts";
 import type { JiraLink, TaskSla } from "./jira.ts";
 import type { AgentPack, AgentRole, Pack } from "./packs.ts";
-import { EngineId } from "./engines.ts";
+import { type CredentialOwner, EngineId } from "./engines.ts";
 import type { ModelEntry, RuntimeId } from "./models.ts";
 import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskRoute, TaskSource, TestCase } from "./stage.ts";
 
@@ -309,6 +309,14 @@ export interface Slots {
   max: number;
   active: number;
   draining: boolean;
+  /** Each credential whose usage window a stage hit, and until when its queued work waits (ISO). Absent from older machines. */
+  latched?: UsageLatch[];
+}
+
+/** One credential's usage window, latched: queued tasks whose next stage runs on it wait until `until`. */
+export interface UsageLatch {
+  owner: CredentialOwner;
+  until: string;
 }
 
 /** One repo's slice of the window, for `GET /metrics?groupBy=repo`. */

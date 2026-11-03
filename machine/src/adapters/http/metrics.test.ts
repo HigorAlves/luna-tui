@@ -75,7 +75,7 @@ describe("GET /metrics", () => {
     expect(m.escalations).toEqual({ rate: null, topReasons: [] });
     expect(m.cost.totalUsd).toBe(0);
     expect(m.gates).toEqual({ withinSla: null, answered: 0, waitMs: {} });
-    expect(m.queue).toEqual({ depth: 0, slots: { max: 2, active: 0, draining: false }, utilisation: 0 });
+    expect(m.queue).toEqual({ depth: 0, slots: { max: 2, active: 0, draining: false, latched: [] }, utilisation: 0 });
   });
 
   it("counts the gates answered in the window, the share inside the gate SLA and the median wait per gate", async () => {

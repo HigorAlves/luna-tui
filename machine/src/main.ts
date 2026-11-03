@@ -217,6 +217,8 @@ pipeline = new Pipeline(db, runnerFor, {
   restartPolicy: config.restartPolicy,
   closeDeps: { exec, worktreeRemove: false, watcher },
   policies,
+  // The queue's usage windows go by the engine each stage really runs on, credential fallback included.
+  ...(agentDeps ? { credentials: agentDeps.credentials } : {}),
   jiraSite: config.jira?.site ?? null,
   onAlert: (alert) => {
     console.warn(`budget: ${alert.scope} at ${alert.pct}% ($${alert.spentUsd.toFixed(2)} of $${alert.limitUsd.toFixed(2)})${alert.repo ? ` · ${alert.repo}` : ""}`);
