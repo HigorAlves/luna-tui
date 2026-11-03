@@ -393,7 +393,7 @@ if (config.slackInbox.enabled && config.slackInbox.userToken) {
 let intake: GitHubIntake | undefined;
 if (config.githubPoll.repos.length > 0) {
   const { repos, intervalMs, label } = config.githubPoll;
-  intake = new GitHubIntake({ pipeline, github, repos, label, intervalMs, resolveRepo: (repo) => repoMap.resolve(repo) });
+  intake = new GitHubIntake({ pipeline, github, repos, label, intervalMs, resolveRepo: (repo) => repoMap.resolve(repo), classifier });
   console.log(`github intake: polling ${repos.join(", ")} every ${intervalMs / 1000}s for ${label}`);
   intake.start();
 }
