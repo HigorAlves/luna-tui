@@ -46,7 +46,7 @@ import { engineInfo } from "../../domain/engines.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, type Pipeline, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, type Pipeline, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -153,6 +153,8 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
     if (error instanceof NoCasesToEditError) return fail(c, 409, "no_cases", error.message);
     if (error instanceof StageStartedError) return fail(c, 409, "stage_started", error.message);
+    if (error instanceof SourceImmutableError) return fail(c, 400, "source_immutable", error.message);
+    if (error instanceof RepoPathLockedError) return fail(c, 409, "has_worktree", error.message);
     if (error instanceof NoWorktreeError) return fail(c, 404, "no_worktree", error.message);
     if (error instanceof NoFileError) return fail(c, 404, "no_file", error.message);
     if (error instanceof NotReadyError) return fail(c, 409, "not_ready", error.message);

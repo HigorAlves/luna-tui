@@ -12,7 +12,7 @@ import type { StageContext, StageResult, StageRunner } from "./ports.ts";
 import { loadConfig } from "../config.ts";
 import { StubStages } from "./stages/stubs.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { type BudgetAlert, Pipeline, TaskNotFoundError } from "./pipeline.ts";
+import { type BudgetAlert, Pipeline, SourceImmutableError, TaskNotFoundError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan } from "../domain/stage-input.ts";
 import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
@@ -78,8 +78,8 @@ describe("creating and starting", () => {
     expect(task.source).toEqual(source);
     expect(await pipeline.artifacts(task.id)).toEqual([]);
 
-    const cleared = await pipeline.update(task.id, { source: null });
-    expect(cleared.source).toBeNull();
+    await expect(pipeline.update(task.id, { source: null })).rejects.toThrow(SourceImmutableError);
+    expect((await pipeline.update(task.id, { source: { ...source } })).source).toEqual(source);
   });
 
   it("runs triage on start and waits for you to approve the plan", async () => {
@@ -1050,6 +1050,21 @@ describe("timer-approved plans", () => {
       reason: "auto-approved after 10 min: triage reported high confidence and low risk",
     });
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toContain("plan.auto_approved");
+  });
+
+  it("never approves a Luna Notch task's plan: the notch's own AutoApproval decides (RFC 0004)", async () => {
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(10) });
+    stubs.plan("triage", confident(), confident());
+    const source = { kind: "notch", ref: "LUNA-14", id: "8f1c0d7e-0000-0000-0000-000000000000" } as const;
+    const notch = await pipeline.createTask({ title: "n", repoPath: "/r/a", source });
+    const tui = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
+    await pipeline.start(notch.id);
+    await pipeline.start(tui.id);
+    await db.query("update approvals set created_at = now() - interval '11 minutes'");
+    await pipeline.tick();
+    expect((await pipeline.get(notch.id)).state).toBe("awaiting_approval");
+    expect((await pipeline.events(notch.id)).map((e) => e.kind)).not.toContain("plan.auto_approved");
+    expect((await pipeline.get(tui.id)).state).toBe("awaiting_test_check");
   });
 
   it("keeps waiting when confidence is not high, risk is not low, triage asked questions, or the policy is off", async () => {
