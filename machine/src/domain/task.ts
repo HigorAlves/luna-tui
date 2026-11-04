@@ -1,6 +1,6 @@
 // Plain domain types for a task and everything attached to it. No TypeORM here — see
 // ../adapters/persistence/schemas.ts for the persistence mapping of these same shapes.
-import type { ArtifactKind, EngineId, JiraLink, RunInfo, StageEngines, StageRunCase, TaskClassification, TaskRoute, TaskSource, TaskState } from "@hardness/contracts";
+import type { ArtifactKind, EngineId, JiraLink, RunInfo, StageEngines, StageRunCase, TaskClassification, TaskRoute, TaskSource, TaskState, EvidencePack, TriageRecord } from "@hardness/contracts";
 
 import type { Retries } from "./transition.ts";
 
@@ -43,6 +43,10 @@ export interface TaskRow {
   stages: StageEngines;
   /** What issue_classify said about the issue the task came from; null when intake did not run it. */
   classification: TaskClassification | null;
+  /** What triage decided about the ticket and why; null before it ran. */
+  record: TriageRecord | null;
+  /** The evidence pack of the task's change; null before verifying made one. */
+  evidence: EvidencePack | null;
   /** The task's place in the change sequence (`task_seq`), bigint as pg returns it. */
   seq: string;
   createdAt: Date;

@@ -393,6 +393,47 @@ export const TaskClassification = z.object({
 });
 export type TaskClassification = z.infer<typeof TaskClassification>;
 
+/** How risky a change or a ticket reads: on one scale for the triage record and the evidence pack. */
+export const Risk = z.enum(["none", "low", "medium", "high"]);
+export type Risk = z.infer<typeof Risk>;
+
+/** What triage decided about a ticket and why, kept on the task (RFC 0005): the ticket as the
+ *  machine understood it, each signal with its confidence, the questions asked and the route taken. */
+export const TriageRecord = z.object({
+  source: z.string(),
+  kind: z.string(),
+  goal: z.string(),
+  size: z.string(),
+  urgency: z.string(),
+  risk: Risk,
+  /** What each decision question answered and how sure it was, by question name. */
+  signals: z.record(z.string(), z.object({ answer: z.union([z.string(), z.number(), z.boolean(), z.null()]), confidence: z.number().min(0).max(1) })),
+  /** Questions asked of the person who filed it, and what they said. */
+  qa: z.array(z.object({ question: z.string(), answer: z.string().nullable() })),
+  decision: z.enum(["plan", "fast_lane", "conversation", "archive"]),
+  reason: z.string(),
+  at: z.string(),
+  model: z.string(),
+});
+export type TriageRecord = z.infer<typeof TriageRecord>;
+
+/** What shows a change does what the ticket asked, kept on the task for the person who approves it. */
+export const EvidencePack = z.object({
+  summary: z.string(),
+  format: z.enum(["video", "captures", "text"]),
+  scenarios: z.array(z.object({ text: z.string(), test: z.string().nullable(), result: z.enum(["pass", "fail", "partial", "skipped"]) })),
+  findings: z.array(z.string()),
+  /** Changes outside what the plan mapped. */
+  outOfMap: z.array(z.string()),
+  risk: Risk,
+  rollback: z.string(),
+  howToVerify: z.string(),
+  commitSha: z.string(),
+  media: z.array(z.object({ kind: z.enum(["video", "screenshot", "har", "report"]), label: z.string(), url: z.string() })),
+  at: z.string(),
+});
+export type EvidencePack = z.infer<typeof EvidencePack>;
+
 /** What the jira_intake pack reads: the issue, as Jira gives it, plus where it would land. */
 export const JiraIntakeContext = z.object({
   key: z.string(),
@@ -456,6 +497,10 @@ export const StageInput = z.object({
     repoPath: z.string(),
     branch: z.string(),
     source: TaskSource.nullable(),
+    /** What triage recorded about the ticket; absent or null before it ran. */
+    record: TriageRecord.nullable().optional(),
+    /** The evidence pack of the task's change; absent or null before verifying made one. */
+    evidence: EvidencePack.nullable().optional(),
   }),
   plan: z
     .object({

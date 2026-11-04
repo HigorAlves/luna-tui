@@ -54,6 +54,14 @@ describe("buildStageInput", () => {
     }),
   ];
 
+  it("carries the task's triage record and evidence pack into the input", () => {
+    const record = { source: "github", kind: "bug", goal: "g", size: "small", urgency: "normal", risk: "low" as const, signals: {}, qa: [], decision: "plan" as const, reason: "r", at: "2026-11-03T12:00:00.000Z", model: "m" };
+    const input = buildStageInput({ task: { ...task, record, evidence: null }, stage: "implementing", attempt: 1, approvals: [], priorFindings: [] });
+    expect(StageInput.safeParse(input).success).toBe(true);
+    expect(input.task.record).toEqual(record);
+    expect(input.task.evidence).toBeNull();
+  });
+
   it("builds an input that passes the contract", () => {
     const input = buildStageInput({
       task,

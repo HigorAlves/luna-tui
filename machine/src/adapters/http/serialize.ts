@@ -48,6 +48,8 @@ export const toTask = (
   sla,
   stages: row.stages ?? {},
   classification: row.classification ?? null,
+  record: row.record ?? null,
+  evidence: row.evidence ?? null,
   seq: Number(row.seq),
   lastRun: glance?.lastRun ?? null,
   gate: glance?.gate ?? null,

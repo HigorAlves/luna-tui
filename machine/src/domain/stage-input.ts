@@ -95,6 +95,8 @@ export function buildStageInput(opts: {
       repoPath: task.repoPath ?? "",
       branch: task.branch ?? "",
       source: task.source,
+      record: task.record,
+      evidence: task.evidence,
     },
     plan,
     decisions: approvals

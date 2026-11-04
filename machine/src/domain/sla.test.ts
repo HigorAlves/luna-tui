@@ -8,7 +8,7 @@ const NOW = new Date("2026-10-28T12:00:00Z");
 const task = (over: Partial<TaskRow> = {}): TaskRow => ({
   id: "t1", title: "x", description: "", criteria: [], repoPath: null, source: null, route: "feature", branch: null, worktreePath: null,
   state: "awaiting_approval", retries: { ...NO_RETRIES }, resumeTo: null, reason: null, queued: false, queuedAt: null, stateSince: null, idempotencyKey: null, requestHash: null, stages: {}, seq: "1",
-  diffAdded: null, diffRemoved: null, testsPassed: null, testsTotal: null, jira: null, classification: null,
+  diffAdded: null, diffRemoved: null, testsPassed: null, testsTotal: null, jira: null, classification: null, record: null, evidence: null,
   createdAt: new Date("2026-10-27T12:00:00Z"), updatedAt: NOW, ...over,
 });
 const defaults = { gate: 3600, cycle: null };

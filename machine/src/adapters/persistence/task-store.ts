@@ -66,6 +66,8 @@ export class PgTaskStore implements TaskStore {
       jira: input.jira ?? null,
       stages: input.stages ?? {},
       classification: input.classification ?? null,
+      record: input.record ?? null,
+      evidence: input.evidence ?? null,
       stateSince: new Date(),
     };
   }

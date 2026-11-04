@@ -7,7 +7,7 @@ import { toTask } from "./serialize.ts";
 const row = (): TaskRow => ({
   id: "t1", title: "x", description: "", criteria: [], repoPath: null, source: null, route: "feature", branch: null, worktreePath: null,
   state: "draft", retries: { ...NO_RETRIES }, resumeTo: null, reason: null, queued: false, queuedAt: null, stateSince: null, idempotencyKey: null, requestHash: null, stages: {}, seq: "1",
-  diffAdded: null, diffRemoved: null, testsPassed: null, testsTotal: null, jira: null, classification: null,
+  diffAdded: null, diffRemoved: null, testsPassed: null, testsTotal: null, jira: null, classification: null, record: null, evidence: null,
   createdAt: new Date(0), updatedAt: new Date(0),
 });
 
@@ -31,6 +31,13 @@ describe("toTask", () => {
     const task = toTask({ ...row(), diffAdded: 142, diffRemoved: 18, testsPassed: 7, testsTotal: 9 });
     expect(task.diff).toEqual({ added: 142, removed: 18 });
     expect(task.tests).toEqual({ passed: 7, total: 9 });
+  });
+
+  it("carries the triage record and the evidence pack, null when the task has none", () => {
+    expect(toTask(row())).toMatchObject({ record: null, evidence: null });
+    const record = { source: "github", kind: "bug", goal: "g", size: "small", urgency: "normal", risk: "low" as const, signals: {}, qa: [], decision: "plan" as const, reason: "r", at: "2026-11-03T12:00:00.000Z", model: "m" };
+    const evidence = { summary: "s", format: "text" as const, scenarios: [], findings: [], outOfMap: [], risk: "none" as const, rollback: "revert", howToVerify: "run it", commitSha: "abc", media: [], at: "2026-11-03T12:00:00.000Z" };
+    expect(toTask({ ...row(), record, evidence })).toMatchObject({ record, evidence });
   });
 
   it("carries the row's sequence number as a number", () => {

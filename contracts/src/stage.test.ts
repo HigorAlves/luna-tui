@@ -7,6 +7,7 @@ import {
   ChatTriageAnswer,
   ChatTriageContext,
   CloneInput,
+  EvidencePack,
   EvalJudgeAnswer,
   EvalJudgeContext,
   JiraIntakeContext,
@@ -30,6 +31,7 @@ import {
   TaskSource,
   TaskState,
   TestCase,
+  TriageRecord,
   ThreadsContext,
   VerifyResult,
   resolveEngine,
@@ -361,5 +363,24 @@ describe("PR tasks", () => {
     expect(CloneInput.safeParse({ repo: "owner/name", dest: "/x" }).success).toBe(true);
     expect(CloneInput.safeParse({ repo: "owner", dest: "/x" }).success).toBe(false);
     expect(MergeInput.parse({}).method).toBe("squash");
+  });
+});
+
+describe("TriageRecord and EvidencePack", () => {
+  const record = { source: "github", kind: "bug", goal: "Pressing j on an empty list must not panic", size: "small", urgency: "normal", risk: "low",
+    signals: { kind: { answer: "bug", confidence: 0.91 } }, qa: [], decision: "plan", reason: "clear repro, one file", at: "2026-11-03T12:00:00.000Z", model: "typesafe/jev" };
+  const evidence = { summary: "The list no longer panics", format: "captures", scenarios: [{ text: "j on an empty list keeps the board up", test: "board::tests::empty_list_j", result: "pass" }],
+    findings: [], outOfMap: [], risk: "low", rollback: "revert the commit", howToVerify: "cargo test empty_list_j", commitSha: "8cb5509", media: [{ kind: "screenshot", label: "after", url: "evidence/1/8cb5509/after.png" }], at: "2026-11-03T12:00:00.000Z" };
+  it("round-trip, and refuse a risk off the scale", () => {
+    expect(TriageRecord.parse(record)).toEqual(record);
+    expect(EvidencePack.parse(evidence)).toEqual(evidence);
+    expect(TriageRecord.safeParse({ ...record, risk: "huge" }).success).toBe(false);
+    expect(EvidencePack.safeParse({ ...evidence, format: "slides" }).success).toBe(false);
+  });
+  it("ride on the stage input's task, absent or null for a task without them", () => {
+    const task = { ...stageInputExample.task, record, evidence };
+    expect(StageInput.parse({ ...stageInputExample, task }).task).toMatchObject({ record, evidence });
+    expect(StageInput.parse({ ...stageInputExample, task: { ...stageInputExample.task, record: null, evidence: null } }).task.record).toBeNull();
+    expect(StageInput.parse(stageInputExample).task.record).toBeUndefined();
   });
 });
