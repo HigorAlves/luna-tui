@@ -32,13 +32,17 @@ describe("the answer schema of a question set", () => {
 describe("the issue_classify pack", () => {
   const pack = PACKS.issue_classify;
 
-  it("is a decision on jev: no role, tools or template, and a 0.7 confidence floor", () => {
-    expect(pack).toMatchObject({ kind: "decision", writable: false, engines: { default: "jev", allowed: ["jev"] }, minConfidence: 0.7 });
+  it("is a decision: no role, tools or template, and a 0.7 confidence floor", () => {
+    expect(pack).toMatchObject({ kind: "decision", writable: false, minConfidence: 0.7 });
     expect(pack).not.toHaveProperty("agent");
     expect(pack).not.toHaveProperty("access");
     expect(pack).not.toHaveProperty("template");
     expect(ENGINES.jev.model).toBe("typesafe/jev");
     expect(PACK_LIMITS.issue_classify).toEqual({ maxTurns: pack.maxTurns, timeoutMs: pack.timeoutMs, writable: false });
+  });
+
+  it("runs on Jev by default and on a small Claude or Codex model when Jev is absent", () => {
+    expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
   });
 
   it("asks the kind, the area, whether it is ready and its size, and answers in the schema derived from them", () => {

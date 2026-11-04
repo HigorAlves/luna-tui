@@ -121,6 +121,13 @@ describe("the engines each pack may run on", () => {
     expect(new Set(fallback).size).toBe(fallback.length);
   });
 
+  it("gives every decision pack an engine besides Jev to fall back to", () => {
+    for (const pack of Object.values(PACKS).filter((p) => p.kind === "decision")) {
+      expect(pack.engines.allowed.filter((e) => e !== "jev").length, pack.id).toBeGreaterThan(0);
+      expect(pack.engines.fallback?.some((e) => e !== "jev"), pack.id).toBe(true);
+    }
+  });
+
   it("gives a Claude-only pack no fallback", () => {
     const claudeOnly = Object.values(PACKS).filter((p) => p.engines.allowed.every((id) => id.startsWith("claude:")));
     expect(claudeOnly.length).toBeGreaterThan(0);
