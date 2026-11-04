@@ -33,6 +33,13 @@ const METHODS: Array<keyof GitHub> = [
   "prChecks",
   "failedRunLog",
   "rerunFailedJobs",
+  "updatePrBody",
+  "listPrComments",
+  "updateComment",
+  "prHeadSha",
+  "ensureRelease",
+  "releaseAssets",
+  "uploadReleaseAsset",
 ];
 
 export function fakeGitHub(answers: Partial<{ [K in keyof GitHub]: Methods[K] }> = {}): FakeGitHub {

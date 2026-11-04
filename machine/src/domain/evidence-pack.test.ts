@@ -1,7 +1,7 @@
 import { EvidencePack, type Finding } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { assembleEvidencePack } from "./evidence-pack.ts";
+import { assembleEvidencePack, packComplete } from "./evidence-pack.ts";
 
 const now = new Date("2026-11-04T10:00:00.000Z");
 const record = { source: "github", kind: "feature", goal: "Show the cart total in the header", size: "small", urgency: "normal", risk: "low" as const, signals: {}, qa: [], decision: "plan" as const, reason: "r", at: "2026-11-03T00:00:00.000Z", model: "m" };
@@ -73,5 +73,42 @@ describe("assembleEvidencePack", () => {
     expect(pack).toMatchObject({ format: "video", note: "n", video });
     expect(assembleEvidencePack(full)).not.toHaveProperty("note");
     expect(assembleEvidencePack(full)).not.toHaveProperty("video");
+  });
+});
+
+describe("packComplete", () => {
+  const base = (): EvidencePack => assembleEvidencePack({ ...full, media: [{ kind: "screenshot", label: "a.png", url: "https://github.com/o/a/releases/download/t/a.png" }] });
+  const never = () => false;
+
+  it("is ok for a full pack whose commit is the head", () => {
+    expect(packComplete(base(), "abc1234def5678", never)).toEqual({ ok: true, problems: [] });
+  });
+
+  it("names a commit that is not the head", () => {
+    const result = packComplete(base(), "fff9999", never);
+    expect(result.ok).toBe(false);
+    expect(result.problems).toEqual([expect.stringContaining("abc1234")]);
+    expect(result.problems[0]).toContain("fff9999");
+  });
+
+  it("names each missing section", () => {
+    const empty = { ...base(), summary: " ", rollback: "", howToVerify: "", scenarios: [] };
+    const { ok, problems } = packComplete(empty, "abc1234def5678", never);
+    expect(ok).toBe(false);
+    expect(problems.join("\n")).toMatch(/summary/);
+    expect(problems.join("\n")).toMatch(/rollback/);
+    expect(problems.join("\n")).toMatch(/how to verify/i);
+    expect(problems.join("\n")).toMatch(/scenarios/);
+  });
+
+  it("asks for no scenarios in the text format", () => {
+    expect(packComplete({ ...base(), format: "text", media: [], scenarios: [] }, "abc1234def5678", never).ok).toBe(true);
+  });
+
+  it("wants every media url non-empty and a local path to exist", () => {
+    const pack = { ...base(), media: [{ kind: "screenshot" as const, label: "a.png", url: "" }, { kind: "screenshot" as const, label: "b.png", url: "/state/evidence/t/abc/b.png" }, { kind: "screenshot" as const, label: "c.png", url: "/state/evidence/t/abc/c.png" }] };
+    const result = packComplete(pack, "abc1234def5678", (path) => path.endsWith("b.png"));
+    expect(result.ok).toBe(false);
+    expect(result.problems).toEqual([expect.stringContaining("a.png"), expect.stringContaining("c.png")]);
   });
 });

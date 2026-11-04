@@ -1,0 +1,129 @@
+import type { EvidencePack } from "@hardness/contracts";
+import { describe, expect, it } from "vitest";
+
+import { COMMENT_MARKER, SECTION_END, SECTION_START, mergeSection, renderEvidenceComment, renderEvidenceSection, stripSection } from "./evidence-markdown.ts";
+
+const pack = (over: Partial<EvidencePack> = {}): EvidencePack => ({
+  summary: "Show the cart total. 2 scenarios: 2 passed. Shown as video; risk medium.",
+  format: "video",
+  scenarios: [
+    { text: "Total shows after adding an item", test: "qa-cart.webm#t=0", result: "pass" },
+    { text: "Empty cart shows zero", test: null, result: "partial" },
+  ],
+  findings: ["should_fix: memoise the total (web/cart.tsx:4)"],
+  outOfMap: ["web/format.ts: shared helper"],
+  risk: "medium",
+  rollback: "Revert the merge commit.",
+  howToVerify: "http://localhost:3000/app",
+  commitSha: "abc1234def5678",
+  media: [
+    { kind: "video", label: "walkthrough.mp4", url: "https://github.com/o/a/releases/download/luna-evidence/t1-abc1234-walkthrough.mp4" },
+    { kind: "screenshot", label: "cart.png", url: "https://github.com/o/a/releases/download/luna-evidence/t1-abc1234-cart.png" },
+  ],
+  video: { file: "walkthrough.mp4", durationS: 92.4, verdict: "ship", scores: { hook: 9, clarity: 8, truth: 7 }, defects: [], rounds: 1 },
+  at: "2026-11-04T10:00:00.000Z",
+  ...over,
+});
+
+describe("renderEvidenceSection", () => {
+  it("sits between the markers and has every section", () => {
+    const text = renderEvidenceSection(pack());
+    expect(text.startsWith(SECTION_START)).toBe(true);
+    expect(text.trimEnd().endsWith(SECTION_END)).toBe(true);
+    expect(text).toContain("## Evidence");
+    expect(text).toContain("Show the cart total.");
+    expect(text).toContain("**Format** video · **Commit** `abc1234` · **Risk** medium");
+    expect(text).toContain("| Scenario | Proof | Result |");
+    expect(text).toContain("| Total shows after adding an item | qa-cart.webm#t=0 | pass |");
+    expect(text).toContain("| Empty cart shows zero | none | partial |");
+    expect(text).toContain("should_fix: memoise the total (web/cart.tsx:4)");
+    expect(text).toContain("web/format.ts: shared helper");
+    expect(text).toContain("**Rollback.** Revert the merge commit.");
+    expect(text).toContain("**How to verify.** http://localhost:3000/app");
+  });
+
+  it("links the media, and gives the video its duration, the critic's verdict and the mean score", () => {
+    const text = renderEvidenceSection(pack());
+    expect(text).toContain("[walkthrough.mp4](https://github.com/o/a/releases/download/luna-evidence/t1-abc1234-walkthrough.mp4)");
+    expect(text).toContain("[cart.png](https://github.com/o/a/releases/download/luna-evidence/t1-abc1234-cart.png)");
+    expect(text).toContain("1:32");
+    expect(text).toContain("critic: ship");
+    expect(text).toContain("8.0/10");
+  });
+
+  it("never prints a host path: a local copy is named, not linked", () => {
+    const text = renderEvidenceSection(pack({ media: [{ kind: "screenshot", label: "cart.png", url: "/Users/me/.luna/evidence/t1/abc/cart.png" }] }));
+    expect(text).toContain("cart.png (local copy)");
+    expect(text).not.toContain("/Users/me");
+  });
+
+  it("says why a format was degraded", () => {
+    expect(renderEvidenceSection(pack({ format: "captures", video: null, note: "the video image is not built" }))).toContain("> Degraded: the video image is not built");
+    expect(renderEvidenceSection(pack())).not.toContain("Degraded");
+  });
+
+  it("leaves out the sections a text pack has nothing for", () => {
+    const text = renderEvidenceSection(pack({ format: "text", scenarios: [], findings: [], outOfMap: [], media: [], video: null }));
+    expect(text).not.toContain("| Scenario |");
+    expect(text).not.toContain("### Findings");
+    expect(text).not.toContain("### Media");
+    expect(text).toContain("**Rollback.**");
+  });
+
+  it("keeps a model's text from breaking the table or the markers", () => {
+    const text = renderEvidenceSection(pack({ scenarios: [{ text: `a | b\nc ${SECTION_END} <!-- x -->`, test: null, result: "pass" }], findings: [`hi @octocat ${SECTION_START}`] }));
+    expect(text.split(SECTION_END)).toHaveLength(2);
+    expect(text.split(SECTION_START)).toHaveLength(2);
+    expect(text).toContain("a \\| b c");
+    expect(text).not.toContain("<!-- x -->");
+    expect(text).not.toMatch(/@octocat/);
+  });
+
+  it("truncates the scenario table first when the section is over its cap", () => {
+    const many = Array.from({ length: 400 }, (_, i) => ({ text: `scenario number ${i} with some words to take space`, test: null, result: "pass" as const }));
+    const text = renderEvidenceSection(pack({ scenarios: many }), { maxChars: 6000 });
+    expect(text.length).toBeLessThanOrEqual(6000);
+    expect(text).toMatch(/… \d+ more/);
+    expect(text).toContain("**Rollback.**");
+    expect(text).toContain("### Findings");
+    expect(text.trimEnd().endsWith(SECTION_END)).toBe(true);
+  });
+
+  it("still ends with the end marker when something other than the table is too big", () => {
+    const text = renderEvidenceSection(pack({ findings: Array.from({ length: 500 }, (_, i) => `bug: finding ${i} ${"x".repeat(60)} (a.ts:1)`) }), { maxChars: 4000 });
+    expect(text.length).toBeLessThanOrEqual(4000);
+    expect(text.trimEnd().endsWith(SECTION_END)).toBe(true);
+  });
+
+  it("defaults to a 60 000 character cap", () => {
+    const many = Array.from({ length: 3000 }, (_, i) => ({ text: `scenario ${i} ${"y".repeat(40)}`, test: null, result: "pass" as const }));
+    expect(renderEvidenceSection(pack({ scenarios: many })).length).toBeLessThanOrEqual(60_000);
+  });
+});
+
+describe("mergeSection and stripSection", () => {
+  const section = renderEvidenceSection(pack());
+  it("appends the section to a body that has none", () => {
+    expect(mergeSection("## Why\n- a", section)).toBe(`## Why\n- a\n\n${section}`);
+    expect(mergeSection("", section)).toBe(section);
+  });
+  it("replaces the section a body already has, once, leaving the rest alone", () => {
+    const old = renderEvidenceSection(pack({ summary: "OLD" }));
+    const merged = mergeSection(`before\n\n${old}\n\nafter`, section);
+    expect(merged).toBe(`before\n\n${section}\n\nafter`);
+    expect(mergeSection(merged, section)).toBe(merged);
+  });
+  it("strips the section and the blank lines around it", () => {
+    expect(stripSection(`before\n\n${section}\n\nafter`)).toBe("before\n\nafter");
+    expect(stripSection("nothing here")).toBe("nothing here");
+  });
+});
+
+describe("renderEvidenceComment", () => {
+  it("is the section plus the comment marker", () => {
+    const text = renderEvidenceComment(pack());
+    expect(text).toContain(COMMENT_MARKER);
+    expect(text).toContain("## Evidence");
+    expect(COMMENT_MARKER).toBe("<!-- luna-evidence-comment -->");
+  });
+});

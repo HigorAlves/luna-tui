@@ -35,12 +35,18 @@ export interface OctokitLike {
     repos: {
       get(params: Record<string, unknown>): Promise<{ data: { default_branch: string } }>;
       getCombinedStatusForRef(params: Record<string, unknown>): Promise<{ data: { statuses: Array<{ context: string; state: string; target_url: string | null }> } }>;
+      getReleaseByTag(params: Record<string, unknown>): Promise<{ data: { id: number; html_url: string } }>;
+      createRelease(params: Record<string, unknown>): Promise<{ data: { id: number; html_url: string } }>;
+      listReleaseAssets: unknown;
+      uploadReleaseAsset(params: Record<string, unknown>): Promise<{ data: { browser_download_url: string } }>;
     };
     git: { deleteRef(params: Record<string, unknown>): Promise<unknown> };
     checks: { listForRef(params: Record<string, unknown>): Promise<{ data: { check_runs: Array<{ name: string; status: string; conclusion: string | null; html_url: string | null }> } }> };
     issues: {
       listForRepo: unknown;
       createComment(params: Record<string, unknown>): Promise<unknown>;
+      listComments: unknown;
+      updateComment(params: Record<string, unknown>): Promise<unknown>;
     };
     actions: {
       listJobsForWorkflowRun(params: Record<string, unknown>): Promise<{ data: { jobs: Array<{ id: number; name: string; conclusion: string | null }> } }>;
@@ -307,6 +313,61 @@ export class OctokitGitHub implements GitHub {
       logs.push(`== ${job.name} ==\n${String(log.data)}`);
     }
     return logs.join("\n");
+  }
+
+  async updatePrBody(slug: string, number: number, body: string): Promise<void> {
+    const { owner, repo } = repoRef(slug);
+    await call(`updating the body of ${slug}#${number}`, () => this.octokit.rest.pulls.update({ owner, repo, pull_number: number, body }));
+  }
+
+  async listPrComments(slug: string, number: number): Promise<Array<{ id: number; body: string; url: string }>> {
+    const { owner, repo } = repoRef(slug);
+    const rows = await call(`listing the comments of ${slug}#${number}`, () =>
+      this.octokit.paginate<{ id: number; body?: string | null; html_url: string }>(this.octokit.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 }),
+    );
+    return rows.map((c) => ({ id: c.id, body: c.body ?? "", url: c.html_url }));
+  }
+
+  async updateComment(slug: string, commentId: number, body: string): Promise<void> {
+    const { owner, repo } = repoRef(slug);
+    await call(`updating comment ${commentId} on ${slug}`, () => this.octokit.rest.issues.updateComment({ owner, repo, comment_id: commentId, body }));
+  }
+
+  async prHeadSha(slug: string, number: number): Promise<string | null> {
+    const { owner, repo } = repoRef(slug);
+    const { data } = await call(`reading ${slug}#${number}`, () => this.octokit.rest.pulls.get({ owner, repo, pull_number: number }));
+    return (data as { head?: { sha?: string } } | undefined)?.head?.sha ?? null;
+  }
+
+  async ensureRelease(slug: string, tag: string, release: { name: string; prerelease: boolean }): Promise<{ id: number; url: string }> {
+    const { owner, repo } = repoRef(slug);
+    try {
+      const { data } = await this.octokit.rest.repos.getReleaseByTag({ owner, repo, tag });
+      return { id: data.id, url: data.html_url };
+    } catch (error) {
+      const status = (error as { status?: number })?.status;
+      if (status !== 404) throw new GitHubError(`reading the ${tag} release of ${slug} failed${status ? ` (${status})` : ""}: ${(error as { message?: string })?.message ?? String(error)}`);
+    }
+    const { data } = await call(`creating the ${tag} release of ${slug}`, () =>
+      this.octokit.rest.repos.createRelease({ owner, repo, tag_name: tag, name: release.name, prerelease: release.prerelease }),
+    );
+    return { id: data.id, url: data.html_url };
+  }
+
+  async releaseAssets(slug: string, releaseId: number): Promise<Array<{ id: number; name: string; url: string }>> {
+    const { owner, repo } = repoRef(slug);
+    const rows = await call(`listing the assets of release ${releaseId}`, () =>
+      this.octokit.paginate<{ id: number; name: string; browser_download_url: string }>(this.octokit.rest.repos.listReleaseAssets, { owner, repo, release_id: releaseId, per_page: 100 }),
+    );
+    return rows.map((a) => ({ id: a.id, name: a.name, url: a.browser_download_url }));
+  }
+
+  async uploadReleaseAsset(slug: string, releaseId: number, name: string, data: Buffer, contentType: string): Promise<{ url: string }> {
+    const { owner, repo } = repoRef(slug);
+    const { data: asset } = await call(`uploading ${name} to release ${releaseId}`, () =>
+      this.octokit.rest.repos.uploadReleaseAsset({ owner, repo, release_id: releaseId, name, data, headers: { "content-type": contentType, "content-length": data.length } }),
+    );
+    return { url: asset.browser_download_url };
   }
 
   async rerunFailedJobs(slug: string, runId: string): Promise<void> {

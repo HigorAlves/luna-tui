@@ -209,6 +209,7 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   {
     latestFinish: (taskId, stage) => pipeline.latestStageFinish(taskId, stage),
     save: (id, patch) => engineSpend.updateTask(id, patch),
+    load: async (id) => (await pipeline.get(id)).evidence,
     decisions: evidenceDecisions,
   },
 );

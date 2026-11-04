@@ -28,10 +28,17 @@ function stub(answers: Record<string, unknown>) {
         listFiles: "pulls.listFiles",
         listReviewComments: "pulls.listReviewComments",
       },
-      repos: { get: endpoint("repos.get"), getCombinedStatusForRef: endpoint("repos.getCombinedStatusForRef") },
+      repos: {
+        get: endpoint("repos.get"),
+        getCombinedStatusForRef: endpoint("repos.getCombinedStatusForRef"),
+        getReleaseByTag: endpoint("repos.getReleaseByTag"),
+        createRelease: endpoint("repos.createRelease"),
+        listReleaseAssets: "repos.listReleaseAssets",
+        uploadReleaseAsset: endpoint("repos.uploadReleaseAsset"),
+      },
       git: { deleteRef: endpoint("git.deleteRef") },
       checks: { listForRef: endpoint("checks.listForRef") },
-      issues: { listForRepo: "issues.listForRepo", createComment: endpoint("issues.createComment") },
+      issues: { listForRepo: "issues.listForRepo", createComment: endpoint("issues.createComment"), listComments: "issues.listComments", updateComment: endpoint("issues.updateComment") },
       actions: {
         listJobsForWorkflowRun: endpoint("actions.listJobsForWorkflowRun"),
         downloadJobLogsForWorkflowRun: endpoint("actions.downloadJobLogsForWorkflowRun"),
@@ -145,5 +152,66 @@ describe("OctokitGitHub", () => {
     expect(await github.listReadyIssues("o/a", "ready")).toEqual([{ number: 1, title: "issue", body: null, url: "u", labels: ["bug", "ready"] }]);
     await expect(github.mergePr("o/a", 1)).rejects.toThrow(GitHubError);
     await expect(github.mergePr("o/a", 1)).rejects.toThrow(/merging o\/a#1 failed \(405\): Pull Request is not mergeable/);
+  });
+});
+
+describe("OctokitGitHub: publishing evidence", () => {
+  it("updates a PR's body with pulls.update", async () => {
+    const { github, calls } = stub({ "pulls.update": {} });
+    await github.updatePrBody("o/a", 3, "the body");
+    expect(calls).toEqual([["pulls.update", { owner: "o", repo: "a", pull_number: 3, body: "the body" }]]);
+  });
+
+  it("lists a PR's comments through the issues API, every page, as id, body and url", async () => {
+    const { github, calls } = stub({ "issues.listComments": [{ id: 7, body: "hi", html_url: "u7", user: {} }, { id: 8, body: null, html_url: "u8" }] });
+    expect(await github.listPrComments("o/a", 3)).toEqual([{ id: 7, body: "hi", url: "u7" }, { id: 8, body: "", url: "u8" }]);
+    expect(calls[0]).toEqual(["paginate issues.listComments", { owner: "o", repo: "a", issue_number: 3, per_page: 100 }]);
+  });
+
+  it("updates a comment by its id", async () => {
+    const { github, calls } = stub({ "issues.updateComment": {} });
+    await github.updateComment("o/a", 7, "new");
+    expect(calls).toEqual([["issues.updateComment", { owner: "o", repo: "a", comment_id: 7, body: "new" }]]);
+  });
+
+  it("reads the PR's head sha, null when GitHub gives none", async () => {
+    expect(await stub({ "pulls.get": { head: { sha: "abc123" } } }).github.prHeadSha("o/a", 3)).toBe("abc123");
+    const { github, calls } = stub({ "pulls.get": {} });
+    expect(await github.prHeadSha("o/a", 3)).toBeNull();
+    expect(calls[0]).toEqual(["pulls.get", { owner: "o", repo: "a", pull_number: 3 }]);
+  });
+
+  it("finds a release by its tag, and creates a pre-release when there is none (a 404)", async () => {
+    const found = stub({ "repos.getReleaseByTag": { id: 11, html_url: "https://x/releases/tag/luna-evidence" } });
+    expect(await found.github.ensureRelease("o/a", "luna-evidence", { name: "Luna evidence", prerelease: true })).toEqual({ id: 11, url: "https://x/releases/tag/luna-evidence" });
+    expect(found.calls).toEqual([["repos.getReleaseByTag", { owner: "o", repo: "a", tag: "luna-evidence" }]]);
+
+    const missing = stub({ "repos.getReleaseByTag": Object.assign(new Error("Not Found"), { status: 404 }), "repos.createRelease": { id: 12, html_url: "https://x/releases/tag/luna-evidence" } });
+    expect(await missing.github.ensureRelease("o/a", "luna-evidence", { name: "Luna evidence", prerelease: true })).toEqual({ id: 12, url: "https://x/releases/tag/luna-evidence" });
+    expect(missing.calls[1]).toEqual(["repos.createRelease", { owner: "o", repo: "a", tag_name: "luna-evidence", name: "Luna evidence", prerelease: true }]);
+  });
+
+  it("does not create a release when the lookup fails for another reason", async () => {
+    const { github, calls } = stub({ "repos.getReleaseByTag": Object.assign(new Error("Bad credentials"), { status: 401 }) });
+    await expect(github.ensureRelease("o/a", "t", { name: "n", prerelease: true })).rejects.toThrow(GitHubError);
+    expect(calls.map((c) => c[0])).toEqual(["repos.getReleaseByTag"]);
+  });
+
+  it("lists a release's assets, every page, with their download urls", async () => {
+    const { github, calls } = stub({ "repos.listReleaseAssets": [{ id: 1, name: "a.png", browser_download_url: "https://x/a.png" }] });
+    expect(await github.releaseAssets("o/a", 11)).toEqual([{ id: 1, name: "a.png", url: "https://x/a.png" }]);
+    expect(calls[0]).toEqual(["paginate repos.listReleaseAssets", { owner: "o", repo: "a", release_id: 11, per_page: 100 }]);
+  });
+
+  it("uploads an asset with its name and content type and answers the download url", async () => {
+    const { github, calls } = stub({ "repos.uploadReleaseAsset": { browser_download_url: "https://x/dl/a.png" } });
+    const data = Buffer.from("png");
+    expect(await github.uploadReleaseAsset("o/a", 11, "t1-abc1234-a.png", data, "image/png")).toEqual({ url: "https://x/dl/a.png" });
+    expect(calls[0]).toEqual(["repos.uploadReleaseAsset", { owner: "o", repo: "a", release_id: 11, name: "t1-abc1234-a.png", data, headers: { "content-type": "image/png", "content-length": 3 } }]);
+  });
+
+  it("wraps a failed upload as a GitHubError", async () => {
+    const { github } = stub({ "repos.uploadReleaseAsset": Object.assign(new Error("Validation Failed"), { status: 422 }) });
+    await expect(github.uploadReleaseAsset("o/a", 11, "n", Buffer.from("x"), "image/png")).rejects.toThrow(/422/);
   });
 });

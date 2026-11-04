@@ -101,6 +101,18 @@ export interface GitHub {
   /** The failed jobs' logs of a workflow run, joined. */
   failedRunLog(slug: string, runId: string): Promise<string>;
   rerunFailedJobs(slug: string, runId: string): Promise<void>;
+  /** Replaces a PR's body. */
+  updatePrBody(slug: string, number: number, body: string): Promise<void>;
+  /** A PR's conversation comments (not its review comments), every page. */
+  listPrComments(slug: string, number: number): Promise<Array<{ id: number; body: string; url: string }>>;
+  updateComment(slug: string, commentId: number, body: string): Promise<void>;
+  /** The head commit of the PR as GitHub sees it, or null when it says none. */
+  prHeadSha(slug: string, number: number): Promise<string | null>;
+  /** The release of `tag`, created as a pre-release (at the default branch head) when there is none. */
+  ensureRelease(slug: string, tag: string, release: { name: string; prerelease: boolean }): Promise<{ id: number; url: string }>;
+  releaseAssets(slug: string, releaseId: number): Promise<Array<{ id: number; name: string; url: string }>>;
+  /** Uploads a file to a release; `url` is the asset's download url. */
+  uploadReleaseAsset(slug: string, releaseId: number, name: string, data: Buffer, contentType: string): Promise<{ url: string }>;
 }
 
 const NO_TOKEN = "no GitHub token: set GITHUB_TOKEN (or GH_TOKEN) for the machine";
@@ -130,6 +142,13 @@ export function noTokenGitHub(): GitHub {
     prChecks: refuse,
     failedRunLog: refuse,
     rerunFailedJobs: refuse,
+    updatePrBody: refuse,
+    listPrComments: refuse,
+    updateComment: refuse,
+    prHeadSha: refuse,
+    ensureRelease: refuse,
+    releaseAssets: refuse,
+    uploadReleaseAsset: refuse,
   };
 }
 

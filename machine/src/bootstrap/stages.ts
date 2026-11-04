@@ -1,12 +1,14 @@
 // Wires up which StageRunner serves which TaskState: the real agent packs (when a
 // credential and the runner image are available), the host-only runners that always run
 // for real, and the stub fallback.
-import type { TaskRoute, TaskState } from "@hardness/contracts";
+import type { EvidencePack, TaskRoute, TaskState } from "@hardness/contracts";
 
 import type { CoverageSummary, Ledger, RunSummary } from "@hardness/contracts";
 
 import type { Config } from "../config.ts";
 import { type Credentials, machineCredentials, removeStaleCodexTemps } from "../adapters/credentials/index.ts";
+import { EvidenceStore } from "../application/evidence-store.ts";
+import { publishEvidence } from "../application/evidence-publish.ts";
 import type { Graph } from "../application/graph.ts";
 import type { Watcher } from "../application/ports.ts";
 import type { Decide } from "../application/stages/check-decide.ts";
@@ -66,8 +68,9 @@ export async function buildRealStages(
   /** Verify's decisions (finding_classify, e2e_failure_cause), bound late like the others; null runs e2e without the failure cause. */
   verifyDecisions?: { decide: Decide | null },
   /** Evidence: the task's latest stage finishes, the pack's save and the format decision (`decide` bound late, once PackRuns exists; null picks captures or text). */
-  evidenceDeps: { latestFinish: EvidenceStageDeps["latestFinish"]; save: EvidenceStageDeps["save"]; decisions: { decide: EvidenceStageDeps["decideFormat"] } } = {
+  evidenceDeps: { latestFinish: EvidenceStageDeps["latestFinish"]; save: EvidenceStageDeps["save"]; load: (taskId: string) => Promise<EvidencePack | null>; decisions: { decide: EvidenceStageDeps["decideFormat"] } } = {
     latestFinish: async () => null,
+    load: async () => null,
     save: async () => {},
     decisions: { decide: null },
   },
@@ -166,7 +169,12 @@ export async function buildRealStages(
     // The memory-review gate has no stage of its own: the retro pack runs after shipping and its
     // proposal rides on the gate; approving applies it at close.
     shipping: withMemoryReview(
-      shipRunnerWith({ exec, github }),
+      shipRunnerWith({
+        exec,
+        github,
+        // Ship publishes the task's Evidence Pack once it is complete and its commit is the PR head.
+        evidence: { load: evidenceDeps.load, save: (taskId, pack) => evidenceDeps.save(taskId, { evidence: pack }), publish: publishEvidence, store: new EvidenceStore(config.stateDir) },
+      }),
       memoryReviewRunner({
         runPack: async (context) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null }),
         stateDir: config.stateDir,

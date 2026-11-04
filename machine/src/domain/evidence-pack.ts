@@ -2,6 +2,7 @@
 // left (the record, the plan, the browser run's manifest, Verify's findings, Build's out-of-map files).
 // Pure: the caller reads the files and says what time it is.
 import type { EvidencePack, Finding, Risk, TriageRecord } from "@hardness/contracts";
+import { existsSync } from "node:fs";
 
 export interface EvidencePackInput {
   task: { title: string; description: string };
@@ -54,4 +55,19 @@ export function assembleEvidencePack(input: EvidencePackInput): EvidencePack {
     ...(input.note ? { note: input.note } : {}),
     at: input.now.toISOString(),
   };
+}
+
+/** Whether a pack may be published: every section there, its commit the PR's head, its media where it says. A local path is checked with `exists`. */
+export function packComplete(pack: EvidencePack, headSha: string, exists: (path: string) => boolean = existsSync): { ok: boolean; problems: string[] } {
+  const problems: string[] = [];
+  if (pack.summary.trim() === "") problems.push("the summary is empty");
+  if (pack.format !== "text" && pack.scenarios.length === 0) problems.push("no scenarios: a captures or video pack must show at least one");
+  if (pack.rollback.trim() === "") problems.push("the rollback is empty");
+  if (pack.howToVerify.trim() === "") problems.push("how to verify is empty");
+  if (pack.commitSha !== headSha) problems.push(`the pack shows ${pack.commitSha.slice(0, 7)} but the PR head is ${headSha.slice(0, 7)}`);
+  for (const m of pack.media) {
+    if (m.url.trim() === "") problems.push(`the media ${m.label} has no url`);
+    else if (!/^https?:\/\//i.test(m.url) && !exists(m.url)) problems.push(`the media ${m.label} is missing on disk`);
+  }
+  return { ok: problems.length === 0, problems };
 }
