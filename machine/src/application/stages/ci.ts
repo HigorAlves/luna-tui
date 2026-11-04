@@ -46,6 +46,27 @@ const parentOf = async (cwd: string): Promise<string | null> => {
   return parent && parent.code === 0 && parent.stdout.trim() ? parent.stdout.trim() : null;
 };
 
+/** The checks that ended red. */
+export const failedChecks = (checks: Check[]): Check[] => checks.filter((c) => FAILED.has(String(c.state).toUpperCase()));
+/** The workflow run a check belongs to, from its link. */
+export const ciRunIdOf = (check: Check): string | undefined => /\/actions\/runs\/(\d+)/.exec(check.link ?? "")?.[1];
+
+/** What the ci_watch pack cannot fetch itself (the sandbox has no GitHub credential): the PR, every check, and the failed runs' log tail. */
+export async function ciContextOf(github: GitHub, slug: string, branch: string, checks: Check[], failed: Check[]): Promise<CiContext> {
+  const pr = await github.findPr(slug, branch).catch(() => null);
+  const runIds = [...new Set(failed.map(ciRunIdOf).filter((id): id is string => Boolean(id)))];
+  const logs: string[] = [];
+  for (const id of runIds) {
+    logs.push(await github.failedRunLog(slug, id).catch((error: unknown) => `(the log of run ${id} could not be read: ${messageOf(error)})`));
+  }
+  const joined = logs.join("\n");
+  return {
+    pr: pr ? { number: pr.number, url: pr.url } : null,
+    checks: checks.map((c) => ({ name: c.name, state: c.state, url: c.link ?? null })),
+    logs: joined ? joined.slice(-LOG_TAIL_CHARS) : null,
+  };
+}
+
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
@@ -113,24 +134,10 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
           : s.kind === "error"
             ? { outcome: "fail", detail: { error: s.error } }
             : null;
-    const failedOf = (checks: Check[]) => checks.filter((c) => FAILED.has(String(c.state).toUpperCase()));
-    const runIdOf = (check: Check) => /\/actions\/runs\/(\d+)/.exec(check.link ?? "")?.[1];
+    const failedOf = failedChecks;
+    const runIdOf = ciRunIdOf;
 
-    /** What the pack cannot fetch itself: the PR, every check, and the failed runs' log tail. */
-    async function gather(checks: Check[], failed: Check[]): Promise<CiContext> {
-      const pr = await deps.github.findPr(slug, branch).catch(() => null);
-      const runIds = [...new Set(failed.map(runIdOf).filter((id): id is string => Boolean(id)))];
-      const logs: string[] = [];
-      for (const id of runIds) {
-        logs.push(await deps.github.failedRunLog(slug, id).catch((error: unknown) => `(the log of run ${id} could not be read: ${messageOf(error)})`));
-      }
-      const joined = logs.join("\n");
-      return {
-        pr: pr ? { number: pr.number, url: pr.url } : null,
-        checks: checks.map((c) => ({ name: c.name, state: c.state, url: c.link ?? null })),
-        logs: joined ? joined.slice(-LOG_TAIL_CHARS) : null,
-      };
-    }
+    const gather = (checks: Check[], failed: Check[]) => ciContextOf(deps.github, slug, branch, checks, failed);
 
     const first = await settle(maxWaitMs);
     const early = stopped(first);

@@ -358,6 +358,23 @@ describe("agent stages through packs", () => {
     expect(input.context.baseCommit).toBe(git(repo, "rev-parse", "HEAD"));
   });
 
+  it("lets the caller name the base commit a pack reads its diff against (a fix round's verifying: only the delta)", async () => {
+    const before = git(repo, "rev-parse", "HEAD");
+    writeFileSync(join(repo, "later.txt"), "x\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "later");
+    await runAgent(deps(fakeSandbox(output())), context("verifying"), "verifying", { baseCommit: before });
+    expect((seen!.input as unknown as StageInput).context.baseCommit).toBe(before);
+  });
+
+  it("hands pr_reply the ship context the host built, and nothing for another pack", async () => {
+    const ship = { kind: "comment" as const, comment: { thread: { id: "T1", path: null, line: null, comments: [] }, pack: { summary: "s", scenarios: [], howToVerify: "h" }, myReplies: 0 } };
+    await runAgent(deps(fakeSandbox(output())), context("shipping"), "pr_reply", { ship });
+    expect((seen!.input as unknown as StageInput).context.ship).toEqual(ship);
+    await runAgent(deps(fakeSandbox(output())), context("ci_watch"), "ci_watch", { ship });
+    expect((seen!.input as unknown as StageInput).context.ship).toBeUndefined();
+  });
+
   it("keeps a finished answer that was also flagged rate-limited; only a run with no answer pauses", async () => {
     // The SDK's usage warning used to arrive with a complete brief; the answer is paid for.
     const finished = await runners(fakeSandbox(output({ rateLimited: true, resetsAt: "1793080800", answer: { kind: "brief", summary: "s" } }))).triage!(context("triage"));

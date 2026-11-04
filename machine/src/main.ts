@@ -21,6 +21,7 @@ import type { EventRow } from "./domain/task.ts";
 import { groundTruthWriter } from "./application/ground-truth.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
+import type { ShipDecide } from "./application/stages/ship-fixes.ts";
 import type { TriageSignalDeps } from "./application/stages/triage-signals.ts";
 import { createIssueClassifier } from "./application/classify.ts";
 import { GitHubIntake } from "./application/intake.ts";
@@ -182,6 +183,8 @@ const buildDecisions: { decide: Decide | null } = { decide: null };
 const verifyDecisions: { decide: Decide | null } = { decide: null };
 /** Evidence's format decision runs through PackRuns as the `evidence` client: bound once it exists. */
 const evidenceDecisions: { decide: ((context: EvidenceContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null } = { decide: null };
+/** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
+const shipDecisions: { decide: ShipDecide | null } = { decide: null };
 const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   config,
   watcher,
@@ -212,6 +215,7 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
     load: async (id) => (await pipeline.get(id)).evidence,
     decisions: evidenceDecisions,
   },
+  shipDecisions,
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
@@ -380,6 +384,7 @@ if (classifier) triageSignals.classify = (issue) => classifier.classify(issue);
 if (packRuns) planDecisions.decide = async (pack, plan) => (await packRuns.run({ pack, context: { plan } }, "plan")).answer;
 if (packRuns) verifyDecisions.decide = async (pack, check) => (await packRuns.run({ pack, context: { check } }, "verify")).answer;
 if (packRuns) evidenceDecisions.decide = async (evidence) => (await packRuns.run({ pack: "evidence_format", context: { evidence } }, "evidence")).answer;
+if (packRuns) shipDecisions.decide = async (pack, ship) => (await packRuns.run({ pack, context: { ship } }, "ship")).answer;
 if (packRuns) buildDecisions.decide = async (pack, check) => (await packRuns.run({ pack, context: { check } }, "build")).answer;
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 const app = createApp({

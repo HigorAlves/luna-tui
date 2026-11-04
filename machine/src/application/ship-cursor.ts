@@ -15,7 +15,7 @@ const ShipCursorSchema = z.object({
   pr: z.object({ slug: z.string(), number: z.number().int() }),
   since: z.string().nullable(),
   seen: z.array(z.string()),
-  threads: z.record(z.string(), z.object({ replies: z.number().int(), lastAt: z.string() })),
+  threads: z.record(z.string(), z.object({ replies: z.number().int(), lastAt: z.string(), fixRounds: z.number().int().optional() })),
   fixRounds: z.number().int(),
   ciReruns: z.number().int(),
   rebases: z.number().int(),
@@ -26,6 +26,8 @@ const ShipCursorSchema = z.object({
   mergeRequested: z.boolean().optional(),
   /** The PR sits in the repo's merge queue: the monitor does not ask to merge it again. */
   queued: z.boolean().optional(),
+  /** The red CI the loop last handled (`<head>:<run ids>`): the same red is not asked about twice. */
+  ciKey: z.string().optional(),
   /** The blockers last noted, so a poll that finds the same ones says nothing. */
   lastBlockers: z.string().optional(),
 });

@@ -23,8 +23,11 @@ These are the suite: run the ones scoped to what you touch before you answer.
 ## The unresolved threads, as the machine fetched them
 {{context.threads}}
 
+## The Evidence Pack
+{{task.evidence}}
+
 ## What to do
-1. Read every thread, then the code it points at (the file at the line, plus or minus 20 lines). Categorize each per `receiving-code-review`: `ACTION` (a change that is right for this codebase), `QUESTION` (the answer is in the code or the plan), `NITPICK` (style; fix when cheap), `DISAGREE` (breaks something, lacks context, YAGNI, or wrong for this stack; verify with a test, a grep for callers or a doc before you say so).
+1. Read the Evidence Pack above first: it says what this change was meant to do and which scenarios it proved, so a fix never undoes one. Then read every thread, then the code it points at (the file at the line, plus or minus 20 lines). Categorize each per `receiving-code-review`: `ACTION` (a change that is right for this codebase), `QUESTION` (the answer is in the code or the plan), `NITPICK` (style; fix when cheap), `DISAGREE` (breaks something, lacks context, YAGNI, or wrong for this stack; verify with a test, a grep for callers or a doc before you say so).
 2. For each `ACTION` (and a cheap `NITPICK`): write the failing test when the thread names a behaviour, make it green, run the scoped checks, commit with a Conventional Commit subject (no body, no attribution). One commit per thread. Minimal diff, no opportunistic refactors, no new dependencies.
 3. Report progress with `mcp__luna__step`, one label per thread.
 4. Dispatch the `reply-drafter` agent once, through the Agent tool, with every thread: its id (verbatim), file and line, the comments, your category, and for each `ACTION` what changed and the commit sha (`git rev-parse --short HEAD` after that commit). It returns one reply per thread with a `resolve` flag. Replies are the person's voice: short, the outcome first, no thanks, no AI attribution.

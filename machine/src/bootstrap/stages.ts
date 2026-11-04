@@ -1,7 +1,7 @@
 // Wires up which StageRunner serves which TaskState: the real agent packs (when a
 // credential and the runner image are available), the host-only runners that always run
 // for real, and the stub fallback.
-import type { EvidencePack, TaskRoute, TaskState } from "@hardness/contracts";
+import type { EvidencePack, ShipContext, TaskRoute, TaskState } from "@hardness/contracts";
 
 import type { CoverageSummary, Ledger, RunSummary } from "@hardness/contracts";
 
@@ -12,7 +12,7 @@ import { publishEvidence } from "../application/evidence-publish.ts";
 import type { Graph } from "../application/graph.ts";
 import type { Watcher } from "../application/ports.ts";
 import type { Decide } from "../application/stages/check-decide.ts";
-import { agentRunners, runAgent } from "../application/stages/pack-runner.ts";
+import { type AgentExtra, agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
 import { type EvidenceDeps, type EvidenceStageDeps, evidenceStage } from "../application/stages/evidence.ts";
@@ -25,12 +25,14 @@ import { prReviewRunner } from "../application/stages/pr-review.ts";
 import { videoPipeline } from "../application/stages/video.ts";
 import { setupRunner } from "../application/stages/setup.ts";
 import { shipRunnerWith } from "../application/stages/ship.ts";
+import { type ShipDecide } from "../application/stages/ship-fixes.ts";
 import { shipMonitor } from "../application/stages/ship-monitor.ts";
+import { verifyRunner } from "../application/stages/verify.ts";
 import { loadCredential } from "../adapters/credentials/claude.ts";
 import { imageExists, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
-import { headCommit } from "../adapters/git/worktree.ts";
+import { HOST_GIT, headCommit } from "../adapters/git/worktree.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { type GitHub, noTokenGitHub } from "../application/github.ts";
 
@@ -76,6 +78,8 @@ export async function buildRealStages(
     save: async () => {},
     decisions: { decide: null },
   },
+  /** Ship's review-loop decisions (event_class, comment_intent, fix_scope, evidence_valid): `decide` is bound late, once PackRuns exists; null sends every review event to a person. */
+  shipDecisions: { decide: ShipDecide | null } = { decide: null },
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -127,6 +131,24 @@ export async function buildRealStages(
   const verifyPack = (context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) =>
     runAgent(deps, context, "verifying", { ...(extra?.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}), ...(extra?.coverage ? { coverage: extra.coverage } : {}) });
   const agents = agentRunners(deps);
+  const saveEvidence = (taskId: string, pack: EvidencePack) => evidenceDeps.save(taskId, { evidence: pack });
+  const evidenceStore = new EvidenceStore(config.stateDir);
+  /** The project's checks over what changed since `since` (a commit the machine read): luna.yaml's list, no review pack. */
+  const deltaChecks = (context: StageContext, since: string) =>
+    verifyRunner({
+      exec: checksExec,
+      runPack: null,
+      stateDir: config.stateDir,
+      policy: async (repoPath) => {
+        const { checks, services, decisions } = await policies.for(repoPath);
+        return { checks, services, decisions };
+      },
+      changedPaths: async (worktreePath) => {
+        if (!/^[0-9a-f]{40,64}$/.test(since)) return null;
+        const out = await exec("git", [...HOST_GIT, "-C", worktreePath, "diff", "--name-only", `${since}..HEAD`]);
+        return out.code === 0 ? out.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : null;
+      },
+    })(context);
   const real: Partial<Record<TaskState, StageRunner>> = {
     ...agents,
     ...(triageSignals && agents.triage ? { triage: withTriageSignals(agents.triage, triageSignals) } : {}),
@@ -186,13 +208,25 @@ export async function buildRealStages(
         exec,
         github,
         // Ship publishes the task's Evidence Pack once it is complete and its commit is the PR head.
-        evidence: { load: evidenceDeps.load, save: (taskId, pack) => evidenceDeps.save(taskId, { evidence: pack }), publish: publishEvidence, store: new EvidenceStore(config.stateDir) },
+        evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishEvidence, store: evidenceStore },
         // Then the PR is watched until it merges: by policy the machine merges it, else a person does.
         stateDir: config.stateDir,
         monitor: shipMonitor({
           github,
           policies,
-          evidence: { load: evidenceDeps.load },
+          evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishEvidence, store: evidenceStore },
+          // The review loop: the decisions bind late; the sub-runs are the same packs the stages run, on the task's own worktree.
+          loop: {
+            get decide() {
+              return shipDecisions.decide;
+            },
+            runPack: (pack, subContext, extra) => {
+              if (pack === "pr_reply") return runAgent(deps, subContext, "pr_reply", { ship: extra as ShipContext });
+              const more = extra as { threads?: AgentExtra["threads"]; baseCommit?: string; ci?: AgentExtra["ci"] };
+              return runAgent(deps, subContext, pack, { ...(more.threads ? { threads: more.threads } : {}), ...(more.baseCommit ? { baseCommit: more.baseCommit } : {}), ...(more.ci ? { ci: more.ci } : {}) });
+            },
+            checks: deltaChecks,
+          },
           stateDir: config.stateDir,
           pollMs: config.shipPoll.intervalMs,
           maxWaitMs: config.shipPoll.maxWaitDays * 86_400_000,

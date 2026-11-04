@@ -109,6 +109,8 @@ export function buildStageInput(opts: {
   review?: ReviewContext | null;
   /** For addressing (a PR task): the unresolved threads the host fetched. */
   threads?: ThreadsContext | null;
+  /** For pr_reply: the thread and the pack the host built. */
+  ship?: ShipContext | null;
   /** Where the repo's code graph is in the container and how current it is; null when it has none. */
   graph?: GraphContext | null;
   /** For the video packs: the scenarios, target, narration and the film's measurements. */
@@ -171,6 +173,7 @@ export function buildStageInput(opts: {
       ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),
       ...(pack === "reviewing" && opts.review ? { review: opts.review } : {}),
       ...(pack === "addressing" && opts.threads ? { threads: opts.threads } : {}),
+      ...(pack === "pr_reply" && opts.ship ? { ship: opts.ship } : {}),
       ...(pack === "reviewing_memory" && opts.history ? { ledger: opts.history.ledger, runs: opts.history.runs } : {}),
       // A retry continues the ledger the last attempt left: committed slices are not redone.
       ...(pack === "implementing" && opts.history?.ledger ? { ledger: opts.history.ledger } : {}),

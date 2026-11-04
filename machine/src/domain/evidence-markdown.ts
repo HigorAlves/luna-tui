@@ -11,7 +11,7 @@ export const COMMENT_MARKER = "<!-- luna-evidence-comment -->";
 export const BODY_CAP = 60_000;
 
 /** A line of someone else's text made safe to print: one line, no HTML at all (a tag can fold the rest of the page away), no mention, no issue reference, no table break. */
-function safe(text: string, table = false): string {
+export function safe(text: string, table = false): string {
   const flat = text
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")

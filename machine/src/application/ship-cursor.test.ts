@@ -18,7 +18,7 @@ describe("the ship cursor", () => {
   });
 
   it("round-trips under tasks/<id>/ship.json", async () => {
-    const cursor: ShipCursor = { ...emptyCursor({ slug: "o/a", number: 3 }), since: "2026-11-04T10:00:00Z", seen: ["comment:1"], threads: { T1: { replies: 1, lastAt: "t" } }, fixRounds: 1, published: { sha: "abc" } };
+    const cursor: ShipCursor = { ...emptyCursor({ slug: "o/a", number: 3 }), since: "2026-11-04T10:00:00Z", seen: ["comment:1"], threads: { T1: { replies: 1, lastAt: "t", fixRounds: 2 } }, ciKey: "abc:77", fixRounds: 1, published: { sha: "abc" } };
     await saveCursor(dir, "t1", cursor);
     expect(await loadCursor(dir, "t1")).toEqual(cursor);
     expect(JSON.parse(await readFile(join(dir, "tasks", "t1", "ship.json"), "utf8"))).toMatchObject({ schema: 1, pr: { slug: "o/a", number: 3 } });

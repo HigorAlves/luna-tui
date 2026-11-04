@@ -236,6 +236,14 @@ describe("buildStageInput", () => {
     expect(buildJiraIntakeInput({ ...jira, repoPath: null }).task.repoPath).toBe("");
   });
 
+  it("carries a ship context to pr_reply only", () => {
+    const ship = { kind: "comment" as const, comment: { thread: { id: "T1", path: "a.ts", line: 3, comments: [{ author: "bo", body: "why?", at: "t" }] }, pack: { summary: "s", scenarios: [], howToVerify: "h" }, myReplies: 1 } };
+    const reply = buildStageInput({ task, stage: "shipping", pack: "pr_reply", attempt: 1, approvals: [], priorFindings: [], ship });
+    expect(reply.context.ship).toEqual(ship);
+    expect(StageInput.safeParse(reply).success).toBe(true);
+    expect(buildStageInput({ task, stage: "shipping", pack: "reviewing_memory", attempt: 1, approvals: [], priorFindings: [], ship }).context.ship).toBeUndefined();
+  });
+
   it("carries what the host fetched for ci_watch, and nothing test_design never wrote", () => {
     const ci = {
       pr: { number: 42, url: "https://x/pull/42" },

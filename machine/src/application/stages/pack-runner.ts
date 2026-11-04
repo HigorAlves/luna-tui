@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -121,6 +121,10 @@ export interface AgentExtra {
   coverage?: CoverageSummary;
   /** The video packs: the scenarios, target, narration and measurements. */
   video?: VideoContext | null;
+  /** verifying after a shipped PR's fix: the commit to diff against, over the branch's fork point (only the delta is reviewed). */
+  baseCommit?: string;
+  /** pr_reply: the thread and the pack, built by the host; a reviewer's text only ever rides here. */
+  ship?: ShipContext;
   /** Extra mounts for the container, after the worktree's own (the critic's /evidence, read-only). */
   mounts?: CredentialMount[];
 }
@@ -197,7 +201,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   if ("note" in choice && choice.note) await context.note?.(choice.note).catch(() => {});
 
   // The repo's code graph, read-only at /graph, with how current it is against where this task forked.
-  const baseCommit = await branchBase(workspace.path, task.repoPath);
+  const baseCommit = extra.baseCommit ?? (await branchBase(workspace.path, task.repoPath));
   const graphStamp = deps.graph && policy.graph ? await deps.graph.stampOf(task.repoPath) : null;
   const graphDir = graphStamp ? deps.graph!.currentDir(task.repoPath) : null;
   if (deps.graph && policy.graph && !graphDir) deps.ensureGraph?.(task.repoPath);
@@ -220,6 +224,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     ci: extra.ci ?? null,
     review: extra.review ?? null,
     threads: extra.threads ?? null,
+    ...(extra.ship ? { ship: extra.ship } : {}),
     ...(extra.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}),
     ...(extra.coverage ? { coverage: extra.coverage } : {}),
     holdoutCases: policy.holdoutCases,

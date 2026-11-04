@@ -1,0 +1,179 @@
+import type { EvidencePack } from "@hardness/contracts";
+import { describe, expect, it, vi } from "vitest";
+
+import type { GitExec } from "../../adapters/git/worktree.ts";
+import { fakeGitHub } from "../../test/github.ts";
+import type { StageContext, StageResult } from "../ports.ts";
+import { type FixInput, fixRound, postable } from "./ship-fixes.ts";
+
+const B = "b".repeat(40);
+const N = "e".repeat(40);
+const ok = (stdout = "") => ({ code: 0, stdout, stderr: "" });
+
+const pack = (): EvidencePack => ({ summary: "Adds the export.", format: "text", scenarios: [{ text: "exports a cart", result: "pass" }] as never, findings: [], outOfMap: [], risk: "low", rollback: "r", howToVerify: "h", commitSha: B, media: [], at: "2026-11-04T00:00:00.000Z" });
+const thread = { id: "T1", path: "src/export.ts", line: 12, comments: [{ author: "bo", body: "please rename x", at: "t" }] };
+
+const answer = (replies: Array<{ threadId: string; body: string; resolve: boolean }> = [{ threadId: "T1", body: "Renamed.", resolve: true }]) => ({ kind: "done", summary: "renamed", replies });
+
+/** A worktree whose head moves when the addressing pack "commits", and a git that records what it was asked. */
+function setup(over: { addressed?: StageResult; commit?: boolean; checks?: StageResult; verifying?: StageResult; valid?: string | Error; pushFails?: boolean; remote?: string; moveDuringChecks?: boolean; noSave?: boolean } = {}) {
+  let head = B;
+  const git: string[][] = [];
+  const exec: GitExec = async (_c, args) => {
+    const a = args.slice(args.indexOf("-C") + 2);
+    git.push(a);
+    if (a[0] === "rev-parse") return ok(head);
+    if (a[0] === "reset") {
+      head = a[3]!;
+      return ok();
+    }
+    if (a[0] === "merge-base") return ok();
+    if (a[0] === "diff" && a[1] === "--name-only") return ok("src/export.ts\nsrc/other.ts\n");
+    if (a[0] === "diff") return ok(" 2 files changed, 3 insertions(+)");
+    if (a[0] === "push") return over.pushFails ? { code: 1, stdout: "", stderr: "rejected" } : ok();
+    return ok();
+  };
+  const runPack = vi.fn(async (pack: string, _context: StageContext, _extra: unknown): Promise<StageResult> => {
+    if (pack === "addressing") {
+      if (over.commit !== false) head = N;
+      return over.addressed ?? { outcome: "pass", detail: { answer: answer() } };
+    }
+    return over.verifying ?? { outcome: "pass", detail: {} };
+  });
+  const checks = vi.fn(async (_context: StageContext, _since: string): Promise<StageResult> => {
+    if (over.moveDuringChecks) head = "c".repeat(40);
+    return over.checks ?? { outcome: "pass", detail: {} };
+  });
+  const decide = vi.fn(async () => {
+    if (over.valid instanceof Error) throw over.valid;
+    return { validity: { choice: over.valid ?? "refresh_text", confidence: 0.9 } };
+  });
+  const github = fakeGitHub({
+    prHeadSha: async () => over.remote ?? B,
+    prFacts: async () => ({ number: 3, title: "t", body: null, url: "https://x/pull/3", baseRefName: "main", headRefName: "hardness/t1", author: { login: "me" } }) as never,
+    threadResolved: async () => false,
+    replyToThread: async () => {},
+    resolveThread: async () => {},
+  });
+  const saved: EvidencePack[] = [];
+  const publish = vi.fn(async ({ pack: p }: { pack: EvidencePack }) => ({ pack: p, comment: "updated" as const, assets: 0 }));
+  const deps = {
+    github,
+    loop: { decide, runPack, checks, exec },
+    policies: { for: async () => ({ decisions: {} }) },
+    evidence: over.noSave ? { load: async () => pack() } : { load: async () => pack(), save: async (_id: string, p: EvidencePack) => void saved.push(p), publish, store: { dirFor: (id: string, sha: string) => `/ev/${id}/${sha}` } },
+  };
+  const context = { task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1" }, stage: "shipping", attempt: 1, runId: "run1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+  const input = (extra: Partial<FixInput> = {}): FixInput => ({ slug: "o/a", number: 3, threads: [thread], scope: "in_place", threadSummary: "rename x in the export", label: "1", postReplies: true, pack: pack(), ...extra });
+  const pushed = () => git.filter((a) => a[0] === "push");
+  const resets = () => git.filter((a) => a[0] === "reset").map((a) => a[3]);
+  return { deps, context, input, runPack, checks, decide, github, saved, publish, pushed, resets, git, headNow: () => head };
+}
+
+describe("a fix round on the shipped PR", () => {
+  it("fixes in place: addressing on the worktree, checks over the delta, a plain push, the reply and resolve, the pack re-stamped and republished", async () => {
+    const s = setup();
+    const out = await fixRound(s.deps, s.context, s.input());
+    expect(out).toMatchObject({ ok: true, head: N, changed: true, replied: 1, resolved: 1, repliedTo: ["T1"] });
+    expect(s.runPack.mock.calls[0]![0]).toBe("addressing");
+    expect(s.runPack.mock.calls[0]![1].runId).toBe("run1-address-1");
+    expect(s.runPack.mock.calls[0]![2]).toMatchObject({ threads: { pr: { number: 3, headRef: "hardness/t1" }, threads: [{ id: "T1", comments: [{ body: "please rename x" }] }] } });
+    expect(s.checks).toHaveBeenCalledWith(expect.objectContaining({ runId: "run1-checks-1" }), B);
+    expect(s.pushed()).toEqual([["push", "-u", "origin", "hardness/t1"]]);
+    expect(s.github.replyToThread.mock.calls).toEqual([["T1", "Renamed."]]);
+    expect(s.github.resolveThread.mock.calls).toEqual([["T1"]]);
+    expect(s.decide).toHaveBeenCalledWith("evidence_valid", { kind: "fix", fix: expect.objectContaining({ changed: ["src/export.ts", "src/other.ts"], threadSummary: "rename x in the export" }) }, "/repo");
+    expect(s.saved).toHaveLength(1);
+    expect(s.saved[0]).toMatchObject({ commitSha: N, summary: "Adds the export. Fixed after review: rename x in the export." });
+    expect(s.publish).toHaveBeenCalledWith(expect.objectContaining({ slug: "o/a", number: 3, localDir: `/ev/t1/${B}` }));
+    expect(s.resets()).toEqual([]);
+  });
+
+  it("resets the worktree to the head it started from and escalates with the findings when a check goes red; nothing is pushed or posted", async () => {
+    const findings = [{ path: "", line: 0, severity: "test", title: "test failed", body: "boom", confidence: 1 }];
+    const s = setup({ checks: { outcome: "fail", detail: { error: "`pnpm test` failed: boom", findings } } });
+    const out = await fixRound(s.deps, s.context, s.input());
+    expect(out).toMatchObject({ ok: false, result: { outcome: "escalated", detail: { reason: expect.stringContaining("boom"), findings } } });
+    expect(s.resets()).toEqual([B]);
+    expect(s.headNow()).toBe(B);
+    expect(s.pushed()).toEqual([]);
+    expect(s.github.replyToThread).not.toHaveBeenCalled();
+    expect(s.saved).toEqual([]);
+  });
+
+  it("re-verifies the delta on a re_verify_partial scope, with the head before the fix as the base, and resets when the review fails", async () => {
+    const good = setup();
+    expect((await fixRound(good.deps, good.context, good.input({ scope: "re_verify_partial" }))).ok).toBe(true);
+    const verify = good.runPack.mock.calls.find((c) => c[0] === "verifying")!;
+    expect(verify[2]).toEqual({ baseCommit: B });
+    expect(verify[1].runId).toBe("run1-verify-1");
+
+    const bad = setup({ verifying: { outcome: "fail", detail: { summary: "a bug in the rename" } } });
+    const out = await fixRound(bad.deps, bad.context, bad.input({ scope: "re_verify_partial" }));
+    expect(out).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("a bug in the rename") } } });
+    expect(bad.resets()).toEqual([B]);
+    expect(bad.pushed()).toEqual([]);
+  });
+
+  it("does not push when the head moved after the checks ran, or the PR's head moved under it", async () => {
+    const moved = setup({ moveDuringChecks: true });
+    expect(await fixRound(moved.deps, moved.context, moved.input())).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("changed while the fix was being checked") } } });
+    expect(moved.pushed()).toEqual([]);
+    expect(moved.resets()).toEqual([B]);
+
+    const someoneElse = setup({ remote: "d".repeat(40) });
+    expect(await fixRound(someoneElse.deps, someoneElse.context, someoneElse.input())).toMatchObject({ ok: false, result: { detail: { escalation: "head_moved" } } });
+    expect(someoneElse.runPack).not.toHaveBeenCalled();
+  });
+
+  it("escalates a refused push and an addressing run that failed or gave up, resetting each time", async () => {
+    const push = setup({ pushFails: true });
+    expect(await fixRound(push.deps, push.context, push.input())).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("git push failed") } } });
+    expect(push.resets()).toEqual([B]);
+
+    const failed = setup({ addressed: { outcome: "fail", detail: { error: "ran out of turns" } } });
+    expect(await fixRound(failed.deps, failed.context, failed.input())).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("ran out of turns") } } });
+    expect(failed.resets()).toEqual([B]);
+
+    const gaveUp = setup({ addressed: { outcome: "pass", detail: { answer: { kind: "escalated", summary: "s", replies: [], escalation: "plan_wrong", reason: "the plan is wrong" } } } });
+    expect(await fixRound(gaveUp.deps, gaveUp.context, gaveUp.input())).toMatchObject({ ok: false, result: { detail: { escalation: "plan_wrong", reason: "the plan is wrong" } } });
+  });
+
+  it("sends the task back to Evidence when the fix changes what a scenario shows, or the decision cannot tell; the push stays", async () => {
+    const media = setup({ valid: "refresh_media" });
+    expect(await fixRound(media.deps, media.context, media.input())).toMatchObject({ ok: false, result: { detail: { escalation: "head_moved" } } });
+    expect(media.pushed()).toHaveLength(1);
+    expect(media.resets()).toEqual([]);
+    expect(media.saved).toEqual([]);
+
+    const unsure = setup({ valid: new Error("no model") });
+    expect(await fixRound(unsure.deps, unsure.context, unsure.input())).toMatchObject({ ok: false, result: { detail: { escalation: "head_moved" } } });
+
+    const nowhere = setup({ noSave: true });
+    expect(await fixRound(nowhere.deps, nowhere.context, nowhere.input())).toMatchObject({ ok: false, result: { detail: { escalation: "head_moved" } } });
+  });
+
+  it("posts only the model's text flattened, and only to threads it was given", async () => {
+    const hostile = [
+      { threadId: "T1", body: "Thanks @bob, fixes #12.\n\n<script>x</script>", resolve: false },
+      { threadId: "T9", body: "not a thread I was given", resolve: true },
+    ];
+    const s = setup({ addressed: { outcome: "pass", detail: { answer: answer(hostile) } } });
+    await fixRound(s.deps, s.context, s.input());
+    const [thread1, body] = s.github.replyToThread.mock.calls[0]!;
+    expect(thread1).toBe("T1");
+    expect(body).not.toMatch(/@bob|#12|<script>|\n/);
+    expect(s.github.replyToThread).toHaveBeenCalledTimes(1);
+    expect(postable("x".repeat(5000)).length).toBe(1500);
+  });
+
+  it("answers with only a reply, and no push, when the pack changed nothing; a CI fix with no change is no fix", async () => {
+    const reply = setup({ commit: false });
+    expect(await fixRound(reply.deps, reply.context, reply.input())).toMatchObject({ ok: true, changed: false, replied: 1 });
+    expect(reply.pushed()).toEqual([]);
+    expect(reply.checks).not.toHaveBeenCalled();
+
+    const ci = setup({ commit: false });
+    expect(await fixRound(ci.deps, ci.context, ci.input({ postReplies: false }))).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("no change") } } });
+  });
+});
