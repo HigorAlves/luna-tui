@@ -28,7 +28,7 @@ Chosen target: {{context.video.target}}
 ## What to do
 1. Use the `demo-recording` skill, with `qa-targets` and `playwright-qa`. Resolve the target and probe it with `curl -sf`; an unreachable target is an escalation, never a fake recording.
 2. Write the demo spec under `e2e/demo/`, using the fixture at `/video-tools/tools/fixture.ts`: `startRecording`, `mark(scene)` before each scene and each transition, `durationFor(scene)` holds, `finish(page)` at the end.
-3. Set `LUNA_NARRATION` to the narration file named in the stage input and `LUNA_TIMING=/out/files/video/timing.json`. The recording must end up at `/out/files/video/recording.webm`.
+3. The job folder is mounted read-only at `/video-job`: `export LUNA_NARRATION=/video-job/narration/narration.json LUNA_TIMING=/out/files/video/timing.json`; `/video-job/timeline.json` has the scene ids. The recording must end up at `/out/files/video/recording.webm`.
 4. Answer `{timing: {marks: [{scene, t}]}, recordingPath, scenesRecorded}`; `recordingPath` is `/out/files/video/recording.webm`.
 
 ## Rules

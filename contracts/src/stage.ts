@@ -405,6 +405,8 @@ export const LunaConfig = z.object({
           .string()
           .regex(/^env:[A-Z_][A-Z0-9_]*$/, "credential must be a reference like env:QA_PASSWORD, never a value")
           .optional(),
+        /** False when the target must not be driven twice (e2e already drove it once, so the video recording is skipped); absent means true. */
+        reentrant: z.boolean().optional(),
       }),
     )
     .optional(),
@@ -427,6 +429,8 @@ export const QaTarget = z.object({
   name: z.string(),
   baseUrl: z.string(),
   credential: z.string().nullable().optional(),
+  /** False when the target must not be driven twice; absent means it may be. */
+  reentrant: z.boolean().optional(),
 });
 export type QaTarget = z.infer<typeof QaTarget>;
 

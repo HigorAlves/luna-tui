@@ -127,7 +127,7 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     maxConcurrent: policy.max_concurrent ?? null,
     holdoutCases: policy.holdout_cases ?? false,
     graph: policy.graph !== "off",
-    qaTargets: qa_targets.map((target) => ({ name: target.name, baseUrl: target.url, credential: target.credential ?? null })),
+    qaTargets: qa_targets.map((target) => ({ name: target.name, baseUrl: target.url, credential: target.credential ?? null, reentrant: target.reentrant ?? true })),
     checks: checks ?? null,
     services,
     toolchains: Object.fromEntries(Object.entries(toolchains).map(([tool, version]) => [tool, String(version)])),

@@ -30,7 +30,7 @@ await narration.finish(page);                // closes the page, writes timing.j
 
 ## Environment
 
-`export LUNA_NARRATION=<the narration.json the input names> LUNA_TIMING=/out/files/video/timing.json`. Configure Playwright's video to record into `/out/files/video/`; copy or rename the result to `/out/files/video/recording.webm`.
+`export LUNA_NARRATION=/video-job/narration/narration.json LUNA_TIMING=/out/files/video/timing.json` (the job folder is mounted read-only at `/video-job`; `/video-job/timeline.json` has the scene ids). Configure Playwright's video to record into `/out/files/video/`; copy or rename the result to `/out/files/video/recording.webm`.
 
 ## Where to write
 

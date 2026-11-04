@@ -10,7 +10,7 @@ when_to_use: Use in the video_qa stage of Evidence.
 
 ## What you have
 
-`/evidence/sheets/beats_sheet.jpg` (a frame 0.3 s after each scene starts), `hook_sheet.jpg` (0 to 3 s, every half second), `phone_sheet.jpg` (one a second, small), `/evidence/report.json` and `report.md` (the measurements), `/evidence/transcript.txt` (what the voice says, heard again), `/evidence/timeline.json`. Read the images with the Read tool. When you cannot read images on this engine, judge from the rest and say so.
+`/evidence/qa/beats_sheet.jpg` (a frame 0.3 s after each scene starts), `hook_sheet.jpg` (0 to 3 s, every half second), `phone_sheet.jpg` (one a second, small), all under `/evidence/qa/`, with `report.json` and `report.md` (the measurements) and `transcript.txt` (what the voice says, heard again); and `/evidence/timeline.json`. Read the images with the Read tool. When you cannot read images on this engine, judge from the rest and say so.
 
 ## Order
 

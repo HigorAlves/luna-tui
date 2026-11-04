@@ -9,10 +9,12 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 
 import { assembleEvidencePack } from "../../domain/evidence-pack.ts";
+import { parseNote } from "../../domain/fix-card.ts";
 import type { Policy } from "../../domain/policy.ts";
 import { approvedCases, approvedPlan } from "../../domain/stage-input.ts";
 import { EvidenceStore } from "../evidence-store.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
+import type { VideoPipeline } from "./video.ts";
 
 export interface EvidenceDeps {
   stateDir: string;
@@ -190,6 +192,8 @@ export interface EvidenceStageDeps extends EvidenceDeps {
   headCommit: (worktreePath: string) => Promise<string>;
   /** Whether the video image is built on this machine. */
   videoImage: () => Promise<boolean>;
+  /** The video pipeline (stages/video.ts); null or absent when the video image is not on this machine. */
+  video?: VideoPipeline | null;
   now?: () => Date;
 }
 
@@ -213,6 +217,7 @@ function plainUrl(raw: unknown): string | null {
   }
 }
 
+const dirExists = (path: string): Promise<boolean> => stat(path).then((s) => s.isDirectory(), () => false);
 const fileExists = (path: string): Promise<boolean> => stat(path).then((s) => s.isFile(), () => false);
 
 /** The change's Evidence Pack: a format picked from the record and the browser run, the pack assembled on the host, a local copy of its media, the pack on the task. */
@@ -278,11 +283,23 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       if (head && head !== task.evidence.commitSha) note = `the browser run proved ${task.evidence.commitSha.slice(0, 7)}; the pack now shows ${head.slice(0, 7)}, which no browser run has seen`;
     }
     const addNote = (text: string) => (note = note ? `${note}; ${text}` : text);
+    // The QA target the film is recorded against: the manifest's by name, else luna.yaml's only or first one.
+    const targets = (await deps.policies.for(task.repoPath)).qaTargets;
+    const targetName = typeof facts.manifest.target?.name === "string" ? facts.manifest.target.name : null;
+    const target = targets.find((t) => t.name === targetName) ?? (targetName === null ? targets[0] : undefined);
+    // How to verify: the QA target's URL as luna.yaml declares it (matched to the manifest's target by name, or the only one), never the manifest's own URL; else the steps file by name, never by host path.
+    // A manifest naming a target luna.yaml does not know gets no URL at all: the person follows the steps instead.
+    const verifyTarget = targets.find((t) => t.name === targetName) ?? (targetName === null && targets.length === 1 ? targets[0] : undefined);
+    const steps = facts.qaDir !== undefined && (await fileExists(join(facts.qaDir, "steps.md"))) ? "follow steps.md in the QA packet" : null;
+    const howToVerify = (verifyTarget ? plainUrl(verifyTarget.baseUrl) : null) ?? steps ?? "run the checks in luna.yaml";
+    let film = false;
     if (format === "video") {
       if (!videoImage) addNote("the video image is not built");
       else if (!hasVideo && !hasSteps) addNote("the browser run left neither a recording nor replayable steps");
-      else addNote("the video pipeline is not wired");
-      format = "captures";
+      else if (!deps.video) addNote("the video pipeline is not wired");
+      else if (target?.reentrant === false) addNote("the QA target is not re-entrant");
+      else film = true;
+      if (!film) format = "captures";
     }
     if (format === "captures" && !hasManifest) {
       addNote("there is no browser run to capture");
@@ -298,6 +315,50 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
     }
     if (commitSha === "") return { outcome: "fail", detail: { step: "evidence", verdict: "missing", artifactCount: 0, error: "the task has no worktree to take the evidence commit from" } };
 
+    // 2b. The film: the pipeline runs on the approved scenarios and the browser run's facts; a person's send-back note re-enters it at the fix.
+    let video: EvidencePack["video"] | undefined;
+    let filmMedia: EvidencePack["media"] = [];
+    let spent: { turns: number; costUsd: number } | undefined;
+    if (film && deps.video) {
+      const sentBack = context.approvals.findLast((a) => a.kind === "awaiting_ship" && a.decision === "sent_back");
+      const card = task.evidence ? parseNote(sentBack?.reason ?? null) : null;
+      const previousRun = card ? await deps.latestFinish(task.id, "evidence") : null;
+      const previousJobDir = previousRun ? join(deps.stateDir, "runs", `${previousRun.runId}-video`) : null;
+      const previous = previousJobDir && (await dirExists(previousJobDir)) ? previousJobDir : null;
+      const facts_ = assembleEvidencePack({
+        task: { title: task.title, description: task.description },
+        record: task.record ?? null,
+        plan: { rollback: plan?.rollback ?? null, risk: risk.success ? risk.data : null },
+        scenarios: facts.scenarios.map((s) => ({ text: s.text, criterion: s.criterion, result: s.result === "pass" || s.result === "partial" || s.result === "skipped" ? s.result : "fail", test: s.test })),
+        findings: [],
+        outOfMap: [],
+        media: [],
+        commitSha,
+        format: "video",
+        howToVerify,
+        now: now(),
+      });
+      const out = await deps.video(context, {
+        scenarios: approvedCases(context.approvals),
+        record: task.record ?? null,
+        pack: { summary: facts_.summary, howToVerify: facts_.howToVerify, risk: facts_.risk },
+        e2eDir: facts.qaDir,
+        target: target ? { name: target.name, baseUrl: target.baseUrl, credential: target.credential ?? null } : null,
+        fixCards: card ? [card] : [],
+        previousJobDir: card ? previous : null,
+      });
+      spent = out.usage;
+      if (out.ok) {
+        video = out.video;
+        filmMedia = out.media;
+      } else {
+        if (out.rateLimited) return { outcome: "fail", rateLimited: true, detail: { step: "evidence", verdict: "missing", artifactCount: 0, error: out.reason }, usage: { ...out.usage } };
+        if (out.video) video = out.video;
+        addNote(out.reason);
+        format = "captures";
+      }
+    }
+
     // 3. The media: the browser run's screenshots, its stitched recording, the manifest and the HAR; none for text.
     const stitched = typeof facts.manifest.video?.file === "string" ? facts.manifest.video.file : null;
     const picked: { path: string; label: string; kind: EvidencePack["media"][number]["kind"] }[] = [];
@@ -309,6 +370,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
         else if (a.kind === "qa-manifest" || a.kind === "har") picked.push({ path: a.path, label: a.label, kind: "report" });
       }
     }
+    for (const m of filmMedia) picked.push({ path: m.url, label: m.label, kind: m.kind });
     const kept = await store.keep(task.id, commitSha, picked);
     const media = kept.flatMap((k) => {
       const kind = picked.find((p) => p.label === k.label)?.kind;
@@ -325,12 +387,6 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       const item = objectOf(o);
       return typeof item?.path === "string" && typeof item.reason === "string" ? [{ path: item.path, reason: item.reason }] : [];
     });
-    // How to verify: the QA target's URL as luna.yaml declares it (matched to the manifest's target by name, or the only one), never the manifest's own URL; else the steps file by name, never by host path.
-    const targets = (await deps.policies.for(task.repoPath)).qaTargets;
-    const targetName = typeof facts.manifest.target?.name === "string" ? facts.manifest.target.name : null;
-    // A manifest naming a target luna.yaml does not know gets no URL at all: the person follows the steps instead.
-    const target = targets.find((t) => t.name === targetName) ?? (targetName === null && targets.length === 1 ? targets[0] : undefined);
-    const steps = facts.qaDir !== undefined && (await fileExists(join(facts.qaDir, "steps.md"))) ? "follow steps.md in the QA packet" : null;
     const pack = assembleEvidencePack({
       task: { title: task.title, description: task.description },
       record: task.record ?? null,
@@ -341,8 +397,9 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       media,
       commitSha,
       format,
-      howToVerify: (target ? plainUrl(target.baseUrl) : null) ?? steps ?? "run the checks in luna.yaml",
+      howToVerify,
       ...(note ? { note } : {}),
+      ...(video !== undefined ? { video } : {}),
       now: now(),
     });
     await store.writePack(task.id, commitSha, pack);
@@ -351,6 +408,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
     const evidence = objectOf(result.detail?.evidence) ?? {};
     return {
       ...result,
+      ...(spent ? { usage: { turns: spent.turns, costUsd: spent.costUsd } } : {}),
       detail: {
         ...result.detail,
         format,

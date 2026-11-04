@@ -24,6 +24,8 @@ RUN pnpm install --frozen-lockfile --filter @hardness/machine...
 
 COPY contracts contracts
 COPY machine/src machine/src
+# The timeline rules the video stage checks on the host are the video tools' own pure library.
+COPY machine/runner-video/tools/lib machine/runner-video/tools/lib
 COPY machine/tsconfig.json machine/
 
 WORKDIR /app/machine

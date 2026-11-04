@@ -15,7 +15,7 @@ You are `{{agent}}`, attempt {{attempt}}. You did not write this film and you do
 Contact sheets (read the images with the Read tool when this engine can):
 {{context.video.sheets}}
 
-Also `/evidence/report.json`, `/evidence/transcript.txt` and `/evidence/timeline.json`. The measurements, as the machine ran them (a FAIL here is a fact, a P0, whatever the sheets show):
+Also `/evidence/qa/report.json`, `/evidence/qa/transcript.txt` and `/evidence/timeline.json`. The measurements, as the machine ran them (a FAIL here is a fact, a P0, whatever the sheets show):
 {{context.video.report}}
 
 What the voice says, heard again from the final audio:

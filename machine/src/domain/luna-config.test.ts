@@ -30,6 +30,9 @@ qa_targets:
   - name: staging
     url: https://stg.example.com
     credential: env:QA_PASSWORD
+    reentrant: false
+  - name: preview
+    url: https://pr-1.example.com
 engines:
   triage: claude:opus
 budget:
@@ -47,7 +50,11 @@ describe("parseLunaConfig", () => {
       maxConcurrent: 1,
       holdoutCases: true,
       graph: true,
-      qaTargets: [{ name: "staging", baseUrl: "https://stg.example.com", credential: "env:QA_PASSWORD" }],
+      // A target is re-entrant unless luna.yaml says it must not be driven twice (the video recording drives it again).
+      qaTargets: [
+        { name: "staging", baseUrl: "https://stg.example.com", credential: "env:QA_PASSWORD", reentrant: false },
+        { name: "preview", baseUrl: "https://pr-1.example.com", credential: null, reentrant: true },
+      ],
       checks: [
         { name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] },
         { name: "machine tests", run: "pnpm test", cwd: "machine", paths: ["machine/**", "contracts/**"] },
@@ -123,6 +130,7 @@ describe("parseLunaConfig", () => {
     expect(() => parseLunaConfig("policy:\n  max_concurrent: 0\n")).toThrow(/policy\.max_concurrent/);
     expect(() => parseLunaConfig("checks:\n  - name: t\n")).toThrow(/checks\.0\.run/);
     expect(() => parseLunaConfig("services:\n  db: { env: {} }\n")).toThrow(/services\.db\.image/);
+    expect(() => parseLunaConfig("qa_targets:\n  - name: s\n    url: https://x\n    reentrant: sometimes\n")).toThrow(/qa_targets\.0\.reentrant/);
     expect(() => parseLunaConfig("qa_targets:\n  - name: s\n    url: stg.example.com\n")).toThrow(/qa_targets\.0\.url.*http/);
     expect(() => parseLunaConfig("qa_targets:\n  - name: s\n    url: https://x\n    credential: hunter2\n")).toThrow(/credential must be a reference/);
     expect(() => parseLunaConfig("- just\n- a list\n")).toThrow(/mapping/);

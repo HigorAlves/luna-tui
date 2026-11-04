@@ -116,7 +116,7 @@ policy:
       kind: { proceed: 0.8, flag: 0.5 }
       archive: { proceed: 0.95 }          # archiving by machine wants a higher bar than labelling (the pack's own: 0.9 / 0.7)
 qa_targets:                               # where e2e may drive the app; the credential is a reference, never a value
-  - { name: staging, url: https://stg.example.com, credential: env:QA_PASSWORD }
+  - { name: staging, url: https://stg.example.com, credential: env:QA_PASSWORD, reentrant: false }   # reentrant: false = never drive it twice; the video recording is skipped there (default true)
 jira:                                     # how this repo's tasks talk to Jira (needs MACHINE_JIRA_SITE/EMAIL/TOKEN)
   project: PLAT                           # where `J` creates issues; also the default for intake
   intake:

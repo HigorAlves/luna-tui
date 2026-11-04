@@ -63,6 +63,8 @@ export interface QaTarget {
   name: string;
   baseUrl: string;
   credential: string | null;
+  /** False when the target must not be driven twice (luna.yaml `reentrant`); absent means it may be. */
+  reentrant?: boolean;
 }
 
 export const DEFAULT_POLICY: Policy = {

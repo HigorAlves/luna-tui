@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { type EvidenceStageDeps, evidenceRunner, evidenceStage } from "./evidence.ts";
+import type { VideoInput, VideoOutcome } from "./video.ts";
 import type { StageContext } from "../ports.ts";
 
 let stateDir: string;
@@ -315,6 +316,98 @@ describe("evidenceStage", () => {
     await run(taskContext());
     const pack = (saved[0]![1] as { evidence: { format: string; note?: string } }).evidence;
     expect(pack).toMatchObject({ format: "captures", note: "the video pipeline is not wired" });
+  });
+
+  describe("the video format", () => {
+    const videoVerdict = { file: "walkthrough.mp4", durationS: 58.5, verdict: "ship" as const, scores: { hook: 9 }, defects: [], rounds: 1 };
+    /** A pipeline that leaves a job dir with a walkthrough and a cover, as the real one does. */
+    function pipeline(outcome?: Partial<VideoOutcome> & { ok?: boolean }) {
+      const calls: VideoInput[] = [];
+      const fn = async (_context: StageContext, input: VideoInput): Promise<VideoOutcome> => {
+        calls.push(input);
+        if (outcome?.ok === false) return { ok: false, reason: "the critic did not pass the second round: hook", degrade: "captures", usage: { turns: 4, costUsd: 0.5 }, ...(outcome as object) } as VideoOutcome;
+        const jobDir = join(stateDir, "runs", "ev-video");
+        mkdirSync(jobDir, { recursive: true });
+        writeFileSync(join(jobDir, "walkthrough.mp4"), "mp4");
+        writeFileSync(join(jobDir, "cover.jpg"), "jpg");
+        return { ok: true, video: videoVerdict, jobDir, usage: { turns: 6, costUsd: 0.75 }, media: [{ kind: "video", label: "walkthrough.mp4", url: join(jobDir, "walkthrough.mp4") }, { kind: "cover", label: "cover.jpg", url: join(jobDir, "cover.jpg") }] };
+      };
+      return { fn, calls };
+    }
+    const wantVideo = { decideFormat: async () => ({ format: { choice: "video", confidence: 0.95 } }), videoImage: async () => true };
+
+    it("runs the pipeline on the approved scenarios and the browser run's facts, and puts the film and its media on the pack", async () => {
+      browserRun();
+      const p = pipeline();
+      const { run, saved } = stage({ ...wantVideo, video: p.fn });
+      const result = await run(taskContext());
+      expect(result.outcome).toBe("pass");
+      expect(p.calls).toHaveLength(1);
+      expect(p.calls[0]).toMatchObject({ scenarios, record, pack: { risk: "medium", howToVerify: "http://localhost:3000/app" }, e2eDir: qaDir(), target: { name: "local" }, fixCards: [], previousJobDir: null });
+      const pack = (saved[0]![1] as { evidence: { format: string; video: unknown; media: { kind: string; label: string; url: string }[]; note?: string } }).evidence;
+      expect(pack.format).toBe("video");
+      expect(pack.video).toEqual(videoVerdict);
+      expect(pack.note).toBeUndefined();
+      expect(pack.media.map((m) => m.label)).toEqual(expect.arrayContaining(["walkthrough.mp4", "cover.jpg", "a.png", "qa-manifest.json"]));
+      const film = pack.media.find((m) => m.label === "walkthrough.mp4")!;
+      expect(film.kind).toBe("video");
+      expect(existsSync(film.url)).toBe(true);
+      expect(film.url).toContain(join("evidence", "t1", "abc1234def"));
+      expect(result.detail?.evidence).toMatchObject({ format: "video", video: videoVerdict });
+      expect(result.usage).toEqual({ turns: 6, costUsd: 0.75 });
+    });
+
+    it("falls back to captures with the pipeline's reason, keeping the critic's scores on the pack", async () => {
+      browserRun();
+      const degraded = { ...videoVerdict, verdict: "degraded" as const, rounds: 2 };
+      const p = pipeline({ ok: false, video: degraded });
+      const { run, saved } = stage({ ...wantVideo, video: p.fn });
+      const result = await run(taskContext());
+      expect(result.outcome).toBe("pass");
+      const pack = (saved[0]![1] as { evidence: { format: string; note?: string; video: unknown; media: { label: string }[] } }).evidence;
+      expect(pack).toMatchObject({ format: "captures", note: "the critic did not pass the second round: hook", video: degraded });
+      expect(pack.media.map((m) => m.label)).not.toContain("walkthrough.mp4");
+      expect(result.usage).toEqual({ turns: 4, costUsd: 0.5 });
+    });
+
+    it("pauses the stage when a pipeline run hit a usage limit", async () => {
+      browserRun();
+      const p = pipeline({ ok: false, rateLimited: true, reason: "video_qa hit a usage limit" });
+      const { run, saved } = stage({ ...wantVideo, video: p.fn });
+      const result = await run(taskContext());
+      expect(result).toMatchObject({ outcome: "fail", rateLimited: true });
+      expect(saved).toEqual([]);
+    });
+
+    it("skips the pipeline for a target that must not be driven twice", async () => {
+      browserRun();
+      const p = pipeline();
+      const { run, saved } = stage({ ...wantVideo, video: p.fn, policies: { for: async () => ({ decisions: {}, qaTargets: [{ name: "local", baseUrl: "http://localhost:3000/app", credential: null, reentrant: false }] }) } });
+      await run(taskContext());
+      expect(p.calls).toEqual([]);
+      expect(saved[0]![1]).toMatchObject({ evidence: { format: "captures", note: "the QA target is not re-entrant" } });
+    });
+
+    it("turns a send-back note into a fix card and reuses the previous film's job dir", async () => {
+      browserRun();
+      mkdirSync(join(stateDir, "runs", "ev-prev-video"), { recursive: true });
+      const p = pipeline();
+      const previous = { summary: "s", format: "video", scenarios: [], findings: [], outOfMap: [], risk: "low", rollback: "r", howToVerify: "h", commitSha: "old1234", media: [], at: "2026-11-03T00:00:00.000Z" };
+      const { run } = stage({ ...wantVideo, video: p.fn, latestFinish: async (_id, name) => (name === "evidence" ? { runId: "ev-prev" } : (finishes[name] ?? null)) });
+      const sentBack = { kind: "awaiting_ship", decision: "sent_back", reason: "t=12.5 scene=add el=cta the headline is cut off" };
+      await run(taskContext({ evidence: previous }, [sentBack]));
+      expect(p.calls[0]!.fixCards).toEqual([{ t: 12.5, scene: "add", element: "cta", text: "the headline is cut off" }]);
+      expect(p.calls[0]!.previousJobDir).toBe(join(stateDir, "runs", "ev-prev-video"));
+    });
+
+    it("starts from the top when the head moved and nobody sent it back: a new commit is a new film", async () => {
+      browserRun();
+      const p = pipeline();
+      const previous = { summary: "s", format: "video", scenarios: [], findings: [], outOfMap: [], risk: "low", rollback: "r", howToVerify: "h", commitSha: "old1234", media: [], at: "2026-11-03T00:00:00.000Z" };
+      const { run } = stage({ ...wantVideo, video: p.fn });
+      await run(taskContext({ evidence: previous }));
+      expect(p.calls[0]).toMatchObject({ fixCards: [], previousJobDir: null });
+    });
   });
 
   it("a text answer passes with no media, and its saved pack says text", async () => {

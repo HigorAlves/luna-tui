@@ -22,10 +22,11 @@ import { type PlanDeps, planStage } from "../application/stages/plan.ts";
 import { type TriageSignalDeps, withTriageSignals } from "../application/stages/triage-signals.ts";
 import { prAddressRunner } from "../application/stages/pr-address.ts";
 import { prReviewRunner } from "../application/stages/pr-review.ts";
+import { videoPipeline } from "../application/stages/video.ts";
 import { setupRunner } from "../application/stages/setup.ts";
 import { shipRunnerWith } from "../application/stages/ship.ts";
 import { loadCredential } from "../adapters/credentials/claude.ts";
-import { imageExists, removeLeftoverContainers, sandboxExecutor } from "../adapters/docker/docker.ts";
+import { imageExists, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
 import { headCommit } from "../adapters/git/worktree.ts";
@@ -97,6 +98,9 @@ export async function buildRealStages(
   if (!qaImage) {
     console.warn(`image ${config.runnerQaImage} is missing (pnpm runner-qa:build): e2e will be skipped`);
   }
+  // The video image carries the narration, card, compose and measure tools; without it video degrades to captures with a note.
+  const videoImage = await imageExists(config.runnerVideoImage);
+  if (!videoImage) console.warn(`image ${config.runnerVideoImage} is missing (pnpm runner-video:build): Evidence will not make a video`);
   // A project's own checks run in the stage image too: what implementing installed there
   // (node_modules with Linux binaries, a Go cache) does not run on the host.
   const checksExec = sandboxExecutor(config.runnerImage);
@@ -105,6 +109,7 @@ export async function buildRealStages(
   const deps = {
     image: config.runnerImage,
     qaImage: config.runnerQaImage,
+    ...(videoImage ? { videoImage: config.runnerVideoImage } : {}),
     credentials,
     worktreesDir: config.worktreesDir,
     stateDir: config.stateDir,
@@ -160,8 +165,15 @@ export async function buildRealStages(
       },
       policies: { for: (repoPath) => policies.for(repoPath) },
       headCommit,
-      // The video image arrives with wave 5's image slice; until then no machine has it.
-      videoImage: async () => false,
+      videoImage: async () => videoImage,
+      video: videoImage
+        ? videoPipeline({
+            sandbox: runSandbox,
+            image: config.runnerVideoImage,
+            stateDir: config.stateDir,
+            runPack: (pack, subContext, extra) => runAgent(deps, subContext, pack, extra),
+          })
+        : null,
     }),
     // The PR tasks' own stages: the host fetches the diff or the threads, the pack answers.
     reviewing: prReviewRunner({ github, runPack: (context, review) => runAgent(deps, context, "reviewing", { review }) }),
