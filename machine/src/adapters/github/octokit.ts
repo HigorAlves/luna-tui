@@ -10,7 +10,9 @@ import {
   GitHubError,
   type GitHub,
   type NewPr,
+  type PrActivity,
   type PrRef,
+  type PrReview,
   type PrSearchHit,
   type ReviewPost,
   repoRef,
@@ -20,7 +22,7 @@ import {
 export interface OctokitLike {
   rest: {
     users: { getAuthenticated(): Promise<{ data: { login: string } }> };
-    teams: { listForAuthenticatedUser: unknown };
+    teams: { listForAuthenticatedUser: unknown; listMembersInOrg: unknown };
     search: { issuesAndPullRequests(params: { q: string; per_page?: number }): Promise<{ data: { items: Array<{ number: number; repository_url: string; updated_at: string }> } }> };
     pulls: {
       get(params: Record<string, unknown>): Promise<{ data: unknown }>;
@@ -31,6 +33,7 @@ export interface OctokitLike {
       createReview(params: Record<string, unknown>): Promise<unknown>;
       listFiles: unknown;
       listReviewComments: unknown;
+      listReviews: unknown;
     };
     repos: {
       get(params: Record<string, unknown>): Promise<{ data: { default_branch: string } }>;
@@ -67,6 +70,7 @@ const THREADS_QUERY = `query($owner:String!,$name:String!,$number:Int!){
       comments(first:50){nodes{author{login} body createdAt}} }} } } }`;
 const REPLY_MUTATION = `mutation($threadId:ID!,$body:String!){
   addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$threadId,body:$body}){comment{id}} }`;
+const ENQUEUE_MUTATION = `mutation($id:ID!){ enqueuePullRequest(input:{pullRequestId:$id}){ mergeQueueEntry{id} } }`;
 const RESOLVE_MUTATION = `mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId}){thread{isResolved}} }`;
 const RESOLVED_QUERY = `query($threadId:ID!){ node(id:$threadId){ ... on PullRequestReviewThread{isResolved} } }`;
 const READY_MUTATION = `mutation($id:ID!){ markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}} }`;
@@ -209,16 +213,75 @@ export class OctokitGitHub implements GitHub {
     return "squash";
   }
 
-  async mergePr(slug: string, number: number): Promise<void> {
+  async mergePr(slug: string, number: number, options: { sha?: string } = {}): Promise<void | { queued: true }> {
     const { owner, repo } = repoRef(slug);
     const { data } = await call(`reading ${slug}#${number}`, () => this.octokit.rest.pulls.get({ owner, repo, pull_number: number }));
-    const head = (data as { head: { ref: string; repo: { full_name: string } | null } }).head;
+    const pr = data as { head: { ref: string; repo: { full_name: string } | null }; node_id?: string };
+    const head = pr.head;
     const merge_method = await this.mergeMethod(owner, repo);
-    await call(`merging ${slug}#${number}`, () => this.octokit.rest.pulls.merge({ owner, repo, pull_number: number, merge_method }));
+    try {
+      await this.octokit.rest.pulls.merge({ owner, repo, pull_number: number, merge_method, ...(options.sha ? { sha: options.sha } : {}) });
+    } catch (error) {
+      const { status, message = "" } = error as { status?: number; message?: string };
+      // A repo with a merge queue refuses a direct merge; the queue merges it, and its branch is not ours to delete yet.
+      if (status === 405 && /merge queue/i.test(message) && pr.node_id) return this.enqueuePr(pr.node_id);
+      throw new GitHubError(`merging ${slug}#${number} failed${status ? ` (${status})` : ""}: ${message || String(error)}`);
+    }
     // The branch goes with it, as `gh pr merge --delete-branch` did; a fork's branch is not ours to delete.
     if (head.repo?.full_name.toLowerCase() === slug.toLowerCase()) {
       await call(`deleting ${head.ref}`, () => this.octokit.rest.git.deleteRef({ owner, repo, ref: `heads/${head.ref}` }));
     }
+  }
+
+  async enqueuePr(nodeId: string): Promise<{ queued: true }> {
+    await call(`enqueuing ${nodeId}`, () => this.octokit.graphql(ENQUEUE_MUTATION, { id: nodeId }));
+    return { queued: true };
+  }
+
+  async prActivity(slug: string, number: number, since: string | null): Promise<PrActivity[]> {
+    const { owner, repo } = repoRef(slug);
+    type Row = { id: number; user: { login: string; type?: string } | null; body?: string | null; created_at?: string; html_url?: string | null };
+    type ReviewRow = { id: number; user: { login: string; type?: string } | null; body?: string | null; state: string; submitted_at?: string | null; html_url?: string | null };
+    const sinceParam = since ? { since } : {};
+    const [comments, reviewComments, reviews] = await call(`listing the activity of ${slug}#${number}`, () =>
+      Promise.all([
+        this.octokit.paginate<Row>(this.octokit.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100, ...sinceParam }),
+        this.octokit.paginate<Row>(this.octokit.rest.pulls.listReviewComments, { owner, repo, pull_number: number, per_page: 100, ...sinceParam }),
+        this.octokit.paginate<ReviewRow>(this.octokit.rest.pulls.listReviews, { owner, repo, pull_number: number, per_page: 100 }),
+      ]),
+    );
+    const isBot = (u: { login: string; type?: string } | null) => u !== null && (u.type === "Bot" || u.login.endsWith("[bot]"));
+    const out: PrActivity[] = [
+      ...comments.map((c): PrActivity => ({ id: `comment:${c.id}`, kind: "comment", actor: c.user?.login ?? null, isBot: isBot(c.user), body: c.body ?? "", state: null, at: c.created_at ?? "", url: c.html_url ?? null })),
+      ...reviewComments.map((c): PrActivity => ({ id: `review_comment:${c.id}`, kind: "review_comment", actor: c.user?.login ?? null, isBot: isBot(c.user), body: c.body ?? "", state: null, at: c.created_at ?? "", url: c.html_url ?? null })),
+      ...reviews
+        .filter((r) => r.submitted_at && (!since || r.submitted_at > since))
+        .map((r): PrActivity => ({ id: `review:${r.id}`, kind: "review", actor: r.user?.login ?? null, isBot: isBot(r.user), body: r.body ?? "", state: r.state, at: r.submitted_at ?? "", url: r.html_url ?? null })),
+    ];
+    return out.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.id.localeCompare(b.id)));
+  }
+
+  async prReviews(slug: string, number: number): Promise<PrReview[]> {
+    const { owner, repo } = repoRef(slug);
+    const rows = await call(`listing the reviews of ${slug}#${number}`, () =>
+      this.octokit.paginate<{ user: { login: string } | null; state: string; commit_id?: string | null; submitted_at?: string | null }>(this.octokit.rest.pulls.listReviews, { owner, repo, pull_number: number, per_page: 100 }),
+    );
+    return rows.map((r) => ({ author: r.user?.login ?? null, state: r.state, commitId: r.commit_id ?? null, at: r.submitted_at ?? "" }));
+  }
+
+  async teamMembers(org: string, teamSlug: string): Promise<string[]> {
+    const rows = await call(`listing the members of ${org}/${teamSlug}`, () =>
+      this.octokit.paginate<{ login: string }>(this.octokit.rest.teams.listMembersInOrg, { org, team_slug: teamSlug, per_page: 100 }),
+    );
+    return rows.map((m) => m.login);
+  }
+
+  async prMerged(slug: string, number: number): Promise<{ merged: boolean; mergedSha: string | null; state: "open" | "closed"; mergedAt: string | null }> {
+    const { owner, repo } = repoRef(slug);
+    const { data } = await call(`reading ${slug}#${number}`, () => this.octokit.rest.pulls.get({ owner, repo, pull_number: number }));
+    const pr = data as { merged?: boolean; merge_commit_sha?: string | null; state?: string; merged_at?: string | null };
+    const merged = pr.merged === true;
+    return { merged, mergedSha: merged ? (pr.merge_commit_sha ?? null) : null, state: pr.state === "open" ? "open" : "closed", mergedAt: merged ? (pr.merged_at ?? null) : null };
   }
 
   async postReview(slug: string, number: number, review: ReviewPost): Promise<void> {

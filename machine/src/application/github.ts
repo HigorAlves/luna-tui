@@ -67,6 +67,29 @@ export interface NewPr {
   draft: boolean;
 }
 
+/** One thing someone did on a PR: a conversation comment, a review comment or a review. */
+export interface PrActivity {
+  /** `comment:<id>`, `review_comment:<id>` or `review:<id>`: stable across polls. */
+  id: string;
+  kind: "comment" | "review" | "review_comment";
+  /** The login, or null for a deleted user. */
+  actor: string | null;
+  isBot: boolean;
+  body: string;
+  /** A review's state (`APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`); null for a comment. */
+  state: string | null;
+  at: string;
+  url: string | null;
+}
+
+/** A submitted review: who, its state, the commit it was given on (when GitHub says) and when. */
+export interface PrReview {
+  author: string | null;
+  state: string;
+  commitId: string | null;
+  at: string;
+}
+
 export interface GitHub {
   /** Who the token belongs to, and the slugs of their teams (empty when the token cannot read them). */
   viewer(): Promise<{ login: string; teams: string[] }>;
@@ -80,8 +103,20 @@ export interface GitHub {
   prComments(slug: string, number: number): Promise<ReviewContext["existingComments"]>;
   /** The unresolved review threads, with the ids replies and resolutions address. */
   prThreads(slug: string, number: number): Promise<ThreadsContext["threads"]>;
-  /** Merges the way the repo allows (squash, else merge, else rebase) and deletes the head branch. */
-  mergePr(slug: string, number: number): Promise<void>;
+  /** Merges the way the repo allows (squash, else merge, else rebase) and deletes the head branch. With `sha`, GitHub
+   *  refuses (409) when the head is no longer that commit. A repo with a merge queue gets the PR enqueued instead and
+   *  the branch stays: `{ queued: true }`. */
+  mergePr(slug: string, number: number, options?: { sha?: string }): Promise<void | { queued: true }>;
+  /** Puts the PR (by its GraphQL node id) in the repo's merge queue. */
+  enqueuePr(nodeId: string): Promise<{ queued: true }>;
+  /** Comments, review comments and reviews on the PR since `since` (null: all), oldest first. */
+  prActivity(slug: string, number: number, since: string | null): Promise<PrActivity[]>;
+  /** Every submitted review, oldest first. */
+  prReviews(slug: string, number: number): Promise<PrReview[]>;
+  /** The logins in `org/<teamSlug>`; throws a GitHubError when the token cannot read the team. */
+  teamMembers(org: string, teamSlug: string): Promise<string[]>;
+  /** Whether the PR is merged, and its state. */
+  prMerged(slug: string, number: number): Promise<{ merged: boolean; mergedSha: string | null; state: "open" | "closed"; mergedAt: string | null }>;
   /** Closes the PR without merging; its branch stays. */
   closePr(slug: string, number: number): Promise<void>;
   postReview(slug: string, number: number, review: ReviewPost): Promise<void>;
@@ -130,6 +165,11 @@ export function noTokenGitHub(): GitHub {
     prComments: refuse,
     prThreads: refuse,
     mergePr: refuse,
+    enqueuePr: refuse,
+    prActivity: refuse,
+    prReviews: refuse,
+    teamMembers: refuse,
+    prMerged: refuse,
     closePr: refuse,
     postReview: refuse,
     replyToThread: refuse,

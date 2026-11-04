@@ -16,7 +16,7 @@ function stub(answers: Record<string, unknown>) {
   const octokit = {
     rest: {
       users: { getAuthenticated: endpoint("users.getAuthenticated") },
-      teams: { listForAuthenticatedUser: "teams.listForAuthenticatedUser" },
+      teams: { listForAuthenticatedUser: "teams.listForAuthenticatedUser", listMembersInOrg: "teams.listMembersInOrg" },
       search: { issuesAndPullRequests: endpoint("search.issuesAndPullRequests") },
       pulls: {
         update: endpoint("pulls.update"),
@@ -27,6 +27,7 @@ function stub(answers: Record<string, unknown>) {
         createReview: endpoint("pulls.createReview"),
         listFiles: "pulls.listFiles",
         listReviewComments: "pulls.listReviewComments",
+        listReviews: "pulls.listReviews",
       },
       repos: {
         get: endpoint("repos.get"),
@@ -152,6 +153,103 @@ describe("OctokitGitHub", () => {
     expect(await github.listReadyIssues("o/a", "ready")).toEqual([{ number: 1, title: "issue", body: null, url: "u", labels: ["bug", "ready"] }]);
     await expect(github.mergePr("o/a", 1)).rejects.toThrow(GitHubError);
     await expect(github.mergePr("o/a", 1)).rejects.toThrow(/merging o\/a#1 failed \(405\): Pull Request is not mergeable/);
+  });
+});
+
+describe("OctokitGitHub: shipping", () => {
+  const head = { head: { ref: "feat/x", repo: { full_name: "o/a" } }, node_id: "PR_node" };
+  const allowed = { allow_squash_merge: true, allow_merge_commit: true, allow_rebase_merge: true };
+
+  it("sends the sha guard with the merge, so the commit merged is the one judged", async () => {
+    const { github, calls } = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": {}, "git.deleteRef": {} });
+    await github.mergePr("o/a", 7, { sha: "abc123" });
+    expect(calls.find((c) => c[0] === "pulls.merge")![1]).toMatchObject({ pull_number: 7, merge_method: "squash", sha: "abc123" });
+    const bare = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": {}, "git.deleteRef": {} });
+    await bare.github.mergePr("o/a", 7);
+    expect(bare.calls.find((c) => c[0] === "pulls.merge")![1]).not.toHaveProperty("sha");
+  });
+
+  it("enqueues the PR when the merge call says the repo has a merge queue, and keeps the branch for the queue", async () => {
+    const queue = Object.assign(new Error("Changes must be made through the merge queue"), { status: 405 });
+    const { github, calls } = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": queue, graphql: { enqueuePullRequest: { mergeQueueEntry: { id: "E1" } } } });
+    expect(await github.mergePr("o/a", 7, { sha: "abc123" })).toEqual({ queued: true });
+    const gql = calls.find((c) => c[0] === "graphql")![1] as { query: string; variables: unknown };
+    expect(gql.query).toContain("enqueuePullRequest");
+    expect(gql.variables).toMatchObject({ id: "PR_node" });
+    expect(calls.map((c) => c[0])).not.toContain("git.deleteRef");
+  });
+
+  it("names a sha mismatch (409) as the failure it is, and does not enqueue for another 405", async () => {
+    const moved = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": Object.assign(new Error("Head branch was modified"), { status: 409 }) });
+    await expect(moved.github.mergePr("o/a", 7, { sha: "old" })).rejects.toThrow(/merging o\/a#7 failed \(409\): Head branch was modified/);
+    const other = stub({ "pulls.get": head, "repos.get": allowed, "pulls.merge": Object.assign(new Error("Pull Request is not mergeable"), { status: 405 }) });
+    await expect(other.github.mergePr("o/a", 7)).rejects.toThrow(/405/);
+    expect(other.calls.map((c) => c[0])).not.toContain("graphql");
+  });
+
+  it("enqueues by node id", async () => {
+    const { github, calls } = stub({ graphql: {} });
+    expect(await github.enqueuePr("PR_node")).toEqual({ queued: true });
+    expect(calls[0]![1]).toMatchObject({ variables: { id: "PR_node" } });
+  });
+
+  it("merges the issue comments, review comments and reviews into one list sorted by time, passing since", async () => {
+    const user = (login: string, type = "User") => ({ login, type });
+    const { github, calls } = stub({
+      "issues.listComments": [{ id: 1, user: user("ana"), body: "why?", created_at: "2026-11-04T10:05:00Z", html_url: "u1" }, { id: 2, user: user("ci[bot]", "Bot"), body: "deployed", created_at: "2026-11-04T10:01:00Z", html_url: "u2" }],
+      "pulls.listReviewComments": [{ id: 3, user: user("bob"), body: "rename", created_at: "2026-11-04T10:03:00Z", html_url: "u3" }],
+      "pulls.listReviews": [
+        { id: 4, user: user("cy"), body: "", state: "APPROVED", submitted_at: "2026-11-04T10:04:00Z", html_url: "u4" },
+        { id: 5, user: user("old"), body: "ok", state: "COMMENTED", submitted_at: "2026-11-04T09:00:00Z", html_url: "u5" },
+        { id: 6, user: null, body: "gone", state: "COMMENTED", submitted_at: "2026-11-04T10:06:00Z", html_url: null },
+      ],
+    });
+    const out = await github.prActivity("o/a", 7, "2026-11-04T10:00:00Z");
+    expect(out.map((a) => [a.id, a.kind, a.actor, a.isBot, a.state])).toEqual([
+      ["comment:2", "comment", "ci[bot]", true, null],
+      ["review_comment:3", "review_comment", "bob", false, null],
+      ["review:4", "review", "cy", false, "APPROVED"],
+      ["comment:1", "comment", "ana", false, null],
+      ["review:6", "review", null, false, "COMMENTED"],
+    ]);
+    expect(out[0]).toMatchObject({ body: "deployed", at: "2026-11-04T10:01:00Z", url: "u2" });
+    expect(calls.filter((c) => String(c[0]).startsWith("paginate")).map((c) => (c[1] as { since?: string }).since)).toEqual(["2026-11-04T10:00:00Z", "2026-11-04T10:00:00Z", undefined]);
+    const all = await stub({ "issues.listComments": [], "pulls.listReviewComments": [], "pulls.listReviews": [{ id: 5, user: user("old"), body: "ok", state: "COMMENTED", submitted_at: "2026-11-04T09:00:00Z", html_url: null }] }).github.prActivity("o/a", 7, null);
+    expect(all).toHaveLength(1);
+  });
+
+  it("lists every review with its author, state, commit and time, and a team's members by login", async () => {
+    const { github, calls } = stub({
+      "pulls.listReviews": [{ id: 1, user: { login: "ana" }, state: "APPROVED", commit_id: "abc", submitted_at: "t1" }, { id: 2, user: null, state: "COMMENTED", submitted_at: "t2" }],
+      "teams.listMembersInOrg": [{ login: "bob" }, { login: "cy" }],
+    });
+    expect(await github.prReviews("o/a", 7)).toEqual([
+      { author: "ana", state: "APPROVED", commitId: "abc", at: "t1" },
+      { author: null, state: "COMMENTED", commitId: null, at: "t2" },
+    ]);
+    expect(await github.teamMembers("acme", "core")).toEqual(["bob", "cy"]);
+    expect(calls.at(-1)![1]).toMatchObject({ org: "acme", team_slug: "core", per_page: 100 });
+  });
+
+  it("turns a team the token cannot read into a GitHubError", async () => {
+    const { github } = stub({ "teams.listMembersInOrg": [] });
+    const denied = new OctokitGitHub({
+      rest: { teams: { listMembersInOrg: "teams.listMembersInOrg" } },
+      paginate: async () => {
+        throw Object.assign(new Error("Not Found"), { status: 404 });
+      },
+    } as unknown as OctokitLike);
+    await expect(denied.teamMembers("acme", "ghosts")).rejects.toThrow(/404/);
+    expect(await github.teamMembers("acme", "core")).toEqual([]);
+  });
+
+  it("shapes a merged, an open and a closed PR", async () => {
+    const merged = stub({ "pulls.get": { merged: true, merge_commit_sha: "m1", state: "closed", merged_at: "2026-11-04T11:00:00Z" } });
+    expect(await merged.github.prMerged("o/a", 7)).toEqual({ merged: true, mergedSha: "m1", state: "closed", mergedAt: "2026-11-04T11:00:00Z" });
+    const open = stub({ "pulls.get": { merged: false, merge_commit_sha: "not-a-merge", state: "open", merged_at: null } });
+    expect(await open.github.prMerged("o/a", 7)).toEqual({ merged: false, mergedSha: null, state: "open", mergedAt: null });
+    const closed = stub({ "pulls.get": { state: "closed" } });
+    expect(await closed.github.prMerged("o/a", 7)).toEqual({ merged: false, mergedSha: null, state: "closed", mergedAt: null });
   });
 });
 

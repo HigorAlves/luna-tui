@@ -1,0 +1,135 @@
+import { describe, expect, it } from "vitest";
+
+import { inFreeze, mergeReadiness, parseDependencies } from "./merge-readiness.ts";
+import type { PrFacts } from "./pull-request.ts";
+
+const HEAD = "9c1f0e2a7b3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f";
+const NOW = new Date("2026-11-04T12:00:00Z");
+
+const pr = (over: Partial<PrFacts> = {}): PrFacts => ({
+  repo: "o/a",
+  number: 12,
+  title: "Export CSV",
+  url: "https://github.com/o/a/pull/12",
+  author: "me",
+  mine: true,
+  reviewRequested: false,
+  isDraft: false,
+  headRef: "hardness/t1",
+  baseRef: "main",
+  fromFork: false,
+  reviewDecision: "APPROVED",
+  mergeable: "MERGEABLE",
+  mergeState: "CLEAN",
+  checks: { state: "success", passed: 2, total: 2, failed: [], all: [] },
+  unresolvedThreads: 0,
+  updatedAt: "2026-11-04T10:00:00Z",
+  headSha: HEAD,
+  headCommittedAt: "2026-11-03T10:00:00Z",
+  nodeId: "PR_1",
+  body: null,
+  ...over,
+});
+
+const input = (over: Partial<Parameters<typeof mergeReadiness>[0]> = {}): Parameters<typeof mergeReadiness>[0] => ({
+  pr: pr(),
+  packSha: HEAD,
+  policy: { autoMerge: "low", freeze: [] },
+  risk: "low",
+  shipApprover: null,
+  now: NOW,
+  dependencies: [],
+  owners: { missing: [], unresolved: [] },
+  ...over,
+});
+
+describe("mergeReadiness", () => {
+  it("is ready, and may merge by itself, for a clean approved green PR the pack describes, with every owner approving", () => {
+    expect(mergeReadiness(input())).toMatchObject({ ready: true, blockers: [], canAutoMerge: true });
+  });
+
+  it("does not count a PR with no CI as blocked, and takes no owners file as nothing to check", () => {
+    const out = mergeReadiness(input({ pr: pr({ checks: { state: "none", passed: 0, total: 0, failed: [], all: [] }, reviewDecision: null }), owners: null }));
+    expect(out.ready).toBe(true);
+  });
+
+  const blocked: Array<[string, Partial<Parameters<typeof mergeReadiness>[0]>, string]> = [
+    ["red CI", { pr: pr({ checks: { state: "failure", passed: 1, total: 2, failed: [], all: [] } }) }, "CI is red"],
+    ["pending CI", { pr: pr({ checks: { state: "pending", passed: 1, total: 2, failed: [], all: [] } }) }, "CI is pending"],
+    ["a conflict", { pr: pr({ mergeable: "CONFLICTING", mergeState: "DIRTY" }) }, "conflicts with the base"],
+    ["GitHub blocking", { pr: pr({ mergeState: "BLOCKED" }) }, "GitHub blocks the merge (BLOCKED)"],
+    ["changes requested", { pr: pr({ reviewDecision: "CHANGES_REQUESTED" }) }, "changes requested"],
+    ["a missing approval", { pr: pr({ reviewDecision: "REVIEW_REQUIRED" }) }, "approval required"],
+    ["a draft", { pr: pr({ isDraft: true }) }, "draft"],
+    ["a missing owner approval", { owners: { missing: [{ path: "src/a.ts", owners: ["@ana", "@acme/core"] }], unresolved: [] } }, "no owner of src/a.ts approved (@ana, @acme/core)"],
+    ["an unresolved owner", { owners: { missing: [], unresolved: ["@acme/ghosts"] } }, "owner @acme/ghosts cannot be resolved"],
+    ["a pack that shows another commit", { packSha: "1111111aaaa" }, "the pack shows 1111111, the head is 9c1f0e2"],
+    ["a freeze", { policy: { autoMerge: "low", freeze: [{ from: "2026-11-04T00:00:00Z", to: "2026-11-05T00:00:00Z", reason: "release week" }] } }, "freeze: release week until 2026-11-05T00:00:00Z"],
+    ["a dependency still open", { dependencies: [{ number: 7, merged: false, closed: false }] }, "blocked by #7"],
+    ["a head fifteen days old", { pr: pr({ headCommittedAt: "2026-10-20T10:00:00Z" }) }, "the head is 15 days old (limit 14)"],
+  ];
+
+  it.each(blocked)("is blocked by %s alone, and says so in plain words", (_name, over, blocker) => {
+    const out = mergeReadiness(input(over));
+    expect(out.blockers).toEqual([blocker]);
+    expect(out.ready).toBe(false);
+    expect(out.canAutoMerge).toBe(false);
+    expect(out.reason).toContain(blocker);
+  });
+
+  it("lets a merged or closed dependency go, and lists every blocker together", () => {
+    expect(mergeReadiness(input({ dependencies: [{ number: 7, merged: true, closed: true }, { number: 8, merged: false, closed: true }] })).ready).toBe(true);
+    const out = mergeReadiness(input({ pr: pr({ isDraft: true, reviewDecision: "CHANGES_REQUESTED" }) }));
+    expect(out.blockers).toEqual(["draft", "changes requested"]);
+  });
+
+  describe("canAutoMerge", () => {
+    const cases: Array<[string, "off" | "low" | "medium", string | null, boolean]> = [
+      ["low", "off", null, false],
+      ["low", "low", null, true],
+      ["low", "medium", null, true],
+      ["medium", "off", null, false],
+      ["medium", "low", null, false],
+      ["medium", "medium", null, true],
+      ["high", "medium", null, false],
+      ["high", "off", "ana", false],
+      ["high", "low", "ana", true],
+      ["high", "medium", "ana", true],
+    ];
+    it.each(cases)("%s risk, auto_merge %s, ship approver %s: %s", (risk, autoMerge, shipApprover, expected) => {
+      const out = mergeReadiness(input({ risk: risk as "low", policy: { autoMerge, freeze: [] }, shipApprover }));
+      expect(out.ready).toBe(true);
+      expect(out.canAutoMerge).toBe(expected);
+    });
+
+    it("never merges a PR that is not ready, whatever the policy", () => {
+      expect(mergeReadiness(input({ pr: pr({ isDraft: true }), policy: { autoMerge: "medium", freeze: [] } })).canAutoMerge).toBe(false);
+    });
+
+    it("says why a ready PR waits for a person", () => {
+      expect(mergeReadiness(input({ policy: { autoMerge: "off", freeze: [] } })).reason).toMatch(/auto-merge/);
+      expect(mergeReadiness(input({ risk: "high" })).reason).toMatch(/ship approver/);
+    });
+  });
+});
+
+describe("parseDependencies", () => {
+  it("reads Depends on and Blocked by, any case, deduped, in order", () => {
+    expect(parseDependencies("Depends on #12\nblocked by #3, BLOCKED BY #12\nSee #99")).toEqual([12, 3]);
+    expect(parseDependencies(null)).toEqual([]);
+    expect(parseDependencies("nothing here")).toEqual([]);
+  });
+});
+
+describe("inFreeze", () => {
+  const freeze = [
+    { from: "2026-11-04T00:00:00Z", to: "2026-11-05T00:00:00Z", reason: "a" },
+    { from: "not a date", to: "2026-11-05T00:00:00Z", reason: "b" },
+  ];
+  it("returns the window that holds now, ignoring a bad date and an end already past", () => {
+    expect(inFreeze(freeze, NOW)?.reason).toBe("a");
+    expect(inFreeze(freeze, new Date("2026-11-05T00:00:00Z"))).toBeNull();
+    expect(inFreeze(freeze, new Date("2026-11-03T23:59:59Z"))).toBeNull();
+    expect(inFreeze([], NOW)).toBeNull();
+  });
+});
