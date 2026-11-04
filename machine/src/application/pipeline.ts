@@ -9,7 +9,7 @@ import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
@@ -32,7 +32,7 @@ import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
+export { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -619,11 +619,33 @@ export class Pipeline {
     decision: "approved" | "sent_back",
     reason?: string,
     response?: Record<string, unknown>,
+    options: { approver?: string } = {},
   ): Promise<TaskRow> {
-    const record = { decision, reason, ...(response ? { response } : {}) };
+    const { approver } = options;
     const task = await this.get(id);
     const open = task.state === "awaiting_approval" ? (await this.approvals(id)).find((a) => a.kind === "awaiting_approval" && a.decision === null) : undefined;
     const outcome = open?.requested.outcome;
+    // A plan of High risk needs two distinct names: the first is kept on the gate, the second closes it.
+    let answered = response;
+    const risk = (open?.requested.risk as { level?: unknown } | undefined)?.level;
+    if (decision === "approved" && open && outcome === undefined && risk === "high") {
+      const prior = await this.store.withTaskLock(id, async (_task, tx) => {
+        const fresh = await tx.findOpenApproval(id);
+        if (!fresh || fresh.kind !== "awaiting_approval") return null;
+        const names = Array.isArray(fresh.requested.approvers) ? fresh.requested.approvers.map(String) : [];
+        if (!approver) throw new ApproverRequiredError(id);
+        if (names.includes(approver)) throw new SameApproverError(id, approver);
+        if (names.length === 0) await tx.updateApprovalRequested(fresh, { ...fresh.requested, approvers: [approver] });
+        return names;
+      });
+      if (prior?.length === 0) {
+        await this.log(id, "approval.partial", { approver, needed: 2, have: 1 });
+        return this.get(id);
+      }
+      if (prior) answered = { ...response, approvers: [...prior, approver] };
+    }
+    if (approver) answered = { ...answered, approver };
+    const record = { decision, reason, ...(answered ? { response: answered } : {}) };
     if (decision === "approved" && (outcome === "archive" || outcome === "conversation")) {
       // One click: a reply is posted on the ticket's thread and an archive is final; neither plans.
       if (outcome === "conversation") await this.log(id, "task.reply", { body: String(open!.requested.reply ?? "") });

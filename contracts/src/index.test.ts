@@ -75,6 +75,10 @@ describe("decision input", () => {
       reason: "rules skipped",
     });
   });
+  it("takes an approver by name, trimmed, and refuses an empty one", () => {
+    expect(DecisionInput.parse({ decision: "approved", approver: "  ana " })).toEqual({ decision: "approved", approver: "ana" });
+    expect(DecisionInput.safeParse({ decision: "approved", approver: "   " }).success).toBe(false);
+  });
   it("leaves applyRules optional", () => {
     expect(DecisionInput.parse({ decision: "approved" })).toEqual({ decision: "approved" });
   });

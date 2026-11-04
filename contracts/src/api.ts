@@ -114,6 +114,8 @@ export const DecisionInput = z.object({
   reason: z.string().nullable().optional(),
   /** At the memory review gate: false approves without writing the proposed rules. */
   applyRules: z.boolean().optional(),
+  /** Who is deciding, by name. A plan of High risk needs two distinct names; any decision keeps its own. */
+  approver: z.string().trim().min(1).max(100).optional(),
 });
 export type DecisionInput = z.infer<typeof DecisionInput>;
 

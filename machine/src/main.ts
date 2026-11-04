@@ -243,7 +243,7 @@ function publish(event: EventRow): void {
   bus.publish({ type: "task.event", event: toEvent(event) });
   void replies.handle(event);
   void jiraSync.handle(event);
-  if (event.kind === "transition" || event.kind === "task.created" || event.kind.startsWith("jira.")) {
+  if (event.kind === "transition" || event.kind === "task.created" || event.kind === "approval.partial" || event.kind.startsWith("jira.")) {
     pipeline.get(event.taskId).then(
       async (task) =>
         bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id), await slaClocks.for(task), await pipeline.glance(task.id)), seq: Number(task.seq) }),

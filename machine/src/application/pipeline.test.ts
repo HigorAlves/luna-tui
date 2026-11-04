@@ -14,7 +14,7 @@ import { StubStages } from "./stages/stubs.ts";
 import { withTriageSignals } from "./stages/triage-signals.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { type BudgetAlert, Pipeline, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
+import { ApproverRequiredError, type BudgetAlert, Pipeline, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
@@ -164,6 +164,53 @@ describe("the plan gate", () => {
     const task = await newTask();
     await pipeline.start(task.id);
     await expect(pipeline.editCases(task.id, cases)).rejects.toThrow(/no test cases/i);
+  });
+});
+
+describe("approvers", () => {
+  const atGate = async (level: "low" | "high") => {
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", risk: { level, scores: {} } } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    return task.id;
+  };
+
+  it("keeps the approver's name on any approval, and approves a plan that is not High risk at once", async () => {
+    const id = await atGate("low");
+    expect((await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" })).state).toBe("awaiting_ship");
+    expect((await pipeline.approvals(id))[0]).toMatchObject({ decision: "approved", response: { approver: "ana" } });
+  });
+
+  it("holds a High-risk plan for a second, distinct name; the first is on the gate as 1 of 2", async () => {
+    const id = await atGate("high");
+    const held = await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" });
+    expect(held.state).toBe("awaiting_approval");
+    const [gate] = await pipeline.approvals(id);
+    expect(gate).toMatchObject({ decision: null, requested: { approvers: ["ana"], risk: { level: "high" } } });
+    expect((await pipeline.events(id)).filter((e) => e.kind === "approval.partial")).toHaveLength(1);
+
+    const done = await pipeline.decide(id, "approved", "ok", undefined, { approver: "bo" });
+    expect(done.state).toBe("awaiting_ship");
+    expect((await pipeline.approvals(id))[0]).toMatchObject({ decision: "approved", response: { approvers: ["ana", "bo"], approver: "bo" } });
+  });
+
+  it("refuses the same name twice and a High-risk approval with no name, leaving the gate open", async () => {
+    const id = await atGate("high");
+    await expect(pipeline.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
+    await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" });
+    await expect(pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" })).rejects.toBeInstanceOf(SameApproverError);
+    expect((await pipeline.get(id)).state).toBe("awaiting_approval");
+  });
+
+  it("counts two simultaneous different approvers once each, never losing one", async () => {
+    const id = await atGate("high");
+    const results = await Promise.allSettled([
+      pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" }),
+      pipeline.decide(id, "approved", undefined, undefined, { approver: "bo" }),
+    ]);
+    expect(results.every((r) => r.status === "fulfilled")).toBe(true);
+    expect((await pipeline.get(id)).state).toBe("awaiting_ship");
+    expect((await pipeline.approvals(id))[0]!.response).toMatchObject({ approvers: expect.arrayContaining(["ana", "bo"]) });
   });
 });
 
