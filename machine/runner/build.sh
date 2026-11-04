@@ -2,11 +2,19 @@
 # Builds the stage image from this checkout: the factory runner (factory/) and the contracts
 # package, installed with the workspace lockfile. Tags the image hardness-runner:dev and
 # hardness-runner:<key>. With --qa it then builds hardness-runner-qa:dev on top (Playwright,
-# chromium, ffmpeg, agent-browser).
+# chromium, ffmpeg, agent-browser). With --video it builds hardness-runner-video:dev on top of that
+# (kokoro-js, whisper and the video tools; builds the QA image first when it is not current).
 set -euo pipefail
 
 qa=0
-[ "${1:-}" = "--qa" ] && qa=1
+video=0
+for arg in "$@"; do
+  case "$arg" in
+    --qa) qa=1 ;;
+    --video) qa=1; video=1 ;;
+    *) echo "unknown option: $arg (use --qa and/or --video)" >&2; exit 2 ;;
+  esac
+done
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
@@ -38,5 +46,18 @@ if [ "$qa" = 1 ]; then
     docker build --build-arg "BASE=hardness-runner:$key" --label "dev.hardness.build=$qa_key" \
       -t hardness-runner-qa:dev -t "hardness-runner-qa:$key" "$here/../runner-qa"
     echo "built hardness-runner-qa:dev and hardness-runner-qa:$key"
+  fi
+fi
+
+if [ "$video" = 1 ]; then
+  video_inputs=()
+  while IFS= read -r f; do video_inputs+=("$f"); done < <(tree_files machine/runner-video)
+  video_key="$(key_of <(echo "$qa_key") "${video_inputs[@]}")"
+  if [ "${REBUILD:-}" != 1 ] && [ "$(current_key hardness-runner-video:dev)" = "$video_key" ]; then
+    echo "hardness-runner-video:dev is up to date (factory $key)"
+  else
+    docker build --build-arg "BASE=hardness-runner-qa:$key" --label "dev.hardness.build=$video_key" \
+      -t hardness-runner-video:dev -t "hardness-runner-video:$key" -f "$here/../runner-video/Dockerfile" "$root"
+    echo "built hardness-runner-video:dev and hardness-runner-video:$key"
   fi
 fi

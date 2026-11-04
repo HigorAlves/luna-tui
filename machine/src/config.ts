@@ -28,6 +28,7 @@ export interface Config {
   runnerImage: string;
   /** Docker image for the e2e stage, with a browser. Used by the QA slices. */
   runnerQaImage: string;
+  runnerVideoImage: string;
   /** Task worktrees go in `<worktreesDir>/<repo>/<branch>`, like `herdr worktree`. */
   worktreesDir: string;
   /** Run inputs, outputs and transcripts. */
@@ -295,6 +296,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     maxConcurrentTasks,
     runnerImage: env.RUNNER_IMAGE ?? "hardness-runner:dev",
     runnerQaImage: env.RUNNER_QA_IMAGE ?? "hardness-runner-qa:dev",
+    runnerVideoImage: env.RUNNER_VIDEO_IMAGE ?? "hardness-runner-video:dev",
     worktreesDir: env.WORKTREES_DIR ?? join(home, "Developer", "worktrees"),
     stateDir,
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },

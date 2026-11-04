@@ -1,0 +1,60 @@
+<!doctype html>
+<!-- A title card, driven by time and nothing else: window.seek(t) puts every element where it is at
+     second t, so the tool can capture frame by frame. No Date.now(), no requestAnimationFrame, no
+     CSS animation. The tool sets window.__CARD__ = { id, role, heading, sub, durationS } first. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; width: 1920px; height: 1080px; overflow: hidden; background: #0e1116; color: #f4f6f8; font-family: "Helvetica Neue", Arial, "Liberation Sans", sans-serif; }
+  #stage { position: relative; width: 1920px; height: 1080px; background: radial-gradient(1200px 700px at 30% 20%, #1b2735, #0e1116); }
+  .block { position: absolute; left: 160px; right: 160px; top: 0; bottom: 0; display: flex; flex-direction: column; justify-content: center; gap: 36px; }
+  #heading { font-weight: 700; line-height: 1.1; opacity: 0; }
+  #sub { font-size: 48px; color: #aab4c0; line-height: 1.25; opacity: 0; }
+  #rule { height: 6px; width: 0; background: #4da3ff; border-radius: 3px; }
+  #tag { position: absolute; left: 160px; bottom: 90px; font-size: 48px; color: #6f7d8c; opacity: 0; }
+</style>
+</head>
+<body>
+<div id="stage" data-id="stage">
+  <div class="block" data-id="block">
+    <div id="rule" data-id="rule"></div>
+    <div id="heading" data-id="heading"></div>
+    <div id="sub" data-id="sub"></div>
+  </div>
+  <div id="tag" data-id="tag"></div>
+</div>
+<script>
+  window.FPS = 30;
+  const card = window.__CARD__ || { id: "card", role: "hook", heading: "", sub: "", durationS: 4 };
+  window.DUR = card.durationS;
+  // Hook heading 96 px, chapter and end headings 56 px (both over the 84 / 48 floors at 1080).
+  const px = card.role === "hook" ? 96 : 56;
+  const heading = document.getElementById("heading");
+  heading.textContent = card.heading;
+  heading.style.fontSize = px + "px";
+  const sub = document.getElementById("sub");
+  sub.textContent = card.sub || "";
+  const tag = document.getElementById("tag");
+  tag.textContent = card.role === "chapter" ? "Next" : "";
+  const clamp = (x) => Math.max(0, Math.min(1, x));
+  const ease = (x) => 1 - Math.pow(1 - clamp(x), 3);
+  // An entrance is opacity plus 10-28 px of travel; the exit fades the whole stage.
+  function enter(el, t, start, len, travel) {
+    const k = ease((t - start) / len);
+    el.style.opacity = String(k);
+    el.style.transform = "translateY(" + ((1 - k) * travel).toFixed(2) + "px)";
+  }
+  window.seek = function (t) {
+    document.getElementById("rule").style.width = (ease(t / 0.6) * 240).toFixed(1) + "px";
+    enter(heading, t, 0.1, 0.5, 28);
+    enter(sub, t, 0.35, 0.5, 16);
+    enter(tag, t, 0.5, 0.4, 10);
+    const out = clamp((window.DUR - t) / 0.3);
+    document.getElementById("stage").style.opacity = String(out);
+  };
+  window.seek(0);
+  window.READY = true;
+</script>
+</body>
+</html>

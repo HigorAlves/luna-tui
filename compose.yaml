@@ -86,6 +86,7 @@ services:
       MACHINE_ENGINE_BUDGETS: ${MACHINE_ENGINE_BUDGETS:-}
       RUNNER_IMAGE: ${RUNNER_IMAGE:-hardness-runner:dev}
       RUNNER_QA_IMAGE: ${RUNNER_QA_IMAGE:-hardness-runner-qa:dev}
+      RUNNER_VIDEO_IMAGE: ${RUNNER_VIDEO_IMAGE:-hardness-runner-video:dev}
       # gh and git push to GitHub over https with this token (`pnpm start` passes `gh auth token`).
       GH_TOKEN: ${GH_TOKEN:-}
       # The Codex (ChatGPT) login for `codex:*` engines: your Codex home, mounted below. The machine

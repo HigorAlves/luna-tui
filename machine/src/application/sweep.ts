@@ -125,7 +125,7 @@ export async function sweepTaskState(db: DataSource, stateDir: string): Promise<
 }
 
 type ExecFn = (command: string, args: string[]) => Promise<ExecResult>;
-const RUNNER_REPOS = ["hardness-runner", "hardness-runner-qa"];
+const RUNNER_REPOS = ["hardness-runner", "hardness-runner-qa", "hardness-runner-video"];
 
 /** Untags `hardness-runner*:<sha>` images whose id differs from what that repository's `:dev`
  *  tag points at: every build leaves one behind, and they were 17 GB at last count. Returns

@@ -9,6 +9,7 @@ design
 machine/runner/*
 !machine/runner/graph
 machine/runner-qa
+!machine/runner-video
 **/.env
 **/.env.*
 **/*.log

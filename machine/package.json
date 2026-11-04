@@ -17,6 +17,8 @@
     "db:generate": "tsx node_modules/typeorm/cli.js migration:generate -d src/adapters/persistence/data-source.ts",
     "runner:build": "bash runner/build.sh",
     "runner-qa:build": "bash runner/build.sh --qa",
+    "runner-video:build": "bash runner/build.sh --video",
+    "runner-video:smoke": "bash runner-video/smoke.sh",
     "smoke:sandbox": "tsx scripts/smoke-sandbox.mjs",
     "golden": "node scripts/golden-task.mjs",
     "gates": "tsx scripts/github-gates.mjs",

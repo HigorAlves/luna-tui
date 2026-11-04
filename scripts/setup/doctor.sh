@@ -49,7 +49,7 @@ else off "Slack inbox" "not set: make integrations"; fi
 
 section "Running"
 if docker_running; then
-  for image in hardness-runner:dev hardness-runner-qa:dev; do
+  for image in hardness-runner:dev hardness-runner-qa:dev hardness-runner-video:dev; do
     if docker image inspect "$image" &>/dev/null; then ok "$image"; else off "$image" "not built: pnpm images"; fi
   done
 fi

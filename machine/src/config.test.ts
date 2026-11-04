@@ -23,6 +23,7 @@ describe("loadConfig", () => {
       maxConcurrentTasks: DEFAULT_MAX_CONCURRENT_TASKS,
       runnerImage: "hardness-runner:dev",
       runnerQaImage: "hardness-runner-qa:dev",
+      runnerVideoImage: "hardness-runner-video:dev",
       worktreesDir: "/home/me/Developer/worktrees",
       stateDir: "/home/me/.local/state/hardness",
       githubPoll: { repos: [], intervalMs: 300_000, label: "ready-for-agent" },

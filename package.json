@@ -10,7 +10,7 @@
     "stop": "docker compose down",
     "api-token": "test -s \"$HOME/.config/hardness/machine-api-token\" || (umask 077 && mkdir -p \"$HOME/.config/hardness\" && openssl rand -hex 32 > \"$HOME/.config/hardness/machine-api-token\")",
     "dev": "docker compose stop machine 2>/dev/null; pnpm images && pnpm db:up && pnpm --filter @hardness/machine dev",
-    "images": "bash machine/runner/build.sh --qa",
+    "images": "bash machine/runner/build.sh --qa --video",
     "test": "pnpm -r test",
     "typecheck": "pnpm -r typecheck",
     "db:up": "docker compose up -d --wait postgres",

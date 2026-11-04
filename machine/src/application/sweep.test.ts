@@ -139,6 +139,8 @@ describe("sweepImages", () => {
       "hardness-runner:fedcba987654 bbb222",
       "hardness-runner-qa:dev ccc333",
       "hardness-runner-qa:111111111111 ddd444",
+      "hardness-runner-video:dev fff666",
+      "hardness-runner-video:222222222222 ggg777",
       "hardness-machine:local eee555",
     ].join("\n");
     const calls: string[][] = [];
@@ -147,7 +149,7 @@ describe("sweepImages", () => {
       return { code: 0, stdout: args[0] === "images" ? `${listing}\n` : "", stderr: "" };
     });
 
-    expect(await sweepImages(exec)).toEqual(["hardness-runner:fedcba987654", "hardness-runner-qa:111111111111"]);
+    expect(await sweepImages(exec)).toEqual(["hardness-runner:fedcba987654", "hardness-runner-qa:111111111111", "hardness-runner-video:222222222222"]);
     expect(calls).toContainEqual(["docker", "rmi", "hardness-runner:fedcba987654"]);
     expect(calls).toContainEqual(["docker", "rmi", "hardness-runner-qa:111111111111"]);
     expect(calls.some((c) => c[1] === "rmi" && /:dev$|0123456789ab|hardness-machine/.test(c[2] ?? ""))).toBe(false);
