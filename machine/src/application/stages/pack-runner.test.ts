@@ -74,6 +74,9 @@ function deps(sandbox: (run: SandboxRun) => Promise<SandboxResult>): AgentDeps {
   };
 }
 
+/** The mounts a run has besides the worktree's own `.git` file. */
+const extraMounts = (run: SandboxRun) => (run.mounts ?? []).filter((m) => m.container !== "/work/.git");
+
 const runners = (sandbox: (run: SandboxRun) => Promise<SandboxResult>) => agentRunners(deps(sandbox));
 
 const context = (stage: StageContext["stage"]): StageContext => ({
@@ -207,7 +210,7 @@ describe("agent stages through packs", () => {
 
     it("mounts the repo's current graph read-only at /graph, points LUNA_GRAPH at it and says how fresh it is", async () => {
       await withGraph(graphOf(true)).triage!(context("triage"));
-      expect(seen!.mounts).toEqual([{ host: "/state/graphs/repo/current", container: "/graph", readOnly: true }]);
+      expect(extraMounts(seen!)).toEqual([{ host: "/state/graphs/repo/current", container: "/graph", readOnly: true }]);
       expect(seen!.extraEnv).toMatchObject({ LUNA_GRAPH: "/graph/graphify-out/graph.json" });
       expect((seen!.input as unknown as StageInput).context.graph).toEqual({ path: "/graph/graphify-out/graph.json", commit: stamp.commit, builtAt: stamp.builtAt, fresh: true });
     });
@@ -220,7 +223,7 @@ describe("agent stages through packs", () => {
     it("mounts nothing and says so when the repo has no graph, and asks for a first build", async () => {
       const ensured: string[] = [];
       await withGraph(graphOf(false), (repo) => ensured.push(repo)).triage!(context("triage"));
-      expect(seen!.mounts ?? []).toEqual([]);
+      expect(extraMounts(seen!)).toEqual([]);
       expect(seen!.extraEnv?.LUNA_GRAPH).toBeUndefined();
       expect((seen!.input as unknown as StageInput).context.graph).toBeNull();
       expect(ensured).toEqual([repo]);
@@ -229,9 +232,20 @@ describe("agent stages through packs", () => {
     it("leaves the graph out when the repo's luna.yaml turns it off", async () => {
       writeFileSync(join(repo, "luna.yaml"), "policy:\n  graph: off\n");
       await withGraph(graphOf(true)).triage!(context("triage"));
-      expect(seen!.mounts ?? []).toEqual([]);
+      expect(extraMounts(seen!)).toEqual([]);
       expect((seen!.input as unknown as StageInput).context.graph).toBeNull();
     });
+  });
+
+  it("mounts the linked worktree's .git file read-only over /work/.git in every stage, and keeps the admin dir's pointers read-only in a writable one", async () => {
+    await runners(fakeSandbox(output())).triage!(context("triage"));
+    expect(seen!.mounts).toContainEqual({ host: join(seen!.worktree, ".git"), container: "/work/.git", readOnly: true });
+    await runners(fakeSandbox(output())).implementing!(context("implementing"));
+    expect(seen!.writable).toBe(true);
+    expect(seen!.mounts).toContainEqual({ host: join(seen!.worktree, ".git"), container: "/work/.git", readOnly: true });
+    const name = seen!.worktree.split("/").pop()!;
+    expect(existsSync(join(seen!.gitDir!, "worktrees", name, "commondir"))).toBe(true);
+    expect(seen!.gitReadOnly).toEqual(expect.arrayContaining(["hooks", "config", `worktrees/${name}/commondir`, `worktrees/${name}/gitdir`]));
   });
 
   it("gives the sandbox the repo's cache volume, so a retry or the next task of the repo installs warm", async () => {

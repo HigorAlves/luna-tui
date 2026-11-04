@@ -176,6 +176,15 @@ async function clearStaleLock(worktreePath: string): Promise<void> {
   }
 }
 
+/** The admin dir of a linked worktree (`<common>/worktrees/<name>`); null for a main checkout or when git cannot say. */
+export async function worktreeAdminDir(worktreePath: string): Promise<string | null> {
+  const dir = await exec("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-dir"]);
+  const common = await exec("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
+  if (dir.code !== 0 || common.code !== 0) return null;
+  const admin = dir.stdout.trim();
+  return admin && admin !== common.stdout.trim() ? admin : null;
+}
+
 /**
  * Discards whatever a run left uncommitted, back to `ref` (defaults to the current HEAD).
  * Used before a retry, so an aborted, timed out or crashed attempt never hands the next one

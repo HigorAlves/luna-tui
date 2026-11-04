@@ -1,10 +1,10 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
 import { type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext } from "@hardness/contracts";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, join, relative } from "node:path";
 
 import {
   type Workspace,
@@ -20,6 +20,7 @@ import {
   ownedWorkspace,
   resetWorktree,
   restoreFiles,
+  worktreeAdminDir,
 } from "../../adapters/git/worktree.ts";
 import { CredentialWaitError, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
@@ -91,6 +92,14 @@ const GRAPH_FILE = "/graph/graphify-out/graph.json";
  *  would otherwise run on the host, as you, at the next git command the machine issues. */
 const GIT_READ_ONLY = ["hooks", "config"];
 
+const isFile = (path: string): boolean => {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+};
+
 export interface AgentExtra {
   /** ci_watch: what the host fetched about the PR's CI, since the sandbox has no GitHub credential. */
   ci?: CiContext | null;
@@ -160,6 +169,10 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   const resume = context.resume;
   const inputCommit = resume?.inputCommit ?? (await headCommit(workspace.path));
   const gitDir = await commonGitDir(task.repoPath);
+  // The admin dir's pointers back to the checkout and to the common dir: a stage must not rewrite them.
+  const adminDir = await worktreeAdminDir(workspace.path);
+  const adminRel = adminDir ? relative(gitDir, adminDir) : null;
+  const adminPointers = adminRel && adminRel.startsWith("worktrees/") ? ["commondir", "gitdir"].map((f) => `${adminRel}/${f}`) : [];
   // A pack the state is not named for (the planner in test_design) names its container after itself.
   const unit = pack === context.stage ? context.stage : pack;
   const container = resume?.container ?? `hardness-${task.id.slice(0, 8)}-${unit.replaceAll("_", "-")}-${context.attempt}`;
@@ -298,7 +311,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     worktree: workspace.path,
     writable: limits.writable,
     gitDir,
-    gitReadOnly: GIT_READ_ONLY.filter((sub) => existsSync(join(gitDir, sub))),
+    gitReadOnly: [...GIT_READ_ONLY, ...adminPointers].filter((sub) => existsSync(join(gitDir, sub))),
     gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
     // The repo's services run beside every stage that runs its code; a read-only stage only reads.
     services: limits.writable ? policy.services : {},
@@ -307,7 +320,12 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     timeoutMs: input.limits.timeoutMs,
     credential: { env: credential.env, mounts: credential.mounts },
     labels: { "dev.hardness.task": task.id },
-    ...(graphContext && graphDir ? { mounts: [{ host: graphDir, container: GRAPH_MOUNT, readOnly: true }], extraEnv: { LUNA_GRAPH: GRAPH_FILE } } : {}),
+    mounts: [
+      ...(graphContext && graphDir ? [{ host: graphDir, container: GRAPH_MOUNT, readOnly: true }] : []),
+      // The worktree's `.git` file points at its admin dir: read-only, so no stage can repoint the checkout.
+      ...(isFile(join(workspace.path, ".git")) ? [{ host: join(workspace.path, ".git"), container: "/work/.git", readOnly: true }] : []),
+    ],
+    ...(graphContext && graphDir ? { extraEnv: { LUNA_GRAPH: GRAPH_FILE } } : {}),
     signal: context.signal,
     // The tab's label names the repo too: five repos' Build tabs read apart.
     onStarted: (name) => {

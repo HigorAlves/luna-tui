@@ -202,3 +202,17 @@ describe("extra mounts and an entrypoint override", () => {
     expect(args.slice(args.indexOf("img:1") + 1)).toEqual(["/graph-tools/build.py", "--input", "/work", "--out", "/graph"]);
   });
 });
+
+describe("sandboxExecArgs with a linked worktree's .git file", () => {
+  it("mounts the file read-only over /work/.git, after the /work mount", () => {
+    const args = sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["pnpm", "test"], gitFile: "/wt/.git" });
+    const mounts = args.filter((_, i) => args[i - 1] === "-v");
+    expect(mounts).toContain("/wt/.git:/work/.git:ro");
+    expect(mounts.indexOf("/wt:/work")).toBeLessThan(mounts.indexOf("/wt/.git:/work/.git:ro"));
+  });
+
+  it("mounts nothing extra without one", () => {
+    const args = sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["pnpm", "test"] });
+    expect(args.filter((a) => a.includes("/work/.git"))).toEqual([]);
+  });
+});

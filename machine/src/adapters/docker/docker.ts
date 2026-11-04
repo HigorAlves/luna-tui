@@ -1,5 +1,6 @@
 // Runs one stage in a fresh container and deletes it afterwards. The worktree is mounted at
 // /work (read-only for read-only stages), the stage input at /in, and results come back in /out.
+import { statSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
@@ -273,6 +274,8 @@ export interface SandboxExec {
   services?: Record<string, ServiceSpec>;
   network?: string | null;
   serviceEnv?: Record<string, string>;
+  /** A linked worktree's `.git` file, mounted read-only over `/work/.git` so the check cannot repoint it. */
+  gitFile?: string;
 }
 
 /** Git config every container gets by env: the mounted worktree is another user's to git,
@@ -302,7 +305,10 @@ export function sandboxExecArgs(run: SandboxExec): string[] {
   args.push(...cacheArgs(run.cacheVolume));
   args.push(...networkArgs(run.network, run.serviceEnv));
   // Writable: a test runner writes its cache next to the code (node_modules/.vite, go's are on the tmpfs).
-  args.push("-v", `${run.worktree}:/work`, "-w", "/work", "--entrypoint", command!, run.image, ...rest);
+  args.push("-v", `${run.worktree}:/work`);
+  // Later mounts shadow earlier ones: the pointer file stays the machine's.
+  if (run.gitFile) args.push("-v", `${run.gitFile}:/work/.git:ro`);
+  args.push("-w", "/work", "--entrypoint", command!, run.image, ...rest);
   return args;
 }
 
@@ -347,6 +353,7 @@ export function sandboxExecutor(image: string) {
         name: `hardness-check-${randomUUID().slice(0, 8)}`,
         image,
         worktree: options.cwd,
+        ...(isFile(join(options.cwd, ".git")) ? { gitFile: join(options.cwd, ".git") } : {}),
         argv: [command, ...args],
         env,
         gitIdentity,
@@ -357,6 +364,14 @@ export function sandboxExecutor(image: string) {
     );
   };
 }
+
+const isFile = (path: string): boolean => {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+};
 
 /** Removes stage containers a previous machine left behind: the stopped ones. A container still
  *  running is left for recover() to re-attach to, or to remove once it decides not to. */

@@ -111,7 +111,7 @@ policy:
   holdout_cases: false                    # true keeps test_design's cases away from the implementer; verifying still judges by them
   graph: on                               # off keeps the machine from building a code graph of this repo (default on; see MACHINE_GRAPH_INTERVAL)
   decisions:                              # per decision pack, per question: when an answer is acted on (proceed) and when a person decides (below flag)
-    triage_signals:                       # also risk_score, coverage_check and plan_check; a question left out keeps the pack's bar
+    triage_signals:                       # also risk_score, coverage_check, plan_check, red_check, scope_check, finding_classify and e2e_failure_cause; a question left out keeps the pack's bar
       kind: { proceed: 0.8, flag: 0.5 }
       archive: { proceed: 0.95 }          # archiving by machine wants a higher bar than labelling (the pack's own: 0.9 / 0.7)
 qa_targets:                               # where e2e may drive the app; the credential is a reference, never a value
