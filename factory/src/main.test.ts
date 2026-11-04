@@ -176,13 +176,13 @@ describe("factory main (dry run)", () => {
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });
 
-  it("issue_classify on claude:haiku: one structured turn with no agent, no tools and no MCP server", () => {
+  it("issue_classify on claude:haiku: one answer within three turns, with no agent, no tools and no MCP server", () => {
     const { code, stdout, out, result } = run(stageInput("issue_classify", { plan: null, engine: "claude:haiku", context: { projectContext: null, issue: { title: "Board crashes", description: "It panics." } } }), {}, {}, { emptyWork: true });
     expect(code).toBe(0);
     expect(stdout).not.toContain("has no agent to run");
     expect(existsSync(join(out, "prompt.md"))).toBe(false);
     const options = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
-    expect(options).toMatchObject({ outputFormat: { type: "json_schema" }, maxTurns: 1, tools: [], allowedTools: [], model: resolveEngine("claude:haiku").modelId });
+    expect(options).toMatchObject({ outputFormat: { type: "json_schema" }, maxTurns: 3, tools: [], allowedTools: [], model: resolveEngine("claude:haiku").modelId });
     expect(options.agent).toBeUndefined();
     expect(options.mcpServers).toBeUndefined();
     expect(result).toMatchObject({ ok: true, outcome: "pass", summary: "dry-run" });
