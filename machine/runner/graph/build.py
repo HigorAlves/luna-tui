@@ -2,7 +2,7 @@
 """A headless, code-only Graphify build: detect the corpus, extract the AST, build and cluster the
 graph, export graph.json and a report, and stamp the commit it was built from. No LLM, no key.
 Reads the checkout at --input (read-only), writes only under --out."""
-import argparse, json, sys, time
+import argparse, json, shutil, sys, time
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
@@ -37,12 +37,14 @@ def main() -> int:
     if not code:
         print("graph: no code files", file=sys.stderr)
         return 2
-    ast = extract(code, cache_root=root)
+    # The AST cache is an output: it goes under --out (never under the read-only checkout), and is dropped below.
+    ast = extract(code, cache_root=Path(a.out), root=root)
     extraction = {"nodes": ast["nodes"], "edges": ast["edges"], "hyperedges": [], "input_tokens": 0, "output_tokens": 0}
     G = build_from_json(extraction, root=str(root), directed=False)
     if G.number_of_nodes() == 0:
         print("graph: empty extraction", file=sys.stderr)
         return 2
+    shutil.rmtree(out / "cache", ignore_errors=True)
     communities = cluster(G)
     cohesion = score_all(G, communities)
     labels = {cid: f"Community {cid}" for cid in communities}
