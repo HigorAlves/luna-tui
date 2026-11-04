@@ -271,6 +271,17 @@ describe("the ship approver", () => {
     expect(gate).toMatchObject({ decision: "approved", response: { approver: "bo" }, requested: { shipApprover: "bo" } });
   });
 
+  it("takes a name with a trailing space or another case for the same person, at the ship gate and at the plan gate", async () => {
+    const id = await atShip("high");
+    await expect(pipeline.decide(id, "approved", undefined, undefined, { approver: "Ana " })).rejects.toBeInstanceOf(SameApproverError);
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", risk: { level: "high", scores: {} } } });
+    const plan = await pipeline.createTask({ title: "Billing", criteria: ["c"] });
+    await pipeline.start(plan.id);
+    await pipeline.decide(plan.id, "approved", undefined, undefined, { approver: "alice" });
+    await expect(pipeline.decide(plan.id, "approved", undefined, undefined, { approver: "alice " })).rejects.toBeInstanceOf(SameApproverError);
+    await expect(pipeline.decide(plan.id, "approved", undefined, undefined, { approver: "ＡＬＩＣＥ" })).rejects.toBeInstanceOf(SameApproverError);
+  });
+
   it("does not ask for a name when the preview is sent back", async () => {
     const id = await atShip("high");
     await pipeline.decide(id, "sent_back", "redo");

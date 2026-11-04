@@ -107,8 +107,10 @@ export interface GitHub {
    *  refuses (409) when the head is no longer that commit. A repo with a merge queue gets the PR enqueued instead and
    *  the branch stays: `{ queued: true }`. */
   mergePr(slug: string, number: number, options?: { sha?: string }): Promise<void | { queued: true }>;
-  /** Puts the PR (by its GraphQL node id) in the repo's merge queue. */
-  enqueuePr(nodeId: string): Promise<{ queued: true }>;
+  /** Puts the PR (by its GraphQL node id) in the repo's merge queue; with `sha`, GitHub refuses when the head is no longer that commit. */
+  enqueuePr(nodeId: string, sha?: string): Promise<{ queued: true }>;
+  /** A file's text at `ref` (a branch or a commit), or null when it is not there, is not a regular file, or is over 256 KB. */
+  fileAtRef(slug: string, ref: string, path: string): Promise<string | null>;
   /** Comments, review comments and reviews on the PR since `since` (null: all), oldest first. */
   prActivity(slug: string, number: number, since: string | null): Promise<PrActivity[]>;
   /** Every submitted review, oldest first. */
@@ -166,6 +168,7 @@ export function noTokenGitHub(): GitHub {
     prThreads: refuse,
     mergePr: refuse,
     enqueuePr: refuse,
+    fileAtRef: refuse,
     prActivity: refuse,
     prReviews: refuse,
     teamMembers: refuse,

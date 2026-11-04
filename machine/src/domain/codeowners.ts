@@ -12,57 +12,85 @@ export interface RequiredOwners {
   owners: string[];
 }
 
-/** The rules of a CODEOWNERS file in order; comments, inline comments and blank lines dropped. */
-export function parseCodeowners(text: string): CodeownersRule[] {
+/** A pattern longer than this, or with more wildcards, is not matched: the rule is dropped and reported. */
+export const MAX_PATTERN_CHARS = 512;
+export const MAX_WILDCARDS = 16;
+
+/** The rules of a CODEOWNERS file in order, and the lines the machine will not match (too long, too many wildcards). */
+export function parseCodeownersChecked(text: string): { rules: CodeownersRule[]; problems: string[] } {
   const rules: CodeownersRule[] = [];
+  const problems: string[] = [];
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/(^|\s)#.*$/, "").trim();
     if (!line) continue;
     const [pattern, ...owners] = line.split(/\s+/);
-    if (pattern) rules.push({ pattern, owners });
+    if (!pattern) continue;
+    const wildcards = (pattern.match(/[*?]/g) ?? []).length;
+    if (pattern.length > MAX_PATTERN_CHARS || wildcards > MAX_WILDCARDS) {
+      problems.push(`a CODEOWNERS pattern is too complex to match (${pattern.slice(0, 40)}${pattern.length > 40 ? "…" : ""})`);
+      continue;
+    }
+    rules.push({ pattern, owners });
   }
-  return rules;
+  return { rules, problems };
 }
 
-const escape = (c: string): string => c.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+/** The rules of a CODEOWNERS file in order; comments, inline comments and blank lines dropped. */
+export function parseCodeowners(text: string): CodeownersRule[] {
+  return parseCodeownersChecked(text).rules;
+}
 
-/** The regular expression a CODEOWNERS pattern means, against a repo-relative path without a leading slash. */
-function regexOf(pattern: string): RegExp {
-  let p = pattern;
-  const anchored = p.startsWith("/") || p.slice(0, -1).includes("/");
-  const directory = p.endsWith("/");
-  p = p.replace(/^\//, "").replace(/\/$/, "");
-  let out = "";
-  for (let i = 0; i < p.length; i++) {
-    const c = p[i]!;
-    if (c === "*") {
-      if (p[i + 1] === "*") {
-        const leading = i === 0 && p[i + 2] === "/";
-        const trailing = i + 2 === p.length;
-        const middle = p[i - 1] === "/" && p[i + 2] === "/";
-        if (leading) {
-          out += "(?:.*/)?";
-          i += 2;
-        } else if (middle) {
-          out += "(?:.*/)?";
-          i += 2;
-        } else if (trailing) {
-          out += ".*";
-          i += 1;
-        } else {
-          out += ".*";
-          i += 1;
-        }
-      } else out += "[^/]*";
-    } else if (c === "?") out += "[^/]";
-    else out += escape(c);
+/** `*` and `?` within one path segment, by the two-pointer wildcard walk: O(pattern x text), no backtracking blowup. */
+function segmentMatches(pattern: string, text: string): boolean {
+  let p = 0;
+  let t = 0;
+  let star = -1;
+  let mark = 0;
+  while (t < text.length) {
+    if (p < pattern.length && (pattern[p] === "?" || pattern[p] === text[t])) {
+      p++;
+      t++;
+    } else if (p < pattern.length && pattern[p] === "*") {
+      star = p++;
+      mark = t;
+    } else if (star >= 0) {
+      p = star + 1;
+      t = ++mark;
+    } else return false;
   }
-  const prefix = anchored ? "^" : "^(?:.*/)?";
-  // A directory (trailing slash) owns everything below it; a literal name matches the file or the directory of that name;
-  // a wildcard in the last segment matches files only (GitHub: `docs/*` is not `docs/**`).
-  const last = p.split("/").pop() ?? "";
-  const tail = directory ? "/.*" : /[*?]/.test(last) ? "" : "(?:/.*)?";
-  return new RegExp(`${prefix}${out}${tail}$`);
+  while (p < pattern.length && pattern[p] === "*") p++;
+  return p === pattern.length;
+}
+
+/** Whether a CODEOWNERS pattern covers a repo-relative path, without building a regular expression.
+ *  Segments: `**` as a whole segment is zero or more of them. A trailing slash means a directory (something must be below it);
+ *  a wildcard in the last segment matches files only; a literal last segment matches the file or the directory of that name. */
+function covers(pattern: string, path: string): boolean {
+  const anchored = pattern.startsWith("/") || pattern.slice(0, -1).includes("/");
+  const directory = pattern.endsWith("/");
+  const core = pattern.replace(/^\//, "").replace(/\/$/, "");
+  const segs = [...(anchored ? [] : ["**"]), ...core.split("/")];
+  const parts = path.split("/").filter((x) => x !== "");
+  const last = segs[segs.length - 1] ?? "";
+  // reach[i][j]: the first i pattern segments can cover the first j path segments.
+  let row = Array.from({ length: parts.length + 1 }, (_, j) => j === 0);
+  for (const seg of segs) {
+    const next = new Array<boolean>(parts.length + 1).fill(false);
+    if (seg === "**") {
+      next[0] = row[0]!;
+      for (let j = 1; j <= parts.length; j++) next[j] = row[j]! || next[j - 1]!;
+    } else {
+      for (let j = 1; j <= parts.length; j++) next[j] = row[j - 1]! && segmentMatches(seg, parts[j - 1]!);
+    }
+    row = next;
+  }
+  const wildcard = /[*?]/.test(last);
+  for (let j = 0; j <= parts.length; j++) {
+    if (!row[j]) continue;
+    const rest = parts.length - j;
+    if (directory ? rest >= 1 : wildcard ? rest === 0 : true) return true;
+  }
+  return false;
 }
 
 /** Owners of one path: the last rule that matches, or none. */
@@ -70,7 +98,7 @@ export function ownersOf(path: string, rules: CodeownersRule[]): string[] {
   const clean = path.replace(/^\//, "");
   for (let i = rules.length - 1; i >= 0; i--) {
     const rule = rules[i]!;
-    if (regexOf(rule.pattern).test(clean)) return rule.owners;
+    if (covers(rule.pattern, clean)) return rule.owners;
   }
   return [];
 }

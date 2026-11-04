@@ -23,7 +23,14 @@ export interface MergeReadinessInput {
   dependencies: { number: number; merged: boolean; closed: boolean }[];
   /** CODEOWNERS approvals still missing and owners that cannot be resolved; null when the repo has no CODEOWNERS. */
   owners: { missing: { path: string; owners: string[] }[]; unresolved: string[] } | null;
+  /** The PR changes a CODEOWNERS file: the rules it would merge under are its own, so a person merges. */
+  changesCodeowners?: boolean;
+  /** How many `Depends on` numbers the body lists; more than MAX_DEPENDENCIES is a blocker (only that many are checked). */
+  dependenciesListed?: number;
 }
+
+/** At most this many dependencies are read from a PR body. */
+export const MAX_DEPENDENCIES = 10;
 
 export interface MergeReadiness {
   ready: boolean;
@@ -32,13 +39,14 @@ export interface MergeReadiness {
   reason: string;
 }
 
-/** The first freeze window that holds `now`; a window with a date that does not parse is ignored. */
+/** Whether both ends of a window are dates. */
+export const readableWindow = (window: Freeze): boolean => !Number.isNaN(Date.parse(window.from)) && !Number.isNaN(Date.parse(window.to));
+
+/** The first freeze window that holds `now`; a window with a date that does not parse counts as frozen (fail closed). */
 export function inFreeze(freeze: Freeze[], now: Date): Freeze | null {
   for (const window of freeze) {
-    const from = Date.parse(window.from);
-    const to = Date.parse(window.to);
-    if (Number.isNaN(from) || Number.isNaN(to)) continue;
-    if (from <= now.getTime() && now.getTime() < to) return window;
+    if (!readableWindow(window)) return window;
+    if (Date.parse(window.from) <= now.getTime() && now.getTime() < Date.parse(window.to)) return window;
   }
   return null;
 }
@@ -58,6 +66,8 @@ const sha7 = (sha: string) => sha.slice(0, 7);
 export function mergeReadiness(input: MergeReadinessInput): MergeReadiness {
   const { pr, packSha, policy, risk, shipApprover, now, dependencies, owners } = input;
   const blockers: string[] = [];
+  if (packSha === null) blockers.push("no evidence pack");
+  if (input.changesCodeowners) blockers.push("changes CODEOWNERS: a person merges");
   if (pr.isDraft) blockers.push("draft");
   if (pr.checks.state === "failure") blockers.push("CI is red");
   else if (pr.checks.state === "pending") blockers.push("CI is pending");
@@ -69,7 +79,8 @@ export function mergeReadiness(input: MergeReadinessInput): MergeReadiness {
   for (const o of owners?.unresolved ?? []) blockers.push(`owner ${o} cannot be resolved`);
   if (packSha && pr.headSha && packSha !== pr.headSha) blockers.push(`the pack shows ${sha7(packSha)}, the head is ${sha7(pr.headSha)}`);
   const frozen = inFreeze(policy.freeze, now);
-  if (frozen) blockers.push(`freeze: ${frozen.reason} until ${frozen.to}`);
+  if (frozen) blockers.push(readableWindow(frozen) ? `freeze: ${frozen.reason} until ${frozen.to}` : "freeze window has an unreadable date");
+  if ((input.dependenciesListed ?? 0) > MAX_DEPENDENCIES) blockers.push(`too many dependencies listed (${input.dependenciesListed})`);
   for (const d of dependencies) if (!d.merged && !d.closed) blockers.push(`blocked by #${d.number}`);
   if (pr.headCommittedAt) {
     const committed = Date.parse(pr.headCommittedAt);

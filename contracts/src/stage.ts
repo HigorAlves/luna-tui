@@ -435,7 +435,15 @@ export const LunaConfig = z.object({
   /** How long the machine keeps a task's local Evidence Pack and media; 0 never sweeps it, absent defers to MACHINE_RETENTION_DAYS. */
   evidence: z.object({ retention_days: z.number().int().min(0).optional() }).optional(),
   /** Windows in which the machine merges nothing, whatever the policy says. */
-  freeze: z.array(z.object({ from: z.string().min(1), to: z.string().min(1), reason: z.string().min(1) })).optional(),
+  freeze: z
+    .array(
+      z.object({
+        from: z.string().refine((s) => !Number.isNaN(Date.parse(s)), "from must be a date"),
+        to: z.string().refine((s) => !Number.isNaN(Date.parse(s)), "to must be a date"),
+        reason: z.string().min(1),
+      }),
+    )
+    .optional(),
 });
 export type LunaConfig = z.infer<typeof LunaConfig>;
 
@@ -642,7 +650,7 @@ export const ShipContext = z.object({
         id: z.string(),
         path: z.string().nullable(),
         line: z.number().int().nullable(),
-        comments: z.array(z.object({ author: z.string(), body: z.string(), at: z.string() })),
+        comments: z.array(z.object({ author: z.string(), body: z.string().max(4000), at: z.string() })).max(50),
       }),
       pack: z.object({
         summary: z.string(),
@@ -655,7 +663,7 @@ export const ShipContext = z.object({
   fix: z
     .object({
       changed: z.array(z.string()).max(200),
-      diffSummary: z.string(),
+      diffSummary: z.string().max(4000),
       scenarios: z.array(z.object({ text: z.string(), result: z.string() })),
       threadSummary: z.string(),
     })

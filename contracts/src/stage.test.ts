@@ -466,6 +466,19 @@ describe("ShipContext", () => {
   });
 });
 
+describe("ShipContext caps", () => {
+  const thread = (comments: unknown[]) => ({ kind: "comment", comment: { thread: { id: "T", path: null, line: null, comments }, pack: { summary: "s", scenarios: [], howToVerify: "h" }, myReplies: 0 } });
+  const one = { author: "a", body: "b", at: "t" };
+  it("takes at most 50 comments of at most 4000 characters, and a diff summary of at most 4000", () => {
+    expect(ShipContext.safeParse(thread(Array(50).fill(one))).success).toBe(true);
+    expect(ShipContext.safeParse(thread(Array(51).fill(one))).success).toBe(false);
+    expect(ShipContext.safeParse(thread([{ ...one, body: "x".repeat(4001) }])).success).toBe(false);
+    const fix = (diffSummary: string) => ({ kind: "fix", fix: { changed: [], diffSummary, scenarios: [], threadSummary: "t" } });
+    expect(ShipContext.safeParse(fix("x".repeat(4000))).success).toBe(true);
+    expect(ShipContext.safeParse(fix("x".repeat(4001))).success).toBe(false);
+  });
+});
+
 describe("EvidenceContext and head_moved", () => {
   const e2e = { ran: true, verdict: "pass", hasVideo: true, hasSteps: true, scenarios: 3, skippedReason: null };
   const context = { record: null, risk: "low", webSurface: true, e2e, videoImage: false };

@@ -35,6 +35,7 @@ function stub(answers: Record<string, unknown>) {
         listReleases: endpoint("repos.listReleases"),
         createRelease: endpoint("repos.createRelease"),
         listReleaseAssets: "repos.listReleaseAssets",
+        getContent: endpoint("repos.getContent"),
         uploadReleaseAsset: endpoint("repos.uploadReleaseAsset"),
       },
       git: { deleteRef: endpoint("git.deleteRef") },
@@ -175,7 +176,8 @@ describe("OctokitGitHub: shipping", () => {
     expect(await github.mergePr("o/a", 7, { sha: "abc123" })).toEqual({ queued: true });
     const gql = calls.find((c) => c[0] === "graphql")![1] as { query: string; variables: unknown };
     expect(gql.query).toContain("enqueuePullRequest");
-    expect(gql.variables).toMatchObject({ id: "PR_node" });
+    expect(gql.variables).toMatchObject({ id: "PR_node", sha: "abc123" });
+    expect(gql.query).toContain("expectedHeadOid:$sha");
     expect(calls.map((c) => c[0])).not.toContain("git.deleteRef");
   });
 
@@ -189,8 +191,20 @@ describe("OctokitGitHub: shipping", () => {
 
   it("enqueues by node id", async () => {
     const { github, calls } = stub({ graphql: {} });
-    expect(await github.enqueuePr("PR_node")).toEqual({ queued: true });
-    expect(calls[0]![1]).toMatchObject({ variables: { id: "PR_node" } });
+    expect(await github.enqueuePr("PR_node", "abc123")).toEqual({ queued: true });
+    expect(calls[0]![1]).toMatchObject({ variables: { id: "PR_node", sha: "abc123" } });
+  });
+
+  it("reads a file at a ref as text, and gives null for a missing file, a directory, an oversize file or a non-base64 answer", async () => {
+    const file = (over: Record<string, unknown> = {}) => ({ type: "file", size: 5, encoding: "base64", content: Buffer.from("* @ana\n").toString("base64"), ...over });
+    const ok = stub({ "repos.getContent": file() });
+    expect(await ok.github.fileAtRef("o/a", "main", ".github/CODEOWNERS")).toBe("* @ana\n");
+    expect(ok.calls[0]![1]).toMatchObject({ owner: "o", repo: "a", path: ".github/CODEOWNERS", ref: "main" });
+    expect(await stub({ "repos.getContent": Object.assign(new Error("Not Found"), { status: 404 }) }).github.fileAtRef("o/a", "main", "CODEOWNERS")).toBeNull();
+    expect(await stub({ "repos.getContent": [file()] }).github.fileAtRef("o/a", "main", "docs")).toBeNull();
+    expect(await stub({ "repos.getContent": file({ size: 300 * 1024 }) }).github.fileAtRef("o/a", "main", "CODEOWNERS")).toBeNull();
+    expect(await stub({ "repos.getContent": file({ encoding: "none" }) }).github.fileAtRef("o/a", "main", "CODEOWNERS")).toBeNull();
+    await expect(stub({ "repos.getContent": Object.assign(new Error("boom"), { status: 500 }) }).github.fileAtRef("o/a", "main", "CODEOWNERS")).rejects.toThrow(GitHubError);
   });
 
   it("merges the issue comments, review comments and reviews into one list sorted by time, passing since", async () => {

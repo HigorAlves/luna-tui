@@ -83,6 +83,11 @@ describe("parseLunaConfig", () => {
     });
   });
 
+  it("refuses a freeze window whose dates do not parse", () => {
+    expect(() => parseLunaConfig('freeze:\n  - from: soon\n    to: "2026-12-27T00:00:00Z"\n    reason: r\n')).toThrow(/freeze/);
+    expect(parseLunaConfig('freeze:\n  - from: "2026-12-24"\n    to: "2026-12-27T00:00:00Z"\n    reason: r\n').freeze).toHaveLength(1);
+  });
+
   it("reads policy.auto_merge (off by default, low or medium) and refuses any other value", () => {
     expect(parseLunaConfig("").autoMerge).toBe("off");
     expect(parseLunaConfig("policy:\n  auto_merge: low\n").autoMerge).toBe("low");

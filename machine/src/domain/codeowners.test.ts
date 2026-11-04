@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ownerApprovals, ownersOf, parseCodeowners, requiredOwners } from "./codeowners.ts";
+import { ownerApprovals, ownersOf, parseCodeowners, parseCodeownersChecked, requiredOwners } from "./codeowners.ts";
 
 // The examples are GitHub's documented CODEOWNERS file.
 const FILE = `
@@ -75,6 +75,27 @@ describe("ownersOf", () => {
     expect(ownersOf("abc.ts", r)).toEqual(["@q"]);
     expect(ownersOf("src/gen/x.ts", r)).toEqual(["@g"]);
     expect(ownersOf("src/a/b/gen", r)).toEqual(["@g"]);
+  });
+});
+
+describe("the matcher is linear", () => {
+  it("finishes the former pathological case (**e repeated against a long path) at once", () => {
+    const pattern = "**e".repeat(12);
+    const rules = [{ pattern, owners: ["@a"] }];
+    const started = performance.now();
+    const owners = ownersOf("e".repeat(30) + "x", rules);
+    expect(performance.now() - started).toBeLessThan(50);
+    expect(owners).toEqual([]);
+    expect(ownersOf("e".repeat(30), rules)).toEqual(["@a"]);
+  });
+
+  it("drops a rule over 512 characters or with more than 16 wildcards, and says so", () => {
+    const long = `${"a/".repeat(260)}x @a`;
+    const wild = `${"*a".repeat(17)} @a`;
+    const out = parseCodeownersChecked(`*.ts @ok\n${long}\n${wild}\n`);
+    expect(out.rules).toEqual([{ pattern: "*.ts", owners: ["@ok"] }]);
+    expect(out.problems).toHaveLength(2);
+    expect(out.problems[0]).toMatch(/too complex/);
   });
 });
 

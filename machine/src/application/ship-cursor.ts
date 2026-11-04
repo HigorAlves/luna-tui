@@ -24,6 +24,8 @@ const ShipCursorSchema = z.object({
   startedAt: z.string().optional(),
   /** The machine asked GitHub to merge (or queued the PR): a merge seen later is its own. */
   mergeRequested: z.boolean().optional(),
+  /** The PR sits in the repo's merge queue: the monitor does not ask to merge it again. */
+  queued: z.boolean().optional(),
   /** The blockers last noted, so a poll that finds the same ones says nothing. */
   lastBlockers: z.string().optional(),
 });

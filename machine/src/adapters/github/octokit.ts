@@ -41,6 +41,7 @@ export interface OctokitLike {
       listReleases(params: Record<string, unknown>): Promise<{ data: Array<{ id: number; tag_name: string; html_url: string; draft?: boolean }> }>;
       createRelease(params: Record<string, unknown>): Promise<{ data: { id: number; html_url: string } }>;
       listReleaseAssets: unknown;
+      getContent(params: Record<string, unknown>): Promise<{ data: unknown }>;
       uploadReleaseAsset(params: Record<string, unknown>): Promise<{ data: { browser_download_url: string } }>;
     };
     git: { deleteRef(params: Record<string, unknown>): Promise<unknown> };
@@ -70,7 +71,9 @@ const THREADS_QUERY = `query($owner:String!,$name:String!,$number:Int!){
       comments(first:50){nodes{author{login} body createdAt}} }} } } }`;
 const REPLY_MUTATION = `mutation($threadId:ID!,$body:String!){
   addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$threadId,body:$body}){comment{id}} }`;
-const ENQUEUE_MUTATION = `mutation($id:ID!){ enqueuePullRequest(input:{pullRequestId:$id}){ mergeQueueEntry{id} } }`;
+const ENQUEUE_MUTATION = `mutation($id:ID!,$sha:GitObjectID){ enqueuePullRequest(input:{pullRequestId:$id,expectedHeadOid:$sha}){ mergeQueueEntry{id} } }`;
+/** A file bigger than this is not read through the contents API (CODEOWNERS is small). */
+export const FILE_AT_REF_MAX_BYTES = 256 * 1024;
 const RESOLVE_MUTATION = `mutation($threadId:ID!){ resolveReviewThread(input:{threadId:$threadId}){thread{isResolved}} }`;
 const RESOLVED_QUERY = `query($threadId:ID!){ node(id:$threadId){ ... on PullRequestReviewThread{isResolved} } }`;
 const READY_MUTATION = `mutation($id:ID!){ markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}} }`;
@@ -224,7 +227,7 @@ export class OctokitGitHub implements GitHub {
     } catch (error) {
       const { status, message = "" } = error as { status?: number; message?: string };
       // A repo with a merge queue refuses a direct merge; the queue merges it, and its branch is not ours to delete yet.
-      if (status === 405 && /merge queue/i.test(message) && pr.node_id) return this.enqueuePr(pr.node_id);
+      if (status === 405 && /merge queue/i.test(message) && pr.node_id) return this.enqueuePr(pr.node_id, options.sha);
       throw new GitHubError(`merging ${slug}#${number} failed${status ? ` (${status})` : ""}: ${message || String(error)}`);
     }
     // The branch goes with it, as `gh pr merge --delete-branch` did; a fork's branch is not ours to delete.
@@ -233,9 +236,24 @@ export class OctokitGitHub implements GitHub {
     }
   }
 
-  async enqueuePr(nodeId: string): Promise<{ queued: true }> {
-    await call(`enqueuing ${nodeId}`, () => this.octokit.graphql(ENQUEUE_MUTATION, { id: nodeId }));
+  async enqueuePr(nodeId: string, sha?: string): Promise<{ queued: true }> {
+    await call(`enqueuing ${nodeId}`, () => this.octokit.graphql(ENQUEUE_MUTATION, { id: nodeId, sha: sha ?? null }));
     return { queued: true };
+  }
+
+  async fileAtRef(slug: string, ref: string, path: string): Promise<string | null> {
+    const { owner, repo } = repoRef(slug);
+    let data: unknown;
+    try {
+      ({ data } = await this.octokit.rest.repos.getContent({ owner, repo, path, ref }));
+    } catch (error) {
+      if ((error as { status?: number }).status === 404) return null;
+      throw new GitHubError(`reading ${path} at ${ref} of ${slug} failed: ${(error as { message?: string }).message ?? String(error)}`);
+    }
+    const file = data as { type?: string; size?: number; content?: string; encoding?: string } | undefined;
+    if (!file || Array.isArray(file) || file.type !== "file" || typeof file.content !== "string" || file.encoding !== "base64") return null;
+    if ((file.size ?? 0) > FILE_AT_REF_MAX_BYTES) return null;
+    return Buffer.from(file.content, "base64").toString("utf8");
   }
 
   async prActivity(slug: string, number: number, since: string | null): Promise<PrActivity[]> {

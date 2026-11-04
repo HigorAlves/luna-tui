@@ -64,18 +64,40 @@ export function shipRunnerWith(deps: ShipDeps): StageRunner {
       return { outcome: "fail", detail: { error: "no branch to ship; the implementer never ran for real" } };
     }
     const cwd = task.worktreePath;
-    const pushError = await pushBranch(deps.exec, task.branch, cwd);
-    if (pushError) return { outcome: "fail", detail: { error: pushError } };
-    const slug = await slugOf(cwd);
+    // A restart re-runs this stage. The cursor names the PR already watched: ask GitHub about it first, so a merged PR
+    // (whose branch the merge deleted) is neither pushed again nor opened anew.
+    const cursor = deps.stateDir ? await loadCursor(deps.stateDir, task.id) : null;
+    const resumed = cursor?.pr ?? null;
+    if (resumed) {
+      try {
+        const state = await deps.github.prMerged(resumed.slug, resumed.number);
+        const url = `https://github.com/${resumed.slug}/pull/${resumed.number}`;
+        if (state.merged) {
+          return { outcome: "pass", detail: { merged: { sha: state.mergedSha, at: state.mergedAt, by: cursor!.mergeRequested || cursor!.queued ? "machine" : "person" }, prUrl: url, number: resumed.number } };
+        }
+        if (state.state === "closed") {
+          return { outcome: "escalated", detail: { escalation: "other", reason: "the PR was closed without a merge", options: [] } };
+        }
+      } catch (error) {
+        return { outcome: "fail", detail: { error: messageOf(error) } };
+      }
+    }
+    // The pack is already published on this very head: nothing new to push or publish.
+    const head = cursor?.published ? (await headOf(cwd)).trim() : null;
+    const already = head !== null && cursor?.published?.sha === head;
+    if (!(resumed && already)) {
+      const pushError = await pushBranch(deps.exec, task.branch, cwd);
+      if (pushError) return { outcome: "fail", detail: { error: pushError } };
+    }
+    const slug = resumed?.slug ?? (await slugOf(cwd));
     if (!slug) return { outcome: "fail", detail: { error: "the worktree's origin is not a GitHub repository" } };
     try {
-      const existing = await deps.github.findPr(slug, task.branch);
-      // Delivering was skipped (an older task): open the PR ready, as shipping used to.
-      const pr = existing ?? (await openTaskPr(deps.github, slug, context, false));
-      // A restart re-runs this stage: a pack already published on this very head is not published again.
-      const cursor = deps.stateDir ? await loadCursor(deps.stateDir, task.id) : null;
-      const head = cursor?.published ? (await headOf(cwd)).trim() : null;
-      const already = head !== null && cursor?.published?.sha === head;
+      const existing = await deps.github.findPr(slug, task.branch).catch((error: unknown) => {
+        if (resumed) return null;
+        throw error;
+      });
+      // Delivering was skipped (an older task): open the PR ready, as shipping used to. A resumed run never opens another.
+      const pr = existing ?? (resumed ? { url: `https://github.com/${resumed.slug}/pull/${resumed.number}`, number: resumed.number, isDraft: false } : await openTaskPr(deps.github, slug, context, false));
       const phase: Awaited<ReturnType<typeof evidencePhase>> = already ? { published: { resumed: true } } : await evidencePhase(slug, pr.number, task.id, cwd);
       if ("stop" in phase) return phase.stop;
       if (deps.stateDir && "published" in phase && !already) {

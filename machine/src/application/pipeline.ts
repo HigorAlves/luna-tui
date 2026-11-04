@@ -201,6 +201,9 @@ function casesOf(detail: Record<string, unknown> | undefined): StageRunCase[] | 
   return rows.length > 0 ? rows : null;
 }
 
+/** Two approver names are the same person's: compared NFKC-normalised, trimmed and lower-cased, so a trailing space or a width variant is no second name. */
+const sameName = (a: string, b: string): boolean => a.normalize("NFKC").trim().toLowerCase() === b.normalize("NFKC").trim().toLowerCase();
+
 /** Stages that only poll GitHub from the host: a restart runs them again. */
 const HOST_POLLERS: ReadonlySet<TaskState> = new Set<TaskState>(["ci_watch", "shipping"]);
 
@@ -646,7 +649,7 @@ export class Pipeline {
         if (!fresh || fresh.kind !== "awaiting_approval") return null;
         const names = Array.isArray(fresh.requested.approvers) ? fresh.requested.approvers.map(String) : [];
         if (!approver) throw new ApproverRequiredError(id);
-        if (names.includes(approver)) throw new SameApproverError(id, approver);
+        if (names.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver);
         if (names.length === 0) await tx.updateApprovalRequested(fresh, { ...fresh.requested, approvers: [approver] });
         return names;
       });
@@ -661,7 +664,7 @@ export class Pipeline {
       const plan = (await this.approvals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved")?.response;
       const planNames = [...(Array.isArray(plan?.approvers) ? plan.approvers.map(String) : []), ...(typeof plan?.approver === "string" ? [plan.approver] : [])];
       if (!approver) throw new ApproverRequiredError(id, "ship");
-      if (planNames.some((n) => n.toLowerCase() === approver.toLowerCase())) throw new SameApproverError(id, approver, "ship");
+      if (planNames.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver, "ship");
       await this.store.withTaskLock(id, async (_task, tx) => {
         const gate = await tx.findOpenApproval(id);
         if (gate && gate.kind === "awaiting_ship") await tx.updateApprovalRequested(gate, { ...gate.requested, shipApprover: approver });

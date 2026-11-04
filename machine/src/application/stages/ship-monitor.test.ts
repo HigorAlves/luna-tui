@@ -50,7 +50,7 @@ beforeEach(async () => {
 afterEach(() => rm(stateDir, { recursive: true, force: true }));
 
 function setup(answers: Partial<GitHub> = {}, over: { policy?: Partial<Policy>; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController } = {}) {
-  const github = fakeGitHub({ prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], mergePr: async () => {}, ...answers });
+  const github = fakeGitHub({ prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => {}, ...answers });
   let clock = START.getTime();
   const slept: number[] = [];
   const notes: string[] = [];
@@ -75,6 +75,11 @@ function setup(answers: Partial<GitHub> = {}, over: { policy?: Partial<Policy>; 
     note: async (text: string) => void notes.push(text),
   } as unknown as StageContext;
   return { run: () => shipMonitor(deps)(context, REF), github, slept, notes, advance: (ms: number) => void (clock += ms) };
+}
+
+/** A fake whose only answers are the ones the default CODEOWNERS reader and a one-poll merge need. */
+function fakeGitHubFrom(fileAtRef: (slug: string, ref: string, path: string) => Promise<string | null>) {
+  return fakeGitHub({ fileAtRef, prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => {} });
 }
 
 const calls = (github: ReturnType<typeof fakeGitHub>, method: string) => github.calls.filter((c) => c[0] === method);
@@ -154,6 +159,81 @@ describe("the ship monitor", () => {
     );
     await run();
     expect(notes.join("\n")).toMatch(/owner @acme\/core cannot be resolved/);
+  });
+
+  it("asks the merge queue once: a PR sitting in the queue is not merged again, and a merge seen later is the machine's", async () => {
+    let polls = 0;
+    const mergePr = vi.fn(async () => ({ queued: true as const }));
+    const { run, github } = setup({ mergePr, prMerged: async () => (++polls < 4 ? open : merged) }, { policy: { autoMerge: "low" } });
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
+    expect(mergePr).toHaveBeenCalledTimes(1);
+    expect(await loadCursor(stateDir, "t1")).toMatchObject({ queued: true });
+    expect(calls(github, "mergePr")).toHaveLength(1);
+  });
+
+  it("reads CODEOWNERS at the PR's base branch through the port, never from the worktree", async () => {
+    const fileAtRef = vi.fn(async (_slug: string, _ref: string, path: string) => (path === "CODEOWNERS" ? "src/ @ana\n" : null));
+    const github = fakeGitHub({ fileAtRef, prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], mergePr: async () => {}, prFiles: async () => [{ path: "src/a.ts", additions: 1, deletions: 0 }], prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t" }] });
+    const result = await shipMonitor({
+      github,
+      policies: { for: async () => ({ ...DEFAULT_POLICY, autoMerge: "low" as const }) },
+      evidence: { load: async () => pack() },
+      stateDir,
+      pollMs: 1,
+      sleep: async () => {},
+    })({ task: { id: "t2", repoPath: "/r", worktreePath: "/nonexistent" }, approvals: [], signal: new AbortController().signal } as unknown as StageContext, REF);
+    expect(result).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
+    expect(fileAtRef.mock.calls.map((c) => [c[1], c[2]])).toEqual([["main", ".github/CODEOWNERS"], ["main", "CODEOWNERS"]]);
+  });
+
+  it("never merges a PR that changes a CODEOWNERS file, or one with no evidence pack", async () => {
+    const touching = setup({ prFiles: async () => [{ path: ".github/CODEOWNERS", additions: 1, deletions: 0 }], prMerged: vi.fn().mockResolvedValueOnce(open).mockResolvedValueOnce(merged) }, { policy: { autoMerge: "low" } });
+    expect(await touching.run()).toMatchObject({ detail: { merged: { by: "person" } } });
+    expect(calls(touching.github, "mergePr")).toEqual([]);
+    expect(touching.notes.join("\n")).toMatch(/changes CODEOWNERS/);
+    const bare = setup({ prMerged: vi.fn().mockResolvedValueOnce(open).mockResolvedValueOnce(merged) }, { policy: { autoMerge: "medium" }, pack: null });
+    expect(await bare.run()).toMatchObject({ detail: { merged: { by: "person" } } });
+    expect(calls(bare.github, "mergePr")).toEqual([]);
+    expect(bare.notes.join("\n")).toMatch(/no evidence pack/);
+  });
+
+  it("turns a CODEOWNERS rule it will not match into an unresolved-owner blocker", async () => {
+    const codeowners = `${"*a".repeat(17)} @ana\n`;
+    const { run, notes } = setup({ prMerged: vi.fn().mockResolvedValueOnce(open).mockResolvedValueOnce(merged), prFiles: async () => [{ path: "a.ts", additions: 1, deletions: 0 }] }, { policy: { autoMerge: "low" }, codeowners });
+    await run();
+    expect(notes.join("\n")).toMatch(/too complex to match/);
+  });
+
+  it("checks at most ten dependencies and blocks a PR that lists more", async () => {
+    const body = Array.from({ length: 11 }, (_, i) => `Depends on #${100 + i}`).join("\n");
+    const prMerged = vi.fn(async () => open);
+    const { run, notes } = setup({ prFacts: async () => node({ body }), prMerged }, { policy: { autoMerge: "low" }, maxWaitMs: 90_000 });
+    await run();
+    expect(notes.join("\n")).toMatch(/too many dependencies listed \(11\)/);
+    // per poll: one state read of the PR itself and ten dependencies, never the eleventh
+    expect(prMerged.mock.calls.filter((c) => (c as unknown as [string, number])[1] === 110)).toEqual([]);
+  });
+
+  it("asks for a team's members again after ten minutes, so a removed member stops counting", async () => {
+    let members = ["ana"];
+    const teamMembers = vi.fn(async () => members);
+    let polls = 0;
+    const { run, notes } = setup(
+      {
+        teamMembers,
+        prFiles: async () => [{ path: "src/a.ts", additions: 1, deletions: 0 }],
+        prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t" }],
+        prMerged: async () => {
+          // after the 10th poll the team loses ana; the 13th poll (> 10 minutes after the first fetch) sees it
+          if (++polls === 10) members = [];
+          return polls > 13 ? merged : open;
+        },
+      },
+      { policy: { autoMerge: "off" }, codeowners: "src/ @acme/core\n" },
+    );
+    await run();
+    expect(teamMembers.mock.calls.length).toBe(2);
+    expect(notes.join("\n")).toMatch(/no owner of src\/a.ts approved \(@acme\/core\)/);
   });
 
   it("escalates head_moved when the head is not the commit the pack shows", async () => {

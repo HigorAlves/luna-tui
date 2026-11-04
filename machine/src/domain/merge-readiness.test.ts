@@ -77,6 +77,18 @@ describe("mergeReadiness", () => {
     expect(out.reason).toContain(blocker);
   });
 
+  it("is never ready with no evidence pack, and never for a PR that changes CODEOWNERS", () => {
+    expect(mergeReadiness(input({ packSha: null })).blockers).toEqual(["no evidence pack"]);
+    expect(mergeReadiness(input({ changesCodeowners: true }))).toMatchObject({ ready: false, canAutoMerge: false, blockers: ["changes CODEOWNERS: a person merges"] });
+  });
+
+  it("treats a freeze window with an unreadable date as frozen, and refuses a PR listing too many dependencies", () => {
+    const bad = mergeReadiness(input({ policy: { autoMerge: "low", freeze: [{ from: "soon", to: "2026-11-05T00:00:00Z", reason: "x" }] } }));
+    expect(bad.blockers).toEqual(["freeze window has an unreadable date"]);
+    expect(mergeReadiness(input({ dependenciesListed: 11 })).blockers).toEqual(["too many dependencies listed (11)"]);
+    expect(mergeReadiness(input({ dependenciesListed: 10 })).ready).toBe(true);
+  });
+
   it("lets a merged or closed dependency go, and lists every blocker together", () => {
     expect(mergeReadiness(input({ dependencies: [{ number: 7, merged: true, closed: true }, { number: 8, merged: false, closed: true }] })).ready).toBe(true);
     const out = mergeReadiness(input({ pr: pr({ isDraft: true, reviewDecision: "CHANGES_REQUESTED" }) }));
@@ -126,10 +138,11 @@ describe("inFreeze", () => {
     { from: "2026-11-04T00:00:00Z", to: "2026-11-05T00:00:00Z", reason: "a" },
     { from: "not a date", to: "2026-11-05T00:00:00Z", reason: "b" },
   ];
-  it("returns the window that holds now, ignoring a bad date and an end already past", () => {
+  it("returns the window that holds now, a window with a bad date as frozen, and none once they are past", () => {
     expect(inFreeze(freeze, NOW)?.reason).toBe("a");
-    expect(inFreeze(freeze, new Date("2026-11-05T00:00:00Z"))).toBeNull();
-    expect(inFreeze(freeze, new Date("2026-11-03T23:59:59Z"))).toBeNull();
+    expect(inFreeze([freeze[1]!], NOW)?.reason).toBe("b");
+    expect(inFreeze([freeze[0]!], new Date("2026-11-05T00:00:00Z"))).toBeNull();
+    expect(inFreeze([freeze[0]!], new Date("2026-11-03T23:59:59Z"))).toBeNull();
     expect(inFreeze([], NOW)).toBeNull();
   });
 });
