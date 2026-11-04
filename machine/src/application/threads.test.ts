@@ -5,6 +5,7 @@ import { Pipeline } from "./pipeline.ts";
 import { StubStages } from "./stages/stubs.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { fakeGitHub } from "../test/github.ts";
+import { fakeSlack } from "../test/slack.ts";
 import { ThreadReplies } from "./threads.ts";
 
 let db: DataSource;
@@ -24,7 +25,7 @@ beforeEach(async () => {
 const source = { kind: "github" as const, repo: "o/a", number: 42, url: "https://github.com/o/a/issues/42" };
 
 /** A pipeline whose events feed the replies, and what the replies sent out. */
-function wire(options: { slack?: boolean; enabled?: boolean } = {}) {
+function wire(options: { slack?: boolean; enabled?: boolean; slackPort?: ReturnType<typeof fakeSlack> | null } = {}) {
   const comments: string[][] = [];
   const posts: Array<Record<string, unknown>> = [];
   let replies: ThreadReplies;
@@ -32,6 +33,7 @@ function wire(options: { slack?: boolean; enabled?: boolean } = {}) {
   replies = new ThreadReplies({
     pipeline,
     enabled: options.enabled ?? true,
+    ...(options.slackPort !== undefined ? { slackPort: () => options.slackPort! } : {}),
     github: fakeGitHub({
       commentOnIssue: async (repo, number, body) => {
         comments.push([repo, String(number), body]);
@@ -124,5 +126,41 @@ describe("ThreadReplies", () => {
     await replies.idle();
     expect(comments).toEqual([]);
     expect(posts).toEqual([]);
+  });
+});
+
+describe("a merged task", () => {
+  const shipped = { title: "Export CSV", prUrl: "https://github.com/o/a/pull/7", number: 7, mergedSha: "9c1f0e2a7b3d4e5f", by: "machine", format: "text", howToVerify: "Press Export.", media: [] };
+  const summary = "Shipped: Export CSV — https://github.com/o/a/pull/7 (9c1f0e2). How to verify: Press Export. Evidence: text.";
+
+  it("is told to the GitHub issue it came from, once, as one summary", async () => {
+    const { pipeline, replies, comments } = wire();
+    const task = await pipeline.createTask({ title: "Export CSV", repoPath: "/r/a", source });
+    await pipeline.record(task.id, "task.shipped", shipped);
+    await replies.idle();
+    expect(comments).toEqual([["o/a", "42", summary]]);
+  });
+
+  it("is posted into the Slack thread it came from, through the user-token port", async () => {
+    const slack = fakeSlack({ postMessage: async () => "2.2" });
+    const { pipeline, replies } = wire({ slackPort: slack });
+    const task = await pipeline.createTask({ title: "Export CSV", repoPath: "/r/a", source: { kind: "slack", channel: "C9", ts: "1.5", permalink: "https://x/p" } });
+    await pipeline.record(task.id, "task.shipped", shipped);
+    await replies.idle();
+    expect(slack.calls).toEqual([["postMessage", "C9", summary, "1.5"]]);
+  });
+
+  it("posts nothing to Slack for a task from elsewhere, nor without a token", async () => {
+    const slack = fakeSlack({ postMessage: async () => "2.2" });
+    const a = wire({ slackPort: slack });
+    const task = await a.pipeline.createTask({ title: "t", repoPath: "/r/a", source });
+    await a.pipeline.record(task.id, "task.shipped", shipped);
+    await a.replies.idle();
+    expect(slack.calls).toEqual([]);
+    const b = wire({ slackPort: null });
+    const slackTask = await b.pipeline.createTask({ title: "t", repoPath: "/r/a", source: { kind: "slack", channel: "C9", ts: "1.5", permalink: "https://x/p" } });
+    await b.pipeline.record(slackTask.id, "task.shipped", shipped);
+    await b.replies.idle();
+    expect(slack.calls).toEqual([]);
   });
 });

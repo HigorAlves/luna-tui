@@ -21,6 +21,7 @@ import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import type { StageResult, StageRunner } from "./ports.ts";
+import { shippedEvent } from "./ship-loop.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
@@ -1276,6 +1277,11 @@ export class Pipeline {
         fallback = undefined;
         // An abort already moved the task on; this stage's result no longer applies.
         if (controller.signal.aborted) return;
+        // A merged PR closes the loop: one event the board and the places the task came from react to.
+        if (stage === "shipping" && result.outcome === "pass" && result.detail?.merged) {
+          const shipped = shippedEvent(await this.get(id), result.detail);
+          if (shipped) await this.log(id, "task.shipped", shipped);
+        }
         // A usage limit on one engine: the stage runs again at once on the pack's next fallback
         // that can run, and the task pauses only once there is none.
         if (result.rateLimited) {

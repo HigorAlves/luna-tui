@@ -300,3 +300,25 @@ describe("JiraSync", () => {
     expect(await pipeline.findByJiraKey("PLAT-999")).toBeNull();
   });
 });
+
+describe("JiraSync: a merged task", () => {
+  const shipped = { title: "Login page", prUrl: "https://github.com/o/a/pull/7", number: 7, mergedSha: "9c1f0e2a7b3d4e5f", by: "person", format: "text", howToVerify: "Log in with a bad password.", media: [] };
+
+  it("comments the shipped summary once, whatever replays the event, and not under comments: none", async () => {
+    const { pipeline, jira, sync } = wire();
+    const task = await pipeline.createTask({ title: "PLAT-123 Login page", repoPath: "/r/a" });
+    await pipeline.record(task.id, "task.shipped", shipped);
+    await sync.idle();
+    const events = (await pipeline.events(task.id)).filter((e) => e.kind === "task.shipped");
+    sync.handle(events[0]!);
+    await sync.idle();
+    expect(jira.comments["PLAT-123"]).toEqual(["Shipped: Login page — https://github.com/o/a/pull/7 (9c1f0e2). How to verify: Log in with a bad password. Evidence: text."]);
+    expect((await kinds(pipeline, task.id)).filter(([k]) => k === "jira.commented")).toEqual([["jira.commented", { kind: "shipped", number: 7 }]]);
+
+    const quiet = wire(jiraPolicy({ comments: "none" }));
+    const other = await quiet.pipeline.createTask({ title: "PLAT-123 Login page", repoPath: "/r/a" });
+    await quiet.pipeline.record(other.id, "task.shipped", shipped);
+    await quiet.sync.idle();
+    expect(quiet.jira.comments["PLAT-123"] ?? []).toEqual([]);
+  });
+});

@@ -15,6 +15,7 @@ import { jiraOf } from "../domain/jira-link.ts";
 import type { JiraPolicy, Policy } from "../domain/policy.ts";
 import type { ArtifactRow, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { type Jira, messageOf } from "./jira.ts";
+import { ShippedEvent, shippedSummary } from "./ship-loop.ts";
 
 export interface JiraSyncOptions {
   pipeline: {
@@ -107,12 +108,22 @@ export class JiraSync {
   }
 
   private async react(event: EventRow): Promise<void> {
-    if (event.kind !== "transition" && event.kind !== "stage.finished" && event.kind !== "sla.reminder" && event.kind !== "task.reply") return;
+    if (event.kind !== "transition" && event.kind !== "stage.finished" && event.kind !== "sla.reminder" && event.kind !== "task.reply" && event.kind !== "task.shipped") return;
     const task = await this.options.pipeline.get(event.taskId);
     const link = jiraOf(task);
     if (!link) return;
     const policy = (await this.options.pipeline.policyFor(task.repoPath)).jira;
     if (!policy) return;
+
+    if (event.kind === "task.shipped") {
+      // Once per task: the record, not memory, says whether the summary was posted.
+      const parsed = ShippedEvent.safeParse(event.payload);
+      if (!parsed.success || policy.comments === "none") return;
+      const events = await this.options.pipeline.events(task.id);
+      if (events.some((e) => e.kind === "jira.commented" && e.payload.kind === "shipped")) return;
+      if (await this.comment(link, shippedSummary(parsed.data))) await this.options.pipeline.record(task.id, "jira.commented", { kind: "shipped", number: parsed.data.number });
+      return;
+    }
 
     if (event.kind === "task.reply") {
       if (policy.comments !== "none" && typeof event.payload.body === "string" && event.payload.body) await this.comment(link, event.payload.body);

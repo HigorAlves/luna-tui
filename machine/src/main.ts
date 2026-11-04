@@ -21,6 +21,7 @@ import type { EventRow } from "./domain/task.ts";
 import { groundTruthWriter } from "./application/ground-truth.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
+import { shippedStream } from "./application/ship-loop.ts";
 import type { ShipDecide } from "./application/stages/ship-fixes.ts";
 import type { TriageSignalDeps } from "./application/stages/triage-signals.ts";
 import { createIssueClassifier } from "./application/classify.ts";
@@ -285,6 +286,8 @@ let slaClocks: SlaClocks;
 /** Streams each logged event, plus the whole task whenever its state (or its Jira link) may have changed. */
 function publish(event: EventRow): void {
   bus.publish({ type: "task.event", event: toEvent(event) });
+  const shipped = shippedStream(event);
+  if (shipped) bus.publish(shipped);
   void replies.handle(event);
   void jiraSync.handle(event);
   if (event.kind === "transition" || event.kind === "task.created" || event.kind === "approval.partial" || event.kind.startsWith("jira.")) {
@@ -313,7 +316,7 @@ pipeline = new Pipeline(db, runnerFor, {
   onAlert: raiseAlert,
   engineBudgets,
 });
-replies = new ThreadReplies({ pipeline, github, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}) });
+replies = new ThreadReplies({ pipeline, github, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}), slackPort: () => (config.slackInbox.userToken ? slackApi : null) });
 /** One Jira client for every call; without the three variables each call says so and nothing syncs. */
 const jiraApi = config.jira ? createJira(config.jira) : noTokenJira();
 const jiraExpiry = new TokenExpiry(config.jira?.tokenExpiresAt ?? null);

@@ -1411,6 +1411,27 @@ pub enum StreamMessage {
     /// The Slack inbox changed; the whole snapshot rides along, watches included.
     #[serde(rename = "slack.items")]
     Slack { snapshot: SlackSnapshot },
+    /// The task's PR merged: what shipped and where.
+    #[serde(rename = "task.shipped")]
+    TaskShipped { shipped: TaskShipped },
+}
+
+/// `task.shipped`: the merged PR and the evidence behind it (web urls only).
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskShipped {
+    pub id: String,
+    pub title: String,
+    pub pr_url: String,
+    pub number: u64,
+    #[serde(default)]
+    pub merged_sha: Option<String>,
+    #[serde(default)]
+    pub format: Option<String>,
+    #[serde(default)]
+    pub how_to_verify: Option<String>,
+    #[serde(default)]
+    pub at: String,
 }
 
 /// `budget.alert`: a task's, a repo's month's, the day's or an engine's monthly spend passing a threshold.

@@ -761,6 +761,11 @@ impl App {
                     self.notices.push(Notice { title: "Budget".to_string(), body: line.clone() });
                     self.notify(format!("budget: {line}"), alert.pct >= 100);
                 }
+                Incoming::Message(StreamMessage::TaskShipped { shipped }) => {
+                    let line = format!("Shipped: {} → PR #{}", shipped.title, shipped.number);
+                    self.notices.push(Notice { title: "Shipped".to_string(), body: line.clone() });
+                    self.notify(line, false);
+                }
                 Incoming::Message(StreamMessage::Prs { snapshot }) => self.take_prs(snapshot),
                 Incoming::Message(StreamMessage::Slack { snapshot }) => self.take_slack(snapshot),
                 Incoming::SlackCatalog { groups, channels } => {
@@ -4433,6 +4438,22 @@ mod tests {
         app.tx.send(Incoming::Message(alert(100))).unwrap();
         app.pump();
         assert!(app.toast.as_ref().unwrap().error, "the ceiling itself reads as an error");
+    }
+
+    #[test]
+    fn a_shipped_task_becomes_a_notice_and_a_toast() {
+        let mut app = App::new(Machine::from_env());
+        let shipped = serde_json::from_str::<StreamMessage>(
+            r##"{"type":"task.shipped","shipped":{"id":"aaaaaaaa0000","title":"Export CSV","prUrl":"https://github.com/o/a/pull/7","number":7,"mergedSha":null,"format":null,"howToVerify":null,"media":[],"at":"t"}}"##,
+        )
+        .unwrap();
+        app.tx.send(Incoming::Message(shipped)).unwrap();
+        app.pump();
+        let notices = app.take_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].title, "Shipped");
+        assert_eq!(notices[0].body, "Shipped: Export CSV → PR #7");
+        assert!(!app.toast.as_ref().expect("a toast").error);
     }
 
     #[test]

@@ -10,6 +10,8 @@ import { fromNotch } from "../domain/jira-link.ts";
 import { type GitHub, messageOf } from "./github.ts";
 import type { EventRow, TaskRow } from "../domain/task.ts";
 import type { Pipeline } from "./pipeline.ts";
+import { ShippedEvent, shippedSummary } from "./ship-loop.ts";
+import type { Slack } from "./slack.ts";
 
 export interface SlackOptions {
   token: string;
@@ -25,6 +27,8 @@ export interface ThreadRepliesOptions {
   /** Posts the issue comments. */
   github: GitHub;
   slack?: SlackOptions;
+  /** Your Slack user token's port, read when a task ships (it is built after this class): the summary goes into the thread the task came from. Null or absent: nowhere to post. */
+  slackPort?: () => Pick<Slack, "postMessage"> | null;
 }
 
 /** What a gate asks of you, as the reply says it. */
@@ -79,6 +83,7 @@ export class ThreadReplies {
       const gate = event.payload.gate as TaskState;
       return this.reply(event.taskId, `Still waiting on you: ${ASKS[gate] ?? gate}.`);
     }
+    if (event.kind === "task.shipped") return this.shipped(event);
     if (event.kind === "stage.finished") {
       const detail = event.payload.detail as { prUrl?: unknown } | undefined;
       const url = typeof detail?.prUrl === "string" ? detail.prUrl : null;
@@ -88,6 +93,23 @@ export class ThreadReplies {
       seen.add(url);
       this.announced.set(event.taskId, seen);
       return this.reply(event.taskId, `PR opened: ${url}`);
+    }
+  }
+
+  /** The PR merged: the summary on the issue and the machine's thread as any reply, and in the Slack thread the task came from. */
+  private async shipped(event: EventRow): Promise<void> {
+    const parsed = ShippedEvent.safeParse(event.payload);
+    if (!parsed.success) return;
+    const text = shippedSummary(parsed.data);
+    await this.reply(event.taskId, text);
+    const task = await this.options.pipeline.get(event.taskId);
+    const source = task.source;
+    const port = this.options.slackPort?.();
+    if (source?.kind !== "slack" || !port) return;
+    try {
+      await port.postMessage(source.channel, text, source.ts);
+    } catch (error) {
+      console.warn(`slack post of the shipped summary failed for task ${event.taskId}: ${messageOf(error)}`);
     }
   }
 

@@ -518,7 +518,7 @@ fn spawn_stream(shared: Arc<RwLock<String>>, candidates: Vec<String>, token: Opt
 /// snapshot does not say which window it covers. Unknown event types are never an error.
 fn parse_stream_event(event: &str, data: &str) -> Option<StreamMessage> {
     match event {
-        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed" | "budget.alert" | "github.prs" | "slack.items" => {
+        "task.updated" | "task.event" | "task.deleted" | "stage.started" | "task.closed" | "budget.alert" | "github.prs" | "slack.items" | "task.shipped" => {
             serde_json::from_str(data).ok()
         }
         _ => None,
@@ -607,6 +607,18 @@ mod tests {
         ));
         let closed = parse_stream_event("task.closed", r#"{"type":"task.closed","id":"t1"}"#);
         assert!(matches!(closed, Some(StreamMessage::Closed { ref id }) if id == "t1"));
+    }
+
+    #[test]
+    fn task_shipped_is_parsed_with_what_shipped() {
+        let shipped = parse_stream_event(
+            "task.shipped",
+            r##"{"type":"task.shipped","shipped":{"id":"t1","title":"Export CSV","prUrl":"https://github.com/o/a/pull/7","number":7,"mergedSha":"9c1f0e2a","format":"video","howToVerify":null,"media":[{"kind":"video","label":"Walkthrough","url":"https://x/w.mp4"}],"at":"2026-11-04T12:00:00.000Z"}}"##,
+        );
+        assert!(matches!(
+            shipped,
+            Some(StreamMessage::TaskShipped { ref shipped }) if shipped.number == 7 && shipped.title == "Export CSV" && shipped.how_to_verify.is_none()
+        ));
     }
 
     #[test]

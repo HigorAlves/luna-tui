@@ -2232,3 +2232,21 @@ describe("concurrent transitions on the same task", () => {
   });
 });
 
+
+describe("closing the loop", () => {
+  it("logs task.shipped with the merge and the pack's facts when shipping passes with a merge, and not otherwise", async () => {
+    const merged = await newTask();
+    stubs.plan("shipping", { outcome: "pass", detail: { merged: { sha: "m".repeat(40), by: "machine" }, prUrl: "https://github.com/o/a/pull/3", number: 3 } });
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
+    await p.start(merged.id);
+    for (let i = 0; i < 2; i++) await p.decide(merged.id, "approved");
+    const event = (await p.events(merged.id)).find((e) => e.kind === "task.shipped");
+    expect(event?.payload).toMatchObject({ title: merged.title, prUrl: "https://github.com/o/a/pull/3", number: 3, mergedSha: "m".repeat(40), by: "machine", media: [] });
+
+    stubs.reset();
+    const plain = await newTask();
+    await p.start(plain.id);
+    for (let i = 0; i < 2; i++) await p.decide(plain.id, "approved");
+    expect((await p.events(plain.id)).map((e) => e.kind)).not.toContain("task.shipped");
+  });
+});
