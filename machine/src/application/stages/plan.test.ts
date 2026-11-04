@@ -79,7 +79,7 @@ describe("planStage", () => {
     expect(result.detail).toMatchObject({
       brief: "Guard the empty list", criteria: ["no panic", "stays selected"], assumptions: ["board only"], slices, rollback: "revert the commit",
       cases: [{ title: "case 0", criterion: "no panic" }, { title: "case 1", criterion: "stays selected" }],
-      risk: { level: "low", scores: { blast_radius: 0, reversibility: 0, data_sensitivity: 0 } },
+      risk: { level: "medium", scores: { blast_radius: 0, reversibility: 0, data_sensitivity: 0 } },
       verdicts: { coverage: "proceed", plan: "proceed", risk: "proceed" },
       rounds: { tests: 1, plan: 1 },
       flagged: [],
@@ -142,6 +142,14 @@ describe("planStage", () => {
     const { run } = setup({ answers: { risk_score: [risky] } }, { policies: { for: async () => ({ decisions: { risk_score: { reversibility: { flag: 0.3 } } } }) } });
     const result = await run(context());
     expect(result.detail).toMatchObject({ risk: { level: "high", scores: { blast_radius: 2, reversibility: 2, data_sensitivity: 1 } }, verdicts: { risk: "flag" }, flagged: ["risk"] });
+  });
+
+  it("never rates the risk below triage's grade: a decision can raise it, not lower it", async () => {
+    const mild = { blast_radius: { score: 0, confidence: 0.9 }, reversibility: { score: 0, confidence: 0.9 }, data_sensitivity: { score: 0, confidence: 0.9 } };
+    const { run } = setup({ answers: { risk_score: [mild] } });
+    const graded = { ...task, record: { ...(task.record ?? {}), risk: "high" } as TaskRow["record"] };
+    const result = await run(context({ task: graded }));
+    expect(result.detail).toMatchObject({ risk: { level: "high", scores: { blast_radius: 0, reversibility: 0, data_sensitivity: 0 } } });
   });
 
   it("ends needs_input with the questions when the planner or the designer asks, and calls nothing after", async () => {

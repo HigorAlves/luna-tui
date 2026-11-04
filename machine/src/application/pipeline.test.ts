@@ -194,6 +194,19 @@ describe("approvers", () => {
     expect((await pipeline.approvals(id))[0]).toMatchObject({ decision: "approved", response: { approvers: ["ana", "bo"], approver: "bo" } });
   });
 
+  it("forgets the first approver when the plan or the cases change: both names must approve the same plan", async () => {
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", risk: { level: "high", scores: {} }, cases: [{ title: "t0", criterion: "c", approach: "a" }] } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+    await pipeline.editPlan(task.id, { brief: "wider: migrate the users table" });
+    expect((await pipeline.approvals(task.id))[0]!.requested.approvers).toEqual([]);
+    // Bo is now the first approver of the edited plan, not the second of Ana's.
+    expect((await pipeline.decide(task.id, "approved", undefined, undefined, { approver: "bo" })).state).toBe("awaiting_approval");
+    await pipeline.editCases(task.id, [{ title: "t1", criterion: "c", approach: "a" }]);
+    expect((await pipeline.approvals(task.id))[0]!.requested.approvers).toEqual([]);
+  });
+
   it("refuses the same name twice and a High-risk approval with no name, leaving the gate open", async () => {
     const id = await atGate("high");
     await expect(pipeline.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
@@ -293,7 +306,8 @@ describe("triage outcomes", () => {
     const events = await pipeline.events(task.id);
     const reply = events.find((e) => e.kind === "task.reply");
     expect(reply?.payload).toEqual({ body: "Use `pnpm dev`." });
-    expect(events.findIndex((e) => e.kind === "task.reply")).toBeLessThan(events.findIndex((e) => e.kind === "transition" && e.payload.to === "archived"));
+    // The reply is posted only by the request that closed the gate: after the archive, never before it.
+    expect(events.findIndex((e) => e.kind === "task.reply")).toBeGreaterThan(events.findIndex((e) => e.kind === "transition" && e.payload.to === "archived"));
   });
 
   it("re-runs triage when an outcome gate is sent back, and the plan stage when the plan is", async () => {

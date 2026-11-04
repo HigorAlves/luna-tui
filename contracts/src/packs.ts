@@ -378,6 +378,10 @@ const RISK_QUESTIONS: QuestionSet = {
 };
 
 /** The plan's risk from the three scores: each rounds to a level 1 to 3; a sum of 4 or less is low, 5 to 6 medium, 7 to 9 high. */
+const RISK_ORDER: Risk[] = ["none", "low", "medium", "high"];
+/** The most severe of several risk grades: a decision may raise triage's grade, never lower it. */
+export const maxRisk = (...levels: Risk[]): Risk => levels.reduce<Risk>((worst, level) => (RISK_ORDER.indexOf(level) > RISK_ORDER.indexOf(worst) ? level : worst), "none");
+
 export function riskLevelOf(a: { blast_radius: { score: number }; reversibility: { score: number }; data_sensitivity: { score: number } }): Risk {
   const sum = [a.blast_radius, a.reversibility, a.data_sensitivity].reduce((total, answer) => total + Math.round(answer.score) + 1, 0);
   return sum <= 4 ? "low" : sum <= 6 ? "medium" : "high";

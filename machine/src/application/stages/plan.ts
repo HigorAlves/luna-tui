@@ -20,6 +20,7 @@ import {
   type Verdict,
   applyPolicy,
   coverageGaps,
+  maxRisk,
   riskLevelOf,
 } from "@hardness/contracts";
 
@@ -199,7 +200,9 @@ export function planStage(deps: PlanDeps): StageRunner {
     const riskJudged = await judge("risk_score", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}) });
     const answer = riskJudged.answer;
     const scores = answer ? { blast_radius: score(answer, "blast_radius"), reversibility: score(answer, "reversibility"), data_sensitivity: score(answer, "data_sensitivity") } : {};
-    const level: Risk = answer ? riskLevelOf(answer as Parameters<typeof riskLevelOf>[0]) : (task.record?.risk ?? "medium");
+    // The decision may raise the risk above triage's grade, never lower it: one small-model call must not drop the second approver.
+    const graded: Risk = task.record?.risk ?? "medium";
+    const level: Risk = answer ? maxRisk(riskLevelOf(answer as Parameters<typeof riskLevelOf>[0]), graded) : graded;
 
     const verdicts = { coverage: coverage.verdict, plan: planCheck.verdict, risk: riskJudged.verdict };
     for (const [name, verdict] of Object.entries(verdicts)) if (verdict === "flag" || verdict === "ask") flagged.add(name);

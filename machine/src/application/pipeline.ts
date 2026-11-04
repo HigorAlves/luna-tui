@@ -515,9 +515,11 @@ export class Pipeline {
       const fields = Object.keys(after);
       if (fields.length > 0) {
         const revisions = Array.isArray(plan.requested.revisions) ? plan.requested.revisions : [];
+        // A changed plan is a new plan: whoever approved the old one has not approved this one.
         await tx.updateApprovalRequested(plan, {
           ...plan.requested,
           ...after,
+          ...(Array.isArray(plan.requested.approvers) ? { approvers: [] } : {}),
           revisions: [...revisions, { at: new Date().toISOString(), before, after }],
         });
         // Approving the plan adopted its criteria onto the ticket; an edit after that follows them.
@@ -540,7 +542,7 @@ export class Pipeline {
       // Kept as a revision like a plan edit, so ground truth can tell the proposed scenarios from the approved ones.
       const revisions = Array.isArray(open.requested.revisions) ? open.requested.revisions : [];
       const before = open.requested.cases === undefined ? {} : { cases: open.requested.cases };
-      await tx.updateApprovalRequested(open, { ...open.requested, cases, revisions: [...revisions, { at: new Date().toISOString(), before, after: { cases } }] });
+      await tx.updateApprovalRequested(open, { ...open.requested, cases, ...(Array.isArray(open.requested.approvers) ? { approvers: [] } : {}), revisions: [...revisions, { at: new Date().toISOString(), before, after: { cases } }] });
     });
     await this.log(id, "cases.edited", { count: cases.length });
     return this.get(id);
@@ -654,10 +656,12 @@ export class Pipeline {
     if (approver) answered = { ...answered, approver };
     const record = { decision, reason, ...(answered ? { response: answered } : {}) };
     if (decision === "approved" && (outcome === "archive" || outcome === "conversation")) {
-      // One click: a reply is posted on the ticket's thread and an archive is final; neither plans.
-      if (outcome === "conversation") await this.log(id, "task.reply", { body: String(open!.requested.reply ?? "") });
+      // One click: an archive is final and a reply is posted on the ticket's thread; neither plans. The
+      // archive runs under the row lock, so only the request that closed the gate goes on to post.
       const why: ArchiveReason = outcome === "conversation" ? "not_for_agent" : TRIAGE_ARCHIVE[String(open!.requested.archiveReason)] ?? "rejected";
-      return this.archive(id, why, { decision: record });
+      const archived = await this.archive(id, why, { decision: record });
+      if (outcome === "conversation") await this.log(id, "task.reply", { body: String(open!.requested.reply ?? "") });
+      return (await this.store.getTask(id)) ?? archived;
     }
     // A gate that carries triage's outcome came from triage; any other open approval is the plan stage's.
     const event: PipelineEvent = decision === "approved" ? { type: "approved" } : { type: "sent_back", from: outcome === undefined ? "plan" : "triage" };
