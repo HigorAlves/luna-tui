@@ -146,6 +146,10 @@ export const ImplementingAnswer = z.object({
   reason: z.string().optional(),
   options: z.array(z.string()).optional(),
   request: z.string().optional(),
+  /** What the change does, as scope_check saw it. */
+  diffSummary: z.string().optional(),
+  /** Files changed outside the plan's touchpoints, each with why. */
+  outOfMap: z.array(z.object({ path: z.string(), reason: z.string() })).optional(),
 });
 
 export const VerifyingAnswer = z.object({
@@ -559,7 +563,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     agent: "implementer",
     helpers: [],
     skills: ["tdd", "verification-before-completion", "code-discovery"],
-    access: access(READ_ONLY, { write: true, luna: LEDGER_TOOLS, commands: ["git add", "git commit", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
+    access: access(READ_ONLY, { write: true, luna: [...LEDGER_TOOLS, "scope_check"], commands: ["git add", "git commit", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
     writable: true,
     maxTurns: 80,
     timeoutMs: 30 * MINUTE,

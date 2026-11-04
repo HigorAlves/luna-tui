@@ -2,7 +2,7 @@
 // names (the Claude runtime in factory/src/runtimes/claude/access.ts). See RFC 0002.
 
 /** The luna tools: progress, the slice ledger and the settled decisions. */
-export type LunaTool = "step" | "slice_init" | "slice_set" | "slice_list" | "decision_get";
+export type LunaTool = "step" | "slice_init" | "slice_set" | "slice_list" | "decision_get" | "scope_check";
 
 export interface Access {
   /** Read files and search the tree. */

@@ -258,6 +258,7 @@
       "mcp__luna__slice_set",
       "mcp__luna__slice_list",
       "mcp__luna__decision_get",
+      "mcp__luna__scope_check",
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git diff:*)",
@@ -285,7 +286,8 @@
       "mcp__luna__slice_init",
       "mcp__luna__slice_set",
       "mcp__luna__slice_list",
-      "mcp__luna__decision_get"
+      "mcp__luna__decision_get",
+      "mcp__luna__scope_check"
     ]
   },
   "verifying": {

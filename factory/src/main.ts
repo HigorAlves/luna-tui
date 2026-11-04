@@ -49,7 +49,9 @@ const emit: Emit = (event) => {
 };
 
 // The luna tools' state lives here, whatever runtime serves them: the result reads it.
-const luna = lunaHandlers({ ledgerPath: join(OUT, "ledger.json"), ledger: input.context.ledger ?? null, decisions: input.decisions, emit });
+// The machine answers the build checks through files under /out/checks; a dry run never waits for one.
+const checkWaitMs = DRY ? 0 : Number(env.LUNA_CHECK_WAIT_MS ?? 90_000);
+const luna = lunaHandlers({ ledgerPath: join(OUT, "ledger.json"), ledger: input.context.ledger ?? null, decisions: input.decisions, emit, checksDir: join(OUT, "checks"), checkWaitMs: Number.isFinite(checkWaitMs) ? checkWaitMs : 90_000 });
 
 out(`luna factory · pack ${pack.id} as ${pack.kind === "decision" ? "a decision" : (pack.agent ?? "script")} (attempt ${input.attempt})`);
 

@@ -17,7 +17,7 @@ For each slice, in plan order:
 
 1. Read the slice. Its criteria (the slice's `acceptance` lines) are the contract; else the failing test is.
 2. Write the slice's failing test first, per `tdd` (a test already in the tree that pins the behaviour will do); run it and confirm it fails with the expected message.
-3. `mcp__luna__slice_set {id, status: "red"}`.
+3. `mcp__luna__slice_set {id, status: "red", note: <the failing output's last lines>}`. The machine judges the red and the answer comes back as `check: {verdict, problems}`. On a verdict of `flag` or `ask` with problems, the test fails for the wrong reason or proves nothing: rewrite it and set `red` again (one more red) before any code. `skipped` means no one answered; go on.
 4. Locate the relevant code per `code-discovery`; read only what the test touches.
 5. Write the minimum code that goes green. No opportunistic refactors.
 6. Run the slice test; it must go red to green.
@@ -27,6 +27,8 @@ For each slice, in plan order:
 10. `mcp__luna__slice_set {id, status: "green"}`.
 11. Commit: Conventional Commit subject, at most 50 characters, no body, no AI attribution.
 12. `mcp__luna__slice_set {id, status: "committed", commit: <sha>, actualLoc: <lines added plus deleted>}`. Call `mcp__luna__step` with the slice title; continue.
+
+After the last slice, before answering `done`: call `mcp__luna__scope_check {diffSummary, outOfMap}` with what the change does and every file you changed outside the plan's touchpoints, each with its reason. Fix what it flags (one pass, in a new commit), then answer `done` with `diffSummary` and `outOfMap`. A file outside the touchpoints that you did not declare fails the stage.
 
 Per `verification-before-completion`: run the command, read the output, then claim.
 
@@ -44,7 +46,8 @@ Stop and escalate when any of these fires:
 - A test stays red after three implementation attempts.
 - The slice spec is ambiguous: two reasonable engineers would build it differently.
 - The slice needs a new dependency. Never auto-install; name the package, version and why.
-- The slice needs files outside the plan's touchpoints.
+- The slice needs many files outside the plan's touchpoints, or ones in another component (a file or two the slice cannot do without is declared in `outOfMap` with its reason instead).
+- The slice is too complex for you: answer `escalation: "too_complex"`; the machine gives it one shot on a stronger engine.
 - A pre-existing test fails for a reason you cannot tie to your change.
 - Lint or type-check fails in code you did not touch.
 - A security or architecture concern the plan missed.
