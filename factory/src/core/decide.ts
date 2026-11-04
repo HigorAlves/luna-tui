@@ -4,7 +4,7 @@
 // runtime renders this text and asks for structured output on `answerJsonSchema(pack)`.
 import type { Question, QuestionSet, StageInput } from "@hardness/contracts";
 
-/** What a decision reads: the issue, as the notch or intake sent it. */
+/** What a decision reads: the issue as intake sent it. */
 export type DecisionState = {
   title: string;
   description: string;
@@ -12,7 +12,7 @@ export type DecisionState = {
   source?: string;
 };
 
-/** The issue the notch or intake sent, else the task's own title and description. */
+/** The issue intake sent, else the task's own title and description. */
 export function stateOf(input: StageInput): DecisionState {
   const { title, description, labels, source } = input.context.issue ?? { title: input.task.title, description: input.task.description };
   return { title, description, ...(labels && { labels }), ...(source && { source }) };
