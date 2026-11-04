@@ -13,12 +13,12 @@ import { type Policy } from "../../domain/policy.ts";
 import { ownerApprovals, parseCodeownersChecked, requiredOwners } from "../../domain/codeowners.ts";
 import { MAX_DEPENDENCIES, mergeReadiness, parseDependencies } from "../../domain/merge-readiness.ts";
 import { fromGraphQl } from "../../domain/pull-request.ts";
-import { type GitHub, type PrActivity, messageOf } from "../github.ts";
+import { type GitHub, type PrActivity, type PrReview, messageOf } from "../github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import { type ShipCursor, SEEN_CAP, emptyCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
 import { ciContextOf, ciRunIdOf, failedChecks } from "./ci.ts";
 import { pushBranch } from "./deliver.ts";
-import { type EvidenceHandle, type FixDeps, type ReviewLoop, escalated, fixRound, headOfWorktree, judgeShip, postable, resetTo, restampPack, subContext } from "./ship-fixes.ts";
+import { type EvidenceHandle, type FixDeps, type ReviewLoop, SECRET_REASON, carriesSecret, escalated, fixRound, headOfWorktree, judgeShip, postable, resetTo, restampPack, subContext } from "./ship-fixes.ts";
 
 const DAY_MS = 86_400_000;
 /** The bounds of the loop: fix rounds per thread and per PR, CI re-runs and rebases. Every bound reached asks a person. */
@@ -26,6 +26,10 @@ export const MAX_THREAD_FIX_ROUNDS = 2;
 export const MAX_PR_FIX_ROUNDS = 3;
 export const MAX_CI_RERUNS = 1;
 export const MAX_REBASES = 1;
+/** Questions answered on one PR; past this a person takes over (a stranger's, or a loop's, appetite for model runs has a limit). */
+export const MAX_PR_REPLIES = 10;
+/** Only these may drive a reply or a fix: GitHub's own word for who the author is to the repo. */
+const TRUSTED = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
 /** A drafted answer below this confidence is not posted: a person answers. */
 const REPLY_MIN_CONFIDENCE = 0.5;
 /** Where GitHub reads CODEOWNERS; the monitor reads it at the PR's base branch, never from the PR's own head or the worktree. */
@@ -84,14 +88,21 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
     await saveCursor(deps.stateDir, task.id, cursor);
     let mergeErrors = 0;
 
+    /** Whether the latest review of someone is an approval given on `head`: nothing older counts after a fix. */
+    const approvedOn = (head: string | null, reviews: PrReview[]): boolean => {
+      const latest = new Map<string, PrReview>();
+      for (const r of reviews) if (r.author && (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED")) latest.set(r.author.toLowerCase(), r);
+      return head !== null && [...latest.values()].some((r) => r.state === "APPROVED" && r.commitId === head);
+    };
+
     /** What the repo's CODEOWNERS still wants: null when it has none. A team the token cannot read stays unresolved. */
-    const ownersOf = async (head: string | null, baseRef: string, paths: string[]) => {
+    const ownersOf = async (head: string | null, baseRef: string, paths: string[], reviewsOf: () => Promise<PrReview[]>) => {
       const text = await readCodeowners(slug, baseRef);
       if (!text) return null;
       const { rules, problems } = parseCodeownersChecked(text);
       const required = requiredOwners(paths, rules);
       if (required.length === 0) return { missing: [], unresolved: problems };
-      const reviews = await deps.github.prReviews(slug, number);
+      const reviews = await reviewsOf();
       const latest = new Map<string, (typeof reviews)[number]>();
       for (const r of reviews) if (r.author && (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED")) latest.set(r.author.toLowerCase(), r);
       const approvers = [...latest.values()].filter((r) => r.state === "APPROVED" && (r.commitId === null || head === null || r.commitId === head)).map((r) => r.author!);
@@ -117,7 +128,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
     const login = async () => (me ??= (await deps.github.viewer()).login.toLowerCase());
     const fixDeps = (): FixDeps => ({ github: deps.github, loop: deps.loop!, policies: deps.policies, evidence: deps.evidence });
     const runOf = () => deps.loop?.exec ?? realExec;
-    const plain = (text: string, cap: number) => text.replace(/\s+/g, " ").trim().slice(0, cap);
+    const plain = (text: string, cap: number) => postable(text, cap);
     const slugId = (id: string) => id.replace(/[^A-Za-z0-9]+/g, "-").slice(0, 40);
     const bump = async (id: string, change: { replies?: number; fixRounds?: number }) => {
       const t = cursor.threads[id] ?? { replies: 0, lastAt: now().toISOString() };
@@ -143,6 +154,8 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       }
       found ??= { id: a.id, path: null, line: null, comments: [{ author: a.actor ?? "ghost", body: a.body, at: a.at }] };
       const thread: Thread = { id: found.id, path: found.path, line: found.line, comments: found.comments.slice(-50).map((c) => ({ author: c.author, body: c.body.slice(0, 4000), at: c.at })) };
+      const answered = Object.values(cursor.threads).reduce((sum, t) => sum + t.replies, 0);
+      if (answered >= MAX_PR_REPLIES) return { result: escalated("ten questions answered on this PR; a person takes over") };
       const myReplies = Math.max(found.comments.filter((c) => c.author.toLowerCase() === mine).length, cursor.threads[thread.id]?.replies ?? 0);
       if (myReplies >= 2) return { result: escalated(`third round trip on ${thread.path ?? "the PR"}: ${quoted(thread)}`) };
       const ship: ShipContext = {
@@ -155,6 +168,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         const ran = await deps.loop!.runPack("pr_reply", subContext(context, `reply-${slugId(a.id)}`), ship);
         const drafted = ran.outcome === "pass" ? PrReplyAnswer.safeParse(ran.detail?.answer) : null;
         if (!drafted?.success) return { result: escalated(`a question needs a person: no usable answer was drafted: ${quoted(thread)}`) };
+        if (carriesSecret(drafted.data.reply)) return { result: escalated(SECRET_REASON) };
         const text = postable(drafted.data.reply);
         if (drafted.data.confidence < REPLY_MIN_CONFIDENCE || !text) return { result: escalated(`a question needs a person: the drafted answer is not confident enough: ${quoted(thread)}`) };
         try {
@@ -204,6 +218,11 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
     /** One review event: classified, then acted on. */
     const handleActivity = async (a: PrActivity, pack: EvidencePack | null): Promise<Outcome> => {
       if (a.actor !== null && a.actor.toLowerCase() === (await login())) return {};
+      // Only the repo's own people drive a reply or a fix; a stranger's comment is noted and left, never an escalation (it must not page anyone).
+      if (!TRUSTED.has(a.association ?? "")) {
+        await note(`skipped a ${a.kind} from ${a.actor ?? "ghost"}: not a collaborator`);
+        return {};
+      }
       const body = a.body.slice(0, 2000);
       const event: ShipContext = { kind: "event", event: { actor: a.actor ?? "ghost", isBot: a.isBot, isMe: false, kind: a.kind === "review" ? "review" : "comment", state: a.state, body, url: a.url } };
       const label = `${a.actor ?? "ghost"} ${a.kind}: ${plain(body, 80)}`;
@@ -232,8 +251,9 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       const runIds = [...new Set(failed.map(ciRunIdOf).filter((id): id is string => Boolean(id)))].sort();
       if (failed.length === 0 || runIds.length === 0) return {};
       const key = `${head}:${runIds.join(",")}`;
-      if (cursor.ciKey === key) return {};
+      if (cursor.ciKey === key && !cursor.ciCycled) return {};
       cursor.ciKey = key;
+      cursor.ciCycled = false;
       await saveCursor(deps.stateDir, task.id, cursor);
       const ran = await deps.loop!.runPack("ci_watch", subContext(context, `ci-${slugId(key.slice(0, 12))}-${runIds[0]}`), { ci: await ciContextOf(deps.github, slug, task.branch ?? "", checks, failed) });
       const answer = ran.detail?.answer && typeof ran.detail.answer === "object" ? (ran.detail.answer as Record<string, unknown>) : {};
@@ -278,7 +298,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       const rebase = deps.loop?.rebase ?? ((r, w, repo) => rebaseOntoDefault(r, w, repo));
       const result = await rebase(run, wt, task.repoPath ?? wt);
       if (!result.ok) return stuck(result.conflicts.length > 0 ? `the default branch moved and the rebase stops on: ${result.conflicts.join(", ")}` : `the branch conflicts with the default branch and could not be rebased: ${result.error}`);
-      const pushError = await pushBranch(run, branch, wt, { force: true });
+      const pushError = await pushBranch(run, branch, wt, { force: true, lease: local });
       if (pushError) {
         await resetTo(run, wt, local).catch(() => {});
         return { result: escalated(pushError) };
@@ -333,7 +353,12 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
           );
           const paths = (await deps.github.prFiles(slug, number)).map((f) => f.path);
           const changesCodeowners = paths.some((p) => CODEOWNERS_PATHS.includes(p));
-          const owners = await ownersOf(head, pr.baseRef, paths).catch((error: unknown) => ({ missing: [], unresolved: [`CODEOWNERS could not be checked: ${messageOf(error)}`] }));
+          // The reviews are read once a poll, for the owners and for the approval a fix needs.
+          let reviewsRead: Promise<PrReview[]> | null = null;
+          const reviewsOf = () => (reviewsRead ??= deps.github.prReviews(slug, number));
+          const owners = await ownersOf(head, pr.baseRef, paths, reviewsOf).catch((error: unknown) => ({ missing: [], unresolved: [`CODEOWNERS could not be checked: ${messageOf(error)}`] }));
+          // After a fix the loop made, the approval that counts is one on the fix itself: the latest review of each person, on the head.
+          const fixApproval = cursor.fixRounds > 0 ? { approved: await approvedOn(head, await reviewsOf().catch(() => [])) } : null;
           const readiness = mergeReadiness({
             pr,
             packSha: pack?.commitSha ?? null,
@@ -345,15 +370,22 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
             owners,
             changesCodeowners,
             dependenciesListed: listed.length,
+            fixApproval,
           });
+          // A checks run that left failure and came back is a new red even under the same run id.
+          if (deps.loop && pr.checks.state !== "failure") cursor.ciCycled = true;
 
           // Review activity: with the loop, each new item is judged and acted on; without it, recorded and noted.
           let moved = false;
+          // Readiness was read before the activity: whatever was handled, the merge waits for the next poll.
+          let handled = false;
           if (deps.loop) {
             // A failure here ends the poll (and the merge with it): nothing is merged past activity that was not read.
             const fresh = (await deps.github.prActivity(slug, number, cursor.since)).filter((a) => !cursor.seen.includes(a.id));
+            handled = fresh.length > 0;
             for (const a of fresh) {
-              const out = await handleActivity(a, pack);
+              // A throw escalates once and the item is marked seen: it is not judged again every poll for two weeks.
+              const out = await handleActivity(a, pack).catch((error: unknown): Outcome => ({ result: escalated(`a review event could not be handled: ${postable(messageOf(error), 300)}`) }));
               cursor.seen = [...cursor.seen, a.id].slice(-SEEN_CAP);
               cursor.since = a.at || cursor.since;
               await saveCursor(deps.stateDir, task.id, cursor);
@@ -382,7 +414,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
             }
           }
 
-          if (moved) {
+          if (moved || handled) {
             // The head moved this poll: what was judged ready is not what is there now. The next poll reads it again.
           } else if (cursor.queued) {
             // In the merge queue: the queue merges it. Asking again would only race it.

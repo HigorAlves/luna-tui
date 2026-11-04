@@ -1,7 +1,7 @@
 import type { EvidencePack } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { COMMENT_MARKER, SECTION_END, SECTION_START, mergeSection, renderEvidenceComment, renderEvidenceSection, stripSection } from "./evidence-markdown.ts";
+import { redact, safe, COMMENT_MARKER, SECTION_END, SECTION_START, mergeSection, renderEvidenceComment, renderEvidenceSection, stripSection } from "./evidence-markdown.ts";
 
 const pack = (over: Partial<EvidencePack> = {}): EvidencePack => ({
   summary: "Show the cart total. 2 scenarios: 2 passed. Shown as video; risk medium.",
@@ -139,5 +139,25 @@ describe("renderEvidenceComment", () => {
     expect(text).toContain(COMMENT_MARKER);
     expect(text).toContain("## Evidence");
     expect(COMMENT_MARKER).toBe("<!-- luna-evidence-comment -->");
+  });
+});
+
+describe("redacting secret-shaped tokens", () => {
+  // Built at run time: a literal of this shape blocks the push.
+  const tokens = [
+    ["sk-ant-", "api03-" + "A1b2C3d4E5f6G7h8"],
+    ["gh", "p_" + "a".repeat(24)],
+    ["github_pat_", "11ABCDEFG0" + "x".repeat(20)],
+    ["xox", "b-" + "1234567890-abcdefghij"],
+    ["AKIA", "ABCDEFGHIJKLMNOP"],
+    ["eyJ", "hbGciOiJIUzI1NiJ9AAAAAA" + "." + "payloadpayload1234" + "." + "signature12345"],
+  ].map(([a, b]) => `${a}${b}`);
+
+  it("turns each token shape into [redacted], in safe() too, and leaves ordinary text alone", () => {
+    for (const token of tokens) {
+      expect(redact(`my key is ${token} ok`)).toBe("my key is [redacted] ok");
+      expect(safe(`the key: ${token}`)).toBe("the key: [redacted]");
+    }
+    expect(redact("a sk-short and ghp_short and plain AKIA text")).toBe("a sk-short and ghp_short and plain AKIA text");
   });
 });

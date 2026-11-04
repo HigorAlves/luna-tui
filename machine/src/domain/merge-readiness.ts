@@ -25,6 +25,8 @@ export interface MergeReadinessInput {
   owners: { missing: { path: string; owners: string[] }[]; unresolved: string[] } | null;
   /** The PR changes a CODEOWNERS file: the rules it would merge under are its own, so a person merges. */
   changesCodeowners?: boolean;
+  /** After a fix the loop made: whether an APPROVED review sits on the head itself. Null when the loop made no fix. */
+  fixApproval?: { approved: boolean } | null;
   /** How many `Depends on` numbers the body lists; more than MAX_DEPENDENCIES is a blocker (only that many are checked). */
   dependenciesListed?: number;
 }
@@ -77,6 +79,7 @@ export function mergeReadiness(input: MergeReadinessInput): MergeReadiness {
   else if (pr.reviewDecision === "REVIEW_REQUIRED") blockers.push("approval required");
   for (const m of owners?.missing ?? []) blockers.push(`no owner of ${m.path} approved (${m.owners.join(", ")})`);
   for (const o of owners?.unresolved ?? []) blockers.push(`owner ${o} cannot be resolved`);
+  if (input.fixApproval && !input.fixApproval.approved) blockers.push(`the fix at ${sha7(pr.headSha ?? "")} has no approval on it`);
   if (packSha && pr.headSha && packSha !== pr.headSha) blockers.push(`the pack shows ${sha7(packSha)}, the head is ${sha7(pr.headSha)}`);
   const frozen = inFreeze(policy.freeze, now);
   if (frozen) blockers.push(readableWindow(frozen) ? `freeze: ${frozen.reason} until ${frozen.to}` : "freeze window has an unreadable date");

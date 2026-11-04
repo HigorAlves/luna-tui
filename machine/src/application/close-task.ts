@@ -1,9 +1,10 @@
 // The host-side close step, run after a task reaches `closed`. It adds no task state: the
 // pipeline stores the transition first, then calls this and logs the report. A failed step
 // is reported, never thrown, because the task is already closed.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import { redact } from "../domain/evidence-markdown.ts";
 import { HOST_GIT, defaultBranch as hostDefaultBranch, isBranchName, originSlugOf } from "../adapters/git/worktree.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import type { GitHub } from "./github.ts";
@@ -47,6 +48,21 @@ export interface CloseTarget {
 
 const message = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 
+/** The rules file's path, after checking that neither `docs`, `docs/agents` nor the file is a symlink (a stage can leave one, and the host would write through it, outside the worktree) or anything but a regular file. */
+async function checkedRulesFile(worktreePath: string): Promise<string> {
+  for (const rel of ["docs", "docs/agents", CONTEXT_FILE]) {
+    const info = await lstat(join(worktreePath, rel)).catch(() => null);
+    if (info?.isSymbolicLink()) throw new Error(`${rel} is a symlink: the rules are not written`);
+    if (info && rel === CONTEXT_FILE && !info.isFile()) throw new Error(`${rel} is not a regular file: the rules are not written`);
+  }
+  return join(worktreePath, CONTEXT_FILE);
+}
+
+/** After the folder exists: it must really be `docs/agents` inside the worktree. */
+async function requireInside(worktreePath: string, file: string): Promise<void> {
+  if ((await realpath(dirname(file))) !== join(await realpath(worktreePath), "docs", "agents")) throw new Error("docs/agents is not inside the worktree: the rules are not written");
+}
+
 /** Writes the approved rules into project-context.md and commits them on the task branch. */
 async function applyRules(
   target: CloseTarget,
@@ -57,7 +73,7 @@ async function applyRules(
   if (!rules.apply) return "skipped: approved without applying the rules";
   if (!worktreePath) return "skipped: the task has no worktree";
   if (target.merged) return applyRulesOnBranch(target, worktreePath, rules, deps);
-  const file = join(worktreePath, CONTEXT_FILE);
+  const file = await checkedRulesFile(worktreePath);
   let existing: string | null = null;
   try {
     existing = await readFile(file, "utf8");
@@ -71,6 +87,7 @@ async function applyRules(
   if (lines > CAP_LINES || bytes > CAP_BYTES) throw new Error(`cap exceeded: ${lines}/${bytes}`);
 
   await mkdir(dirname(file), { recursive: true });
+  await requireInside(worktreePath, file);
   await writeFile(file, merged);
   const run = async (args: string[]): Promise<ExecResult> => deps.exec("git", [...HOST_GIT, "-C", worktreePath, ...args]);
   const added = await run(["add", CONTEXT_FILE]);
@@ -84,8 +101,8 @@ async function applyRules(
   return `committed and pushed ${CONTEXT_FILE} (${lines} lines)`;
 }
 
-/** Mentions and issue references in a model's text are neutralized: a draft PR must not ping anyone or close anything. */
-const inert = (text: string): string => text.replace(/@(?=[A-Za-z0-9])/g, "@\u200b").replace(/#(?=\d)/g, "#\u200b");
+/** A model's text for a draft PR's body: tokens redacted, HTML escaped (a `<!--` or `<details>` would hide the rest from the reviewer), mentions and issue references neutralized: a draft PR must not ping anyone or close anything. */
+const inert = (text: string): string => redact(text).replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/@(?=[A-Za-z0-9])/g, "@\u200b").replace(/#(?=\d)/g, "#\u200b");
 
 /** After a merge the task's branch is gone: the rules go on `luna/memory-<task8>`, cut from origin's default branch, pushed with -u and opened as a draft PR. The branch name is the machine's, never from a model. */
 async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rules: { markdown: string }, deps: CloseDeps): Promise<string> {
@@ -103,7 +120,7 @@ async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rul
   await must("fetch", ["fetch", "--quiet", "--end-of-options", "origin", base]);
   await must("checkout", ["checkout", "-B", branch, `origin/${base}`]);
   // The file as the default branch has it now, not as the merged branch left it.
-  const file = join(worktreePath, CONTEXT_FILE);
+  const file = await checkedRulesFile(worktreePath);
   let existing: string | null = null;
   try {
     existing = await readFile(file, "utf8");
@@ -115,6 +132,7 @@ async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rul
   const lines = merged.split("\n").length - 1;
   if (lines > CAP_LINES || Buffer.byteLength(merged) > CAP_BYTES) throw new Error(`cap exceeded: ${lines}/${Buffer.byteLength(merged)}`);
   await mkdir(dirname(file), { recursive: true });
+  await requireInside(worktreePath, file);
   await writeFile(file, merged);
   await must("add", ["add", CONTEXT_FILE]);
   await must("commit", ["-c", "commit.gpgsign=false", "commit", "-m", "docs(context): rules from the memory review"]);

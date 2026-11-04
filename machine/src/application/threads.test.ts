@@ -164,3 +164,17 @@ describe("a merged task", () => {
     expect(slack.calls).toEqual([]);
   });
 });
+
+describe("an escalation's reason reaches a channel flattened", () => {
+  it("posts it on one line with no mention, no issue link, no HTML and no token", async () => {
+    const token = "gh" + "p_" + "e".repeat(24);
+    const { pipeline, replies, comments } = wire();
+    const task = await pipeline.createTask({ title: "t", repoPath: "/r/a", source });
+    await pipeline.record(task.id, "transition", { from: "shipping", to: "escalated", event: "stage_done", reason: `<!channel> @team see #12\n${token}` });
+    await replies.idle();
+    const body = comments.at(-1)![2]!;
+    expect(body).toMatch(/^Escalated: /);
+    expect(body).not.toMatch(/<!channel>|@team|#12|\n.|ghp_/);
+    expect(body).toContain("[redacted]");
+  });
+});

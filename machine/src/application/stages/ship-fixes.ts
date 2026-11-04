@@ -19,7 +19,7 @@ import {
 
 import { HOST_GIT, type GitExec, type RebaseResult } from "../../adapters/git/worktree.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
-import { safe } from "../../domain/evidence-markdown.ts";
+import { redact, safe } from "../../domain/evidence-markdown.ts";
 import type { PublishEvidence } from "../evidence-publish.ts";
 import { type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
@@ -35,6 +35,9 @@ const SHA = /^[0-9a-f]{40,64}$/;
 
 /** A model's text made safe to post: one line, no HTML, no `@mention`, no `#N` auto-link, capped. */
 export const postable = (text: string, cap = REPLY_CAP): string => safe(text).slice(0, cap).trim();
+/** Whether the text carried a token-shaped string: such a drafted answer is never posted. */
+export const carriesSecret = (text: string): boolean => redact(text) !== text;
+export const SECRET_REASON = "the drafted answer carried a secret-shaped token";
 
 export type ShipDecisionPack = "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning";
 export type ShipDecide = (pack: ShipDecisionPack, ship: ShipContext, repoPath: string | null) => Promise<Record<string, unknown>>;
@@ -158,7 +161,7 @@ export type FixOutcome =
 const reasonOf = (result: StageResult): string => {
   const d = result.detail ?? {};
   const text = d.error ?? d.reason ?? d.summary;
-  return typeof text === "string" && text ? text.slice(0, 400) : result.outcome;
+  return typeof text === "string" && text ? postable(text, 400) : result.outcome;
 };
 
 /** One fix round on the task's worktree. A red anywhere resets to the head it started from and escalates with why. */
@@ -188,10 +191,12 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
   const parsed = PrAddressAnswer.safeParse(addressed.detail?.answer);
   if (!parsed.success) return stop(escalated("the addressing pack gave no usable answer"));
   const answer = parsed.data;
-  if (answer.kind === "escalated") return stop(escalated(answer.reason || answer.summary || "the addressing pack asked for a person", answer.escalation ?? "other"));
+  if (answer.kind === "escalated") return stop(escalated(postable(answer.reason || answer.summary || "the addressing pack asked for a person", 400), answer.escalation ?? "other"));
 
   const after = await headOfWorktree(run, wt);
   if (!after) return stop(escalated("the worktree's head could not be read after the fix"));
+  // A reply or summary that needed redacting is not posted, pushed or published: a person answers.
+  if (carriesSecret(answer.summary) || answer.replies.some((r) => carriesSecret(r.body))) return stop(escalated(SECRET_REASON));
   const known = new Set(input.threads.map((t) => t.id));
   const replies = input.postReplies
     ? answer.replies.filter((r) => known.has(r.threadId)).map((r) => ({ threadId: r.threadId, body: postable(r.body), resolve: r.resolve })).filter((r) => r.body)
@@ -205,6 +210,8 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
     return { ok: true, head: before, changed: false, replied: posted.replied, resolved: posted.resolved, repliedTo: replies.map((r) => r.threadId), summary: answer.summary, ...(posted.ok ? {} : { note: posted.error }) };
   }
 
+  // The checks run on exactly what will be pushed: the committed head, with whatever the pack left uncommitted gone.
+  await resetTo(run, wt, after);
   const checked = deps.loop.checks ? await deps.loop.checks(subContext(context, `checks-${input.label}`), before) : null;
   if (!checked) return stop(escalated("no checks runner is wired to prove the fix"));
   if (checked.outcome !== "pass") {
@@ -221,6 +228,10 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
   const now = await headOfWorktree(run, wt);
   const descends = (await run("git", [...HOST_GIT, "-C", wt, "merge-base", "--is-ancestor", before, now ?? ""])).code === 0;
   if (now !== after || !descends) return stop(escalated("the branch changed while the fix was being checked; nothing was pushed"));
+  // The push is of the branch's ref: it must be the checked commit, and HEAD must be that branch (refs are writable in the pack's container).
+  const onBranch = await run("git", [...HOST_GIT, "-C", wt, "symbolic-ref", "-q", "HEAD"]);
+  const tip = await run("git", [...HOST_GIT, "-C", wt, "rev-parse", `refs/heads/${branch}`]);
+  if (onBranch.stdout.trim() !== `refs/heads/${branch}` || tip.stdout.trim() !== after) return stop(escalated("the branch ref is not the checked commit; nothing was pushed"));
   const remoteNow = await deps.github.prHeadSha(input.slug, input.number).catch(() => null);
   if (remoteNow && remoteNow !== before) return stop(escalated(`someone pushed to the PR (${remoteNow.slice(0, 7)}) while the fix was checked; nothing was pushed`, "head_moved"));
   const pushError = await pushBranch(run, branch, wt);

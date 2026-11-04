@@ -185,3 +185,60 @@ describe("closeTask after a merge: the rules go to their own branch and a draft 
     expect(odd.calls).toEqual([]);
   });
 });
+
+describe("closeTask: the rules file is only ever a real file inside the worktree", () => {
+  const rules = { markdown: "- Run pnpm verify before any commit.\n", apply: true };
+
+  async function withLink(where: "file" | "docs" | "agents") {
+    const { mkdirSync, symlinkSync, writeFileSync } = await import("node:fs");
+    const path = worktree();
+    const outside = mkdtempSync(join(tmpdir(), "outside-"));
+    writeFileSync(join(outside, "target.md"), "secret\n");
+    if (where === "docs") symlinkSync(outside, join(path, "docs"));
+    else {
+      mkdirSync(join(path, "docs"), { recursive: true });
+      if (where === "agents") symlinkSync(outside, join(path, "docs/agents"));
+      else {
+        mkdirSync(join(path, "docs/agents"), { recursive: true });
+        symlinkSync(join(outside, "target.md"), join(path, "docs/agents/project-context.md"));
+      }
+    }
+    return { path, outside };
+  }
+
+  function wire() {
+    const calls: string[][] = [];
+    const exec: CloseDeps["exec"] = async (_c, args) => (calls.push(args.slice(args.indexOf("-C") + 2)), { code: 0, stdout: "", stderr: "" });
+    const github = { openPr: async () => ({ url: "https://github.com/o/a/pull/9", number: 9, isDraft: true }) };
+    const deps: CloseDeps = { exec, worktreeRemove: false, github, slugOf: async () => "o/a", defaultBranchOf: async () => "main" };
+    return { calls, deps };
+  }
+
+  for (const where of ["file", "docs", "agents"] as const) {
+    it(`refuses a symlink at ${where}, before a merge and after one, and writes nothing outside`, async () => {
+      const { readFileSync, readdirSync } = await import("node:fs");
+      for (const merged of [null, { prUrl: "https://github.com/o/a/pull/7", number: 7 }]) {
+        const { path, outside } = await withLink(where);
+        const { calls, deps } = wire();
+        const report = await closeTask({ id: "0a1b2c3d-1111", title: "t", repoPath: "/repo", worktreePath: path, rules, merged }, deps);
+        expect(report.steps[0]).toMatchObject({ step: "rules", ok: false, note: expect.stringContaining("symlink") });
+        expect(readFileSync(join(outside, "target.md"), "utf8")).toBe("secret\n");
+        expect(readdirSync(outside)).toEqual(["target.md"]);
+        expect(calls.some((c) => c[0] === "add" || c[0] === "commit" || c[0] === "push")).toBe(false);
+      }
+    });
+  }
+
+  it("escapes HTML and redacts a token in the draft PR's body", async () => {
+    // Built at run time: a literal of this shape blocks the push.
+    const token = "gh" + "p_" + "d".repeat(24);
+    const opened: Array<{ body: string }> = [];
+    const calls: string[][] = [];
+    const exec: CloseDeps["exec"] = async (_c, args) => (calls.push(args), { code: 0, stdout: "", stderr: "" });
+    const deps: CloseDeps = { exec, worktreeRemove: false, github: { openPr: async (_s, pr) => (opened.push(pr), { url: "u", number: 9, isDraft: true }) }, slugOf: async () => "o/a", defaultBranchOf: async () => "main" };
+    await closeTask({ id: "0a1b2c3d-1111", title: "t", repoPath: "/repo", worktreePath: worktree(), rules: { markdown: `- a <!-- hidden --> <details>x\n- ${token}\n`, apply: true }, merged: { prUrl: "https://github.com/o/a/pull/7", number: 7 } }, deps);
+    expect(opened[0]!.body).not.toMatch(/<!--|<details>|ghp_/);
+    expect(opened[0]!.body).toContain("&lt;!-- hidden --&gt;");
+    expect(opened[0]!.body).toContain("[redacted]");
+  });
+});

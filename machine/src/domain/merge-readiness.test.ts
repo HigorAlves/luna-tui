@@ -146,3 +146,13 @@ describe("inFreeze", () => {
     expect(inFreeze([], NOW)).toBeNull();
   });
 });
+
+describe("mergeReadiness after a fix the loop made", () => {
+  it("wants an approval on the fix's own commit before the machine merges, and says which sha has none", () => {
+    const waiting = mergeReadiness(input({ fixApproval: { approved: false } }));
+    expect(waiting).toMatchObject({ ready: false, canAutoMerge: false });
+    expect(waiting.blockers).toEqual([`the fix at ${HEAD.slice(0, 7)} has no approval on it`]);
+    expect(mergeReadiness(input({ fixApproval: { approved: true } }))).toMatchObject({ ready: true, canAutoMerge: true });
+    expect(mergeReadiness(input({ fixApproval: null }))).toMatchObject({ ready: true });
+  });
+});

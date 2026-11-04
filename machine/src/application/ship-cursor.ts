@@ -26,6 +26,8 @@ const ShipCursorSchema = z.object({
   mergeRequested: z.boolean().optional(),
   /** The PR sits in the repo's merge queue: the monitor does not ask to merge it again. */
   queued: z.boolean().optional(),
+  /** The checks left failure since the last red was handled: the same run id coming back red is a new red (GitHub keeps the run id across a re-run). */
+  ciCycled: z.boolean().optional(),
   /** The red CI the loop last handled (`<head>:<run ids>`): the same red is not asked about twice. */
   ciKey: z.string().optional(),
   /** The blockers last noted, so a poll that finds the same ones says nothing. */

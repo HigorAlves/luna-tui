@@ -210,10 +210,10 @@ describe("OctokitGitHub: shipping", () => {
   it("merges the issue comments, review comments and reviews into one list sorted by time, passing since", async () => {
     const user = (login: string, type = "User") => ({ login, type });
     const { github, calls } = stub({
-      "issues.listComments": [{ id: 1, user: user("ana"), body: "why?", created_at: "2026-11-04T10:05:00Z", html_url: "u1" }, { id: 2, user: user("ci[bot]", "Bot"), body: "deployed", created_at: "2026-11-04T10:01:00Z", html_url: "u2" }],
-      "pulls.listReviewComments": [{ id: 3, user: user("bob"), body: "rename", created_at: "2026-11-04T10:03:00Z", html_url: "u3" }],
+      "issues.listComments": [{ id: 1, user: user("ana"), author_association: "MEMBER", body: "why?", created_at: "2026-11-04T10:05:00Z", html_url: "u1" }, { id: 2, user: user("ci[bot]", "Bot"), body: "deployed", created_at: "2026-11-04T10:01:00Z", html_url: "u2" }],
+      "pulls.listReviewComments": [{ id: 3, user: user("bob"), author_association: "NONE", body: "rename", created_at: "2026-11-04T10:03:00Z", html_url: "u3" }],
       "pulls.listReviews": [
-        { id: 4, user: user("cy"), body: "", state: "APPROVED", submitted_at: "2026-11-04T10:04:00Z", html_url: "u4" },
+        { id: 4, user: user("cy"), author_association: "COLLABORATOR", body: "", state: "APPROVED", submitted_at: "2026-11-04T10:04:00Z", html_url: "u4" },
         { id: 5, user: user("old"), body: "ok", state: "COMMENTED", submitted_at: "2026-11-04T09:00:00Z", html_url: "u5" },
         { id: 6, user: null, body: "gone", state: "COMMENTED", submitted_at: "2026-11-04T10:06:00Z", html_url: null },
       ],
@@ -226,7 +226,8 @@ describe("OctokitGitHub: shipping", () => {
       ["comment:1", "comment", "ana", false, null],
       ["review:6", "review", null, false, "COMMENTED"],
     ]);
-    expect(out[0]).toMatchObject({ body: "deployed", at: "2026-11-04T10:01:00Z", url: "u2" });
+    expect(out[0]).toMatchObject({ body: "deployed", at: "2026-11-04T10:01:00Z", url: "u2", association: null });
+    expect(out.map((a) => [a.id, a.association])).toEqual([["comment:2", null], ["review_comment:3", "NONE"], ["review:4", "COLLABORATOR"], ["comment:1", "MEMBER"], ["review:6", null]]);
     expect(calls.filter((c) => String(c[0]).startsWith("paginate")).map((c) => (c[1] as { since?: string }).since)).toEqual(["2026-11-04T10:00:00Z", "2026-11-04T10:00:00Z", undefined]);
     const all = await stub({ "issues.listComments": [], "pulls.listReviewComments": [], "pulls.listReviews": [{ id: 5, user: user("old"), body: "ok", state: "COMMENTED", submitted_at: "2026-11-04T09:00:00Z", html_url: null }] }).github.prActivity("o/a", 7, null);
     expect(all).toHaveLength(1);

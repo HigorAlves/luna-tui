@@ -16,12 +16,14 @@ const thread = { id: "T1", path: "src/export.ts", line: 12, comments: [{ author:
 const answer = (replies: Array<{ threadId: string; body: string; resolve: boolean }> = [{ threadId: "T1", body: "Renamed.", resolve: true }]) => ({ kind: "done", summary: "renamed", replies });
 
 /** A worktree whose head moves when the addressing pack "commits", and a git that records what it was asked. */
-function setup(over: { addressed?: StageResult; commit?: boolean; checks?: StageResult; verifying?: StageResult; valid?: string | Error; pushFails?: boolean; remote?: string; moveDuringChecks?: boolean; noSave?: boolean } = {}) {
+function setup(over: { addressed?: StageResult; commit?: boolean; checks?: StageResult; verifying?: StageResult; valid?: string | Error; pushFails?: boolean; remote?: string; moveDuringChecks?: boolean; noSave?: boolean; branchRef?: string; symbolicRef?: string } = {}) {
   let head = B;
   const git: string[][] = [];
   const exec: GitExec = async (_c, args) => {
     const a = args.slice(args.indexOf("-C") + 2);
     git.push(a);
+    if (a[0] === "symbolic-ref") return ok(over.symbolicRef ?? "refs/heads/hardness/t1");
+    if (a[0] === "rev-parse" && String(a[1]).startsWith("refs/heads/")) return ok(over.branchRef ?? head);
     if (a[0] === "rev-parse") return ok(head);
     if (a[0] === "reset") {
       head = a[3]!;
@@ -40,7 +42,9 @@ function setup(over: { addressed?: StageResult; commit?: boolean; checks?: Stage
     }
     return over.verifying ?? { outcome: "pass", detail: {} };
   });
+  const atChecks: string[][] = [];
   const checks = vi.fn(async (_context: StageContext, _since: string): Promise<StageResult> => {
+    atChecks.push(git.filter((a) => a[0] === "reset").map((a) => a[3]!));
     if (over.moveDuringChecks) head = "c".repeat(40);
     return over.checks ?? { outcome: "pass", detail: {} };
   });
@@ -67,8 +71,52 @@ function setup(over: { addressed?: StageResult; commit?: boolean; checks?: Stage
   const input = (extra: Partial<FixInput> = {}): FixInput => ({ slug: "o/a", number: 3, threads: [thread], scope: "in_place", threadSummary: "rename x in the export", label: "1", postReplies: true, pack: pack(), ...extra });
   const pushed = () => git.filter((a) => a[0] === "push");
   const resets = () => git.filter((a) => a[0] === "reset").map((a) => a[3]);
-  return { deps, context, input, runPack, checks, decide, github, saved, publish, pushed, resets, git, headNow: () => head };
+  return { atChecks, deps, context, input, runPack, checks, decide, github, saved, publish, pushed, resets, git, headNow: () => head };
 }
+
+// Built at run time: a literal of this shape blocks the push.
+const TOKEN = "gh" + "p_" + "b".repeat(24);
+
+describe("a fix round on the shipped PR: what the security pass found", () => {
+  it("runs the checks on the committed head, with the dirty tree reset first", async () => {
+    const s = setup();
+    await fixRound(s.deps, s.context, s.input());
+    expect(s.atChecks).toEqual([[N]]);
+  });
+
+  it("pushes only when the branch ref is the checked commit and HEAD is that branch", async () => {
+    const moved = setup({ branchRef: "d".repeat(40) });
+    expect(await fixRound(moved.deps, moved.context, moved.input())).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("the branch ref is not the checked commit") } } });
+    expect(moved.pushed()).toEqual([]);
+    expect(moved.resets()).toContain(B);
+    const detached = setup({ symbolicRef: "refs/heads/other" });
+    expect(await fixRound(detached.deps, detached.context, detached.input())).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("the branch ref is not the checked commit") } } });
+    expect(detached.pushed()).toEqual([]);
+  });
+
+  it("flattens what a check or the pack says before it can reach a person's channel", async () => {
+    const hostile = "<!channel> @team see #12 " + TOKEN;
+    const red = setup({ checks: { outcome: "fail", detail: { error: hostile } } });
+    const out = await fixRound(red.deps, red.context, red.input());
+    const reason = String((out as unknown as { result: { detail: { reason: string } } }).result.detail.reason);
+    expect(reason).not.toMatch(/<!channel>|@team|#12|ghp_/);
+    expect(reason).toContain("[redacted]");
+
+    const gaveUp = setup({ addressed: { outcome: "pass", detail: { answer: { kind: "escalated", summary: "s", replies: [], reason: hostile } } } });
+    const second = await fixRound(gaveUp.deps, gaveUp.context, gaveUp.input());
+    expect(String((second as unknown as { result: { detail: { reason: string } } }).result.detail.reason)).not.toMatch(/<!channel>|@team|#12|ghp_/);
+  });
+
+  it("does not post or push an answer that carried a secret-shaped token", async () => {
+    const leaky = setup({ addressed: { outcome: "pass", detail: { answer: answer([{ threadId: "T1", body: `the key is ${TOKEN}`, resolve: true }]) } } });
+    expect(await fixRound(leaky.deps, leaky.context, leaky.input())).toMatchObject({ ok: false, result: { detail: { reason: "the drafted answer carried a secret-shaped token" } } });
+    expect(leaky.pushed()).toEqual([]);
+    expect(leaky.github.replyToThread).not.toHaveBeenCalled();
+    expect(leaky.resets()).toEqual([B]);
+    const summary = setup({ addressed: { outcome: "pass", detail: { answer: { ...answer(), summary: `done, key ${TOKEN}` } } } });
+    expect(await fixRound(summary.deps, summary.context, summary.input())).toMatchObject({ ok: false, result: { detail: { reason: "the drafted answer carried a secret-shaped token" } } });
+  });
+});
 
 describe("a fix round on the shipped PR", () => {
   it("fixes in place: addressing on the worktree, checks over the delta, a plain push, the reply and resolve, the pack re-stamped and republished", async () => {
@@ -86,7 +134,7 @@ describe("a fix round on the shipped PR", () => {
     expect(s.saved).toHaveLength(1);
     expect(s.saved[0]).toMatchObject({ commitSha: N, summary: "Adds the export. Fixed after review: rename x in the export." });
     expect(s.publish).toHaveBeenCalledWith(expect.objectContaining({ slug: "o/a", number: 3, localDir: `/ev/t1/${B}` }));
-    expect(s.resets()).toEqual([]);
+    expect(s.resets()).toEqual([N]);
   });
 
   it("resets the worktree to the head it started from and escalates with the findings when a check goes red; nothing is pushed or posted", async () => {
@@ -94,7 +142,7 @@ describe("a fix round on the shipped PR", () => {
     const s = setup({ checks: { outcome: "fail", detail: { error: "`pnpm test` failed: boom", findings } } });
     const out = await fixRound(s.deps, s.context, s.input());
     expect(out).toMatchObject({ ok: false, result: { outcome: "escalated", detail: { reason: expect.stringContaining("boom"), findings } } });
-    expect(s.resets()).toEqual([B]);
+    expect(s.resets()).toEqual([N, B]);
     expect(s.headNow()).toBe(B);
     expect(s.pushed()).toEqual([]);
     expect(s.github.replyToThread).not.toHaveBeenCalled();
@@ -111,7 +159,7 @@ describe("a fix round on the shipped PR", () => {
     const bad = setup({ verifying: { outcome: "fail", detail: { summary: "a bug in the rename" } } });
     const out = await fixRound(bad.deps, bad.context, bad.input({ scope: "re_verify_partial" }));
     expect(out).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("a bug in the rename") } } });
-    expect(bad.resets()).toEqual([B]);
+    expect(bad.resets()).toEqual([N, B]);
     expect(bad.pushed()).toEqual([]);
   });
 
@@ -119,7 +167,7 @@ describe("a fix round on the shipped PR", () => {
     const moved = setup({ moveDuringChecks: true });
     expect(await fixRound(moved.deps, moved.context, moved.input())).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("changed while the fix was being checked") } } });
     expect(moved.pushed()).toEqual([]);
-    expect(moved.resets()).toEqual([B]);
+    expect(moved.resets()).toEqual([N, B]);
 
     const someoneElse = setup({ remote: "d".repeat(40) });
     expect(await fixRound(someoneElse.deps, someoneElse.context, someoneElse.input())).toMatchObject({ ok: false, result: { detail: { escalation: "head_moved" } } });
@@ -129,7 +177,7 @@ describe("a fix round on the shipped PR", () => {
   it("escalates a refused push and an addressing run that failed or gave up, resetting each time", async () => {
     const push = setup({ pushFails: true });
     expect(await fixRound(push.deps, push.context, push.input())).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("git push failed") } } });
-    expect(push.resets()).toEqual([B]);
+    expect(push.resets()).toEqual([N, B]);
 
     const failed = setup({ addressed: { outcome: "fail", detail: { error: "ran out of turns" } } });
     expect(await fixRound(failed.deps, failed.context, failed.input())).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("ran out of turns") } } });
@@ -143,7 +191,7 @@ describe("a fix round on the shipped PR", () => {
     const media = setup({ valid: "refresh_media" });
     expect(await fixRound(media.deps, media.context, media.input())).toMatchObject({ ok: false, result: { detail: { escalation: "head_moved" } } });
     expect(media.pushed()).toHaveLength(1);
-    expect(media.resets()).toEqual([]);
+    expect(media.resets()).toEqual([N]);
     expect(media.saved).toEqual([]);
 
     const unsure = setup({ valid: new Error("no model") });

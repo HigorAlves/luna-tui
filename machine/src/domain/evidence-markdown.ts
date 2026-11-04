@@ -10,9 +10,23 @@ export const COMMENT_MARKER = "<!-- luna-evidence-comment -->";
 /** GitHub's limit is 65 536 characters; a body keeps some room. */
 export const BODY_CAP = 60_000;
 
+const SECRET_SHAPES = [
+  /sk-ant-[A-Za-z0-9_-]{8,}/g,
+  /gh[pousr]_[A-Za-z0-9]{20,}/g,
+  /github_pat_[A-Za-z0-9_]{20,}/g,
+  /xox[abprs]-[A-Za-z0-9-]{10,}/g,
+  /AKIA[0-9A-Z]{16}/g,
+  /eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g,
+];
+
+/** Text with every token-shaped string (API keys, GitHub and Slack tokens, AWS key ids, JWTs) replaced by `[redacted]`. */
+export function redact(text: string): string {
+  return SECRET_SHAPES.reduce((out, shape) => out.replace(shape, "[redacted]"), text);
+}
+
 /** A line of someone else's text made safe to print: one line, no HTML at all (a tag can fold the rest of the page away), no mention, no issue reference, no table break. */
 export function safe(text: string, table = false): string {
-  const flat = text
+  const flat = redact(text)
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/\s+/g, " ")

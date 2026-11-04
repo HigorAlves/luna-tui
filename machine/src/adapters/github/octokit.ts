@@ -258,8 +258,8 @@ export class OctokitGitHub implements GitHub {
 
   async prActivity(slug: string, number: number, since: string | null): Promise<PrActivity[]> {
     const { owner, repo } = repoRef(slug);
-    type Row = { id: number; user: { login: string; type?: string } | null; body?: string | null; created_at?: string; html_url?: string | null };
-    type ReviewRow = { id: number; user: { login: string; type?: string } | null; body?: string | null; state: string; submitted_at?: string | null; html_url?: string | null };
+    type Row = { id: number; user: { login: string; type?: string } | null; author_association?: string | null; body?: string | null; created_at?: string; html_url?: string | null };
+    type ReviewRow = { id: number; user: { login: string; type?: string } | null; author_association?: string | null; body?: string | null; state: string; submitted_at?: string | null; html_url?: string | null };
     const sinceParam = since ? { since } : {};
     const [comments, reviewComments, reviews] = await call(`listing the activity of ${slug}#${number}`, () =>
       Promise.all([
@@ -270,11 +270,11 @@ export class OctokitGitHub implements GitHub {
     );
     const isBot = (u: { login: string; type?: string } | null) => u !== null && (u.type === "Bot" || u.login.endsWith("[bot]"));
     const out: PrActivity[] = [
-      ...comments.map((c): PrActivity => ({ id: `comment:${c.id}`, kind: "comment", actor: c.user?.login ?? null, isBot: isBot(c.user), body: c.body ?? "", state: null, at: c.created_at ?? "", url: c.html_url ?? null })),
-      ...reviewComments.map((c): PrActivity => ({ id: `review_comment:${c.id}`, kind: "review_comment", actor: c.user?.login ?? null, isBot: isBot(c.user), body: c.body ?? "", state: null, at: c.created_at ?? "", url: c.html_url ?? null })),
+      ...comments.map((c): PrActivity => ({ id: `comment:${c.id}`, kind: "comment", actor: c.user?.login ?? null, isBot: isBot(c.user), association: c.author_association ?? null, body: c.body ?? "", state: null, at: c.created_at ?? "", url: c.html_url ?? null })),
+      ...reviewComments.map((c): PrActivity => ({ id: `review_comment:${c.id}`, kind: "review_comment", actor: c.user?.login ?? null, isBot: isBot(c.user), association: c.author_association ?? null, body: c.body ?? "", state: null, at: c.created_at ?? "", url: c.html_url ?? null })),
       ...reviews
         .filter((r) => r.submitted_at && (!since || r.submitted_at > since))
-        .map((r): PrActivity => ({ id: `review:${r.id}`, kind: "review", actor: r.user?.login ?? null, isBot: isBot(r.user), body: r.body ?? "", state: r.state, at: r.submitted_at ?? "", url: r.html_url ?? null })),
+        .map((r): PrActivity => ({ id: `review:${r.id}`, kind: "review", actor: r.user?.login ?? null, isBot: isBot(r.user), association: r.author_association ?? null, body: r.body ?? "", state: r.state, at: r.submitted_at ?? "", url: r.html_url ?? null })),
     ];
     return out.sort((a, b) => (a.at < b.at ? -1 : a.at > b.at ? 1 : a.id.localeCompare(b.id)));
   }

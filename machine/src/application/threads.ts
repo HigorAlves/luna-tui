@@ -6,6 +6,7 @@
 import { WAITING_ON_USER, type TaskState } from "@hardness/contracts";
 import { basename } from "node:path";
 
+import { safe } from "../domain/evidence-markdown.ts";
 import { fromNotch } from "../domain/jira-link.ts";
 import { type GitHub, messageOf } from "./github.ts";
 import type { EventRow, TaskRow } from "../domain/task.ts";
@@ -70,7 +71,7 @@ export class ThreadReplies {
       const to = event.payload.to as TaskState;
       const from = event.payload.from as TaskState;
       if (from === "draft" && event.payload.event === "start") return this.open(event.taskId);
-      if (to === "escalated") return this.reply(event.taskId, `Escalated: ${String(event.payload.reason ?? "see the board")}.`);
+      if (to === "escalated") return this.reply(event.taskId, `Escalated: ${safe(String(event.payload.reason ?? "see the board"))}.`);
       if (to === "paused_rate_limit") return this.reply(event.taskId, "Paused on a usage limit; it resumes by itself.");
       if (to === "closed") return this.reply(event.taskId, "Closed.");
       if (to === "archived") return this.reply(event.taskId, `Archived: ${String(event.payload.archiveReason ?? "no reason given")}.`);

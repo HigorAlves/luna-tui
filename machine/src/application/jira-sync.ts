@@ -11,6 +11,7 @@
 // pipeline; a failure is a warning and, where it fits, a blocked mark.
 import { WAITING_ON_USER, type JiraLink, type TaskState } from "@hardness/contracts";
 
+import { safe } from "../domain/evidence-markdown.ts";
 import { jiraOf } from "../domain/jira-link.ts";
 import type { JiraPolicy, Policy } from "../domain/policy.ts";
 import type { ArtifactRow, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
@@ -155,7 +156,7 @@ export class JiraSync {
       else if (to === "closed") await this.comment(link, await this.closing(task));
       else if (to === "archived") await this.comment(link, `Archived: ${String(event.payload.archiveReason ?? "no reason given")}.`);
       else if (policy.comments === "gates" && WAITING_ON_USER.has(to) && to !== from) {
-        await this.comment(link, to === "escalated" ? `Escalated: ${String(event.payload.reason ?? "see the board")}.` : `Needs you: ${ASKS[to] ?? to}.`);
+        await this.comment(link, to === "escalated" ? `Escalated: ${safe(String(event.payload.reason ?? "see the board"))}.` : `Needs you: ${ASKS[to] ?? to}.`);
       }
     }
     const wanted = policy.on[to];

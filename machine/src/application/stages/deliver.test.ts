@@ -133,3 +133,17 @@ describe("delivering a branch that conflicts with the default branch", () => {
     expect(throwing.calls).toHaveLength(1);
   });
 });
+
+describe("pushBranch with a lease", () => {
+  it("pins the lease to the sha it is given, and refuses a lease that is not a sha", async () => {
+    const { pushBranch } = await import("./deliver.ts");
+    const calls: string[][] = [];
+    const exec = async (_c: string, args: string[]) => (calls.push(args), ok());
+    const sha = "a".repeat(40);
+    expect(await pushBranch(exec, "hardness/t1", "/wt", { force: true, lease: sha })).toBeNull();
+    expect(calls[0]).toContain(`--force-with-lease=refs/heads/hardness/t1:${sha}`);
+    expect(calls[0]).not.toContain("--force-with-lease");
+    expect(await pushBranch(exec, "hardness/t1", "/wt", { force: true, lease: "--upload-pack=x" })).toMatch(/lease/);
+    expect(calls).toHaveLength(1);
+  });
+});

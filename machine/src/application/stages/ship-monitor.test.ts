@@ -281,7 +281,7 @@ describe("the ship monitor", () => {
   });
 
   it("records new activity in the cursor and notes it once, asking GitHub only for what is after `since`", async () => {
-    const item = { id: "comment:1", kind: "comment" as const, actor: "ana", isBot: false, body: "why?", state: null, at: "2026-11-04T12:01:00Z", url: null };
+    const item = { id: "comment:1", kind: "comment" as const, association: "MEMBER", actor: "ana", isBot: false, body: "why?", state: null, at: "2026-11-04T12:01:00Z", url: null };
     const prActivity = vi.fn(async (_s: string, _n: number, since: string | null) => (since ? [] : [item]));
     const { run, notes } = setup({ prActivity, prMerged: vi.fn().mockResolvedValueOnce(open).mockResolvedValueOnce(open).mockResolvedValueOnce(merged) });
     await run();
@@ -320,7 +320,7 @@ describe("the review loop", () => {
       {
         viewer: async () => ({ login: "me", teams: [] }),
         prMerged: async () => (++polls < 3 ? open : merged),
-        prActivity: async (_slug, _n, since) => (since === null ? [{ id: "review_comment:1", kind: "review_comment", actor: "bo", isBot: false, body: question, state: null, at, url: null }] : []),
+        prActivity: async (_slug, _n, since) => (since === null ? [{ id: "review_comment:1", kind: "review_comment", association: "MEMBER", actor: "bo", isBot: false, body: question, state: null, at, url: null }] : []),
         prThreads: async () => [thread],
         replyToThread: async () => {},
       },
@@ -346,6 +346,7 @@ function loopWorld(over: { choices?: Record<string, string>; confidence?: number
     const a = args.slice(args.indexOf("-C") + 2);
     git.push(a);
     const out = (stdout = "") => ({ code: 0, stdout, stderr: "" });
+    if (a[0] === "symbolic-ref") return out("refs/heads/hardness/t1");
     if (a[0] === "rev-parse") return out(head);
     if (a[0] === "reset") {
       head = a[3]!;
@@ -379,7 +380,7 @@ function loopWorld(over: { choices?: Record<string, string>; confidence?: number
 }
 
 const ACTIVITY_AT = "2026-11-04T12:01:00Z";
-const commentAct = (over: Record<string, unknown> = {}) => ({ id: "review_comment:1", kind: "review_comment" as const, actor: "bo", isBot: false, body: "please rename x", state: null, at: ACTIVITY_AT, url: null, ...over });
+const commentAct = (over: Record<string, unknown> = {}) => ({ id: "review_comment:1", kind: "review_comment" as const, association: "MEMBER" as string | null, actor: "bo", isBot: false, body: "please rename x", state: null, at: ACTIVITY_AT, url: null, ...over });
 const threadOf = (over: Record<string, unknown> = {}) => ({ id: "T1", path: "src/export.ts", line: 12, comments: [{ author: "bo", body: "please rename x", at: ACTIVITY_AT }], ...over });
 const redNode = () => node({ commits: { nodes: [{ commit: { oid: HEAD, committedDate: "2026-11-03T10:00:00Z", statusCheckRollup: { state: "FAILURE", contexts: { nodes: [{ __typename: "CheckRun", name: "build", status: "COMPLETED", conclusion: "FAILURE", detailsUrl: null }] } } } }] } });
 const failedCheck = (run = 77) => [{ name: "build", state: "FAILURE", link: `https://github.com/o/a/actions/runs/${run}/job/1` }];
@@ -487,7 +488,7 @@ describe("the review loop: fixes", () => {
     const world = loopWorld({ choices: { comment_intent: "change_request" }, checks: { outcome: "fail", detail: { error: "`pnpm test` failed" } } });
     const { run, github } = review(world);
     expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("checks failed after the fix") } });
-    expect(world.git.filter((a) => a[0] === "reset").map((a) => a[3])).toEqual([HEAD]);
+    expect(world.git.filter((a) => a[0] === "reset").map((a) => a[3])).toEqual([world.NEW, HEAD]);
     expect(world.pushes()).toEqual([]);
     expect(calls(github, "replyToThread")).toEqual([]);
   });
@@ -566,7 +567,7 @@ describe("the review loop: CI and conflicts", () => {
     const { run } = review(world, { prFacts: async () => node({ mergeable: "CONFLICTING" }), prMerged: async () => open }, []);
     expect(await run()).toMatchObject({ outcome: "escalated", detail: { verdict: "conflict_unresolvable", reason: expect.stringContaining("after one rebase") } });
     expect(world.rebase).toHaveBeenCalledTimes(1);
-    expect(world.pushes()).toEqual([["push", "--force-with-lease", "-u", "origin", "hardness/t1"]]);
+    expect(world.pushes()).toEqual([["push", `--force-with-lease=refs/heads/hardness/t1:${HEAD}`, "-u", "origin", "hardness/t1"]]);
     expect(world.saved[0]).toMatchObject({ commitSha: "f".repeat(40) });
     expect((await loadCursor(stateDir, "t1"))!.rebases).toBe(1);
   });
@@ -577,5 +578,116 @@ describe("the review loop: CI and conflicts", () => {
     const { run } = review({ ...world, loop: { ...world.loop, rebase } }, { prFacts: async () => node({ mergeable: "CONFLICTING" }), prMerged: async () => open }, []);
     expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("rebase stops on: a.ts") } });
     expect(world.pushes()).toEqual([]);
+  });
+});
+
+// Built at run time: a literal of this shape blocks the push.
+const TOKEN = "gh" + "p_" + "c".repeat(24);
+
+describe("the review loop: what the security pass found", () => {
+  it("acts only on a collaborator's comment: a stranger's is noted and skipped, never escalated, never sent to a model", async () => {
+    for (const association of ["NONE", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", null]) {
+      await rm(join(stateDir, "tasks"), { recursive: true, force: true });
+      const world = loopWorld({ choices: { comment_intent: "change_request" } });
+      const { run, notes } = review(world, {}, [commentAct({ association })]);
+      expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "person" } } });
+      expect(world.decide).not.toHaveBeenCalled();
+      expect(world.runPack).not.toHaveBeenCalled();
+      expect(notes.join("|")).toMatch(/not a collaborator/);
+    }
+    for (const association of ["OWNER", "MEMBER", "COLLABORATOR"]) {
+      await rm(join(stateDir, "tasks"), { recursive: true, force: true });
+      const world = loopWorld();
+      const { run } = review(world, {}, [commentAct({ association })]);
+      await run();
+      expect(world.decide).toHaveBeenCalled();
+    }
+  });
+
+  it("merges after a fix only with an approval on the fix's own commit", async () => {
+    const stale = [{ author: "ana", state: "APPROVED", commitId: "1".repeat(40), at: "t" }];
+    const fresh = [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t" }];
+    const blocked = setup({ prReviews: async () => stale }, { policy: { autoMerge: "low" }, maxWaitMs: 120_000 });
+    await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), fixRounds: 1 });
+    await blocked.run();
+    expect(calls(blocked.github, "mergePr")).toEqual([]);
+    expect(blocked.notes.some((n) => n.includes(`the fix at ${HEAD.slice(0, 7)} has no approval on it`))).toBe(true);
+
+    const ok = setup({ prReviews: async () => fresh }, { policy: { autoMerge: "low" } });
+    expect(await ok.run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
+
+    const dismissed = setup({ prReviews: async () => [...fresh, { author: "ana", state: "CHANGES_REQUESTED", commitId: HEAD, at: "t2" }] }, { policy: { autoMerge: "low" }, maxWaitMs: 120_000 });
+    await dismissed.run();
+    expect(calls(dismissed.github, "mergePr")).toEqual([]);
+  });
+
+  it("keeps the monitor's reviews for the merge check even when the repo has no CODEOWNERS", async () => {
+    const { run, github } = setup({ prReviews: async () => [] }, { policy: { autoMerge: "low" }, maxWaitMs: 120_000 });
+    await run();
+    expect(calls(github, "mergePr")).toHaveLength(1);
+  });
+
+  it("flattens a reviewer's text and redacts a token before it goes into an escalation", async () => {
+    const world = loopWorld({ confidence: 0.2 });
+    const { run } = review(world, {}, [commentAct({ body: `<!channel> @team fix #12 ${TOKEN}` })]);
+    const result = await run();
+    const reason = String((result.detail as { reason: string }).reason);
+    expect(reason).not.toMatch(/<!channel>|@team|#12|ghp_/);
+    expect(reason).toContain("[redacted]");
+  });
+
+  it("does not merge in the poll that handled activity, only in the next one", async () => {
+    const world = loopWorld({ choices: { event_class: "noise" } });
+    const { run, github, slept } = setup(
+      { prActivity: async (_s, _n, since) => (since === null ? [commentAct()] : []), viewer: async () => ({ login: "me", teams: [] }) },
+      { policy: { autoMerge: "low" }, loop: world.loop, evidence: world.evidence },
+    );
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
+    expect(slept).toEqual([60_000]);
+    expect(calls(github, "mergePr")).toHaveLength(1);
+  });
+
+  it("hands a PR that has had ten answers to a person", async () => {
+    const world = loopWorld();
+    await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), threads: { A: { replies: 6, lastAt: "t" }, B: { replies: 4, lastAt: "t" } } });
+    const { run } = review(world);
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("ten questions answered on this PR; a person takes over") } });
+    expect(world.runPack).not.toHaveBeenCalled();
+  });
+
+  it("escalates once when handling an item throws, and does not handle it again", async () => {
+    const world = loopWorld();
+    const { run } = review(world, { prThreads: async () => { throw new Error(`boom <!channel> ${TOKEN}`); } });
+    const result = await run();
+    expect(result).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("a review event could not be handled") } });
+    expect(String((result.detail as { reason: string }).reason)).not.toMatch(/<!channel>|ghp_/);
+    expect((await loadCursor(stateDir, "t1"))!.seen).toEqual(["review_comment:1"]);
+  });
+
+  it("does not post a drafted answer that carried a secret-shaped token: a person answers", async () => {
+    const world = loopWorld();
+    const runPack = vi.fn(async (_p: string, _c: unknown, _e: unknown) => ({ outcome: "pass" as const, detail: { answer: { reply: `the key is ${TOKEN}`, resolves: false, confidence: 0.9 } } }));
+    const { run, github } = review({ ...world, loop: { ...world.loop, runPack } });
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("the drafted answer carried a secret-shaped token") } });
+    expect(calls(github, "replyToThread")).toEqual([]);
+  });
+
+  it("judges a red that comes back with the same run id once the checks have left failure in between (a flake re-run keeps the run id)", async () => {
+    const world = loopWorld({ ciVerdict: { verdict: "flake", summary: "a timeout" } });
+    let polls = 0;
+    const { run, github } = setup(
+      {
+        viewer: async () => ({ login: "me", teams: [] }),
+        prFacts: async () => (++polls === 2 ? node() : redNode()),
+        prChecks: async () => failedCheck(77),
+        failedRunLog: async () => "log",
+        findPr: async () => ({ number: 3, url: REF.url, isDraft: false }) as never,
+        rerunFailedJobs: async () => {},
+      },
+      { loop: world.loop, evidence: world.evidence },
+    );
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("red again after one re-run") } });
+    expect(calls(github, "rerunFailedJobs")).toHaveLength(1);
+    expect(world.runPack.mock.calls.filter((c) => c[0] === "ci_watch")).toHaveLength(2);
   });
 });

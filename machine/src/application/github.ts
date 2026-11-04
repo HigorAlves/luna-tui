@@ -76,6 +76,8 @@ export interface PrActivity {
   actor: string | null;
   isBot: boolean;
   body: string;
+  /** GitHub's `author_association` of whoever did it (`OWNER`, `MEMBER`, `COLLABORATOR`, `CONTRIBUTOR`, `NONE`, …); null when GitHub does not say. */
+  association: string | null;
   /** A review's state (`APPROVED`, `CHANGES_REQUESTED`, `COMMENTED`); null for a comment. */
   state: string | null;
   at: string;

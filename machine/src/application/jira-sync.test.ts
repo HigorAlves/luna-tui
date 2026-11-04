@@ -322,3 +322,16 @@ describe("JiraSync: a merged task", () => {
     expect(quiet.jira.comments["PLAT-123"] ?? []).toEqual([]);
   });
 });
+
+describe("JiraSync: an escalation's reason", () => {
+  it("is flattened before it goes to the ticket", async () => {
+    const token = "gh" + "p_" + "f".repeat(24);
+    const { pipeline, jira, sync } = wire(jiraPolicy({ comments: "gates" }));
+    const task = await pipeline.createTask({ title: "PLAT-123 Login page", repoPath: "/r/a" });
+    await pipeline.record(task.id, "transition", { from: "shipping", to: "escalated", event: "stage_done", reason: `<!channel> @team see #12 ${token}` });
+    await sync.idle();
+    const body = jira.comments["PLAT-123"]!.find((c) => c.startsWith("Escalated"))!;
+    expect(body).not.toMatch(/<!channel>|@team|#12|ghp_/);
+    expect(body).toContain("[redacted]");
+  });
+});

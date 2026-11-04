@@ -25,9 +25,12 @@ export function describe(result: ExecResult): string {
 }
 
 /** Pushes the task's branch from its worktree. Returns an error message on failure. */
-export async function pushBranch(exec: ExecFn, branch: string, cwd: string, options: { force?: boolean } = {}): Promise<string | null> {
+export async function pushBranch(exec: ExecFn, branch: string, cwd: string, options: { force?: boolean; lease?: string } = {}): Promise<string | null> {
   // `--force-with-lease`: after a rebase, only over the head this worktree last saw on the task's own branch.
-  const pushed = await exec("git", [...HOST_GIT, "-C", cwd, "push", ...(options.force ? ["--force-with-lease"] : []), "-u", "origin", branch]);
+  // With `lease` (a sha the machine read) the lease is pinned to it, so a concurrent fetch cannot move what it is compared with.
+  if (options.lease !== undefined && !/^[0-9a-f]{40,64}$/.test(options.lease)) return "git push refused: the lease is not a commit sha";
+  const force = options.force ? [options.lease ? `--force-with-lease=refs/heads/${branch}:${options.lease}` : "--force-with-lease"] : [];
+  const pushed = await exec("git", [...HOST_GIT, "-C", cwd, "push", ...force, "-u", "origin", branch]);
   return pushed.code === 0 ? null : `git push failed: ${describe(pushed)}`;
 }
 
