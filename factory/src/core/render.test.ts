@@ -187,6 +187,18 @@ describe("renderPrompt", () => {
     expect(render(jira)).toContain("hint: (none)");
   });
 
+  it("renders the ticket's signals one per question, with the label a score rounds to and a flag under the bar", () => {
+    const signals = {
+      kind: { answer: "bug", confidence: 0.9 }, area: { answer: "board", confidence: 0.55 }, ready: { answer: true, confidence: 0.83 }, size: { answer: 1, confidence: 0.75 },
+      urgency: { answer: 1.2, confidence: 0.7 }, risk: { answer: 0.8, confidence: 0.8 }, archive: { answer: false, confidence: 0.95 },
+    };
+    const classification = { kind: "bug", area: "board", ready: true, size: 1, confidence: 0.55, at: "2026-11-03T12:00:00.000Z", model: "m", signals };
+    const render = (c: unknown) => renderPrompt({ pack: PACKS.triage, input: { ...input, pack: "triage", stage: "triage", task: { ...input.task, classification: c as never } }, template: "signals: {{task.classification}}" });
+    expect(render(classification)).toContain("signals: kind bug (0.90) · area board (0.55, flagged) · ready yes (p 0.83) · size small (0.75) · urgency normal (0.70) · risk low (0.80) · archive no (p 0.05)");
+    expect(render(null)).toContain("signals: (none)");
+    expect(render({ ...classification, signals: undefined })).toContain("signals: (none)");
+  });
+
   it("renders the case for eval_judge: the pack, the rubric and the JSON as the runner wrote it", () => {
     const template = "{{context.eval.pack}} {{context.eval.case}}\nrubric: {{context.eval.rubric}}\ninput: {{context.eval.input}}\nchecks: {{context.eval.checks}}\nanswer: {{context.eval.answer}}";
     const judged = { pack: "slack_triage" as const, caseId: "incident", rubric: "  P0 for the outage\n", input: '{"a":1}', checks: "[]", answer: '{"items":[]}' };

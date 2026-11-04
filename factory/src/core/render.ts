@@ -4,7 +4,7 @@
 // (runtimes/claude/run.ts, `outputFormat`). Pure: the caller passes the template and the
 // project context, so a test needs no files.
 import type { AgentPack, Pack, StageInput } from "@hardness/contracts";
-import { answerJsonSchema, classificationLine } from "@hardness/contracts";
+import { PACKS, type TaskClassification, answerJsonSchema, classificationLine, verdictOf } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
 import { callText } from "./transcript.ts";
@@ -204,6 +204,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{task.description}}": txt(input.task.description),
     "{{task.criteria}}": bullets(input.task.criteria),
     "{{task.branch}}": txt(input.task.branch),
+    "{{task.classification}}": classificationLines(input.task.classification),
     "{{plan.brief}}": txt(input.plan?.brief),
     "{{plan.criteria}}": bullets(input.plan?.criteria),
     "{{plan.assumptions}}": bullets(input.plan?.assumptions),
@@ -264,6 +265,35 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
   const body = template.replace(/\{\{[A-Za-z.]+\}\}/g, (key) => subs[key] ?? key);
   const header = [`You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1); no person is present. ${escalationLine(pack)}`, ""].join("\n");
   return header + body;
+}
+
+/** A ticket's signals on one line, in the pack's question order: `kind bug (0.90) · area board
+ *  (0.55, flagged) · ready yes (p 0.83) · size small (0.75)`. A score reads as the rubric level it
+ *  rounds to; a signal under the pack's own `proceed` bar is flagged (the factory has no repo
+ *  policy). `(none)` when intake never ran triage_signals. */
+export function classificationLines(c: TaskClassification | null | undefined): string {
+  const signals = c?.signals;
+  if (!signals) return NONE;
+  const pack = PACKS.triage_signals;
+  const parts: string[] = [];
+  for (const [name, question] of Object.entries(pack.questions)) {
+    const signal = signals[name];
+    if (!signal) continue;
+    const confidence = signal.confidence;
+    const flagged = verdictOf(confidence, pack.policy[name]!) === "proceed" ? "" : ", flagged";
+    const fixed = confidence.toFixed(2);
+    if (question.type === "yesno") {
+      const yes = signal.answer === true;
+      parts.push(`${name} ${yes ? "yes" : "no"} (p ${(yes ? confidence : 1 - confidence).toFixed(2)}${flagged})`);
+    } else if (question.type === "score") {
+      const levels = Object.keys(question.rubric);
+      const level = levels[Math.min(levels.length - 1, Math.max(0, Math.round(Number(signal.answer))))];
+      parts.push(`${name} ${level} (${fixed}${flagged})`);
+    } else {
+      parts.push(`${name} ${String(signal.answer)} (${fixed}${flagged})`);
+    }
+  }
+  return parts.length > 0 ? parts.join(" · ") : NONE;
 }
 
 const CALL_TARGET_MAX = 160;

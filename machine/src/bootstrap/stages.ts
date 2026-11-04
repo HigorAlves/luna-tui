@@ -14,6 +14,7 @@ import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
 import { type EvidenceDeps, evidenceRunner } from "../application/stages/evidence.ts";
 import { memoryReviewRunner, withMemoryReview } from "../application/stages/memory.ts";
 import type { StageContext, StageResult, StageRunner } from "../application/ports.ts";
+import { type TriageSignalDeps, withTriageSignals } from "../application/stages/triage-signals.ts";
 import { prAddressRunner } from "../application/stages/pr-address.ts";
 import { prReviewRunner } from "../application/stages/pr-review.ts";
 import { setupRunner } from "../application/stages/setup.ts";
@@ -50,6 +51,8 @@ export async function buildRealStages(
   github: GitHub = noTokenGitHub(),
   /** Each engine's credential, gated by what the machine holds back; defaults to the credentials alone. */
   engineCredentials: Credentials = machineCredentials(),
+  /** Triage's first read of a ticket with no signals; `classify` is bound late, once PackRuns exists. */
+  triageSignals?: TriageSignalDeps,
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -90,8 +93,10 @@ export async function buildRealStages(
     history,
   };
   const verifyPack = (context: StageContext) => runAgent(deps, context, "verifying");
+  const agents = agentRunners(deps);
   const real: Partial<Record<TaskState, StageRunner>> = {
-    ...agentRunners(deps),
+    ...agents,
+    ...(triageSignals && agents.triage ? { triage: withTriageSignals(agents.triage, triageSignals) } : {}),
     // Setup reads the repo checkout itself (no worktree yet) and proves what it proposes in the image.
     setup: setupRunner({ runPack: (context) => runAgent(deps, context, "setup", { checkout: true }), exec: checksExec, stateDir: config.stateDir }),
     // ci_watch polls the PR's checks on the host and only calls its pack when one is red.

@@ -11,6 +11,11 @@ Branch: {{task.branch}}
 Ticket criteria:
 {{task.criteria}}
 
+## Signals
+{{task.classification}}
+
+These are a small model's guesses with its confidence; a flagged one is yours to settle.
+
 ## Answers and decisions so far
 {{decisions}}
 

@@ -519,6 +519,8 @@ export const StageInput = z.object({
     source: TaskSource.nullable(),
     /** What triage recorded about the ticket; absent or null before it ran. */
     record: TriageRecord.nullable().optional(),
+    /** What triage_signals said about the ticket (every signal with its confidence); absent or null when intake did not run it. */
+    classification: TaskClassification.nullable().optional(),
     /** The evidence pack of the task's change; absent or null before verifying made one. */
     evidence: EvidencePack.nullable().optional(),
   }),

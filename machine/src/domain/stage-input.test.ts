@@ -14,6 +14,16 @@ const task = {
   source: { kind: "github", repo: "o/n", number: 7, url: "https://github.com/o/n/issues/7" },
 } as unknown as TaskRow;
 
+describe("buildStageInput's task", () => {
+  it("carries the ticket's classification, null when it has none", () => {
+    const classification = { kind: "bug", area: "board", ready: true, size: 1, confidence: 0.8, at: "2026-11-04T00:00:00.000Z", model: "m" };
+    const build = (t: unknown) => buildStageInput({ task: t as TaskRow, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
+    expect(build({ ...task, classification }).task.classification).toEqual(classification);
+    expect(StageInput.parse(build({ ...task, classification })).task.classification).toEqual(classification);
+    expect(build({ ...task, classification: null }).task.classification).toBeNull();
+  });
+});
+
 const approval = (over: Partial<ApprovalRow>): ApprovalRow =>
   ({
     id: "a",

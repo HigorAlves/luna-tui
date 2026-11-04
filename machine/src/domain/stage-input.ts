@@ -96,6 +96,7 @@ export function buildStageInput(opts: {
       branch: task.branch ?? "",
       source: task.source,
       record: task.record,
+      classification: task.classification,
       evidence: task.evidence,
     },
     plan,
