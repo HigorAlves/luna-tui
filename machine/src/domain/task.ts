@@ -1,6 +1,6 @@
 // Plain domain types for a task and everything attached to it. No TypeORM here — see
 // ../adapters/persistence/schemas.ts for the persistence mapping of these same shapes.
-import type { ArtifactKind, EngineId, JiraLink, RunInfo, StageEngines, StageRunCase, TaskClassification, TaskRoute, TaskSource, TaskState, EvidencePack, TriageRecord } from "@hardness/contracts";
+import type { ArchiveReason, ArtifactKind, EngineId, JiraLink, RunInfo, StageEngines, StageRunCase, TaskClassification, TaskRoute, TaskSource, TaskState, EvidencePack, TriageRecord } from "@hardness/contracts";
 
 import type { Retries } from "./transition.ts";
 
@@ -22,6 +22,8 @@ export interface TaskRow {
   resumeTo: TaskState | null;
   /** Why the task is escalated, shown on the board. */
   reason: string | null;
+  /** Why the task was archived; null for any other state. */
+  archiveReason: ArchiveReason | null;
   /** Ready to run but waiting for a free concurrency slot. */
   queued: boolean;
   /** When it joined the queue: claims go in this order, so editing a queued ticket keeps its place. */

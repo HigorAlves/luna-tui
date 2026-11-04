@@ -9,7 +9,7 @@ import type { JiraLink, TaskSla } from "./jira.ts";
 import type { AgentPack, AgentRole, Pack } from "./packs.ts";
 import { type CredentialOwner, EngineId } from "./engines.ts";
 import type { ModelEntry, RuntimeId } from "./models.ts";
-import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskClassification, type TaskRoute, TaskSource, TestCase, type EvidencePack, type TriageRecord } from "./stage.ts";
+import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskClassification, type TaskRoute, TaskSource, TestCase, ArchiveReason, type EvidencePack, type TriageRecord } from "./stage.ts";
 
 export const NewTaskInput = z.object({
   title: z.string().trim().min(1),
@@ -105,6 +105,9 @@ export interface TaskDiffFile {
   removed: number;
 }
 
+export const ArchiveInput = z.object({ reason: ArchiveReason });
+export type ArchiveInput = z.infer<typeof ArchiveInput>;
+
 export const DecisionInput = z.object({
   decision: z.enum(["approved", "sent_back"]),
   // Clients may send `null` for "no reason" rather than omitting the field.
@@ -164,6 +167,8 @@ export interface Task {
   retries: Retries;
   resumeTo: TaskState | null;
   reason: string | null;
+  /** Why the task was archived; null for any other state. */
+  archiveReason: ArchiveReason | null;
   /** What every stage run of this task has cost so far; null when unknown or nothing ran. */
   spentUsd: number | null;
   /** Wall time its stage runs took so far; null when unknown. */

@@ -2,7 +2,7 @@
 // created to closed, and the Jira due date (the end of that day where the Jira site lives). Pure: the clocks are computed from the task row,
 // when its wait began, when its stage started and the targets in force; nothing is stored.
 // The same `30m`/`4h`/`3d`/`off` durations luna.yaml and the env use are parsed here.
-import { RUNNING, WAITING_ON_USER, type SlaClock, type TaskSla, type TaskState } from "@hardness/contracts";
+import { RUNNING, type SlaClock, type TaskSla, type TaskState, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 
 import type { TaskRow } from "./task.ts";
 
@@ -87,11 +87,11 @@ export function computeSla(input: SlaInput, now: Date): TaskSla | null {
     }
   }
 
-  const cycle: TaskSla["cycle"] = cycleTarget !== null && state !== "closed" ? clock(task.createdAt, cycleTarget, now) : null;
+  const cycle: TaskSla["cycle"] = cycleTarget !== null && !isTerminal(state) ? clock(task.createdAt, cycleTarget, now) : null;
 
   let jiraDue: TaskSla["jiraDue"] = null;
   const due = task.jira?.dueAt;
-  if (due && state !== "closed") {
+  if (due && !isTerminal(state)) {
     // Jira stores a date: the day ends at 23:59:59 in the site's timezone (UTC until JiraWatch
     // has read it). The clock counts from the ticket's creation or its link time, whichever is later.
     const end = endOfDay(due, task.jira?.timeZone ?? null);

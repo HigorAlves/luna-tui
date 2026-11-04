@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskRoute, type TaskSource, type TaskState, type TestCase, type EvidencePack, type TriageRecord, credentialOwner } from "@hardness/contracts";
+import { type ArchiveReason, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskRoute, type TaskSource, type TaskState, type TestCase, type EvidencePack, type TriageRecord, credentialOwner } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -634,6 +634,18 @@ export class Pipeline {
     // The task reads "escalated" from here on, but the stage is still dying: its container
     // being killed, its run recorded, its worktree reset. Return once that is over, so a
     // retry or a delete that follows this call never shares the worktree with a live container.
+    if (!(await this.untilLoopEnds(id, ABORT_WIND_DOWN_MS))) return task;
+    return (await this.store.getTask(id)) ?? task;
+  }
+
+  /** Ends the task as archived, with a reason, from any state that has not ended: a running stage
+   *  is stopped and the close steps run (the worktree goes). */
+  async archive(id: string, reason: ArchiveReason): Promise<TaskRow> {
+    const task = await this.dispatch(id, { type: "archive", reason });
+    this.loops.get(id)?.abort();
+    await this.store.updateTask(id, { queued: false });
+    clearTimeout(this.resumeTimers.get(id));
+    this.resumeTimers.delete(id);
     if (!(await this.untilLoopEnds(id, ABORT_WIND_DOWN_MS))) return task;
     return (await this.store.getTask(id)) ?? task;
   }
@@ -1331,6 +1343,7 @@ export class Pipeline {
           event: event.type,
           ...(event.type === "stage_done" ? { outcome: event.outcome } : {}),
           ...(step.escalation ? { escalation: step.escalation } : {}),
+          ...(step.archiveReason ? { archiveReason: step.archiveReason } : {}),
           from: task.state,
           to: step.state,
           ...(step.reason ? { reason: step.reason } : {}),
@@ -1343,6 +1356,7 @@ export class Pipeline {
         retries: step.retries,
         resumeTo: step.resumeTo,
         reason: step.reason ?? null,
+        archiveReason: step.archiveReason ?? null,
         ...(criteria ? { criteria } : {}),
       });
 

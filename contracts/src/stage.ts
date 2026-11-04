@@ -393,6 +393,10 @@ export const TaskClassification = z.object({
 });
 export type TaskClassification = z.infer<typeof TaskClassification>;
 
+/** Why a task was archived instead of closed. */
+export const ArchiveReason = z.enum(["duplicate", "sla_expired", "rejected", "not_for_agent", "pr_closed"]);
+export type ArchiveReason = z.infer<typeof ArchiveReason>;
+
 /** Why a stage stopped on purpose: `plan_wrong` the plan cannot be built as written (triage runs again),
  *  `env_broken` the sandbox or toolchain is, `flaky_tests` the tests do not hold still, `too_complex`
  *  the work is bigger than one stage, `undeclared_scope` it needs files or packages the plan did not name. */

@@ -48,6 +48,8 @@ export const TaskState = z.enum([
   "shipping",
   "reviewing_memory",
   "closed",
+  // Ended without shipping or closing: a duplicate, an SLA that ran out, a ticket not for an agent.
+  "archived",
   // PR tasks: a code review of someone's PR, and addressing the review threads on yours.
   "reviewing",
   "addressing",
@@ -76,9 +78,14 @@ export const COLUMN_OF: Record<TaskState, Column> = {
   shipping: "Ship",
   reviewing_memory: "Ship",
   closed: "Done",
+  archived: "Done",
   reviewing: "Verify",
   addressing: "Build",
 };
+
+/** States a task ends in: nothing moves it again. */
+export const TERMINAL: ReadonlySet<TaskState> = new Set(["closed", "archived"]);
+export const isTerminal = (state: TaskState): boolean => TERMINAL.has(state);
 
 /** States where an agent or script is running a stage. */
 export const RUNNING: ReadonlySet<TaskState> = new Set([

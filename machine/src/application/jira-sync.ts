@@ -131,6 +131,7 @@ export class JiraSync {
       // An intake import was already told "Picked up" by JiraIntake when the ticket was made.
       if (from === "draft" && event.payload.event === "start" && task.source?.kind !== "jira") await this.comment(link, `Picked up as task #${task.id.slice(0, 8)} on the Luna board.`);
       else if (to === "closed") await this.comment(link, await this.closing(task));
+      else if (to === "archived") await this.comment(link, `Archived: ${String(event.payload.archiveReason ?? "no reason given")}.`);
       else if (policy.comments === "gates" && WAITING_ON_USER.has(to) && to !== from) {
         await this.comment(link, to === "escalated" ? `Escalated: ${String(event.payload.reason ?? "see the board")}.` : `Needs you: ${ASKS[to] ?? to}.`);
       }

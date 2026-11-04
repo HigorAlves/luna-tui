@@ -40,6 +40,7 @@ export const toTask = (
   retries: row.retries,
   resumeTo: row.resumeTo,
   reason: row.reason,
+  archiveReason: row.archiveReason ?? null,
   spentUsd: usage?.spentUsd ?? null,
   workedMs: usage?.workedMs ?? null,
   diff: row.diffAdded !== null && row.diffRemoved !== null ? { added: row.diffAdded, removed: row.diffRemoved } : null,

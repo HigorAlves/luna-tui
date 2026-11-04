@@ -25,7 +25,7 @@ export async function sweepWorktrees(db: DataSource, days: number): Promise<Work
   if (days <= 0) return result;
   const rows: { id: string; repo_path: string; worktree_path: string; branch: string | null }[] = await db.query(
     `select id, repo_path, worktree_path, branch from tasks
-      where state = 'closed' and worktree_path is not null and repo_path is not null
+      where state in ('closed', 'archived') and worktree_path is not null and repo_path is not null
         and updated_at < now() - make_interval(days => $1)`,
     [days],
   );

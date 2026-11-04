@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { DecisionInput, EditCasesInput, EditPlanInput } from "./api.ts";
-import { COLUMNS, COLUMN_OF, RUNNING, TaskState, WAITING_ON_USER } from "./index.ts";
+import { COLUMNS, COLUMN_OF, RUNNING, TERMINAL, TaskState, WAITING_ON_USER, isTerminal } from "./index.ts";
 
 describe("task states", () => {
+  it("ends in closed or archived, both in Done", () => {
+    expect([...TERMINAL]).toEqual(["closed", "archived"]);
+    expect(COLUMN_OF.archived).toBe("Done");
+    expect(isTerminal("archived")).toBe(true);
+    expect(isTerminal("implementing")).toBe(false);
+  });
+
   it("puts every state in a board column", () => {
     for (const state of TaskState.options) {
       expect(COLUMNS).toContain(COLUMN_OF[state]);

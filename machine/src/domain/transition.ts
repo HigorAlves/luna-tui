@@ -1,7 +1,7 @@
 // The pipeline as a pure function: given a task's state and an event, return the next
 // state and what the machine should do next. No database, no I/O, so every path is
 // unit tested. The graph is documented in docs/architecture.md.
-import { type EscalationReason, RUNNING, type TaskRoute, type TaskState } from "@hardness/contracts";
+import { type ArchiveReason, type EscalationReason, RUNNING, TERMINAL, type TaskRoute, type TaskState } from "@hardness/contracts";
 
 /** Failures allowed in one retry loop (verify, e2e, ci) before asking you. */
 export const LOOP_CAP = 3;
@@ -35,6 +35,8 @@ export type PipelineEvent =
   /** `setup` when the repo has no luna.yaml yet: the setup gate runs before triage. */
   | { type: "start"; setup?: boolean }
   | { type: "stage_done"; outcome: StageOutcome; reason?: string; escalation?: EscalationReason }
+  /** Ends the task without shipping or closing it: from any state that has not ended. */
+  | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
   | { type: "approved" }
   | { type: "sent_back" }
@@ -61,6 +63,8 @@ export interface Step extends Snapshot {
   effect: Effect;
   /** Why the task was escalated, for the board. */
   reason?: string;
+  /** Why the task was archived, when it was. */
+  archiveReason?: ArchiveReason;
   /** The typed reason an escalating stage gave, when it gave one. */
   escalation?: EscalationReason;
 }
@@ -142,6 +146,9 @@ function next(task: Snapshot, event: PipelineEvent): Move {
   const { state, retries } = task;
 
   switch (event.type) {
+    case "archive":
+      if (TERMINAL.has(state)) break;
+      return { state: "archived", retries, resumeTo: null, effect: { kind: "done" }, reason: event.reason, archiveReason: event.reason };
     case "crash":
       if (RUNNING.has(state)) return escalate(`stage loop crashed: ${event.error}`, state, retries);
       break;

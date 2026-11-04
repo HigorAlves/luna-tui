@@ -18,7 +18,7 @@ export async function pruneOldRuns(db: DataSource, retentionDays: number, stateD
   const prunedRunIds: string[] = [];
   const result = await db.transaction(async (tx) => {
     const cutoffCondition = `task_id in (
-      select id from tasks where state = 'closed' and updated_at < now() - make_interval(days => $1)
+      select id from tasks where state in ('closed', 'archived') and updated_at < now() - make_interval(days => $1)
     )`;
     // TypeORM's query() for a Postgres DELETE ... RETURNING resolves to a [rows, rowCount]
     // tuple, not just the rows array — destructure, don't just read .length on the result.

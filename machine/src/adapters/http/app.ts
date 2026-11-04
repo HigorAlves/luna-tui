@@ -4,6 +4,7 @@ import {
   AnswersInput,
   type ApiError,
   CloneInput,
+  ArchiveInput,
   DecisionInput,
   EngineId,
   type PrAction,
@@ -377,6 +378,15 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     const { decision, reason, applyRules } = await body(c, DecisionInput);
     const response = applyRules === undefined ? undefined : { applyRules };
     return c.json(await serialize(await pipeline.decide(id, decision, reason ?? undefined, response)));
+  });
+
+  /** Ends the task as archived with a reason (duplicate, sla_expired, rejected, not_for_agent, pr_closed). */
+  app.post("/tasks/:id/archive", async (c) => {
+    const id = taskId(c);
+    const { reason } = await body(c, ArchiveInput);
+    const task = await serialize(await pipeline.archive(id, reason));
+    bus.publish({ type: "task.updated", task, seq: task.seq });
+    return c.json(task);
   });
 
   app.post("/tasks/:id/abort", async (c) => c.json(await serialize(await pipeline.abort(taskId(c)))));

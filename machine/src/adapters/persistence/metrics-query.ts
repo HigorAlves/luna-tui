@@ -1,6 +1,6 @@
 // Factory metrics: how the pipeline is doing over a window. Rows come from Postgres and
 // the numbers are computed here, so a window with no data gives null, never NaN.
-import { type EngineId, type EngineMetrics, type FingerprintMetrics, type Metrics, type MetricsGroupBy, type RepoMetrics, RUNNING, type Slots, WAITING_ON_USER } from "@hardness/contracts";
+import { type EngineId, type EngineMetrics, type FingerprintMetrics, type Metrics, type MetricsGroupBy, RUNNING, type RepoMetrics, type Slots, type TaskState, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import { ratio, stats } from "../http/metrics.ts";
@@ -151,7 +151,7 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
 
   // Tasks.
   const states = taskRows as unknown as { state: never; queued: boolean }[];
-  const open = states.filter((t) => (t.state as string) !== "closed");
+  const open = states.filter((t) => !isTerminal(t.state as TaskState));
   const tasks = {
     created: taskRows.filter((t) => t.created).length,
     closed: closedRows.length,

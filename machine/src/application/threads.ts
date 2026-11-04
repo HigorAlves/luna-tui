@@ -69,6 +69,7 @@ export class ThreadReplies {
       if (to === "escalated") return this.reply(event.taskId, `Escalated: ${String(event.payload.reason ?? "see the board")}.`);
       if (to === "paused_rate_limit") return this.reply(event.taskId, "Paused on a usage limit; it resumes by itself.");
       if (to === "closed") return this.reply(event.taskId, "Closed.");
+      if (to === "archived") return this.reply(event.taskId, `Archived: ${String(event.payload.archiveReason ?? "no reason given")}.`);
       if (WAITING_ON_USER.has(to) && to !== from) return this.reply(event.taskId, `Needs you: ${ASKS[to] ?? to}.`);
       return;
     }

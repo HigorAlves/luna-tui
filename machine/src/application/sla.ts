@@ -2,7 +2,7 @@
 // state), the running stage run's start and its repo's targets, at the moment it is serialized.
 // Nothing is stored beyond `state_since`; a minute tick (main.ts) recomputes every open task
 // from one list and one stage-run query, and republishes the tasks whose clocks flipped.
-import type { TaskSla } from "@hardness/contracts";
+import { TaskSla, isTerminal } from "@hardness/contracts";
 
 import { type SlaDefaults, computeSla, slaFlags } from "../domain/sla.ts";
 import type { TaskRow } from "../domain/task.ts";
@@ -42,8 +42,8 @@ export class SlaClocks {
 
   /** The open tasks whose overdue or warn flags changed since they were last shown. */
   async flipped(tasks: TaskRow[]): Promise<Array<{ task: TaskRow; sla: TaskSla | null }>> {
-    const open = tasks.filter((task) => task.state !== "closed");
-    for (const task of tasks) if (task.state === "closed") this.shown.delete(task.id);
+    const open = tasks.filter((task) => !isTerminal(task.state));
+    for (const task of tasks) if (isTerminal(task.state)) this.shown.delete(task.id);
     const before = new Map([...this.shown]);
     const clocks = await this.forAll(open);
     return open.filter((task) => before.has(task.id) && before.get(task.id) !== slaFlags(clocks.get(task.id) ?? null)).map((task) => ({ task, sla: clocks.get(task.id) ?? null }));

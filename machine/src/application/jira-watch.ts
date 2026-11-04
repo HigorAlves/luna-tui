@@ -7,7 +7,7 @@
 // the `retryBlocked` hook (JiraSync.retry), which clears the mark when the move lands. Like
 // GitHubPulls it runs on a timer, never throws, and backs off a rate limit. It also warns, once
 // a day inside the last two weeks, that the token named by `MACHINE_JIRA_TOKEN_EXPIRES` is about to go.
-import type { JiraLink } from "@hardness/contracts";
+import { JiraLink, isTerminal } from "@hardness/contracts";
 
 import { jiraOf } from "../domain/jira-link.ts";
 import type { TaskRow } from "../domain/task.ts";
@@ -97,7 +97,7 @@ export class JiraWatch {
   private async poll(): Promise<void> {
     this.nextDelayMs = this.options.intervalMs;
     this.warnExpiry();
-    const tasks = (await this.options.pipeline.list()).filter((t) => t.state !== "closed" && jiraOf(t));
+    const tasks = (await this.options.pipeline.list()).filter((t) => !isTerminal(t.state) && jiraOf(t));
     if (tasks.length > 0 && this.timeZone === undefined) {
       try {
         this.timeZone = (await this.options.jira.me()).timeZone;

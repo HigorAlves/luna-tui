@@ -63,6 +63,7 @@ export class PgTaskStore implements TaskStore {
       retries: { ...NO_RETRIES },
       resumeTo: null,
       reason: null,
+      archiveReason: null,
       jira: input.jira ?? null,
       stages: input.stages ?? {},
       classification: input.classification ?? null,

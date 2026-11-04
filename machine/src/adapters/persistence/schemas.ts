@@ -31,6 +31,7 @@ export const TaskEntity = new EntitySchema<TaskRow>({
     retries: { type: "jsonb" },
     resumeTo: { name: "resume_to", type: "text", nullable: true },
     reason: { type: "text", nullable: true },
+    archiveReason: { type: "text", nullable: true },
     queued: { type: "boolean", default: false },
     queuedAt: { name: "queued_at", type: "timestamptz", nullable: true },
     diffAdded: { name: "diff_added", type: "integer", nullable: true },

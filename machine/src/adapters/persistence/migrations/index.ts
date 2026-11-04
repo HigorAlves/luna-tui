@@ -20,6 +20,7 @@ import { AddPackRuns1794400000000 } from "./1794400000000-AddPackRuns.ts";
 import { AddRunFingerprint1794560000000 } from "./1794560000000-AddRunFingerprint.ts";
 import { AddTaskClassification1794570000000 } from "./1794570000000-AddTaskClassification.ts";
 import { AddTaskRecordAndEvidence1794580000000 } from "./1794580000000-AddTaskRecordAndEvidence.ts";
+import { AddTaskArchiveReason1794590000000 } from "./1794590000000-AddTaskArchiveReason.ts";
 
 export const MIGRATIONS: Function[] = [
   Init1792712166445,
@@ -43,4 +44,5 @@ export const MIGRATIONS: Function[] = [
   AddRunFingerprint1794560000000,
   AddTaskClassification1794570000000,
   AddTaskRecordAndEvidence1794580000000,
+  AddTaskArchiveReason1794590000000,
 ];

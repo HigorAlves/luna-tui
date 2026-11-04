@@ -1,4 +1,4 @@
-import { type TaskRoute, TaskState } from "@hardness/contracts";
+import { TERMINAL, type TaskRoute, TaskState } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -18,6 +18,16 @@ const at = (state: TaskState, overrides: Partial<Snapshot> = {}): Snapshot => ({
   resumeTo: null,
   route: "feature",
   ...overrides,
+});
+
+describe("archive", () => {
+  const nonTerminal = TaskState.options.filter((s) => !TERMINAL.has(s));
+  it.each(nonTerminal)("%s can be archived with a reason", (state) => {
+    expect(transition(at(state, { route: routeOf(state) }), { type: "archive", reason: "duplicate" })).toMatchObject({ state: "archived", effect: { kind: "done" }, archiveReason: "duplicate" });
+  });
+  it.each([...TERMINAL])("%s cannot be archived again", (state) => {
+    expect(() => transition(at(state), { type: "archive", reason: "rejected" })).toThrow(TransitionError);
+  });
 });
 
 describe("typed escalations", () => {
@@ -356,8 +366,8 @@ describe("graph coverage", () => {
     { type: "window_reset" },
   ];
 
-  it("lets every state except closed move forward", () => {
-    for (const state of TaskState.options.filter((s) => s !== "closed")) {
+  it("lets every state but the terminal ones move forward", () => {
+    for (const state of TaskState.options.filter((s) => !TERMINAL.has(s))) {
       const task = at(state, { resumeTo: state === "paused_rate_limit" ? "triage" : null, route: routeOf(state) });
       const moves = candidates.filter((event) => {
         try {

@@ -1,6 +1,6 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
-import { type BudgetAlert, Ledger, PrAction, type PullRequest } from "@hardness/contracts";
+import { type BudgetAlert, Ledger, PrAction, type PullRequest, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -279,7 +279,7 @@ const pulls = new GitHubPulls({
   findTask: async (repo, number) => {
     const task = await pipeline.findBySource(repo, number, "github_pr");
     const route = task ? PrAction.safeParse(task.route) : null;
-    return task && route?.success && task.state !== "closed" ? { id: task.id, state: task.state, route: route.data } : null;
+    return task && route?.success && !isTerminal(task.state) ? { id: task.id, state: task.state, route: route.data } : null;
   },
   publish: (snapshot) => bus.publish({ type: "github.prs", snapshot }),
 });
