@@ -29,8 +29,18 @@ describe("the answer schema of a question set", () => {
   });
 });
 
-describe("the issue_classify pack", () => {
-  const pack = PACKS.issue_classify;
+describe("the triage_signals pack", () => {
+  const pack = PACKS.triage_signals;
+
+  it("asks kind, area, ready, size, urgency, risk, and whether to archive and why", () => {
+    expect(Object.keys(pack.questions)).toEqual(["kind", "area", "ready", "size", "urgency", "risk", "archive", "archive_reason"]);
+    expect(pack.questions.urgency).toMatchObject({ type: "score", rubric: { low: expect.any(String), normal: expect.any(String), high: expect.any(String), urgent: expect.any(String) } });
+    expect(pack.questions.risk).toMatchObject({ type: "score", rubric: { none: expect.any(String), low: expect.any(String), medium: expect.any(String), high: expect.any(String) } });
+    expect(pack.questions.archive).toMatchObject({ type: "yesno" });
+    expect(Object.keys((pack.questions.archive_reason as { criteria: Record<string, string> }).criteria)).toEqual(["none", "duplicate", "out_of_scope", "stale", "not_actionable"]);
+    expect(Object.keys(pack.policy).sort()).toEqual(Object.keys(pack.questions).sort());
+    expect(pack.policy.archive).toEqual({ proceed: 0.9, flag: 0.7 });
+  });
 
   it("is a decision: no role, tools or template, and a policy bar per question", () => {
     expect(pack).toMatchObject({ kind: "decision", writable: false });
