@@ -157,11 +157,13 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     }
   }
   args.push(...identityEnv(run.gitIdentity));
-  for (const [key, value] of Object.entries(run.extraEnv ?? {})) args.push("-e", `${key}=${value}`);
   // A trace backend on the host (docs/configuration.md "Observability"): Docker Desktop resolves
   // host.docker.internal by itself, Linux needs the gateway alias.
   if (Object.values(run.extraEnv ?? {}).some((value) => value.includes("host.docker.internal"))) args.push("--add-host", "host.docker.internal:host-gateway");
   args.push(...networkArgs(run.network, run.serviceEnv, run.networkNone));
+  // The run's own extra env last: docker keeps the last value, so a repo's service exports
+  // (luna.yaml) never redirect the trace context the machine set.
+  for (const [key, value] of Object.entries(run.extraEnv ?? {})) args.push("-e", `${key}=${value}`);
   const [program, ...rest] = run.entrypoint ?? [];
   if (program) args.push("--entrypoint", program);
   args.push(run.image, ...rest);

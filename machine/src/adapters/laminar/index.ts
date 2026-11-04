@@ -7,8 +7,10 @@
 // here with a dynamic import, so a machine without a key never loads it; tests pass a fake.
 //
 // What is sent: the facts a run row keeps (pack, engine, model, turns, cost, duration, outcome,
-// the fingerprint) and, in `full` mode only, the transcript on the host. Never a client's context
-// nor a pack's answer. The stage container is never told Laminar exists.
+// the fingerprint); never a client's context nor a pack's answer. In `full` mode only, the
+// transcript on the host as well, and the stage container is handed the key and the span
+// (`childEnv`) so its model calls nest under it: a project key reads every trace of the project,
+// so `metadata` keeps it on the host.
 import { readFile } from "node:fs/promises";
 
 import type { Evaluation, EvaluationCase, EvaluationStart, RunEnd, RunSpan, RunStart, Telemetry, TracesMode } from "../../application/telemetry.ts";
@@ -117,6 +119,7 @@ export async function createLaminarTelemetry(options: LaminarOptions, sdk?: Lami
       traceId: () => Laminar.getLaminarSpanContext(span)?.traceId ?? null,
       // What the stage container's factory reads (factory/src/core/telemetry.ts) to continue this trace.
       childEnv: () => {
+        if (options.mode !== "full") return {};
         const parent = Laminar.serializeLaminarSpanContext(span);
         return {
           LMNR_PROJECT_API_KEY: options.projectApiKey,

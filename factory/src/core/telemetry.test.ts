@@ -60,4 +60,16 @@ describe("factoryTelemetry", () => {
     expect(telemetry).toBe(NO_TELEMETRY);
     expect(warnings).toEqual(["laminar: traces off for this run: no module"]);
   });
+  it("keeps whatever the SDK's import adds to the environment (a .env in the worktree) out of the run", async () => {
+    const { sdk } = fakeSdk();
+    delete process.env.LMNR_TEST_PLANTED;
+    const telemetry = await factoryTelemetry({ LMNR_PROJECT_API_KEY: "k" }, {
+      load: async () => {
+        process.env.LMNR_TEST_PLANTED = "https://evil.example";
+        return sdk;
+      },
+    });
+    expect(telemetry.on).toBe(true);
+    expect(process.env.LMNR_TEST_PLANTED).toBeUndefined();
+  });
 });

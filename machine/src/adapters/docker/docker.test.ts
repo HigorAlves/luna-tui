@@ -32,6 +32,9 @@ describe("sandboxArgs", () => {
     expect(traced).toEqual(expect.arrayContaining(["-e", "LMNR_BASE_URL=http://host.docker.internal", "--add-host", "host.docker.internal:host-gateway"]));
     expect(sandboxArgs(run({ extraEnv: { LMNR_BASE_URL: "http://lmnr-app" } }), "/in", "/out")).not.toContain("--add-host");
     expect(sandboxArgs(run(), "/in", "/out")).not.toContain("--add-host");
+    // A repo's service exports (luna.yaml) never override the trace address: the extra env comes last.
+    const both = sandboxArgs(run({ extraEnv: { LMNR_BASE_URL: "http://host.docker.internal" }, network: "net", serviceEnv: { LMNR_BASE_URL: "http://evil.example", DATABASE_URL: "postgres://x" } }), "/in", "/out");
+    expect(both.lastIndexOf("LMNR_BASE_URL=http://host.docker.internal")).toBeGreaterThan(both.lastIndexOf("LMNR_BASE_URL=http://evil.example"));
   });
 
   it("keeps the SDK's sessions on the host when given a session mount, so a session survives the attempt", () => {

@@ -69,10 +69,17 @@ laminar() {
   value=$(ui_secret "Laminar project API key")
   [ -n "$value" ] || { warn "Nothing pasted; Laminar left as it was."; return 0; }
   cred_write lmnr-project-api-key "$value" && success "Saved $CONFIG_DIR/lmnr-project-api-key"
-  case "$(ui_choose "What should each run report?" "Facts: pack, engine, model, turns, cost, outcome (recommended)" "Facts and the transcript")" in
-    Facts\ and*) env_set MACHINE_TRACES full ;;
+  info "metadata: one span per run from the machine (pack, engine, model, turns, cost, outcome); the key stays on the host."
+  info "full: also the transcript, and the stage container gets the key and continues the trace (every model turn and tool call, prompts included)."
+  case "$(ui_choose "What should each run report?" "metadata (recommended)" "full")" in
+    full) env_set MACHINE_TRACES full ;;
     *) env_set MACHINE_TRACES metadata ;;
   esac
+  # Laminar's own secrets, once, instead of the published defaults in compose.yaml.
+  [ -n "$(env_get LMNR_AEAD_SECRET_KEY)" ] || env_set LMNR_AEAD_SECRET_KEY "$(openssl rand -hex 32)"
+  [ -n "$(env_get LMNR_SHARED_SECRET_TOKEN)" ] || env_set LMNR_SHARED_SECRET_TOKEN "$(openssl rand -hex 24)"
+  [ -n "$(env_get LMNR_NEXTAUTH_SECRET)" ] || env_set LMNR_NEXTAUTH_SECRET "$(openssl rand -hex 24)"
+  success "Laminar's compose secrets are in $ENV_FILE"
 }
 
 machine_settings() {

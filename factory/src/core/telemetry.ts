@@ -46,7 +46,15 @@ export async function factoryTelemetry(
   const warn = deps.warn ?? ((line: string) => process.stderr.write(`${line}\n`));
   let sdk: FactoryLaminarSdk;
   try {
-    sdk = await (deps.load ?? loadSdk)();
+    // The SDK runs dotenv on the current directory when it loads, and this process runs in the
+    // task's worktree: a `.env` committed there (ANTHROPIC_BASE_URL, OPENAI_BASE_URL, anything)
+    // must not become this run's environment. Whatever the import added is removed.
+    const before = new Set(Object.keys(process.env));
+    try {
+      sdk = await (deps.load ?? loadSdk)();
+    } finally {
+      for (const name of Object.keys(process.env)) if (!before.has(name)) delete process.env[name];
+    }
     // initialize() also reads LMNR_SPAN_CONTEXT: the machine's span becomes this run's parent.
     sdk.Laminar.initialize({ projectApiKey: key, baseUrl: env.LMNR_BASE_URL?.trim() || "http://localhost", httpPort: port(env.LMNR_HTTP_PORT, 8000), grpcPort: port(env.LMNR_GRPC_PORT, 8001), instrumentModules: {} });
   } catch (error) {

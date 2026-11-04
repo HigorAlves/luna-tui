@@ -155,8 +155,10 @@ describe("createLaminarTelemetry", () => {
     expect(s!.ended).toBe(true);
   });
 
-  it("hands a child process the key, the containers' address and the serialized parent span", async () => {
-    const telemetry = await createLaminarTelemetry({ ...options, mode: "metadata" }, fakeSdk());
+  it("in full mode hands a child process the key, the containers' address and the serialized parent span; in metadata mode nothing", async () => {
+    const metadata = await createLaminarTelemetry({ ...options, mode: "metadata" }, fakeSdk());
+    expect(metadata.run({ kind: "stage", pack: "triage", engine: "claude:opus", sessionId: "t", taskId: "t", stage: "triage", attempt: 1 }).childEnv()).toEqual({});
+    const telemetry = await createLaminarTelemetry({ ...options, mode: "full" }, fakeSdk());
     const span = telemetry.run({ kind: "stage", pack: "triage", engine: "claude:opus", sessionId: "t", taskId: "t", stage: "triage", attempt: 1 });
     expect(span.childEnv()).toEqual({
       LMNR_PROJECT_API_KEY: "k",
