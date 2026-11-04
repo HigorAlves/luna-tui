@@ -107,12 +107,18 @@ export class JiraSync {
   }
 
   private async react(event: EventRow): Promise<void> {
-    if (event.kind !== "transition" && event.kind !== "stage.finished") return;
+    if (event.kind !== "transition" && event.kind !== "stage.finished" && event.kind !== "sla.reminder") return;
     const task = await this.options.pipeline.get(event.taskId);
     const link = jiraOf(task);
     if (!link) return;
     const policy = (await this.options.pipeline.policyFor(task.repoPath)).jira;
     if (!policy) return;
+
+    if (event.kind === "sla.reminder") {
+      // One line per gate entry (the tick records one); only for a repo that asked for gate comments.
+      if (policy.comments === "gates") await this.comment(link, `Reminder: waiting at ${String(event.payload.gate)} since ${(task.stateSince ?? task.createdAt).toISOString()}.`);
+      return;
+    }
 
     if (event.kind === "stage.finished") {
       const detail = event.payload.detail as { prUrl?: unknown } | undefined;

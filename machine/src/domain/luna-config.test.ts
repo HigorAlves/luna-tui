@@ -72,6 +72,13 @@ describe("parseLunaConfig", () => {
     expect(() => parseLunaConfig("policy:\n  decisions:\n    issue_classify:\n      kind: { proceed: 1.5 }\n")).toThrow(/policy\.decisions/);
   });
 
+  it("reads sla.archive in seconds, off as null, and leaves it out when the file says nothing", () => {
+    expect(parseLunaConfig("sla:\n  archive: 5d\n").sla).toEqual({ archive: 432_000 });
+    expect(parseLunaConfig("sla:\n  archive: off\n").sla).toEqual({ archive: null });
+    expect(parseLunaConfig("sla:\n  gate: 1h\n").sla).toEqual({ gate: 3600 });
+    expect(() => parseLunaConfig("sla:\n  archive: whenever\n")).toThrow(/sla\.archive/);
+  });
+
   it("is the defaults for an empty file or an empty mapping, and a missing section stays at its default", () => {
     expect(parseLunaConfig("")).toEqual(DEFAULT_POLICY);
     expect(parseLunaConfig("{}\n")).toEqual(DEFAULT_POLICY);

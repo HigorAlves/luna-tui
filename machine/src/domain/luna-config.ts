@@ -101,6 +101,7 @@ export function slaTargetsOf(sla: SlaConfig, warn: Warn = quiet): Partial<SlaTar
   const targets: Partial<SlaTargets> = {};
   if (sla.gate !== undefined) targets.gate = seconds("sla.gate", sla.gate);
   if (sla.cycle !== undefined) targets.cycle = seconds("sla.cycle", sla.cycle);
+  if (sla.archive !== undefined) targets.archive = seconds("sla.archive", sla.archive);
   if (sla.stage) {
     const stage: Record<string, number> = {};
     for (const [name, value] of Object.entries(sla.stage)) {

@@ -330,6 +330,8 @@ export const SlaConfig = z.object({
   stage: z.record(z.string().min(1), Duration).optional(),
   /** Created to closed. */
   cycle: Duration.optional(),
+  /** Archive a ticket left at an intake gate (setup, triage's questions) this long; off by default. */
+  archive: Duration.optional(),
 });
 export type SlaConfig = z.infer<typeof SlaConfig>;
 

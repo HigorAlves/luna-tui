@@ -1,6 +1,6 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
-import { type BudgetAlert, Ledger, PrAction, type PullRequest, isTerminal } from "@hardness/contracts";
+import { type BudgetAlert, Ledger, PrAction, type PullRequest, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -14,6 +14,7 @@ import { loadConfig } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
+import { type SlaRow, applySlaActions } from "./application/sla-actions.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { createIssueClassifier } from "./application/classify.ts";
@@ -439,6 +440,21 @@ const slaTicker = new Ticker(() => {
     .then((tasks) => slaClocks.flipped(tasks))
     .then(async (flipped) => {
       for (const { task, sla } of flipped) bus.publish({ type: "task.updated", task: toTask(task, await pipeline.taskUsage(task.id), sla, await pipeline.glance(task.id)), seq: Number(task.seq) });
+    })
+    .then(() => pipeline.list())
+    .then(async (tasks) => {
+      // A gate past its clock reminds once; a ticket left at an intake gate past `sla.archive` is archived.
+      const gated = tasks.filter((task) => WAITING_ON_USER.has(task.state));
+      const clocks = await slaClocks.forAll(gated);
+      const rows: SlaRow[] = [];
+      for (const task of gated) {
+        const sla = clocks.get(task.id) ?? null;
+        const targets = (await pipeline.policyFor(task.repoPath)).sla;
+        if (!sla?.gate?.overdue && typeof targets.archive !== "number") continue;
+        const reminders = (await pipeline.events(task.id)).filter((event) => event.kind === "sla.reminder");
+        rows.push({ task, sla, targets, lastReminderAt: reminders.length ? new Date(Math.max(...reminders.map((event) => event.at.getTime()))) : null });
+      }
+      await applySlaActions(rows, new Date(), { record: (id, kind, payload) => pipeline.record(id, kind, payload), archive: (id, reason) => pipeline.archive(id, reason) });
     })
     .catch((error: unknown) => console.warn("sla tick failed", error));
 }, MINUTE_MS);

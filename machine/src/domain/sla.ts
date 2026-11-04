@@ -25,6 +25,8 @@ export interface SlaTargets {
   /** Keyed by running stage. */
   stage: Record<string, number>;
   cycle: number | null;
+  /** How long a ticket may sit at an intake gate before it is archived; null (the default) never. */
+  archive: number | null;
 }
 
 /** The machine-wide fallbacks from the env. */

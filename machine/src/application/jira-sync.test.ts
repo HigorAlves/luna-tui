@@ -149,6 +149,25 @@ describe("JiraSync", () => {
     ]);
   });
 
+  it("comments a reminder with `gates` only, and says when the task is archived", async () => {
+    const gates = wire(jiraPolicy({ comments: "gates", on: {} }));
+    const t1 = await gates.pipeline.createTask({ title: "PLAT-123 a", repoPath: "/r/a" });
+    await gates.pipeline.start(t1.id);
+    await gates.pipeline.record(t1.id, "sla.reminder", { gate: "awaiting_approval", dueAt: "2026-10-28T13:00:00.000Z" });
+    await gates.sync.idle();
+    expect(gates.jira.comments["PLAT-123"]!.at(-1)).toMatch(/^Reminder: waiting at awaiting_approval since /);
+    await gates.pipeline.archive(t1.id, "duplicate");
+    await gates.sync.idle();
+    expect(gates.jira.comments["PLAT-123"]!.at(-1)).toBe("Archived: duplicate.");
+    const quiet = wire(jiraPolicy({ comments: "milestones", on: {} }));
+    const t2 = await quiet.pipeline.createTask({ title: "PLAT-123 b", repoPath: "/r/a" });
+    await quiet.pipeline.start(t2.id);
+    const before = quiet.jira.comments["PLAT-123"]?.length ?? 0;
+    await quiet.pipeline.record(t2.id, "sla.reminder", { gate: "awaiting_approval", dueAt: "2026-10-28T13:00:00.000Z" });
+    await quiet.sync.idle();
+    expect(quiet.jira.comments["PLAT-123"]?.length ?? 0).toBe(before);
+  });
+
   it("comments every gate with `gates`, nothing with `none`, and ignores tasks with no link or repos with no jira block", async () => {
     const gates = wire(jiraPolicy({ comments: "gates", on: {} }));
     const t1 = await gates.pipeline.createTask({ title: "PLAT-123 a", repoPath: "/r/a" });

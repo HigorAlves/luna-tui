@@ -73,6 +73,18 @@ describe("ThreadReplies", () => {
     expect(bodies.filter((b) => /implementing|verifying/.test(b!))).toEqual([]);
   });
 
+  it("says once that a gate is still waiting when the tick records a reminder, and that the task was archived", async () => {
+    const { pipeline, replies, comments } = wire();
+    const task = await pipeline.createTask({ title: "Export CSV", repoPath: "/r/a", source });
+    await pipeline.start(task.id);
+    await pipeline.record(task.id, "sla.reminder", { gate: "awaiting_approval", dueAt: "2026-11-05T12:00:00.000Z" });
+    await replies.idle();
+    expect(comments.at(-1)![2]).toBe("Still waiting on you: approve the plan.");
+    await pipeline.archive(task.id, "sla_expired");
+    await replies.idle();
+    expect(comments.at(-1)![2]).toBe("Archived: sla_expired.");
+  });
+
   it("says why when the task escalates, and that it paused on a usage limit", async () => {
     const { pipeline, replies, comments } = wire();
     stubs.plan("triage", { outcome: "fail" }, { outcome: "fail" }, { outcome: "fail" });

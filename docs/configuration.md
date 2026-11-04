@@ -133,6 +133,7 @@ sla:                                      # ticket clocks; the machine's env def
     implementing: 4h
     verifying: 1h
   cycle: 3d                               # created → closed (MACHINE_SLA_CYCLE)
+  archive: 5d                             # auto-archive a ticket left at Intake or Triage (setup, questions) this long; off by default. A gate past its clock gets one reminder per visit (a `sla.reminder` event, a Jira comment with `comments: gates`, a line in the task's thread)
 engines:                                  # the engine a pack runs on in this repo, over its default
   triage: claude:opus                     # must be one of the pack's engines.allowed (GET /packs)
 budget:

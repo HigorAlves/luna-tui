@@ -73,6 +73,10 @@ export class ThreadReplies {
       if (WAITING_ON_USER.has(to) && to !== from) return this.reply(event.taskId, `Needs you: ${ASKS[to] ?? to}.`);
       return;
     }
+    if (event.kind === "sla.reminder") {
+      const gate = event.payload.gate as TaskState;
+      return this.reply(event.taskId, `Still waiting on you: ${ASKS[gate] ?? gate}.`);
+    }
     if (event.kind === "stage.finished") {
       const detail = event.payload.detail as { prUrl?: unknown } | undefined;
       const url = typeof detail?.prUrl === "string" ? detail.prUrl : null;
