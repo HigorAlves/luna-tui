@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { branchBase, commitAll, ensureCleanCheckout, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
+import { branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -223,5 +223,28 @@ describe("workspaceFor", () => {
     expect((await ownedWorkspace(linked, repo, join(root, "wt"), "{type}/{key}-{slug}")).branch).toBe("bug/PLAT-123-login-page");
     git(repo, "branch", "task/a1b2c3d4-login-page");
     expect((await ownedWorkspace(task, repo, join(root, "wt"))).branch).toBe("task/a1b2c3d4-login-page");
+  });
+});
+
+describe("graph helpers", () => {
+  it("names the graph checkout beside the intake one", () => {
+    expect(graphCheckoutPath("/r/api", "/wt")).toBe("/wt/api/graph");
+  });
+
+  it("answers the default branch's head and ancestry", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "graph-git-")));
+    git(root, "init", "-q", "-b", "main");
+    writeFileSync(join(root, "a.txt"), "a\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "one");
+    const one = git(root, "rev-parse", "HEAD");
+    writeFileSync(join(root, "b.txt"), "b\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "two");
+    const two = git(root, "rev-parse", "HEAD");
+    expect(await defaultHead(root)).toBe(two);
+    expect(await isAncestor(root, one, two)).toBe(true);
+    expect(await isAncestor(root, two, one)).toBe(false);
+    expect(await isAncestor(root, "c".repeat(40), two)).toBe(false);
   });
 });

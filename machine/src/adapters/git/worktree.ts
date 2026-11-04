@@ -91,6 +91,22 @@ export function intakeCheckoutPath(repoPath: string, worktreesDir: string): stri
   return join(worktreesDir, basename(repoPath), INTAKE_CHECKOUT);
 }
 
+/** The read-only checkout the code graph is built from: `<dir>/<repo>/graph`. */
+export const GRAPH_CHECKOUT = "graph";
+export function graphCheckoutPath(repoPath: string, worktreesDir: string): string {
+  return join(worktreesDir, basename(repoPath), GRAPH_CHECKOUT);
+}
+
+/** The commit `origin/<default>` points at after a fetch (the repo's HEAD without an origin). */
+export async function defaultHead(repoPath: string): Promise<string> {
+  return execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", await startPoint(repoPath)]);
+}
+
+/** Whether `ancestor` is an ancestor of (or the same commit as) `descendant`; false when either is unknown. */
+export async function isAncestor(repoPath: string, ancestor: string, descendant: string): Promise<boolean> {
+  return (await exec("git", [...HOST_GIT, "-C", repoPath, "merge-base", "--is-ancestor", ancestor, descendant])).code === 0;
+}
+
 /**
  * A clean, detached checkout of the default branch at `path`, fresh for every run: created from
  * `origin/<default>` after a fetch (the repo's own HEAD without an origin) when missing, else
