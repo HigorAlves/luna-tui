@@ -9,6 +9,7 @@ import { StreamWatcher } from "./adapters/http/watch.ts";
 import { parseSince } from "./adapters/http/metrics.ts";
 import { toEvent, toTask } from "./adapters/http/serialize.ts";
 
+import { buildTelemetry } from "./bootstrap/telemetry.ts";
 import { buildPackRuns, buildRealStages, buildRunnerFor } from "./bootstrap/stages.ts";
 import { loadConfig } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
@@ -79,6 +80,12 @@ if (applied.length > 0) {
 
 /** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
 const policies = new PolicyStore();
+/** Run traces: a local Laminar (`MACHINE_TRACES`, `LMNR_*`); the no-op without a key. Built before
+ *  the pipeline so the first stage run after boot is traced. */
+const telemetry = await buildTelemetry(config.traces);
+if (config.traces.mode !== "off") {
+  console.log(`traces ${telemetry.mode === "off" ? "off (backend unavailable)" : telemetry.mode} · Laminar at ${config.traces.laminar.baseUrl}:${config.traces.laminar.httpPort}`);
+}
 
 /** The nightly housekeeping: old history pruned, closed tasks' checkouts and merged branches
  *  removed, orphaned run folders and superseded runner images gone. Each step fails alone. */
@@ -323,6 +330,7 @@ pipeline = new Pipeline(db, runnerFor, {
   jiraSite: config.jira?.site ?? null,
   onAlert: raiseAlert,
   engineBudgets,
+  telemetry,
 });
 replies = new ThreadReplies({ pipeline, github, enabled: config.threadReplies, ...(config.slack ? { slack: config.slack } : {}), slackPort: () => (config.slackInbox.userToken ? slackApi : null) });
 /** One Jira client for every call; without the three variables each call says so and nothing syncs. */
@@ -383,6 +391,7 @@ const packRuns = buildPackRuns(config, {
   store: new PgPackRunStore(db),
   budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },
   engineBudgets,
+  telemetry,
   // A usage limit moves a call to a fallback engine, never to one whose window the pipeline holds.
   latched: () => pipeline.slots.latched.map((latch) => latch.owner),
 });
@@ -562,6 +571,7 @@ async function shutdown(): Promise<void> {
   pipeline.stopSupervisor();
   server.close();
   await pipeline.shutdown();
+  await telemetry.flush();
   await db.destroy();
   process.exit(0);
 }
