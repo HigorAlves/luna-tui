@@ -96,6 +96,10 @@ describe("parseLunaConfig", () => {
     });
   });
 
+  it("keeps a check's coverage report path", () => {
+    expect(parseLunaConfig("checks:\n  - name: t\n    run: make test\n    coverage: coverage/lcov.info\n").checks).toEqual([{ name: "t", run: "make test", coverage: "coverage/lcov.info" }]);
+  });
+
   it("refuses a value it cannot read, naming where", () => {
     expect(() => parseLunaConfig("policy:\n  qa: mobile\n")).toThrow(/policy\.qa/);
     expect(() => parseLunaConfig("policy:\n  max_concurrent: 0\n")).toThrow(/policy\.max_concurrent/);

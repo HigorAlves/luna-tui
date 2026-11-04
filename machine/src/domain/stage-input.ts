@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, CodeMapAnswer, type CheckContext, type CheckSpec, type CiContext, type EngineId, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type ChatTriageContext, CodeMapAnswer, type CheckContext, type CheckSpec, type CiContext, type CoverageSummary, type EngineId, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -97,6 +97,8 @@ export function buildStageInput(opts: {
   graph?: GraphContext | null;
   /** For verifying: the files the code graph says depend on what the change touched. */
   blastRadius?: string[];
+  /** For verifying: how much of the change's added lines the repo's lcov report saw run. */
+  coverage?: CoverageSummary;
 }): StageInput {
   const { task, stage, attempt, approvals } = opts;
   const pack = opts.pack ?? (stage as PackId);
@@ -143,6 +145,7 @@ export function buildStageInput(opts: {
       graph: opts.graph ?? null,
       ...(opts.plan ? { plan: opts.plan } : {}),
       ...(pack === "verifying" && opts.blastRadius?.length ? { blastRadius: opts.blastRadius } : {}),
+      ...(pack === "verifying" && opts.coverage ? { coverage: opts.coverage } : {}),
       ...(pack === "e2e" && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
       ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),
       ...(pack === "reviewing" && opts.review ? { review: opts.review } : {}),

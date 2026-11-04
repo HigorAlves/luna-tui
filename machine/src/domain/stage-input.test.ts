@@ -132,6 +132,13 @@ describe("buildStageInput", () => {
     expect(input.env).toEqual({ LUNA_FACTORY: "1" });
   });
 
+  it("carries the coverage summary to verifying only", () => {
+    const coverage = { files: [{ path: "src/a.ts", added: 4, covered: 3, uncovered: [12] }], total: { added: 4, covered: 3 }, report: "coverage/lcov.info" };
+    const build = (stage: "verifying" | "implementing") => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], coverage });
+    expect(build("verifying").context.coverage).toEqual(coverage);
+    expect(build("implementing").context).not.toHaveProperty("coverage");
+  });
+
   it("carries the blast radius to verifying only, and nothing when there is none", () => {
     const build = (stage: "verifying" | "implementing", blastRadius?: string[]) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], ...(blastRadius ? { blastRadius } : {}) });
     expect(build("verifying", ["src/b.ts"]).context.blastRadius).toEqual(["src/b.ts"]);

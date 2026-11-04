@@ -3,7 +3,7 @@
 // for real, and the stub fallback.
 import type { TaskRoute, TaskState } from "@hardness/contracts";
 
-import type { Ledger, RunSummary } from "@hardness/contracts";
+import type { CoverageSummary, Ledger, RunSummary } from "@hardness/contracts";
 
 import type { Config } from "../config.ts";
 import { type Credentials, machineCredentials, removeStaleCodexTemps } from "../adapters/credentials/index.ts";
@@ -33,7 +33,7 @@ export interface RealStagesResult {
   real: Partial<Record<TaskState, StageRunner>>;
   /** The verifying stage's review pack, or null when agents are off; `main.ts` passes this
    *  straight into `verifyRunner({ runPack: verifyPack, ... })`. */
-  verifyPack: ((context: StageContext, extra?: { blastRadius?: string[] }) => Promise<StageResult>) | null;
+  verifyPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) => Promise<StageResult>) | null;
   /** Runs a project's checks inside the runner image; null when stages are stubs. */
   checksExec: ReturnType<typeof sandboxExecutor> | null;
   /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
@@ -106,7 +106,8 @@ export async function buildRealStages(
     history,
     ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure } : {}),
   };
-  const verifyPack = (context: StageContext, extra?: { blastRadius?: string[] }) => runAgent(deps, context, "verifying", extra?.blastRadius?.length ? { blastRadius: extra.blastRadius } : {});
+  const verifyPack = (context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) =>
+    runAgent(deps, context, "verifying", { ...(extra?.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}), ...(extra?.coverage ? { coverage: extra.coverage } : {}) });
   const agents = agentRunners(deps);
   const real: Partial<Record<TaskState, StageRunner>> = {
     ...agents,

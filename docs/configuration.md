@@ -95,6 +95,7 @@ checks:                                   # the repo's own checks; without this 
     run: pnpm test
     cwd: machine
     paths: ["machine/**", "contracts/**"]
+    coverage: coverage/lcov.info          # an lcov report the run writes, relative to cwd; Verify measures the change's added lines against it
 services:                                 # run beside every stage and check container, reachable by key as hostname
   postgres:
     image: postgres:16
@@ -149,6 +150,8 @@ Every key is optional and unknown keys are ignored. Under `jira.on`, `jira.field
 `engines` maps a pack to the engine it runs on in this repo. An engine outside the pack's `engines.allowed` makes the file invalid, reported like any other bad value (the last good version stays in force; a setup proposal with one fails the stage, like any proposal the machine cannot read). A task's own choice (`stages` on `POST /tasks`, `PATCH /tasks/:id/stages`) wins over the file, and the file over the pack's default. A pack's engine is read when its stage starts, so an edit counts from the next stage on; a stage already running keeps its engine, also across a restart.
 
 `budget.engines` caps an engine in this repo the way `MACHINE_ENGINE_BUDGETS` caps it on the machine, with the same keys and rules, counting only this repo's stage runs this month; a key that names no engine or credential, or names Claude, makes the file invalid. At the cap the repo's tasks run that pack's default with a note, and the machine's caps still apply on top.
+
+A check with `coverage` names an lcov report its run writes (vitest, jest, pytest-cov, cargo-llvm-cov and go via gcov2lcov all emit one), relative to the check's `cwd`. After the check passes, Verify reads it and measures *patch coverage*: of the lines the branch added, how many the report saw run. A file with uncovered added lines becomes a `test` finding (confidence 0.9) that the verifier weighs and never fails the stage by itself; the numbers are in the stage's `detail.coverage` and in the verifier's input. A missing or unreadable report is noted and never fails the stage; a path that climbs out of the worktree is ignored.
 
 Each `services` entry runs as its own container beside every stage that runs the repo's code (implementing, verifying, e2e) and every check run, on a private docker network for that run, reachable by its key as hostname; the `exports` become env in the stage or check container. They are torn down with it, so two tasks of one repo never share a database. A service whose `ready` line does not exit 0 within a minute escalates the stage with the service's log tail.
 

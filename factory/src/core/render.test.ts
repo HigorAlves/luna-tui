@@ -115,6 +115,16 @@ describe("renderPrompt", () => {
     expect(render(undefined)).toContain("(none)");
   });
 
+  it("renders the coverage of the change per file with a total line, or says there is no report", () => {
+    const template = "{{context.coverage}}";
+    const render = (coverage?: unknown) => renderPrompt({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying", context: { ...input.context, ...(coverage ? { coverage } : {}) } } as never, template });
+    const out = render({ files: [{ path: "src/a.ts", added: 8, covered: 3, uncovered: [12, 14, 15, 16, 17] }, { path: "src/b.ts", added: 2, covered: 2, uncovered: [] }], total: { added: 10, covered: 5 }, report: "coverage/lcov.info" });
+    expect(out).toContain("src/a.ts: 3/8 added lines covered (uncovered: 12, 14-17)");
+    expect(out).toContain("src/b.ts: 2/2 added lines covered");
+    expect(out).toContain("Total: 5/10 added lines covered (coverage/lcov.info)");
+    expect(render()).toContain("(no coverage report)");
+  });
+
   it("renders the code map the planner reads: components, files, owners and the note", () => {
     const template = "{{context.plan.map}}";
     const plan = { record: null, brief: "b", criteria: [], assumptions: [], slices: [] };

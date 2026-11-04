@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { type CiContext, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext } from "@hardness/contracts";
 import { existsSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -106,6 +106,8 @@ export interface AgentExtra {
   plan?: PlanContext;
   /** verifying: the files the code graph says depend on what the change touched. */
   blastRadius?: string[];
+  /** verifying: the coverage of the change's added lines. */
+  coverage?: CoverageSummary;
 }
 
 /** The files the plan's slices touch, with the code map's files when it has one. */
@@ -200,6 +202,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     review: extra.review ?? null,
     threads: extra.threads ?? null,
     ...(extra.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}),
+    ...(extra.coverage ? { coverage: extra.coverage } : {}),
     holdoutCases: policy.holdoutCases,
     qaTargets: policy.qaTargets,
     checks: policy.checks,

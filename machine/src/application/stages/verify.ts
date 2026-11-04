@@ -1,14 +1,15 @@
 // The verifying stage: run the project's own checks in the task worktree, and only when they
 // are green hand the change to the verifying review pack. A red check fails the stage with
 // its output as findings, so the next implementing attempt sees what broke.
-import type { CheckSpec, Finding, ServiceSpec } from "@hardness/contracts";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import type { CheckSpec, CoverageSummary, Finding, ServiceSpec } from "@hardness/contracts";
+import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 
-import { changedPaths as hostChangedPaths, gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
+import { branchBase, changedPaths as hostChangedPaths, diffText, gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type GraphJson, blastRadius } from "../../domain/blast-radius.ts";
 import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.ts";
+import { addedLineNumbers, parseLcov, patchCoverage } from "../../domain/coverage.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
@@ -24,7 +25,7 @@ export interface VerifyDeps {
     options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> },
   ) => Promise<ExecResult>;
   /** Runs the verifying review pack; null when agents are off, which skips the review. */
-  runPack: ((context: StageContext, extra?: { blastRadius?: string[] }) => Promise<StageResult>) | null;
+  runPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) => Promise<StageResult>) | null;
   stateDir: string;
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
   /** Who a check commits as: the identity git resolves for the repo. Null escalates. */
@@ -36,6 +37,8 @@ export interface VerifyDeps {
   changedPaths?: (worktreePath: string, repoPath: string) => Promise<string[] | null>;
   /** The machine's code graphs: when the repo has one, the files that depend on the change widen the checks and steer the review. */
   graph?: { currentDir(repoPath: string): string | null };
+  /** The branch's diff against where it forked, for the coverage of its added lines; null when unknown. */
+  diffSince?: (worktreePath: string, repoPath: string) => Promise<string | null>;
 }
 
 interface CheckReport {
@@ -47,6 +50,26 @@ interface CheckReport {
   note?: string;
   /** A luna.yaml check the change did not call for. */
   skipped?: string;
+}
+
+const COVERAGE_BODY_LINES = 20;
+
+/** The default diff: the branch's changes since it forked from the repo's HEAD. */
+async function branchDiff(worktreePath: string, repoPath: string): Promise<string | null> {
+  const base = await branchBase(worktreePath, repoPath);
+  return base ? diffText(worktreePath, base, "HEAD") : null;
+}
+
+/** A report path under the worktree, or null when it climbs out of it (by `..` or by a symlink). */
+async function reportUnder(worktree: string, relative: string): Promise<string | null> {
+  const path = resolve(worktree, relative);
+  if (path !== worktree && !path.startsWith(worktree + sep)) return null;
+  try {
+    const [real, root] = await Promise.all([realpath(path), realpath(worktree)]);
+    return real.startsWith(root + sep) ? real : null;
+  } catch {
+    return path;
+  }
 }
 
 const tailOf = (text: string): string => text.trimEnd().split("\n").slice(-TAIL_LINES).join("\n");
@@ -65,6 +88,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
   const resolveIdentity = deps.gitIdentity ?? hostGitIdentity;
   const repoPolicy = deps.policy ?? (async () => ({ checks: null, services: {} }));
   const changed = deps.changedPaths ?? hostChangedPaths;
+  const diffSince = deps.diffSince ?? branchDiff;
   /** The files the graph says depend on the change; empty without a graph or a readable one. */
   const radiusOf = async (repoPath: string, changedFiles: string[] | null): Promise<string[]> => {
     const dir = changedFiles && deps.graph?.currentDir(repoPath);
@@ -107,12 +131,14 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     const { checks: declared, services } = await repoPolicy(task.repoPath ?? null);
     const reports: CheckReport[] = [];
     let commands: Array<{ name: string; cmd: string; argv: string[] }>;
+    let selectedChecks: CheckSpec[] = [];
     let noTests: boolean;
     const skipped: CheckReport[] = [];
     if (declared) {
       const changedFiles = task.repoPath ? await changed(cwd, task.repoPath) : null;
       state.radius = task.repoPath ? await radiusOf(task.repoPath, changedFiles) : [];
       const selected = selectChecks(declared, changedFiles ? [...changedFiles, ...state.radius] : null);
+      selectedChecks = selected;
       commands = selected.map(checkCommand);
       for (const check of declared) if (!selected.includes(check)) skipped.push({ name: check.name, skipped: skippedReason(check) });
       noTests = declared.length === 0;
@@ -196,20 +222,55 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       };
     }
 
+    // Coverage of the change's added lines, from the report each passing check that names one wrote.
+    let coverage: CoverageSummary | null = null;
+    const coverageFindings: Finding[] = [];
+    for (const check of selectedChecks) {
+      if (!check.coverage || !reports.some((r) => r.name === check.name && r.ok === true)) continue;
+      const relative = join(check.cwd ?? "", check.coverage);
+      const path = await reportUnder(cwd, relative);
+      const text = path ? await readFile(path, "utf8").catch(() => null) : null;
+      if (text === null) {
+        reports.push({ name: check.name, note: `coverage report ${check.coverage} not found` });
+        continue;
+      }
+      const diff = await diffSince(cwd, task.repoPath ?? cwd).catch(() => null);
+      if (!diff) {
+        reports.push({ name: check.name, note: "coverage: the branch's diff is unknown" });
+        continue;
+      }
+      const summary = patchCoverage({ lcov: parseLcov(text, check.cwd ? { cwd: check.cwd } : {}), added: addedLineNumbers(diff), report: relative });
+      coverage = coverage ? { files: [...coverage.files, ...summary.files], total: { added: coverage.total.added + summary.total.added, covered: coverage.total.covered + summary.total.covered }, report: coverage.report } : summary;
+      for (const f of summary.files) {
+        if (f.uncovered.length === 0) continue;
+        coverageFindings.push({
+          path: f.path,
+          line: f.uncovered[0]!,
+          start_line: null,
+          severity: "test",
+          title: `coverage: ${f.covered} of ${f.added} added lines in ${f.path} are not covered`,
+          body: `uncovered: ${f.uncovered.slice(0, COVERAGE_BODY_LINES).join(", ")}`,
+          suggestion_code: null,
+          confidence: 0.9,
+        });
+      }
+    }
+    const coverageDetail = coverage ? { coverage } : {};
+
     // Step B: the review pack, only when agents are on.
     const noTestsNote = noTests ? { note: "no test command detected; verifying proves the scenarios by direct check" } : {};
     if (!deps.runPack) {
-      return { outcome: "pass", detail: { step: "checks", note: "review: skipped (agents off)", checks: reports }, run: { transcriptPath } };
+      return { outcome: "pass", detail: { step: "checks", note: "review: skipped (agents off)", checks: reports, ...coverageDetail }, run: { transcriptPath } };
     }
-    const pack = await deps.runPack(context, state.radius.length ? { blastRadius: state.radius } : {});
+    const pack = await deps.runPack(context, { ...(state.radius.length ? { blastRadius: state.radius } : {}), ...(coverage ? { coverage } : {}) });
     // A plain failure or a deliberate escalation are both the pack's own answer, verbatim —
     // neither should fall into the verdict computation below (an escalation has no real
     // findings to compute one from, and would otherwise be miscounted as a pass).
     if (pack.outcome === "fail" || pack.outcome === "escalated") {
-      return { ...pack, detail: { ...pack.detail, step: "review", checks: reports } };
+      return { ...pack, detail: { ...pack.detail, step: "review", checks: reports, ...coverageDetail } };
     }
     const answer = answerOf(pack.detail);
-    const findings = (Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[];
+    const findings = [...((Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[]), ...coverageFindings];
     const results = Array.isArray(answer?.results) ? answer.results : [];
     // One verdict per case, by the title the pack copied verbatim from the approved case. The
     // cases are matched by title only: a reworded title is an unproven case, as the prompt says,
@@ -235,6 +296,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         results,
         ...(cases.length > 0 ? { cases } : {}),
         checks: reports,
+        ...coverageDetail,
         ...noTestsNote,
         ...(asked ? { note: "the reviewer asked a question; a reviewer should not, so the review counts as a pass" } : {}),
       },

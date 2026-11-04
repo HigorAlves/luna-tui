@@ -206,6 +206,24 @@ function mapText(map: NonNullable<StageInput["context"]["plan"]>["map"]): string
 }
 
 /** The line that says where the code graph is, and how far to trust it. */
+/** Line numbers as ranges: 12, 14-17. */
+function ranges(lines: number[]): string {
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; ) {
+    let j = i;
+    while (j + 1 < lines.length && lines[j + 1] === lines[j]! + 1) j++;
+    out.push(j > i ? `${lines[i]}-${lines[j]}` : `${lines[i]}`);
+    i = j + 1;
+  }
+  return out.join(", ");
+}
+
+function coverageText(coverage: StageInput["context"]["coverage"]): string {
+  if (!coverage) return "(no coverage report)";
+  const rows = coverage.files.map((f) => `${f.path}: ${f.covered}/${f.added} added lines covered${f.uncovered.length ? ` (uncovered: ${ranges(f.uncovered)})` : ""}`);
+  return [...rows, `Total: ${coverage.total.covered}/${coverage.total.added} added lines covered (${coverage.report})`].join("\n");
+}
+
 function graphText(graph: StageInput["context"]["graph"]): string {
   if (!graph) return "Code graph: (none: use Glob, Grep and Read)";
   const built = `built at ${graph.commit.slice(0, 7)} on ${graph.builtAt.slice(0, 10)}`;
@@ -252,6 +270,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{context.baseCommit}}": txt(input.context.baseCommit),
     "{{context.graph}}": graphText(input.context.graph),
     "{{context.blastRadius}}": bullets(input.context.blastRadius),
+    "{{context.coverage}}": coverageText(input.context.coverage),
     "{{context.ci}}": ciText(input.context.ci),
     "{{context.review}}": reviewText(input.context.review),
     "{{context.threads}}": threadsText(input.context.threads),

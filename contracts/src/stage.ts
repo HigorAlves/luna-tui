@@ -303,8 +303,19 @@ export const CheckSpec = z.object({
   run: z.string().min(1),
   cwd: z.string().min(1).optional(),
   paths: z.array(z.string().min(1)).optional(),
+  /** An lcov report the run writes, relative to `cwd`: Verify measures the change's added lines against it. */
+  coverage: z.string().min(1).optional(),
 });
 export type CheckSpec = z.infer<typeof CheckSpec>;
+
+/** How much of a change's added lines a repo's own lcov report saw run. */
+export const CoverageSummary = z.object({
+  files: z.array(z.object({ path: z.string(), added: z.number().int(), covered: z.number().int(), uncovered: z.array(z.number().int()) })),
+  total: z.object({ added: z.number().int(), covered: z.number().int() }),
+  /** The report's path, as the check named it. */
+  report: z.string(),
+});
+export type CoverageSummary = z.infer<typeof CoverageSummary>;
 
 /** A service a repo's code needs beside it (a database, a broker), from its luna.yaml. The
  *  machine runs it next to each stage and check container; `exports` is the env the code
@@ -683,6 +694,8 @@ export const StageInput = z.object({
     chat: ChatTriageContext.nullable().optional(),
     /** For verifying: the files the code graph says depend on what the change touched, to review first. */
     blastRadius: z.array(z.string()).optional(),
+    /** For verifying: how much of the change's added lines the repo's lcov report saw run; absent without a report. */
+    coverage: CoverageSummary.optional(),
     /** The repo's Graphify code graph, read-only at /graph; null or absent when it has none. */
     graph: GraphContext.nullable().optional(),
   }),

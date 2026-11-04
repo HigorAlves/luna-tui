@@ -29,7 +29,10 @@ function setup(opts: {
   noPack?: boolean;
   identity?: { name: string; email: string } | null;
   /** The repo's own checks from luna.yaml; undefined means none declared. */
-  lunaChecks?: Array<{ name: string; run: string; cwd?: string; paths?: string[] }>;
+  lunaChecks?: Array<{ name: string; run: string; cwd?: string; paths?: string[]; coverage?: string }>;
+  /** A real directory standing in for the task worktree (default /wt). */
+  worktree?: string;
+  diffSince?: (worktreePath: string, repoPath: string) => Promise<string | null>;
   changed?: string[] | null;
   services?: Record<string, { image: string; exports?: Record<string, string> }>;
 }) {
@@ -48,10 +51,11 @@ function setup(opts: {
     gitIdentity: async () => ("identity" in opts ? opts.identity! : { name: "Ada L", email: "ada@x.dev" }),
     policy: async () => ({ checks: opts.lunaChecks ?? null, services: opts.services ?? {} }),
     changedPaths: async () => ("changed" in opts ? opts.changed! : null),
+    ...(opts.diffSince ? { diffSince: opts.diffSince } : {}),
   });
   const controller = opts.controller ?? new AbortController();
   const context: StageContext = {
-    task: { id: "t1", worktreePath: "/wt", repoPath: "/repo" } as unknown as TaskRow,
+    task: { id: "t1", worktreePath: opts.worktree ?? "/wt", repoPath: "/repo" } as unknown as TaskRow,
     stage: "verifying",
     attempt: 1,
     runId: "run-1",
@@ -184,6 +188,51 @@ describe("verifying stage", () => {
       const result = await bare(context);
       expect(result.detail).not.toHaveProperty("blastRadius");
       expect(runPack).toHaveBeenLastCalledWith(context, {});
+    });
+  });
+
+  describe("coverage of the change's added lines", () => {
+    const diff = ["diff --git a/src/a.ts b/src/a.ts", "--- a/src/a.ts", "+++ b/src/a.ts", "@@ -9,1 +10,5 @@", " ctx", "+a", "+b", "+c", "+d", ""].join("\n");
+    const worktree = () => {
+      const dir = mkdtempSync(join(tmpdir(), "verify-wt-"));
+      mkdirSync(join(dir, "coverage"), { recursive: true });
+      writeFileSync(join(dir, "coverage", "lcov.info"), ["SF:/work/src/a.ts", "DA:11,1", "DA:12,0", "DA:13,2", "DA:14,1", "end_of_record", ""].join("\n"));
+      return dir;
+    };
+    const lunaChecks = [{ name: "tests", run: "pnpm test", coverage: "coverage/lcov.info" }];
+
+    it("reads the report after a passing check, records it, adds a test finding per file with uncovered lines and hands the summary to the verifier", async () => {
+      const { run, context, runPack } = setup({ worktree: worktree(), lunaChecks, diffSince: async () => diff });
+      const result = await run(context);
+      const summary = { files: [{ path: "src/a.ts", added: 4, covered: 3, uncovered: [12] }], total: { added: 4, covered: 3 }, report: "coverage/lcov.info" };
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).toMatchObject({ coverage: summary });
+      expect(result.findings).toEqual([
+        expect.objectContaining({ path: "src/a.ts", line: 12, severity: "test", title: "coverage: 3 of 4 added lines in src/a.ts are not covered", body: "uncovered: 12", confidence: 0.9 }),
+      ]);
+      expect(runPack).toHaveBeenCalledWith(context, { coverage: summary });
+    });
+
+    it("notes a report that is missing and still passes", async () => {
+      const { run, context } = setup({ worktree: mkdtempSync(join(tmpdir(), "verify-wt-")), lunaChecks, diffSince: async () => diff });
+      const result = await run(context);
+      expect(result.outcome).toBe("pass");
+      expect((result.detail as { checks: unknown[] }).checks).toContainEqual({ name: "tests", note: "coverage report coverage/lcov.info not found" });
+      expect(result.detail).not.toHaveProperty("coverage");
+    });
+
+    it("does not read a report path that climbs out of the worktree", async () => {
+      const { run, context } = setup({ worktree: worktree(), lunaChecks: [{ name: "tests", run: "pnpm test", coverage: "../../etc/passwd" }], diffSince: async () => diff });
+      const result = await run(context);
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).not.toHaveProperty("coverage");
+    });
+
+    it("reads no report when the check failed", async () => {
+      const { run, context, runPack } = setup({ worktree: worktree(), lunaChecks, diffSince: async () => diff, checks: { "sh -c pnpm test": { code: 1, stdout: "x", stderr: "" } } });
+      const result = await run(context);
+      expect(runPack).not.toHaveBeenCalled();
+      expect(result.detail).not.toHaveProperty("coverage");
     });
   });
 
