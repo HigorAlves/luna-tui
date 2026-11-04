@@ -95,6 +95,7 @@ export async function buildRealStages(
     stateDir: config.stateDir,
     watcher,
     exec: checksExec,
+    hostExec: exec,
     policies,
     history,
     ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure } : {}),

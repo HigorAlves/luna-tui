@@ -1,8 +1,8 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { type CiContext, EscalationReason, type Ledger, PACKS, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type CiContext, EscalationReason, Ledger, PACKS, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext } from "@hardness/contracts";
 import { existsSync } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import {
@@ -26,6 +26,8 @@ import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
 import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
+import { pushBranch } from "./deliver.ts";
+import { buildWatch } from "./build-watch.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
@@ -62,6 +64,10 @@ export interface AgentDeps {
     args: string[],
     options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> },
   ) => Promise<ExecResult>;
+  /** Runs a command on the host (not in the stage image): the build watch pushes the task branch with it. */
+  hostExec?: (command: string, args: string[], options?: { cwd?: string; signal?: AbortSignal; timeoutMs?: number }) => Promise<ExecResult>;
+  /** How often the build watch looks at the run's ledger, in ms. */
+  watchEvery?: number;
 }
 
 /** Every branch the pipeline writes starts with this; see `workspaceFor`. */
@@ -203,6 +209,32 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     if (!(error instanceof NoCredentialError || error instanceof CredentialWaitError)) throw error;
     return { outcome: "fail", detail: { error: error.message }, ...(engineEvents.length ? { events: engineEvents } : {}) };
   }
+  // Implementing: every slice that turns committed is pushed as it lands, one push at a time.
+  const pushes = { attempted: 0, ok: 0 };
+  const pushErrors: string[] = [];
+  let watch: ReturnType<typeof buildWatch> | null = null;
+  let pushing: Promise<void> = Promise.resolve();
+  const startWatch = (): void => {
+    if (pack !== "implementing" || !deps.hostExec || watch) return;
+    const hostExec = deps.hostExec;
+    watch = buildWatch({
+      outDir: join(runDir, "out"),
+      every: deps.watchEvery ?? 2000,
+      log: (line) => void context.note?.(line).catch(() => {}),
+      onCommitted: (slice) => {
+        pushing = pushing.then(async () => {
+          pushes.attempted += 1;
+          const error = await pushBranch(hostExec, workspace.branch, workspace.path).catch((e: Error) => e.message);
+          if (error === null) pushes.ok += 1;
+          else {
+            pushErrors.push(error);
+            await context.note?.(`slice ${slice.id} not pushed: ${error}`).catch(() => {});
+          }
+        });
+        return pushing;
+      },
+    });
+  };
   const sandbox = await (deps.sandbox ?? runSandbox)({
     name: container,
     attach: Boolean(resume),
@@ -225,10 +257,18 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     ...(graphContext && graphDir ? { mounts: [{ host: graphDir, container: GRAPH_MOUNT, readOnly: true }], extraEnv: { LUNA_GRAPH: GRAPH_FILE } } : {}),
     signal: context.signal,
     // The tab's label names the repo too: five repos' Build tabs read apart.
-    onStarted: (name) =>
-      void deps.watcher.follow(task.id, `#${task.id.slice(0, 8)} ${basename(task.repoPath!)} · ${task.title}`, workspace.path, name),
+    onStarted: (name) => {
+      startWatch();
+      void deps.watcher.follow(task.id, `#${task.id.slice(0, 8)} ${basename(task.repoPath!)} · ${task.title}`, workspace.path, name);
+    },
     onLine: (line) => detector.feed(line),
-  }).finally(() => credential.release());
+  }).finally(async () => {
+    // A fake or resumed sandbox may never call onStarted; the watch still covers its run.
+    startWatch();
+    await (watch as ReturnType<typeof buildWatch> | null)?.stop();
+    await pushing;
+    credential.release();
+  });
 
   const base: StageResult = {
     outcome: "fail",
@@ -243,7 +283,18 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     if (limits.writable) await resetWorktree(workspace.path);
     return result;
   };
-  const failed = (error: string): Promise<StageResult> => dirty({ ...base, detail: { error } });
+  // What the run left in its ledger survives an abort, a timeout or a stuck stop: the next attempt resumes from it.
+  const keptLedger = async () => {
+    try {
+      return Ledger.parse(JSON.parse(await readFile(join(runDir, "out", "ledger.json"), "utf8")));
+    } catch {
+      return null;
+    }
+  };
+  const failed = async (error: string): Promise<StageResult> => {
+    const ledger = await keptLedger();
+    return dirty({ ...base, detail: { error, ...(ledger ? { ledger } : {}), ...(pushes.attempted ? { pushes } : {}) } });
+  };
 
   if (sandbox.aborted) return failed("aborted");
   if (sandbox.timedOut) return failed(`timed out after ${input.limits.timeoutMs / MINUTE} minutes`);
@@ -262,6 +313,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   }
   const { output } = ingested;
   const mapped = toStageResult(ingested);
+  if (pushes.attempted) mapped.detail = { ...mapped.detail, pushes };
   const merged = (result: StageResult): StageResult => ({
     ...base,
     ...result,

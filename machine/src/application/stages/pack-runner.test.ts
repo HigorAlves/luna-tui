@@ -769,4 +769,38 @@ describe("the engine a stage runs on", () => {
     await expect(runAgent({ ...deps(broken), credentials }, context("triage"), "triage")).rejects.toThrow(/docker/);
     expect(log).toEqual(["prepare claude:opus", "release claude:opus"]);
   });
+
+  describe("build watch", () => {
+    const ledgerJson = JSON.stringify({ schema: 1, slices: [{ id: 1, title: "one", status: "committed", commit: "abc" }] });
+    const killed = (run: SandboxRun) => {
+      mkdirSync(join(run.runDir, "out"), { recursive: true });
+      writeFileSync(join(run.runDir, "out", "ledger.json"), ledgerJson);
+    };
+    const aborting = (run: SandboxRun): Promise<SandboxResult> => {
+      killed(run);
+      return Promise.resolve({ exitCode: 137, timedOut: false, aborted: true, transcriptPath: join(run.runDir, "t.log") });
+    };
+
+    it("keeps the ledger of an aborted run and has pushed the committed slice once", async () => {
+      const calls: string[][] = [];
+      const hostExec = vi.fn(async (cmd: string, args: string[]) => {
+        calls.push([cmd, ...args]);
+        return { code: 0, stdout: "", stderr: "" };
+      });
+      const result = await runAgent({ ...deps(aborting), hostExec, watchEvery: 5 }, context("implementing"), "implementing");
+      expect((result.detail as { ledger: { slices: Array<{ status: string }> } }).ledger.slices[0]!.status).toBe("committed");
+      const pushes = calls.filter((c) => c.includes("push"));
+      expect(pushes).toHaveLength(1);
+      expect(pushes[0]!.slice(0, 4)).toEqual(["git", "-c", "core.hooksPath=/dev/null", "-C"]);
+      expect(pushes[0]!.slice(5)).toEqual(["push", "-u", "origin", expect.stringMatching(/^task\//)]);
+    });
+
+    it("never fails the stage on a failed push, and counts it", async () => {
+      const hostExec = vi.fn(async () => ({ code: 1, stdout: "", stderr: "no remote" }));
+      const sandbox = fakeSandbox(output(), killed);
+      const result = await runAgent({ ...deps(sandbox), hostExec, watchEvery: 5 }, context("implementing"), "implementing");
+      expect(result.outcome).toBe("pass");
+      expect((result.detail as { pushes: unknown }).pushes).toEqual({ attempted: 1, ok: 0 });
+    });
+  });
 });
