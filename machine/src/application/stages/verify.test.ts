@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { TaskRow } from "../../domain/task.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import type { StageContext, StageResult } from "../ports.ts";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { verifyRunner } from "./verify.ts";
 
 const finding = (over: Record<string, unknown> = {}) => ({
@@ -137,6 +138,53 @@ describe("verifying stage", () => {
     const result = await run(context);
     expect(calls).toEqual([["sh", "-c", "cd 'board' && cargo test"]]);
     expect(result.detail).toMatchObject({ checks: [{ name: "board tests", ok: true }, { name: "machine tests", skipped: "no change under machine/**" }] });
+  });
+
+  describe("the regression sweep", () => {
+    const withGraph = (changed: string[] | null) => {
+      const graphDir = mkdtempSync(join(tmpdir(), "verify-graph-"));
+      mkdirSync(join(graphDir, "graphify-out"));
+      writeFileSync(
+        join(graphDir, "graphify-out", "graph.json"),
+        JSON.stringify({ nodes: [{ id: "A", source_file: "board/src/a.rs" }, { id: "M", source_file: "machine/src/m.ts" }], links: [{ source: "M", target: "A" }] }),
+      );
+      const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
+      const calls: string[][] = [];
+      const runPack = vi.fn(async (_context: StageContext, _extra?: { blastRadius?: string[] }) => ({ outcome: "pass" as const, detail: { answer: { verdict: "pass", summary: "fine", findings: [] } } }));
+      const run = verifyRunner({
+        exec: async (command, args) => (calls.push([command, ...args]), { code: 0, stdout: "", stderr: "" }),
+        runPack,
+        stateDir,
+        gitIdentity: async () => ({ name: "A", email: "a@x.dev" }),
+        policy: async () => ({
+          checks: [
+            { name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] },
+            { name: "machine tests", run: "pnpm test", cwd: "machine", paths: ["machine/**"] },
+          ],
+          services: {},
+        }),
+        changedPaths: async () => changed,
+        graph: { currentDir: (repo) => (repo === "/repo" ? graphDir : null) },
+      });
+      return { run, calls, runPack };
+    };
+    const context = { task: { id: "t1", worktreePath: "/wt", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+
+    it("widens the check selection with the files that depend on the change, hands them to the reviewer and records them", async () => {
+      const { run, calls, runPack } = withGraph(["board/src/a.rs"]);
+      const result = await run(context);
+      expect(calls.map((c) => c[2])).toEqual(["cd 'board' && cargo test", "cd 'machine' && pnpm test"]);
+      expect(runPack).toHaveBeenCalledWith(context, { blastRadius: ["machine/src/m.ts"] });
+      expect(result.detail).toMatchObject({ blastRadius: ["machine/src/m.ts"] });
+    });
+
+    it("changes nothing when the repo has no graph", async () => {
+      const { run, calls, runPack } = withGraph(["board/src/a.rs"]);
+      const bare = verifyRunner({ exec: async (c, a) => (calls.push([c, ...a]), { code: 0, stdout: "", stderr: "" }), runPack, stateDir: mkdtempSync(join(tmpdir(), "verify-")), gitIdentity: async () => ({ name: "A", email: "a@x" }), policy: async () => ({ checks: null, services: {} }), detect: async () => ({ manager: "pnpm", test: ["t"] }) as never, changedPaths: async () => ["board/src/a.rs"], graph: { currentDir: () => null } });
+      const result = await bare(context);
+      expect(result.detail).not.toHaveProperty("blastRadius");
+      expect(runPack).toHaveBeenLastCalledWith(context, {});
+    });
   });
 
   it("names a failed luna.yaml check by its own name, with its tail, so the finding reads like the file", async () => {

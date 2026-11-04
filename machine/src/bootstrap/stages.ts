@@ -33,7 +33,7 @@ export interface RealStagesResult {
   real: Partial<Record<TaskState, StageRunner>>;
   /** The verifying stage's review pack, or null when agents are off; `main.ts` passes this
    *  straight into `verifyRunner({ runPack: verifyPack, ... })`. */
-  verifyPack: ((context: StageContext) => Promise<StageResult>) | null;
+  verifyPack: ((context: StageContext, extra?: { blastRadius?: string[] }) => Promise<StageResult>) | null;
   /** Runs a project's checks inside the runner image; null when stages are stubs. */
   checksExec: ReturnType<typeof sandboxExecutor> | null;
   /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
@@ -106,7 +106,7 @@ export async function buildRealStages(
     history,
     ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure } : {}),
   };
-  const verifyPack = (context: StageContext) => runAgent(deps, context, "verifying");
+  const verifyPack = (context: StageContext, extra?: { blastRadius?: string[] }) => runAgent(deps, context, "verifying", extra?.blastRadius?.length ? { blastRadius: extra.blastRadius } : {});
   const agents = agentRunners(deps);
   const real: Partial<Record<TaskState, StageRunner>> = {
     ...agents,

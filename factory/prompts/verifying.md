@@ -16,6 +16,10 @@ Assumptions:
 Scenarios test_design named (each needs a test or a direct check):
 {{context.testCases}}
 
+## Review these first
+Files the code graph says depend on what changed (a change can break them without touching them; read the diff's callers there before the rest):
+{{context.blastRadius}}
+
 ## Decisions so far
 {{decisions}}
 

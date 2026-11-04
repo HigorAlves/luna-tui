@@ -664,6 +664,8 @@ export const StageInput = z.object({
     eval: EvalJudgeContext.nullable().optional(),
     /** For chat_triage: the chat batch; the task is synthetic and there is no worktree. */
     chat: ChatTriageContext.nullable().optional(),
+    /** For verifying: the files the code graph says depend on what the change touched, to review first. */
+    blastRadius: z.array(z.string()).optional(),
     /** The repo's Graphify code graph, read-only at /graph; null or absent when it has none. */
     graph: GraphContext.nullable().optional(),
   }),

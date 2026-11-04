@@ -251,6 +251,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     ),
     "{{context.baseCommit}}": txt(input.context.baseCommit),
     "{{context.graph}}": graphText(input.context.graph),
+    "{{context.blastRadius}}": bullets(input.context.blastRadius),
     "{{context.ci}}": ciText(input.context.ci),
     "{{context.review}}": reviewText(input.context.review),
     "{{context.threads}}": threadsText(input.context.threads),

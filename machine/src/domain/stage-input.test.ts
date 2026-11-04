@@ -126,6 +126,13 @@ describe("buildStageInput", () => {
     expect(input.env).toEqual({ LUNA_FACTORY: "1" });
   });
 
+  it("carries the blast radius to verifying only, and nothing when there is none", () => {
+    const build = (stage: "verifying" | "implementing", blastRadius?: string[]) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], ...(blastRadius ? { blastRadius } : {}) });
+    expect(build("verifying", ["src/b.ts"]).context.blastRadius).toEqual(["src/b.ts"]);
+    expect(build("implementing", ["src/b.ts"]).context).not.toHaveProperty("blastRadius");
+    expect(build("verifying", []).context).not.toHaveProperty("blastRadius");
+  });
+
   it("carries the repo's code graph when the machine has one, null when it has none", () => {
     const graph = { path: "/graph/graphify-out/graph.json", commit: "9c1f0e2a", builtAt: "2026-11-04T10:00:00Z", fresh: true };
     const build = (g?: typeof graph | null) => buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [], ...(g !== undefined ? { graph: g } : {}) });

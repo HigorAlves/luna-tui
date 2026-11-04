@@ -101,6 +101,8 @@ export interface AgentExtra {
   checkout?: boolean;
   /** The plan stage's packs: the plan under review (the test designer reads it as its plan; a second round carries the gaps or the review). */
   plan?: PlanContext;
+  /** verifying: the files the code graph says depend on what the change touched. */
+  blastRadius?: string[];
 }
 
 /** The files the plan's slices touch, with the code map's files when it has one. */
@@ -195,6 +197,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     ci: extra.ci ?? null,
     review: extra.review ?? null,
     threads: extra.threads ?? null,
+    ...(extra.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}),
     holdoutCases: policy.holdoutCases,
     qaTargets: policy.qaTargets,
     checks: policy.checks,

@@ -196,6 +196,7 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
 const realVerifyRunner = verifyRunner({
   exec: checksExec ?? exec,
   runPack: verifyPack,
+  graph,
   stateDir: config.stateDir,
   policy: async (repoPath) => {
     const { checks, services } = await policies.for(repoPath);

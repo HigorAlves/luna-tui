@@ -86,6 +86,8 @@ export function buildStageInput(opts: {
   threads?: ThreadsContext | null;
   /** Where the repo's code graph is in the container and how current it is; null when it has none. */
   graph?: GraphContext | null;
+  /** For verifying: the files the code graph says depend on what the change touched. */
+  blastRadius?: string[];
 }): StageInput {
   const { task, stage, attempt, approvals } = opts;
   const pack = opts.pack ?? (stage as PackId);
@@ -131,6 +133,7 @@ export function buildStageInput(opts: {
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,
       ...(opts.plan ? { plan: opts.plan } : {}),
+      ...(pack === "verifying" && opts.blastRadius?.length ? { blastRadius: opts.blastRadius } : {}),
       ...(pack === "e2e" && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
       ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),
       ...(pack === "reviewing" && opts.review ? { review: opts.review } : {}),

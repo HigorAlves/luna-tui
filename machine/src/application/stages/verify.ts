@@ -2,11 +2,12 @@
 // are green hand the change to the verifying review pack. A red check fails the stage with
 // its output as findings, so the next implementing attempt sees what broke.
 import type { CheckSpec, Finding, ServiceSpec } from "@hardness/contracts";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { changedPaths as hostChangedPaths, gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
+import { type GraphJson, blastRadius } from "../../domain/blast-radius.ts";
 import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
@@ -23,7 +24,7 @@ export interface VerifyDeps {
     options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> },
   ) => Promise<ExecResult>;
   /** Runs the verifying review pack; null when agents are off, which skips the review. */
-  runPack: ((context: StageContext) => Promise<StageResult>) | null;
+  runPack: ((context: StageContext, extra?: { blastRadius?: string[] }) => Promise<StageResult>) | null;
   stateDir: string;
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
   /** Who a check commits as: the identity git resolves for the repo. Null escalates. */
@@ -33,6 +34,8 @@ export interface VerifyDeps {
   policy?: (repoPath: string | null) => Promise<{ checks: CheckSpec[] | null; services: Record<string, ServiceSpec> }>;
   /** The files the branch changed, worktree-relative; null when unknown (then every check runs). */
   changedPaths?: (worktreePath: string, repoPath: string) => Promise<string[] | null>;
+  /** The machine's code graphs: when the repo has one, the files that depend on the change widen the checks and steer the review. */
+  graph?: { currentDir(repoPath: string): string | null };
 }
 
 interface CheckReport {
@@ -62,7 +65,17 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
   const resolveIdentity = deps.gitIdentity ?? hostGitIdentity;
   const repoPolicy = deps.policy ?? (async () => ({ checks: null, services: {} }));
   const changed = deps.changedPaths ?? hostChangedPaths;
-  return async (context) => {
+  /** The files the graph says depend on the change; empty without a graph or a readable one. */
+  const radiusOf = async (repoPath: string, changedFiles: string[] | null): Promise<string[]> => {
+    const dir = changedFiles && deps.graph?.currentDir(repoPath);
+    if (!dir || !changedFiles) return [];
+    try {
+      return blastRadius(JSON.parse(await readFile(join(dir, "graphify-out", "graph.json"), "utf8")) as GraphJson, changedFiles);
+    } catch {
+      return [];
+    }
+  };
+  const verify = async (context: StageContext, state: { radius: string[] }): Promise<StageResult> => {
     const { task, signal } = context;
     // No worktree means implementing was stubbed (agents off): behave like the stub, not an escalation.
     if (!task.worktreePath) return { outcome: "pass", detail: { note: "no worktree; implementer was stubbed" } };
@@ -97,11 +110,14 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     let noTests: boolean;
     const skipped: CheckReport[] = [];
     if (declared) {
-      const selected = selectChecks(declared, task.repoPath ? await changed(cwd, task.repoPath) : null);
+      const changedFiles = task.repoPath ? await changed(cwd, task.repoPath) : null;
+      state.radius = task.repoPath ? await radiusOf(task.repoPath, changedFiles) : [];
+      const selected = selectChecks(declared, changedFiles ? [...changedFiles, ...state.radius] : null);
       commands = selected.map(checkCommand);
       for (const check of declared) if (!selected.includes(check)) skipped.push({ name: check.name, skipped: skippedReason(check) });
       noTests = declared.length === 0;
     } else {
+      if (task.repoPath) state.radius = await radiusOf(task.repoPath, await changed(cwd, task.repoPath));
       const found = await detect(cwd);
       commands = CHECK_NAMES.flatMap((name) => (found[name] ? [{ name, cmd: found[name]!.join(" "), argv: found[name]! }] : []));
       noTests = !found.test;
@@ -185,7 +201,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     if (!deps.runPack) {
       return { outcome: "pass", detail: { step: "checks", note: "review: skipped (agents off)", checks: reports }, run: { transcriptPath } };
     }
-    const pack = await deps.runPack(context);
+    const pack = await deps.runPack(context, state.radius.length ? { blastRadius: state.radius } : {});
     // A plain failure or a deliberate escalation are both the pack's own answer, verbatim —
     // neither should fall into the verdict computation below (an escalation has no real
     // findings to compute one from, and would otherwise be miscounted as a pass).
@@ -224,5 +240,10 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       },
       findings,
     };
+  };
+  return async (context) => {
+    const state = { radius: [] as string[] };
+    const result = await verify(context, state);
+    return state.radius.length > 0 ? { ...result, detail: { ...result.detail, blastRadius: state.radius } } : result;
   };
 }

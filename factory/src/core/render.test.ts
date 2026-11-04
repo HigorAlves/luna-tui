@@ -107,6 +107,14 @@ describe("renderPrompt", () => {
     expect(render(undefined)).toContain("Code graph: (none: use Glob, Grep and Read)");
   });
 
+  it("lists the files the graph says depend on what changed, or says there are none", () => {
+    const template = "{{context.blastRadius}}";
+    const render = (radius?: string[]) => renderPrompt({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying", context: { ...input.context, ...(radius ? { blastRadius: radius } : {}) } }, template });
+    expect(render(["src/b.ts", "src/c.ts"])).toContain("- src/b.ts\n- src/c.ts");
+    expect(render([])).toContain("(none)");
+    expect(render(undefined)).toContain("(none)");
+  });
+
   it("renders the code map the planner reads: components, files, owners and the note", () => {
     const template = "{{context.plan.map}}";
     const plan = { record: null, brief: "b", criteria: [], assumptions: [], slices: [] };
