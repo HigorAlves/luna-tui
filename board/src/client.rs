@@ -262,13 +262,10 @@ impl Machine {
         self.post("/repos/setup", json!({ "repoPath": repo_path }))
     }
 
-    /// Approves (or sends back) whatever the task waits on, with an optional reason.
+    /// Approves (or sends back) whatever the task waits on, with an optional reason, as
+    /// `LUNA_APPROVER` when it is set: a plan of High risk needs two distinct names.
     pub fn decide(&self, id: &str, approve: bool, reason: Option<&str>) -> Result<Task, String> {
-        let decision = if approve { "approved" } else { "sent_back" };
-        self.post(
-            &format!("/tasks/{id}/decision"),
-            json!({ "decision": decision, "reason": reason }),
-        )
+        self.post(&format!("/tasks/{id}/decision"), decision_body(approve, reason, approver().as_deref()))
     }
 
     /// Approves the memory review without writing its proposed rules to project-context.md.
@@ -566,9 +563,29 @@ fn urlencoding(value: &str) -> String {
     out
 }
 
+/// Who is deciding: `LUNA_APPROVER`, when it names someone.
+fn approver() -> Option<String> {
+    std::env::var("LUNA_APPROVER").ok().map(|name| name.trim().to_string()).filter(|name| !name.is_empty())
+}
+
+/// The body of `POST /tasks/:id/decision`; the approver rides along only when there is one.
+fn decision_body(approve: bool, reason: Option<&str>, approver: Option<&str>) -> Value {
+    let mut body = json!({ "decision": if approve { "approved" } else { "sent_back" }, "reason": reason });
+    if let Some(name) = approver {
+        body["approver"] = json!(name);
+    }
+    body
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_decision_names_its_approver_when_there_is_one_and_stays_as_it_was_when_not() {
+        assert_eq!(decision_body(true, None, None), json!({ "decision": "approved", "reason": null }));
+        assert_eq!(decision_body(false, Some("split it"), Some("ana")), json!({ "decision": "sent_back", "reason": "split it", "approver": "ana" }));
+    }
 
     #[test]
     fn metrics_stream_events_are_ignored_not_errors() {

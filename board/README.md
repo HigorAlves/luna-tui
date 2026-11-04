@@ -21,7 +21,7 @@ cargo run --release
 
 The board connects to whichever machine is up: `pnpm dev`'s on `http://127.0.0.1:4317` first, then
 `pnpm start`'s container on `:4318`. It checks again on every reconnect, so switching between
-the two needs no restart. `HARDNESS_MACHINE_URL` pins one address instead.
+the two needs no restart. `HARDNESS_MACHINE_URL` pins one address instead. `LUNA_APPROVER` names you on every approval and send-back; a plan of High risk needs two distinct names, so the first `a` keeps yours on the gate (`Approvals  1 of 2 (ana)`) and a second person's `a` closes it.
 
 ## Install as a herdr plugin (local link)
 
@@ -88,7 +88,7 @@ and a test fails when they drift from the registry.
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and archive the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `A` | memory review: approve, skip the rules |
 | `r` | send back with a reason |
 | `x` then `S` | ship: approve and open the PR |
@@ -223,7 +223,7 @@ link is the board's `J`):
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and archive the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `A` | memory review: approve, skip the rules |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
@@ -524,7 +524,7 @@ What the ticket shows:
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and archive the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
 

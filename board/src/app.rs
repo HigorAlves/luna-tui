@@ -359,9 +359,11 @@ fn plan_editable(task: &Task, detail: Option<&TaskDetail>) -> bool {
         && detail.is_some_and(|d| d.task.id == task.id && d.latest_approval("awaiting_approval").is_some())
 }
 
-/// Whether the cases may be edited: only while they wait for your check.
+/// Whether the cases may be edited: only while they wait for your check, on the plan gate that
+/// carries them or a legacy test check.
 fn cases_editable(task: &Task, detail: Option<&TaskDetail>) -> bool {
-    task.state == "awaiting_test_check" && detail.is_some_and(|d| d.task.id == task.id && !d.cases().is_empty())
+    matches!(task.state.as_str(), "awaiting_test_check" | "awaiting_approval")
+        && detail.is_some_and(|d| d.task.id == task.id && d.cases_approval().is_some_and(|a| a.decision.is_none()) && !d.cases().is_empty())
 }
 
 /// What the event loop must do after a key press.

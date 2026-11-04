@@ -247,6 +247,18 @@ fn gate_is(app: &App, states: &[&str]) -> Avail {
     }
 }
 
+/// `On` at the plan gate: with `outcome` None the plan stage's own gate (or one whose detail is not
+/// loaded yet), with `Some(outcome)` the gate triage opened to confirm a reply or an archive in
+/// one click. `Hidden` anywhere else, so the three meanings of `a` there never show together.
+fn plan_gate(app: &App, outcome: Option<&str>) -> Avail {
+    let Some(task) = task_of(app) else { return Avail::Hidden };
+    if task.state != "awaiting_approval" {
+        return Avail::Hidden;
+    }
+    let open = app.detail.as_ref().filter(|d| d.task.id == task.id).and_then(|d| d.open_approval()).and_then(|a| a.outcome());
+    if open == outcome { Avail::On } else { Avail::Hidden }
+}
+
 /// The states one of the `a` entries names.
 const GATE_STATES: &[&str] = &[
     "draft",
@@ -326,7 +338,9 @@ const SHARED: &[Binding] = &[
     cmd(b("a", "start", Group::Gate, Scope::Board, |app| gate_is(app, &["draft"]), 90), "start"),
     b("a", "approve the setup", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_setup"]), 90),
     b("a", "answer triage's questions", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_answers"]), 90),
-    b("a", "approve the plan", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_approval"]), 90),
+    b("a", "approve the plan", Group::Gate, Scope::Board, |app| plan_gate(app, None), 90),
+    b("a", "archive the ticket (one click)", Group::Gate, Scope::Board, |app| plan_gate(app, Some("archive")), 90),
+    b("a", "post the reply and archive the ticket", Group::Gate, Scope::Board, |app| plan_gate(app, Some("conversation")), 90),
     b("a", "approve the tests", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_test_check"]), 90),
     b("a", "ship: approve and open the PR", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_ship"]), 90),
     b("a", "retry the escalation, with guidance", Group::Gate, Scope::Board, |app| gate_is(app, &["escalated"]), 90),
@@ -1129,6 +1143,21 @@ mod tests {
         let approval = app_with(vec![task("t1", "awaiting_approval", true, false, true)]);
         let a = bindings_for(&approval, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();
         assert_eq!((a.0.label, a.1), ("approve the plan", Avail::On));
+        // A gate triage opened for a reply or an archive says what `a` does there, once its detail is loaded.
+        for (outcome, label) in [("archive", "archive the ticket (one click)"), ("conversation", "post the reply and archive the ticket")] {
+            let mut gate = app_with(vec![task("t1", "awaiting_approval", true, false, true)]);
+            let task_json = r#"{"id":"t1","title":"Login page","description":"","criteria":[],"repoPath":"/r/app","branch":null,"worktreePath":"/w/app","state":"awaiting_approval","column":"Build",
+                "waitingOnYou":true,"running":false,"queued":false,"retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,
+                "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
+            gate.detail = Some(
+                serde_json::from_str(&format!(
+                    r#"{{"task":{task_json},"stageRuns":[],"events":[],"approvals":[{{"id":"p","kind":"awaiting_approval","decision":null,"requested":{{"outcome":"{outcome}"}}}}]}}"#
+                ))
+                .unwrap(),
+            );
+            let shown: Vec<&str> = bindings_for(&gate, Scope::Board).into_iter().filter(|(b, _)| b.keys == "a").map(|(b, _)| b.label).collect();
+            assert_eq!(shown, [label], "{outcome}");
+        }
         let running = app_with(vec![task("t1", "implementing", true, true, true)]);
         let a = bindings_for(&running, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();
         assert_eq!(a.1, Avail::Off("a stage is running; X aborts it"));

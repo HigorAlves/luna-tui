@@ -437,9 +437,101 @@ pub struct Approval {
     pub reason: Option<String>,
     #[serde(default)]
     pub decided_at: Option<String>,
+    /// What came with the decision: who approved (`approver`, and `approvers` once two did).
+    #[serde(default)]
+    pub response: Option<Value>,
+}
+
+/// A score as the board prints it: `2`, `1.5`.
+fn score_text(v: &Value) -> Option<String> {
+    let n = v.as_f64()?;
+    Some(if n.fract() == 0.0 { format!("{n:.0}") } else { format!("{n:.1}") })
 }
 
 impl Approval {
+    /// What triage chose at a gate that waits on its own (`conversation`, `archive`); None at the plan's.
+    pub fn outcome(&self) -> Option<&str> {
+        self.requested["outcome"].as_str()
+    }
+
+    /// `plan`, `fast lane` (with why it moved lanes), `conversation`, `archive (duplicate)`; None on a plan from before the lanes.
+    pub fn outcome_line(&self) -> Option<String> {
+        let r = &self.requested;
+        match self.outcome() {
+            Some("archive") => Some(match self.archive_reason() {
+                Some(reason) => format!("archive ({reason})"),
+                None => "archive".to_string(),
+            }),
+            Some(other) => Some(other.replace('_', " ")),
+            None => {
+                let lane = match r["lane"].as_str() {
+                    Some("fast") => "fast lane",
+                    Some(_) => "plan",
+                    None if r["risk"].is_object() => "plan",
+                    None => return None,
+                };
+                Some(match r["laneNote"].as_str().filter(|n| !n.is_empty()) {
+                    Some(note) => format!("{lane} · {note}"),
+                    None => lane.to_string(),
+                })
+            }
+        }
+    }
+
+    /// `high (blast 2 · reversibility 1.5 · data 0)`: the plan's risk and the three scores behind it.
+    pub fn risk_line(&self) -> Option<String> {
+        let risk = &self.requested["risk"];
+        let level = risk["level"].as_str()?;
+        let scores: Vec<String> = [("blast", "blast_radius"), ("reversibility", "reversibility"), ("data", "data_sensitivity")]
+            .iter()
+            .filter_map(|(label, key)| Some(format!("{label} {}", score_text(&risk["scores"][*key])?)))
+            .collect();
+        Some(if scores.is_empty() { level.to_string() } else { format!("{level} ({})", scores.join(" · ")) })
+    }
+
+    /// The plan stage's checks in the order they ran: coverage, plan, risk, each `proceed`, `flag`, `ask` or `skipped`.
+    pub fn checks(&self) -> Vec<(String, String)> {
+        ["coverage", "plan", "risk"]
+            .iter()
+            .filter_map(|name| Some((name.to_string(), self.requested["verdicts"][*name].as_str()?.to_string())))
+            .collect()
+    }
+
+    /// Who approved: the names kept on the open gate, else the ones the decision carried.
+    pub fn approvers(&self) -> Vec<String> {
+        let names = |v: &Value| -> Vec<String> { v.as_array().map(|a| a.iter().filter_map(|n| n.as_str().map(String::from)).collect()).unwrap_or_default() };
+        let open = names(&self.requested["approvers"]);
+        if !open.is_empty() {
+            return open;
+        }
+        match &self.response {
+            Some(r) if r["approvers"].is_array() => names(&r["approvers"]),
+            Some(r) => r["approver"].as_str().map(|n| vec![n.to_string()]).unwrap_or_default(),
+            None => Vec::new(),
+        }
+    }
+
+    /// `1 of 2 (ana)` on a High-risk plan that has a name and needs another; `approved by ana` once decided on one name.
+    pub fn approvals_line(&self) -> Option<String> {
+        let names = self.approvers();
+        if names.is_empty() {
+            return None;
+        }
+        if self.requested["risk"]["level"].as_str() == Some("high") {
+            return Some(format!("{} of 2 ({})", names.len(), names.join(", ")));
+        }
+        Some(format!("approved by {}", names.join(", ")))
+    }
+
+    /// The reply a conversation gate would post on the ticket.
+    pub fn reply(&self) -> Option<String> {
+        self.requested["reply"].as_str().filter(|r| !r.trim().is_empty()).map(String::from)
+    }
+
+    pub fn archive_reason(&self) -> Option<String> {
+        self.requested["archiveReason"].as_str().map(String::from)
+    }
+
     /// The gate's state name, guessed from what was requested when the machine did not say.
     pub fn kind_or_guess(&self) -> &str {
         if let Some(kind) = &self.kind {
@@ -554,7 +646,7 @@ impl TaskDetail {
 
     /// test_design's cases with verifying's verdict on each, in the order they were written.
     pub fn cases(&self) -> Vec<TestCase> {
-        let requested = match self.latest_approval("awaiting_test_check") {
+        let requested = match self.cases_approval() {
             Some(a) => &a.requested,
             None => return Vec::new(),
         };
@@ -566,6 +658,12 @@ impl TaskDetail {
                 c
             })
             .collect()
+    }
+
+    /// The gate that carries the cases: a legacy test check, else the plan gate that holds them.
+    pub fn cases_approval(&self) -> Option<&Approval> {
+        self.latest_approval("awaiting_test_check")
+            .or_else(|| self.latest_approval("awaiting_approval").filter(|a| a.requested["cases"].is_array()))
     }
 
     /// The cases grouped under the criterion each proves, criteria in first-seen order; cases
@@ -2664,6 +2762,67 @@ mod detail_tests {
                 "09:58  approved",
             ]
         );
+    }
+
+    fn gate(json: &str) -> Approval {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn a_plan_gate_says_its_lane_risk_checks_and_who_approved() {
+        let g = gate(
+            r#"{"kind":"awaiting_approval","decision":null,"requested":{"brief":"b","lane":"fast","laneNote":"the plan check was unsure; planned in full",
+              "risk":{"level":"high","scores":{"blast_radius":2,"reversibility":1.5,"data_sensitivity":0}},
+              "verdicts":{"coverage":"proceed","plan":"flag","risk":"proceed"},"flagged":["plan"],"approvers":["ana"]}}"#,
+        );
+        assert_eq!(g.outcome(), None);
+        assert_eq!(g.outcome_line().as_deref(), Some("fast lane · the plan check was unsure; planned in full"));
+        assert_eq!(g.risk_line().as_deref(), Some("high (blast 2 · reversibility 1.5 · data 0)"));
+        assert_eq!(g.checks(), [("coverage".to_string(), "proceed".to_string()), ("plan".to_string(), "flag".to_string()), ("risk".to_string(), "proceed".to_string())]);
+        assert_eq!(g.approvals_line().as_deref(), Some("1 of 2 (ana)"));
+        let full = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"brief":"b","lane":"full","risk":{"level":"low","scores":{}}}}"#);
+        assert_eq!(full.outcome_line().as_deref(), Some("plan"));
+        assert_eq!(full.risk_line().as_deref(), Some("low"));
+        assert_eq!(full.approvals_line(), None, "no one has approved a low-risk plan yet, and it needs one name only");
+    }
+
+    #[test]
+    fn a_decided_gate_reads_its_approvers_off_the_response() {
+        let g = gate(r#"{"kind":"awaiting_approval","decision":"approved","requested":{"risk":{"level":"high"}},"response":{"approvers":["ana","bo"],"approver":"bo"}}"#);
+        assert_eq!(g.approvers(), ["ana", "bo"]);
+        assert_eq!(g.approvals_line().as_deref(), Some("2 of 2 (ana, bo)"));
+        let one = gate(r#"{"kind":"awaiting_approval","decision":"approved","requested":{"risk":{"level":"low"}},"response":{"approver":"ana"}}"#);
+        assert_eq!(one.approvals_line().as_deref(), Some("approved by ana"));
+    }
+
+    #[test]
+    fn a_triage_gate_is_a_reply_or_an_archive_with_its_text_and_reason() {
+        let reply = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"outcome":"conversation","reply":"Use `pnpm dev`.","brief":"asks how"}}"#);
+        assert_eq!(reply.outcome(), Some("conversation"));
+        assert_eq!(reply.outcome_line().as_deref(), Some("conversation"));
+        assert_eq!(reply.reply().as_deref(), Some("Use `pnpm dev`."));
+        let archive = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"outcome":"archive","archiveReason":"duplicate"}}"#);
+        assert_eq!(archive.outcome_line().as_deref(), Some("archive (duplicate)"));
+        assert_eq!(archive.archive_reason().as_deref(), Some("duplicate"));
+        let legacy = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"brief":"b"}}"#);
+        assert_eq!((legacy.outcome_line(), legacy.risk_line(), legacy.approvals_line()), (None, None, None));
+        assert!(legacy.checks().is_empty());
+    }
+
+    #[test]
+    fn the_scenarios_come_from_the_plan_gate_that_carries_them_and_a_legacy_test_check_still_wins() {
+        let plan_only: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{TASK},"stageRuns":[],"events":[],"approvals":[{{"id":"p","kind":"awaiting_approval","decision":null,
+              "requested":{{"brief":"b","cases":[{{"title":"t","criterion":"c1","approach":"run it"}}]}}}}]}}"#
+        ))
+        .unwrap();
+        assert_eq!(plan_only.cases().len(), 1);
+        assert_eq!(plan_only.cases_approval().map(|a| a.kind_or_guess()), Some("awaiting_approval"));
+        let legacy = detail();
+        assert_eq!(legacy.cases_approval().map(|a| a.kind_or_guess()), Some("awaiting_test_check"));
+        assert_eq!(legacy.cases().len(), 3);
+        let none: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{TASK},"stageRuns":[],"events":[],"approvals":[{{"id":"p","kind":"awaiting_approval","decision":null,"requested":{{"brief":"b"}}}}]}}"#)).unwrap();
+        assert!(none.cases_approval().is_none() && none.cases().is_empty());
     }
 
     #[test]

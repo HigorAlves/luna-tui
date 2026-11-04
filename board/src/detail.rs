@@ -311,7 +311,7 @@ fn rail_status(section: Section, view: &DetailView, detail: Option<&TaskDetail>)
         Section::Plan => gate(d.latest_approval("awaiting_approval"), None),
         Section::Tests => {
             let cases = d.cases();
-            gate(d.latest_approval("awaiting_test_check"), (!cases.is_empty()).then_some(cases.len()))
+            gate(d.cases_approval(), (!cases.is_empty()).then_some(cases.len()))
         }
         Section::Runs => match d.stage_runs.last() {
             None => dim("–".to_string()),
@@ -406,8 +406,18 @@ fn run_glyph(run: &StageRun) -> (&'static str, ratatui::style::Color) {
 /// of every section while a gate is open (or the ticket is escalated or paused).
 pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'static>> {
     let look = task.look();
+    let gate = detail.and_then(|d| d.open_approval()).filter(|a| a.kind_or_guess() == "awaiting_approval");
+    let approve_plan = match gate {
+        Some(a) if a.outcome() == Some("archive") => "a archive the ticket · r send back (triage again)".to_string(),
+        Some(a) if a.outcome() == Some("conversation") => "a post the reply and archive · r send back (triage again)".to_string(),
+        Some(a) if a.requested["risk"]["level"].as_str() == Some("high") => {
+            let who = if a.approvers().is_empty() { "first of two approvers; set LUNA_APPROVER" } else { "second of two approvers" };
+            format!("a approve ({who}) · r send back · e edit the plan")
+        }
+        _ => "a approve · r send back · e edit the plan".to_string(),
+    };
     let keys = match task.state.as_str() {
-        "awaiting_approval" => "a approve · r send back · e edit the plan",
+        "awaiting_approval" => approve_plan.as_str(),
         "awaiting_test_check" => "a approve · r send back · e edit the cases",
         "awaiting_setup" => "a write luna.yaml · r send back",
         "awaiting_answers" => "a answer the questions",
@@ -418,7 +428,6 @@ pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'stat
         "paused_rate_limit" => "a resume now",
         _ => return None,
     };
-    let _ = detail;
     Some(Line::from(vec![
         Span::from(format!(" {} {} ", look_glyph(look), task.status_label())).fg(c(BASE)).bg(c(look_color(look))).bold(),
         Span::from(format!(" {keys}")).fg(c(look_color(look))),
@@ -639,13 +648,28 @@ fn jira_lines(task: &Task, now: u64) -> Vec<Line<'static>> {
 /// Plan: the latest triage plan, decided or not, then what happened to it.
 fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'static>> {
     let approval = detail.and_then(|d| d.latest_approval("awaiting_approval"));
-    let mut lines = vec![gate_header("Plan", "triage", approval, detail, now)];
+    // A gate that carries triage's outcome came from triage; the plan stage's has a lane or a risk.
+    let stage = if approval.is_some_and(|a| a.outcome().is_none() && (a.requested["lane"].is_string() || a.requested["risk"].is_object())) { "test_design" } else { "triage" };
+    let mut lines = vec![gate_header("Plan", stage, approval, detail, now)];
     let Some(approval) = approval else {
         lines.push(Line::default());
-        lines.push(muted("  no plan yet: triage writes one once the ticket starts".into()));
+        lines.push(muted("  no plan yet: triage and the planner write one once the ticket starts".into()));
         return lines;
     };
     let requested = &approval.requested;
+    let facts = gate_facts(approval);
+    if !facts.is_empty() {
+        lines.push(Line::default());
+        lines.extend(facts);
+    }
+    if let Some(reply) = approval.reply() {
+        lines.extend([Line::default(), proposal_heading("Reply (a posts it on the ticket and archives it)")]);
+        lines.extend(reply.lines().map(|l| Line::from(format!("  {l}"))));
+    }
+    if approval.outcome() == Some("archive") {
+        lines.extend([Line::default(), proposal_heading("Archive (a archives the ticket)")]);
+        lines.push(Line::from(format!("  {}", approval.archive_reason().unwrap_or_else(|| "no reason given".into()))));
+    }
     lines.extend([Line::default(), proposal_heading("Brief")]);
     match requested["brief"].as_str().filter(|b| !b.trim().is_empty()) {
         Some(brief) => lines.extend(brief.lines().map(|l| Line::from(format!("  {l}")))),
@@ -669,7 +693,7 @@ fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'s
     lines.push(Line::default());
     lines.push(muted(
         if matches!(task.state.as_str(), "awaiting_approval" | "awaiting_test_check") {
-            "e edits the brief, criteria and assumptions · slices stay as triage wrote them".to_string()
+            "e edits the brief, criteria and assumptions · slices stay as the planner wrote them".to_string()
         } else {
             "read-only now that Build has started · r at the next gate sends the ticket back to triage".to_string()
         },
@@ -677,13 +701,48 @@ fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'s
     lines
 }
 
+/// What a gate says about itself above its text: the outcome, the risk with its three scores, the
+/// plan stage's checks (a flagged one in peach, an unsure one red) and who has approved.
+fn gate_facts(approval: &Approval) -> Vec<Line<'static>> {
+    let label = |name: &str| Span::from(format!("{name:<11}")).fg(c(SUBTEXT0));
+    let mut lines = Vec::new();
+    if let Some(outcome) = approval.outcome_line() {
+        lines.push(Line::from(vec![label("Outcome"), Span::from(outcome)]));
+    }
+    if let Some(risk) = approval.risk_line() {
+        let high = approval.requested["risk"]["level"].as_str() == Some("high");
+        lines.push(Line::from(vec![label("Risk"), if high { Span::from(risk).fg(c(PEACH)).bold() } else { Span::from(risk) }]));
+    }
+    let checks = approval.checks();
+    if !checks.is_empty() {
+        let mut spans = vec![label("Checks")];
+        for (i, (name, verdict)) in checks.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::from(" · ").fg(c(SUBTEXT0)));
+            }
+            let color = match verdict.as_str() {
+                "proceed" => GREEN,
+                "flag" => PEACH,
+                "ask" => RED,
+                _ => SUBTEXT0,
+            };
+            spans.push(Span::from(format!("{name} {verdict}")).fg(c(color)));
+        }
+        lines.push(Line::from(spans));
+    }
+    if let Some(approvals) = approval.approvals_line() {
+        lines.push(Line::from(vec![label("Approvals"), Span::from(approvals)]));
+    }
+    lines
+}
+
 /// Tests: the cases under the criterion each proves, with verifying's verdict on each.
 fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64) -> Vec<Line<'static>> {
-    let approval = detail.and_then(|d| d.latest_approval("awaiting_test_check"));
+    let approval = detail.and_then(|d| d.cases_approval());
     let mut lines = vec![gate_header("Tests", "test_design", approval, detail, now)];
     let Some(d) = detail.filter(|_| approval.is_some()) else {
         lines.push(Line::default());
-        lines.push(muted("  no cases yet: test_design writes them once the plan is approved".into()));
+        lines.push(muted("  no cases yet: test_design writes them with the plan".into()));
         return lines;
     };
     let groups = d.cases_by_criterion();
@@ -716,7 +775,7 @@ fn tests_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64)
     }
     lines.push(Line::default());
     lines.push(muted(
-        if task.state == "awaiting_test_check" {
+        if matches!(task.state.as_str(), "awaiting_test_check" | "awaiting_approval") {
             "e edits the cases while they wait for your check · the implementer never sees them".to_string()
         } else {
             "read-only · each case carries what verifying found".to_string()
@@ -1389,6 +1448,84 @@ mod tests {
         assert!(text.contains("Activity · 3"), "{text}");
         assert!(text.contains("10:11:58  ■ verifying #1 failed: 2 tests failed"), "{text}");
         assert!(text.contains("10:12:03  ▶ implementing #2"), "{text}");
+    }
+
+    /// A ticket at one open gate, with `requested` as the machine sent it.
+    fn at_gate(requested: &str, state: &str) -> (Task, TaskDetail) {
+        let task_json = TASK.replace("\"state\":\"implementing\"", &format!("\"state\":\"{state}\"")).replace("\"waitingOnYou\":false,\"running\":true", "\"waitingOnYou\":true,\"running\":false");
+        let task: Task = serde_json::from_str(&task_json).unwrap();
+        let detail: TaskDetail = serde_json::from_str(&format!(
+            r#"{{"task":{task_json},"stageRuns":[{{"id":"r1","stage":"test_design","attempt":1,"status":"passed","startedAt":"2026-10-22T09:30:00Z","endedAt":"2026-10-22T09:33:00Z"}}],"events":[],"artifacts":[],
+              "approvals":[{{"id":"p1","kind":"awaiting_approval","requested":{requested},"decision":null,"createdAt":"2026-10-22T09:50:00Z"}}]}}"#
+        ))
+        .unwrap();
+        (task, detail)
+    }
+
+    const PLAN_GATE: &str = r#"{"brief":"Guard the empty list","criteria":["no panic"],"slices":[{"title":"guard j","est_loc":12}],"lane":"fast",
+        "risk":{"level":"high","scores":{"blast_radius":2,"reversibility":1,"data_sensitivity":0}},
+        "verdicts":{"coverage":"proceed","plan":"flag","risk":"proceed"},"approvers":["ana"],
+        "cases":[{"title":"j on empty","criterion":"no panic","approach":"cargo test keys::empty"}]}"#;
+
+    #[test]
+    fn the_plan_gate_shows_outcome_risk_checks_and_approvals_above_the_plan() {
+        let (task, detail) = at_gate(PLAN_GATE, "awaiting_approval");
+        let text = render(120, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
+        for line in [
+            "Outcome    fast lane",
+            "Risk       high (blast 2 · reversibility 1 · data 0)",
+            "Checks     coverage proceed · plan flag · risk proceed",
+            "Approvals  1 of 2 (ana)",
+        ] {
+            assert!(text.contains(line), "missing {line:?}: {text}");
+        }
+        let at = |needle: &str| text.find(needle).unwrap_or_else(|| panic!("no {needle:?}: {text}"));
+        assert!(at("Outcome    fast lane") < at("Brief") && at("Approvals  1 of 2") < at("Brief"), "all four sit above the plan: {text}");
+    }
+
+    #[test]
+    fn a_flagged_check_is_highlighted_and_a_plan_with_no_checks_shows_none() {
+        let (task, detail) = at_gate(PLAN_GATE, "awaiting_approval");
+        let lines = plan_lines(&task, Some(&detail), 0);
+        let checks = lines.iter().find(|l| l.to_string().starts_with("Checks")).expect("a checks line");
+        let flagged = checks.spans.iter().find(|s| s.content.contains("plan flag")).expect("the flagged check");
+        assert_eq!(flagged.style.fg, Some(c(PEACH)), "flag is peach");
+        let ok = checks.spans.iter().find(|s| s.content.contains("coverage proceed")).expect("a clear check");
+        assert_ne!(ok.style.fg, Some(c(PEACH)));
+        let (task, detail) = at_gate(r#"{"brief":"b"}"#, "awaiting_approval");
+        let text = render(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(!text.contains("Checks") && !text.contains("Risk ") && !text.contains("Outcome"), "{text}");
+    }
+
+    #[test]
+    fn a_reply_gate_shows_the_reply_and_an_archive_gate_its_reason() {
+        let (task, detail) = at_gate(r#"{"outcome":"conversation","brief":"asks how","reply":"Use `pnpm dev`."}"#, "awaiting_approval");
+        let text = render(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(text.contains("Outcome    conversation") && text.contains("Use `pnpm dev`.") && text.contains("posts it"), "{text}");
+        let (task, detail) = at_gate(r#"{"outcome":"archive","archiveReason":"duplicate","brief":"same as #7"}"#, "awaiting_approval");
+        let text = render(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(text.contains("Outcome    archive (duplicate)") && text.contains("archives the ticket"), "{text}");
+    }
+
+    #[test]
+    fn the_tests_section_reads_the_cases_off_the_plan_gate() {
+        let (task, detail) = at_gate(PLAN_GATE, "awaiting_approval");
+        let text = render(120, 30, &task, Some(&detail), Section::Tests, 0).join("\n");
+        assert!(text.contains("1 case over 1 criterion") && text.contains("no panic") && text.contains("j on empty") && text.contains("cargo test keys::empty"), "{text}");
+        assert!(text.contains("e edits the cases"), "the cases are editable while the plan gate waits: {text}");
+    }
+
+    #[test]
+    fn the_gate_strip_says_what_a_does_at_each_kind_of_gate() {
+        let strip = |requested: &str| {
+            let (task, detail) = at_gate(requested, "awaiting_approval");
+            gate_strip(&task, Some(&detail)).unwrap().to_string()
+        };
+        assert!(strip(r#"{"brief":"b","risk":{"level":"low"}}"#).contains("a approve · r send back · e edit the plan"));
+        assert!(strip(r#"{"brief":"b","risk":{"level":"high"}}"#).contains("a approve (first of two approvers; set LUNA_APPROVER)"));
+        assert!(strip(PLAN_GATE).contains("a approve (second of two approvers)"), "{}", strip(PLAN_GATE));
+        assert!(strip(r#"{"outcome":"archive","archiveReason":"duplicate"}"#).contains("a archive the ticket · r send back"));
+        assert!(strip(r#"{"outcome":"conversation","reply":"x"}"#).contains("a post the reply and archive · r send back"));
     }
 
     #[test]
