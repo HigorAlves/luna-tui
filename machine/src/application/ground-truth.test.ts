@@ -1,0 +1,59 @@
+import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+import type { ApprovalRow, TaskRow } from "../domain/task.ts";
+import { groundTruthOf, groundTruthWriter } from "./ground-truth.ts";
+
+const task = { id: "task-1", title: "Login", description: "Sign in", criteria: ["c1", "c2"], record: { goal: "Sign in works" } } as unknown as TaskRow;
+const slices = [{ title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }];
+const cases = [{ title: "t", criterion: "c1", approach: "run it" }];
+const approval = (requested: Record<string, unknown>, over: Partial<ApprovalRow> = {}): ApprovalRow =>
+  ({ id: "ap-1", taskId: "task-1", kind: "awaiting_approval", requested, decision: "approved", reason: null, response: { approvers: ["ana", "bo"], approver: "bo" }, createdAt: new Date(0), decidedAt: new Date("2026-11-04T10:00:00Z"), ...over }) as ApprovalRow;
+
+describe("groundTruthOf", () => {
+  const requested = {
+    brief: "edited brief", criteria: ["c1", "c2", "c3"], assumptions: ["a1"], slices, rollback: "revert", cases,
+    risk: { level: "high", scores: { blast_radius: 2 } }, verdicts: { coverage: "proceed", plan: "flag", risk: "proceed" },
+    revisions: [
+      { at: "2026-11-04T09:00:00Z", before: { brief: "first brief", criteria: ["c1", "c2"] }, after: { brief: "second brief", criteria: ["c1", "c2", "c3"] } },
+      { at: "2026-11-04T09:30:00Z", before: { brief: "second brief" }, after: { brief: "edited brief" } },
+      { at: "2026-11-04T09:40:00Z", before: { cases: [{ title: "old", criterion: "c1", approach: "x" }] }, after: { cases } },
+    ],
+  };
+
+  it("holds the task, the record, what was proposed, what was approved, the edits, the checks, the risk and who approved", () => {
+    const truth = groundTruthOf(task, approval(requested));
+    expect(truth).toMatchObject({
+      schema: 1,
+      task: { id: "task-1", title: "Login", description: "Sign in", criteria: ["c1", "c2"] },
+      record: { goal: "Sign in works" },
+      approved: { brief: "edited brief", criteria: ["c1", "c2", "c3"], assumptions: ["a1"], slices, rollback: "revert", cases },
+      revisions: requested.revisions,
+      verdicts: requested.verdicts,
+      risk: requested.risk,
+      approvers: ["ana", "bo"],
+      decidedAt: "2026-11-04T10:00:00.000Z",
+    });
+    // The proposal is the approved plan with every revision undone, latest first.
+    expect(truth.proposed).toMatchObject({ brief: "first brief", criteria: ["c1", "c2"], assumptions: ["a1"], slices, rollback: "revert", cases: [{ title: "old" }] });
+  });
+
+  it("proposes what it approves when nothing was edited, and names one approver or none", () => {
+    const plain = groundTruthOf(task, approval({ brief: "b", criteria: ["c1"], assumptions: [], slices }, { response: { approver: "ana" } }));
+    expect(plain.proposed).toEqual(plain.approved);
+    expect(plain).toMatchObject({ revisions: [], approvers: ["ana"], verdicts: null, risk: null });
+    expect(groundTruthOf(task, approval({ brief: "b" }, { response: null })).approvers).toEqual([]);
+  });
+});
+
+describe("groundTruthWriter", () => {
+  it("writes <stateDir>/ground-truth/plan/<taskId>-<approvalId>.json and answers the path", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "gt-"));
+    const path = await groundTruthWriter(stateDir)(task, approval({ brief: "b", criteria: ["c1"] }));
+    expect(path).toBe(join(stateDir, "ground-truth", "plan", "task-1-ap-1.json"));
+    expect(JSON.parse(readFileSync(path, "utf8"))).toMatchObject({ schema: 1, task: { id: "task-1" }, approved: { brief: "b" } });
+    expect(existsSync(path)).toBe(true);
+  });
+});

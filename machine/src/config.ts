@@ -44,6 +44,8 @@ export interface Config {
   reposDir: string;
   /** Reply in the thread a task came from (its GitHub issue; Slack when set). `MACHINE_THREAD_REPLIES=off` stops it. */
   threadReplies: boolean;
+  /** Keep what the person changed or approved in the plan, under the state dir, for evals. `MACHINE_GROUND_TRUTH=off` stops it. */
+  groundTruth: boolean;
   /** A Slack bot token and channel: one thread per task is opened there. Both or neither. */
   slack: { token: string; channel: string } | null;
   /** The Slack inbox: your user token, the optional app-level token for Socket Mode, and its knobs. */
@@ -289,6 +291,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     repoMap,
     reposDir: env.MACHINE_REPOS_DIR ?? join(home, "Developer"),
     threadReplies: env.MACHINE_THREAD_REPLIES !== "off",
+    groundTruth: env.MACHINE_GROUND_TRUTH !== "off",
     slack: slackToken === "" ? null : { token: slackToken, channel: slackChannel },
     slackInbox: {
       enabled: env.MACHINE_SLACK_INBOX !== "off",

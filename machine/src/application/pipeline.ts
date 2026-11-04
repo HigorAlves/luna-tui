@@ -116,6 +116,8 @@ export interface PipelineOptions {
   diffStat?: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   /** What the close step needs once a task is approved for good. Without it, nothing is closed on the host. */
   closeDeps?: CloseDeps;
+  /** Keeps the approved plan and what changed before it (ground truth); answers where. A failure is logged and never blocks the approval. */
+  groundTruth?: (task: TaskRow, approval: ApprovalRow) => Promise<string>;
   /** Spend ceilings in USD; either unset means no ceiling of that kind. */
   budget?: Budget;
   /** On shutdown: `requeue` (default) parks running tasks for the next boot; `escalate` waits for you. */
@@ -219,6 +221,7 @@ export class Pipeline {
   private readonly revertCommit: (worktreePath: string, sha: string) => Promise<void>;
   private readonly diffStat: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   private readonly closeDeps: CloseDeps | undefined;
+  private readonly groundTruth: PipelineOptions["groundTruth"];
   readonly budget: Required<Budget>;
   private readonly restartPolicy: RestartPolicy;
   private readonly policies: Pick<PolicyStore, "for">;
@@ -258,6 +261,7 @@ export class Pipeline {
     this.revertCommit = options.revertCommit ?? revertCommit;
     this.diffStat = options.diffStat ?? branchDiffStat;
     this.closeDeps = options.closeDeps;
+    this.groundTruth = options.groundTruth;
     this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
     this.restartPolicy = options.restartPolicy ?? "requeue";
     this.policies = options.policies ?? new PolicyStore();
@@ -533,7 +537,10 @@ export class Pipeline {
       const open = await tx.findOpenApproval(id);
       const carriesCases = open?.kind === "awaiting_test_check" || (open?.kind === "awaiting_approval" && Array.isArray(open.requested.cases));
       if (!open || !carriesCases) throw new NoCasesToEditError(id);
-      await tx.updateApprovalRequested(open, { ...open.requested, cases });
+      // Kept as a revision like a plan edit, so ground truth can tell the proposed scenarios from the approved ones.
+      const revisions = Array.isArray(open.requested.revisions) ? open.requested.revisions : [];
+      const before = open.requested.cases === undefined ? {} : { cases: open.requested.cases };
+      await tx.updateApprovalRequested(open, { ...open.requested, cases, revisions: [...revisions, { at: new Date().toISOString(), before, after: { cases } }] });
     });
     await this.log(id, "cases.edited", { count: cases.length });
     return this.get(id);
@@ -654,7 +661,21 @@ export class Pipeline {
     }
     // A gate that carries triage's outcome came from triage; any other open approval is the plan stage's.
     const event: PipelineEvent = decision === "approved" ? { type: "approved" } : { type: "sent_back", from: outcome === undefined ? "plan" : "triage" };
-    return this.dispatch(id, event, { decision: record });
+    const moved = await this.dispatch(id, event, { decision: record });
+    if (decision === "approved" && open && outcome === undefined) await this.keepGroundTruth(moved, open.id);
+    return moved;
+  }
+
+  /** Writes the plan gate that was just approved as ground truth; whatever goes wrong is an event, never an error. */
+  private async keepGroundTruth(task: TaskRow, approvalId: string): Promise<void> {
+    if (!this.groundTruth) return;
+    try {
+      const approval = (await this.approvals(task.id)).find((a) => a.id === approvalId);
+      if (!approval || approval.decision !== "approved") return;
+      await this.log(task.id, "ground_truth.written", { path: await this.groundTruth(task, approval) });
+    } catch (error) {
+      await this.log(task.id, "ground_truth.failed", { error: error instanceof Error ? error.message : String(error) }).catch(() => {});
+    }
   }
 
   /** Stops the running (or merely queued) stage and waits for you. */

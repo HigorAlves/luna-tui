@@ -40,6 +40,7 @@ describe("loadConfig", () => {
       repoMap: {},
       reposDir: "/home/me/Developer",
       threadReplies: true,
+      groundTruth: true,
       slack: null,
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null },
       jira: null,
@@ -71,6 +72,8 @@ describe("loadConfig", () => {
 
   it("reads the thread-reply switch and the Slack pair, which go together", () => {
     expect(loadConfig({ HOME: "/h", MACHINE_THREAD_REPLIES: "off" }).threadReplies).toBe(false);
+    expect(loadConfig({ HOME: "/h" }).groundTruth).toBe(true);
+    expect(loadConfig({ HOME: "/h", MACHINE_GROUND_TRUTH: "off" }).groundTruth).toBe(false);
     expect(loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb", MACHINE_SLACK_CHANNEL: "C1" }).slack).toEqual({ token: "xoxb", channel: "C1" });
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb" })).toThrow(/MACHINE_SLACK_CHANNEL/);
   });

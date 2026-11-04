@@ -214,6 +214,53 @@ describe("approvers", () => {
   });
 });
 
+describe("ground truth", () => {
+  const atGate = async (p: Pipeline) => {
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], cases: [{ title: "t", criterion: "c1", approach: "x" }] } });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    return task.id;
+  };
+
+  it("hands the approved plan gate to the writer once it is closed, with who approved, and not on a send-back", async () => {
+    const seen: Array<[string, string, unknown]> = [];
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, groundTruth: async (task, approval) => { seen.push([task.id, approval.decision ?? "open", approval.response]); return "/x.json"; } });
+    const id = await atGate(p);
+    await p.decide(id, "sent_back", "again");
+    expect(seen).toEqual([]);
+    await p.decide(id, "approved", undefined, undefined, { approver: "ana" });
+    expect(seen).toEqual([[id, "approved", { approver: "ana" }]]);
+    expect((await p.events(id)).filter((e) => e.kind === "ground_truth.written").map((e) => e.payload)).toEqual([{ path: "/x.json" }]);
+  });
+
+  it("logs a writer that fails and approves anyway", async () => {
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, groundTruth: async () => { throw new Error("disk full"); } });
+    const id = await atGate(p);
+    expect((await p.decide(id, "approved")).state).toBe("awaiting_ship");
+    expect((await p.events(id)).filter((e) => e.kind === "ground_truth.failed").map((e) => e.payload)).toEqual([{ error: "disk full" }]);
+  });
+
+  it("writes nothing for a reply or an archive gate, and nothing without a writer", async () => {
+    let calls = 0;
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, groundTruth: async () => { calls += 1; return "/x.json"; } });
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "archive", archiveReason: "duplicate" } });
+    const task = await p.createTask({ title: "dup" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(calls).toBe(0);
+    const bare = await atGate(pipeline);
+    expect((await pipeline.decide(bare, "approved")).state).toBe("awaiting_ship");
+  });
+
+  it("keeps the scenario edit as a revision on the gate, so the proposal can be told from the approval", async () => {
+    const id = await atGate(pipeline);
+    const edited = [{ title: "edited", criterion: "c1", approach: "y" }];
+    await pipeline.editCases(id, edited);
+    const [gate] = await pipeline.approvals(id);
+    expect(gate!.requested).toMatchObject({ cases: edited, revisions: [{ before: { cases: [{ title: "t" }] }, after: { cases: edited } }] });
+  });
+});
+
 describe("triage outcomes", () => {
   const record = { kind: "question", goal: "answer how to run the board", size: "tiny", urgency: "normal", risk: "none", reason: "asks how, changes nothing" };
 
