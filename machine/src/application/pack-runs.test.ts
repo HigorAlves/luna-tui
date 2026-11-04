@@ -2,12 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { type EngineId, StageInput, type StageOutput, resolveEngine } from "@hardness/contracts";
+import { type EngineId, PACKS, StageInput, type StageOutput, resolveEngine } from "@hardness/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 
 import { type Credentials, NoCredentialError } from "../adapters/credentials/index.ts";
 import type { SandboxResult, SandboxRun } from "../adapters/docker/docker.ts";
+import { type RunEnd, type RunStart, type Telemetry, noTelemetry } from "./telemetry.ts";
 import { EngineNotAllowedError, NotOnDemandError, PACK_RUNS_DIR, type PackRunRecord, PackRuns, QueueFullError, RunAbortedError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "./pack-runs.ts";
 
 const NOW = new Date("2026-11-02T12:00:00.000Z");
@@ -51,6 +52,20 @@ const credentials = (missing: EngineId[] = []): Credentials => ({
 const runs = (sandbox: (run: SandboxRun) => Promise<SandboxResult>, over: Partial<ConstructorParameters<typeof PackRuns>[0]> = {}) =>
   new PackRuns({ image: "hardness-runner:dev", credentials: credentials(), stateDir, store: { record: async (r) => void records.push(r) }, sandbox, now: () => NOW, log: () => {}, ...over });
 
+/** A telemetry that keeps each span's start, events and end. */
+function recordingTelemetry() {
+  const spans: Array<{ start: RunStart; events: Array<{ name: string; payload?: Record<string, unknown> }>; end: RunEnd | null }> = [];
+  const telemetry: Telemetry = {
+    ...noTelemetry(),
+    run: (start) => {
+      const span = { start, events: [] as Array<{ name: string; payload?: Record<string, unknown> }>, end: null as RunEnd | null };
+      spans.push(span);
+      return { event: (name, payload) => void span.events.push({ name, payload }), traceId: () => "t", childEnv: () => ({ LMNR_SPAN_CONTEXT: "ctx-1" }), end: async (end) => void (span.end = end) };
+    },
+  };
+  return { telemetry, spans };
+}
+
 beforeEach(() => {
   stateDir = mkdtempSync(join(tmpdir(), "pack-runs-"));
   seen = [];
@@ -59,6 +74,43 @@ beforeEach(() => {
 });
 
 describe("PackRuns", () => {
+  it("reports each call as one span: pack, engine and client at the start, the usage at the end, never the context nor the answer", async () => {
+    const { telemetry, spans } = recordingTelemetry();
+    const r = runs(fakeSandbox(output()), { telemetry });
+    await r.run({ pack: "chat_triage", context: { chat } }, "notch");
+    expect(spans).toHaveLength(1);
+    expect(spans[0]!.start).toEqual({ kind: "pack", pack: "chat_triage", engine: "claude:haiku", client: "notch" });
+    expect(spans[0]!.end).toMatchObject({ outcome: "pass", engine: "claude:haiku", model: "gpt-6-luna", turns: 1, costUsd: 0.0031, durationMs: 4200, error: null });
+    expect(spans[0]!.end!.transcriptPath).toMatch(/pack-runs[\\/]chat_triage-.*[\\/]transcript\.log$/);
+    expect(seen[0]!.extraEnv).toEqual({ LMNR_SPAN_CONTEXT: "ctx-1" });
+    const flat = JSON.stringify([spans[0]!.start, spans[0]!.events, spans[0]!.end]);
+    expect(flat).not.toContain("approve the rollout");
+    expect(flat).not.toContain('"priority"');
+  });
+
+  it("ends the span before the run folder goes, so the transcript can still be read", async () => {
+    const seenAtEnd: boolean[] = [];
+    const telemetry: Telemetry = {
+      ...noTelemetry(),
+      run: () => ({ event: () => {}, traceId: () => null, childEnv: () => ({}), end: async (end) => void seenAtEnd.push(existsSync(end.transcriptPath!.replace(/transcript\.log$/, ""))) }),
+    };
+    await runs(fakeSandbox(output()), { telemetry }).run({ pack: "chat_triage", context: { chat } }, null);
+    expect(seenAtEnd).toEqual([true]);
+  });
+
+  it("puts a usage limit on the call's span and the fallback's reason on the next", async () => {
+    const { telemetry, spans } = recordingTelemetry();
+    let calls = 0;
+    const sandbox = fakeSandbox(output());
+    const limited = fakeSandbox(output({ ok: false, rateLimited: true, resetsAt: 1_800_000_000, error: "usage limit" }));
+    const r = runs((run) => (calls++ === 0 ? limited(run) : sandbox(run)), { telemetry });
+    await r.run({ pack: "chat_triage", context: { chat } }, null);
+    expect(spans.map((s) => s.start.engine)).toEqual(["claude:haiku", PACKS.chat_triage.engines.fallback![0]]);
+    expect(spans[0]!.events).toEqual([{ name: "rate_limited", payload: { resetsAt: new Date(1_800_000_000 * 1000).toISOString() } }]);
+    expect(spans[0]!.end).toMatchObject({ outcome: "rate_limited" });
+    expect(spans[1]!.events[0]).toMatchObject({ name: "engine", payload: { reason: "fallback after claude:haiku rate limit" } });
+  });
+
   it("runs chat_triage on the engine asked for over an empty /work, answers the validated answer and the usage, and keeps nothing on disk", async () => {
     const result = await runs(fakeSandbox(output())).run({ pack: "chat_triage", engine: "codex:luna", context: { chat } }, "notch");
     expect(result).toEqual({ answer: { items: [verdict("chat:19:a"), verdict("post:t:c:m")] }, usage: { model: "gpt-6-luna", engine: "codex:luna", turns: 1, durationMs: 4200, costUsd: 0.0031 } });

@@ -23,6 +23,8 @@ export interface OneRun {
   /** The engine whose credential the run gets; the input names the same one. */
   engine: EngineId;
   labels: Record<string, string>;
+  /** Extra container env: the run's trace context (RunSpan.childEnv()). */
+  extraEnv?: Record<string, string>;
   signal?: AbortSignal;
 }
 
@@ -56,6 +58,7 @@ export async function runPackOnce(run: OneRun, deps: OneRunDeps): Promise<OneRun
     timeoutMs: run.input.limits.timeoutMs,
     credential: { env: credential.env, mounts: credential.mounts },
     labels: run.labels,
+    extraEnv: run.extraEnv ?? {},
     signal: run.signal,
   }).finally(() => credential.release());
   if (result.aborted) return { output: null, error: "aborted" };

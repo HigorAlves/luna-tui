@@ -25,7 +25,7 @@
 // Spend: a call's cost is a pack_runs row the day's budget counts (spendSinceUsd), and a call
 // while the day is at its ceiling is refused before it runs. There is no monthly ceiling here:
 // that one is per repo (luna.yaml), and a call has no repo.
-import { type CredentialOwner, type EngineId, PACKS, type PackId, type RunInput, type RunResult, credentialOwner, resolveEngine } from "@hardness/contracts";
+import { type CredentialOwner, type EngineId, PACKS, type PackId, type RunInfo, type RunInput, type RunResult, credentialOwner, resolveEngine } from "@hardness/contracts";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -38,6 +38,7 @@ import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { buildContextPackInput } from "../domain/stage-input.ts";
 import { type RunFacts, runFacts } from "../domain/task.ts";
 import { outputError, runPackOnce } from "./stages/run-once.ts";
+import { type Telemetry, noTelemetry } from "./telemetry.ts";
 
 /** How many `POST /runs` calls run at once; the rest wait. */
 export const PACK_RUNS_MAX = 2;
@@ -121,6 +122,8 @@ export interface PackRunsDeps {
   latched?: () => CredentialOwner[];
   /** One line per call; defaults to console.log. Never the context nor the answer. */
   log?: (line: string) => void;
+  /** Where each call is reported as a span; the no-op without a backend. */
+  telemetry?: Telemetry;
 }
 
 /** `resetsAt` as the run reported it (epoch seconds, or a string from an older runner), as ISO. */
@@ -150,10 +153,12 @@ export class PackRuns implements PackRunsPort {
   private readonly waiting: Array<{ grant: () => void }> = [];
   private readonly now: () => Date;
   private readonly log: (line: string) => void;
+  private readonly telemetry: Telemetry;
 
   constructor(private readonly deps: PackRunsDeps) {
     this.now = deps.now ?? (() => new Date());
     this.log = deps.log ?? ((line) => console.log(line));
+    this.telemetry = deps.telemetry ?? noTelemetry();
   }
 
   /** Removes run folders a crash left behind: they hold a client's context. */
@@ -187,10 +192,11 @@ export class PackRuns implements PackRunsPort {
       // A usage limit moves the call to the pack's next fallback engine, in the same place; the
       // client hears rate_limited only once there is none left to try.
       const tried: EngineId[] = [];
+      let movedFrom: EngineId | null = null;
       let limit: RunRateLimitedError | null = null;
       for (;;) {
         try {
-          return await this.once(pack, context, engine, client, signal);
+          return await this.once(pack, context, engine, client, signal, movedFrom);
         } catch (thrown) {
           if (!(thrown instanceof RunRateLimitedError)) throw thrown;
           tried.push(engine);
@@ -198,6 +204,7 @@ export class PackRuns implements PackRunsPort {
           const next = signal?.aborted ? null : await this.fallback(pack, tried);
           if (!next) throw limit;
           this.log(`run: ${pack} moves to ${next} after ${engine} rate limit`);
+          movedFrom = engine;
           engine = next;
         }
       }
@@ -235,20 +242,23 @@ export class PackRuns implements PackRunsPort {
   }
 
   /** One run of the pack on one engine, in a place already taken: its answer, or the error that ended it. */
-  private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal): Promise<RunResult> {
+  private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal, movedFrom: EngineId | null = null): Promise<RunResult> {
     const startedAt = this.now();
     const t0 = Date.now();
+    const span = this.telemetry.run({ kind: "pack", pack, engine, client });
+    if (movedFrom) span.event("engine", { engine, reason: `fallback after ${movedFrom} rate limit` });
     const runDir = join(this.deps.stateDir, PACK_RUNS_DIR, `${pack}-${randomUUID()}`);
     const work = join(runDir, "work");
     let usage: RunResult["usage"] = { model: "", engine, turns: 0, durationMs: 0, costUsd: null };
     let answer: Record<string, unknown> | null = null;
     let failure: Error | null = null;
     let facts: RunFacts = {};
+    let info: RunInfo | null = null;
     try {
       await mkdir(work, { recursive: true });
       const input = buildContextPackInput(pack, context, engine);
       const run = await runPackOnce(
-        { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: work, input, engine, labels: { luna: "run" }, signal },
+        { name: `hardness-run-${pack.replace(/_/g, "-")}-${runDir.slice(-12)}`, image: this.deps.image, runDir, worktree: work, input, engine, labels: { luna: "run" }, extraEnv: span.childEnv(), signal },
         { credentials: this.deps.credentials, sandbox: this.deps.sandbox },
       );
       if (run.error !== null) failure = signal?.aborted ? new RunAbortedError("the client left: the run was stopped") : new RunFailedError(run.error);
@@ -256,6 +266,7 @@ export class PackRuns implements PackRunsPort {
         const out = run.output;
         usage = { model: out.usage.model, engine, turns: out.usage.turns, durationMs: out.usage.durationMs, costUsd: out.usage.costUsd };
         facts = runFacts(out.run);
+        info = out.run ?? null;
         if (!out.ok) failure = out.rateLimited ? new RunRateLimitedError(outputError(out), resetsIso(out.resetsAt)) : new RunFailedError(outputError(out));
         else {
           const parsed = PACKS[pack].answer.safeParse(out.answer);
@@ -268,11 +279,24 @@ export class PackRuns implements PackRunsPort {
       if (thrown instanceof NoCredentialError) failure = new RunNoCredentialError(`${engine}: ${thrown.message}`);
       else failure = new RunFailedError(thrown instanceof Error ? thrown.message : String(thrown));
     } finally {
+      // The span ends first: in `full` mode it reads the transcript the folder still holds.
+      // What the run is recorded as when the result names no model: the pinned ID it was started on.
+      if (!usage.model) usage.model = resolveEngine(engine).modelId;
+      if (usage.durationMs === 0) usage.durationMs = Date.now() - t0;
+      if (failure instanceof RunRateLimitedError) span.event("rate_limited", { resetsAt: failure.resetsAt });
+      await span.end({
+        outcome: failure === null ? "pass" : failure instanceof RunRateLimitedError ? "rate_limited" : "fail",
+        engine,
+        error: failure?.message ?? null,
+        model: usage.model,
+        turns: usage.turns,
+        costUsd: usage.costUsd,
+        durationMs: usage.durationMs,
+        info,
+        transcriptPath: join(runDir, "transcript.log"),
+      });
       await rm(runDir, { recursive: true, force: true }).catch(() => {});
     }
-    // What the run is recorded as when the result names no model: the pinned ID it was started on.
-    if (!usage.model) usage.model = resolveEngine(engine).modelId;
-    if (usage.durationMs === 0) usage.durationMs = Date.now() - t0;
     if (!(failure instanceof RunNoCredentialError)) await this.record({ pack, engine, model: usage.model, client, ok: failure === null, error: failure?.message ?? null, turns: usage.turns, durationMs: usage.durationMs, costUsd: usage.costUsd, startedAt: startedAt.toISOString(), endedAt: this.now().toISOString(), ...facts });
     if (usage.costUsd) await this.deps.engineBudgets?.afterRun(engine, { taskId: null, repo: null }).catch((thrown: unknown) => console.warn(`run: could not check the engine's cap: ${thrown instanceof Error ? thrown.message : String(thrown)}`));
     const cost = usage.costUsd === null ? "" : ` · $${usage.costUsd.toFixed(4)}`;
