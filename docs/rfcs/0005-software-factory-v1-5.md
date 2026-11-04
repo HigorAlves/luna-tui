@@ -5,7 +5,7 @@
 - **Created:** 2026-11-03
 - **Discussion:** (open a PR with this file)
 - **Decision deadline:** 2026-11-10
-- **Related:** [RFC 0002](./0002-native-agent-runtimes.md) (runtimes, decision packs), [RFC 0003](./0003-upgradable-harness.md) (catalog, evals, rollout), [RFC 0004](./0004-harness-for-luna-notch.md) (the notch owns the ticket, the machine owns the run)
+- **Related:** [RFC 0002](./0002-native-agent-runtimes.md) (runtimes, decision packs), [RFC 0003](./0003-upgradable-harness.md) (catalog, evals, rollout)
 - **Source diagram:** Software Factory, Flow Diagram, Draft v1.5 (eight Mermaid panels: Overview, Intake, Triage, Plan, Build, Verify, Evidence, Ship)
 
 ## Summary
@@ -15,7 +15,7 @@ The machine runs eight stages with seventeen agent roles and one decision pack. 
 ## Goals
 
 - Every branch in the pipeline that the diagram marks purple is a decision pack with typed questions, a confidence and a policy for what to do below it, and runs on `jev` or on `claude:haiku` with the same contract.
-- A Triage Record and an Evidence Pack exist as contract schemas on the task, written once and read by every later stage, and shown on the TUI (and on the notch once it connects).
+- A Triage Record and an Evidence Pack exist as contract schemas on the task, written once and read by every later stage, and shown on the TUI.
 - Build never loses work: every green slice is pushed to the task branch before the next one starts.
 - Evidence can be a narrated video for UI changes, produced from the approved scenarios and the e2e recording, checked by a cold critic on another engine, and degraded to screenshots on a second failure.
 - A shipped PR is watched until it merges: comments, CI, conflicts and staleness are classified and answered on the task, with human stops at disagreement, freezes and the third round trip.
@@ -23,8 +23,8 @@ The machine runs eight stages with seventeen agent roles and one decision pack. 
 
 ## Non-goals
 
-- Renaming stages, columns or task states. The notch's `BoardStage` mapping from RFC 0004 stays valid throughout.
-- Retiring the TUI's Jira, Slack or PR inbox. RFC 0004 step 7 stays gated on the notch test.
+- Renaming stages, columns or task states. The TUI's column mapping stays valid throughout.
+- Retiring the TUI's Jira, Slack or PR inbox: the machine keeps talking to every source itself.
 - Making Jev required. Luna works the same without a `TYPESAFE_API_KEY` or `AI_GATEWAY_API_KEY`; the decision slots then run on `claude:haiku`.
 - Adopting a third-party video CLI as a dependency of the stage image. Ideas and contracts are borrowed; the renderer is ours.
 - Deploys. Ship hands off at merge, as the diagram does.
@@ -47,7 +47,7 @@ The machine runs eight stages with seventeen agent roles and one decision pack. 
 
 **A decision pack answers three kinds of question** (`contracts/src/questions.ts`): a `choice` among fixed labels, a `yesno` with a probability, a `score` on a rubric. It cannot emit a list, a path, a file name or a sentence. Several purple nodes in the diagram ask for exactly that: "duplicate_of", "components · files · owners", "gaps · redundant · untestable", "undeclared files outside code-map". Each of those is either an agent pack on `claude:haiku` with a structured answer, or a decision pack whose `choice` labels are built per call from candidates the machine already has (the open tasks, the plan's criteria). This RFC says which, node by node.
 
-**Today the TUI and the machine own the ticket.** Tickets reach the machine from its own loops (the Slack inbox, Jira intake, GitHub issue intake) or by hand from the TUI, and the machine talks to the source about them. RFC 0004 moves that ownership to the notch for `source.kind: notch` tasks once the two are tested together; until then every Intake source and every "close the loop with the source" in this RFC is the machine's. The design keeps that boundary as one switch: who posts is decided by `source.kind`, so the notch's turn adds a case, not a rewrite. The machine always owns dedup against its own tasks, the SLA clocks on its gates, and the archive.
+**The TUI and the machine own the ticket.** Tickets reach the machine from its own loops (the Slack inbox, Jira intake, GitHub issue intake) or by hand from the TUI, and the machine talks to the source about them: every Intake source and every "close the loop with the source" in this RFC is the machine's. Luna Notch (RFC 0004) is out of scope: it does not exist yet, and nothing here is designed around it. The machine owns dedup against its own tasks, the SLA clocks on its gates, and the archive.
 
 ## Proposed design
 
@@ -63,15 +63,15 @@ The machine runs eight stages with seventeen agent roles and one decision pack. 
 - **`EvidencePack`** (`task.evidence`): `summary`, `scenarios[]` each with the test and result that proves it, `findings[]` with resolutions, `outOfMap[]`, `risk`, `rollback`, `howToVerify` (preview URL or steps), `commitSha`, `media[]` (kind, label, URL), `format` (`video | captures | text`). Its `commitSha` must equal the PR head for Ship to proceed; a change of head invalidates it.
 - **`EscalationReason`** enum: `plan_wrong | env_broken | flaky_tests | too_complex | undeclared_scope | other`, on every `escalated` answer. The transition engine routes `plan_wrong` to triage, `too_complex` to one retry on `claude:opus`, the rest to a person.
 - **`archived`** task state, a sibling of `closed`, with `archiveReason` (`duplicate | sla_expired | rejected | not_for_agent | pr_closed`). The board shows it in Done, dimmed.
-- **SLA clocks on gates**: `sla.ts` generalised from Jira tickets to `awaiting_*` states, with `luna.yaml` `sla.gate` (reminder) and `sla.archive` (auto-archive) durations; the ticker posts the reminder as a task event, which the TUI shows and posts to the source (and the notch shows, later).
+- **SLA clocks on gates**: `sla.ts` generalised from Jira tickets to `awaiting_*` states, with `luna.yaml` `sla.gate` (reminder) and `sla.archive` (auto-archive) durations; the ticker posts the reminder as a task event, which the TUI shows and posts to the source.
 
 ### Stage by stage
 
 **① Intake.** New decision pack `intake_dedup` (per-call labels: the open and last-30-days-closed tasks of the repo plus `none`; questions `duplicate_of` choice, `related_to` choice, each with confidence). Runs on `POST /tasks` for every source; a confident duplicate merges (links the source, archives the new task as `duplicate`) and the client is told with a 200 naming the kept task. Context setup is machine code: repo map, reporter, thread history already arrive in the work order. `setup` keeps its meaning (propose `luna.yaml`). `awaiting_setup` gets the SLA clocks.
 
-**② Triage.** `issue_classify` is renamed `triage_signals` and extended: `kind`, `area`, `size`, `ready`, plus `urgency` (score), `risk` (score), `archive` (yesno with a `reason` choice: duplicate, out_of_scope, stale, not_actionable). Intake calls it before the triage agent; its answers and confidences enter the prompt and the Triage Record. The `triage-planner` role shrinks to what the diagram calls the triage agent: clarify, ask at most three questions, settle defaults, write the Triage Record and pick the outcome (`plan | fast_lane | conversation | archive`). A `conversation` outcome runs the `reply-drafter` role with a new template `triage_reply.md` and closes the task; the machine posts the reply to the source thread (Slack, Jira or the GitHub issue) through its adapters, and a future notch client posts instead for its own tasks. `fast_lane` requires `risk` low and `size` ≤ small from `triage_signals`, both at or above `proceed`.
+**② Triage.** `issue_classify` is renamed `triage_signals` and extended: `kind`, `area`, `size`, `ready`, plus `urgency` (score), `risk` (score), `archive` (yesno with a `reason` choice: duplicate, out_of_scope, stale, not_actionable). Intake calls it before the triage agent; its answers and confidences enter the prompt and the Triage Record. The `triage-planner` role shrinks to what the diagram calls the triage agent: clarify, ask at most three questions, settle defaults, write the Triage Record and pick the outcome (`plan | fast_lane | conversation | archive`). A `conversation` outcome runs the `reply-drafter` role with a new template `triage_reply.md` and closes the task; the machine posts the reply to the source thread (Slack, Jira or the GitHub issue) through its adapters. `fast_lane` requires `risk` low and `size` ≤ small from `triage_signals`, both at or above `proceed`.
 
-**③ Plan.** A new agent role `planner` (opus or codex:sol) takes the Triage Record, the code-map and the risk and writes the plan: criteria, slices, assumptions, rollback. `test-designer` stays and becomes the second step of the same stage run (the stage returns both). Three decision packs follow: `coverage_check` (per-call labels: the criteria; one `yesno` per criterion "a scenario pins this" plus a `score` for redundancy; at most three rounds back to `test-designer`), `plan_check` (independent: `score` plan-vs-record, `yesno` touchpoints consistent with code-map, `yesno` rollback stated; at most two rounds back to `planner`), and `risk_score` (three `score` questions, blast radius, reversibility, data sensitivity, each 1–3; the level is derived in contracts, never asked). The two human gates become one: `awaiting_approval` after scenarios and checks; `awaiting_test_check` stays in the state enum for compatibility and is skipped by the feature route. High risk asks for a second approver (the TUI asks for a second approver's name; the notch's Inbox shows two Approve buttons once it connects). **Ground truth**: on approval the machine stores the diff between the proposed and approved plan and the list of flagged decisions the person overrode under `evals/<pack>/ground-truth/`, scrubbed as the eval cases are. The fast lane runs a `fast-planner` role (sonnet, low effort, 15 turns, one to three steps), then `test-designer` at low effort (one or two scenarios, 15 turns), then `plan_check` only, then the single approval; `plan_check` below `flag` sends it to the full path. Test design is never skipped: a scenario is what Build's red check and Verify's e2e run against, so a lane without one would have nothing to prove.
+**③ Plan.** A new agent role `planner` (opus or codex:sol) takes the Triage Record, the code-map and the risk and writes the plan: criteria, slices, assumptions, rollback. `test-designer` stays and becomes the second step of the same stage run (the stage returns both). Three decision packs follow: `coverage_check` (per-call labels: the criteria; one `yesno` per criterion "a scenario pins this" plus a `score` for redundancy; at most three rounds back to `test-designer`), `plan_check` (independent: `score` plan-vs-record, `yesno` touchpoints consistent with code-map, `yesno` rollback stated; at most two rounds back to `planner`), and `risk_score` (three `score` questions, blast radius, reversibility, data sensitivity, each 1–3; the level is derived in contracts, never asked). The two human gates become one: `awaiting_approval` after scenarios and checks; `awaiting_test_check` stays in the state enum for compatibility and is skipped by the feature route. High risk asks for a second approver (the TUI asks for a second approver's name). **Ground truth**: on approval the machine stores the diff between the proposed and approved plan and the list of flagged decisions the person overrode under `evals/<pack>/ground-truth/`, scrubbed as the eval cases are. The fast lane runs a `fast-planner` role (sonnet, low effort, 15 turns, one to three steps), then `test-designer` at low effort (one or two scenarios, 15 turns), then `plan_check` only, then the single approval; `plan_check` below `flag` sends it to the full path. Test design is never skipped: a scenario is what Build's red check and Verify's e2e run against, so a lane without one would have nothing to prove.
 
 **Graphify as a shared service.** A `Graphify` port in `machine/src/application/graphify.ts` and an adapter in `machine/src/adapters/graphify/` build the graph per repo on merge to the default branch (the intake poller already sees merges), stamp it with the commit, and mount it read-only into every stage container at `/graph`. The `code-discovery` skill queries `/graph` first, as it does today, and falls back to grep when the stamp is older than the base commit. A new agent pack `code_map` (haiku, low, read-only, Graphify only) answers `components[]`, `files[]`, `owners[]` from CODEOWNERS, `confidence`. Build's declared out-of-map files are appended to a per-repo `graph-misses.jsonl` the rebuild reads.
 
@@ -81,7 +81,7 @@ The machine runs eight stages with seventeen agent roles and one decision pack. 
 
 **⑥ Evidence.** `evidence` becomes an agent stage with a script prelude. `evidence_format` (decision: `choice` video/captures/text with reasons as labels, from the Triage Record's `kind` and `area`, whether e2e ran, whether a web surface exists). Text and captures assemble the Evidence Pack from upstream and stop. Video runs the pipeline below, then `video_qa`, then the pack. The pack is published by the machine as a PR description section and one PR comment, media stored as GitHub release assets on a `luna-evidence` pre-release tag (never in git), a local copy under `<stateDir>/evidence/<task>/<sha>/`, retention from `luna.yaml`. `pack_complete` is a script: sections present, `commitSha` equals the PR head, every link resolves. A head change after this point sends the task back to `evidence` with `format` kept.
 
-**⑦ Ship.** `awaiting_ship` becomes a monitored wait. A PR monitor (the `pulls.ts` poller, scoped to the task's PR) raises events: CI, base moved, conflict, review comment, freeze window from `luna.yaml` `freeze[]`, blocked by another PR. `event_class` (decision), then for a comment `comment_intent` (decision: question/nit/change_request/disagreement) and `fix_scope` (decision: in_place/re_verify_partial/re_plan). The existing `addressing` pack runs the fix in place with the Evidence Pack in its input, capped at two round trips per thread; `re_verify_partial` runs `verifying` on the delta; `re_plan` sends the task to triage with the record. `evidence_valid` (decision: valid/refresh_text/refresh_media) decides whether the pack is rewritten, and only a changed scenario outcome refreshes media. **Merge readiness** is a script: CI green on head, no conflict, CODEOWNERS approvals present, evidence `commitSha` equals head, no freeze, not blocked, head younger than fourteen days. Low and medium risk auto-merge (squash, merge queue when the repo has one) when `luna.yaml` `policy.auto_merge` allows it; high risk waits for a ship approver who is not the plan approver. Close the loop: the machine's Slack, Jira and GitHub adapters post what shipped, the evidence link and how to verify to the thread or issue the task came from; a `task.shipped` event carries the same summary so a future notch client can post instead for its tasks. `reviewing_memory` starts with `worth_learning` (decision, `yesno`); the `retro-reviewer` answer gains `recalibration[]` (predicted vs actual size, risk, iterations, escalations, format), `graphMisses[]` and `promptUpdates[]`.
+**⑦ Ship.** `awaiting_ship` becomes a monitored wait. A PR monitor (the `pulls.ts` poller, scoped to the task's PR) raises events: CI, base moved, conflict, review comment, freeze window from `luna.yaml` `freeze[]`, blocked by another PR. `event_class` (decision), then for a comment `comment_intent` (decision: question/nit/change_request/disagreement) and `fix_scope` (decision: in_place/re_verify_partial/re_plan). The existing `addressing` pack runs the fix in place with the Evidence Pack in its input, capped at two round trips per thread; `re_verify_partial` runs `verifying` on the delta; `re_plan` sends the task to triage with the record. `evidence_valid` (decision: valid/refresh_text/refresh_media) decides whether the pack is rewritten, and only a changed scenario outcome refreshes media. **Merge readiness** is a script: CI green on head, no conflict, CODEOWNERS approvals present, evidence `commitSha` equals head, no freeze, not blocked, head younger than fourteen days. Low and medium risk auto-merge (squash, merge queue when the repo has one) when `luna.yaml` `policy.auto_merge` allows it; high risk waits for a ship approver who is not the plan approver. Close the loop: the machine's Slack, Jira and GitHub adapters post what shipped, the evidence link and how to verify to the thread or issue the task came from; a `task.shipped` event carries the same summary for the TUI. `reviewing_memory` starts with `worth_learning` (decision, `yesno`); the `retro-reviewer` answer gains `recalibration[]` (predicted vs actual size, risk, iterations, escalations, format), `graphMisses[]` and `promptUpdates[]`.
 
 ### The video pipeline
 
@@ -102,19 +102,11 @@ Machine-side numeric checks run before the critic sees the file (loudness, true 
 
 **Tooling decisions.** The stage image already carries Chromium, ffmpeg and agent-browser. It gains kokoro-js with the English voice pack, whisper-cpp for word timestamps, and our own small canvas scene page for cards and animated diagrams (time-driven, `seek(t)`, seeded randomness, a stable `data-id` per element so a critic's note can name it). Nothing from the reference repositories is installed in the image: explainroo carries a watermark and 400 MB of models by default, huashu-motion is macOS-only with a bundled GSAP licence, argo is an npm package whose fixture is forty lines we can write against our Playwright. What is borrowed is contract and prompt material: argo's fixture API and `.scenes.json` manifest shape, video-director's `timeline.json` fields, FACTS rule, fix card and critic rubric, explainroo's narration rules and `script.md` syntax, huashu-motion's frame-anchored comment schema for the preview gate, reanimate's rule that thresholds are never relaxed silently.
 
-**The preview gate.** The TUI's Evidence approval (and the notch's Inbox once RFC 0004 lands) shows the walkthrough with the critic's verdict and scores. A person's note at this gate is structured like huashu-motion's: time, scene id, element id, text. It becomes a fix card for `video_fix` or, with "Looks right", the pack is published.
+**The preview gate.** The TUI's Evidence approval shows the walkthrough with the critic's verdict and scores. A person's note at this gate is structured like huashu-motion's: time, scene id, element id, text. It becomes a fix card for `video_fix` or, with "Looks right", the pack is published.
 
 ### Who talks to the source
 
-Today every row is the machine's, driven from the TUI. The right column is what changes for `source.kind: notch` tasks once RFC 0004's test together has happened; nothing in this RFC depends on it.
-
-| Node | Today (TUI → machine) | Later (notch task, RFC 0004) |
-|---|---|---|
-| Intake sources, card created | Slack inbox, Jira intake, GitHub issues, the TUI by hand | the notch, `POST /tasks` |
-| `intake_dedup` | the machine, against its tasks; the 200 names the kept task | the machine, the same |
-| SLA reminders and auto-archive | the machine posts them where the task came from and shows them on the TUI | the machine emits `task.sla` events; the notch shows them |
-| Conversation reply, close the loop | the machine drafts and posts | the machine drafts; the notch posts |
-| Approvals, second approver, ship approver | the TUI; a named second approver | the notch's Inbox or the TUI; the first answer wins (409 for the other) |
+The machine, driven from the TUI, in every case: Intake's sources (the Slack inbox, Jira intake, GitHub issues, a ticket typed into the TUI), the duplicate check against its own tasks, SLA reminders and auto-archive posted where the task came from, the conversation reply, the close-the-loop message, and every approval (plan, second approver on High, ship approver) answered in the TUI.
 
 ### Migration
 
@@ -149,7 +141,7 @@ Rejected for the image, kept for the ideas: both are days old, one is macOS-only
 
 ### Rewrite the transition engine for the new graph in one PR
 
-Rejected: the state enum does not change, so every edge can land as its own small PR with its own test, and the notch's card mapping never breaks mid-migration.
+Rejected: the state enum does not change, so every edge can land as its own small PR with its own test, and the TUI's column mapping never breaks mid-migration.
 
 ### Keep doing what we do
 
@@ -157,7 +149,7 @@ The pipeline ships tickets today. What it lacks is calibrated judgement at the b
 
 ## Open questions
 
-- Q1: Where do the two approvers' identities come from on the TUI, which has one operator? Preferred: a `LUNA_APPROVER` name per TUI instance; the notch has accounts.
+- Q1: Where do the two approvers' identities come from on the TUI, which has one operator? Preferred: a `LUNA_APPROVER` name per TUI instance.
 - Q2: Is a GitHub pre-release the right media store for a private repo, or a bucket named in `luna.yaml`? Preferred: release assets first, a `media.store` port so a bucket adapter is one file.
 - Q3: Does the video critic need to see frames (vision) or is the contact sheet plus ASR transcript enough? Preferred: frames; `codex:sol` and `claude:haiku` both take images, so the pack stays on two engines.
 - Q4: Should ground truth be captured for agent answers too (the edited plan) or only for decision answers? Preferred: both; the plan diff is the planner's eval case.
@@ -181,7 +173,7 @@ Three months after wave 6 lands on a repo:
 - UI tickets ship with a walkthrough the critic passed on the first or second round in at least four of five cases; the fifth degrades to captures, never to nothing.
 - No green slice is ever lost to a killed container (checkpoint pushes measured by the ledger).
 - The reviewer-comment loop answers or fixes without a new task in at least three of four threads; the fourth stops at a person with the thread quoted.
-- The notch's card mapping from RFC 0004 is unchanged.
+- The TUI's column mapping is unchanged.
 
 ## Appendix: decision packs
 
