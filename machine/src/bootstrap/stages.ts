@@ -9,7 +9,7 @@ import type { Config } from "../config.ts";
 import { type Credentials, machineCredentials, removeStaleCodexTemps } from "../adapters/credentials/index.ts";
 import type { Graph } from "../application/graph.ts";
 import type { Watcher } from "../application/ports.ts";
-import type { Decide } from "../application/stages/build-watch.ts";
+import type { Decide } from "../application/stages/check-decide.ts";
 import { agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";

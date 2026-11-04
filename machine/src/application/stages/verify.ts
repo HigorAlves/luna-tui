@@ -1,7 +1,7 @@
 // The verifying stage: run the project's own checks in the task worktree, and only when they
 // are green hand the change to the verifying review pack. A red check fails the stage with
 // its output as findings, so the next implementing attempt sees what broke.
-import type { CheckSpec, CoverageSummary, Finding, ServiceSpec } from "@hardness/contracts";
+import type { CheckSpec, CoverageSummary, DecisionOverrides, Finding, ServiceSpec } from "@hardness/contracts";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
@@ -12,6 +12,7 @@ import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.t
 import { addedLineNumbers, parseLcov, patchCoverage } from "../../domain/coverage.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
+import { type Decide, judgeCheck } from "./check-decide.ts";
 
 const MINUTE = 60_000;
 export const CHECKS_TIMEOUT_MS = 30 * MINUTE;
@@ -32,13 +33,15 @@ export interface VerifyDeps {
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
   /** The repo's luna.yaml: its own checks (null means detect them from the tree) and the
    *  services to run beside each one. */
-  policy?: (repoPath: string | null) => Promise<{ checks: CheckSpec[] | null; services: Record<string, ServiceSpec> }>;
+  policy?: (repoPath: string | null) => Promise<{ checks: CheckSpec[] | null; services: Record<string, ServiceSpec>; decisions?: Record<string, DecisionOverrides> }>;
   /** The files the branch changed, worktree-relative; null when unknown (then every check runs). */
   changedPaths?: (worktreePath: string, repoPath: string) => Promise<string[] | null>;
   /** The machine's code graphs: when the repo has one, the files that depend on the change widen the checks and steer the review. */
   graph?: { currentDir(repoPath: string): string | null };
   /** The branch's diff against where it forked, for the coverage of its added lines; null when unknown. */
   diffSince?: (worktreePath: string, repoPath: string) => Promise<string | null>;
+  /** Runs finding_classify on a check context; null (or absent) leaves the review's severities unclassified. Read at call time. */
+  decide?: Decide | null;
 }
 
 interface CheckReport {
@@ -53,6 +56,14 @@ interface CheckReport {
 }
 
 const COVERAGE_BODY_LINES = 20;
+/** How many findings finding_classify sees, the most confident first, and how much code it gets around each. */
+const CLASSIFY_MAX = 6;
+const EXCERPT_RADIUS = 8;
+const EXCERPT_CAP = 2000;
+
+/** The verifier's severity on the classifier's scale. */
+const scaleOf = (severity: string): "blocker" | "should_fix" | "nit" =>
+  severity === "bug" || severity === "security" ? "blocker" : severity === "test" || severity === "perf" || severity === "question" ? "should_fix" : "nit";
 
 /** The default diff: the branch's changes since it forked from the repo's HEAD. */
 async function branchDiff(worktreePath: string, repoPath: string): Promise<string | null> {
@@ -60,8 +71,8 @@ async function branchDiff(worktreePath: string, repoPath: string): Promise<strin
   return base ? diffText(worktreePath, base, "HEAD") : null;
 }
 
-/** A report path under the worktree, or null when it climbs out of it (by `..` or by a symlink). */
-async function reportUnder(worktree: string, relative: string): Promise<string | null> {
+/** A path under the worktree, or null when it climbs out of it (by `..` or by a symlink). */
+async function pathUnder(worktree: string, relative: string): Promise<string | null> {
   const path = resolve(worktree, relative);
   if (path !== worktree && !path.startsWith(worktree + sep)) return null;
   try {
@@ -83,10 +94,23 @@ const answerOf = (detail: Record<string, unknown> | undefined): Record<string, u
   return answer && typeof answer === "object" ? (answer as Record<string, unknown>) : undefined;
 };
 
+/** The file around a finding's line, as it is in the worktree; empty when the path is not under it or has no line. */
+async function excerptOf(worktree: string, finding: Finding): Promise<string> {
+  if (!finding.path || finding.line < 1) return "";
+  const path = await pathUnder(worktree, finding.path);
+  const text = path ? await readFile(path, "utf8").catch(() => null) : null;
+  if (text === null) return "";
+  return text
+    .split("\n")
+    .slice(Math.max(0, finding.line - 1 - EXCERPT_RADIUS), finding.line + EXCERPT_RADIUS)
+    .join("\n")
+    .slice(0, EXCERPT_CAP);
+}
+
 export function verifyRunner(deps: VerifyDeps): StageRunner {
   const detect = deps.detect ?? detectChecks;
   const resolveIdentity = deps.gitIdentity ?? hostGitIdentity;
-  const repoPolicy = deps.policy ?? (async () => ({ checks: null, services: {} }));
+  const repoPolicy: NonNullable<VerifyDeps["policy"]> = deps.policy ?? (async () => ({ checks: null, services: {} }));
   const changed = deps.changedPaths ?? hostChangedPaths;
   const diffSince = deps.diffSince ?? branchDiff;
   /** The files the graph says depend on the change; empty without a graph or a readable one. */
@@ -128,7 +152,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     };
     // Step A: the project's own checks: the luna.yaml list when the repo has one (those the
     // change calls for), else what the tree says.
-    const { checks: declared, services } = await repoPolicy(task.repoPath ?? null);
+    const { checks: declared, services, decisions = {} } = await repoPolicy(task.repoPath ?? null);
     const reports: CheckReport[] = [];
     let commands: Array<{ name: string; cmd: string; argv: string[] }>;
     let selectedChecks: CheckSpec[] = [];
@@ -228,7 +252,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     for (const check of selectedChecks) {
       if (!check.coverage || !reports.some((r) => r.name === check.name && r.ok === true)) continue;
       const relative = join(check.cwd ?? "", check.coverage);
-      const path = await reportUnder(cwd, relative);
+      const path = await pathUnder(cwd, relative);
       const text = path ? await readFile(path, "utf8").catch(() => null) : null;
       if (text === null) {
         reports.push({ name: check.name, note: `coverage report ${check.coverage} not found` });
@@ -257,6 +281,37 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     }
     const coverageDetail = coverage ? { coverage } : {};
 
+    /** finding_classify over the review's most confident findings: recorded beside the verifier's severities, never a verdict. */
+    const classify = async (reviewed: Finding[]): Promise<Record<string, unknown>> => {
+      const decide = deps.decide ?? null;
+      if (!decide || reviewed.length === 0) return {};
+      const top = [...reviewed].sort((a, b) => b.confidence - a.confidence).slice(0, CLASSIFY_MAX);
+      const classified = await Promise.all(
+        top.map(async (finding) => {
+          const excerpt = await excerptOf(cwd, finding);
+          const { verdict, answer } = await judgeCheck(decide, "finding_classify", { kind: "finding", finding, excerpt }, task.repoPath ?? null, decisions);
+          const severity = (answer?.severity ?? null) as { choice?: unknown; confidence?: unknown } | null;
+          const usable = (verdict === "proceed" || verdict === "flag") && typeof severity?.choice === "string";
+          return {
+            title: finding.title,
+            path: finding.path,
+            line: finding.line,
+            severity: finding.severity,
+            classified: usable ? (severity!.choice as "blocker" | "should_fix" | "nit") : null,
+            confidence: typeof severity?.confidence === "number" ? severity.confidence : null,
+            verdict,
+          };
+        }),
+      );
+      const calibration = { agree: 0, disagree: 0, skipped: 0 };
+      for (const row of classified) {
+        if (row.classified === null) calibration.skipped++;
+        else if (row.classified === scaleOf(row.severity)) calibration.agree++;
+        else calibration.disagree++;
+      }
+      return { classified, calibration };
+    };
+
     // Step B: the review pack, only when agents are on.
     const noTestsNote = noTests ? { note: "no test command detected; verifying proves the scenarios by direct check" } : {};
     if (!deps.runPack) {
@@ -266,11 +321,17 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     // A plain failure or a deliberate escalation are both the pack's own answer, verbatim —
     // neither should fall into the verdict computation below (an escalation has no real
     // findings to compute one from, and would otherwise be miscounted as a pass).
-    if (pack.outcome === "fail" || pack.outcome === "escalated") {
+    if (pack.outcome === "escalated") {
       return { ...pack, detail: { ...pack.detail, step: "review", checks: reports, ...coverageDetail } };
     }
     const answer = answerOf(pack.detail);
-    const findings = [...((Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[]), ...coverageFindings];
+    if (pack.outcome === "fail") {
+      const reviewed = (Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[];
+      return { ...pack, detail: { ...pack.detail, step: "review", checks: reports, ...coverageDetail, ...(await classify(reviewed)) } };
+    }
+    const reviewed = (Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[];
+    const classification = await classify(reviewed);
+    const findings = [...reviewed, ...coverageFindings];
     const results = Array.isArray(answer?.results) ? answer.results : [];
     // One verdict per case, by the title the pack copied verbatim from the approved case. The
     // cases are matched by title only: a reworded title is an unproven case, as the prompt says,
@@ -297,6 +358,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         ...(cases.length > 0 ? { cases } : {}),
         checks: reports,
         ...coverageDetail,
+        ...classification,
         ...noTestsNote,
         ...(asked ? { note: "the reviewer asked a question; a reviewer should not, so the review counts as a pass" } : {}),
       },

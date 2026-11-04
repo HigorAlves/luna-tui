@@ -7,6 +7,7 @@ import type { TaskRow } from "../../domain/task.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
+import type { Decide } from "./check-decide.ts";
 import { verifyRunner } from "./verify.ts";
 
 const finding = (over: Record<string, unknown> = {}) => ({
@@ -35,6 +36,8 @@ function setup(opts: {
   diffSince?: (worktreePath: string, repoPath: string) => Promise<string | null>;
   changed?: string[] | null;
   services?: Record<string, { image: string; exports?: Record<string, string> }>;
+  decide?: Decide | null;
+  decisions?: Record<string, Record<string, { proceed?: number; flag?: number }>>;
 }) {
   const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
   const calls: string[][] = [];
@@ -49,7 +52,8 @@ function setup(opts: {
     stateDir,
     detect: async () => (opts.detected ?? { manager: "pnpm", test: ["pnpm", "run", "test"], lint: ["pnpm", "run", "lint"] }) as never,
     gitIdentity: async () => ("identity" in opts ? opts.identity! : { name: "Ada L", email: "ada@x.dev" }),
-    policy: async () => ({ checks: opts.lunaChecks ?? null, services: opts.services ?? {} }),
+    policy: async () => ({ checks: opts.lunaChecks ?? null, services: opts.services ?? {}, decisions: opts.decisions ?? {} }),
+    ...("decide" in opts ? { decide: opts.decide } : {}),
     changedPaths: async () => ("changed" in opts ? opts.changed! : null),
     ...(opts.diffSince ? { diffSince: opts.diffSince } : {}),
   });
@@ -233,6 +237,77 @@ describe("verifying stage", () => {
       const result = await run(context);
       expect(runPack).not.toHaveBeenCalled();
       expect(result.detail).not.toHaveProperty("coverage");
+    });
+  });
+
+  describe("finding_classify after the review", () => {
+    const worktree = () => {
+      const dir = mkdtempSync(join(tmpdir(), "verify-wt-"));
+      mkdirSync(join(dir, "src"), { recursive: true });
+      writeFileSync(join(dir, "src", "a.ts"), Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n"));
+      writeFileSync(join(dir, "..", `${dir.split("/").pop()}-secret.txt`), "outside");
+      return dir;
+    };
+    const review = (findings: unknown[]): StageResult => ({ outcome: "pass", detail: { answer: { verdict: "pass", summary: "fine", findings } } });
+    const choose = (choice: string) => ({ severity: { choice, confidence: 0.9 } });
+
+    it("classifies each finding with an excerpt, records the rows and the calibration, and leaves the outcome alone", async () => {
+      const findings = [finding({ path: "src/a.ts", line: 10, severity: "bug", title: "first", confidence: 0.9 }), finding({ path: "src/a.ts", line: 20, severity: "nit", title: "second", confidence: 0.6 })];
+      const decide = vi.fn<Decide>(async (_pack, check) => choose(check.finding?.title === "first" ? "blocker" : "should_fix"));
+      const base = setup({ worktree: worktree(), pack: review(findings) });
+      const { run, context } = setup({ worktree: worktree(), pack: review(findings), decide });
+      const result = await run(context);
+      expect(result.outcome).toBe((await base.run(base.context)).outcome);
+      expect(decide).toHaveBeenCalledTimes(2);
+      const first = decide.mock.calls.find(([, c]) => c.finding?.title === "first")!;
+      expect(first[0]).toBe("finding_classify");
+      expect(first[1].kind).toBe("finding");
+      expect(first[1].excerpt).toContain("line 10");
+      expect(first[1].excerpt).toContain("line 2\n");
+      expect(first[1].excerpt).not.toContain("line 19");
+      const detail = result.detail as { classified: Array<Record<string, unknown>>; calibration: unknown };
+      expect(detail.classified).toEqual([
+        { title: "first", path: "src/a.ts", line: 10, severity: "bug", classified: "blocker", confidence: 0.9, verdict: "proceed" },
+        { title: "second", path: "src/a.ts", line: 20, severity: "nit", classified: "should_fix", confidence: 0.9, verdict: "proceed" },
+      ]);
+      expect(detail.calibration).toEqual({ agree: 1, disagree: 1, skipped: 0 });
+    });
+
+    it("classifies at most the six most confident findings", async () => {
+      const findings = Array.from({ length: 7 }, (_, i) => finding({ path: "src/a.ts", line: i + 1, title: `f${i}`, severity: "nit", confidence: 0.5 + i / 20 }));
+      const decide = vi.fn<Decide>(async () => choose("nit"));
+      const { run, context } = setup({ worktree: worktree(), pack: review(findings), decide });
+      const result = await run(context);
+      expect(decide).toHaveBeenCalledTimes(6);
+      const titles = (result.detail as { classified: Array<{ title: string }> }).classified.map((c) => c.title);
+      expect(titles).not.toContain("f0");
+    });
+
+    it("keeps the excerpt inside the worktree: a path that climbs out gets none", async () => {
+      const wt = worktree();
+      const decide = vi.fn<Decide>(async () => choose("nit"));
+      const { run, context } = setup({ worktree: wt, pack: review([finding({ path: `../${wt.split("/").pop()}-secret.txt`, line: 1 })]), decide });
+      await run(context);
+      expect(decide.mock.calls[0]![1].excerpt ?? "").toBe("");
+    });
+
+    it("records nothing without a decide, and a skipped decision counts as skipped", async () => {
+      const findings = [finding({ path: "src/a.ts", line: 3, severity: "nit" })];
+      const none = setup({ worktree: worktree(), pack: review(findings), decide: null });
+      expect((await none.run(none.context)).detail).not.toHaveProperty("classified");
+      const failing = setup({ worktree: worktree(), pack: review(findings), decide: async () => { throw new Error("no jev"); } });
+      const detail = (await failing.run(failing.context)).detail as { classified: Array<{ classified: unknown; verdict: string }>; calibration: unknown };
+      expect(detail.classified[0]).toMatchObject({ classified: null, confidence: null, verdict: "skipped" });
+      expect(detail.calibration).toEqual({ agree: 0, disagree: 0, skipped: 1 });
+    });
+
+    it("never changes the verdict, whatever the classification says", async () => {
+      const findings = [finding({ path: "src/a.ts", line: 3, severity: "bug", confidence: 0.95 })];
+      const failing: StageResult = { outcome: "pass", detail: { answer: { verdict: "fail", summary: "bad", findings } } };
+      const a = setup({ worktree: worktree(), pack: failing, decide: async () => choose("nit") });
+      const b = setup({ worktree: worktree(), pack: failing });
+      expect((await a.run(a.context)).outcome).toBe("fail");
+      expect((await b.run(b.context)).outcome).toBe("fail");
     });
   });
 

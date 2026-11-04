@@ -19,7 +19,7 @@ import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns
 import type { EventRow } from "./domain/task.ts";
 import { groundTruthWriter } from "./application/ground-truth.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
-import type { Decide } from "./application/stages/build-watch.ts";
+import type { Decide } from "./application/stages/check-decide.ts";
 import type { TriageSignalDeps } from "./application/stages/triage-signals.ts";
 import { createIssueClassifier } from "./application/classify.ts";
 import { GitHubIntake } from "./application/intake.ts";
@@ -166,6 +166,8 @@ const triageSignals: TriageSignalDeps = { classify: null, save: (id, patch) => e
 const planDecisions: { decide: PlanDeps["decide"] } = { decide: null };
 /** Build's red and scope checks run through PackRuns too: bound once it exists. */
 const buildDecisions: { decide: Decide | null } = { decide: null };
+/** Verify's finding_classify (and e2e's failure cause) run through PackRuns as the `verify` client: bound once it exists. */
+const verifyDecisions: { decide: Decide | null } = { decide: null };
 const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   config,
   watcher,
@@ -198,9 +200,12 @@ const realVerifyRunner = verifyRunner({
   runPack: verifyPack,
   graph,
   stateDir: config.stateDir,
+  get decide() {
+    return verifyDecisions.decide;
+  },
   policy: async (repoPath) => {
-    const { checks, services } = await policies.for(repoPath);
-    return { checks, services };
+    const { checks, services, decisions } = await policies.for(repoPath);
+    return { checks, services, decisions };
   },
 });
 /** Delivering and shipping need only git and gh, not a Claude credential, so they always run for real. */
@@ -352,6 +357,7 @@ await packRuns?.clearLeftovers();
 const classifier = packRuns ? createIssueClassifier({ runs: packRuns }) : null;
 if (classifier) triageSignals.classify = (issue) => classifier.classify(issue);
 if (packRuns) planDecisions.decide = async (pack, plan) => (await packRuns.run({ pack, context: { plan } }, "plan")).answer;
+if (packRuns) verifyDecisions.decide = async (pack, check) => (await packRuns.run({ pack, context: { check } }, "verify")).answer;
 if (packRuns) buildDecisions.decide = async (pack, check) => (await packRuns.run({ pack, context: { check } }, "build")).answer;
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 const app = createApp({

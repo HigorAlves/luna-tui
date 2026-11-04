@@ -1,10 +1,11 @@
 // The build watch follows an implementing run's /out while its container runs. The container
 // cannot push and the machine reads the ledger only after the run, so a slice that turned
 // committed is handed to `onCommitted` as it lands.
-import { type CheckContext, type DecisionOverrides, type LedgerSlice, Ledger, PACKS, Slice, applyPolicy } from "@hardness/contracts";
+import { type CheckContext, type DecisionOverrides, type LedgerSlice, Ledger, Slice } from "@hardness/contracts";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { type Decide, judgeCheck } from "./check-decide.ts";
 import { type AddedLine, type ScopeFacts, addedLinesOf, scopeFacts } from "../../domain/scope.ts";
 
 export interface BuildWatchOptions {
@@ -133,7 +134,7 @@ export interface CheckAnswer {
   facts?: ScopeFacts;
 }
 
-export type Decide = (pack: "red_check" | "scope_check", check: CheckContext, repoPath: string | null) => Promise<Record<string, unknown>>;
+export type { Decide };
 
 export interface BuildChecksDeps {
   /** The run's `/out` on the host: answers go to `checks/` beside the requests. */
@@ -186,16 +187,10 @@ export function buildChecks(deps: BuildChecksDeps) {
     await rename(tmp, join(checksDir, file));
   };
   const judge = async (pack: "red_check" | "scope_check", check: CheckContext): Promise<CheckAnswer> => {
-    if (!deps.decide) return { verdict: "skipped", problems: [] };
-    try {
-      const answer = await deps.decide(pack, check, deps.repoPath);
-      const { overall } = applyPolicy(PACKS[pack], answer, deps.overrides[pack]);
-      const problems = problemsOf(pack, answer);
-      return { verdict: overall === "proceed" && problems.length > 0 ? "flag" : overall, problems };
-    } catch (error) {
-      log(`build checks: ${pack} skipped: ${error instanceof Error ? error.message : String(error)}`);
-      return { verdict: "skipped", problems: [] };
-    }
+    const { verdict, answer } = await judgeCheck(deps.decide, pack, check, deps.repoPath, deps.overrides, log);
+    if (!answer) return { verdict: "skipped", problems: [] };
+    const problems = problemsOf(pack, answer);
+    return { verdict: verdict === "proceed" && problems.length > 0 ? "flag" : verdict, problems };
   };
 
   const factsFor = async (declared: { path: string }[]): Promise<ScopeFacts> => {
