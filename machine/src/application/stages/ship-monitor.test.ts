@@ -49,7 +49,10 @@ beforeEach(async () => {
 });
 afterEach(() => rm(stateDir, { recursive: true, force: true }));
 
-function setup(answers: Partial<GitHub> = {}, over: { policy?: Partial<Policy>; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController } = {}) {
+function setup(
+  answers: Partial<GitHub> = {},
+  over: { policy?: Partial<Policy>; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController; loop?: unknown } = {},
+) {
   const github = fakeGitHub({ prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => {}, ...answers });
   let clock = START.getTime();
   const slept: number[] = [];
@@ -67,6 +70,8 @@ function setup(answers: Partial<GitHub> = {}, over: { policy?: Partial<Policy>; 
     },
     now: () => new Date(clock),
     readCodeowners: async () => over.codeowners ?? null,
+    // The review loop's decisions and sub-runs (slice 5); absent, the monitor only notes activity.
+    ...((over.loop ? { loop: over.loop } : {}) as object),
   };
   const context = {
     task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1" },
@@ -297,5 +302,35 @@ describe("the ship monitor", () => {
     const { run } = setup({ prActivity }, { policy: { autoMerge: "low" } });
     await run();
     expect(prActivity).toHaveBeenCalledWith("o/a", 3, "2026-11-04T11:00:00Z");
+  });
+});
+
+describe("the review loop", () => {
+  it("answers a person's question from the pack: pr_reply runs with the thread, the reply lands on it, nothing is resolved", async () => {
+    const at = "2026-11-04T12:01:00Z";
+    const question = "Does the export handle an empty cart?";
+    const thread = { id: "T1", path: "src/export.ts", line: 12, comments: [{ author: "bo", body: question, at }] };
+    const reply = "Yes: scenario 2 exports an empty cart and gets an empty file.";
+    let polls = 0;
+    const decide = vi.fn(async (pack: string) => (pack === "event_class" ? { event: { choice: "comment", confidence: 0.95 } } : { intent: { choice: "question", confidence: 0.9 } }));
+    const runPack = vi.fn(async () => ({ outcome: "pass" as const, detail: { answer: { reply, resolves: false, confidence: 0.9 } } }));
+    const { run, github } = setup(
+      {
+        viewer: async () => ({ login: "me", teams: [] }),
+        prMerged: async () => (++polls < 3 ? open : merged),
+        prActivity: async (_slug, _n, since) => (since === null ? [{ id: "review_comment:1", kind: "review_comment", actor: "bo", isBot: false, body: question, state: null, at, url: null }] : []),
+        prThreads: async () => [thread],
+        replyToThread: async () => {},
+      },
+      { loop: { decide, runPack } },
+    );
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "person" } } });
+    expect(decide.mock.calls.map((c) => c[0])).toEqual(["event_class", "comment_intent"]);
+    expect(decide.mock.calls[0]![1]).toMatchObject({ kind: "event", event: { actor: "bo", isBot: false, isMe: false, kind: "comment", body: question } });
+    expect(runPack).toHaveBeenCalledTimes(1);
+    expect(runPack.mock.calls[0]![0]).toBe("pr_reply");
+    expect(runPack.mock.calls[0]![2]).toMatchObject({ kind: "comment", comment: { thread, pack: { summary: "s", howToVerify: "h" }, myReplies: 0 } });
+    expect(calls(github, "replyToThread")).toEqual([["replyToThread", "T1", reply]]);
+    expect(calls(github, "resolveThread")).toEqual([]);
   });
 });
