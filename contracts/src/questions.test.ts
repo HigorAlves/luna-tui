@@ -111,6 +111,25 @@ describe("the plan stage's decision packs", () => {
     }
   });
 
+  it("finding_classify asks one severity choice (blocker, should_fix, nit) and e2e_failure_cause one cause choice (product_bug, test_bug, env_flake), both decisions on the check context", () => {
+    // Read through a plain record until the packs exist: the red must be "the pack is missing", not a type error.
+    const packs = PACKS as Record<string, unknown>;
+    expect(packs).toHaveProperty("finding_classify");
+    expect(packs).toHaveProperty("e2e_failure_cause");
+    const classify = packs.finding_classify as typeof PACKS.red_check;
+    const cause = packs.e2e_failure_cause as typeof PACKS.red_check;
+    expect(Object.keys(classify.questions)).toEqual(["severity"]);
+    expect(classify.questions.severity).toMatchObject({ type: "choice", criteria: { blocker: expect.any(String), should_fix: expect.any(String), nit: expect.any(String) } });
+    expect(Object.keys(cause.questions)).toEqual(["cause"]);
+    expect(cause.questions.cause).toMatchObject({ type: "choice", criteria: { product_bug: expect.any(String), test_bug: expect.any(String), env_flake: expect.any(String) } });
+    for (const pack of [classify, cause]) {
+      expect(pack.kind).toBe("decision");
+      expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
+      expect(Object.keys(pack.policy).sort()).toEqual(Object.keys(pack.questions).sort());
+      expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: 1, timeoutMs: pack.timeoutMs, writable: false });
+    }
+  });
+
   it("all three run on Jev by default and a small Claude or Codex model when it is absent, with a bar per question", () => {
     for (const pack of [PACKS.risk_score, PACKS.coverage_check, PACKS.plan_check]) {
       expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
