@@ -28,6 +28,11 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   e2e_failure_cause: [],
   // A decision on the evidence context, run on demand by the evidence stage.
   evidence_format: [],
+  // The video pipeline runs inside evidence, sub-run by sub-run; `evidence` stays first in PACKS so the state still picks it.
+  video_script: ["evidence"],
+  recording: ["evidence"],
+  video_qa: ["evidence"],
+  video_fix: ["evidence"],
   eval_judge: [],
   chat_triage: [],
 };

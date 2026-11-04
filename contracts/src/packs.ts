@@ -35,6 +35,10 @@ export const AgentRole = z.enum([
   "jira-triager",
   // The replay evals' judge: grades another pack's answer against a case's rubric; no tools.
   "eval-judge",
+  // Evidence's video pipeline: writes the script and timeline; drives the approved steps against the app; judges the finished film cold.
+  "video-director",
+  "demo-recorder",
+  "video-critic",
   // Helpers a pack's role hands work to (packs' `helpers`); never a pack's own role.
   "security-reviewer",
   "reply-drafter",
@@ -178,6 +182,38 @@ export const E2eAnswer = z.object({
 });
 
 export const EvidenceAnswer = z.object({ outcome: z.enum(["pass", "fail"]).optional() });
+
+/** What the video director (video_script, video_fix) gives back: the script, the timeline (checked by the machine, not here), the facts it cites. */
+export const VideoScriptAnswer = z.object({
+  script: z.string(),
+  timeline: z.unknown(),
+  facts: z.array(z.object({ claim: z.string(), source: z.string() })),
+  durationEstimateS: z.number(),
+  kind: z.enum(["done", "escalated"]).optional(),
+  escalation: EscalationReason.optional(),
+  reason: z.string().optional(),
+  options: z.array(z.string()).optional(),
+});
+
+export const RecordingAnswer = z.object({
+  timing: z.object({ marks: z.array(z.object({ scene: z.string(), t: z.number() })) }),
+  recordingPath: z.string(),
+  scenesRecorded: z.array(z.string()),
+  kind: z.enum(["done", "escalated"]).optional(),
+  escalation: EscalationReason.optional(),
+  reason: z.string().optional(),
+  options: z.array(z.string()).optional(),
+});
+
+const VideoScore = z.number().int().min(1).max(10);
+export const VideoQaAnswer = z.object({
+  message: z.string(),
+  verdict: z.enum(["ship", "one_more_pass"]),
+  scores: z.object({ hook: VideoScore, clarity: VideoScore, readability: VideoScore, motion: VideoScore, rhythm: VideoScore, composition: VideoScore, continuity: VideoScore, truth: VideoScore, sync: VideoScore }),
+  defects: z.array(z.object({ priority: z.enum(["P0", "P1", "P2"]), t: z.number(), scene: z.string().nullable(), element: z.string().nullable(), symptom: z.string(), mechanism: z.string(), fix: z.string() })),
+  weakestScene: z.string(),
+});
+export type VideoQaAnswer = z.infer<typeof VideoQaAnswer>;
 
 export const CiWatchAnswer = z.object({
   kind: z.enum(["done", "escalated"]).optional(),
@@ -662,6 +698,70 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "low",
     answer: EvidenceAnswer,
     template: "evidence.md",
+  },
+  // Evidence's video pipeline. They run in the evidence state (the machine's RUNS_IN) and sit after `evidence` so the state still picks that one.
+  video_script: {
+    id: "video_script",
+    kind: "agent",
+    agent: "video-director",
+    helpers: [],
+    skills: ["video-script"],
+    // It writes /out/files/video/script.md and timeline.json; the prompt forbids edits to /work.
+    access: access(READ_ONLY, { write: true }),
+    writable: true,
+    maxTurns: 25,
+    timeoutMs: 10 * MINUTE,
+    engines: only("claude:sonnet"),
+    effort: "medium",
+    answer: VideoScriptAnswer,
+    template: "video_script.md",
+  },
+  recording: {
+    id: "recording",
+    kind: "agent",
+    agent: "demo-recorder",
+    helpers: [],
+    skills: ["demo-recording", "qa-targets", "playwright-qa"],
+    access: access(READ_ONLY, { write: true, commands: ["node", "npx", "npx playwright", "ffmpeg", "curl", "command -v"] }),
+    writable: true,
+    maxTurns: 40,
+    timeoutMs: 20 * MINUTE,
+    engines: only("claude:sonnet"),
+    effort: "medium",
+    answer: RecordingAnswer,
+    template: "recording.md",
+  },
+  video_qa: {
+    id: "video_qa",
+    kind: "agent",
+    agent: "video-critic",
+    helpers: [],
+    skills: ["video-critic"],
+    // Reads the contact sheets under /evidence (mounted read-only) and the worktree.
+    access: access(READ_ONLY),
+    writable: false,
+    maxTurns: 12,
+    timeoutMs: 8 * MINUTE,
+    // Another engine than the writer (sonnet). Only the Claude runtime is known to read images, so haiku is the default; codex:sol judges from the report, the transcript and the timeline.
+    engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:sol"], fallback: ["codex:sol"] },
+    effort: "medium",
+    answer: VideoQaAnswer,
+    template: "video_qa.md",
+  },
+  video_fix: {
+    id: "video_fix",
+    kind: "agent",
+    agent: "video-director",
+    helpers: [],
+    skills: ["video-script"],
+    access: access(READ_ONLY, { write: true }),
+    writable: true,
+    maxTurns: 25,
+    timeoutMs: 10 * MINUTE,
+    engines: only("claude:sonnet"),
+    effort: "medium",
+    answer: VideoScriptAnswer,
+    template: "video_fix.md",
   },
   ci_watch: {
     id: "ci_watch",

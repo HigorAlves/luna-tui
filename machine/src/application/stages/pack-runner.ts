@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -22,7 +22,7 @@ import {
   restoreFiles,
   worktreeAdminDir,
 } from "../../adapters/git/worktree.ts";
-import { CredentialWaitError, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
+import { CredentialWaitError, type CredentialMount, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
@@ -47,6 +47,8 @@ export interface AgentDeps {
   image: string;
   /** The image with browsers, used by the e2e pack. */
   qaImage: string;
+  /** The image with the video tools, used by the recording pack; absent falls back to the QA image. */
+  videoImage?: string;
   /** Each engine's credential; a stage gets only its own engine's. */
   credentials: Credentials;
   worktreesDir: string;
@@ -117,6 +119,10 @@ export interface AgentExtra {
   blastRadius?: string[];
   /** verifying: the coverage of the change's added lines. */
   coverage?: CoverageSummary;
+  /** The video packs: the scenarios, target, narration and measurements. */
+  video?: VideoContext | null;
+  /** Extra mounts for the container, after the worktree's own (the critic's /evidence, read-only). */
+  mounts?: CredentialMount[];
 }
 
 /** The files the plan's slices touch, with the code map's files when it has one. */
@@ -218,6 +224,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     ...(extra.coverage ? { coverage: extra.coverage } : {}),
     holdoutCases: policy.holdoutCases,
     qaTargets: policy.qaTargets,
+    ...(extra.video ? { video: extra.video } : {}),
     checks: policy.checks,
     history: extra.history ?? ((pack === "implementing" || pack === "reviewing_memory") && deps.history ? await deps.history(task.id) : null),
   });
@@ -306,7 +313,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     attach: Boolean(resume),
     sessionMount,
     cacheVolume: cacheVolumeFor(task.repoPath),
-    image: pack === "e2e" ? deps.qaImage : deps.image,
+    image: pack === "e2e" ? deps.qaImage : pack === "recording" ? (deps.videoImage ?? deps.qaImage) : deps.image,
     runDir,
     worktree: workspace.path,
     writable: limits.writable,
@@ -324,6 +331,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       ...(graphContext && graphDir ? [{ host: graphDir, container: GRAPH_MOUNT, readOnly: true }] : []),
       // The worktree's `.git` file points at its admin dir: read-only, so no stage can repoint the checkout.
       ...(isFile(join(workspace.path, ".git")) ? [{ host: join(workspace.path, ".git"), container: "/work/.git", readOnly: true }] : []),
+      ...(extra.mounts ?? []),
     ],
     ...(graphContext && graphDir ? { extraEnv: { LUNA_GRAPH: GRAPH_FILE } } : {}),
     signal: context.signal,

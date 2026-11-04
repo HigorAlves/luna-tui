@@ -9,6 +9,7 @@ import {
   CloneInput,
   EscalationReason,
   EvidenceContext,
+  VideoContext,
   EvidencePack,
   EvalJudgeAnswer,
   CodeMapAnswer,
@@ -201,11 +202,11 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format", "video_script", "recording", "video_qa", "video_fix"].sort(),
     );
     const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format"];
     // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
-    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "code_map"];
+    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "code_map", "video_script", "recording", "video_qa", "video_fix"];
     for (const pack of PackId.options) {
       if (onDemand.includes(pack) || runsInAnotherState.includes(pack)) expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
@@ -465,5 +466,63 @@ describe("EvidenceContext and head_moved", () => {
   });
   it("head_moved is an escalation reason", () => {
     expect(EscalationReason.options).toContain("head_moved");
+  });
+});
+
+describe("the video packs", () => {
+  const video = (id: "video_script" | "video_fix" | "recording" | "video_qa") => PACKS[id] as Exclude<(typeof PACKS)[typeof id], { kind: "decision" }>;
+
+  it("video_script and video_fix are the video director on sonnet: they write the script and the timeline, never the worktree", () => {
+    for (const id of ["video_script", "video_fix"] as const) {
+      expect(video(id)).toMatchObject({ kind: "agent", agent: "video-director", helpers: [], skills: ["video-script"], writable: true, maxTurns: 25, timeoutMs: 600_000, effort: "medium", template: `${id}.md`, engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
+      expect(video(id).access).toMatchObject({ read: true, write: true });
+    }
+  });
+
+  it("recording is the demo recorder: the QA skills and a browser job's commands, 40 turns, 20 minutes", () => {
+    expect(video("recording")).toMatchObject({ agent: "demo-recorder", skills: ["demo-recording", "qa-targets", "playwright-qa"], writable: true, maxTurns: 40, timeoutMs: 1_200_000, effort: "medium", template: "recording.md", engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
+    expect(video("recording").access.commands).toEqual(expect.arrayContaining(["node", "npx", "npx playwright", "ffmpeg", "curl", "command -v"]));
+  });
+
+  it("video_qa is a read-only critic that defaults to haiku and may fall back to codex:sol", () => {
+    expect(video("video_qa")).toMatchObject({ agent: "video-critic", skills: ["video-critic"], writable: false, maxTurns: 12, timeoutMs: 480_000, template: "video_qa.md", engines: { default: "claude:haiku", allowed: ["claude:haiku", "codex:sol"], fallback: ["codex:sol"] } });
+    expect(video("video_qa").access).toMatchObject({ read: true, write: false });
+  });
+
+  it("answers: the script pair gives a script and a timeline, the recorder its marks, the critic scores and defects", () => {
+    expect(AgentRole.options).toEqual(expect.arrayContaining(["video-director", "demo-recorder", "video-critic"]));
+    const script = { script: "# s", timeline: { meta: {} }, facts: [{ claim: "c", source: "s" }], durationEstimateS: 60 };
+    expect(PACKS.video_script.answer.safeParse(script).success).toBe(true);
+    expect(PACKS.video_fix.answer.safeParse({ ...script, kind: "escalated", escalation: "other", reason: "r" }).success).toBe(true);
+    expect(PACKS.video_script.answer.safeParse({ ...script, durationEstimateS: "long" }).success).toBe(false);
+    expect(PACKS.recording.answer.safeParse({ timing: { marks: [{ scene: "a", t: 1.5 }] }, recordingPath: "/out/files/video/recording.webm", scenesRecorded: ["a"] }).success).toBe(true);
+    const scores = { hook: 8, clarity: 8, readability: 8, motion: 8, rhythm: 8, composition: 8, continuity: 8, truth: 8, sync: 8 };
+    const qa = { message: "ships", verdict: "ship", scores, defects: [{ priority: "P1", t: 12.5, scene: "cart", element: "cta", symptom: "cut off", mechanism: "overflow", fix: "wrap the heading" }], weakestScene: "cart" };
+    expect(PACKS.video_qa.answer.safeParse(qa).success).toBe(true);
+    expect(PACKS.video_qa.answer.safeParse({ ...qa, scores: { ...scores, hook: 11 } }).success).toBe(false);
+    expect(PACKS.video_qa.answer.safeParse({ ...qa, verdict: "degraded" }).success).toBe(false);
+  });
+});
+
+describe("VideoContext", () => {
+  const context = {
+    scenarios: [{ title: "A coupon counts once", criterion: "c1", approach: "apply twice" }],
+    record: null,
+    pack: { summary: "s", howToVerify: "open it", risk: "low" },
+    steps: ['{"scenario":"a","step":"click"}'],
+    chapters: [{ title: "A", start: 0 }],
+    target: { name: "local", baseUrl: "http://127.0.0.1:3000", credential: null },
+    narration: [{ id: "a", durationS: 12.5 }],
+    timeline: null,
+    report: null,
+    transcript: null,
+    sheets: ["/evidence/sheets/beats_sheet.jpg"],
+    fixCards: [{ t: 12.5, scene: "cart", element: "cta", text: "cut off", priority: "P1" }],
+  };
+  it("is what the video packs read, and rides on the stage input's context", () => {
+    expect(VideoContext.parse(context)).toEqual(context);
+    expect(VideoContext.safeParse({ ...context, steps: Array.from({ length: 401 }, () => "x") }).success).toBe(false);
+    expect(VideoContext.safeParse({ ...context, fixCards: [{ t: null, scene: null, element: null, text: "x", priority: "P3" }] }).success).toBe(false);
+    expect(StageInput.parse({ ...stageInputExample, schema: 3, context: { projectContext: null, video: context } }).context.video).toEqual(context);
   });
 });

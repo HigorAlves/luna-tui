@@ -134,6 +134,11 @@ export const PackId = z.enum([
   "code_map",
   // A decision on Evidence (an evidence context, run on demand): which format shows the change best.
   "evidence_format",
+  // Evidence's video pipeline (they run in the evidence state): the script and timeline, the recording of the approved steps, the cold critic, one fix round.
+  "video_script",
+  "recording",
+  "video_qa",
+  "video_fix",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -645,6 +650,37 @@ export const EvalJudgeContext = z.object({
 });
 export type EvalJudgeContext = z.infer<typeof EvalJudgeContext>;
 
+/** One thing to change in the film: where (a time, a scene, an element), what, and how serious when the critic raised it. */
+export const VideoFixCard = z.object({
+  t: z.number().nullable(),
+  scene: z.string().nullable(),
+  element: z.string().nullable(),
+  text: z.string(),
+  priority: z.enum(["P0", "P1", "P2"]).optional(),
+});
+export type VideoFixCard = z.infer<typeof VideoFixCard>;
+
+/** What the video packs read: the approved scenarios, what the browser run left, the target, the narration, and (for the critic and the fix) the film's own measurements and sheets. */
+export const VideoContext = z.object({
+  scenarios: z.array(TestCase),
+  record: TriageRecord.nullable(),
+  pack: z.object({ summary: z.string(), howToVerify: z.string(), risk: Risk.nullable() }),
+  /** `steps.jsonl` lines from the browser run, capped at 400. */
+  steps: z.array(z.string()).max(400),
+  chapters: z.array(z.object({ title: z.string(), start: z.number() })),
+  target: QaTarget.nullable(),
+  /** The clip length of each narrated scene; present once the narration job ran. */
+  narration: z.array(z.object({ id: z.string(), durationS: z.number() })).nullable(),
+  timeline: z.unknown().nullable(),
+  /** The measure job's report.json. */
+  report: z.unknown().nullable(),
+  transcript: z.string().nullable(),
+  /** Contact sheets, as paths in the container (under /evidence). */
+  sheets: z.array(z.string()),
+  fixCards: z.array(VideoFixCard),
+});
+export type VideoContext = z.infer<typeof VideoContext>;
+
 /** Schema 2 adds `context.testCases`; schema 3 renames its `test` field to `approach`. */
 /** Where the repo's code graph is in the stage container, and how current. */
 export const GraphContext = z.object({
@@ -732,6 +768,8 @@ export const StageInput = z.object({
     check: CheckContext.nullable().optional(),
     /** For evidence_format: the change's record, surface and browser run. */
     evidence: EvidenceContext.nullable().optional(),
+    /** For the video packs (script, fix, recording, critic): the scenarios, the target, the narration, the film's measurements. */
+    video: VideoContext.nullable().optional(),
     /** For the eval_judge pack: the case, its expectation and the answer to grade. */
     eval: EvalJudgeContext.nullable().optional(),
     /** For chat_triage: the chat batch; the task is synthetic and there is no worktree. */

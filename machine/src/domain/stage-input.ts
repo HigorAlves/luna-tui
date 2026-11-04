@@ -1,10 +1,13 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, CodeMapAnswer, type CheckContext, type CheckSpec, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type ChatTriageContext, CodeMapAnswer, type CheckContext, type CheckSpec, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
 import type { ContextPackId, PackContext } from "./context-packs.ts";
 import type { ApprovalRow, TaskRow } from "./task.ts";
+
+/** The packs that read `context.video`. */
+const VIDEO_PACKS: ReadonlySet<PackId> = new Set<PackId>(["video_script", "recording", "video_qa", "video_fix"]);
 
 const MINUTE = 60_000;
 
@@ -100,6 +103,8 @@ export function buildStageInput(opts: {
   threads?: ThreadsContext | null;
   /** Where the repo's code graph is in the container and how current it is; null when it has none. */
   graph?: GraphContext | null;
+  /** For the video packs: the scenarios, target, narration and the film's measurements. */
+  video?: VideoContext | null;
   /** For verifying: the files the code graph says depend on what the change touched. */
   blastRadius?: string[];
   /** For verifying: how much of the change's added lines the repo's lcov report saw run. */
@@ -144,14 +149,17 @@ export function buildStageInput(opts: {
     context: {
       projectContext: opts.projectContext ?? null,
       testCases:
-        pack === "verifying" || pack === "e2e" || (pack === "implementing" && !opts.holdoutCases) ? approvedCases(approvals) : [],
+        pack === "verifying" || pack === "e2e" || pack === "video_script" || pack === "video_fix" || pack === "recording" || (pack === "implementing" && !opts.holdoutCases)
+          ? approvedCases(approvals)
+          : [],
       baseCommit: opts.baseCommit ?? null,
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,
       ...(opts.plan ? { plan: opts.plan } : {}),
       ...(pack === "verifying" && opts.blastRadius?.length ? { blastRadius: opts.blastRadius } : {}),
       ...(pack === "verifying" && opts.coverage ? { coverage: opts.coverage } : {}),
-      ...(pack === "e2e" && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
+      ...((pack === "e2e" || pack === "recording") && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
+      ...(VIDEO_PACKS.has(pack) && opts.video ? { video: opts.video } : {}),
       ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),
       ...(pack === "reviewing" && opts.review ? { review: opts.review } : {}),
       ...(pack === "addressing" && opts.threads ? { threads: opts.threads } : {}),

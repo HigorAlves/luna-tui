@@ -125,6 +125,45 @@ describe("renderPrompt", () => {
     expect(prompt).not.toContain("{{");
   });
 
+  it("renders the video context, the evidence pack as text, and leaves no placeholder in any video template", () => {
+    const video = {
+      scenarios: [{ title: "A coupon counts once", criterion: "c1", approach: "apply twice" }],
+      record: null,
+      pack: { summary: "Discounts show in the cart.", howToVerify: "open the cart", risk: "low" as const },
+      steps: ['{"scenario":"a","step":"click"}'],
+      chapters: [{ title: "A coupon", start: 4 }],
+      target: { name: "local", baseUrl: "http://127.0.0.1:3000", credential: "env:QA_PASSWORD" },
+      narration: [{ id: "a", durationS: 12.5 }],
+      timeline: { meta: { dur: 60 } },
+      report: { verdict: "pass" },
+      transcript: "apply the coupon",
+      sheets: ["/evidence/sheets/beats_sheet.jpg"],
+      fixCards: [{ t: 12.5, scene: "cart", element: "cta", text: "the headline is cut off", priority: "P1" as const }],
+    };
+    const evidence = { summary: "Discounts show in the cart.", format: "video" as const, scenarios: [{ text: "A coupon counts once", test: null, result: "pass" as const }], findings: [], outOfMap: [], risk: "low" as const, rollback: "revert", howToVerify: "open the cart", commitSha: "abc1234", media: [], at: "2026-11-04T10:00:00Z" };
+    const base = { ...input, stage: "evidence", task: { ...input.task, evidence }, context: { projectContext: null, video, testCases: video.scenarios, qaTargets: [video.target] } };
+    const one = renderPrompt({ pack: PACKS.video_qa, input: { ...base, pack: "video_qa" } as never, template: "{{context.video.scenarios}}|{{context.video.steps}}|{{context.video.chapters}}|{{context.video.target}}|{{context.video.narration}}|{{context.video.timeline}}|{{context.video.report}}|{{context.video.transcript}}|{{context.video.sheets}}|{{context.video.fixCards}}|{{task.evidence}}" });
+    expect(one).toContain("- A coupon counts once (criterion: c1): apply twice");
+    expect(one).toContain('{"scenario":"a","step":"click"}');
+    expect(one).toContain("- 4s: A coupon");
+    expect(one).toContain("local: http://127.0.0.1:3000 (credential: env:QA_PASSWORD)");
+    expect(one).toContain("- a: 12.5s");
+    expect(one).toContain('"dur": 60');
+    expect(one).toContain('"verdict": "pass"');
+    expect(one).toContain("apply the coupon");
+    expect(one).toContain("- /evidence/sheets/beats_sheet.jpg");
+    expect(one).toContain("- P1 t=12.5 scene=cart el=cta: the headline is cut off");
+    expect(one).toContain("Format: video");
+    expect(one).toContain("A coupon counts once: pass");
+    const bare = renderPrompt({ pack: PACKS.video_script, input: { ...input, pack: "video_script" } as never, template: "{{context.video.narration}}|{{context.video.timeline}}|{{context.video.fixCards}}|{{task.evidence}}" });
+    expect(bare).toContain("(none)|(none)|(none)|(none)");
+    for (const id of ["video_script", "recording", "video_qa", "video_fix"] as const) {
+      const template = readFileSync(new URL(`../../prompts/${id}.md`, import.meta.url), "utf8");
+      const prompt = renderPrompt({ pack: PACKS[id], input: { ...base, pack: id } as never, template });
+      expect(prompt, id).not.toContain("{{");
+    }
+  });
+
   it("renders the coverage of the change per file with a total line, or says there is no report", () => {
     const template = "{{context.coverage}}";
     const render = (coverage?: unknown) => renderPrompt({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying", context: { ...input.context, ...(coverage ? { coverage } : {}) } } as never, template });

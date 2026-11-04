@@ -66,6 +66,7 @@ function deps(sandbox: (run: SandboxRun) => Promise<SandboxResult>): AgentDeps {
   return {
     image: "img",
     qaImage: "qa-img",
+    videoImage: "video-img",
     credentials: fixedCredentials({ ANTHROPIC_API_KEY: "x" }),
     worktreesDir: join(root, "worktrees"),
     stateDir,
@@ -145,6 +146,29 @@ describe("agent stages through packs", () => {
     expect(seen?.image).toBe("img");
     await runAgent(d, context("triage"), "triage");
     expect(seen?.image).toBe("img");
+  });
+
+  it("runs recording in the video image (the QA image when there is none) and the other video packs in the base image", async () => {
+    const d = deps(fakeSandbox(output()));
+    await runAgent(d, context("evidence"), "recording");
+    expect(seen?.image).toBe("video-img");
+    await runAgent({ ...d, videoImage: undefined }, context("evidence"), "recording");
+    expect(seen?.image).toBe("qa-img");
+    for (const pack of ["video_script", "video_fix", "video_qa"] as const) {
+      await runAgent(d, context("evidence"), pack);
+      expect(seen?.image, pack).toBe("img");
+    }
+  });
+
+  it("hands a video pack its VideoContext and mounts what the caller asks for, after the worktree's own mounts", async () => {
+    const d = deps(fakeSandbox(output()));
+    const video = { scenarios: [], record: null, pack: { summary: "s", howToVerify: "h", risk: null }, steps: [], chapters: [], target: null, narration: null, timeline: null, report: null, transcript: null, sheets: ["/evidence/sheets/beats_sheet.jpg"], fixCards: [] };
+    const mounts = [{ host: join(root, "state", "runs", "run-1-video", "files", "video"), container: "/evidence", readOnly: true }];
+    await runAgent(d, context("evidence"), "video_qa", { video, mounts });
+    expect((seen?.input as { context: { video?: unknown } }).context.video).toEqual(video);
+    expect(extraMounts(seen!)).toContainEqual(mounts[0]);
+    await runAgent(d, context("evidence"), "triage", { video, mounts });
+    expect((seen?.input as { context: { video?: unknown } }).context.video).toBeUndefined();
   });
 
   it.each([

@@ -224,6 +224,46 @@ function coverageText(coverage: StageInput["context"]["coverage"]): string {
   return [...rows, `Total: ${coverage.total.covered}/${coverage.total.added} added lines covered (${coverage.report})`].join("\n");
 }
 
+const JSON_CAP = 20_000;
+const jsonText = (value: unknown): string => {
+  if (value == null) return NONE;
+  const text = JSON.stringify(value, null, 2);
+  return text.length > JSON_CAP ? `${text.slice(0, JSON_CAP)}\n… (cut at ${JSON_CAP} characters)` : text;
+};
+
+/** The video packs' context, one text per placeholder. */
+const videoText = (video: StageInput["context"]["video"]) => ({
+  scenarios: bullets((video?.scenarios ?? []).map((c) => `${c.title}${c.criterion ? ` (criterion: ${c.criterion})` : ""}: ${c.approach}`)),
+  steps: bullets(video?.steps),
+  chapters: bullets((video?.chapters ?? []).map((c) => `${c.start}s: ${c.title}`)),
+  target: video?.target ? `${video.target.name}: ${video.target.baseUrl}${video.target.credential ? ` (credential: ${video.target.credential})` : ""}` : NONE,
+  narration: bullets((video?.narration ?? []).map((n) => `${n.id}: ${n.durationS}s`)),
+  timeline: jsonText(video?.timeline),
+  report: jsonText(video?.report),
+  transcript: txt(video?.transcript),
+  sheets: bullets(video?.sheets),
+  fixCards: bullets(
+    (video?.fixCards ?? []).map((c) => {
+      const where = [c.t != null ? `t=${c.t}` : "", c.scene ? `scene=${c.scene}` : "", c.element ? `el=${c.element}` : ""].filter(Boolean).join(" ");
+      return `${c.priority ? `${c.priority} ` : ""}${where ? `${where}: ` : ""}${c.text}`;
+    }),
+  ),
+});
+
+/** The task's Evidence Pack as text, for the packs that work from it. */
+const evidenceText = (evidence: StageInput["task"]["evidence"]): string => {
+  if (!evidence) return NONE;
+  return [
+    `Format: ${evidence.format} · Commit: ${evidence.commitSha.slice(0, 7)} · Risk: ${evidence.risk}`,
+    `Summary: ${evidence.summary}`,
+    "Scenarios:",
+    bullets(evidence.scenarios.map((s) => `${s.text}: ${s.result}`)),
+    `Findings:\n${bullets(evidence.findings)}`,
+    `Rollback: ${evidence.rollback}`,
+    `How to verify: ${evidence.howToVerify}`,
+  ].join("\n");
+};
+
 function graphText(graph: StageInput["context"]["graph"]): string {
   if (!graph) return "Code graph: (none: use Glob, Grep and Read)";
   const built = `built at ${graph.commit.slice(0, 7)} on ${graph.builtAt.slice(0, 10)}`;
@@ -238,6 +278,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
   const jira = jiraText(input.context.jira);
   const judged = evalText(input.context.eval);
   const chat = chatText(input.context.chat);
+  const video = videoText(input.context.video);
   const subs: Record<string, string> = {
     "{{task.title}}": txt(input.task.title),
     "{{task.description}}": txt(input.task.description),
@@ -284,6 +325,17 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
         )
       : "(none declared; detect the suite from the tree)",
     "{{context.qaTargets}}": bullets((input.context.qaTargets ?? []).map((t) => `${t.name}: ${t.baseUrl}${t.credential ? ` (credential: ${t.credential})` : ""}`)),
+    "{{context.video.scenarios}}": video.scenarios,
+    "{{context.video.steps}}": video.steps,
+    "{{context.video.chapters}}": video.chapters,
+    "{{context.video.target}}": video.target,
+    "{{context.video.narration}}": video.narration,
+    "{{context.video.timeline}}": video.timeline,
+    "{{context.video.report}}": video.report,
+    "{{context.video.transcript}}": video.transcript,
+    "{{context.video.sheets}}": video.sheets,
+    "{{context.video.fixCards}}": video.fixCards,
+    "{{task.evidence}}": evidenceText(input.task.evidence),
     "{{context.slack.me}}": slack.me,
     "{{context.slack.watches}}": slack.watches,
     "{{context.slack.rules}}": slack.rules,

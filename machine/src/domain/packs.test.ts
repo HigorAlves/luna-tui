@@ -19,6 +19,11 @@ describe("packStates", () => {
     expect(packForState("test_design")).toBe("test_design");
   });
 
+  it("runs the four video packs inside evidence, beside the pack of that name, which the pipeline still picks for the state", () => {
+    for (const id of ["video_script", "recording", "video_qa", "video_fix"] as const) expect(packStates(id)).toEqual(["evidence"]);
+    expect(packForState("evidence")).toBe("evidence");
+  });
+
   it("runs the memory review inside shipping, and the inbox and on-demand packs in no task state", () => {
     expect(packStates("reviewing_memory")).toEqual(["shipping"]);
     expect(packStates("slack_triage")).toEqual([]);

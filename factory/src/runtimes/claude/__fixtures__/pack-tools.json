@@ -617,5 +617,147 @@
       "mcp__luna__step",
       "Bash"
     ]
+  },
+  "video_script": {
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Write",
+      "Edit",
+      "Skill",
+      "mcp__luna__step",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(pwd:*)",
+      "Bash(echo:*)",
+      "Bash(git branch --show-current:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(graphify query:*)",
+      "Bash(graphify explain:*)",
+      "Bash(graphify path:*)",
+      "Bash(graphify affected:*)",
+      "Bash(graphify god-nodes:*)"
+    ],
+    "tools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Write",
+      "Edit",
+      "Skill",
+      "mcp__luna__step",
+      "Bash"
+    ]
+  },
+  "recording": {
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Write",
+      "Edit",
+      "Skill",
+      "mcp__luna__step",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(pwd:*)",
+      "Bash(echo:*)",
+      "Bash(git branch --show-current:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(graphify query:*)",
+      "Bash(graphify explain:*)",
+      "Bash(graphify path:*)",
+      "Bash(graphify affected:*)",
+      "Bash(graphify god-nodes:*)",
+      "Bash(node:*)",
+      "Bash(npx:*)",
+      "Bash(npx playwright:*)",
+      "Bash(ffmpeg:*)",
+      "Bash(curl:*)",
+      "Bash(command -v:*)"
+    ],
+    "tools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Write",
+      "Edit",
+      "Skill",
+      "mcp__luna__step",
+      "Bash"
+    ]
+  },
+  "video_qa": {
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Skill",
+      "mcp__luna__step",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(pwd:*)",
+      "Bash(echo:*)",
+      "Bash(git branch --show-current:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(graphify query:*)",
+      "Bash(graphify explain:*)",
+      "Bash(graphify path:*)",
+      "Bash(graphify affected:*)",
+      "Bash(graphify god-nodes:*)"
+    ],
+    "tools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Skill",
+      "mcp__luna__step",
+      "Bash"
+    ]
+  },
+  "video_fix": {
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Write",
+      "Edit",
+      "Skill",
+      "mcp__luna__step",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(pwd:*)",
+      "Bash(echo:*)",
+      "Bash(git branch --show-current:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(graphify query:*)",
+      "Bash(graphify explain:*)",
+      "Bash(graphify path:*)",
+      "Bash(graphify affected:*)",
+      "Bash(graphify god-nodes:*)"
+    ],
+    "tools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Write",
+      "Edit",
+      "Skill",
+      "mcp__luna__step",
+      "Bash"
+    ]
   }
 }
