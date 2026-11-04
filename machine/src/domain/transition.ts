@@ -1,7 +1,7 @@
 // The pipeline as a pure function: given a task's state and an event, return the next
 // state and what the machine should do next. No database, no I/O, so every path is
 // unit tested. The graph is documented in docs/architecture.md.
-import { type ArchiveReason, type EscalationReason, RUNNING, TERMINAL, type TaskRoute, type TaskState, type TriageOutcome } from "@hardness/contracts";
+import { type ArchiveReason, type EscalationReason, PACKS, RUNNING, TERMINAL, type TaskRoute, type TaskState, type TriageOutcome, stronger } from "@hardness/contracts";
 
 /** Failures allowed in one retry loop (verify, e2e, ci) before asking you. */
 export const LOOP_CAP = 3;
@@ -16,9 +16,13 @@ export interface Retries {
   ci: number;
   /** Implementer runs started, plus test change requests. */
   total: number;
+  /** Implementer runs taken on a stronger engine after a too_complex escalation: one is all a task gets. */
+  stronger: number;
+  /** The next implementing run is that one shot; the pipeline reads it as the run starts and the run's own end clears it. */
+  strongerNext?: boolean;
 }
 
-export const NO_RETRIES: Retries = { verify: 0, e2e: 0, ci: 0, total: 0 };
+export const NO_RETRIES: Retries = { verify: 0, e2e: 0, ci: 0, total: 0, stronger: 0 };
 
 export interface Snapshot {
   state: TaskState;
@@ -297,7 +301,9 @@ function prStageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stag
 }
 
 function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_done" }>): Move {
-  const { state, retries } = task;
+  const { state } = task;
+  // The stronger engine's one run is over whichever way it ended.
+  const { strongerNext: _spent, ...retries } = task.retries;
   const { outcome } = event;
 
   // The agent stopped on purpose and says why: a human decides, so no retry is spent.
@@ -306,6 +312,10 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
     // is no plan to redo, and triage itself cannot send the task to triage.
     if (event.escalation === "plan_wrong" && task.route === "feature" && state !== "triage" && state !== "setup") {
       return { ...run("triage", retries), reason: event.reason };
+    }
+    // Too complex for the default engine: one more run on the pack's stronger one before a person is asked.
+    if (event.escalation === "too_complex" && state === "implementing" && (retries.stronger ?? 0) < 1 && retries.total < IMPLEMENTER_CAP && stronger(PACKS.implementing)) {
+      return { ...run("implementing", { ...retries, total: retries.total + 1, stronger: (retries.stronger ?? 0) + 1, strongerNext: true }), reason: event.reason };
     }
     return { ...escalate(event.reason || `${state} escalated`, state, retries), ...(event.escalation ? { escalation: event.escalation } : {}) };
   }

@@ -5,7 +5,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { AGENT_PACKS, ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, StageInput, credentialOwner, engineBudgetKeyProblem, helperPack, readOnly, resolveEngine, retired } from "./index.ts";
+import { AGENT_PACKS, ENGINES, EngineBudgets, EngineId, MODELS, type ModelEntry, PACKS, STRONGER, StageInput, credentialOwner, engineBudgetKeyProblem, helperPack, readOnly, resolveEngine, retired, stronger } from "./index.ts";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 
@@ -133,6 +133,18 @@ describe("the engines each pack may run on", () => {
     const claudeOnly = Object.values(PACKS).filter((p) => p.engines.allowed.every((id) => id.startsWith("claude:")));
     expect(claudeOnly.length).toBeGreaterThan(0);
     for (const pack of claudeOnly) expect(pack.engines.fallback, pack.id).toBeUndefined();
+  });
+
+  it("names a stronger engine for a default that has one among the pack's allowed engines, and none otherwise", () => {
+    expect(STRONGER).toEqual({ "claude:haiku": "claude:sonnet", "claude:sonnet": "claude:opus", "codex:luna": "codex:sol" });
+    expect(stronger(PACKS.implementing)).toBe("claude:opus");
+    // Opus is the top of the Claude ladder; Haiku's step up (Sonnet) is not allowed on the Slack inbox.
+    expect(stronger(PACKS.verifying)).toBeNull();
+    expect(stronger(PACKS.slack_triage)).toBeNull();
+  });
+
+  it("lets implementing run on Opus for the one shot after too_complex, and still has no fallback", () => {
+    expect(PACKS.implementing.engines).toEqual({ default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] });
   });
 
   it("keeps today's models as the defaults", () => {

@@ -39,6 +39,22 @@ describe("typed escalations", () => {
     const step = transition(at("verifying"), { type: "stage_done", outcome: "escalated", escalation, reason: "r" });
     expect(step).toMatchObject({ state: "escalated", resumeTo: "verifying", escalation });
   });
+  it("too_complex from implementing runs it once more, flagged for a stronger engine, with the reason", () => {
+    const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 1 } }), { type: "stage_done", outcome: "escalated", escalation: "too_complex", reason: "the refactor spans six modules" });
+    expect(step).toMatchObject({ state: "implementing", effect: { kind: "run", stage: "implementing" }, retries: { total: 2, stronger: 1, strongerNext: true }, reason: "the refactor spans six modules" });
+  });
+  it("a second too_complex, or one past the implementer's cap, waits for a person", () => {
+    const again = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2, stronger: 1 } }), { type: "stage_done", outcome: "escalated", escalation: "too_complex", reason: "r" });
+    expect(again).toMatchObject({ state: "escalated", resumeTo: "implementing", escalation: "too_complex" });
+    const capped = transition(at("implementing", { retries: { ...NO_RETRIES, total: IMPLEMENTER_CAP } }), { type: "stage_done", outcome: "escalated", escalation: "too_complex", reason: "r" });
+    expect(capped.state).toBe("escalated");
+  });
+  it("the stronger run's own end clears the flag, so the next attempt runs on the default engine", () => {
+    const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2, stronger: 1, strongerNext: true } }), { type: "stage_done", outcome: "pass" });
+    expect(step.state).toBe("verifying");
+    expect(step.retries).not.toHaveProperty("strongerNext");
+    expect(step.retries.stronger).toBe(1);
+  });
   it("plan_wrong on a PR route still escalates: there is no plan to redo", () => {
     expect(transition(at("addressing", { route: "address" }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" }).state).toBe("escalated");
   });

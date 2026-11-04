@@ -26,6 +26,15 @@ export const ENGINES = {
 export const EngineId = z.enum(Object.keys(ENGINES) as [keyof typeof ENGINES, ...(keyof typeof ENGINES)[]]);
 export type EngineId = z.infer<typeof EngineId>;
 
+/** The next engine up from each, for the one shot a task gets after a `too_complex` escalation. */
+export const STRONGER: Partial<Record<EngineId, EngineId>> = { "claude:haiku": "claude:sonnet", "claude:sonnet": "claude:opus", "codex:luna": "codex:sol" };
+
+/** The engine a pack's default steps up to, when the pack allows it; null otherwise. */
+export function stronger(pack: { engines: { default: EngineId; allowed: readonly EngineId[] } }): EngineId | null {
+  const next = STRONGER[pack.engines.default];
+  return next && pack.engines.allowed.includes(next) ? next : null;
+}
+
 export interface ResolvedEngine {
   id: EngineId;
   runtime: RuntimeId;

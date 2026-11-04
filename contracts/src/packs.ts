@@ -567,7 +567,8 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     writable: true,
     maxTurns: 80,
     timeoutMs: 30 * MINUTE,
-    engines: only("claude:sonnet"),
+    // Opus is allowed for the one shot after a too_complex escalation (`stronger`); Claude-only, so no fallback.
+    engines: { default: "claude:sonnet", allowed: ["claude:sonnet", "claude:opus"] },
     effort: "medium",
     answer: ImplementingAnswer,
     template: "implementing.md",

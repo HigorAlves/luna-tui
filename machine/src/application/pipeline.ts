@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, TriageOutcome, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskRoute, type TaskSource, type TaskState, type TestCase, type EvidencePack, type TriageRecord, credentialOwner } from "@hardness/contracts";
+import { type ArchiveReason, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, TriageOutcome, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskRoute, type TaskSource, type TaskState, type TestCase, type EvidencePack, type TriageRecord, credentialOwner, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -1234,6 +1234,11 @@ export class Pipeline {
         if (polling) {
           this.offPool.add(id);
           this.fillSlots().catch((error: unknown) => console.error("could not fill slots during ci_watch", error));
+        }
+        // A too_complex escalation gets one run on the pack's stronger engine, handed over like a usage-limit fallback.
+        if (stage === "implementing" && !resume && !fallback && (await this.get(id)).retries.strongerNext) {
+          const engine = stronger(PACKS.implementing);
+          if (engine) fallback = { engine, reason: "one shot on a stronger engine after too_complex" };
         }
         let result: StageResult;
         try {

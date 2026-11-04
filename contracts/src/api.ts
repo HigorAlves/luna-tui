@@ -144,6 +144,10 @@ export interface Retries {
   e2e: number;
   ci: number;
   total: number;
+  /** Implementer runs taken on a stronger engine after a too_complex escalation. */
+  stronger?: number;
+  /** The next implementing run is that one shot. */
+  strongerNext?: boolean;
 }
 
 export interface Task {

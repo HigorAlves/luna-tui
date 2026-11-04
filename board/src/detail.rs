@@ -519,6 +519,10 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     if task.retries.total > 1 {
         status.push(Span::from(format!(" · run {} of 3", task.retries.total)).fg(c(PEACH)));
     }
+    if task.retries.stronger > 0 {
+        let note = if task.retries.stronger_next { " · stronger engine next" } else { " · stronger engine used" };
+        status.push(Span::from(note).fg(c(PEACH)));
+    }
     if let Some(spent) = detail.and_then(TaskDetail::spent_usd).or(task.spent_usd) {
         status.push(Span::from(format!(" · ${spent:.2}")).fg(c(SUBTEXT0)));
     }

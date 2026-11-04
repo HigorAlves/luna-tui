@@ -34,6 +34,12 @@ pub struct Retries {
     pub e2e: u32,
     pub ci: u32,
     pub total: u32,
+    /// Runs taken on a stronger engine after a `too_complex` escalation; absent from older machines.
+    #[serde(default)]
+    pub stronger: u32,
+    /// The next implementing run is that one shot.
+    #[serde(default)]
+    pub stronger_next: bool,
 }
 
 /// Where a task came from, when it was created from an outside issue, a Slack message or a

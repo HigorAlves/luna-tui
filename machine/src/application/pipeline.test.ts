@@ -751,6 +751,29 @@ describe("retries and escalation", () => {
     expect(run).toMatchObject({ status: "failed", outcome: "escalated" });
   });
 
+  it("runs implementing once more on a stronger engine after too_complex, and asks a person after a second", async () => {
+    const engines: Array<EngineId | undefined> = [];
+    const tooComplex: StageResult = { outcome: "escalated", detail: { reason: "spans six modules", escalation: "too_complex" } };
+    const implementing = (results: StageResult[]): StageRunner => async ({ engine }) => {
+      engines.push(engine);
+      return results.shift() ?? { outcome: "pass" };
+    };
+    const once = implementing([tooComplex, { outcome: "pass" }]);
+    pipeline = new Pipeline(db, (stage) => (stage === "implementing" ? once : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const first = await startAndApprove((await newTask()).id);
+    expect(first.state).not.toBe("escalated");
+    expect(first.retries).not.toHaveProperty("strongerNext");
+    expect(engines).toEqual([undefined, "claude:opus"]);
+    expect((await pipeline.events(first.id)).find((e) => e.kind === "stage.engine")?.payload).toMatchObject({ stage: "implementing", engine: "claude:opus", reason: "one shot on a stronger engine after too_complex" });
+
+    engines.length = 0;
+    const twice = implementing([tooComplex, tooComplex]);
+    pipeline = new Pipeline(db, (stage) => (stage === "implementing" ? twice : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const second = await startAndApprove((await newTask()).id);
+    expect(second).toMatchObject({ state: "escalated", reason: "spans six modules" });
+    expect(engines).toEqual([undefined, "claude:opus"]);
+  });
+
   it("treats a runner that throws as a failed run", async () => {
     const throwing: StageRunner = async () => {
       throw new Error("container exited with 137");
