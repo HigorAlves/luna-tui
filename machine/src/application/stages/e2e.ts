@@ -1,6 +1,6 @@
 // The e2e stage: skip repos with no web surface and changes that touch none of it; otherwise
 // run the e2e pack in the QA image and turn its verdict into a pass or a fail for the e2e loop.
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, readdir, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { branchBase, diffNameStatus } from "../../adapters/git/worktree.ts";
@@ -24,6 +24,8 @@ export interface E2eDeps {
   decide?: Decide | null;
   /** The repo's per-pack decision bars. */
   overrides?: (repoPath: string | null) => Promise<Record<string, DecisionOverrides>>;
+  /** The machine's state dir: a re-run starts from an empty `runs/<runId>/out`, so the first attempt's packet never reaches Evidence. */
+  stateDir?: string;
 }
 
 type Cause = "product_bug" | "test_bug" | "env_flake";
@@ -167,6 +169,8 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     if (cause === null) return result;
     if (cause !== "env_flake") return { ...result, detail: { ...result.detail, cause } };
     // An environment flake: the scenario was never really tried, so once more before a person is asked.
+    // The re-run writes into the same run folder: what the first attempt left there must not be read as its packet.
+    if (deps.stateDir) await rm(join(deps.stateDir, "runs", context.runId, "out"), { recursive: true, force: true });
     result = settle(await deps.runPack(context));
     if (result.outcome !== "fail") return { ...result, detail: { ...result.detail, rerun: true, cause } };
     const summary = String(result.detail?.summary ?? "");

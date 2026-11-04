@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -208,6 +208,19 @@ describe("e2e_failure_cause", () => {
     const [pack, check] = decide.mock.calls[0]!;
     expect(pack).toBe("e2e_failure_cause");
     expect(check).toEqual({ kind: "e2e", e2e: { verdict: "fail", summary: "login broke", attempt: 2, criteria: [{ text: "login works", result: "fail" }] } });
+  });
+
+  it("clears the run's out/ folder before the re-run, so the first attempt's artifacts never reach Evidence", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "e2e-state-"));
+    const ctx = { ...context(), attempt: 2 };
+    const stale = join(stateDir, "runs", ctx.runId, "out", "files", "qa");
+    mkdirSync(stale, { recursive: true });
+    writeFileSync(join(stale, "stale.png"), "x");
+    const runPack = vi.fn(async () => (existsSync(join(stale, "stale.png")) ? failing : passing));
+    const result = await e2eRunner({ runPack, detectWeb: async () => true, decide: async () => cause("env_flake"), overrides: async () => ({}), stateDir })(ctx);
+    expect(runPack).toHaveBeenCalledTimes(2);
+    expect(result.outcome).toBe("pass");
+    expect(existsSync(join(stateDir, "runs", ctx.runId, "out"))).toBe(false);
   });
 
   it("escalates as flaky_tests when the re-run fails too", async () => {

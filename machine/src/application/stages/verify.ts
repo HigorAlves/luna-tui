@@ -263,7 +263,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         reports.push({ name: check.name, note: "coverage: the branch's diff is unknown" });
         continue;
       }
-      const summary = patchCoverage({ lcov: parseLcov(text, check.cwd ? { cwd: check.cwd } : {}), added: addedLineNumbers(diff), report: relative });
+      const summary = patchCoverage({ lcov: parseLcov(text, { root: cwd, ...(check.cwd ? { cwd: check.cwd } : {}) }), added: addedLineNumbers(diff), report: relative });
       coverage = coverage ? { files: [...coverage.files, ...summary.files], total: { added: coverage.total.added + summary.total.added, covered: coverage.total.covered + summary.total.covered }, report: coverage.report } : summary;
       for (const f of summary.files) {
         if (f.uncovered.length === 0) continue;

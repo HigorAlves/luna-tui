@@ -136,6 +136,7 @@ export async function buildRealStages(
             return verifyDecisions?.decide ?? null;
           },
           overrides: (repoPath) => policies.for(repoPath).then((p) => p.decisions),
+          stateDir: config.stateDir,
         })
       : missingQaImageRunner(),
     // Evidence is script-only, so it runs on the host from what e2e left in the state dir.

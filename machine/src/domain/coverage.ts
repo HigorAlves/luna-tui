@@ -4,15 +4,18 @@ import type { CoverageSummary } from "@hardness/contracts";
 
 const UNCOVERED_CAP = 50;
 
-/** An lcov report as file → line → hits. A leading `/work/` (the container's mount) is stripped and
- *  a relative path gets the check's `cwd` in front, so keys are worktree-relative. */
-export function parseLcov(text: string, options: { cwd?: string } = {}): Map<string, Map<number, number>> {
+/** An lcov report as file → line → hits. A leading `/work/` (the container's mount) or the worktree's
+ *  own path (`root`: a check run on the host) is stripped, and a relative path gets the check's `cwd`
+ *  in front, so keys are worktree-relative. */
+export function parseLcov(text: string, options: { cwd?: string; root?: string } = {}): Map<string, Map<number, number>> {
   const files = new Map<string, Map<number, number>>();
+  const root = options.root ? `${options.root.replace(/\/+$/, "")}/` : null;
   let current: Map<number, number> | null = null;
   for (const line of text.split(/\r?\n/)) {
     if (line.startsWith("SF:")) {
       let path = line.slice(3).trim();
       if (path.startsWith("/work/")) path = path.slice("/work/".length);
+      else if (root && path.startsWith(root)) path = path.slice(root.length);
       else if (!path.startsWith("/") && options.cwd) path = `${options.cwd.replace(/\/+$/, "")}/${path.replace(/^\.\//, "")}`;
       current = files.get(path) ?? new Map();
       files.set(path, current);

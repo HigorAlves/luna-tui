@@ -13,6 +13,11 @@ describe("parseLcov", () => {
     expect(lcov.get("pkg/src/b.ts")!.get(2)).toBe(1);
   });
 
+  it("strips the worktree's own path too: a check run on the host (no runner image) writes absolute host paths", () => {
+    const lcov = parseLcov("SF:/Users/me/wt/pkg/src/c.ts\nDA:3,1\nend_of_record\nSF:/elsewhere/d.ts\nDA:1,1\nend_of_record\n", { cwd: "pkg", root: "/Users/me/wt/" });
+    expect([...lcov.keys()]).toEqual(["pkg/src/c.ts", "/elsewhere/d.ts"]);
+  });
+
   it("leaves a relative path alone without a cwd, and ignores lines outside a record", () => {
     const lcov = parseLcov("DA:1,1\nSF:x.ts\nDA:4,2\nend_of_record\nDA:9,9\n");
     expect([...lcov.keys()]).toEqual(["x.ts"]);
