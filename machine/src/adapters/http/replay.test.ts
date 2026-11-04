@@ -251,6 +251,18 @@ describe("GET /events?since=", () => {
     expect(messages.filter((m) => m.event === "task.event")).toHaveLength(1);
   });
 
+  it("with source=notch passes task.shipped for a notch task and never for a board task's", async () => {
+    const p = await newTask("p");
+    const n = await newTask("n", notch);
+    const messages = listen("/events?since=0&source=notch");
+    await until(() => ready(messages), "ready");
+    const shipped = (id: string) => ({ type: "task.shipped" as const, shipped: { id, title: "t", prUrl: "u", number: 1, mergedSha: null, format: null, howToVerify: null, media: [], at: "t" } });
+    bus.publish(shipped(p.id));
+    bus.publish(shipped(n.id));
+    await until(() => messages.some((m) => m.event === "task.shipped"), "the notch task's shipped");
+    expect(messages.filter((m) => m.event === "task.shipped").map((m) => (m as unknown as { shipped: { id: string } }).shipped.id)).toEqual([n.id]);
+  });
+
   it("is 400 for a since that is not a sequence number or an unknown source", async () => {
     expect((await app().request("/events?since=-1")).status).toBe(400);
     expect((await app().request("/events?since=abc")).status).toBe(400);

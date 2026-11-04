@@ -48,6 +48,8 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `MACHINE_GITHUB_LABEL` | `ready-for-agent` | the issue label GitHub intake looks for |
 | `MACHINE_GITHUB_PRS` | on | `off` stops the PR inbox from polling GitHub; the board's `P` view then shows nothing |
 | `MACHINE_GITHUB_PRS_INTERVAL` | `60` | seconds between PR inbox polls; a rate-limited answer backs the next poll off to five minutes |
+| `MACHINE_SHIP_POLL_INTERVAL` | `60` | seconds between the ship monitor's polls of a shipped PR (merge readiness, review activity, CI, conflicts) |
+| `MACHINE_SHIP_MAX_WAIT_DAYS` | `14` | days the monitor waits for a merge before a person is asked |
 | `MACHINE_REPO_MAP` | unset | `owner/name=/abs/path` pairs: the checkout an imported issue's task works in. Without a match, the checkouts up to two folders under `MACHINE_REPOS_DIR` (`~/Developer/orc` and `~/Developer/projects/orc`) are matched by their `origin` remote. A folder you pick in the board's clone prompt that already is a checkout is linked instead of cloned, and the link is kept in `<state dir>/repo-links.json`, so a renamed remote needs no setting |
 | `MACHINE_REPOS_DIR` | `~/Developer` | where `MACHINE_REPO_MAP`'s fallback scan looks |
 | `MACHINE_THREAD_REPLIES` | on | set to `off` to stop the machine replying in the thread a task came from (a comment on its GitHub issue; a Slack thread when the pair below is set) when it is picked up, needs you, escalates, pauses, gets its PR and closes |
@@ -111,10 +113,13 @@ policy:
   max_concurrent: 1                       # running tasks this repo may hold at once (over MACHINE_MAX_PER_REPO)
   holdout_cases: false                    # true keeps test_design's cases away from the implementer; verifying still judges by them
   graph: on                               # off keeps the machine from building a code graph of this repo (default on; see MACHINE_GRAPH_INTERVAL)
+  auto_merge: off                         # what the machine may merge by itself once a shipped PR is ready: off (default: never), low, or medium (low and medium); a high-risk PR is merged only when this is not off and a ship approver, who is none of the plan's approvers, approved the preview
   decisions:                              # per decision pack, per question: when an answer is acted on (proceed) and when a person decides (below flag)
-    triage_signals:                       # also risk_score, coverage_check, plan_check, red_check, scope_check, finding_classify and e2e_failure_cause; a question left out keeps the pack's bar
+    triage_signals:                       # also risk_score, coverage_check, plan_check, red_check, scope_check, finding_classify, e2e_failure_cause, evidence_format, event_class, comment_intent, fix_scope, evidence_valid and worth_learning; a question left out keeps the pack's bar
       kind: { proceed: 0.8, flag: 0.5 }
       archive: { proceed: 0.95 }          # archiving by machine wants a higher bar than labelling (the pack's own: 0.9 / 0.7)
+freeze:                                   # windows in which the machine merges nothing, whatever auto_merge says
+  - { from: "2026-12-20", to: "2027-01-03", reason: "holiday freeze" }
 qa_targets:                               # where e2e may drive the app; the credential is a reference, never a value
   - { name: staging, url: https://stg.example.com, credential: env:QA_PASSWORD, reentrant: false }   # reentrant: false = never drive it twice; the video recording is skipped there (default true)
 jira:                                     # how this repo's tasks talk to Jira (needs MACHINE_JIRA_SITE/EMAIL/TOKEN)

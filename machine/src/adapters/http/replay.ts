@@ -5,7 +5,7 @@
 // before its first read, so a change committed while that read runs pokes it again, and the
 // sequence is handed out in commit order (the `tasks_seq` trigger), so a read never skips a
 // number it would later find. Messages that are not task snapshots pass as they come; with a
-// source, the ones about one task (`task.event`, `stage.started`, `task.closed`, `budget.alert`)
+// source, the ones about one task (`task.event`, `stage.started`, `task.closed`, `task.shipped`, `budget.alert`)
 // pass only for a task of that source, looked up once and kept: from the snapshots the bus and
 // the replay carry, else from Postgres, and forgotten when the task is deleted. A task's source
 // never changes after it is made (PATCH refuses it), so what is kept stays true. Those messages
@@ -34,6 +34,8 @@ function taskOf(message: StreamMessage): string | null {
       return message.taskId;
     case "task.closed":
       return message.id;
+    case "task.shipped":
+      return message.shipped.id;
     case "budget.alert":
       return message.alert.taskId;
     default:
