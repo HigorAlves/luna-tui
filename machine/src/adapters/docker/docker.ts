@@ -8,7 +8,7 @@ import { randomUUID } from "node:crypto";
 
 import type { ServiceSpec } from "@hardness/contracts";
 
-import type { RunCredential } from "../credentials/index.ts";
+import type { CredentialMount, RunCredential } from "../credentials/index.ts";
 import { startServices } from "./services.ts";
 import { type ExecResult, exec, execOrThrow } from "../process/exec.ts";
 
@@ -94,6 +94,10 @@ export interface SandboxRun {
    *  `node` user is uid 1000, which is not the host user on a Linux host). Defaults to the
    *  machine's own uid:gid; null keeps the image's user. */
   user?: string | null;
+  /** Extra bind mounts, after the credential's (a repo's code graph at `/graph`, read-only). */
+  mounts?: CredentialMount[];
+  /** Replaces the image's entrypoint: the first element is the program, the rest its arguments. */
+  entrypoint?: string[];
 }
 
 /** The machine's own uid:gid, the owner of everything it mounts; undefined where the platform has none. */
@@ -140,6 +144,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   );
   if (run.sessionMount) args.push("-v", `${run.sessionMount}:/session`);
   for (const mount of run.credential.mounts) args.push("-v", `${mount.host}:${mount.container}${mount.readOnly ? ":ro" : ""}`);
+  for (const mount of run.mounts ?? []) args.push("-v", `${mount.host}:${mount.container}${mount.readOnly ? ":ro" : ""}`);
   args.push(...cacheArgs(run.cacheVolume));
   if (run.gitDir) {
     args.push("-v", `${run.gitDir}:${run.gitDir}${run.writable ? "" : ":ro"}`);
@@ -151,7 +156,9 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   args.push(...identityEnv(run.gitIdentity));
   for (const [key, value] of Object.entries(run.extraEnv ?? {})) args.push("-e", `${key}=${value}`);
   args.push(...networkArgs(run.network, run.serviceEnv));
-  args.push(run.image);
+  const [program, ...rest] = run.entrypoint ?? [];
+  if (program) args.push("--entrypoint", program);
+  args.push(run.image, ...rest);
 
   return args;
 }
