@@ -11,14 +11,18 @@ const checks = (...states: Array<[string, string]>): Check[] =>
 const finding = { path: "a.ts", line: 1, start_line: null, severity: "test", title: "red", body: "", suggestion_code: null, confidence: 1 };
 const pack = (answer: Record<string, unknown>): StageResult => ({ outcome: "pass", detail: { answer } });
 
-function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number; parent?: { ref: string; checks: Check[] }; graceMs?: number; realSleepMs?: number }) {
+function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number; parent?: { ref: string; checks: Check[] }; graceMs?: number; realSleepMs?: number; mergeable?: string[]; rebase?: { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] } }) {
   let poll = 0;
+  let facts = 0;
   const github = fakeGitHub({
     prChecks: async (_slug, ref) => (opts.parent && ref === opts.parent.ref ? opts.parent.checks : opts.polls[Math.min(poll++, opts.polls.length - 1)]!),
     findPr: async () => ({ url: "https://github.com/a/b/pull/7", number: 7, isDraft: true }),
     failedRunLog: async (_slug, runId) => `log of run ${runId}\nFAIL src/a.test.ts > boom\n`,
     rerunFailedJobs: async () => {},
+    ...(opts.mergeable ? { prFacts: async () => ({ mergeable: opts.mergeable![Math.min(facts++, opts.mergeable!.length - 1)] }) as never } : {}),
   });
+  const rebase = vi.fn(async () => opts.rebase ?? { ok: true as const, onto: "origin/main" });
+  const exec = vi.fn(async () => ({ code: 0, stdout: "", stderr: "" }));
   const runPack = vi.fn(async (_context: StageContext, _ci?: unknown) => opts.pack ?? pack({ verdict: "green" }));
   const sleeps: number[] = [];
   const run = ciWatchRunner({
@@ -29,6 +33,8 @@ function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number;
     maxWaitMs: opts.maxWaitMs ?? 1_000,
     parentRef: async () => opts.parent?.ref ?? null,
     graceMs: opts.graceMs,
+    rebase,
+    exec,
     sleep: async (ms) => {
       sleeps.push(ms);
       if (opts.realSleepMs) await new Promise((resolve) => setTimeout(resolve, opts.realSleepMs));
@@ -42,7 +48,7 @@ function setup(opts: { polls: Check[][]; pack?: StageResult; maxWaitMs?: number;
     approvals: [],
     signal: new AbortController().signal,
   } as StageContext;
-  return { run, context, github, runPack, sleeps };
+  return { run, context, github, runPack, sleeps, rebase, exec };
 }
 
 describe("ci_watch after a push", () => {
@@ -168,5 +174,49 @@ describe("ci_watch", () => {
     const result = await run(context);
     expect(result.outcome).toBe("fail");
     expect(String(result.detail?.error)).toBe("CI did not settle in 45m");
+  });
+});
+
+describe("ci_watch on a conflicting PR", () => {
+  const green = checks(["lint", "SUCCESS"]);
+
+  it("rebases once, pushes with a lease and watches the checks again", async () => {
+    const { run, context, rebase, exec } = setup({ polls: [green], mergeable: ["CONFLICTING", "MERGEABLE"] });
+    const result = await run(context);
+    expect(result).toMatchObject({ outcome: "pass", detail: { step: "checks", rebased: true } });
+    expect(rebase).toHaveBeenCalledTimes(1);
+    expect(exec).toHaveBeenCalledWith("git", expect.arrayContaining(["push", "--force-with-lease", "origin", "hardness/t1"]));
+  });
+
+  it("escalates as conflict_unresolvable when the PR still conflicts after the rebase", async () => {
+    const { run, context, rebase } = setup({ polls: [green], mergeable: ["CONFLICTING", "CONFLICTING"] });
+    const result = await run(context);
+    expect(rebase).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ step: "conflict", verdict: "conflict_unresolvable", escalation: "other" });
+    expect((result.detail as { options: string[] }).options).toHaveLength(2);
+  });
+
+  it("escalates when the rebase stops, naming the files", async () => {
+    const { run, context } = setup({ polls: [green], mergeable: ["CONFLICTING"], rebase: { ok: false, error: "stopped", conflicts: ["a.ts", "b.ts"] } });
+    const result = await run(context);
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ verdict: "conflict_unresolvable", reason: expect.stringContaining("a.ts, b.ts") });
+  });
+
+  it("escalates like infra when the pack traces a red run to a conflict", async () => {
+    const { run, context } = setup({
+      polls: [checks(["lint", "FAILURE"])],
+      pack: pack({ verdict: "conflict_unresolvable", classification: "conflict", summary: "merge conflict", reason: "main moved", options: ["rebase by hand"], findings: [] }),
+    });
+    const result = await run(context);
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ verdict: "conflict_unresolvable", reason: "main moved", options: ["rebase by hand"] });
+  });
+
+  it("leaves a PR whose facts cannot be read alone", async () => {
+    const { run, context, rebase } = setup({ polls: [green] });
+    expect((await run(context)).outcome).toBe("pass");
+    expect(rebase).not.toHaveBeenCalled();
   });
 });

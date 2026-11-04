@@ -5,10 +5,11 @@
 // host fetches the PR, the checks and the failed run's log and hands them over as context.
 import type { CiContext, Finding } from "@hardness/contracts";
 
-import { originSlugOf } from "../../adapters/git/worktree.ts";
+import { HOST_GIT, type GitExec, type RebaseResult, originSlugOf, rebaseOntoDefault } from "../../adapters/git/worktree.ts";
 import { exec } from "../../adapters/process/exec.ts";
 import { type Check, type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
+import { pushBranch } from "./deliver.ts";
 
 const MINUTE = 60_000;
 const RERUN_WAIT_MS = 15 * MINUTE;
@@ -28,6 +29,10 @@ export interface CiDeps {
   parentRef?: (cwd: string) => Promise<string | null>;
   /** How long to wait for those checks to appear on the new head. */
   graceMs?: number;
+  /** Runs git for the rebase and its push (default: the real one); tests inject a recorder. */
+  exec?: GitExec;
+  /** Rebases the worktree onto the default branch (default: `rebaseOntoDefault`); tests inject a fake. */
+  rebase?: (exec: GitExec, worktreePath: string, repoPath: string) => Promise<RebaseResult>;
   pollMs?: number;
   maxWaitMs?: number;
   sleep?: (ms: number) => Promise<void>;
@@ -37,7 +42,7 @@ const PENDING = new Set(["PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "REQUEST
 const FAILED = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ACTION_REQUIRED", "STALE"]);
 
 const parentOf = async (cwd: string): Promise<string | null> => {
-  const parent = await exec("git", ["-C", cwd, "rev-parse", "--verify", "-q", "HEAD~1"]).catch(() => null);
+  const parent = await exec("git", [...HOST_GIT, "-C", cwd, "rev-parse", "--verify", "-q", "HEAD~1"]).catch(() => null);
   return parent && parent.code === 0 && parent.stdout.trim() ? parent.stdout.trim() : null;
 };
 
@@ -54,6 +59,8 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
   const slugOf = deps.slugOf ?? originSlugOf;
   const parentRef = deps.parentRef ?? parentOf;
   const graceMs = deps.graceMs ?? NEW_RUN_GRACE_MS;
+  const run: GitExec = deps.exec ?? exec;
+  const rebase = deps.rebase ?? ((r: GitExec, worktree: string, repo: string) => rebaseOntoDefault(r, worktree, repo));
 
   return async (context) => {
     const { task, signal } = context;
@@ -75,7 +82,7 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
         const before = await deps.github.prChecks(slug, parent).catch(() => [] as Check[]);
         return [...new Set(before.map((c) => c.name))];
       })());
-    const graceEnds = Date.now() + graceMs;
+    let graceEnds = Date.now() + graceMs;
 
     async function settle(waitMs: number): Promise<Settled> {
       const deadline = Date.now() + waitMs;
@@ -128,54 +135,94 @@ export function ciWatchRunner(deps: CiDeps): StageRunner {
     const first = await settle(maxWaitMs);
     const early = stopped(first);
     if (early) return early;
-    const checks = (first as { checks: Check[] }).checks;
-    if (checks.length === 0) {
-      return { outcome: "pass", detail: { step: "checks", checks, note: "no CI checks are configured on this PR" } };
-    }
-    const failed = failedOf(checks);
-    if (failed.length === 0) return { outcome: "pass", detail: { step: "checks", checks } };
+    let checks = (first as { checks: Check[] }).checks;
 
-    // Red: ask the pack what kind of red.
-    const pack = await deps.runPack(context, await gather(checks, failed));
-    if (pack.outcome === "fail" || pack.outcome === "escalated") {
-      return { ...pack, detail: { ...pack.detail, step: "triage", checks } };
-    }
-    const answer = asRecord(pack.detail?.answer);
-    const verdict = String(answer?.verdict ?? "fixable");
-    const summary = typeof answer?.summary === "string" ? answer.summary : String(pack.detail?.summary ?? "");
-    const findings = (Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[];
-    const base = { ...pack, run: pack.run };
-    const fixable = (note?: string): StageResult => ({
-      ...base,
-      outcome: "fail",
-      detail: { step: "checks", verdict: "fixable", summary, findings, checks, ...(note ? { note } : {}) },
-      findings,
+    // A conflict with the base: GitHub runs no CI on it. Rebase the branch once, push it back, watch again.
+    const conflicting = async (): Promise<boolean> => {
+      const pr = await deps.github.findPr(slug, branch).catch(() => null);
+      return pr ? (await deps.github.prFacts(slug, pr.number).catch(() => null))?.mergeable === "CONFLICTING" : false;
+    };
+    const stuck = (reason: string): StageResult => ({
+      outcome: "escalated",
+      detail: {
+        step: "conflict",
+        verdict: "conflict_unresolvable",
+        reason,
+        options: ["rebase the branch by hand and approve", "merge the default branch into the branch and approve"],
+        escalation: "other",
+        checks,
+      },
     });
+    let rebased = false;
+    if (await conflicting()) {
+      const repoPath = task.repoPath ?? task.worktreePath;
+      const result = await rebase(run, task.worktreePath, repoPath);
+      if (!result.ok) {
+        return stuck(result.conflicts.length > 0 ? `the default branch moved and the rebase stops on: ${result.conflicts.join(", ")}` : `the branch conflicts with the default branch and could not be rebased: ${result.error}`);
+      }
+      const pushError = await pushBranch(run, branch, task.worktreePath, { force: true });
+      if (pushError) return { outcome: "fail", detail: { error: pushError } };
+      rebased = true;
+      graceEnds = Date.now() + graceMs;
+      expected = null;
+      const again = await settle(maxWaitMs);
+      const stoppedAfter = stopped(again);
+      if (stoppedAfter) return stoppedAfter;
+      checks = (again as { checks: Check[] }).checks;
+      if (await conflicting()) return stuck("the branch still conflicts with the default branch after one rebase");
+    }
+    const outcome = await judge(checks);
+    return rebased ? { ...outcome, detail: { ...outcome.detail, rebased: true } } : outcome;
 
-    if (verdict === "green") return { ...base, outcome: "pass", detail: { step: "checks", verdict, summary, checks } };
-    if (verdict === "infra" || verdict === "needs_debug") {
-      // Nothing implementing can fix: a human decides, with the pack's reason in front of them.
-      const reason = typeof answer?.reason === "string" && answer.reason ? answer.reason : summary;
-      const options = Array.isArray(answer?.options) ? answer.options.filter((o): o is string => typeof o === "string") : [];
-      return { ...base, outcome: "escalated", detail: { step: "checks", verdict, summary, reason, options, findings, checks }, findings };
-    }
-    if (verdict !== "flake") return fixable();
+    async function judge(checks: Check[]): Promise<StageResult> {
+      if (checks.length === 0) {
+        return { outcome: "pass", detail: { step: "checks", checks, note: "no CI checks are configured on this PR" } };
+      }
+      const failed = failedOf(checks);
+      if (failed.length === 0) return { outcome: "pass", detail: { step: "checks", checks } };
 
-    // Flake: one re-run of the failed workflow, then a second look.
-    const runId = failed.map(runIdOf).find(Boolean);
-    if (!runId) return fixable("flake verdict, but no workflow run id to re-run");
-    try {
-      await deps.github.rerunFailedJobs(slug, runId);
-    } catch (error) {
-      return fixable(`flake verdict, but the re-run failed: ${messageOf(error)}`);
+      // Red: ask the pack what kind of red.
+      const pack = await deps.runPack(context, await gather(checks, failed));
+      if (pack.outcome === "fail" || pack.outcome === "escalated") {
+        return { ...pack, detail: { ...pack.detail, step: "triage", checks } };
+      }
+      const answer = asRecord(pack.detail?.answer);
+      const verdict = String(answer?.verdict ?? "fixable");
+      const summary = typeof answer?.summary === "string" ? answer.summary : String(pack.detail?.summary ?? "");
+      const findings = (Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[];
+      const base = { ...pack, run: pack.run };
+      const fixable = (note?: string): StageResult => ({
+        ...base,
+        outcome: "fail",
+        detail: { step: "checks", verdict: "fixable", summary, findings, checks, ...(note ? { note } : {}) },
+        findings,
+      });
+
+      if (verdict === "green") return { ...base, outcome: "pass", detail: { step: "checks", verdict, summary, checks } };
+      if (verdict === "infra" || verdict === "needs_debug" || verdict === "conflict_unresolvable") {
+        // Nothing implementing can fix: a human decides, with the pack's reason in front of them.
+        const reason = typeof answer?.reason === "string" && answer.reason ? answer.reason : summary;
+        const options = Array.isArray(answer?.options) ? answer.options.filter((o): o is string => typeof o === "string") : [];
+        return { ...base, outcome: "escalated", detail: { step: "checks", verdict, summary, reason, options, findings, checks }, findings };
+      }
+      if (verdict !== "flake") return fixable();
+
+      // Flake: one re-run of the failed workflow, then a second look.
+      const runId = failed.map(runIdOf).find(Boolean);
+      if (!runId) return fixable("flake verdict, but no workflow run id to re-run");
+      try {
+        await deps.github.rerunFailedJobs(slug, runId);
+      } catch (error) {
+        return fixable(`flake verdict, but the re-run failed: ${messageOf(error)}`);
+      }
+      const second = await settle(RERUN_WAIT_MS);
+      const stoppedAgain = stopped(second);
+      if (stoppedAgain) return stoppedAgain;
+      const after = (second as { checks: Check[] }).checks;
+      if (failedOf(after).length === 0) {
+        return { ...base, outcome: "pass", detail: { step: "checks", verdict, summary, checks: after, note: "flake, re-run passed" } };
+      }
+      return fixable("flake verdict, but it stayed red after one re-run");
     }
-    const second = await settle(RERUN_WAIT_MS);
-    const stoppedAgain = stopped(second);
-    if (stoppedAgain) return stoppedAgain;
-    const after = (second as { checks: Check[] }).checks;
-    if (failedOf(after).length === 0) {
-      return { ...base, outcome: "pass", detail: { step: "checks", verdict, summary, checks: after, note: "flake, re-run passed" } };
-    }
-    return fixable("flake verdict, but it stayed red after one re-run");
   };
 }

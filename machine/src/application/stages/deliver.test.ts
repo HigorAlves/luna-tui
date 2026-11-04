@@ -9,11 +9,11 @@ import { deliverRunner } from "./deliver.ts";
 const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
 const bad = (stderr = "nope"): ExecResult => ({ code: 1, stdout: "", stderr });
 
-function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult; task?: Record<string, unknown> } = {}) {
+function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult; task?: Record<string, unknown>; respond?: (args: string[]) => ExecResult | undefined } = {}) {
   const calls: string[][] = [];
   const exec = vi.fn(async (command: string, args: string[]) => {
     calls.push([command, ...args]);
-    return opts.push ?? ok();
+    return opts.respond?.(args) ?? opts.push ?? ok();
   });
   const context = {
     task: { id: "t1", title: "feat: thing", description: "d", criteria: ["c"], branch: "hardness/t1", worktreePath: "/wt", repoPath: "/repo", source: null, ...opts.task } as unknown as TaskRow,
@@ -23,7 +23,7 @@ function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult;
     approvals: [],
     signal: new AbortController().signal,
   } as StageContext;
-  return { run: deliverRunner({ exec, github, slugOf: async () => "acme/widgets" }), context, calls };
+  return { run: deliverRunner({ exec, github, slugOf: async () => "acme/widgets", defaultBranch: async () => "main" }), context, calls };
 }
 
 describe("delivering", () => {
@@ -66,5 +66,59 @@ describe("delivering", () => {
     expect(String(result.detail?.error)).toMatch(/unexpected github.openPr/);
     const noBranch = setup(fakeGitHub(), { task: { branch: null } });
     expect((await noBranch.run(noBranch.context)).outcome).toBe("fail");
+  });
+});
+
+describe("delivering a branch that conflicts with the default branch", () => {
+  const G = ["git", "-c", "core.hooksPath=/dev/null", "-C", "/wt"];
+  const pr = { url: "https://x/pull/3", number: 3, isDraft: true };
+  const facts = (mergeable: string) => async () => ({ mergeable }) as never;
+
+  it("rebases once onto origin/main and pushes with a lease, then passes", async () => {
+    const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING") });
+    const { run, context, calls } = setup(github);
+    const result = await run(context);
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ rebased: true, onto: "origin/main" });
+    expect(calls).toEqual([
+      [...G, "push", "-u", "origin", "hardness/t1"],
+      [...G, "fetch", "--quiet", "origin", "main"],
+      [...G, "rebase", "origin/main"],
+      [...G, "push", "--force-with-lease", "-u", "origin", "hardness/t1"],
+    ]);
+  });
+
+  it("fails naming the files when the rebase stops, after aborting it", async () => {
+    const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING") });
+    const { run, context, calls } = setup(github, {
+      respond: (args) => (args.includes("rebase") && !args.includes("--abort") ? bad("CONFLICT") : args.includes("diff") ? ok("a.ts\nb.ts\n") : undefined),
+    });
+    const result = await run(context);
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ error: "the branch conflicts with main and the rebase stopped on: a.ts, b.ts", conflicts: ["a.ts", "b.ts"], escalation: "other" });
+    expect(calls).toContainEqual([...G, "diff", "--name-only", "--diff-filter=U"]);
+    expect(calls).toContainEqual([...G, "rebase", "--abort"]);
+    expect(calls.some((c) => c.includes("--force-with-lease"))).toBe(false);
+  });
+
+  it("fails with the push error when the push after the rebase is refused", async () => {
+    const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING") });
+    const { run, context } = setup(github, { respond: (args) => (args.includes("--force-with-lease") ? bad("stale info") : undefined) });
+    const result = await run(context);
+    expect(result.outcome).toBe("fail");
+    expect(String(result.detail?.error)).toContain("stale info");
+  });
+
+  it("does nothing more on a mergeable PR, notes an UNKNOWN one, and ignores a prFacts that throws", async () => {
+    for (const [mergeable, note] of [["MERGEABLE", false], ["UNKNOWN", true]] as const) {
+      const { run, context, calls } = setup(fakeGitHub({ findPr: async () => pr, prFacts: facts(mergeable) }));
+      const result = await run(context);
+      expect(result.outcome).toBe("pass");
+      expect(calls).toHaveLength(1);
+      expect(result.detail?.mergeable === "UNKNOWN").toBe(note);
+    }
+    const throwing = setup(fakeGitHub({ findPr: async () => pr, prFacts: async () => { throw new Error("rate limited"); } }));
+    expect((await throwing.run(throwing.context)).outcome).toBe("pass");
+    expect(throwing.calls).toHaveLength(1);
   });
 });

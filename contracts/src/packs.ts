@@ -181,8 +181,8 @@ export const EvidenceAnswer = z.object({ outcome: z.enum(["pass", "fail"]).optio
 
 export const CiWatchAnswer = z.object({
   kind: z.enum(["done", "escalated"]).optional(),
-  verdict: z.enum(["fixable", "flake", "infra", "needs_debug", "green"]),
-  classification: z.enum(["test", "lint", "build", "flake", "infra", "drift", "none"]),
+  verdict: z.enum(["fixable", "flake", "infra", "needs_debug", "green", "conflict_unresolvable"]),
+  classification: z.enum(["test", "lint", "build", "flake", "infra", "drift", "conflict", "none"]),
   summary: z.string(),
   runUrl: z.string().nullable().optional(),
   findings: z.array(Finding),

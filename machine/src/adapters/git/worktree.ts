@@ -55,6 +55,33 @@ export async function defaultBranch(repoPath: string): Promise<string | null> {
   return current.code === 0 ? current.stdout.trim() || null : null;
 }
 
+/** A command runner the rebase takes, so tests can record the git calls; the real one is `exec`. */
+export type GitExec = (command: string, args: string[], options?: { cwd?: string; signal?: AbortSignal; timeoutMs?: number }) => Promise<{ code: number; stdout: string; stderr: string }>;
+
+const FETCH_TIMEOUT = 60_000;
+
+export type RebaseResult = { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] };
+
+/** Rebases the task's worktree onto `origin/<default branch>`, once. A rebase that stops is aborted
+ *  (the worktree is left as it was) and reports the files in conflict. Never pushes: the caller does. */
+export async function rebaseOntoDefault(
+  run: GitExec,
+  worktreePath: string,
+  repoPath: string,
+  defaultBranchOf: (repoPath: string) => Promise<string | null> = defaultBranch,
+): Promise<RebaseResult> {
+  const base = await defaultBranchOf(repoPath);
+  if (!base) return { ok: false, error: "no default branch", conflicts: [] };
+  const git = (...args: string[]) => ["-c", "core.hooksPath=/dev/null", "-C", worktreePath, ...args];
+  const fetched = await run("git", git("fetch", "--quiet", "origin", base), { timeoutMs: FETCH_TIMEOUT });
+  if (fetched.code !== 0) return { ok: false, error: `git fetch failed: ${(fetched.stderr || fetched.stdout).trim() || `exit code ${fetched.code}`}`, conflicts: [] };
+  const rebased = await run("git", git("rebase", `origin/${base}`));
+  if (rebased.code === 0) return { ok: true, onto: `origin/${base}` };
+  const unmerged = await run("git", git("diff", "--name-only", "--diff-filter=U"));
+  await run("git", git("rebase", "--abort"));
+  return { ok: false, error: (rebased.stderr || rebased.stdout).trim() || `exit code ${rebased.code}`, conflicts: unmerged.stdout.split("\n").map((l) => l.trim()).filter(Boolean) };
+}
+
 /** Whether `refs/heads/<branch>` exists in the repo. */
 export async function branchExists(repoPath: string, branch: string): Promise<boolean> {
   return (await exec("git", [...HOST_GIT, "-C", repoPath, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`])).code === 0;

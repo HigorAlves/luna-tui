@@ -1,6 +1,6 @@
 ---
 name: ci-routing
-description: The canonical route-on-verdict protocol for a red CI diagnosis — fixable/flake/infra/needs-debug handling, the single-render rule, and the fix-then-re-watch loop
+description: The canonical route-on-verdict protocol for a red CI diagnosis — fixable/flake/infra/needs-debug/conflict handling, the single-render rule, and the fix-then-re-watch loop
 when_to_use: Use when the CI investigator classifies a red run; the ci_watch stage and the machine's post-open CI loop follow it.
 ---
 
@@ -25,6 +25,10 @@ Quote up to 3 run-history evidence lines proving intermittency. The stage passes
 ## `infra`
 
 No code changes to make. The stage fails and escalates through `requested[]` with the recommendation (pin the action version, report to the platform team, wait out the outage) and its capped evidence. A re-run is suggested only when the investigator recommended one.
+
+## `conflict_unresolvable`
+
+The red run comes from a merge conflict with the base that the machine could not rebase (the merge-commit build fails, `git` reports conflicts in the log). Classification `conflict`. The stage escalates with a `reason` (the proving log line) and `options[]` (rebase by hand, merge the base into the branch). The machine, not you, rebases once and pushes with a lease on the task's own branch; you never touch git history.
 
 ## `needs_debug`
 
