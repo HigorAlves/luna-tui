@@ -619,6 +619,8 @@ export const StageInput = z.object({
       slices: z.array(z.unknown()).optional(),
       /** How to undo the change, from the plan. */
       rollback: z.string().optional(),
+      /** The code map the plan stage opened with; its files count as planned. */
+      map: CodeMapAnswer.nullable().optional(),
     })
     .nullable(),
   decisions: z.array(

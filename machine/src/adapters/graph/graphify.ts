@@ -3,7 +3,7 @@
 // with a `current` symlink to the newest. A build is a sandbox job on the runner image with the
 // entrypoint overridden to `/graph-tools/build.py`, over a clean checkout of the default branch
 // mounted read-only; no model, no credential.
-import { readlinkSync, statSync } from "node:fs";
+import { existsSync, readlinkSync, statSync } from "node:fs";
 import { appendFile, mkdir, readFile, readdir, rename, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -12,6 +12,8 @@ import type { SandboxResult, SandboxRun } from "../docker/docker.ts";
 import { ensureCleanCheckout, graphCheckoutPath, headCommit, isAncestor } from "../git/worktree.ts";
 import { repoSlug } from "./slug.ts";
 
+/** Where a repo's misses file is mounted in the build container. */
+const MISSES_MOUNT = "/graph-misses.jsonl";
 const BUILD_TIMEOUT_MS = 15 * 60_000;
 /** Commit folders kept per repo: the current graph and two older ones a running stage may still mount. */
 export const KEEP_GRAPHS = 3;
@@ -86,6 +88,9 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
         if (previous !== target) await point(repoDir, commit);
         return have;
       }
+      // The files scope checks found outside the code map: the build counts them into the stamp.
+      const missesFile = join(repoDir, "misses.jsonl");
+      const hasMisses = existsSync(missesFile);
       const building = join(repoDir, `building-${commit}`);
       await rm(building, { recursive: true, force: true });
       await mkdir(building, { recursive: true });
@@ -102,8 +107,8 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
           timeoutMs: BUILD_TIMEOUT_MS,
           credential: { env: {}, mounts: [] },
           labels: { luna: "graph", "luna.repo": repoSlug(repoPath) },
-          mounts: [{ host: building, container: "/graph", readOnly: false }],
-          entrypoint: ["python3", "/graph-tools/build.py", "--input", "/work", "--out", "/graph", "--commit", commit],
+          mounts: [{ host: building, container: "/graph", readOnly: false }, ...(hasMisses ? [{ host: missesFile, container: MISSES_MOUNT, readOnly: true }] : [])],
+          entrypoint: ["python3", "/graph-tools/build.py", "--input", "/work", "--out", "/graph", "--commit", commit, ...(hasMisses ? ["--misses", MISSES_MOUNT] : [])],
           // Parsing untrusted code needs no network at all.
           networkNone: true,
           signal,

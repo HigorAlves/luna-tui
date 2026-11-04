@@ -11,6 +11,8 @@ export interface GraphStamp {
   edges: number;
   communities: number;
   graphify: string;
+  /** Files tasks changed that the code map did not name, counted from `misses.jsonl` when the graph was built. */
+  misses?: number;
 }
 
 export class GraphBuildError extends Error {

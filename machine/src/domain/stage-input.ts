@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, type CheckContext, type CheckSpec, type CiContext, type EngineId, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type ChatTriageContext, CodeMapAnswer, type CheckContext, type CheckSpec, type CiContext, type EngineId, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -29,12 +29,14 @@ export function approvedPlan(approvals: ApprovalRow[]): StageInput["plan"] {
   const approval = approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
   if (!approval) return null;
   const requested = approval.requested;
+  const map = CodeMapAnswer.safeParse(requested.map);
   return {
     brief: typeof requested.brief === "string" ? requested.brief : "",
     criteria: strings(requested.criteria),
     assumptions: strings(requested.assumptions),
     ...(Array.isArray(requested.slices) ? { slices: requested.slices } : {}),
     ...(typeof requested.rollback === "string" ? { rollback: requested.rollback } : {}),
+    ...(map.success ? { map: map.data } : {}),
   };
 }
 

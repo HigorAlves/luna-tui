@@ -72,6 +72,20 @@ describe("graphifyGraph.build", () => {
     expect(readdirSync(join(stateDir, "graphs", repoSlug(repo))).some((n) => n.startsWith("building-"))).toBe(false);
   });
 
+  it("mounts the repo's misses file read-only and hands it to the build, only when there is one", async () => {
+    const first = setup();
+    await first.graph.build(first.repo);
+    expect(first.seen[0]!.mounts).toHaveLength(1);
+    expect(first.seen[0]!.entrypoint).not.toContain("--misses");
+
+    const { graph, repo, seen, stateDir, setHead } = setup();
+    setHead("b".repeat(40));
+    await graph.recordMisses(repo, { task: "t1", at: "2026-11-04T10:00:00Z", files: ["a.ts"] });
+    await graph.build(repo);
+    expect(seen[0]!.mounts).toContainEqual({ host: join(stateDir, "graphs", repoSlug(repo), "misses.jsonl"), container: "/graph-misses.jsonl", readOnly: true });
+    expect(seen[0]!.entrypoint!.slice(-2)).toEqual(["--misses", "/graph-misses.jsonl"]);
+  });
+
   it("is a no-op for a commit it already has", async () => {
     const { graph, repo, seen } = setup();
     const first = await graph.build(repo);

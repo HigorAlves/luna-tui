@@ -251,7 +251,7 @@ export const factory = {
   features: [
     {
       title: "Packs, not prompts",
-      body: "Triage, code map, plan, test design, build, verify, e2e, CI watch, evidence and the retro each run a pack with a typed result; small checks (signals, risk, coverage) are decision packs.",
+      body: "Triage, code map, plan, test design, build, verify, e2e, CI watch, evidence and the retro each run a pack with a typed result; small checks (signals, risk, coverage, red, scope) are decision packs.",
     },
     {
       title: "Built from the checkout, so it's repeatable",

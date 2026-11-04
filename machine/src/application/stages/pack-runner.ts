@@ -111,8 +111,7 @@ function plannedFiles(plan: StageInput["plan"]): string[] {
     const parsed = Slice.safeParse(slice);
     return parsed.success ? parsed.data.touchpoints : [];
   });
-  const map = (plan as { map?: { files?: string[] } | null } | null)?.map;
-  return [...new Set([...touched, ...(map?.files ?? [])])];
+  return [...new Set([...touched, ...(plan?.map?.files ?? [])])];
 }
 
 const OutOfMap = z.array(z.object({ path: z.string(), reason: z.string() }));

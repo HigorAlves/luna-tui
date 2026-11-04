@@ -19,6 +19,7 @@ def main() -> int:
     p.add_argument("--input", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--commit", required=True)
+    p.add_argument("--misses", default=None, help="a misses.jsonl: files tasks changed that the code map did not name")
     a = p.parse_args()
     root, out = Path(a.input), Path(a.out) / "graphify-out"
     out.mkdir(parents=True, exist_ok=True)
@@ -60,6 +61,9 @@ def main() -> int:
         suggested_questions=questions, built_at_commit=a.commit,
     )
     (out / "GRAPH_REPORT.md").write_text(report, encoding="utf-8")
+    misses = 0
+    if a.misses and Path(a.misses).is_file():
+        misses = sum(1 for line in Path(a.misses).read_text(encoding="utf-8").splitlines() if line.strip())
     stamp = {
         "schema": 1,
         "commit": a.commit,
@@ -68,6 +72,7 @@ def main() -> int:
         "edges": G.number_of_edges(),
         "communities": len(communities),
         "graphify": graphify_version(),
+        "misses": misses,
     }
     (Path(a.out) / "stamp.json").write_text(json.dumps(stamp, indent=2), encoding="utf-8")
     print(json.dumps(stamp))

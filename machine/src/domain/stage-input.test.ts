@@ -72,6 +72,12 @@ describe("buildStageInput's pack and plan", () => {
     const input = buildStageInput({ task, stage: "implementing", attempt: 1, approvals, priorFindings: [] });
     expect(input.plan).toMatchObject({ brief: "b", rollback: "revert it", slices });
     expect(input.context.testCases).toEqual(cases);
+    // The code map the plan stage opened with rides along; a malformed one is dropped.
+    const map = { components: ["export"], files: ["src/a.ts"], owners: ["@marta"], confidence: 0.8 };
+    const mapped = [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices, map } })];
+    expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: mapped, priorFindings: [] }).plan).toMatchObject({ map });
+    const broken = [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices, map: { files: 3 } } })];
+    expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: broken, priorFindings: [] }).plan).not.toHaveProperty("map");
     // A legacy test check, when one exists, still wins.
     const legacy = [...approvals, approval({ kind: "awaiting_test_check", requested: { cases: [{ title: "legacy", criterion: null, approach: "x" }] } })];
     expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: legacy, priorFindings: [] }).context.testCases).toEqual([{ title: "legacy", criterion: null, approach: "x" }]);
