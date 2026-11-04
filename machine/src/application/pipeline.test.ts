@@ -227,6 +227,57 @@ describe("approvers", () => {
   });
 });
 
+describe("the ship approver", () => {
+  const pack = (risk: "low" | "high") => ({ summary: "s", format: "text" as const, scenarios: [], findings: [], outOfMap: [], risk, rollback: "revert", howToVerify: "run it", commitSha: "9c1f0e2a7b3d", media: [], at: "2026-11-04T00:00:00.000Z" });
+  /** A task whose plan Ana approved, parked at the preview gate with a pack of this risk. */
+  const atShip = async (risk: "low" | "high", planApprover = "ana") => {
+    const task = await pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"], evidence: pack(risk) });
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved", undefined, undefined, { approver: planApprover });
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_ship");
+    return task.id;
+  };
+
+  it("needs no new name for a low-risk pack", async () => {
+    const id = await atShip("low");
+    expect((await pipeline.decide(id, "approved")).state).not.toBe("awaiting_ship");
+  });
+
+  it("refuses a high-risk pack's approval with no name, naming the ship gate, and leaves the gate open", async () => {
+    const id = await atShip("high");
+    await expect(pipeline.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
+    await expect(pipeline.decide(id, "approved")).rejects.toThrow(/ship/);
+    expect((await pipeline.get(id)).state).toBe("awaiting_ship");
+  });
+
+  it("refuses the plan's approver, and any of a High-risk plan's two", async () => {
+    const id = await atShip("high");
+    await expect(pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" })).rejects.toBeInstanceOf(SameApproverError);
+    expect((await pipeline.get(id)).state).toBe("awaiting_ship");
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", risk: { level: "high", scores: {} } } });
+    const two = await pipeline.createTask({ title: "Billing", criteria: ["c"], evidence: pack("high") });
+    await pipeline.start(two.id);
+    await pipeline.decide(two.id, "approved", undefined, undefined, { approver: "ana" });
+    await pipeline.decide(two.id, "approved", undefined, undefined, { approver: "bo" });
+    await expect(pipeline.decide(two.id, "approved", undefined, undefined, { approver: "bo" })).rejects.toBeInstanceOf(SameApproverError);
+    await expect(pipeline.decide(two.id, "approved", undefined, undefined, { approver: "ana" })).rejects.toBeInstanceOf(SameApproverError);
+    expect((await pipeline.decide(two.id, "approved", undefined, undefined, { approver: "cy" })).state).not.toBe("awaiting_ship");
+  });
+
+  it("ships with another name, keeps it on the approval, and records it on the gate's request", async () => {
+    const id = await atShip("high");
+    expect((await pipeline.decide(id, "approved", undefined, undefined, { approver: "bo" })).state).not.toBe("awaiting_ship");
+    const gate = (await pipeline.approvals(id)).find((a) => a.kind === "awaiting_ship")!;
+    expect(gate).toMatchObject({ decision: "approved", response: { approver: "bo" }, requested: { shipApprover: "bo" } });
+  });
+
+  it("does not ask for a name when the preview is sent back", async () => {
+    const id = await atShip("high");
+    await pipeline.decide(id, "sent_back", "redo");
+    expect((await pipeline.stageRuns(id)).filter((r) => r.stage === "evidence")).toHaveLength(2);
+  });
+});
+
 describe("ground truth", () => {
   const atGate = async (p: Pipeline) => {
     stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], cases: [{ title: "t", criterion: "c1", approach: "x" }] } });

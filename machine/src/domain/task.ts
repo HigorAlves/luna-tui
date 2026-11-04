@@ -185,16 +185,24 @@ export class StageStartedError extends Error {
 
 /** A plan of High risk needs two distinct approvers, and this approval named none. */
 export class ApproverRequiredError extends Error {
-  constructor(id: string) {
-    super(`task ${id}: a plan of High risk needs two named approvers; send your name as the approver`);
+  constructor(id: string, gate: "plan" | "ship" = "plan") {
+    super(
+      gate === "ship"
+        ? `task ${id}: a pack of High risk ships only with a ship approver who did not approve the plan; send your name as the approver`
+        : `task ${id}: a plan of High risk needs two named approvers; send your name as the approver`,
+    );
     this.name = "ApproverRequiredError";
   }
 }
 
 /** The same approver twice on a plan that needs two. */
 export class SameApproverError extends Error {
-  constructor(id: string, approver: string) {
-    super(`task ${id}: ${approver} already approved this plan; a second, different approver must`);
+  constructor(id: string, approver: string, gate: "plan" | "ship" = "plan") {
+    super(
+      gate === "ship"
+        ? `task ${id}: ${approver} approved the plan; the ship approver of a High-risk pack must be someone else`
+        : `task ${id}: ${approver} already approved this plan; a second, different approver must`,
+    );
     this.name = "SameApproverError";
   }
 }

@@ -281,6 +281,7 @@ describe("evidenceStage", () => {
       format: "captures",
       summary: pack.summary,
       commitSha: "abc1234def",
+      risk: pack.risk,
       rows: 2,
       scenarios: [expect.objectContaining({ text: scenarios[0]!.title, result: "pass" }), expect.objectContaining({ text: scenarios[1]!.title })],
       media: (pack.media as { label: string; url: string }[]).map((m) => ({ label: m.label, url: m.url })),

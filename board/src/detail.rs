@@ -422,6 +422,7 @@ pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'stat
         "awaiting_setup" => "a write luna.yaml · r send back",
         "awaiting_answers" => "a answer the questions",
         "awaiting_ship" if task.route == "review" => "a post the verdict · r drop it",
+        "awaiting_ship" if ship_risk_is_high(detail) => "S ship (high risk: another approver than the plan's) · r send back",
         "awaiting_ship" => "S ship · r send back",
         "reviewing_memory" => "a apply the rules · A skip them",
         "escalated" => "a retry (guidance optional) · X abort",
@@ -432,6 +433,11 @@ pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'stat
         Span::from(format!(" {} {} ", look_glyph(look), task.status_label())).fg(c(BASE)).bg(c(look_color(look))).bold(),
         Span::from(format!(" {keys}")).fg(c(look_color(look))),
     ]))
+}
+
+/// Whether the ship gate's Evidence Pack is High risk: shipping then needs an approver who did not approve the plan.
+fn ship_risk_is_high(detail: Option<&TaskDetail>) -> bool {
+    detail.and_then(|d| d.latest_approval("awaiting_ship")).is_some_and(|a| a.requested["evidence"]["risk"].as_str() == Some("high"))
 }
 
 fn heading(text: &str) -> Line<'static> {
@@ -1546,6 +1552,17 @@ mod tests {
         assert!(strip(PLAN_GATE).contains("a approve (second of two approvers)"), "{}", strip(PLAN_GATE));
         assert!(strip(r#"{"outcome":"archive","archiveReason":"duplicate"}"#).contains("a archive the ticket · r send back"));
         assert!(strip(r#"{"outcome":"conversation","reply":"x"}"#).contains("a post the reply and archive · r send back"));
+    }
+
+    #[test]
+    fn the_ship_gate_hint_names_the_other_approver_only_for_a_high_risk_pack() {
+        let strip = |risk: &str| {
+            let (task, mut detail) = at_gate("{}", "awaiting_ship");
+            detail.approvals = vec![serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":{"evidence":{"risk":risk}}})).unwrap()];
+            gate_strip(&task, Some(&detail)).unwrap().to_string()
+        };
+        assert!(strip("high").contains("S ship (high risk: another approver than the plan's) · r send back"), "{}", strip("high"));
+        assert!(strip("low").contains("S ship · r send back") && !strip("low").contains("high risk"), "{}", strip("low"));
     }
 
     #[test]

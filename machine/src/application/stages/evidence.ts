@@ -422,6 +422,8 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
           summary: pack.summary,
           media: pack.media.map((m) => ({ label: m.label, url: m.url })),
           commitSha,
+          // The board's ship hint reads it: a High-risk pack needs another approver than the plan's.
+          risk: pack.risk,
           ...(note ? { note } : {}),
           ...(pack.video ? { video: pack.video } : {}),
         },

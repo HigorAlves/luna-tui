@@ -653,6 +653,17 @@ export class Pipeline {
       }
       if (prior) answered = { ...response, approvers: [...prior, approver] };
     }
+    // A High-risk pack ships only after an approver who is none of the plan's: the name is an attestation the monitor reads.
+    if (decision === "approved" && task.state === "awaiting_ship" && task.route !== "review" && task.evidence?.risk === "high") {
+      const plan = (await this.approvals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved")?.response;
+      const planNames = [...(Array.isArray(plan?.approvers) ? plan.approvers.map(String) : []), ...(typeof plan?.approver === "string" ? [plan.approver] : [])];
+      if (!approver) throw new ApproverRequiredError(id, "ship");
+      if (planNames.some((n) => n.toLowerCase() === approver.toLowerCase())) throw new SameApproverError(id, approver, "ship");
+      await this.store.withTaskLock(id, async (_task, tx) => {
+        const gate = await tx.findOpenApproval(id);
+        if (gate && gate.kind === "awaiting_ship") await tx.updateApprovalRequested(gate, { ...gate.requested, shipApprover: approver });
+      });
+    }
     if (approver) answered = { ...answered, approver };
     const record = { decision, reason, ...(answered ? { response: answered } : {}) };
     if (decision === "approved" && (outcome === "archive" || outcome === "conversation")) {
