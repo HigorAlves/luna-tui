@@ -953,7 +953,7 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Li
     let verdict = d.latest_approval("awaiting_ship").map(|a| evidence_lines(&a.requested["evidence"])).unwrap_or_default();
     if !verdict.is_empty() {
         lines.push(Line::default());
-        lines.extend(verdict.iter().take(2).map(|l| Line::from(format!("  {l}"))));
+        lines.extend(verdict.iter().map(|l| Line::from(format!("  {l}"))));
     }
     lines.push(Line::default());
     if d.artifacts.is_empty() {
@@ -981,7 +981,7 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Li
         ]));
     }
     lines.push(Line::default());
-    lines.push(muted("j/k pick a file · J/K scroll · o opens it".into()));
+    lines.push(muted("j/k pick a file · J/K scroll · o opens it · r send back with a note".into()));
     (lines, cursor_row)
 }
 
@@ -1294,6 +1294,22 @@ mod tests {
         bare.artifacts.clear();
         let text = render(120, 30, &task, Some(&bare), Section::Evidence, 0).join("\n");
         assert!(text.contains("nothing yet"), "{text}");
+    }
+
+    #[test]
+    fn the_evidence_section_shows_the_whole_pack_and_the_send_back_footer() {
+        let (task, mut detail) = fixture();
+        detail.approvals.push(
+            serde_json::from_value(serde_json::json!({"kind":"awaiting_ship","requested":{"evidence":{
+                "verdict":"pass","artifactCount":3,"thumbnails":["/a.png","/b.png"],"format":"captures","summary":"Show the cart total.",
+                "scenarios":[{"text":"Total shows","result":"pass"}],"media":[{"label":"a.png","url":"https://x/a.png"}]}}}))
+            .unwrap(),
+        );
+        let text = render(120, 40, &task, Some(&detail), Section::Evidence, 0).join("\n");
+        for part in ["format: captures", "Show the cart total.", "verdict: pass", "3 artifacts", "/a.png", "/b.png", "✓ Total shows", "media: a.png  https://x/a.png"] {
+            assert!(text.contains(part), "{part}: {text}");
+        }
+        assert!(text.contains("j/k pick a file · J/K scroll · o opens it · r send back with a note"), "{text}");
     }
 
     fn pr(head: &str) -> PullRequest {

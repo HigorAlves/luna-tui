@@ -455,6 +455,7 @@ fn footer_line(app: &App) -> Line<'static> {
             Span::from("   enter keep · esc clear").fg(c(SUBTEXT0)),
         ]),
         Mode::Reason { approve, text, .. } => {
+            let placeholder = if text.is_empty() && !*approve { app.tasks.iter().find(|t| matches!(&app.mode, Mode::Reason { id, .. } if *id == t.id)).and_then(|t| reason_placeholder(&t.state)) } else { None };
             let prompt = if *approve {
                 " guidance for the retry (optional): "
             } else {
@@ -463,6 +464,7 @@ fn footer_line(app: &App) -> Line<'static> {
             Line::from(vec![
                 Span::from(prompt).fg(c(ACCENT)).bold(),
                 Span::from(format!("{text}▏")),
+                Span::from(placeholder.map(|p| format!(" {p}")).unwrap_or_default()).fg(c(SUBTEXT0)),
                 Span::from("   enter send · esc cancel").fg(c(SUBTEXT0)),
             ])
         }
@@ -810,15 +812,71 @@ pub(crate) fn slice_lines(value: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// "verdict", "N artifacts" and up to three artifact paths from `requested.evidence`.
+/// The reason prompt's hint at a gate that takes a structured note, if it does.
+pub(crate) fn reason_placeholder(state: &str) -> Option<&'static str> {
+    (state == "awaiting_ship").then_some("what to change (t=12.5 scene=<id> el=<id> …)")
+}
+
+/// `text` wrapped at word boundaries to `width` columns.
+fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    let mut lines: Vec<String> = Vec::new();
+    for word in text.split_whitespace() {
+        match lines.last_mut() {
+            Some(last) if last.chars().count() + 1 + word.chars().count() <= width => {
+                last.push(' ');
+                last.push_str(word);
+            }
+            _ => lines.push(word.to_string()),
+        }
+    }
+    lines
+}
+
+/// The Evidence Pack from `requested.evidence`: its format (and why it degraded), the summary's first
+/// three lines, the verdict and artifact count and up to three paths as before, a line per scenario,
+/// up to six media, and for a video the critic's verdict, mean score and first two defects.
 pub(crate) fn evidence_lines(value: &Value) -> Vec<String> {
     let Some(verdict) = value["verdict"].as_str() else { return Vec::new() };
     let count = value["artifactCount"].as_u64().unwrap_or(0);
-    let mut lines = vec![
-        format!("verdict: {verdict}"),
-        format!("{count} artifact{}", if count == 1 { "" } else { "s" }),
-    ];
+    let mut lines = Vec::new();
+    if let Some(format) = value["format"].as_str() {
+        lines.push(match value["note"].as_str() {
+            Some(note) => format!("format: {format} (degraded: {note})"),
+            None => format!("format: {format}"),
+        });
+    }
+    if let Some(summary) = value["summary"].as_str() {
+        lines.extend(wrap_words(summary, 76).into_iter().take(3));
+    }
+    lines.push(format!("verdict: {verdict}"));
+    lines.push(format!("{count} artifact{}", if count == 1 { "" } else { "s" }));
     lines.extend(json_list(&value["thumbnails"]).into_iter().take(3));
+    for row in value["scenarios"].as_array().into_iter().flatten() {
+        let Some(text) = row["text"].as_str() else { continue };
+        let mark = match row["result"].as_str() {
+            Some("pass") => "✓",
+            Some("fail") => "✗",
+            Some("partial") => "~",
+            _ => "?",
+        };
+        lines.push(format!("{mark} {text}"));
+    }
+    for media in value["media"].as_array().into_iter().flatten().take(6) {
+        if let (Some(label), Some(url)) = (media["label"].as_str(), media["url"].as_str()) {
+            lines.push(format!("media: {label}  {url}"));
+        }
+    }
+    let video = &value["video"];
+    if let Some(critic) = video["verdict"].as_str() {
+        let scores: Vec<f64> = video["scores"].as_object().map(|m| m.values().filter_map(Value::as_f64).collect()).unwrap_or_default();
+        let defects = video["defects"].as_array().cloned().unwrap_or_default();
+        let mean = if scores.is_empty() { String::new() } else { format!(" · {:.1}/10", scores.iter().sum::<f64>() / scores.len() as f64) };
+        lines.push(format!("critic: {critic}{mean} · {} defect{}", defects.len(), if defects.len() == 1 { "" } else { "s" }));
+        for d in defects.iter().take(2) {
+            let scene = d["scene"].as_str().map(|s| format!(" {s}")).unwrap_or_default();
+            lines.push(format!("{} @{:.1}{scene}: {}", d["priority"].as_str().unwrap_or("P?"), d["t"].as_f64().unwrap_or(0.0), d["symptom"].as_str().unwrap_or("")));
+        }
+    }
     lines
 }
 
@@ -2852,6 +2910,64 @@ mod tests {
         let one: Value = serde_json::json!({"verdict":"skipped","artifactCount":1});
         assert_eq!(evidence_lines(&one), ["verdict: skipped", "1 artifact"]);
         assert!(evidence_lines(&Value::Null).is_empty());
+    }
+
+    #[test]
+    fn the_note_prompt_at_the_ship_gate_shows_the_note_convention() {
+        assert_eq!(reason_placeholder("awaiting_ship"), Some("what to change (t=12.5 scene=<id> el=<id> …)"));
+        assert_eq!(reason_placeholder("awaiting_approval"), None);
+    }
+
+    #[test]
+    fn evidence_lines_render_a_video_pack_in_order() {
+        let v: Value = serde_json::json!({"verdict":"pass","artifactCount":6,"thumbnails":["/a.png"],
+            "format":"video","summary":"Show the cart total. 2 scenarios: 2 passed. Shown as video; risk medium. And a fourth sentence that must not appear because only three lines are kept after wrapping at the width of the pane for sure.",
+            "scenarios":[{"text":"Total shows","result":"pass"},{"text":"Zero on empty","result":"fail"},{"text":"Updates","result":"partial"},{"text":"Odd"}],
+            "media":[{"label":"walkthrough.mp4","url":"https://x/w.mp4"},{"label":"cover.jpg","url":"https://x/c.jpg"}],
+            "video":{"verdict":"ship","scores":{"hook":9,"clarity":8,"truth":7},
+                "defects":[{"priority":"P0","t":12.5,"scene":"cart","symptom":"headline cut off"},{"priority":"P1","t":3.0,"scene":null,"symptom":"voice late"},{"priority":"P2","t":9.0,"scene":"x","symptom":"third"}]}});
+        let lines = evidence_lines(&v);
+        assert_eq!(lines[0], "format: video");
+        let summary: Vec<&String> = lines.iter().skip(1).take_while(|l| !l.starts_with("verdict:")).collect();
+        assert_eq!(summary.len(), 3, "{lines:?}");
+        assert!(summary[0].starts_with("Show the cart total."));
+        assert!(summary.iter().all(|l| l.chars().count() <= 80), "{summary:?}");
+        let rest: Vec<&str> = lines.iter().skip(1 + summary.len()).map(String::as_str).collect();
+        assert_eq!(
+            rest,
+            [
+                "verdict: pass",
+                "6 artifacts",
+                "/a.png",
+                "✓ Total shows",
+                "✗ Zero on empty",
+                "~ Updates",
+                "? Odd",
+                "media: walkthrough.mp4  https://x/w.mp4",
+                "media: cover.jpg  https://x/c.jpg",
+                "critic: ship · 8.0/10 · 3 defects",
+                "P0 @12.5 cart: headline cut off",
+                "P1 @3.0: voice late",
+            ]
+        );
+    }
+
+    #[test]
+    fn evidence_lines_render_a_captures_pack_and_say_why_it_degraded() {
+        let media: Vec<Value> = (1..=8).map(|i| serde_json::json!({"label":format!("m{i}"),"url":format!("/u{i}")})).collect();
+        let v: Value = serde_json::json!({"verdict":"pass","artifactCount":2,"format":"captures","note":"the video image is not built",
+            "summary":"Short.","media":media});
+        let lines = evidence_lines(&v);
+        assert_eq!(lines[0], "format: captures (degraded: the video image is not built)");
+        assert_eq!(lines[1], "Short.");
+        assert_eq!(lines.iter().filter(|l| l.starts_with("media: ")).count(), 6);
+        assert!(!lines.iter().any(|l| l.starts_with("critic:")));
+    }
+
+    #[test]
+    fn evidence_lines_keep_the_legacy_shape_without_a_pack() {
+        let v: Value = serde_json::json!({"verdict":"pass","artifactCount":1,"scenarios":[]});
+        assert_eq!(evidence_lines(&v), ["verdict: pass", "1 artifact"]);
     }
 
     #[test]

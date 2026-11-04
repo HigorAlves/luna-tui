@@ -231,6 +231,16 @@ fn task_of(app: &App) -> Option<&Task> {
     app.focus_task()
 }
 
+/// Whether `r` may send the ticket back: a setup, a plan or the tests, and the ship gate of a
+/// feature task (the preview: a note sends it back to Evidence); a review's verdict is not sent back.
+pub(crate) fn sendable_back(t: &Task) -> bool {
+    match t.state.as_str() {
+        "awaiting_setup" | "awaiting_approval" | "awaiting_test_check" => true,
+        "awaiting_ship" => t.route != "review",
+        _ => false,
+    }
+}
+
 fn with_task(app: &App, f: fn(&Task) -> Avail) -> Avail {
     match task_of(app) {
         Some(task) => f(task),
@@ -362,7 +372,7 @@ const SHARED: &[Binding] = &[
         Scope::Board,
         |app| {
             with_task(app, |t| {
-                if matches!(t.state.as_str(), "awaiting_setup" | "awaiting_approval" | "awaiting_test_check") {
+                if sendable_back(t) {
                     Avail::On
                 } else {
                     Avail::Off("only a setup, plan or tests go back")
@@ -1195,6 +1205,17 @@ mod tests {
         let none = app_with(Vec::new());
         assert_eq!(find(&none, "a"), Avail::Off("no ticket selected"));
         assert_eq!(find(&none, "enter"), Avail::Off("no ticket selected"));
+    }
+
+    #[test]
+    fn send_back_is_available_at_the_ship_gate_for_a_feature_task_only() {
+        let find = |app: &App, key: &str| bindings_for(app, Scope::Board).into_iter().find(|(b, _)| b.keys == key).map(|(_, a)| a).unwrap();
+        let ship = app_with(vec![task("t1", "awaiting_ship", true, false, true)]);
+        assert_eq!(find(&ship, "r"), Avail::On);
+        let mut review = task("t2", "awaiting_ship", true, false, true);
+        review.route = "review".to_string();
+        assert_eq!(find(&app_with(vec![review]), "r"), Avail::Off("only a setup, plan or tests go back"));
+        assert_eq!(find(&app_with(vec![task("t3", "implementing", true, true, true)]), "r"), Avail::Off("only a setup, plan or tests go back"));
     }
 
     #[test]

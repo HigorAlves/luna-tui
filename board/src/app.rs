@@ -1642,7 +1642,7 @@ impl App {
             }
             'R' => self.open_repo_picker(id),
             'r' => {
-                if matches!(task.state.as_str(), "awaiting_setup" | "awaiting_approval" | "awaiting_test_check") {
+                if crate::keys::sendable_back(&task) {
                     self.mode = Mode::Reason {
                         id: id.to_string(),
                         approve: false,
@@ -5504,6 +5504,17 @@ mod workspace_key_tests {
         assert_eq!(app.detail_scroll.get(), 0);
         press(&mut app, KeyCode::Char('='));
         assert!(!app.detail_full, "= is the board's density key, not the popup's size");
+    }
+
+    #[test]
+    fn r_at_the_ship_gate_opens_the_note_prompt_for_a_feature_task_and_not_for_a_review() {
+        let mut app = open("awaiting_ship");
+        press(&mut app, KeyCode::Char('r'));
+        assert!(matches!(&app.mode, Mode::Reason { approve: false, text, .. } if text.is_empty()), "{:?}", app.toast.as_ref().map(|t| t.text.clone()));
+        let mut review = open("awaiting_ship");
+        review.tasks[0].route = "review".to_string();
+        press(&mut review, KeyCode::Char('r'));
+        assert!(!matches!(review.mode, Mode::Reason { .. }), "a review verdict is not sent back");
     }
 
     #[test]
