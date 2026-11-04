@@ -291,6 +291,11 @@ impl Machine {
         self.post(&format!("/tasks/{id}/abort"), json!({}))
     }
 
+    /// Ends the ticket as archived, with one of `ARCHIVE_REASONS`.
+    pub fn archive(&self, id: &str, reason: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/archive"), json!({ "reason": reason }))
+    }
+
     pub fn resume(&self, id: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/resume"), json!({}))
     }

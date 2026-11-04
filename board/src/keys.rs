@@ -266,6 +266,7 @@ fn advance_fallback(app: &App) -> Avail {
         None => Avail::Off("no ticket selected"),
         Some(task) if GATE_STATES.contains(&task.state.as_str()) => Avail::Hidden,
         Some(task) if task.state == "closed" => Avail::Off("closed"),
+        Some(task) if task.state == "archived" => Avail::Off("archived"),
         Some(task) if task.waiting_on_you => Avail::On,
         Some(_) => Avail::Off("a stage is running; X aborts it"),
     }
@@ -377,6 +378,20 @@ const SHARED: &[Binding] = &[
             })
         },
         40,
+    ),
+    b(
+        "Z",
+        "archive, with a reason",
+        Group::Ticket,
+        Scope::Board,
+        |app| {
+            with_task(app, |t| match t.state.as_str() {
+                "closed" => Avail::Off("closed"),
+                "archived" => Avail::Off("archived"),
+                _ => Avail::On,
+            })
+        },
+        43,
     ),
     b("d", "delete (asks first)", Group::Ticket, Scope::Board, |app| with_task(app, |_| Avail::On), 42),
     b("f", "open or focus the agent's watch tab", Group::Ticket, Scope::Board, |app| with_task(app, |_| Avail::On), 41),
@@ -1069,6 +1084,7 @@ mod tests {
             app_with(vec![task("t1", "paused_rate_limit", true, false, true)]),
             app_with(vec![task("t1", "reviewing_memory", true, false, true)]),
             app_with(vec![task("t1", "closed", true, false, false)]),
+            app_with(vec![task("t1", "archived", true, false, false)]),
             app_with(Vec::new()),
         ]
     }
@@ -1116,6 +1132,21 @@ mod tests {
         let running = app_with(vec![task("t1", "implementing", true, true, true)]);
         let a = bindings_for(&running, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();
         assert_eq!(a.1, Avail::Off("a stage is running; X aborts it"));
+    }
+
+    #[test]
+    fn z_archives_a_ticket_that_has_not_ended_and_says_why_it_cannot_otherwise() {
+        let find = |app: &App| bindings_for(app, Scope::Board).into_iter().find(|(b, _)| b.keys == "Z").map(|(_, a)| a).unwrap();
+        for state in ["draft", "awaiting_approval", "implementing", "escalated"] {
+            assert_eq!(find(&app_with(vec![task("t1", state, true, false, false)])), Avail::On, "{state}");
+        }
+        assert_eq!(find(&app_with(vec![task("t1", "closed", true, false, false)])), Avail::Off("closed"));
+        assert_eq!(find(&app_with(vec![task("t1", "archived", true, false, false)])), Avail::Off("archived"));
+        assert_eq!(find(&app_with(Vec::new())), Avail::Off("no ticket selected"));
+        // Nothing to advance on an archived ticket, and no gate entry claims it.
+        let archived = app_with(vec![task("t1", "archived", true, false, false)]);
+        let a = bindings_for(&archived, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();
+        assert_eq!(a.1, Avail::Off("archived"));
     }
 
     #[test]

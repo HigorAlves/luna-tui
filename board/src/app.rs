@@ -30,7 +30,7 @@ use crate::{
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        COLUMNS, EngineCatalog, EngineInfo, EngineMetrics, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
+        ARCHIVE_REASONS, COLUMNS, EngineCatalog, EngineInfo, EngineMetrics, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
         StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of,
         plan_markdown, priority_step, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
@@ -265,6 +265,8 @@ pub enum Mode {
         approve: bool,
         text: String,
     },
+    /// `Z` on a ticket: pick why it is archived; enter archives it.
+    ArchiveReason { id: String, cursor: usize },
     ConfirmDelete(String),
     ConfirmAbort(String),
     ConfirmWorktree(String),
@@ -1598,6 +1600,7 @@ impl App {
             }
             "paused_rate_limit" => self.act(|m| m.resume(id), "resumed"),
             "closed" => self.notify("this ticket is closed", false),
+            "archived" => self.notify("this ticket is archived", false),
             _ if task.waiting_on_you => self.act(|m| m.decide(id, true, None), "approved"),
             _ => self.notify(format!("{} is running; X aborts it", task.status_label()), false),
         }
@@ -1661,6 +1664,13 @@ impl App {
                     self.notify("a stage is running on this worktree; X aborts it first", false);
                 } else {
                     self.mode = Mode::ConfirmWorktree(id.to_string());
+                }
+            }
+            'Z' => {
+                if matches!(task.state.as_str(), "closed" | "archived") {
+                    self.notify(format!("this ticket is already {}", task.state), false);
+                } else {
+                    self.mode = Mode::ArchiveReason { id: id.to_string(), cursor: 0 };
                 }
             }
             'd' => self.mode = Mode::ConfirmDelete(id.to_string()),
@@ -1854,6 +1864,7 @@ impl App {
                 let id = id.clone();
                 self.handle_confirm(key, &id)
             }
+            Mode::ArchiveReason { .. } => self.handle_archive_reason(key),
             Mode::ConfirmApproveAll(_) => self.handle_confirm_approve_all(key),
             Mode::ConfirmMany { .. } => self.handle_confirm_many(key),
             Mode::Actions { .. } => self.handle_actions(key),
@@ -2071,7 +2082,7 @@ impl App {
     /// own: the split's approval, not the memory review).
     #[cfg(test)]
     pub(crate) const HANDLED_INBOX: &[&str] =
-        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "X", "w", "d", "f", "o", "J"];
+        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "X", "w", "Z", "d", "f", "o", "J"];
 
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
     fn handle_inbox(&mut self, key: KeyEvent) -> Outcome {
@@ -2836,7 +2847,7 @@ impl App {
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
         "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "S", "v", "V", "?", ":",
-        "esc", "enter", "R", "a", "A", "e", "r", "X", "w", "d", "f", "o", "J",
+        "esc", "enter", "R", "a", "A", "e", "r", "X", "w", "Z", "d", "f", "o", "J",
     ];
 
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
@@ -3055,7 +3066,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "X", "w", "d", "f"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "X", "w", "Z", "d", "f"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -3564,6 +3575,29 @@ impl App {
         Outcome::Continue
     }
 
+    /// `Z`'s picker: j/k or 1-5 move, enter archives with the highlighted reason, esc cancels.
+    fn handle_archive_reason(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::ArchiveReason { id, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        let mut chosen = None;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(ARCHIVE_REASONS.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(*cursor),
+            KeyCode::Char(d @ '1'..='5') => chosen = Some((d as usize) - ('1' as usize)),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
+        }
+        if let Some(pick) = chosen {
+            self.mode = Mode::Normal;
+            let reason = ARCHIVE_REASONS[pick].0;
+            self.act(|m| m.archive(&id, reason), &format!("archived: {reason}"));
+        }
+        Outcome::Continue
+    }
+
     fn handle_confirm(&mut self, key: KeyEvent, id: &str) -> Outcome {
         match key.code {
             KeyCode::Char('y') => {
@@ -3684,7 +3718,7 @@ impl App {
 
     /// The chars the `x` menu runs: the pool keys, then every ticket key `ticket_key` takes.
     #[cfg(test)]
-    pub(crate) const HANDLED_ACTIONS: &[&str] = &["P", "D", "+", "-", "S", "a", "A", "r", "e", "R", "f", "o", "J", "X", "w", "d"];
+    pub(crate) const HANDLED_ACTIONS: &[&str] = &["P", "D", "+", "-", "S", "a", "A", "r", "e", "R", "f", "o", "J", "X", "w", "Z", "d"];
 
     /// Opens triage's questions in place, each with its recommended answer ready to edit.
     /// The questions come from the ticket's detail: the one already shown, or fetched now.
@@ -4046,6 +4080,27 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Esc);
         assert!(app.marked.is_empty(), "esc clears the marks");
+    }
+
+    #[test]
+    fn z_opens_the_archive_reason_picker_on_a_live_ticket_moves_and_esc_cancels_and_an_ended_one_refuses() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "awaiting_approval", true, false));
+        app.tasks.push(ticket("bbbbbbbb0000", "archived", false, false));
+        app.focus = app.tasks[0].column_index();
+        let press = |app: &mut App, code: KeyCode| { app.handle_key(KeyEvent::from(code)); };
+        press(&mut app, KeyCode::Char('Z'));
+        assert!(matches!(&app.mode, Mode::ArchiveReason { id, cursor: 0 } if id == "aaaaaaaa0000"));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert!(matches!(app.mode, Mode::ArchiveReason { cursor: 2, .. }));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(ARCHIVE_REASONS.map(|(name, _)| name), ["duplicate", "sla_expired", "rejected", "not_for_agent", "pr_closed"]);
+        app.focus = app.tasks[1].column_index();
+        app.select("bbbbbbbb0000", true);
+        press(&mut app, KeyCode::Char('Z'));
+        assert!(matches!(app.mode, Mode::Normal), "an archived ticket has nothing to archive");
     }
 
     #[test]

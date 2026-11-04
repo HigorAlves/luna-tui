@@ -128,6 +128,9 @@ pub struct Task {
     pub retries: Retries,
     pub resume_to: Option<String>,
     pub reason: Option<String>,
+    /// Why the ticket was archived (`duplicate`, `sla_expired`, `rejected`, `not_for_agent`, `pr_closed`); absent otherwise and from machines that predate archiving.
+    #[serde(default)]
+    pub archive_reason: Option<String>,
     /// What every stage run of this ticket has cost so far; None when unknown.
     #[serde(default)]
     pub spent_usd: Option<f64>,
@@ -1574,7 +1577,18 @@ pub enum Look {
     Paused,
     Draft,
     Done,
+    /// Ended without shipping or closing: dimmed in Done.
+    Archived,
 }
+
+/// Why a ticket may be archived, in the order the picker lists them: the machine's `ArchiveReason`.
+pub const ARCHIVE_REASONS: [(&str, &str); 5] = [
+    ("duplicate", "duplicate of another ticket"),
+    ("sla_expired", "nobody answered in time"),
+    ("rejected", "decided against"),
+    ("not_for_agent", "not work for an agent"),
+    ("pr_closed", "its PR was closed"),
+];
 
 /// The first 8 characters of a task id: what cards and watch-tab labels show.
 pub fn short_id(id: &str) -> &str {
@@ -1658,6 +1672,7 @@ impl Task {
             "paused_rate_limit" => Look::Paused,
             "draft" => Look::Draft,
             "closed" => Look::Done,
+            "archived" => Look::Archived,
             _ if self.waiting_on_you => Look::NeedsYou,
             _ if self.queued => Look::Queued,
             _ if self.running && unix_secs(&self.updated_at).is_some_and(|t| now.saturating_sub(t) > STALE_SECS) => Look::Stale,
@@ -1694,6 +1709,7 @@ impl Task {
             "escalated" => "escalated".to_string(),
             "paused_rate_limit" => "paused: usage limit".to_string(),
             "closed" => "closed".to_string(),
+            "archived" => "archived".to_string(),
             "ci_watch" => "ci".to_string(),
             "test_design" => "test design".to_string(),
             other => other.to_string(),
@@ -2076,6 +2092,17 @@ pub(crate) mod tests {
         assert_eq!(task.column_index(), 0);
         assert!(matches!(task.look(), Look::Draft));
         assert_eq!(task.status_label(), "intake");
+    }
+
+    #[test]
+    fn an_archived_ticket_looks_archived_says_so_and_carries_its_reason() {
+        let json = task_json("").replace(r#""state":"draft""#, r#""state":"archived""#).replace(r#""reason":null"#, r#""reason":"duplicate","archiveReason":"duplicate""#);
+        let task: Task = serde_json::from_str(&json).unwrap();
+        assert!(matches!(task.look(), Look::Archived));
+        assert_eq!(task.status_label(), "archived");
+        assert_eq!(task.archive_reason.as_deref(), Some("duplicate"));
+        let plain: Task = serde_json::from_str(&task_json("")).unwrap();
+        assert_eq!(plain.archive_reason, None, "a machine from before archiving sends none");
     }
 
     #[test]

@@ -536,7 +536,9 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     if let Some(stage) = &task.resume_to {
         lines.push(muted(format!("Continues  {}", continues_line(&task.state, stage).trim_start_matches("Continues at: "))));
     }
-    if let Some(reason) = &task.reason {
+    if let Some(reason) = &task.archive_reason {
+        lines.push(muted(format!("Archived   {reason}")));
+    } else if let Some(reason) = &task.reason {
         lines.push(Line::from(format!("Why        {reason}")).fg(look_color(look)));
     }
     if task.retries.total > 0 {
