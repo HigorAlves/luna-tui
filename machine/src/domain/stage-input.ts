@@ -139,7 +139,7 @@ export function buildStageInput(opts: {
     context: {
       projectContext: opts.projectContext ?? null,
       testCases:
-        pack === "verifying" || (pack === "implementing" && !opts.holdoutCases) ? checkedCases(approvals) : [],
+        pack === "verifying" || pack === "e2e" || (pack === "implementing" && !opts.holdoutCases) ? checkedCases(approvals) : [],
       baseCommit: opts.baseCommit ?? null,
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,

@@ -191,6 +191,7 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   planDecisions,
   { graph, ensure: (repoPath) => graphWatch?.ensure(repoPath) },
   buildDecisions,
+  verifyDecisions,
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review

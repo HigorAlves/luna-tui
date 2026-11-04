@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { Decide } from "./check-decide.ts";
 import { detectWeb, e2eRunner, missingQaImageRunner, touchesRenderedSurface, webRoots } from "./e2e.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 
@@ -183,6 +184,65 @@ describe("e2eRunner", () => {
     const runPack = packReturning(answered({}));
     const result = await e2eRunner({ runPack, detectWeb: async () => true })(context());
     expect(result.outcome).toBe("fail");
+  });
+});
+
+describe("e2e_failure_cause", () => {
+  const criteria = [
+    { text: "login works", result: "fail", evidence: [] },
+    { text: "logout works", result: "pass", evidence: [] },
+  ];
+  const failing = answered({ verdict: "fail", summary: "login broke", criteria });
+  const passing = answered({ verdict: "pass", summary: "ok" });
+  const cause = (choice: string, confidence = 0.9) => ({ cause: { choice, confidence } });
+  const run = (runPack: (context: StageContext) => Promise<StageResult>, decide: Decide | null) =>
+    e2eRunner({ runPack, detectWeb: async () => true, decide, overrides: async () => ({}) })({ ...context(), attempt: 2 });
+
+  it("re-runs the pack once on an environment flake, and passes when the second run does", async () => {
+    const runPack = vi.fn().mockResolvedValueOnce(failing).mockResolvedValueOnce(passing);
+    const decide = vi.fn<Decide>(async () => cause("env_flake"));
+    const result = await run(runPack, decide);
+    expect(runPack).toHaveBeenCalledTimes(2);
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ rerun: true, cause: "env_flake" });
+    const [pack, check] = decide.mock.calls[0]!;
+    expect(pack).toBe("e2e_failure_cause");
+    expect(check).toEqual({ kind: "e2e", e2e: { verdict: "fail", summary: "login broke", attempt: 2, criteria: [{ text: "login works", result: "fail" }] } });
+  });
+
+  it("escalates as flaky_tests when the re-run fails too", async () => {
+    const runPack = vi.fn().mockResolvedValue(failing);
+    const result = await run(runPack, async () => cause("env_flake"));
+    expect(runPack).toHaveBeenCalledTimes(2);
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ step: "e2e", escalation: "flaky_tests", rerun: true, cause: "env_flake", reason: expect.stringContaining("login broke") });
+    expect((result.detail as { options: string[] }).options).toHaveLength(2);
+  });
+
+  it.each(["product_bug", "test_bug"])("fails once with the cause recorded on %s", async (choice) => {
+    const runPack = vi.fn().mockResolvedValue(failing);
+    const result = await run(runPack, async () => cause(choice));
+    expect(runPack).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ cause: choice });
+  });
+
+  it("treats a low-confidence flake as a product bug", async () => {
+    const runPack = vi.fn().mockResolvedValue(failing);
+    const result = await run(runPack, async () => cause("env_flake", 0.3));
+    expect(runPack).toHaveBeenCalledTimes(1);
+    expect(result.detail).toMatchObject({ cause: "product_bug" });
+  });
+
+  it("behaves as before without a decide, and on a pass", async () => {
+    const runPack = vi.fn().mockResolvedValue(failing);
+    const result = await run(runPack, null);
+    expect(runPack).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).not.toHaveProperty("cause");
+    const decide = vi.fn<Decide>(async () => cause("env_flake"));
+    expect((await run(vi.fn().mockResolvedValue(passing), decide)).outcome).toBe("pass");
+    expect(decide).not.toHaveBeenCalled();
   });
 });
 

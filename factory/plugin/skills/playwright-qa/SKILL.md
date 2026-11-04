@@ -8,7 +8,7 @@ when_to_use: Use when browser-qa selects the playwright driver; falls back to ag
 
 **Announce at start:** "I'm using the playwright-qa skill to run browser QA with Playwright."
 
-Inputs from `browser-qa`: feature description, `<qa-dir>`, the acceptance criteria (step 2), the target **name** + `baseUrl` + `guard` (see `qa-targets`; credential references, never resolved values), `isVisual`. Output: the packet in `<qa-dir>` with `qa-manifest.json` (`driver: "playwright"`).
+Inputs from `browser-qa`: feature description, `<qa-dir>`, the approved scenarios (step 2; titles verbatim key every row and chapter), the target **name** + `baseUrl` + `guard` (see `qa-targets`; credential references, never resolved values), `isVisual`. Output: the packet in `<qa-dir>` with `qa-manifest.json` (`driver: "playwright"`).
 
 ## 0. Preconditions → fallback
 
@@ -59,12 +59,12 @@ Any failed test → debug it yourself: read `<qa-dir>/pw/results.json` and the t
 
 Collect from `<qa-dir>/pw/`: each scenario's video, trace and console log, renamed `video-<id>.webm`, `trace-<id>.zip`, `console-<id>.log` into `<qa-dir>`. When `command -v ffmpeg` succeeds, concatenate the scenario videos in spec order into `qa-<branch>.webm` (ffmpeg concat demuxer) and write `chapters.json` (one `{title, start, acIds}` per scenario, `start` from the cumulative durations in `results.json`); otherwise write `Motion proof: skipped — ffmpeg not installed` into `steps.md` and list the per-scenario videos as the recording.
 
-Then write `steps.md` (one `### Scenario <n> — <title>` per test, each listing its steps and the `AC` ids proven) and `qa-manifest.json`:
+Then write `steps.md` (one `### Scenario <n> — <title>` per test, each listing its steps and the `AC` ids proven), `steps.jsonl` (one JSON object per action: `{ scenario, step, action, selector?, value?, url?, screenshot? }`, `scenario` the title verbatim, so the walk can be replayed) and `qa-manifest.json`:
 
 - `driver: "playwright"`, `target: { name, baseUrl, guard }`, top-level `verdict`
 - `artifacts[]`: `qa-<branch>.webm` (role `stitched recording`), `chapters.json`, each `trace-<id>.zip` (role `trace <title>`), each `console-<id>.log`, `pw/results.json`
 - `video: { file: "qa-<branch>.webm", chapters: <chapters.json contents> }`
-- `acceptance[]`: one row per criterion; `evidence` = `["qa-<branch>.webm#t=<chapter.start>", "trace-<id>.zip"]` of the scenario whose `test.step` title carries the criterion id; `partial` rows carry the note.
+- `acceptance[]`: one row per approved scenario, `text` its title verbatim and `criterion` its criterion; `evidence` = `["qa-<branch>.webm#t=<chapter.start>", "trace-<id>.zip"]` of the scenario whose `test.step` title carries the criterion id; `partial` rows carry the note.
 - `curated`: `["qa-<branch>.webm"]`
 - `specs`: `["<dir>/specs/<feature-slug>.md"]`, `tests`: the generated spec files (relative to repo).
 

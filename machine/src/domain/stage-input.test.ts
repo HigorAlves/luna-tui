@@ -263,7 +263,8 @@ describe("buildStageInput", () => {
     cases.push({ title: "older", criterion: null, approach: "run c.test.ts" });
     expect(at("implementing").context.testCases).toEqual(cases);
     expect(at("verifying").context.testCases).toEqual(cases);
-    expect(at("e2e").context.testCases).toEqual([]);
+    // e2e drives the approved scenarios, as verifying does.
+    expect(at("e2e").context.testCases).toEqual(cases);
     expect(StageInput.safeParse(at("verifying")).success).toBe(true);
   });
 

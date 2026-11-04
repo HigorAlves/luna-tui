@@ -4,8 +4,11 @@ import { readFile, readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
 
 import { branchBase, diffNameStatus } from "../../adapters/git/worktree.ts";
+import type { DecisionOverrides } from "@hardness/contracts";
+
 import type { Policy } from "../../domain/policy.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
+import { type Decide, judgeCheck } from "./check-decide.ts";
 
 export interface E2eDeps {
   /** Runs the e2e pack. */
@@ -17,7 +20,13 @@ export interface E2eDeps {
   changedFiles?: (worktreePath: string, repoPath: string | null) => Promise<string[] | null>;
   /** The repo's config: `qa: none` means this repo never gets a browser run. */
   policy?: (repoPath: string | null) => Promise<Pick<Policy, "qa">>;
+  /** Runs e2e_failure_cause on a failed run; null (or absent) leaves a failure as it is. Read at call time. */
+  decide?: Decide | null;
+  /** The repo's per-pack decision bars. */
+  overrides?: (repoPath: string | null) => Promise<Record<string, DecisionOverrides>>;
 }
+
+type Cause = "product_bug" | "test_bug" | "env_flake";
 
 const WEB_SCRIPTS = ["dev", "start", "preview"];
 const WEB_FRAMEWORKS = ["next", "vite", "react", "vue", "svelte", "astro", "nuxt", "remix"];
@@ -114,24 +123,63 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     if (files !== null && !touchesRenderedSurface(files, await roots(worktree))) {
       return { outcome: "pass", detail: { step: "e2e", skipped: true, reason: "the change touches no rendered surface", files } };
     }
-    const pack = await deps.runPack(context);
-    if (pack.outcome !== "pass") return { ...pack, detail: { ...pack.detail, step: "e2e" } };
+    const settle = (pack: StageResult): StageResult => {
+      if (pack.outcome !== "pass") return { ...pack, detail: { ...pack.detail, step: "e2e" } };
+      const answer = (pack.detail?.answer ?? {}) as Record<string, unknown>;
+      const verdict = typeof answer.verdict === "string" ? answer.verdict : undefined;
+      // `skipped` is not a result.json outcome; the runner reports it as a pass, and so do we.
+      const passed = verdict === "pass" || verdict === "skipped";
+      const summary = typeof answer.summary === "string" ? answer.summary : String(pack.detail?.summary ?? "");
+      return {
+        ...pack,
+        outcome: passed ? "pass" : "fail",
+        detail: {
+          step: "e2e",
+          verdict: verdict ?? "none",
+          summary,
+          criteria: Array.isArray(answer.criteria) ? answer.criteria : [],
+          ...(verdict === "skipped" ? { skipped: true, note: `e2e skipped by the QA agent: ${summary}` } : {}),
+          ...(verdict ? {} : { error: "the e2e pack gave no verdict" }),
+        },
+      };
+    };
+    /** Why a browser run failed, from the decision pack: an `env_flake` only when it is confident, else the app's fault. */
+    const causeOf = async (result: StageResult): Promise<Cause | null> => {
+      const decide = deps.decide ?? null;
+      const detail = result.detail as { verdict?: string; summary?: string; criteria?: Array<{ text: string; result: string }> };
+      if (!decide || (detail.verdict !== "fail" && detail.verdict !== "partial")) return null;
+      const repoPath = context.task.repoPath ?? null;
+      const rows = (detail.criteria ?? []).filter((c) => c.result !== "pass").map((c) => ({ text: c.text, result: c.result as "fail" | "partial" }));
+      const { verdict, answer } = await judgeCheck(
+        decide,
+        "e2e_failure_cause",
+        { kind: "e2e", e2e: { verdict: detail.verdict, summary: detail.summary ?? "", criteria: rows, attempt: context.attempt } },
+        repoPath,
+        (await deps.overrides?.(repoPath)) ?? {},
+      );
+      const choice = (answer?.cause as { choice?: unknown } | undefined)?.choice;
+      return (verdict === "proceed" || verdict === "flag") && (choice === "env_flake" || choice === "test_bug") ? choice : verdict === "skipped" ? null : "product_bug";
+    };
 
-    const answer = (pack.detail?.answer ?? {}) as Record<string, unknown>;
-    const verdict = typeof answer.verdict === "string" ? answer.verdict : undefined;
-    // `skipped` is not a result.json outcome; the runner reports it as a pass, and so do we.
-    const passed = verdict === "pass" || verdict === "skipped";
-    const summary = typeof answer.summary === "string" ? answer.summary : String(pack.detail?.summary ?? "");
+    let result = settle(await deps.runPack(context));
+    if (result.outcome !== "fail") return result;
+    const cause = await causeOf(result);
+    if (cause === null) return result;
+    if (cause !== "env_flake") return { ...result, detail: { ...result.detail, cause } };
+    // An environment flake: the scenario was never really tried, so once more before a person is asked.
+    result = settle(await deps.runPack(context));
+    if (result.outcome !== "fail") return { ...result, detail: { ...result.detail, rerun: true, cause } };
+    const summary = String(result.detail?.summary ?? "");
     return {
-      ...pack,
-      outcome: passed ? "pass" : "fail",
+      ...result,
+      outcome: "escalated",
       detail: {
-        step: "e2e",
-        verdict: verdict ?? "none",
-        summary,
-        criteria: Array.isArray(answer.criteria) ? answer.criteria : [],
-        ...(verdict === "skipped" ? { skipped: true, note: `e2e skipped by the QA agent: ${summary}` } : {}),
-        ...(verdict ? {} : { error: "the e2e pack gave no verdict" }),
+        ...result.detail,
+        cause,
+        rerun: true,
+        escalation: "flaky_tests",
+        reason: `e2e failed twice on what looks like an environment flake: ${summary}`,
+        options: ["check the QA target or the dev server, then retry the task", "mark the scenario partial by hand"],
       },
     };
   };

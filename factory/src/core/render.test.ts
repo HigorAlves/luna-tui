@@ -1,4 +1,5 @@
 import { PACKS, type StageInput } from "@hardness/contracts";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import { EVE_TOOL_NAMES, FACTORY_RULES, callLine, escalationLine, factoryRules, renderPrompt } from "./render.ts";
@@ -113,6 +114,15 @@ describe("renderPrompt", () => {
     expect(render(["src/b.ts", "src/c.ts"])).toContain("- src/b.ts\n- src/c.ts");
     expect(render([])).toContain("(none)");
     expect(render(undefined)).toContain("(none)");
+  });
+
+  it("renders the e2e template with the approved scenarios and leaves no placeholder", () => {
+    const template = readFileSync(new URL("../../prompts/e2e.md", import.meta.url), "utf8");
+    const e2e = { ...input, pack: "e2e" as const, stage: "e2e" as const, context: { projectContext: null, testCases: [{ title: "Rejects a bad password", criterion: "no crash", approach: "Given a user, When a bad password is sent, Then 401" }], qaTargets: [] } };
+    const prompt = renderPrompt({ pack: PACKS.e2e, input: e2e as never, template });
+    expect(prompt).toContain("- Rejects a bad password (criterion: no crash): Given a user, When a bad password is sent, Then 401");
+    expect(prompt).toContain("steps.jsonl");
+    expect(prompt).not.toContain("{{");
   });
 
   it("renders the coverage of the change per file with a total line, or says there is no report", () => {

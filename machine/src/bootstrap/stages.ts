@@ -62,6 +62,8 @@ export async function buildRealStages(
   graphs?: { graph: Graph; ensure: (repoPath: string) => void },
   /** Build's checks (red_check, scope_check): `decide` is bound late, once PackRuns exists; null runs Build without them. */
   buildDecisions?: { decide: Decide | null },
+  /** Verify's decisions (finding_classify, e2e_failure_cause), bound late like the others; null runs e2e without the failure cause. */
+  verifyDecisions?: { decide: Decide | null },
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -127,7 +129,14 @@ export async function buildRealStages(
     ci_watch: ciWatchRunner({ github, runPack: (context, ci) => runAgent(deps, context, "ci_watch", { ci }) }),
     // e2e skips repos with no web surface; without the QA image it passes with a note.
     e2e: qaImage
-      ? e2eRunner({ runPack: (context) => runAgent(deps, context, "e2e"), policy: (repoPath) => policies.for(repoPath) })
+      ? e2eRunner({
+          runPack: (context) => runAgent(deps, context, "e2e"),
+          policy: (repoPath) => policies.for(repoPath),
+          get decide() {
+            return verifyDecisions?.decide ?? null;
+          },
+          overrides: (repoPath) => policies.for(repoPath).then((p) => p.decisions),
+        })
       : missingQaImageRunner(),
     // Evidence is script-only, so it runs on the host from what e2e left in the state dir.
     evidence: evidenceRunner({ stateDir: config.stateDir, latestE2e }),

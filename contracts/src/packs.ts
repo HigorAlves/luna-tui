@@ -173,7 +173,7 @@ export const E2eAnswer = z.object({
   reason: z.string().optional(),
   options: z.array(z.string()).optional(),
   criteria: z
-    .array(z.object({ text: z.string(), result: z.enum(["pass", "fail", "partial"]), evidence: z.array(z.string()) }))
+    .array(z.object({ text: z.string(), criterion: z.string().nullable().optional(), result: z.enum(["pass", "fail", "partial"]), evidence: z.array(z.string()) }))
     .optional(),
 });
 
