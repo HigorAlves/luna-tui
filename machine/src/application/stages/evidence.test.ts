@@ -210,7 +210,7 @@ describe("evidenceStage", () => {
         asked.push([ctx, repoPath]);
         return { format: { choice: "captures", confidence: 0.9 } };
       },
-      policies: { for: async () => ({ decisions: {} }) },
+      policies: { for: async () => ({ decisions: {}, qaTargets: [{ name: "local", baseUrl: "http://localhost:3000/app", credential: null }] }) },
       headCommit: async () => "abc1234def",
       videoImage: async () => false,
       now: () => new Date("2026-11-04T10:00:00.000Z"),
@@ -380,6 +380,27 @@ describe("evidenceStage", () => {
     expect(result.outcome).toBe("fail");
     expect(result.detail).toMatchObject({ error: expect.stringContaining("not a git repository") });
     expect(saved).toEqual([]);
+  });
+
+  it("takes how-to-verify from luna.yaml's target by name, never from the manifest, and never prints a host path", async () => {
+    const dir = browserRun({ target: { name: "evil", baseUrl: "https://evil.example/login?next=1" } });
+    writeFileSync(join(dir, "steps.md"), "# steps");
+    const { run, saved } = stage();
+    await run(taskContext());
+    const pack = saved[0]![1] as { evidence: { howToVerify: string } };
+    expect(pack.evidence.howToVerify).toBe("follow steps.md in the QA packet");
+    expect(JSON.stringify(saved)).not.toContain("evil.example");
+    expect(pack.evidence.howToVerify).not.toContain(stateDir);
+  });
+
+  it("notes when the browser run proved an older commit than the one the pack shows", async () => {
+    browserRun();
+    const previous = { summary: "s", format: "captures", scenarios: [], findings: [], outOfMap: [], risk: "low", rollback: "r", howToVerify: "h", commitSha: "old1234", media: [], at: "2026-11-03T00:00:00.000Z" };
+    const { run, saved } = stage();
+    const result = await run(taskContext({ evidence: previous }));
+    expect(result.outcome).toBe("pass");
+    const pack = saved[0]![1] as { evidence: { note?: string } };
+    expect(pack.evidence.note).toMatch(/proved old1234.*abc1234/);
   });
 
   it("never carries a credential from the manifest's target into the pack", async () => {

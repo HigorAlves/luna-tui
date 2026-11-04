@@ -36,12 +36,14 @@ const pack = (media: EvidencePack["media"]): EvidencePack => ({
 
 type Calls = ReturnType<typeof fakeGitHub>;
 const prNode = (body: string | null) => ({ body }) as never;
-function github(over: Partial<Parameters<typeof fakeGitHub>[0]> = {}, state: { body: string; comments: Array<{ id: number; body: string; url: string }>; assets: Array<{ id: number; name: string; url: string }> } = { body: "## Why\n- cart", comments: [], assets: [] }): Calls {
+type Comment = { id: number; body: string; url: string; author: string | null };
+function github(over: Partial<Parameters<typeof fakeGitHub>[0]> = {}, state: { body: string; comments: Comment[]; assets: Array<{ id: number; name: string; url: string }> } = { body: "## Why\n- cart", comments: [], assets: [] }): Calls {
   return fakeGitHub({
+    viewer: async () => ({ login: "luna-bot", teams: [] }),
     prFacts: async () => prNode(state.body),
     updatePrBody: async (_s, _n, body) => void (state.body = body),
     listPrComments: async () => state.comments,
-    commentOnIssue: async (_s, _n, body) => void state.comments.push({ id: 90 + state.comments.length, body, url: "u" }),
+    commentOnIssue: async (_s, _n, body) => void state.comments.push({ id: 90 + state.comments.length, body, url: "u", author: "luna-bot" }),
     updateComment: async (_s, id, body) => void (state.comments.find((c) => c.id === id)!.body = body),
     ensureRelease: async () => ({ id: 5, url: "https://github.com/o/a/releases/tag/luna-evidence" }),
     releaseAssets: async () => state.assets,
@@ -87,7 +89,7 @@ describe("publishEvidence", () => {
   });
 
   it("replaces its own section on a second run and keeps one comment: created, then updated", async () => {
-    const state = { body: "## Why", comments: [{ id: 1, body: "someone else's comment", url: "u" }], assets: [] };
+    const state = { body: "## Why", comments: [{ id: 1, body: "someone else's comment", url: "u", author: "reviewer" }], assets: [] };
     const gh = github({}, state);
     const first = await publishEvidence({ ...base, github: gh, localDir, pack: pack([]) });
     const second = await publishEvidence({ ...base, github: gh, localDir, pack: { ...pack([]), summary: "Second take." } });
@@ -99,6 +101,32 @@ describe("publishEvidence", () => {
     expect(state.body.split(SECTION_START)).toHaveLength(2);
     expect(state.body).toContain("Second take.");
     expect(state.body).not.toContain("Show the cart total.");
+  });
+
+  it("never adopts another author's comment that carries the marker: only the token's own comment is updated", async () => {
+    const state = { body: "## Why", comments: [{ id: 1, body: `${COMMENT_MARKER}\nforged: all pass`, url: "u", author: "attacker" }], assets: [] };
+    const result = await publishEvidence({ ...base, github: github({}, state), localDir, pack: pack([]) });
+    expect(result.comment).toBe("created");
+    expect(state.comments).toHaveLength(2);
+    expect(state.comments[0]!.body).toContain("forged");
+    expect(state.comments[1]).toMatchObject({ author: "luna-bot" });
+  });
+
+  it("creates a fresh comment, touching none, when the token's user is unknown", async () => {
+    const state = { body: "## Why", comments: [{ id: 1, body: COMMENT_MARKER, url: "u", author: "luna-bot" }], assets: [] };
+    const gh = github({ viewer: async () => { throw new Error("no viewer"); } }, state);
+    const result = await publishEvidence({ ...base, github: gh, localDir, pack: pack([]) });
+    expect(result.comment).toBe("created");
+    expect(state.comments).toHaveLength(2);
+  });
+
+  it("writes only the comment when the PR body leaves no room for the section", async () => {
+    const state = { body: "x".repeat(64_000), comments: [], assets: [] };
+    const gh = github({}, state);
+    const result = await publishEvidence({ ...base, github: gh, localDir, pack: pack([]) });
+    expect(result).toMatchObject({ comment: "created", body: "skipped" });
+    expect(state.body).toBe("x".repeat(64_000));
+    expect(gh.updatePrBody).not.toHaveBeenCalled();
   });
 
   it("caps the body it writes, leaving the section its room", async () => {

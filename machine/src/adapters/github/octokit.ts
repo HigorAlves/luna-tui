@@ -35,7 +35,7 @@ export interface OctokitLike {
     repos: {
       get(params: Record<string, unknown>): Promise<{ data: { default_branch: string } }>;
       getCombinedStatusForRef(params: Record<string, unknown>): Promise<{ data: { statuses: Array<{ context: string; state: string; target_url: string | null }> } }>;
-      getReleaseByTag(params: Record<string, unknown>): Promise<{ data: { id: number; html_url: string } }>;
+      listReleases(params: Record<string, unknown>): Promise<{ data: Array<{ id: number; tag_name: string; html_url: string; draft?: boolean }> }>;
       createRelease(params: Record<string, unknown>): Promise<{ data: { id: number; html_url: string } }>;
       listReleaseAssets: unknown;
       uploadReleaseAsset(params: Record<string, unknown>): Promise<{ data: { browser_download_url: string } }>;
@@ -320,12 +320,12 @@ export class OctokitGitHub implements GitHub {
     await call(`updating the body of ${slug}#${number}`, () => this.octokit.rest.pulls.update({ owner, repo, pull_number: number, body }));
   }
 
-  async listPrComments(slug: string, number: number): Promise<Array<{ id: number; body: string; url: string }>> {
+  async listPrComments(slug: string, number: number): Promise<Array<{ id: number; body: string; url: string; author: string | null }>> {
     const { owner, repo } = repoRef(slug);
     const rows = await call(`listing the comments of ${slug}#${number}`, () =>
-      this.octokit.paginate<{ id: number; body?: string | null; html_url: string }>(this.octokit.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 }),
+      this.octokit.paginate<{ id: number; body?: string | null; html_url: string; user?: { login?: string } | null }>(this.octokit.rest.issues.listComments, { owner, repo, issue_number: number, per_page: 100 }),
     );
-    return rows.map((c) => ({ id: c.id, body: c.body ?? "", url: c.html_url }));
+    return rows.map((c) => ({ id: c.id, body: c.body ?? "", url: c.html_url, author: c.user?.login ?? null }));
   }
 
   async updateComment(slug: string, commentId: number, body: string): Promise<void> {
@@ -341,15 +341,13 @@ export class OctokitGitHub implements GitHub {
 
   async ensureRelease(slug: string, tag: string, release: { name: string; prerelease: boolean }): Promise<{ id: number; url: string }> {
     const { owner, repo } = repoRef(slug);
-    try {
-      const { data } = await this.octokit.rest.repos.getReleaseByTag({ owner, repo, tag });
-      return { id: data.id, url: data.html_url };
-    } catch (error) {
-      const status = (error as { status?: number })?.status;
-      if (status !== 404) throw new GitHubError(`reading the ${tag} release of ${slug} failed${status ? ` (${status})` : ""}: ${(error as { message?: string })?.message ?? String(error)}`);
-    }
+    // A draft has no tag to look up by: the first page of releases (drafts included for a token with push) is where it is.
+    const { data: releases } = await call(`listing the releases of ${slug}`, () => this.octokit.rest.repos.listReleases({ owner, repo, per_page: 100 }));
+    const found = releases.find((r) => r.tag_name === tag);
+    if (found) return { id: found.id, url: found.html_url };
+    // A draft: no tag is created and no `release` event fires, so the repo's publish or deploy workflows stay out of it.
     const { data } = await call(`creating the ${tag} release of ${slug}`, () =>
-      this.octokit.rest.repos.createRelease({ owner, repo, tag_name: tag, name: release.name, prerelease: release.prerelease }),
+      this.octokit.rest.repos.createRelease({ owner, repo, tag_name: tag, name: release.name, prerelease: release.prerelease, draft: true }),
     );
     return { id: data.id, url: data.html_url };
   }

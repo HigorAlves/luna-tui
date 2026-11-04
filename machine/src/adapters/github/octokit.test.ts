@@ -31,7 +31,7 @@ function stub(answers: Record<string, unknown>) {
       repos: {
         get: endpoint("repos.get"),
         getCombinedStatusForRef: endpoint("repos.getCombinedStatusForRef"),
-        getReleaseByTag: endpoint("repos.getReleaseByTag"),
+        listReleases: endpoint("repos.listReleases"),
         createRelease: endpoint("repos.createRelease"),
         listReleaseAssets: "repos.listReleaseAssets",
         uploadReleaseAsset: endpoint("repos.uploadReleaseAsset"),
@@ -163,8 +163,8 @@ describe("OctokitGitHub: publishing evidence", () => {
   });
 
   it("lists a PR's comments through the issues API, every page, as id, body and url", async () => {
-    const { github, calls } = stub({ "issues.listComments": [{ id: 7, body: "hi", html_url: "u7", user: {} }, { id: 8, body: null, html_url: "u8" }] });
-    expect(await github.listPrComments("o/a", 3)).toEqual([{ id: 7, body: "hi", url: "u7" }, { id: 8, body: "", url: "u8" }]);
+    const { github, calls } = stub({ "issues.listComments": [{ id: 7, body: "hi", html_url: "u7", user: { login: "luna-bot" } }, { id: 8, body: null, html_url: "u8" }] });
+    expect(await github.listPrComments("o/a", 3)).toEqual([{ id: 7, body: "hi", url: "u7", author: "luna-bot" }, { id: 8, body: "", url: "u8", author: null }]);
     expect(calls[0]).toEqual(["paginate issues.listComments", { owner: "o", repo: "a", issue_number: 3, per_page: 100 }]);
   });
 
@@ -181,20 +181,20 @@ describe("OctokitGitHub: publishing evidence", () => {
     expect(calls[0]).toEqual(["pulls.get", { owner: "o", repo: "a", pull_number: 3 }]);
   });
 
-  it("finds a release by its tag, and creates a pre-release when there is none (a 404)", async () => {
-    const found = stub({ "repos.getReleaseByTag": { id: 11, html_url: "https://x/releases/tag/luna-evidence" } });
+  it("finds the release by its tag name among the repo's releases (drafts included), and creates a draft pre-release when there is none: no tag, no release event", async () => {
+    const found = stub({ "repos.listReleases": [{ id: 10, tag_name: "v1.0.0", html_url: "https://x/releases/tag/v1.0.0", draft: false }, { id: 11, tag_name: "luna-evidence", html_url: "https://x/releases/tag/luna-evidence", draft: true }] });
     expect(await found.github.ensureRelease("o/a", "luna-evidence", { name: "Luna evidence", prerelease: true })).toEqual({ id: 11, url: "https://x/releases/tag/luna-evidence" });
-    expect(found.calls).toEqual([["repos.getReleaseByTag", { owner: "o", repo: "a", tag: "luna-evidence" }]]);
+    expect(found.calls).toEqual([["repos.listReleases", { owner: "o", repo: "a", per_page: 100 }]]);
 
-    const missing = stub({ "repos.getReleaseByTag": Object.assign(new Error("Not Found"), { status: 404 }), "repos.createRelease": { id: 12, html_url: "https://x/releases/tag/luna-evidence" } });
+    const missing = stub({ "repos.listReleases": [], "repos.createRelease": { id: 12, html_url: "https://x/releases/tag/luna-evidence" } });
     expect(await missing.github.ensureRelease("o/a", "luna-evidence", { name: "Luna evidence", prerelease: true })).toEqual({ id: 12, url: "https://x/releases/tag/luna-evidence" });
-    expect(missing.calls[1]).toEqual(["repos.createRelease", { owner: "o", repo: "a", tag_name: "luna-evidence", name: "Luna evidence", prerelease: true }]);
+    expect(missing.calls[1]).toEqual(["repos.createRelease", { owner: "o", repo: "a", tag_name: "luna-evidence", name: "Luna evidence", prerelease: true, draft: true }]);
   });
 
-  it("does not create a release when the lookup fails for another reason", async () => {
-    const { github, calls } = stub({ "repos.getReleaseByTag": Object.assign(new Error("Bad credentials"), { status: 401 }) });
+  it("does not create a release when the lookup fails", async () => {
+    const { github, calls } = stub({ "repos.listReleases": Object.assign(new Error("Bad credentials"), { status: 401 }) });
     await expect(github.ensureRelease("o/a", "t", { name: "n", prerelease: true })).rejects.toThrow(GitHubError);
-    expect(calls.map((c) => c[0])).toEqual(["repos.getReleaseByTag"]);
+    expect(calls.map((c) => c[0])).toEqual(["repos.listReleases"]);
   });
 
   it("lists a release's assets, every page, with their download urls", async () => {

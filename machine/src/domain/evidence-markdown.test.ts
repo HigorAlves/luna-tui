@@ -79,6 +79,13 @@ describe("renderEvidenceSection", () => {
     expect(text).not.toMatch(/@octocat/);
   });
 
+  it("escapes raw HTML in a model's text, so a tag cannot fold the rest of the section away", () => {
+    const text = renderEvidenceSection(pack({ summary: "<details><summary>ok</summary>", findings: ["bug: <img src=x onerror=1> (a.ts:1)"] }));
+    expect(text).not.toContain("<details>");
+    expect(text).not.toContain("<img");
+    expect(text).toContain("&lt;details&gt;");
+  });
+
   it("keeps an issue reference in a model's text from closing or linking anything on merge", () => {
     const text = renderEvidenceSection(pack({ findings: ["bug: Closes #12 and fixes #345 (src/a.ts:1)"], summary: "see GH #7" }));
     expect(text).not.toMatch(/#\d/);

@@ -24,7 +24,7 @@ const MANIFEST = "qa-manifest.json";
 
 interface Manifest {
   verdict?: unknown;
-  target?: { baseUrl?: unknown } | null;
+  target?: { name?: unknown; baseUrl?: unknown } | null;
   acceptance?: Array<{ text?: unknown; result?: unknown; evidence?: unknown } | null>;
   video?: { file?: unknown; chapters?: Array<{ title?: unknown; start?: unknown } | null> } | null;
 }
@@ -184,7 +184,8 @@ export interface EvidenceStageDeps extends EvidenceDeps {
   save: (taskId: string, patch: { evidence: EvidencePack }) => Promise<void>;
   /** Runs evidence_format on an evidence context and returns its answer; bound late, once PackRuns exists. Read at call time. */
   decideFormat: ((context: EvidenceContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
-  policies: { for: (repoPath: string | null) => Promise<Pick<Policy, "decisions">> };
+  /** The repo's decision bars and its QA targets: how-to-verify names a target's URL from here, never from the manifest. */
+  policies: { for: (repoPath: string | null) => Promise<Pick<Policy, "decisions" | "qaTargets">> };
   /** The worktree's HEAD: the commit the pack shows. */
   headCommit: (worktreePath: string) => Promise<string>;
   /** Whether the video image is built on this machine. */
@@ -271,14 +272,20 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       }
     }
     let note: string | undefined;
+    // A re-run (the head moved, a send-back) still reads the latest browser run: when that run proved an older commit, say so on the pack.
+    if (task.evidence && task.evidence.commitSha && facts.e2e && task.worktreePath) {
+      const head = (await deps.headCommit(task.worktreePath).catch(() => "")).trim();
+      if (head && head !== task.evidence.commitSha) note = `the browser run proved ${task.evidence.commitSha.slice(0, 7)}; the pack now shows ${head.slice(0, 7)}, which no browser run has seen`;
+    }
+    const addNote = (text: string) => (note = note ? `${note}; ${text}` : text);
     if (format === "video") {
-      if (!videoImage) note = "the video image is not built";
-      else if (!hasVideo && !hasSteps) note = "the browser run left neither a recording nor replayable steps";
-      else note = "the video pipeline is not wired";
+      if (!videoImage) addNote("the video image is not built");
+      else if (!hasVideo && !hasSteps) addNote("the browser run left neither a recording nor replayable steps");
+      else addNote("the video pipeline is not wired");
       format = "captures";
     }
     if (format === "captures" && !hasManifest) {
-      note = note ? `${note}; there is no browser run to capture` : "there is no browser run to capture";
+      addNote("there is no browser run to capture");
       format = "text";
     }
 
@@ -318,7 +325,12 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       const item = objectOf(o);
       return typeof item?.path === "string" && typeof item.reason === "string" ? [{ path: item.path, reason: item.reason }] : [];
     });
-    const steps = facts.qaDir !== undefined && (await fileExists(join(facts.qaDir, "steps.md"))) ? join(facts.qaDir, "steps.md") : null;
+    // How to verify: the QA target's URL as luna.yaml declares it (matched to the manifest's target by name, or the only one), never the manifest's own URL; else the steps file by name, never by host path.
+    const targets = (await deps.policies.for(task.repoPath)).qaTargets;
+    const targetName = typeof facts.manifest.target?.name === "string" ? facts.manifest.target.name : null;
+    // A manifest naming a target luna.yaml does not know gets no URL at all: the person follows the steps instead.
+    const target = targets.find((t) => t.name === targetName) ?? (targetName === null && targets.length === 1 ? targets[0] : undefined);
+    const steps = facts.qaDir !== undefined && (await fileExists(join(facts.qaDir, "steps.md"))) ? "follow steps.md in the QA packet" : null;
     const pack = assembleEvidencePack({
       task: { title: task.title, description: task.description },
       record: task.record ?? null,
@@ -329,7 +341,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       media,
       commitSha,
       format,
-      howToVerify: plainUrl(facts.manifest.target?.baseUrl) ?? steps ?? "run the checks in luna.yaml",
+      howToVerify: (target ? plainUrl(target.baseUrl) : null) ?? steps ?? "run the checks in luna.yaml",
       ...(note ? { note } : {}),
       now: now(),
     });

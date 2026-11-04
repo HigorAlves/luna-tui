@@ -103,12 +103,13 @@ export interface GitHub {
   rerunFailedJobs(slug: string, runId: string): Promise<void>;
   /** Replaces a PR's body. */
   updatePrBody(slug: string, number: number, body: string): Promise<void>;
-  /** A PR's conversation comments (not its review comments), every page. */
-  listPrComments(slug: string, number: number): Promise<Array<{ id: number; body: string; url: string }>>;
+  /** A PR's conversation comments (not its review comments), every page, with each author's login (null for a deleted user). */
+  listPrComments(slug: string, number: number): Promise<Array<{ id: number; body: string; url: string; author: string | null }>>;
   updateComment(slug: string, commentId: number, body: string): Promise<void>;
   /** The head commit of the PR as GitHub sees it, or null when it says none. */
   prHeadSha(slug: string, number: number): Promise<string | null>;
-  /** The release of `tag`, created as a pre-release (at the default branch head) when there is none. */
+  /** The release named `tag` among the repo's releases, drafts included; created as a draft pre-release when there is none.
+   *  A draft has no tag and fires no release event, so no workflow of the repo runs because evidence was published. */
   ensureRelease(slug: string, tag: string, release: { name: string; prerelease: boolean }): Promise<{ id: number; url: string }>;
   releaseAssets(slug: string, releaseId: number): Promise<Array<{ id: number; name: string; url: string }>>;
   /** Uploads a file to a release; `url` is the asset's download url. */

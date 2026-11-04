@@ -45,8 +45,13 @@ export interface PublishInput {
 export interface Published {
   pack: EvidencePack;
   comment: "created" | "updated" | "skipped";
+  /** Whether the PR body got the section; `skipped` when the body left no room for it (the comment still carries the pack). */
+  body?: "written" | "skipped";
   assets: number;
 }
+
+/** The section needs at least this much of the body's room, else it goes into the comment alone. */
+const BODY_ROOM_MIN = 2000;
 
 export type PublishEvidence = (input: PublishInput) => Promise<Published>;
 
@@ -102,15 +107,21 @@ export const publishEvidence: PublishEvidence = async ({ github, slug, number, t
   }
   const published: EvidencePack = { ...pack, media: pack.media.map((m, i) => (urls.has(i) ? { ...m, url: urls.get(i)! } : m)) };
 
-  // The body: what the PR says now, minus our old section, plus the new one within what room is left.
+  // The body: what the PR says now, minus our old section, plus the new one within what room is left; a body with no room is left alone.
   current ??= await github.prFacts(slug, number);
   const rest = stripSection(current?.body ?? "");
-  const room = Math.max(2000, BODY_CAP - rest.length - 2);
-  await github.updatePrBody(slug, number, mergeSection(rest, renderEvidenceSection(published, { maxChars: room })));
+  const room = BODY_CAP - rest.length - 2;
+  let body: Published["body"] = "skipped";
+  if (room >= BODY_ROOM_MIN) {
+    await github.updatePrBody(slug, number, mergeSection(rest, renderEvidenceSection(published, { maxChars: room })));
+    body = "written";
+  }
 
+  // The comment: ours is the one the token's own user wrote with the marker; anyone else's marker is just text.
   const comment = renderEvidenceComment(published);
-  const found = (await github.listPrComments(slug, number)).find((c) => c.body.includes(COMMENT_MARKER));
+  const me = await github.viewer().then((v) => v.login, () => null);
+  const found = me === null ? undefined : (await github.listPrComments(slug, number)).find((c) => c.author === me && c.body.includes(COMMENT_MARKER));
   if (found) await github.updateComment(slug, found.id, comment);
   else await github.commentOnIssue(slug, number, comment);
-  return { pack: published, comment: found ? "updated" : "created", assets: uploaded };
+  return { pack: published, comment: found ? "updated" : "created", body, assets: uploaded };
 };
