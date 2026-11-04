@@ -412,6 +412,8 @@ export const LunaConfig = z.object({
   engines: StageEngines.optional(),
   /** Monthly caps in USD on this repo's stage runs, by engine or credential (`openai:sol: 10`). */
   budget: z.object({ engines: EngineBudgets.optional() }).optional(),
+  /** How long the machine keeps a task's local Evidence Pack and media; 0 never sweeps it, absent defers to MACHINE_RETENTION_DAYS. */
+  evidence: z.object({ retention_days: z.number().int().min(0).optional() }).optional(),
 });
 export type LunaConfig = z.infer<typeof LunaConfig>;
 

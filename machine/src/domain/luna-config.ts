@@ -30,7 +30,7 @@ export function validateLunaConfig(raw: unknown): LunaConfig {
 /** The file text for a config, sections in the order people read them, empty ones left out. */
 export function renderLunaConfig(config: LunaConfig): string {
   const ordered: Record<string, unknown> = {};
-  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "budget"] as const) {
+  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "budget", "evidence"] as const) {
     const value = config[key];
     if (value === undefined) continue;
     if (Array.isArray(value) ? value.length === 0 : typeof value === "object" && Object.keys(value as object).length === 0) continue;
@@ -119,7 +119,7 @@ export function slaTargetsOf(sla: SlaConfig, warn: Warn = quiet): Partial<SlaTar
 
 /** The policy a validated config means. */
 export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
-  const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla, engines = {}, budget } = config;
+  const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla, engines = {}, budget, evidence } = config;
   return {
     qa: policy.qa ?? DEFAULT_POLICY.qa,
     monthlyBudgetUsd: policy.monthly_budget_usd ?? null,
@@ -136,5 +136,6 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     engines,
     engineBudgets: budget?.engines ?? {},
     decisions: (policy.decisions ?? {}) as Policy["decisions"],
+    evidenceRetentionDays: evidence?.retention_days ?? null,
   };
 }

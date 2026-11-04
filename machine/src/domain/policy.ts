@@ -54,6 +54,8 @@ export interface Policy {
   engineBudgets: EngineBudgets;
   /** The repo's own confidence bars per decision pack, per question (luna.yaml `policy.decisions`), over the pack's. */
   decisions: Record<string, DecisionOverrides>;
+  /** Days the local Evidence Pack store keeps a task's media (luna.yaml `evidence.retention_days`); 0 keeps it for good, null defers to the machine's retention. */
+  evidenceRetentionDays: number | null;
 }
 
 /** `qa_target: <name> <base url> [credential ref]`, one line per target; the ref is `env:NAME`. */
@@ -79,6 +81,7 @@ export const DEFAULT_POLICY: Policy = {
   engines: {},
   engineBudgets: {},
   decisions: {},
+  evidenceRetentionDays: null,
 };
 
 export class PolicyParseError extends Error {

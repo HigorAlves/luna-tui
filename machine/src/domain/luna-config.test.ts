@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_POLICY } from "./policy.ts";
-import { parseLunaConfig, validateLunaConfig } from "./luna-config.ts";
+import { parseLunaConfig, renderLunaConfig, validateLunaConfig } from "./luna-config.ts";
 
 const full = `
 checks:
@@ -34,6 +34,8 @@ engines:
   triage: claude:opus
 budget:
   engines: { "openai:sol": 10, codex: 0 }
+evidence:
+  retention_days: 30
 `;
 
 describe("parseLunaConfig", () => {
@@ -64,7 +66,23 @@ describe("parseLunaConfig", () => {
       engines: { triage: "claude:opus" },
       engineBudgets: { "openai:sol": 10, codex: 0 },
       decisions: {},
+      evidenceRetentionDays: 30,
     });
+  });
+
+  it("reads evidence.retention_days: null when absent, 0 to keep nothing swept, a negative or fractional value refused", () => {
+    expect(parseLunaConfig("").evidenceRetentionDays).toBeNull();
+    expect(parseLunaConfig("evidence: {}\n").evidenceRetentionDays).toBeNull();
+    expect(parseLunaConfig("evidence:\n  retention_days: 0\n").evidenceRetentionDays).toBe(0);
+    expect(() => parseLunaConfig("evidence:\n  retention_days: -1\n")).toThrow(/evidence\.retention_days/);
+    expect(() => parseLunaConfig("evidence:\n  retention_days: 1.5\n")).toThrow(/evidence\.retention_days/);
+  });
+
+  it("writes the evidence block back after budget when a config is rendered", () => {
+    const text = renderLunaConfig(validateLunaConfig({ budget: { engines: { "openai:sol": 5 } }, evidence: { retention_days: 14 }, engines: { triage: "claude:opus" } }));
+    expect(text.indexOf("engines:")).toBeLessThan(text.indexOf("budget:"));
+    expect(text.indexOf("budget:")).toBeLessThan(text.indexOf("evidence:"));
+    expect(text).toContain("retention_days: 14");
   });
 
   it("reads policy.graph: on by default, off when the repo says so", () => {

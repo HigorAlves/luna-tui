@@ -1,6 +1,6 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
-import { type BudgetAlert, Ledger, PrAction, type PullRequest, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
+import { type BudgetAlert, type EvidenceContext, Ledger, PrAction, type PullRequest, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -15,6 +15,7 @@ import { createDataSource, poolSizeFor } from "./adapters/persistence/data-sourc
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
 import { AUTO_ARCHIVE_GATES, type SlaRow, applySlaActions } from "./application/sla-actions.ts";
+import { sweepEvidenceStore } from "./application/evidence-store.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { groundTruthWriter } from "./application/ground-truth.ts";
@@ -73,6 +74,9 @@ if (applied.length > 0) {
   console.log(`applied migrations: ${applied.map((m) => m.name).join(", ")}`);
 }
 
+/** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
+const policies = new PolicyStore();
+
 /** The nightly housekeeping: old history pruned, closed tasks' checkouts and merged branches
  *  removed, orphaned run folders and superseded runner images gone. Each step fails alone. */
 async function sweep(): Promise<void> {
@@ -109,6 +113,16 @@ async function sweep(): Promise<void> {
     const removed = await sweepTaskState(db, config.stateDir);
     return removed > 0 ? `removed ${removed} per-task state dir(s) whose task is gone` : null;
   });
+  await step("evidence store", async () => {
+    // A repo's `evidence.retention_days` over the machine's; a task whose repo is gone takes the machine's.
+    const retention = async (taskId: string): Promise<number> => {
+      const rows: { repo_path: string | null }[] = await db.query("select repo_path from tasks where id::text = $1", [taskId]);
+      const repo = rows[0]?.repo_path ?? null;
+      return (repo ? (await policies.for(repo)).evidenceRetentionDays : null) ?? config.retentionDays;
+    };
+    const removed = await sweepEvidenceStore(config.stateDir, retention, new Date());
+    return removed > 0 ? `removed ${removed} evidence pack copy(ies) past retention` : null;
+  });
   await step("slack triage runs", async () => {
     const removed = await sweepSlackTriageRuns(config.stateDir, config.retentionDays);
     return removed > 0 ? `removed ${removed} failed slack triage run folder(s)` : null;
@@ -137,8 +151,6 @@ const watcher = new StreamWatcher(bus);
 // `pipeline` is assigned below, after the real stages are built — `latestE2e` is only
 // ever called once a stage actually runs, by which point `pipeline` is set.
 let pipeline: Pipeline;
-/** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
-const policies = new PolicyStore();
 /** One Graphify code graph per repo, built from its default branch in the runner image. */
 const graph = graphifyGraph({ stateDir: config.stateDir, image: config.runnerImage, worktreesDir: config.worktreesDir, sandbox: runSandbox });
 /** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
@@ -168,6 +180,8 @@ const planDecisions: { decide: PlanDeps["decide"] } = { decide: null };
 const buildDecisions: { decide: Decide | null } = { decide: null };
 /** Verify's finding_classify (and e2e's failure cause) run through PackRuns as the `verify` client: bound once it exists. */
 const verifyDecisions: { decide: Decide | null } = { decide: null };
+/** Evidence's format decision runs through PackRuns as the `evidence` client: bound once it exists. */
+const evidenceDecisions: { decide: ((context: EvidenceContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null } = { decide: null };
 const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   config,
   watcher,
@@ -192,6 +206,11 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   { graph, ensure: (repoPath) => graphWatch?.ensure(repoPath) },
   buildDecisions,
   verifyDecisions,
+  {
+    latestFinish: (taskId, stage) => pipeline.latestStageFinish(taskId, stage),
+    save: (id, patch) => engineSpend.updateTask(id, patch),
+    decisions: evidenceDecisions,
+  },
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
@@ -359,6 +378,7 @@ const classifier = packRuns ? createIssueClassifier({ runs: packRuns }) : null;
 if (classifier) triageSignals.classify = (issue) => classifier.classify(issue);
 if (packRuns) planDecisions.decide = async (pack, plan) => (await packRuns.run({ pack, context: { plan } }, "plan")).answer;
 if (packRuns) verifyDecisions.decide = async (pack, check) => (await packRuns.run({ pack, context: { check } }, "verify")).answer;
+if (packRuns) evidenceDecisions.decide = async (evidence) => (await packRuns.run({ pack: "evidence_format", context: { evidence } }, "evidence")).answer;
 if (packRuns) buildDecisions.decide = async (pack, check) => (await packRuns.run({ pack, context: { check } }, "build")).answer;
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 const app = createApp({

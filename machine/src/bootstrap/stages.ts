@@ -13,7 +13,7 @@ import type { Decide } from "../application/stages/check-decide.ts";
 import { agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
-import { type EvidenceDeps, evidenceRunner } from "../application/stages/evidence.ts";
+import { type EvidenceDeps, type EvidenceStageDeps, evidenceStage } from "../application/stages/evidence.ts";
 import { memoryReviewRunner, withMemoryReview } from "../application/stages/memory.ts";
 import type { StageContext, StageResult, StageRunner } from "../application/ports.ts";
 import { type PlanDeps, planStage } from "../application/stages/plan.ts";
@@ -26,6 +26,7 @@ import { loadCredential } from "../adapters/credentials/claude.ts";
 import { imageExists, removeLeftoverContainers, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
+import { headCommit } from "../adapters/git/worktree.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { type GitHub, noTokenGitHub } from "../application/github.ts";
 
@@ -64,6 +65,12 @@ export async function buildRealStages(
   buildDecisions?: { decide: Decide | null },
   /** Verify's decisions (finding_classify, e2e_failure_cause), bound late like the others; null runs e2e without the failure cause. */
   verifyDecisions?: { decide: Decide | null },
+  /** Evidence: the task's latest stage finishes, the pack's save and the format decision (`decide` bound late, once PackRuns exists; null picks captures or text). */
+  evidenceDeps: { latestFinish: EvidenceStageDeps["latestFinish"]; save: EvidenceStageDeps["save"]; decisions: { decide: EvidenceStageDeps["decideFormat"] } } = {
+    latestFinish: async () => null,
+    save: async () => {},
+    decisions: { decide: null },
+  },
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -139,8 +146,20 @@ export async function buildRealStages(
           stateDir: config.stateDir,
         })
       : missingQaImageRunner(),
-    // Evidence is script-only, so it runs on the host from what e2e left in the state dir.
-    evidence: evidenceRunner({ stateDir: config.stateDir, latestE2e }),
+    // Evidence runs on the host from what e2e left in the state dir: it picks a format (a decision), assembles the pack and keeps its media.
+    evidence: evidenceStage({
+      stateDir: config.stateDir,
+      latestE2e,
+      latestFinish: evidenceDeps.latestFinish,
+      save: evidenceDeps.save,
+      get decideFormat() {
+        return evidenceDeps.decisions.decide;
+      },
+      policies: { for: (repoPath) => policies.for(repoPath) },
+      headCommit,
+      // The video image arrives with wave 5's image slice; until then no machine has it.
+      videoImage: async () => false,
+    }),
     // The PR tasks' own stages: the host fetches the diff or the threads, the pack answers.
     reviewing: prReviewRunner({ github, runPack: (context, review) => runAgent(deps, context, "reviewing", { review }) }),
     addressing: prAddressRunner({ github, runPack: (context, threads) => runAgent(deps, context, "addressing", { threads }) }),

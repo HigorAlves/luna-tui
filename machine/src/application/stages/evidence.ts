@@ -1,14 +1,18 @@
-// The evidence stage runs on the host: the evidence pack is script-only, so there is
-// nothing to put in a container. It reads what the latest e2e run left under
-// `<stateDir>/runs/<runId>/files/qa/`, checks the QA manifest and lists the files, which
-// then show up in the ship approval's `requested`.
-import type { ArtifactKind } from "@hardness/contracts";
+// The evidence stage runs on the host: nothing of it needs a container. It reads what the latest
+// e2e run left under `<stateDir>/runs/<runId>/files/qa/`, checks the QA manifest and lists the files
+// (the prelude, `evidenceRunner`); `evidenceStage` then picks a format for the change (a decision, with
+// a mechanical veto), assembles the Evidence Pack, keeps a local copy of its media and saves the pack
+// on the task. The pack and its files show up in the ship approval's `requested`, the gate Ship publishes from.
+import { type ArtifactKind, type EvidenceContext, EvidencePack, Finding, PACKS, Risk, type TaskState, applyPolicy } from "@hardness/contracts";
 import { createHash } from "node:crypto";
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 
-import { approvedCases } from "../../domain/stage-input.ts";
-import type { StageResult, StageRunner } from "../ports.ts";
+import { assembleEvidencePack } from "../../domain/evidence-pack.ts";
+import type { Policy } from "../../domain/policy.ts";
+import { approvedCases, approvedPlan } from "../../domain/stage-input.ts";
+import { EvidenceStore } from "../evidence-store.ts";
+import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
 export interface EvidenceDeps {
   stateDir: string;
@@ -20,8 +24,9 @@ const MANIFEST = "qa-manifest.json";
 
 interface Manifest {
   verdict?: unknown;
-  acceptance?: Array<{ text?: unknown; result?: unknown } | null>;
-  video?: { chapters?: Array<{ title?: unknown; start?: unknown } | null> } | null;
+  target?: { baseUrl?: unknown } | null;
+  acceptance?: Array<{ text?: unknown; result?: unknown; evidence?: unknown } | null>;
+  video?: { file?: unknown; chapters?: Array<{ title?: unknown; start?: unknown } | null> } | null;
 }
 const IMAGES = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
 const VIDEOS = new Set([".webm", ".mp4", ".mov"]);
@@ -52,8 +57,20 @@ async function walk(dir: string): Promise<string[]> {
   return found.sort();
 }
 
-export function evidenceRunner(deps: EvidenceDeps): StageRunner {
-  return async (context) => {
+/** What the prelude read, for the stage that builds the pack on it. */
+interface PreludeFacts {
+  e2e: { runId: string; detail?: Record<string, unknown> } | null;
+  qaDir: string | undefined;
+  manifest: Manifest;
+  manifestPath: string | undefined;
+  verdict: string;
+  scenarios: { text: string; criterion: string | null; result: string; test: string | null }[];
+  artifacts: NonNullable<StageResult["artifacts"]>;
+  approvedCount: number;
+}
+
+async function prelude(deps: EvidenceDeps, context: StageContext): Promise<{ result: StageResult; facts: PreludeFacts | null }> {
+  {
     const e2e = await deps.latestE2e(context.task.id);
     const qaDir = e2e ? join(deps.stateDir, "runs", e2e.runId, "files", "qa") : undefined;
     const manifestPath = qaDir ? join(qaDir, MANIFEST) : undefined;
@@ -75,25 +92,31 @@ export function evidenceRunner(deps: EvidenceDeps): StageRunner {
       if (e2e?.detail?.skipped === true) {
         const why = e2e.detail.reason ?? e2e.detail.note;
         return {
-          outcome: "pass",
-          detail: {
-            step: "evidence",
-            verdict: "skipped",
-            artifactCount: 0,
-            thumbnails: [],
-            note: `e2e skipped${why ? `: ${String(why)}` : ""}`,
-            evidence: { verdict: "skipped", artifactCount: 0, manifest: null, thumbnails: [] },
+          result: {
+            outcome: "pass",
+            detail: {
+              step: "evidence",
+              verdict: "skipped",
+              artifactCount: 0,
+              thumbnails: [],
+              note: `e2e skipped${why ? `: ${String(why)}` : ""}`,
+              evidence: { verdict: "skipped", artifactCount: 0, manifest: null, thumbnails: [] },
+            },
           },
+          facts: { e2e, qaDir, manifest, manifestPath, verdict: "skipped", scenarios: [], artifacts: [], approvedCount: 0 },
         };
       }
       return {
-        outcome: "fail",
-        detail: {
-          step: "evidence",
-          verdict: "missing",
-          artifactCount: 0,
-          error: `no ${MANIFEST} from the e2e run; the criteria are not shown working`,
+        result: {
+          outcome: "fail",
+          detail: {
+            step: "evidence",
+            verdict: "missing",
+            artifactCount: 0,
+            error: `no ${MANIFEST} from the e2e run; the criteria are not shown working`,
+          },
         },
+        facts: null,
       };
     }
 
@@ -116,7 +139,8 @@ export function evidenceRunner(deps: EvidenceDeps): StageRunner {
       const found = rows.find((r) => typeof r?.text === "string" && r.text.trim() === c.title.trim());
       const chapter = chapters.find((ch) => typeof ch?.title === "string" && ch.title.trim() === c.title.trim());
       const result = found?.result === "pass" || found?.result === "fail" || found?.result === "partial" ? found.result : "missing";
-      return { text: c.title, criterion: c.criterion ?? null, result, chapter: typeof chapter?.start === "number" ? chapter.start : null, hasChapter: chapter !== undefined };
+      const evidence = Array.isArray(found?.evidence) ? found.evidence.find((e): e is string => typeof e === "string") : undefined;
+      return { text: c.title, criterion: c.criterion ?? null, result, chapter: typeof chapter?.start === "number" ? chapter.start : null, hasChapter: chapter !== undefined, test: evidence ?? null };
     });
     const noRow = scenarios.filter((s) => s.result === "missing").map((s) => s.text);
     const noChapter = hasVideo ? scenarios.filter((s) => !s.hasChapter).map((s) => s.text) : [];
@@ -126,21 +150,210 @@ export function evidenceRunner(deps: EvidenceDeps): StageRunner {
     ];
     if (gaps.length > 0 && verdict !== "fail") verdict = "partial";
     const passed = gaps.length === 0 && (verdict === "pass" || verdict === "skipped");
-    const shown = approved.length > 0 ? { rows: rows.length, scenarios: scenarios.map(({ hasChapter: _, ...s }) => s) } : {};
+    const shown = approved.length > 0 ? { rows: rows.length, scenarios: scenarios.map(({ hasChapter: _, test: __, ...s }) => s) } : {};
     const thumbnails = artifacts.filter((a) => a.kind === "screenshot").slice(0, THUMBNAILS).map((a) => a.path);
     return {
-      outcome: passed ? "pass" : "fail",
-      detail: {
-        step: "evidence",
-        verdict,
-        artifactCount: artifacts.length,
-        manifestPath,
-        thumbnails,
-        ...(gaps.length > 0 ? { error: gaps.join("; ") } : {}),
-        // The ship approval's `requested.evidence`, which the board shows.
-        evidence: { verdict, artifactCount: artifacts.length, manifest: manifestPath, thumbnails, ...shown },
+      result: {
+        outcome: passed ? "pass" : "fail",
+        detail: {
+          step: "evidence",
+          verdict,
+          artifactCount: artifacts.length,
+          manifestPath,
+          thumbnails,
+          ...(gaps.length > 0 ? { error: gaps.join("; ") } : {}),
+          // The ship approval's `requested.evidence`, which the board shows.
+          evidence: { verdict, artifactCount: artifacts.length, manifest: manifestPath, thumbnails, ...shown },
+        },
+        artifacts,
       },
-      artifacts,
+      facts: { e2e, qaDir, manifest, manifestPath, verdict, scenarios, artifacts, approvedCount: approved.length },
+    };
+  }
+}
+
+/** The script prelude alone: the manifest and scenario checks, the files listed. */
+export function evidenceRunner(deps: EvidenceDeps): StageRunner {
+  return async (context) => (await prelude(deps, context)).result;
+}
+
+export interface EvidenceStageDeps extends EvidenceDeps {
+  /** The task's latest finish of a stage and its detail (`pipeline.latestStageFinish`). */
+  latestFinish: (taskId: string, stage: TaskState) => Promise<{ runId: string; detail?: Record<string, unknown> } | null>;
+  /** Writes the pack on the task row. */
+  save: (taskId: string, patch: { evidence: EvidencePack }) => Promise<void>;
+  /** Runs evidence_format on an evidence context and returns its answer; bound late, once PackRuns exists. Read at call time. */
+  decideFormat: ((context: EvidenceContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
+  policies: { for: (repoPath: string | null) => Promise<Pick<Policy, "decisions">> };
+  /** The worktree's HEAD: the commit the pack shows. */
+  headCommit: (worktreePath: string) => Promise<string>;
+  /** Whether the video image is built on this machine. */
+  videoImage: () => Promise<boolean>;
+  now?: () => Date;
+}
+
+type Format = EvidencePack["format"];
+const FORMATS: readonly string[] = ["video", "captures", "text"];
+const CHANGED_CAP = 50;
+const MEDIA_SCREENSHOTS = 30;
+
+const objectOf = (value: unknown): Record<string, unknown> | undefined => (value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
+
+/** A URL without the credentials it may carry: userinfo never goes into a pack. */
+function plainUrl(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const url = new URL(raw);
+    url.username = "";
+    url.password = "";
+    return url.toString().replace(/\/$/, "") || null;
+  } catch {
+    return null;
+  }
+}
+
+const fileExists = (path: string): Promise<boolean> => stat(path).then((s) => s.isFile(), () => false);
+
+/** The change's Evidence Pack: a format picked from the record and the browser run, the pack assembled on the host, a local copy of its media, the pack on the task. */
+export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
+  const store = new EvidenceStore(deps.stateDir);
+  const now = deps.now ?? (() => new Date());
+  return async (context) => {
+    const { task } = context;
+    const { result, facts } = await prelude(deps, context);
+    // A manifest gap, a failed run or no manifest at all: today's failure, no pack.
+    if (result.outcome !== "pass" || !facts) return result;
+
+    const plan = approvedPlan(context.approvals);
+    const approval = context.approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
+    const risk = Risk.safeParse(objectOf(approval?.requested.risk)?.level);
+    const implementing = await deps.latestFinish(task.id, "implementing");
+    const verifying = await deps.latestFinish(task.id, "verifying");
+
+    const skipped = facts.e2e?.detail?.skipped === true;
+    const skippedReason = skipped ? String(facts.e2e?.detail?.reason ?? facts.e2e?.detail?.note ?? "") || null : null;
+    const hasManifest = facts.manifestPath !== undefined && facts.verdict !== "skipped" && facts.verdict !== "unreadable";
+    const hasVideo = facts.manifest.video !== undefined && facts.manifest.video !== null;
+    const hasSteps = facts.qaDir !== undefined && (await fileExists(join(facts.qaDir, "steps.jsonl")));
+    const videoImage = await deps.videoImage();
+    const changed = (Array.isArray(objectOf(objectOf(implementing?.detail?.scope)?.facts)?.changed) ? (objectOf(objectOf(implementing!.detail!.scope)!.facts)!.changed as unknown[]) : [])
+      .filter((p): p is string => typeof p === "string")
+      .slice(0, CHANGED_CAP);
+    const evidenceContext: EvidenceContext = {
+      record: task.record ?? null,
+      risk: risk.success ? risk.data : null,
+      webSurface: !(skipped && /no web surface/i.test(skippedReason ?? "")),
+      e2e: { ran: !skipped && facts.e2e !== null, verdict: facts.verdict === "skipped" ? null : facts.verdict, hasVideo, hasSteps, scenarios: facts.approvedCount, skippedReason },
+      videoImage,
+      ...(changed.length > 0 ? { changed } : {}),
+    };
+
+    // 1. The format: kept from a previous pack, else decided; then a mechanical veto.
+    const fallback: Format = hasManifest ? "captures" : "text";
+    let format: Format;
+    let formatKept = false;
+    if (task.evidence) {
+      format = task.evidence.format;
+      formatKept = true;
+    } else {
+      format = fallback;
+      const decide = deps.decideFormat;
+      if (decide && (facts.verdict !== "skipped" || !skipped)) {
+        try {
+          const answer = await decide(evidenceContext, task.repoPath);
+          const overrides = (await deps.policies.for(task.repoPath)).decisions.evidence_format;
+          const verdict = applyPolicy(PACKS.evidence_format, answer, overrides).overall;
+          const choice = objectOf(answer.format)?.choice;
+          if ((verdict === "proceed" || verdict === "flag") && typeof choice === "string" && FORMATS.includes(choice)) format = choice as Format;
+        } catch (error) {
+          await context.note?.(`evidence_format skipped: ${error instanceof Error ? error.message : String(error)}`).catch(() => {});
+        }
+      }
+    }
+    let note: string | undefined;
+    if (format === "video") {
+      if (!videoImage) note = "the video image is not built";
+      else if (!hasVideo && !hasSteps) note = "the browser run left neither a recording nor replayable steps";
+      else note = "the video pipeline is not wired";
+      format = "captures";
+    }
+    if (format === "captures" && !hasManifest) {
+      note = note ? `${note}; there is no browser run to capture` : "there is no browser run to capture";
+      format = "text";
+    }
+
+    // 2. The commit the pack shows.
+    let commitSha: string;
+    try {
+      commitSha = task.worktreePath ? (await deps.headCommit(task.worktreePath)).trim() : "";
+    } catch (error) {
+      return { outcome: "fail", detail: { step: "evidence", verdict: "missing", artifactCount: 0, error: `cannot read the worktree's head: ${error instanceof Error ? error.message : String(error)}` } };
+    }
+    if (commitSha === "") return { outcome: "fail", detail: { step: "evidence", verdict: "missing", artifactCount: 0, error: "the task has no worktree to take the evidence commit from" } };
+
+    // 3. The media: the browser run's screenshots, its stitched recording, the manifest and the HAR; none for text.
+    const stitched = typeof facts.manifest.video?.file === "string" ? facts.manifest.video.file : null;
+    const picked: { path: string; label: string; kind: EvidencePack["media"][number]["kind"] }[] = [];
+    if (format !== "text") {
+      let screenshots = 0;
+      for (const a of facts.artifacts) {
+        if (a.kind === "screenshot" && screenshots++ < MEDIA_SCREENSHOTS) picked.push({ path: a.path, label: a.label, kind: "screenshot" });
+        else if (a.kind === "video" && stitched !== null && a.label === stitched) picked.push({ path: a.path, label: a.label, kind: "video" });
+        else if (a.kind === "qa-manifest" || a.kind === "har") picked.push({ path: a.path, label: a.label, kind: "report" });
+      }
+    }
+    const kept = await store.keep(task.id, commitSha, picked);
+    const media = kept.flatMap((k) => {
+      const kind = picked.find((p) => p.label === k.label)?.kind;
+      return kind ? [{ kind, label: k.label, url: k.path }] : [];
+    });
+
+    // 4. The pack.
+    const findings = (Array.isArray(verifying?.detail?.findings) ? verifying!.detail!.findings : []).flatMap((f) => {
+      const parsed = Finding.safeParse(f);
+      return parsed.success ? [parsed.data] : [];
+    });
+    const answer = objectOf(implementing?.detail?.answer);
+    const outOfMap = (Array.isArray(answer?.outOfMap) ? answer.outOfMap : []).flatMap((o) => {
+      const item = objectOf(o);
+      return typeof item?.path === "string" && typeof item.reason === "string" ? [{ path: item.path, reason: item.reason }] : [];
+    });
+    const steps = facts.qaDir !== undefined && (await fileExists(join(facts.qaDir, "steps.md"))) ? join(facts.qaDir, "steps.md") : null;
+    const pack = assembleEvidencePack({
+      task: { title: task.title, description: task.description },
+      record: task.record ?? null,
+      plan: { rollback: plan?.rollback ?? null, risk: risk.success ? risk.data : null },
+      scenarios: facts.scenarios.map((s) => ({ text: s.text, criterion: s.criterion, result: s.result === "pass" || s.result === "partial" || s.result === "skipped" ? s.result : "fail", test: s.test })),
+      findings,
+      outOfMap,
+      media,
+      commitSha,
+      format,
+      howToVerify: plainUrl(facts.manifest.target?.baseUrl) ?? steps ?? "run the checks in luna.yaml",
+      ...(note ? { note } : {}),
+      now: now(),
+    });
+    await store.writePack(task.id, commitSha, pack);
+    await deps.save(task.id, { evidence: pack });
+
+    const evidence = objectOf(result.detail?.evidence) ?? {};
+    return {
+      ...result,
+      detail: {
+        ...result.detail,
+        format,
+        ...(formatKept ? { formatKept: true } : {}),
+        pack,
+        evidence: {
+          ...evidence,
+          format,
+          summary: pack.summary,
+          media: pack.media.map((m) => ({ label: m.label, url: m.url })),
+          commitSha,
+          ...(note ? { note } : {}),
+          ...(pack.video ? { video: pack.video } : {}),
+        },
+      },
     };
   };
 }
