@@ -106,14 +106,24 @@ describe("shipping with an Evidence Pack", () => {
     expect(evidence.publish).toHaveBeenCalledTimes(1);
   });
 
-  it("escalates head_moved, with no options and nothing published, when the PR head is not the pack's commit", async () => {
-    const github = fakeGitHub({ findPr: async () => pr(true), prHeadSha: async () => "fff9999000000000000000000000000000000000", markPrReady: async () => {} });
-    const { run, context, evidence } = withEvidence(pack(), github);
+  it("escalates head_moved, with no options and nothing published, when the head it just pushed is not the pack's commit", async () => {
+    const moved = "fff9999000000000000000000000000000000000";
+    const github = fakeGitHub({ findPr: async () => pr(true), prHeadSha: async () => moved, markPrReady: async () => {} });
+    const { run, context, evidence } = withEvidence(pack(), github, {}, async () => moved);
     const result = await run(context);
     expect(result.outcome).toBe("escalated");
     expect(result.detail).toMatchObject({ escalation: "head_moved", options: [], reason: expect.stringMatching(/abc1234.*fff9999.*Evidence runs again/) });
     expect(evidence.publish).not.toHaveBeenCalled();
     expect(github.markPrReady).not.toHaveBeenCalled();
+  });
+
+  it("trusts the head it pushed over GitHub's, which can lag the push: a differing GitHub head is a note, not a stop", async () => {
+    const github = fakeGitHub({ findPr: async () => pr(true), prHeadSha: async () => "fff9999000000000000000000000000000000000", markPrReady: async () => {} });
+    const { run, context, evidence } = withEvidence(pack(), github, {}, async () => HEAD);
+    const result = await run(context);
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ published: { assets: 1 }, note: expect.stringMatching(/fff9999.*abc1234/) });
+    expect(evidence.publish).toHaveBeenCalledTimes(1);
   });
 
   it("takes the worktree's head when GitHub names none", async () => {

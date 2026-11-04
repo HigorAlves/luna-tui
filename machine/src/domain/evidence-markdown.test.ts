@@ -79,6 +79,13 @@ describe("renderEvidenceSection", () => {
     expect(text).not.toMatch(/@octocat/);
   });
 
+  it("keeps an issue reference in a model's text from closing or linking anything on merge", () => {
+    const text = renderEvidenceSection(pack({ findings: ["bug: Closes #12 and fixes #345 (src/a.ts:1)"], summary: "see GH #7" }));
+    expect(text).not.toMatch(/#\d/);
+    expect(text).toContain("#\u200b12");
+    expect(text).toContain("#\u200b7");
+  });
+
   it("truncates the scenario table first when the section is over its cap", () => {
     const many = Array.from({ length: 400 }, (_, i) => ({ text: `scenario number ${i} with some words to take space`, test: null, result: "pass" as const }));
     const text = renderEvidenceSection(pack({ scenarios: many }), { maxChars: 6000 });

@@ -1,6 +1,6 @@
 // An Evidence Pack as markdown: a marked section for the PR body and one comment. Pure. What goes in
 // is a model's and a container's text on a public page, so it is flattened (no newline in a cell, no
-// HTML comment, no `@mention`) and a host path is never printed.
+// HTML comment, no `@mention`, no `#123` reference) and a host path is never printed.
 import type { EvidencePack } from "@hardness/contracts";
 
 export const SECTION_START = "<!-- luna-evidence:start -->";
@@ -17,6 +17,8 @@ function safe(text: string, table = false): string {
     .replace(/-->/g, "--&gt;")
     .replace(/\s+/g, " ")
     .replace(/@(?=[A-Za-z0-9])/g, "@\u200b")
+    // `Closes #12` in a PR body closes issue 12 on merge: a model's text never gets that power.
+    .replace(/#(?=\d)/g, "#\u200b")
     .trim();
   return table ? flat.replace(/\|/g, "\\|") : flat;
 }

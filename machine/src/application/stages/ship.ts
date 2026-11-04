@@ -21,7 +21,7 @@ export interface ShipDeps extends DeliverDeps {
     publish: PublishEvidence;
     store: { dirFor: (taskId: string, sha: string) => string };
   };
-  /** The worktree's HEAD, for a PR GitHub names no head for; tests inject one. */
+  /** The worktree's HEAD, the head the push just set; tests inject one. */
   headCommit?: (worktreePath: string) => Promise<string>;
 }
 
@@ -29,12 +29,15 @@ export function shipRunnerWith(deps: ShipDeps): StageRunner {
   const slugOf = deps.slugOf ?? originSlugOf;
   const headOf = deps.headCommit ?? worktreeHead;
   /** The pack's turn at the gate: nothing to do (no pack), a stop (the head moved, the pack is incomplete), or what was published. */
-  const evidencePhase = async (slug: string, number: number, taskId: string, worktreePath: string): Promise<{ stop: StageResult } | { published: Record<string, unknown> } | { none: true }> => {
+  const evidencePhase = async (slug: string, number: number, taskId: string, worktreePath: string): Promise<{ stop: StageResult } | { published: Record<string, unknown>; note?: string } | { none: true }> => {
     const evidence = deps.evidence;
     if (!evidence) return { none: true };
     const pack = await evidence.load(taskId);
     if (!pack) return { none: true };
-    const head = (await deps.github.prHeadSha(slug, number)) ?? (await headOf(worktreePath)).trim();
+    // The head is what the push a moment ago set; GitHub's view of it can lag, so a difference there is a note, never a stop.
+    const head = (await headOf(worktreePath)).trim();
+    const seen = await deps.github.prHeadSha(slug, number).catch(() => null);
+    const note = seen && seen !== head ? `GitHub shows ${seen.slice(0, 7)} as the PR head; the pushed head is ${head.slice(0, 7)}` : undefined;
     if (pack.commitSha !== head) {
       return {
         stop: {
@@ -47,7 +50,7 @@ export function shipRunnerWith(deps: ShipDeps): StageRunner {
     if (!complete.ok) return { stop: { outcome: "fail", detail: { error: `the evidence pack is not complete: ${complete.problems.join("; ")}` } } };
     const done = await evidence.publish({ github: deps.github, slug, number, taskId, pack, localDir: evidence.store.dirFor(taskId, pack.commitSha) });
     await evidence.save(taskId, done.pack);
-    return { published: { comment: done.comment, assets: done.assets } };
+    return { published: { comment: done.comment, assets: done.assets }, ...(note ? { note } : {}) };
   };
   return async (context) => {
     const { task } = context;
@@ -65,7 +68,7 @@ export function shipRunnerWith(deps: ShipDeps): StageRunner {
       const pr = existing ?? (await openTaskPr(deps.github, slug, context, false));
       const phase = await evidencePhase(slug, pr.number, task.id, cwd);
       if ("stop" in phase) return phase.stop;
-      const shown = "published" in phase ? { published: phase.published } : deps.evidence ? { evidence: "none" } : {};
+      const shown = "published" in phase ? { published: phase.published, ...(phase.note ? { note: phase.note } : {}) } : deps.evidence ? { evidence: "none" } : {};
       if (existing?.isDraft) await deps.github.markPrReady(slug, existing.number);
       return { outcome: "pass", detail: { prUrl: pr.url, readied: existing?.isDraft === true, ...shown } };
     } catch (error) {
