@@ -96,6 +96,9 @@ export const PackId = z.enum([
   "test_design",
   // The planner: runs in the test_design state (the machine's RUNS_IN), as the first half of the plan stage.
   "plan",
+  // The fast lane's planner and test designer: the same stage, at low effort, for a small low-risk ticket.
+  "plan_fast",
+  "test_design_fast",
   "implementing",
   "verifying",
   "e2e",

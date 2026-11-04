@@ -37,15 +37,23 @@ const good = {
 const bad = { ...good.plan_check, rollback_stated: { value: false, p: 0.05 } };
 
 interface Call { pack: string; runId: string; context: StageContext; plan?: PlanContext }
-function setup(script: { plan?: StageResult[]; test_design?: StageResult[]; answers?: Partial<Record<"risk_score" | "coverage_check" | "plan_check", Array<Record<string, unknown> | Error>>> } = {}, over: Partial<PlanDeps> = {}) {
+const fastTask = { ...task, record: { ...record, decision: "fast_lane", risk: "low" } } as unknown as TaskRow;
+const needsFull: StageResult = { outcome: "pass", detail: { summary: "a second component appears", needsFullPlan: true }, events: [{ at: "t", kind: "stage.note", payload: { from: "fast" } }] };
+
+function setup(script: { plan?: StageResult[]; test_design?: StageResult[]; plan_fast?: StageResult[]; test_design_fast?: StageResult[]; answers?: Partial<Record<"risk_score" | "coverage_check" | "plan_check", Array<Record<string, unknown> | Error>>> } = {}, over: Partial<PlanDeps> = {}) {
   const calls: Call[] = [];
   const decided: Array<{ pack: string; plan: PlanContext; repo: string | null }> = [];
-  const queues = { plan: [...(script.plan ?? [planned()])], test_design: [...(script.test_design ?? [cased("no panic", "stays selected")])] };
+  const queues = {
+    plan: [...(script.plan ?? [planned()])],
+    test_design: [...(script.test_design ?? [cased("no panic", "stays selected")])],
+    plan_fast: [...(script.plan_fast ?? [planned()])],
+    test_design_fast: [...(script.test_design_fast ?? [cased("no panic", "stays selected")])],
+  };
   const answers = Object.fromEntries((["risk_score", "coverage_check", "plan_check"] as const).map((p) => [p, [...(script.answers?.[p] ?? [])]]));
   const deps: PlanDeps = {
     runPack: async (pack, ctx, extra) => {
       calls.push({ pack, runId: ctx.runId, context: ctx, ...(extra.plan ? { plan: extra.plan } : {}) });
-      const queue = pack === "plan" ? queues.plan : queues.test_design;
+      const queue = queues[pack];
       return queue.length > 1 ? queue.shift()! : queue[0]!;
     },
     decide: async (pack, plan, repo) => {
@@ -75,8 +83,10 @@ describe("planStage", () => {
       verdicts: { coverage: "proceed", plan: "proceed", risk: "proceed" },
       rounds: { tests: 1, plan: 1 },
       flagged: [],
+      lane: "full",
     });
     expect(result.detail).not.toHaveProperty("outcome");
+    expect(result.detail).not.toHaveProperty("laneNote");
   });
 
   it("runs each sub-run under a derived run id, not resumable and not pinned to the stage's engine", async () => {
@@ -176,5 +186,56 @@ describe("planStage", () => {
     const { run } = setup({ plan: [planned({ criteria: undefined })], test_design: [cased("no panic")] });
     const result = await run(context());
     expect(result.detail).toMatchObject({ criteria: ["no panic"], flagged: [] });
+  });
+
+  describe("the fast lane", () => {
+    const fast = (script: Parameters<typeof setup>[0] = {}, over: Partial<PlanDeps> = {}) => setup(script, over);
+    const ctx = () => context({ task: fastTask });
+
+    it("plans and designs on the fast packs, skips coverage_check, runs plan_check once and risk_score", async () => {
+      const { run, calls, decided } = fast();
+      const result = await run(ctx());
+      expect(calls.map((c) => [c.pack, c.runId])).toEqual([["plan_fast", "r1-plan"], ["test_design_fast", "r1-tests-1"]]);
+      expect(decided.map((d) => d.pack)).toEqual(["plan_check", "risk_score"]);
+      expect(result.detail).toMatchObject({ lane: "fast", verdicts: { coverage: "skipped", plan: "proceed", risk: "proceed" }, rounds: { tests: 1, plan: 1 }, flagged: [] });
+      expect(result.detail).not.toHaveProperty("laneNote");
+    });
+
+    it("does not re-run anything on a finding: it flags the plan and goes on", async () => {
+      const { run, calls } = fast({ answers: { plan_check: [bad] } });
+      const result = await run(ctx());
+      expect(calls.map((c) => c.pack)).toEqual(["plan_fast", "test_design_fast"]);
+      expect(result.detail).toMatchObject({ lane: "fast", verdicts: { plan: "flag" }, flagged: ["plan"] });
+    });
+
+    it("flags coverage when a criterion has no scenario, without a second designer round", async () => {
+      const { run, calls } = fast({ test_design_fast: [cased("no panic")] });
+      const result = await run(ctx());
+      expect(calls.filter((c) => c.pack === "test_design_fast")).toHaveLength(1);
+      expect(result.detail).toMatchObject({ lane: "fast", flagged: ["coverage"] });
+    });
+
+    it("plans in full, in the same run, when the fast planner says the ticket is bigger than it looked", async () => {
+      const { run, calls, decided } = fast({ plan_fast: [needsFull] });
+      const result = await run(ctx());
+      expect(calls.map((c) => [c.pack, c.runId])).toEqual([["plan_fast", "r1-plan"], ["plan", "r1-plan-2"], ["test_design", "r1-tests-1"]]);
+      expect(decided.map((d) => d.pack)).toEqual(["coverage_check", "plan_check", "risk_score"]);
+      expect(result.detail).toMatchObject({ lane: "full", laneNote: expect.stringMatching(/fast planner.*a second component appears/i), rounds: { plan: 2, tests: 1 } });
+      expect(result.events).toContainEqual({ at: "t", kind: "stage.note", payload: { from: "fast" } });
+    });
+
+    it("plans in full when the plan check cannot tell whether the fast plan fits", async () => {
+      const unsure = { ...good.plan_check, fits_record: { score: 2, confidence: 0.3 } };
+      const { run, calls } = fast({ answers: { plan_check: [unsure, good.plan_check] } });
+      const result = await run(ctx());
+      expect(calls.map((c) => c.pack)).toEqual(["plan_fast", "test_design_fast", "plan", "test_design"]);
+      expect(result.detail).toMatchObject({ lane: "full", laneNote: expect.stringMatching(/plan check/i), verdicts: { coverage: "proceed", plan: "proceed" } });
+    });
+
+    it("stays on the full path for a ticket triage did not send to the fast lane", async () => {
+      const { run, calls } = setup();
+      await run(context());
+      expect(calls.map((c) => c.pack)).toEqual(["plan", "test_design"]);
+    });
   });
 });

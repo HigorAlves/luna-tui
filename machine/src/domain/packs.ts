@@ -8,6 +8,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   reviewing_memory: ["shipping"],
   // The plan stage: the planner runs first, then test design, both in the test_design state.
   plan: ["test_design"],
+  plan_fast: ["test_design"],
+  test_design_fast: ["test_design"],
   // The inboxes' packs and the decision pack callers run on demand: no task, so no task state.
   slack_triage: [],
   jira_intake: [],

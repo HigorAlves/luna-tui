@@ -10,6 +10,7 @@ import {
   EvidencePack,
   EvalJudgeAnswer,
   PlanAnswer,
+  TestDesignAnswer,
   EvalJudgeContext,
   JiraIntakeContext,
   TaskClassification,
@@ -196,11 +197,11 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "plan", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage"].sort(),
     );
     const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage"];
     // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
-    const runsInAnotherState: string[] = ["plan"];
+    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast"];
     for (const pack of PackId.options) {
       if (onDemand.includes(pack) || runsInAnotherState.includes(pack)) expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
@@ -215,6 +216,12 @@ describe("the plan pack", () => {
       engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"], fallback: ["codex:sol", "claude:opus"] },
     });
     expect(PACKS.plan.kind === "agent" && PACKS.plan.access).toMatchObject({ read: true, web: true, write: false, luna: expect.arrayContaining(["decision_get"]) });
+  });
+
+  it("has a fast lane: the same plan and scenarios on sonnet at low effort, 15 turns, for a small low-risk ticket", () => {
+    expect(PACKS.plan_fast).toMatchObject({ kind: "agent", agent: "fast-planner", helpers: [], writable: false, maxTurns: 15, effort: "low", template: "plan_fast.md", answer: PlanAnswer, engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
+    expect(PACKS.test_design_fast).toMatchObject({ kind: "agent", agent: "test-designer", helpers: [], writable: false, maxTurns: 15, effort: "low", template: "test_design.md", answer: TestDesignAnswer, engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
+    expect(PlanAnswer.safeParse({ kind: "needs_full_plan", summary: "a second component appears" }).success).toBe(true);
   });
 
   it("answers done with the plan, or questions", () => {

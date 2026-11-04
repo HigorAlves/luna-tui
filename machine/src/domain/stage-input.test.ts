@@ -165,9 +165,9 @@ describe("buildStageInput", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["addressing", "chat_triage", "ci_watch", "coverage_check", "e2e", "eval_judge", "evidence", "implementing", "jira_intake", "plan", "plan_check", "reviewing", "reviewing_memory", "risk_score", "setup", "slack_triage", "test_design", "triage", "triage_signals", "verifying"],
+      ["addressing", "chat_triage", "ci_watch", "coverage_check", "e2e", "eval_judge", "evidence", "implementing", "jira_intake", "plan", "plan_check", "plan_fast", "reviewing", "reviewing_memory", "risk_score", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying"],
     );
-    expect(Object.keys(PACK_LIMITS)).toHaveLength(20);
+    expect(Object.keys(PACK_LIMITS)).toHaveLength(22);
   });
 
   it("builds slack_triage's input around a synthetic task: the batch in context.slack, no plan, no branch, the pack's limits", () => {
@@ -240,7 +240,7 @@ describe("buildStageInput", () => {
 
   it("hands implementing and verifying the repo's checks from luna.yaml, and no other pack", () => {
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }];
-    const build = (stage: Exclude<PackId, "plan" | "risk_score" | "coverage_check" | "plan_check" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
+    const build = (stage: Exclude<PackId, "plan" | "plan_fast" | "test_design_fast" | "risk_score" | "coverage_check" | "plan_check" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
     expect(build("implementing").context.checks).toEqual(checks);
     expect(build("verifying").context.checks).toEqual(checks);
     expect(build("triage").context.checks).toBeUndefined();

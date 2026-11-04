@@ -3,6 +3,11 @@
 // (never asked of a model), and three decision packs judge the result: coverage_check, plan_check
 // and risk_score. Everything lands in one detail, which opens the one approval.
 //
+// A ticket triage sent to the fast lane (`record.decision === "fast_lane"`) runs the same stage on
+// the fast packs: one designer round, no coverage_check, one plan_check, and the planner's right
+// to refuse (`needs_full_plan`). A refusal, or a plan check that cannot tell whether the plan
+// fits, plans again on the full path in the same run (`detail.lane`, `detail.laneNote`).
+//
 // Each pack runs as a sub-run of the stage's own run, under a derived run id (`<runId>-plan`,
 // `<runId>-plan-<n>`, `<runId>-tests-<n>`): its own folder and container, not resumable (a
 // restart re-runs the stage), and on the pack's own engine, never the stage's.
@@ -29,7 +34,7 @@ type DecisionPackName = "risk_score" | "coverage_check" | "plan_check";
 
 export interface PlanDeps {
   /** Runs one pack as a sub-run of this stage: `context` already carries the derived run id. `extra.plan` reaches the pack as `context.plan`. */
-  runPack: (pack: "plan" | "test_design", context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
+  runPack: (pack: "plan" | "plan_fast" | "test_design" | "test_design_fast", context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
   /** Runs a decision pack on a plan context and answers its answer; null when no decision can run (agents off, no runtime). Read at call time: main.ts binds it late. */
   decide: ((pack: DecisionPackName, plan: PlanContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** Each repo's luna.yaml bars for the decisions. */
@@ -110,6 +115,20 @@ export function planStage(deps: PlanDeps): StageRunner {
       }
     };
 
+    let lane: "fast" | "full" = task.record?.decision === "fast_lane" ? "fast" : "full";
+    let laneNote: string | undefined;
+    /** Planner runs on the current lane: the re-run cap counts from the last switch. */
+    let planRunsOnLane = 0;
+    /** The stage moves to the full path: the fast lane's plan is dropped, and the full planner starts from the record. */
+    const goFull = (note: string) => {
+      lane = "full";
+      laneNote = note;
+      planRunsOnLane = 0;
+      review = undefined;
+      plan = undefined;
+      flagged.clear();
+    };
+
     let review: string[] | undefined;
     let plan: { brief: string; criteria: string[]; assumptions: string[]; slices: PlanContext["slices"]; rollback?: string; summary?: string } | undefined;
     let cases: TestCase[] = [];
@@ -121,12 +140,17 @@ export function planStage(deps: PlanDeps): StageRunner {
     for (;;) {
       // The planner: the first run, or a re-run with what plan_check found.
       planRuns += 1;
-      const planned = await deps.runPack("plan", sub(planRuns === 1 ? "plan" : `plan-${planRuns}`), {
+      planRunsOnLane += 1;
+      const planned = await deps.runPack(lane === "fast" ? "plan_fast" : "plan", sub(planRuns === 1 ? "plan" : `plan-${planRuns}`), {
         ...(plan ? { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, ...(review ? { review } : {}) } } : {}),
       });
       if (planned.outcome !== "pass") return ended(planned);
       results.push(planned);
       const d = planned.detail ?? {};
+      if (lane === "fast" && d.needsFullPlan === true) {
+        goFull(`the fast planner asked for the full plan: ${String(d.summary ?? "the ticket is bigger than it looked")}`);
+        continue;
+      }
       plan = {
         brief: typeof d.brief === "string" && d.brief ? d.brief : String(d.summary ?? ""),
         criteria: strings(d.criteria).length ? strings(d.criteria) : task.criteria,
@@ -144,22 +168,31 @@ export function planStage(deps: PlanDeps): StageRunner {
       for (;;) {
         roundsOnThisPlan += 1;
         testRuns += 1;
-        const designed = await deps.runPack("test_design", sub(`tests-${testRuns}`), {
+        const designed = await deps.runPack(lane === "fast" ? "test_design_fast" : "test_design", sub(`tests-${testRuns}`), {
           plan: { record: task.record ?? null, ...plan, ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), round: roundsOnThisPlan },
         });
         if (designed.outcome !== "pass") return ended(designed);
         results.push(designed);
         cases = ((designed.detail?.cases as TestCase[] | undefined) ?? []).filter((c) => c && typeof c === "object");
         gaps = coverageGaps(plan.criteria, cases);
+        // The fast lane asks nothing of coverage_check and designs once: a criterion left unnamed is flagged below.
+        if (lane === "fast") break;
         coverage = await judge("coverage_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}) });
         if (gaps.length === 0 || roundsOnThisPlan >= COVERAGE_ROUNDS) break;
       }
+      if (lane === "fast" && gaps.length > 0) flagged.add("coverage");
       if (gaps.length > 0 && coverage.verdict === "proceed") coverage = { ...coverage, verdict: "flag" };
 
       // The plan against the record: a finding sends the planner back, within the cap.
       planCheck = await judge("plan_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}) });
+      if (lane === "fast") {
+        // One plan check, no re-run: unsure whether the plan fits means the ticket needs the full path.
+        if (planCheck.verdict !== "ask") break;
+        goFull("the plan check could not tell whether the fast plan fits the record; planned again in full");
+        continue;
+      }
       const wrong = planCheck.problems.length > 0 || planCheck.verdict === "ask";
-      if (!wrong || planRuns > PLAN_ROUNDS) break;
+      if (!wrong || planRunsOnLane > PLAN_ROUNDS) break;
       review = planCheck.problems.length ? planCheck.problems : ["the plan check could not tell whether the plan fits the record"];
     }
 
@@ -186,6 +219,8 @@ export function planStage(deps: PlanDeps): StageRunner {
         verdicts,
         rounds: { tests: testRuns, plan: planRuns },
         flagged: [...flagged],
+        lane,
+        ...(laneNote ? { laneNote } : {}),
       },
     };
   };

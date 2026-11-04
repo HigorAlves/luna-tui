@@ -12,6 +12,8 @@ describe("packStates", () => {
 
   it("runs the planner in test_design, beside the pack of that name, which the pipeline still picks for the state", () => {
     expect(packStates("plan")).toEqual(["test_design"]);
+    expect(packStates("plan_fast")).toEqual(["test_design"]);
+    expect(packStates("test_design_fast")).toEqual(["test_design"]);
     expect(packStates("test_design")).toEqual(["test_design"]);
     expect(packForState("test_design")).toBe("test_design");
   });

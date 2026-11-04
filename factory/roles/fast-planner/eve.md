@@ -1,0 +1,1 @@
+On this runtime the file tools are `read_file`, `glob` and `grep` (where the steps above say Read, Glob and Grep), and `bash` runs one allowed command per call. Your answer goes through the structured reply: fill every field the schema asks for.

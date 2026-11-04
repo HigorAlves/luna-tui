@@ -17,6 +17,7 @@ export const AgentRole = z.enum([
   "setup-planner",
   "triage-planner",
   "planner",
+  "fast-planner",
   "test-designer",
   "implementer",
   "verifier",
@@ -112,7 +113,8 @@ export const TriageAnswer = z.object({
 /** The planner's answer: the plan the one approval shows, built from triage's record. Every field but
  *  `kind` and `summary` is absent on `questions`. */
 export const PlanAnswer = z.object({
-  kind: z.enum(["done", "questions"]),
+  /** `needs_full_plan` is the fast planner's refusal: the ticket is bigger than triage read it; the stage plans again in full. */
+  kind: z.enum(["done", "questions", "needs_full_plan"]),
   summary: z.string(),
   brief: z.string().optional(),
   /** Every record goal and ticket criterion, written to be testable. */
@@ -482,6 +484,36 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "high",
     answer: PlanAnswer,
     template: "plan.md",
+  },
+  plan_fast: {
+    id: "plan_fast",
+    kind: "agent",
+    agent: "fast-planner",
+    helpers: [],
+    skills: ["writing-plans"],
+    access: access(READ_ONLY, { web: true, commands: ["gh issue view"], luna: ["decision_get"] }),
+    writable: false,
+    maxTurns: 15,
+    timeoutMs: 5 * MINUTE,
+    engines: only("claude:sonnet"),
+    effort: "low",
+    answer: PlanAnswer,
+    template: "plan_fast.md",
+  },
+  test_design_fast: {
+    id: "test_design_fast",
+    kind: "agent",
+    agent: "test-designer",
+    helpers: [],
+    skills: ["tdd"],
+    access: access(READ_ONLY, { web: true, commands: ["gh issue view"], luna: ["decision_get"] }),
+    writable: false,
+    maxTurns: 15,
+    timeoutMs: 5 * MINUTE,
+    engines: only("claude:sonnet"),
+    effort: "low",
+    answer: TestDesignAnswer,
+    template: "test_design.md",
   },
   implementing: {
     id: "implementing",

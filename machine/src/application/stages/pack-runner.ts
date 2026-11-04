@@ -389,7 +389,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       },
     });
   }
-  if (pack === "plan") {
+  if (pack === "plan" || pack === "plan_fast") {
     const answer = answerOf(output.answer);
     const list = (value: unknown, fallback: string[]): string[] => (Array.isArray(value) ? value.map(String) : fallback);
     return merged({
@@ -402,10 +402,12 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
         assumptions: list(answer?.assumptions, []),
         slices: Array.isArray(answer?.slices) ? answer.slices : [],
         ...(typeof answer?.rollback === "string" ? { rollback: answer.rollback } : {}),
+        // The fast planner refusing the lane: the plan stage plans again in full.
+        ...(answer?.kind === "needs_full_plan" ? { needsFullPlan: true } : {}),
       },
     });
   }
-  if (pack === "test_design") {
+  if (pack === "test_design" || pack === "test_design_fast") {
     const cases = answerOf(output.answer)?.cases;
     return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, cases: Array.isArray(cases) ? cases : [] } });
   }
