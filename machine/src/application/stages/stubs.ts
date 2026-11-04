@@ -5,6 +5,12 @@ import type { TaskState } from "@hardness/contracts";
 
 import type { StageResult, StageRunner } from "../ports.ts";
 
+/** What a passing triage stub says: a record draft, the plan outcome and the ticket's criteria. */
+const TRIAGE_DETAIL = {
+  outcome: "plan",
+  record: { kind: "feature", goal: "Do what the ticket asks", size: "small", urgency: "normal", risk: "low", reason: "stub triage" },
+};
+
 export class StubStages {
   private readonly planned = new Map<TaskState, StageResult[]>();
 
@@ -19,6 +25,12 @@ export class StubStages {
   }
 
   readonly runnerFor = (stage: TaskState): StageRunner => {
-    return async () => this.planned.get(stage)?.shift() ?? { outcome: "pass" };
+    return async (context) => {
+      const queued = this.planned.get(stage)?.shift();
+      if (stage !== "triage") return queued ?? { outcome: "pass" };
+      // A passing triage always carries an outcome and a record; a queued result's detail wins key by key.
+      if (queued && queued.outcome !== "pass") return queued;
+      return { ...queued, outcome: "pass", detail: { ...TRIAGE_DETAIL, criteria: context?.task?.criteria ?? [], ...queued?.detail } };
+    };
   };
 }

@@ -198,12 +198,16 @@ describe("agent stages through packs", () => {
     expect(seen!.cacheVolume).toBe("hardness-cache-repo");
   });
 
-  it("keeps triage's confidence and risk on the plan, for the timer approval", async () => {
-    const answer = { kind: "brief", summary: "s", criteria: ["c"], confidence: "high", risk: "low" };
-    const run = runners(fakeSandbox(output({ answer })));
-    const result = await run.triage!(context("triage"));
-    expect(result.detail).toMatchObject({ brief: "s", confidence: "high", risk: "low" });
-    const bare = await runners(fakeSandbox(output({ answer: { kind: "brief", summary: "s" } }))).triage!(context("triage"));
+  it("keeps triage's outcome, record and reply on the stage detail, and defaults the outcome to plan", async () => {
+    const record = { kind: "question", goal: "answer how to run the board", size: "tiny", urgency: "normal", risk: "none", reason: "asks how, changes nothing" };
+    const conversation = { kind: "brief", summary: "s", outcome: "conversation", record, reply: "Use `pnpm dev`." };
+    const talked = await runners(fakeSandbox(output({ answer: conversation }))).triage!(context("triage"));
+    expect(talked.detail).toMatchObject({ outcome: "conversation", record, reply: "Use `pnpm dev`.", brief: "s" });
+    const archived = await runners(fakeSandbox(output({ answer: { kind: "brief", summary: "s", outcome: "archive", archiveReason: "duplicate" } }))).triage!(context("triage"));
+    expect(archived.detail).toMatchObject({ outcome: "archive", archiveReason: "duplicate" });
+    const bare = await runners(fakeSandbox(output({ answer: { kind: "brief", summary: "s", criteria: ["c"] } }))).triage!(context("triage"));
+    expect(bare.detail).toMatchObject({ outcome: "plan", criteria: ["c"] });
+    expect(bare.detail).not.toHaveProperty("assumptions");
     expect(bare.detail).not.toHaveProperty("confidence");
   });
 
@@ -539,22 +543,16 @@ describe("agent stages through packs", () => {
   });
 
   it("builds the triage approval from the pack answer", async () => {
-    const slices = [{ title: "s1", est_loc: 40 }];
-    const run = runners(
-      fakeSandbox(
-        output({
-          answer: { kind: "done", summary: "the brief", criteria: ["c1"], assumptions: ["a1"], slices },
-        }),
-      ),
-    );
+    const run = runners(fakeSandbox(output({ answer: { kind: "brief", summary: "the brief", criteria: ["c1"] } })));
     const result = await run.triage!(context("triage"));
-    expect(result.detail).toMatchObject({ brief: "the brief", criteria: ["c1"], assumptions: ["a1"], slices });
+    expect(result.detail).toMatchObject({ brief: "the brief", criteria: ["c1"], outcome: "plan" });
+    expect(result.detail).not.toHaveProperty("assumptions");
   });
 
   it("falls back to the summary and ticket criteria when triage has no answer", async () => {
     const run = runners(fakeSandbox(output()));
     const result = await run.triage!(context("triage"));
-    expect(result.detail).toMatchObject({ brief: "did it", criteria: ["works"], assumptions: [], slices: [] });
+    expect(result.detail).toMatchObject({ brief: "did it", criteria: ["works"], outcome: "plan" });
   });
 
   it("prefers answer.questions on triage needs_input", async () => {

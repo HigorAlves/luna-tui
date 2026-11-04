@@ -373,13 +373,13 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       ...mapped,
       detail: {
         ...mapped.detail,
+        // Triage hands the plan stage a record and picks where the ticket goes; the plan stage owns the plan.
         brief: typeof answer?.summary === "string" ? answer.summary : output.summary,
+        outcome: typeof answer?.outcome === "string" ? answer.outcome : "plan",
+        ...(answer?.record ? { record: answer.record } : {}),
         criteria: list(answer?.criteria, task.criteria),
-        assumptions: list(answer?.assumptions, []),
-        slices: list(answer?.slices, []),
-        // How sure triage is and how risky the touched paths are: the timer approval reads both.
-        ...(typeof answer?.confidence === "string" ? { confidence: answer.confidence } : {}),
-        ...(typeof answer?.risk === "string" ? { risk: answer.risk } : {}),
+        ...(typeof answer?.reply === "string" ? { reply: answer.reply } : {}),
+        ...(typeof answer?.archiveReason === "string" ? { archiveReason: answer.archiveReason } : {}),
       },
     });
   }

@@ -8,6 +8,8 @@ import { describe, expect, it } from "vitest";
 import { agentFiles, appName, compileAgent, eveTools, tokenBudgetPerTurn } from "./compile.ts";
 
 const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
+/** Triage hands its reply to a helper; these rows are about a pack that has none. */
+const triage = { ...PACKS.triage, helpers: [] };
 const options = (over = {}) => ({ factoryRoot: FACTORY_ROOT, outDir: join(FACTORY_ROOT, ".eve-agents"), ...over });
 
 describe("eveTools", () => {
@@ -20,7 +22,7 @@ describe("eveTools", () => {
 });
 
 describe("agentFiles", () => {
-  const files = agentFiles(PACKS.triage, options());
+  const files = agentFiles(triage, options());
 
   it("writes an agent on the engine's model, the pack's effort, no default tools and a usage limit", () => {
     const agent = files["agent/agent.ts"]!;
@@ -72,12 +74,13 @@ describe("agentFiles", () => {
 
   it("gives a pack with helpers a delegate tool over the bridge that names each helper, and a helper's run none", () => {
     const helper = { role: "security-reviewer", engine: "codex:sol" } as const;
-    const pack = { ...PACKS.triage, helpers: [helper] };
+    const pack = { ...triage, helpers: [helper] };
     const tool = agentFiles(pack, options())["agent/tools/delegate.ts"]!;
     expect(tool).toContain('import { delegateTool } from "../../../../src/runtimes/eve/agent/tools.ts";');
     expect(tool).toContain('["security-reviewer"]');
     expect(tool).toMatch(/- security-reviewer \(codex:sol\): Reviews a diff/);
-    expect(agentFiles(PACKS.triage, options())["agent/tools/delegate.ts"]).toBeUndefined();
+    expect(agentFiles(triage, options())["agent/tools/delegate.ts"]).toBeUndefined();
+    expect(agentFiles(PACKS.triage, options())["agent/tools/delegate.ts"]).toContain("reply-drafter");
     const child = helperPack(pack, helper);
     expect(appName(pack)).toBe("triage");
     expect(appName(child)).toBe("triage--security-reviewer");
@@ -103,10 +106,10 @@ describe("compileAgent", () => {
     // Inside the factory, as the real ones are, so the agent resolves eve from its node_modules.
     const outDir = mkdtempSync(join(FACTORY_ROOT, ".eve-agents-test-"));
     try {
-      const app = compileAgent(PACKS.triage, options({ outDir }));
+      const app = compileAgent(triage, options({ outDir }));
       expect(app).toBe(join(outDir, "triage"));
       expect(existsSync(join(app, "agent", "agent.ts"))).toBe(true);
-      expect(existsSync(join(app, "agent", "skills", "writing-plans", "SKILL.md"))).toBe(true);
+      expect(existsSync(join(app, "agent", "skills", "code-discovery", "SKILL.md"))).toBe(true);
       expect(existsSync(join(compileAgent(PACKS.slack_triage, options({ outDir })), "agent", "skills"))).toBe(false);
     } finally {
       rmSync(outDir, { recursive: true, force: true });

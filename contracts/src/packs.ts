@@ -10,7 +10,7 @@ import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
-import { EscalationReason, Finding, LunaConfig, PackId, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
+import { EscalationReason, Finding, LunaConfig, PackId, Risk, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
 
 /** The agent roles. A pack names one; the runner looks its definition up by this. */
 export const AgentRole = z.enum([
@@ -86,16 +86,35 @@ export const JiraIntakeAnswer = z.object({
 });
 export type JiraIntakeAnswer = z.infer<typeof JiraIntakeAnswer>;
 
+/** Where a triaged ticket goes next: the plan stage, its fast lane, a reply, or the archive. */
+export const TriageOutcome = z.enum(["plan", "fast_lane", "conversation", "archive"]);
+export type TriageOutcome = z.infer<typeof TriageOutcome>;
+
+/** What triage writes of the ticket; the machine adds source, signals, questions asked, when and the model. */
+export const RecordDraft = z.object({
+  kind: z.string(),
+  goal: z.string(),
+  size: z.enum(["tiny", "small", "medium", "large"]),
+  urgency: z.enum(["low", "normal", "high", "urgent"]),
+  risk: Risk,
+  reason: z.string(),
+});
+export type RecordDraft = z.infer<typeof RecordDraft>;
+
 export const TriageAnswer = z.object({
   kind: z.enum(["brief", "questions"]),
   summary: z.string(),
+  /** Absent means `plan`. */
+  outcome: TriageOutcome.optional(),
+  /** Required when `kind` is `brief`. */
+  record: RecordDraft.optional(),
+  /** The ticket's criteria, refined until testable. */
   criteria: z.array(z.string()).optional(),
-  assumptions: z.array(z.string()).optional(),
-  slices: z.array(Slice).optional(),
   questions: z.array(Question).max(3).optional(),
-  /** How sure triage is, and how risky the touched paths are; the timer approval reads both. */
-  confidence: z.enum(["high", "medium", "low"]).optional(),
-  risk: z.enum(["none", "low", "medium", "high"]).optional(),
+  /** For `conversation`: the answer to post, drafted with reply-drafter. */
+  reply: z.string().optional(),
+  /** For `archive`. */
+  archiveReason: z.enum(["duplicate", "out_of_scope", "stale", "not_actionable"]).optional(),
 });
 
 export const TestDesignAnswer = z.object({
@@ -366,9 +385,9 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     id: "triage",
     kind: "agent",
     agent: "triage-planner",
-    helpers: [],
-    skills: ["writing-plans", "code-discovery"],
-    access: access(READ_ONLY, { web: true, commands: ["gh issue view"], luna: ["decision_get"] }),
+    helpers: [{ role: "reply-drafter", engine: "claude:haiku" }],
+    skills: ["code-discovery"],
+    access: access(READ_ONLY, { agent: true, web: true, commands: ["gh issue view"], luna: ["decision_get"] }),
     writable: false,
     maxTurns: 30,
     timeoutMs: 10 * MINUTE,

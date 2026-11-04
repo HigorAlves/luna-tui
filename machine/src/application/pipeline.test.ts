@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { EngineId, TaskState } from "@hardness/contracts";
+import { type EngineId, type TaskState, TriageRecord } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -11,6 +11,8 @@ import { NO_RETRIES, TransitionError } from "../domain/transition.ts";
 import type { StageContext, StageResult, StageRunner } from "./ports.ts";
 import { loadConfig } from "../config.ts";
 import { StubStages } from "./stages/stubs.ts";
+import { withTriageSignals } from "./stages/triage-signals.ts";
+import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { type BudgetAlert, Pipeline, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
@@ -93,6 +95,19 @@ describe("creating and starting", () => {
     expect(await pipeline.approvals(task.id)).toMatchObject([
       { kind: "awaiting_approval", decision: null },
     ]);
+  });
+});
+
+describe("triage's record", () => {
+  it("keeps the TriageRecord the triage runner assembled, on the task", async () => {
+    const record = { kind: "bug", goal: "Stop the panic", size: "small", urgency: "high", risk: "low", reason: "one function" };
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "plan", record, criteria: ["c1"] } });
+    const saving = (stage: TaskState) =>
+      stage === "triage" ? withTriageSignals(stubs.runnerFor(stage), { classify: null, save: (id, patch) => new PgTaskStore(db).updateTask(id, patch) }) : stubs.runnerFor(stage);
+    const p = new Pipeline(db, saving, { inline: true, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login page" });
+    await p.start(task.id);
+    expect(TriageRecord.parse((await p.get(task.id)).record)).toMatchObject({ ...record, source: "manual", decision: "plan", signals: {}, qa: [] });
   });
 });
 

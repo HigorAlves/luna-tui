@@ -51,6 +51,7 @@
       "Grep",
       "Skill",
       "mcp__luna__step",
+      "Agent",
       "Bash(cat:*)",
       "Bash(ls:*)",
       "Bash(head:*)",
@@ -70,6 +71,7 @@
       "Grep",
       "Skill",
       "mcp__luna__step",
+      "Agent",
       "Bash",
       "WebFetch",
       "mcp__luna__decision_get"
