@@ -45,6 +45,10 @@ const pr = (number: number, split: PullRequest["split"]): PullRequest => ({
   localPath: "/r/a",
   task: null,
   updatedAt: "2026-10-27T10:00:00Z",
+  headSha: null,
+  headCommittedAt: null,
+  nodeId: null,
+  body: null,
 });
 
 /** A fake poller: a fixed snapshot, and a log of what the routes asked it to do. */

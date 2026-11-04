@@ -137,7 +137,6 @@ describe("the plan stage's decision packs", () => {
   });
 
   it("the ship decisions exist: event_class, comment_intent, fix_scope and evidence_valid each ask one choice, worth_learning one yes/no, all decisions like the others", () => {
-    // Read through a plain record until the packs exist: the red must be "the pack is missing", not a type error.
     const packs = PACKS as Record<string, unknown>;
     const choices: Record<string, [string, string[]]> = {
       event_class: ["event", ["comment", "approval", "changes_requested", "push", "noise"]],

@@ -56,6 +56,17 @@ export interface Policy {
   decisions: Record<string, DecisionOverrides>;
   /** Days the local Evidence Pack store keeps a task's media (luna.yaml `evidence.retention_days`); 0 keeps it for good, null defers to the machine's retention. */
   evidenceRetentionDays: number | null;
+  /** What the machine may merge by itself once a shipped PR is ready (luna.yaml `policy.auto_merge`): nothing, low risk, or low and medium. */
+  autoMerge: "off" | "low" | "medium";
+  /** Windows in which the machine merges nothing (luna.yaml `freeze`). */
+  freeze: Freeze[];
+}
+
+/** A window in which nothing merges: ISO instants and why. */
+export interface Freeze {
+  from: string;
+  to: string;
+  reason: string;
 }
 
 /** `qa_target: <name> <base url> [credential ref]`, one line per target; the ref is `env:NAME`. */
@@ -84,6 +95,8 @@ export const DEFAULT_POLICY: Policy = {
   engineBudgets: {},
   decisions: {},
   evidenceRetentionDays: null,
+  autoMerge: "off",
+  freeze: [],
 };
 
 export class PolicyParseError extends Error {
@@ -138,7 +151,7 @@ const qaTarget = (key: string, raw: string): QaTarget => {
 
 /** The policy a PIPELINE.md declares; unknown keys are ignored, a bad value throws. */
 export function parsePolicy(text: string): Policy {
-  const policy: Policy = { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {}, decisions: {} };
+  const policy: Policy = { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {}, decisions: {}, freeze: [] };
   for (const { key, value } of frontMatter(text)) {
     switch (key) {
       case "qa":

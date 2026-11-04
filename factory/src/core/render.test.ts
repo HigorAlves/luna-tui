@@ -98,6 +98,15 @@ describe("renderPrompt", () => {
     expect(bare).toContain("base (none)\nci:\n(none)\ntargets:\n(none)");
   });
 
+  it("renders the thread and the pack for pr_reply, with no placeholder left", () => {
+    const template = readFileSync(new URL("../../prompts/pr_reply.md", import.meta.url), "utf8");
+    const ship = { kind: "comment" as const, comment: { thread: { id: "T9", path: "a.ts", line: 7, comments: [{ author: "ana", body: "why a map here?", at: "2026-11-04T10:00:00Z" }] }, pack: { summary: "Adds the export", scenarios: [{ text: "it exports", result: "pass" }], howToVerify: "press e" }, myReplies: 0 } };
+    const evidence = { summary: "Adds the export", format: "text" as const, scenarios: [{ text: "it exports", test: null, result: "pass" as const }], findings: [], outOfMap: [], risk: "low" as const, rollback: "revert", howToVerify: "press e", commitSha: "9c1f0e2a7b3d", media: [], at: "t" };
+    const prompt = renderPrompt({ pack: PACKS.pr_reply, input: { ...input, stage: "pr_reply", pack: "pr_reply", task: { ...input.task, evidence }, context: { projectContext: null, ship } }, template });
+    expect(prompt).not.toContain("{{");
+    for (const part of ["### Thread T9 at a.ts:7", "@ana (2026-11-04T10:00:00Z): why a map here?", "How to verify: press e", "Commit: 9c1f0e2"]) expect(prompt).toContain(part);
+  });
+
   it("says where the code graph is and how fresh, or that there is none", () => {
     const template = "{{context.graph}}";
     const graph = { path: "/graph/graphify-out/graph.json", commit: "9c1f0e2a7b3d4e5f", builtAt: "2026-11-04T10:00:00Z", fresh: true };

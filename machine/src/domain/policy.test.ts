@@ -25,6 +25,8 @@ describe("parsePolicy", () => {
       engines: {},
       engineBudgets: {},
       evidenceRetentionDays: null,
+      autoMerge: "off",
+      freeze: [],
       decisions: {},
     });
   });
@@ -49,6 +51,8 @@ describe("parsePolicy", () => {
       engines: {},
       engineBudgets: {},
       evidenceRetentionDays: null,
+      autoMerge: "off",
+      freeze: [],
       decisions: {},
     });
   });

@@ -26,7 +26,7 @@ export interface PolicyStoreOptions {
   warn?: (message: string) => void;
 }
 
-const fresh = (): Policy => ({ ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {}, decisions: {} });
+const fresh = (): Policy => ({ ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {}, decisions: {}, freeze: [] });
 
 export class PolicyStore {
   private readonly cache = new Map<string, Cached>();

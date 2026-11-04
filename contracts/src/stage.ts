@@ -139,6 +139,14 @@ export const PackId = z.enum([
   "recording",
   "video_qa",
   "video_fix",
+  // Ship's decisions (a ship context, run on demand): what a review event is, what a comment asks, how far a fix reaches, whether the pack is still true, whether a retro would teach anything.
+  "event_class",
+  "comment_intent",
+  "fix_scope",
+  "evidence_valid",
+  "worth_learning",
+  // Drafts the answer to a reviewer's question on a shipped PR from the Evidence Pack (runs in the shipping state, after the retro in PACKS order).
+  "pr_reply",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -303,6 +311,9 @@ export const RunSummary = z.object({
   outcome: z.string(),
   turns: z.number().int().nullable(),
   costUsd: z.number().nullable(),
+  /** The engine the run used, and how long it took; absent on rows recorded before wave 6. */
+  engine: z.string().nullable().optional(),
+  durationMs: z.number().nullable().optional(),
 });
 export type RunSummary = z.infer<typeof RunSummary>;
 
@@ -392,6 +403,8 @@ export const LunaConfig = z.object({
       holdout_cases: z.boolean().optional(),
       // Whether the machine keeps a code graph of this repo for its stages (default on).
       graph: z.enum(["on", "off"]).optional(),
+      // What the machine may merge by itself once a shipped PR is ready: nothing (default), low risk, or low and medium.
+      auto_merge: z.enum(["off", "low", "medium"]).optional(),
       // Per decision pack, per question: the repo's own confidence bars over the pack's.
       decisions: z.record(z.string(), z.record(z.string(), ConfidencePolicySchema)).optional(),
     })
@@ -421,6 +434,8 @@ export const LunaConfig = z.object({
   budget: z.object({ engines: EngineBudgets.optional() }).optional(),
   /** How long the machine keeps a task's local Evidence Pack and media; 0 never sweeps it, absent defers to MACHINE_RETENTION_DAYS. */
   evidence: z.object({ retention_days: z.number().int().min(0).optional() }).optional(),
+  /** Windows in which the machine merges nothing, whatever the policy says. */
+  freeze: z.array(z.object({ from: z.string().min(1), to: z.string().min(1), reason: z.string().min(1) })).optional(),
 });
 export type LunaConfig = z.infer<typeof LunaConfig>;
 
@@ -607,6 +622,61 @@ export const EvidenceContext = z.object({
 });
 export type EvidenceContext = z.infer<typeof EvidenceContext>;
 
+/** What Ship's decisions read: a review event, a comment, a fix, or the facts of a finished task for the retro. */
+export const ShipContext = z.object({
+  kind: z.enum(["event", "comment", "fix", "retro"]),
+  event: z
+    .object({
+      actor: z.string(),
+      isBot: z.boolean(),
+      isMe: z.boolean(),
+      kind: z.enum(["comment", "review", "push"]),
+      state: z.string().nullable().optional(),
+      body: z.string().max(2000),
+      url: z.string().nullable(),
+    })
+    .optional(),
+  comment: z
+    .object({
+      thread: z.object({
+        id: z.string(),
+        path: z.string().nullable(),
+        line: z.number().int().nullable(),
+        comments: z.array(z.object({ author: z.string(), body: z.string(), at: z.string() })),
+      }),
+      pack: z.object({
+        summary: z.string(),
+        scenarios: z.array(z.object({ text: z.string(), result: z.string() })),
+        howToVerify: z.string(),
+      }),
+      myReplies: z.number().int(),
+    })
+    .optional(),
+  fix: z
+    .object({
+      changed: z.array(z.string()).max(200),
+      diffSummary: z.string(),
+      scenarios: z.array(z.object({ text: z.string(), result: z.string() })),
+      threadSummary: z.string(),
+    })
+    .optional(),
+  retro: z
+    .object({
+      predicted: z.object({ size: z.string().nullable(), risk: z.string().nullable(), estLoc: z.number().int().nullable() }),
+      actual: z.object({
+        added: z.number().int(),
+        removed: z.number().int(),
+        retries: z.object({ verify: z.number().int(), e2e: z.number().int(), ci: z.number().int(), total: z.number().int() }),
+        escalations: z.number().int(),
+        format: z.string().nullable(),
+        durationMin: z.number().int().nullable(),
+      }),
+      runs: z.number().int(),
+    })
+    .optional(),
+});
+export type ShipContext = z.infer<typeof ShipContext>;
+
 /** What the jira_intake pack reads: the issue, as Jira gives it, plus where it would land. */
 export const JiraIntakeContext = z.object({
   key: z.string(),
@@ -772,6 +842,8 @@ export const StageInput = z.object({
     check: CheckContext.nullable().optional(),
     /** For evidence_format: the change's record, surface and browser run. */
     evidence: EvidenceContext.nullable().optional(),
+    /** For Ship's decisions and pr_reply: the review event, comment, fix or retro facts. */
+    ship: ShipContext.nullable().optional(),
     /** For the video packs (script, fix, recording, critic): the scenarios, the target, the narration, the film's measurements. */
     video: VideoContext.nullable().optional(),
     /** For the eval_judge pack: the case, its expectation and the answer to grade. */

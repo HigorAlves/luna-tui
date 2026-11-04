@@ -264,6 +264,29 @@ const evidenceText = (evidence: StageInput["task"]["evidence"]): string => {
   ].join("\n");
 };
 
+/** A ship context as text: the thread and the pack for a reply, the event for a classification. */
+const shipText = (ship: StageInput["context"]["ship"]): string => {
+  if (!ship) return NONE;
+  const c = ship.comment;
+  if (c) {
+    const where = c.thread.path ? `${c.thread.path}${c.thread.line !== null ? `:${c.thread.line}` : ""}` : "the PR as a whole";
+    const comments = c.thread.comments.map((m) => `- @${m.author} (${m.at}): ${m.body}`).join("\n");
+    return [
+      `### Thread ${c.thread.id} at ${where}`,
+      comments,
+      "",
+      "### What the Evidence Pack says",
+      `Summary: ${c.pack.summary}`,
+      "Scenarios:",
+      bullets(c.pack.scenarios.map((s) => `${s.text}: ${s.result}`)),
+      `How to verify: ${c.pack.howToVerify}`,
+      `Replies already posted in this thread: ${c.myReplies}`,
+    ].join("\n");
+  }
+  const e = ship.event;
+  return e ? `${e.actor}${e.isBot ? " (bot)" : ""} ${e.kind}${e.state ? ` (${e.state})` : ""}: ${e.body}` : NONE;
+};
+
 function graphText(graph: StageInput["context"]["graph"]): string {
   if (!graph) return "Code graph: (none: use Glob, Grep and Read)";
   const built = `built at ${graph.commit.slice(0, 7)} on ${graph.builtAt.slice(0, 10)}`;
@@ -315,6 +338,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{context.ci}}": ciText(input.context.ci),
     "{{context.review}}": reviewText(input.context.review),
     "{{context.threads}}": threadsText(input.context.threads),
+    "{{context.ship}}": shipText(input.context.ship),
     "{{context.checks}}": input.context.checks
       ? bullets(
           input.context.checks.map((c) => {

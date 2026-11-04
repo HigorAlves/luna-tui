@@ -9,6 +9,7 @@ import {
   CloneInput,
   EscalationReason,
   EvidenceContext,
+  ShipContext,
   VideoContext,
   EvidencePack,
   EvalJudgeAnswer,
@@ -202,11 +203,11 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format", "video_script", "recording", "video_qa", "video_fix"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "pr_reply"].sort(),
     );
-    const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format"];
+    const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning"];
     // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
-    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "code_map", "video_script", "recording", "video_qa", "video_fix"];
+    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "code_map", "video_script", "recording", "video_qa", "video_fix", "pr_reply"];
     for (const pack of PackId.options) {
       if (onDemand.includes(pack) || runsInAnotherState.includes(pack)) expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
@@ -451,6 +452,17 @@ describe("TriageRecord and EvidencePack", () => {
     expect(StageInput.parse({ ...stageInputExample, task }).task).toMatchObject({ record, evidence });
     expect(StageInput.parse({ ...stageInputExample, task: { ...stageInputExample.task, record: null, evidence: null } }).task.record).toBeNull();
     expect(StageInput.parse(stageInputExample).task.record).toBeUndefined();
+  });
+});
+
+describe("ShipContext", () => {
+  const event = { actor: "ana", isBot: false, isMe: false, kind: "comment" as const, body: "why a map here?", url: null };
+
+  it("is what Ship's decisions read, and rides on the stage input's context", () => {
+    expect(ShipContext.parse({ kind: "event", event })).toEqual({ kind: "event", event });
+    expect(ShipContext.safeParse({ kind: "other" }).success).toBe(false);
+    expect(ShipContext.safeParse({ kind: "event", event: { ...event, body: "x".repeat(2001) } }).success).toBe(false);
+    expect(StageInput.parse({ ...stageInputExample, schema: 3, context: { projectContext: null, ship: { kind: "event", event } } }).context.ship?.event?.actor).toBe("ana");
   });
 });
 

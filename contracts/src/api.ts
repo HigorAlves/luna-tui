@@ -341,6 +341,7 @@ export interface TaskDetail {
  * - `budget.alert`: a spend crossed 80, 90 or 100% of a ceiling (a task's, a repo's month's, the day's).
  * - `github.prs`: the PR inbox changed; carries the whole snapshot.
  * - `slack.items`: the Slack inbox changed; carries the whole snapshot, watches included.
+ * - `task.shipped`: the task's PR merged; what shipped, where, and how to check it.
  */
 export type StreamMessage =
   | { type: "task.updated"; task: Task; seq: number }
@@ -351,7 +352,21 @@ export type StreamMessage =
   | { type: "stage.started"; taskId: string; label: string; cwd: string; container: string }
   | { type: "task.closed"; id: string }
   | { type: "github.prs"; snapshot: PrSnapshot }
-  | { type: "slack.items"; snapshot: SlackSnapshot };
+  | { type: "slack.items"; snapshot: SlackSnapshot }
+  | { type: "task.shipped"; shipped: TaskShipped };
+
+/** What `task.shipped` carries: the merged PR and the evidence behind it (web urls only). */
+export interface TaskShipped {
+  id: string;
+  title: string;
+  prUrl: string;
+  number: number;
+  mergedSha: string | null;
+  format: string | null;
+  howToVerify: string | null;
+  media: { kind: string; label: string; url: string }[];
+  at: string;
+}
 
 /** A spend passing a threshold of a ceiling; raised once per scope and threshold. */
 export interface BudgetAlert {

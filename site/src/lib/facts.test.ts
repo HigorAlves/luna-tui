@@ -36,7 +36,7 @@ describe("facts", () => {
   })
 
   it("committed facts.json has the factory numbers", () => {
-    expect(facts).toEqual({ states: 23, columns: 8, packs: 32, images: 3 })
+    expect(facts).toEqual({ states: 23, columns: 8, packs: 38, images: 3 })
   })
 
   it("--check passes against the real repo", () => {

@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, CodeMapAnswer, type CheckContext, type CheckSpec, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type ChatTriageContext, CodeMapAnswer, type CheckContext, type CheckSpec, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -21,6 +21,14 @@ function checkTitle(check: CheckContext): string {
 /** The synthetic task's title for an evidence context sent to evidence_format. */
 function evidenceTitle(evidence: EvidenceContext): string {
   return evidence.record ? `Evidence format: ${evidence.record.goal}` : "Evidence format";
+}
+
+/** The synthetic task's title for a ship context sent to one of Ship's decisions. */
+function shipTitle(ship: ShipContext, retroTitle?: string): string {
+  if (ship.kind === "event") return `PR event: ${ship.event?.actor ?? "?"} ${ship.event?.kind ?? "?"}`;
+  if (ship.kind === "comment") return `Comment on ${ship.comment?.thread.path ?? "the PR"}`;
+  if (ship.kind === "fix") return `Fix: ${ship.fix?.threadSummary ?? "?"}`;
+  return `Retro: ${retroTitle ?? "task"}`;
 }
 
 /** Implementing's turns and time scale with the plan's slice count, up to this many times the pack default. */
@@ -230,17 +238,18 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
   const plan: PlanContext | null = "plan" in context ? context.plan : null;
   const check: CheckContext | null = "check" in context ? context.check : null;
   const evidence: EvidenceContext | null = "evidence" in context ? context.evidence : null;
+  const ship: ShipContext | null = "ship" in context ? context.ship : null;
   return {
     schema: 3,
     stage: pack,
     pack,
     ...(engine ? { engine } : {}),
     attempt: 1,
-    task: { id: pack.replace(/_/g, "-"), title: issue?.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
+    task: { id: pack.replace(/_/g, "-"), title: issue?.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : ship ? shipTitle(ship) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
     decisions: [],
     priorFindings: [],
-    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}) },
+    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}), ...(ship ? { ship } : {}) },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

@@ -236,6 +236,14 @@ export const ReviewingMemoryAnswer = z.object({
   proposedRules: z.array(z.object({ rule: z.string(), evidence: z.array(z.string()), scope: z.string() })),
   calibration: z.object({ estLocBias: z.number() }),
   rulesMarkdown: z.string().optional(),
+  /** Where the task's size, risk, iterations, escalations or format differed from the prediction. */
+  recalibration: z
+    .array(z.object({ dimension: z.enum(["size", "risk", "iterations", "escalations", "format"]), predicted: z.string(), actual: z.string(), note: z.string() }))
+    .optional(),
+  /** Files the change touched that the plan's map did not name. */
+  graphMisses: z.array(z.string()).optional(),
+  /** A prompt a pack should change, and how, in one sentence. */
+  promptUpdates: z.array(z.object({ pack: z.string(), change: z.string() })).optional(),
 });
 
 /** reviewing (PR task): a comment review the host posts at once; approve / request_changes wait for you. */
@@ -312,6 +320,10 @@ export interface Helper {
 
 /** What a helper run through `delegate` answers: its reply to the agent that asked, and findings
  *  per the review contract when it found problems in code. */
+/** pr_reply: the draft of an answer to a reviewer's question on a shipped PR. */
+export const PrReplyAnswer = z.object({ reply: z.string().max(1500), resolves: z.boolean(), confidence: z.number() });
+export type PrReplyAnswer = z.infer<typeof PrReplyAnswer>;
+
 export const HelperAnswer = z.object({ answer: z.string(), findings: z.array(Finding).optional() });
 export type HelperAnswer = z.infer<typeof HelperAnswer>;
 
@@ -501,13 +513,76 @@ const EVIDENCE_FORMAT_QUESTIONS: QuestionSet = {
   },
 };
 
+/** What event_class asks of a review event on a shipped PR. */
+const EVENT_CLASS_QUESTIONS: QuestionSet = {
+  event: {
+    type: "choice",
+    instructions: "What is this event on the shipped PR? Judge from who did it, whether it is a bot, and what it says.",
+    criteria: {
+      comment: "a person's comment or review note that needs an answer or a change",
+      approval: "a review that approves",
+      changes_requested: "a review that asks for changes",
+      push: "someone else pushed to the branch",
+      noise: "a bot, a CI notice, a reaction, an edit of ours: nothing to do",
+    },
+  },
+};
+
+/** What comment_intent asks of a reviewer's comment. */
+const COMMENT_INTENT_QUESTIONS: QuestionSet = {
+  intent: {
+    type: "choice",
+    instructions: "What does this comment on the shipped PR want? Judge from the thread and what the pack says it did.",
+    criteria: {
+      question: "asks something the pack or the diff can answer",
+      nit: "a small change nobody would block on",
+      change_request: "asks for a change in behaviour or code",
+      disagreement: "disputes the approach or the plan",
+    },
+  },
+};
+
+/** What fix_scope asks of a change request. */
+const FIX_SCOPE_QUESTIONS: QuestionSet = {
+  scope: {
+    type: "choice",
+    instructions: "How far does the change this thread asks for reach? Judge from the thread and the pack's scenarios.",
+    criteria: {
+      in_place: "a local change: fix, run the checks, push",
+      re_verify_partial: "the change touches behaviour: fix and have the verifier review the delta",
+      re_plan: "the plan itself is wrong: back to triage with the thread",
+    },
+  },
+};
+
+/** What evidence_valid asks after a fix on a shipped PR. */
+const EVIDENCE_VALID_QUESTIONS: QuestionSet = {
+  validity: {
+    type: "choice",
+    instructions: "After this fix, is the Evidence Pack still true? Judge from the files changed, the diff summary and the pack's scenarios.",
+    criteria: {
+      valid: "nothing a scenario shows changed",
+      refresh_text: "the summary, the findings or how to verify changed",
+      refresh_media: "a scenario's outcome or what is on screen changed",
+    },
+  },
+};
+
+/** What worth_learning asks of a finished task. */
+const WORTH_LEARNING_QUESTIONS: QuestionSet = {
+  worth: {
+    type: "yesno",
+    instructions: "Would a retro of this task teach the next one something: a surprise in size, risk, iterations, an escalation, a downgraded format, a repeated finding?",
+  },
+};
+
 /** The packs a decision model answers; every other pack is a role's or a script's. */
-type DecisionPackId = "triage_signals" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "evidence_format";
+type DecisionPackId = "triage_signals" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "evidence_format" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning";
 
 /** The engines a decision pack on the plan context runs on: Jev, else a small Claude or Codex model. */
 const DECISION_ENGINES = { default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] } satisfies AgentPack["engines"];
 
-const planDecision = (id: "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "evidence_format", questions: QuestionSet): DecisionPack => ({
+const planDecision = (id: "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "evidence_format" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning", questions: QuestionSet): DecisionPack => ({
   id,
   kind: "decision",
   questions,
@@ -798,6 +873,22 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     answer: ReviewingMemoryAnswer,
     template: "reviewing_memory.md",
   },
+  // Runs in the shipping state (the machine's RUNS_IN) and sits after reviewing_memory so the state still picks that one.
+  pr_reply: {
+    id: "pr_reply",
+    kind: "agent",
+    agent: "reply-drafter",
+    helpers: [],
+    skills: [],
+    access: access(READ_ONLY),
+    writable: false,
+    maxTurns: 8,
+    timeoutMs: 3 * MINUTE,
+    engines: only("claude:haiku"),
+    effort: "low",
+    answer: PrReplyAnswer,
+    template: "pr_reply.md",
+  },
   reviewing: {
     id: "reviewing",
     kind: "agent",
@@ -927,6 +1018,12 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
   e2e_failure_cause: { ...planDecision("e2e_failure_cause", E2E_FAILURE_QUESTIONS) },
   // Evidence's decision: reads an evidence context, one call, no worktree.
   evidence_format: { ...planDecision("evidence_format", EVIDENCE_FORMAT_QUESTIONS) },
+  // Ship's decisions: each reads a ship context, one call, no worktree.
+  event_class: { ...planDecision("event_class", EVENT_CLASS_QUESTIONS) },
+  comment_intent: { ...planDecision("comment_intent", COMMENT_INTENT_QUESTIONS) },
+  fix_scope: { ...planDecision("fix_scope", FIX_SCOPE_QUESTIONS) },
+  evidence_valid: { ...planDecision("evidence_valid", EVIDENCE_VALID_QUESTIONS) },
+  worth_learning: { ...planDecision("worth_learning", WORTH_LEARNING_QUESTIONS) },
 };
 
 type Choice = { choice: string; confidence: number };

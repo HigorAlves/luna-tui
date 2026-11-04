@@ -16,7 +16,7 @@ describe("context-only packs", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "coverage_check", "e2e_failure_cause", "evidence_format", "finding_classify", "jira_intake", "plan_check", "red_check", "risk_score", "scope_check", "slack_triage", "triage_signals"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "comment_intent", "coverage_check", "e2e_failure_cause", "event_class", "evidence_format", "evidence_valid", "finding_classify", "fix_scope", "jira_intake", "plan_check", "red_check", "risk_score", "scope_check", "slack_triage", "triage_signals", "worth_learning"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
@@ -85,6 +85,27 @@ describe("buildContextPackInput", () => {
     expect(input).toMatchObject({ pack: "evidence_format", stage: "evidence_format", task: { title: "Evidence format", repoPath: "" }, plan: null, context: { projectContext: null, evidence }, limits: { maxTurns: 1 } });
     const record = { source: "github", kind: "bug", goal: "Pressing j on an empty list must not panic", size: "small", urgency: "normal", risk: "low" as const, signals: {}, qa: [], decision: "plan" as const, reason: "r", at: "2026-11-03T12:00:00.000Z", model: "m" };
     expect(buildContextPackInput("evidence_format", { evidence: { ...evidence, record } }).task.title).toBe("Evidence format: Pressing j on an empty list must not panic");
+  });
+
+  it("builds each ship decision's input with the ship context under context.ship, titled by the event, the comment, the fix or the retro", () => {
+    const event = { kind: "event" as const, event: { actor: "ana", isBot: false, isMe: false, kind: "review" as const, body: "no", url: null } };
+    const comment = { kind: "comment" as const, comment: { thread: { id: "T1", path: "a.ts", line: 3, comments: [] }, pack: { summary: "s", scenarios: [], howToVerify: "h" }, myReplies: 0 } };
+    const fix = { kind: "fix" as const, fix: { changed: ["a.ts"], diffSummary: "d", scenarios: [], threadSummary: "rename x" } };
+    const retro = { kind: "retro" as const, retro: { predicted: { size: null, risk: null, estLoc: null }, actual: { added: 1, removed: 0, retries: { verify: 0, e2e: 0, ci: 0, total: 0 }, escalations: 0, format: null, durationMin: null }, runs: 1 } };
+    for (const pack of ["event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning"] as const) {
+      expect(contextSchema(pack).safeParse({ ship: event }).success).toBe(true);
+      expect(contextSchema(pack).safeParse({ plan }).success).toBe(false);
+      expect(packStates(pack)).toEqual([]);
+      expect(isContextPack(pack)).toBe(true);
+    }
+    const titled = (ship: typeof event | typeof comment | typeof fix | typeof retro) => buildContextPackInput("event_class", { ship });
+    expect(titled(event).task.title).toBe("PR event: ana review");
+    expect(titled(comment).task.title).toBe("Comment on a.ts");
+    expect(titled(fix).task.title).toBe("Fix: rename x");
+    expect(titled(retro).task.title).toBe("Retro: task");
+    const input = titled(event);
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input).toMatchObject({ pack: "event_class", context: { projectContext: null, ship: event }, limits: { maxTurns: 1 } });
   });
 
   it("titles the finding and e2e checks' synthetic task", () => {

@@ -149,7 +149,7 @@ describe("the engines each pack may run on", () => {
 
   it("keeps today's models as the defaults", () => {
     const defaults = Object.fromEntries(Object.values(PACKS).map((p) => [p.id, p.engines.default]));
-    expect(defaults).toMatchObject({ setup: "claude:opus", triage: "claude:opus", implementing: "claude:sonnet", verifying: "claude:opus", slack_triage: "claude:haiku", jira_intake: "claude:sonnet", triage_signals: "jev", risk_score: "jev", coverage_check: "jev", plan_check: "jev", finding_classify: "jev", e2e_failure_cause: "jev", evidence_format: "jev", code_map: "claude:haiku" });
+    expect(defaults).toMatchObject({ setup: "claude:opus", triage: "claude:opus", implementing: "claude:sonnet", verifying: "claude:opus", slack_triage: "claude:haiku", jira_intake: "claude:sonnet", triage_signals: "jev", risk_score: "jev", coverage_check: "jev", plan_check: "jev", finding_classify: "jev", e2e_failure_cause: "jev", evidence_format: "jev", event_class: "jev", comment_intent: "jev", fix_scope: "jev", evidence_valid: "jev", worth_learning: "jev", pr_reply: "claude:haiku", code_map: "claude:haiku" });
   });
 });
 

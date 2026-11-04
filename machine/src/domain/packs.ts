@@ -33,6 +33,14 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   recording: ["evidence"],
   video_qa: ["evidence"],
   video_fix: ["evidence"],
+  // Ship's decisions, run on demand by the ship monitor and the retro.
+  event_class: [],
+  comment_intent: [],
+  fix_scope: [],
+  evidence_valid: [],
+  worth_learning: [],
+  // Drafts an answer inside the shipping stage's monitor; `reviewing_memory` stays first in PACKS so the state still picks it.
+  pr_reply: ["shipping"],
   eval_judge: [],
   chat_triage: [],
 };

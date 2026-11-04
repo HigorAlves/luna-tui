@@ -26,6 +26,10 @@ const pr = (over: Partial<PullRequest> = {}): PullRequest => ({
   localPath: "/r/a",
   task: null,
   updatedAt: "2026-10-27T10:00:00Z",
+  headSha: null,
+  headCommittedAt: null,
+  nodeId: null,
+  body: null,
   ...over,
 });
 

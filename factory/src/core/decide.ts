@@ -2,7 +2,7 @@
 // in plain words, then the rule that the answer is the JSON the schema asks for, with a confidence
 // per question. Jev gets the questions on its own wire (runtimes/jev/questions.ts); every other
 // runtime renders this text and asks for structured output on `answerJsonSchema(pack)`.
-import type { CheckContext, EvidenceContext, PlanContext, Question, QuestionSet, StageInput } from "@hardness/contracts";
+import type { CheckContext, EvidenceContext, PlanContext, Question, QuestionSet, ShipContext, StageInput } from "@hardness/contracts";
 
 /** What a decision reads: the issue as intake sent it. */
 export type DecisionState = {
@@ -91,6 +91,55 @@ export function renderEvidence(evidence: EvidenceContext): string {
   ].join("\n");
 }
 
+/** A ship context as text: a review event, a comment thread against the pack, a fix, or a finished task's predicted and actual facts. */
+export function renderShip(ship: ShipContext): string {
+  if (ship.kind === "event" && ship.event) {
+    const e = ship.event;
+    return [
+      `Actor: ${e.actor}${e.isBot ? " (a bot)" : ""}${e.isMe ? " (this machine)" : ""}`,
+      `Kind: ${e.kind}${e.state ? ` (${e.state})` : ""}`,
+      ...(e.url ? [`URL: ${e.url}`] : []),
+      `Body:\n${e.body}`,
+    ].join("\n");
+  }
+  if (ship.kind === "comment" && ship.comment) {
+    const c = ship.comment;
+    return [
+      `Thread ${c.thread.id} at ${c.thread.path ? `${c.thread.path}${c.thread.line !== null ? `:${c.thread.line}` : ""}` : "the PR as a whole"}`,
+      ...c.thread.comments.map((m) => `- @${m.author} (${m.at}): ${m.body}`),
+      `Pack summary: ${c.pack.summary}`,
+      ...bullets("Scenarios", c.pack.scenarios.map((s) => `${s.text}: ${s.result}`)),
+      `How to verify: ${c.pack.howToVerify}`,
+      `Replies already posted here: ${c.myReplies}`,
+    ].join("\n");
+  }
+  if (ship.kind === "fix" && ship.fix) {
+    const f = ship.fix;
+    return [
+      `Thread: ${f.threadSummary}`,
+      ...bullets("Changed files", f.changed),
+      `Diff summary: ${f.diffSummary}`,
+      ...bullets("Scenarios", f.scenarios.map((s) => `${s.text}: ${s.result}`)),
+    ].join("\n");
+  }
+  if (ship.kind === "retro" && ship.retro) {
+    const r = ship.retro;
+    return [
+      `Predicted: size ${r.predicted.size ?? "?"}, risk ${r.predicted.risk ?? "?"}, ${r.predicted.estLoc ?? "?"} LOC`,
+      `Actual: +${r.actual.added} -${r.actual.removed} LOC, retries ${r.actual.retries.total} (verify ${r.actual.retries.verify}, e2e ${r.actual.retries.e2e}, ci ${r.actual.retries.ci}), ${r.actual.escalations} escalation${r.actual.escalations === 1 ? "" : "s"}, format ${r.actual.format ?? "?"}, ${r.actual.durationMin ?? "?"} min`,
+      `Runs: ${r.runs}`,
+    ].join("\n");
+  }
+  return `(no ${ship.kind} facts)`;
+}
+
+function shipTitle(ship: ShipContext, fallback: string): string {
+  if (ship.kind === "event") return `PR event: ${ship.event?.actor ?? "?"} ${ship.event?.kind ?? "?"}`;
+  if (ship.kind === "comment") return `Comment on ${ship.comment?.thread.path ?? "the PR"}`;
+  if (ship.kind === "fix") return `Fix: ${ship.fix?.threadSummary ?? "?"}`;
+  return `Retro: ${fallback}`;
+}
+
 function checkTitle(check: CheckContext): string {
   switch (check.kind) {
     case "red":
@@ -109,6 +158,8 @@ export function stateOf(input: StageInput): DecisionState {
   const plan = input.context.plan;
   const check = input.context.check;
   const evidence = input.context.evidence;
+  const ship = input.context.ship;
+  if (ship) return { title: shipTitle(ship, input.task.title), description: renderShip(ship) };
   if (evidence) return { title: evidence.record ? `Evidence format: ${evidence.record.goal}` : "Evidence format", description: renderEvidence(evidence) };
   if (check) return { title: checkTitle(check), description: renderCheck(check) };
   if (plan) return { title: plan.brief.split("\n")[0]!, description: renderPlan(plan) };

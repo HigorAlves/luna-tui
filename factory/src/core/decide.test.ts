@@ -1,7 +1,7 @@
 import { PACKS, type StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { decisionSummary, renderCheck, renderDecision, renderEvidence, renderPlan, stateOf } from "./decide.ts";
+import { decisionSummary, renderCheck, renderDecision, renderEvidence, renderPlan, renderShip, stateOf } from "./decide.ts";
 
 const questions = PACKS.triage_signals.questions;
 
@@ -142,5 +142,34 @@ describe("an evidence context", () => {
     expect(state.title).toBe("Evidence format: Show the cart total");
     expect(state.description).toBe(renderEvidence(evidence as never));
     expect(renderDecision(PACKS.evidence_format.questions, state)).toContain("## format (choice)");
+  });
+});
+
+describe("a ship context", () => {
+  const base = { schema: 3, stage: "event_class", pack: "event_class", attempt: 1, task: { id: "t", title: "Ship", description: "", criteria: [], repoPath: "", branch: "", source: null }, plan: null, decisions: [], priorFindings: [], limits: { maxTurns: 1, timeoutMs: 1 }, env: {} };
+  const state = (ship: unknown) => stateOf({ ...base, context: { projectContext: null, ship } } as never);
+
+  it("titles and renders an event: who, what kind, the body", () => {
+    const ship = { kind: "event", event: { actor: "ana", isBot: false, isMe: false, kind: "review", state: "CHANGES_REQUESTED", body: "please rename it", url: "https://x/1" } };
+    expect(state(ship).title).toBe("PR event: ana review");
+    for (const part of ["Actor: ana", "Kind: review (CHANGES_REQUESTED)", "URL: https://x/1", "please rename it"]) expect(state(ship).description).toContain(part);
+    expect(renderDecision(PACKS.event_class.questions, state(ship))).toContain("## event (choice)");
+  });
+
+  it("titles a comment by its path, with the thread and the pack", () => {
+    const ship = { kind: "comment", comment: { thread: { id: "T1", path: "a.ts", line: 4, comments: [{ author: "ana", body: "why?", at: "t" }] }, pack: { summary: "Adds x", scenarios: [{ text: "x works", result: "pass" }], howToVerify: "run it" }, myReplies: 1 } };
+    expect(state(ship).title).toBe("Comment on a.ts");
+    for (const part of ["Thread T1 at a.ts:4", "@ana (t): why?", "Pack summary: Adds x", "- x works: pass", "How to verify: run it", "Replies already posted here: 1"]) expect(state(ship).description).toContain(part);
+    expect(state({ ...ship, comment: { ...ship.comment, thread: { ...ship.comment.thread, path: null } } }).title).toBe("Comment on the PR");
+  });
+
+  it("titles a fix by its thread and a retro by the task", () => {
+    const fix = { kind: "fix", fix: { changed: ["a.ts"], diffSummary: "+3 -1", scenarios: [], threadSummary: "rename x" } };
+    expect(state(fix).title).toBe("Fix: rename x");
+    expect(state(fix).description).toContain("Changed files:\n- a.ts");
+    const retro = { kind: "retro", retro: { predicted: { size: "small", risk: "low", estLoc: 80 }, actual: { added: 200, removed: 10, retries: { verify: 1, e2e: 0, ci: 0, total: 1 }, escalations: 1, format: "captures", durationMin: 42 }, runs: 9 } };
+    expect(state(retro).title).toBe("Retro: Ship");
+    expect(renderShip(retro as never)).toContain("Predicted: size small, risk low, 80 LOC");
+    expect(renderShip(retro as never)).toContain("Actual: +200 -10 LOC, retries 1 (verify 1, e2e 0, ci 0), 1 escalation, format captures, 42 min");
   });
 });

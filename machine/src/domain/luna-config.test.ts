@@ -39,6 +39,10 @@ budget:
   engines: { "openai:sol": 10, codex: 0 }
 evidence:
   retention_days: 30
+freeze:
+  - from: "2026-12-24T00:00:00Z"
+    to: "2026-12-27T00:00:00Z"
+    reason: holiday freeze
 `;
 
 describe("parseLunaConfig", () => {
@@ -74,7 +78,17 @@ describe("parseLunaConfig", () => {
       engineBudgets: { "openai:sol": 10, codex: 0 },
       decisions: {},
       evidenceRetentionDays: 30,
+      autoMerge: "off",
+      freeze: [{ from: "2026-12-24T00:00:00Z", to: "2026-12-27T00:00:00Z", reason: "holiday freeze" }],
     });
+  });
+
+  it("reads policy.auto_merge (off by default, low or medium) and refuses any other value", () => {
+    expect(parseLunaConfig("").autoMerge).toBe("off");
+    expect(parseLunaConfig("policy:\n  auto_merge: low\n").autoMerge).toBe("low");
+    expect(parseLunaConfig("policy:\n  auto_merge: medium\n").autoMerge).toBe("medium");
+    expect(() => parseLunaConfig("policy:\n  auto_merge: high\n")).toThrow(/auto_merge/);
+    expect(parseLunaConfig("").freeze).toEqual([]);
   });
 
   it("reads evidence.retention_days: null when absent, 0 to keep nothing swept, a negative or fractional value refused", () => {

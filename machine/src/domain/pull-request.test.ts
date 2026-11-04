@@ -60,6 +60,13 @@ describe("fromGraphQl", () => {
     expect(facts({ contexts: [checkRun("docs", "COMPLETED", "SKIPPED")] }).checks.state).toBe("success");
   });
 
+  it("maps the head commit, its date, the node id and the body, and null when a fixture has none", () => {
+    const oid = "9c1f0e2a7b3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f";
+    const pr = facts({ id: "PR_node1", body: "Depends on #7", commits: { nodes: [{ commit: { oid, committedDate: "2026-11-01T09:00:00Z", statusCheckRollup: null } }] } });
+    expect(pr).toMatchObject({ headSha: oid, headCommittedAt: "2026-11-01T09:00:00Z", nodeId: "PR_node1", body: "Depends on #7" });
+    expect(facts({})).toMatchObject({ headSha: null, headCommittedAt: null, nodeId: null, body: null });
+  });
+
   it("knows whose PR it is, who was asked, and whether the head is a fork", () => {
     expect(facts({}).mine).toBe(true);
     expect(facts({ author: { login: "them" } }).mine).toBe(false);
