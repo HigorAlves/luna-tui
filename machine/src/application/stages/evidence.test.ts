@@ -34,6 +34,13 @@ describe("evidenceRunner: one manifest row per approved scenario", () => {
   const row = (text: string, result = "pass") => ({ text, result, evidence: [] });
   const write = (manifest: Record<string, unknown>) => writeFileSync(join(qaDir(), "qa-manifest.json"), JSON.stringify({ verdict: "pass", ...manifest }));
 
+  it("reads a manifest that is JSON null as unreadable instead of crashing", async () => {
+    writeFileSync(join(qaDir(), "qa-manifest.json"), "null");
+    const result = await runner({ runId: "e2e-run" })(approved);
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ verdict: "unreadable" });
+  });
+
   it("passes when every scenario has its row and chapter, and lists them with the chapter start", async () => {
     write({ acceptance: [row(scenarios[0]!.title), row(scenarios[1]!.title, "partial")], video: { file: "qa.webm", chapters: [{ title: scenarios[0]!.title, start: 0 }, { title: scenarios[1]!.title, start: 12.5 }] } });
     const result = await runner({ runId: "e2e-run" })(approved);

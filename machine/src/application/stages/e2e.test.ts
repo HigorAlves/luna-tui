@@ -223,6 +223,15 @@ describe("e2e_failure_cause", () => {
     expect(existsSync(join(stateDir, "runs", ctx.runId, "out"))).toBe(false);
   });
 
+  it("drops malformed criteria rows before asking for the cause", async () => {
+    const junk = answered({ verdict: "fail", summary: "broke", criteria: [null, "x", 7, { text: "login works", result: "fail", evidence: [] }, { result: "fail" }] });
+    const runPack = vi.fn().mockResolvedValueOnce(junk).mockResolvedValueOnce(passing);
+    const decide = vi.fn<Decide>(async () => cause("env_flake"));
+    const result = await run(runPack, decide);
+    expect(result.outcome).toBe("pass");
+    expect(decide.mock.calls[0]![1].e2e?.criteria).toEqual([{ text: "login works", result: "fail" }]);
+  });
+
   it("escalates as flaky_tests when the re-run fails too", async () => {
     const runPack = vi.fn().mockResolvedValue(failing);
     const result = await run(runPack, async () => cause("env_flake"));

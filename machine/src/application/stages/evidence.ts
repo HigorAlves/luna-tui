@@ -62,7 +62,9 @@ export function evidenceRunner(deps: EvidenceDeps): StageRunner {
     let manifest: Manifest = {};
     if (manifestPath) {
       try {
-        manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Manifest;
+        const parsed: unknown = JSON.parse(await readFile(manifestPath, "utf8"));
+        // The container wrote it: anything but an object (null, a list, a number) is an unreadable manifest, not a crash.
+        manifest = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as Manifest) : {};
         verdict = typeof manifest.verdict === "string" ? manifest.verdict : "unreadable";
       } catch (error) {
         verdict = (error as NodeJS.ErrnoException)?.code === "ENOENT" ? undefined : "unreadable";

@@ -9,7 +9,7 @@ import { deliverRunner } from "./deliver.ts";
 const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
 const bad = (stderr = "nope"): ExecResult => ({ code: 1, stdout: "", stderr });
 
-function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult; task?: Record<string, unknown>; respond?: (args: string[]) => ExecResult | undefined } = {}) {
+function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult; task?: Record<string, unknown>; respond?: (args: string[]) => ExecResult | undefined; defaultBranch?: string | null } = {}) {
   const calls: string[][] = [];
   const exec = vi.fn(async (command: string, args: string[]) => {
     calls.push([command, ...args]);
@@ -23,7 +23,7 @@ function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult;
     approvals: [],
     signal: new AbortController().signal,
   } as StageContext;
-  return { run: deliverRunner({ exec, github, slugOf: async () => "acme/widgets", defaultBranch: async () => "main" }), context, calls };
+  return { run: deliverRunner({ exec, github, slugOf: async () => "acme/widgets", defaultBranch: async () => (opts.defaultBranch === undefined ? "main" : opts.defaultBranch) }), context, calls };
 }
 
 describe("delivering", () => {
@@ -82,7 +82,7 @@ describe("delivering a branch that conflicts with the default branch", () => {
     expect(result.detail).toMatchObject({ rebased: true, onto: "origin/main" });
     expect(calls).toEqual([
       [...G, "push", "-u", "origin", "hardness/t1"],
-      [...G, "fetch", "--quiet", "origin", "main"],
+      [...G, "fetch", "--quiet", "--end-of-options", "origin", "main"],
       [...G, "rebase", "origin/main"],
       [...G, "push", "--force-with-lease", "-u", "origin", "hardness/t1"],
     ]);
@@ -99,6 +99,17 @@ describe("delivering a branch that conflicts with the default branch", () => {
     expect(calls).toContainEqual([...G, "diff", "--name-only", "--diff-filter=U"]);
     expect(calls).toContainEqual([...G, "rebase", "--abort"]);
     expect(calls.some((c) => c.includes("--force-with-lease"))).toBe(false);
+  });
+
+  it("refuses a default branch that reads as an option or is not a ref name, before any git call: the ref lives in the container-writable git dir", async () => {
+    for (const base of ["--upload-pack=/g/.git/evil.sh", "-v", "a b", "", null]) {
+      const github = fakeGitHub({ findPr: async () => pr, prFacts: facts("CONFLICTING") });
+      const { run, context, calls } = setup(github, { defaultBranch: base });
+      const result = await run(context);
+      expect(result.outcome).toBe("fail");
+      expect(String(result.detail?.error)).toMatch(/no usable default branch/);
+      expect(calls.filter((c) => c.includes("fetch") || c.includes("rebase"))).toEqual([]);
+    }
   });
 
   it("fails with the push error when the push after the rebase is refused", async () => {

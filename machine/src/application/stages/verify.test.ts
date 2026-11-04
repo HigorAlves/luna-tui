@@ -225,6 +225,16 @@ describe("verifying stage", () => {
       expect(result.detail).not.toHaveProperty("coverage");
     });
 
+    it("treats a report path that is a directory as not found", async () => {
+      const wt = worktree();
+      mkdirSync(join(wt, "coverage", "dir.info"), { recursive: true });
+      const { run, context } = setup({ worktree: wt, lunaChecks: [{ name: "tests", run: "pnpm test", coverage: "coverage/dir.info" }], diffSince: async () => diff });
+      const result = await run(context);
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).not.toHaveProperty("coverage");
+      expect(JSON.stringify(result.detail?.checks)).toContain("coverage report coverage/dir.info not found");
+    });
+
     it("does not read a report path that climbs out of the worktree", async () => {
       const { run, context } = setup({ worktree: worktree(), lunaChecks: [{ name: "tests", run: "pnpm test", coverage: "../../etc/passwd" }], diffSince: async () => diff });
       const result = await run(context);
@@ -289,6 +299,15 @@ describe("verifying stage", () => {
       const { run, context } = setup({ worktree: wt, pack: review([finding({ path: `../${wt.split("/").pop()}-secret.txt`, line: 1 })]), decide });
       await run(context);
       expect(decide.mock.calls[0]![1].excerpt ?? "").toBe("");
+    });
+
+    it("reads no excerpt from a directory or from a file over the size cap: only regular files of a sane size", async () => {
+      const wt = worktree();
+      writeFileSync(join(wt, "src", "big.ts"), "x".repeat(1_100_000));
+      const decide = vi.fn<Decide>(async () => choose("nit"));
+      const { run, context } = setup({ worktree: wt, pack: review([finding({ path: "src", line: 1, title: "dir" }), finding({ path: "src/big.ts", line: 1, title: "big" })]), decide });
+      await run(context);
+      for (const [, check] of decide.mock.calls) expect(check.excerpt ?? "").toBe("");
     });
 
     it("records nothing without a decide, and a skipped decision counts as skipped", async () => {

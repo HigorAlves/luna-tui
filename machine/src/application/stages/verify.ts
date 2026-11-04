@@ -2,7 +2,7 @@
 // are green hand the change to the verifying review pack. A red check fails the stage with
 // its output as findings, so the next implementing attempt sees what broke.
 import type { CheckSpec, CoverageSummary, DecisionOverrides, Finding, ServiceSpec } from "@hardness/contracts";
-import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
 import { branchBase, changedPaths as hostChangedPaths, diffText, gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
@@ -60,6 +60,16 @@ const COVERAGE_BODY_LINES = 20;
 const CLASSIFY_MAX = 6;
 const EXCERPT_RADIUS = 8;
 const EXCERPT_CAP = 2000;
+/** The host reads nothing but a regular file of a sane size from the worktree: a FIFO or a huge file a stage left would stall the machine. */
+const EXCERPT_FILE_CAP = 1_000_000;
+const REPORT_FILE_CAP = 50_000_000;
+
+/** The text of a regular file under the cap; null for anything else (missing, a directory, a FIFO, too big). */
+async function readBounded(path: string, maxBytes: number): Promise<string | null> {
+  const info = await stat(path).catch(() => null);
+  if (!info?.isFile() || info.size > maxBytes) return null;
+  return readFile(path, "utf8").catch(() => null);
+}
 
 /** The verifier's severity on the classifier's scale. */
 const scaleOf = (severity: string): "blocker" | "should_fix" | "nit" =>
@@ -71,7 +81,7 @@ async function branchDiff(worktreePath: string, repoPath: string): Promise<strin
   return base ? diffText(worktreePath, base, "HEAD") : null;
 }
 
-/** A path under the worktree, or null when it climbs out of it (by `..` or by a symlink). */
+/** A path under the worktree, or null when it climbs out of it (by `..` or by a symlink), or cannot be resolved: closed, never lexical. */
 async function pathUnder(worktree: string, relative: string): Promise<string | null> {
   const path = resolve(worktree, relative);
   if (path !== worktree && !path.startsWith(worktree + sep)) return null;
@@ -79,7 +89,7 @@ async function pathUnder(worktree: string, relative: string): Promise<string | n
     const [real, root] = await Promise.all([realpath(path), realpath(worktree)]);
     return real.startsWith(root + sep) ? real : null;
   } catch {
-    return path;
+    return null;
   }
 }
 
@@ -98,7 +108,7 @@ const answerOf = (detail: Record<string, unknown> | undefined): Record<string, u
 async function excerptOf(worktree: string, finding: Finding): Promise<string> {
   if (!finding.path || finding.line < 1) return "";
   const path = await pathUnder(worktree, finding.path);
-  const text = path ? await readFile(path, "utf8").catch(() => null) : null;
+  const text = path ? await readBounded(path, EXCERPT_FILE_CAP) : null;
   if (text === null) return "";
   return text
     .split("\n")
@@ -253,7 +263,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       if (!check.coverage || !reports.some((r) => r.name === check.name && r.ok === true)) continue;
       const relative = join(check.cwd ?? "", check.coverage);
       const path = await pathUnder(cwd, relative);
-      const text = path ? await readFile(path, "utf8").catch(() => null) : null;
+      const text = path ? await readBounded(path, REPORT_FILE_CAP) : null;
       if (text === null) {
         reports.push({ name: check.name, note: `coverage report ${check.coverage} not found` });
         continue;

@@ -148,10 +148,14 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     /** Why a browser run failed, from the decision pack: an `env_flake` only when it is confident, else the app's fault. */
     const causeOf = async (result: StageResult): Promise<Cause | null> => {
       const decide = deps.decide ?? null;
-      const detail = result.detail as { verdict?: string; summary?: string; criteria?: Array<{ text: string; result: string }> };
+      const detail = result.detail as { verdict?: string; summary?: string; criteria?: unknown[] };
       if (!decide || (detail.verdict !== "fail" && detail.verdict !== "partial")) return null;
       const repoPath = context.task.repoPath ?? null;
-      const rows = (detail.criteria ?? []).filter((c) => c.result !== "pass").map((c) => ({ text: c.text, result: c.result as "fail" | "partial" }));
+      // The rows are the pack's own answer: only a well-formed one that did not pass is a fact for the decision.
+      const rows = (detail.criteria ?? []).flatMap((c): Array<{ text: string; result: "fail" | "partial" }> => {
+        const row = c as { text?: unknown; result?: unknown } | null;
+        return row && typeof row === "object" && typeof row.text === "string" && (row.result === "fail" || row.result === "partial") ? [{ text: row.text, result: row.result }] : [];
+      });
       const { verdict, answer } = await judgeCheck(
         decide,
         "e2e_failure_cause",

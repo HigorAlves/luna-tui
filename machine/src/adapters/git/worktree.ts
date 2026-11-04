@@ -62,6 +62,11 @@ const FETCH_TIMEOUT = 60_000;
 
 export type RebaseResult = { ok: true; onto: string } | { ok: false; error: string; conflicts: string[] };
 
+/** A branch name git would accept as a positional: the default branch is read from a ref in the common git
+ *  dir, which a writable stage can rewrite, so a name shaped like an option is never passed to git. */
+const BRANCH_NAME = /^[A-Za-z0-9][\w./-]*$/;
+export const isBranchName = (name: string): boolean => BRANCH_NAME.test(name) && !name.includes("..") && !name.includes("//") && !name.endsWith("/") && !name.endsWith(".lock");
+
 /** Rebases the task's worktree onto `origin/<default branch>`, once. A rebase that stops is aborted
  *  (the worktree is left as it was) and reports the files in conflict. Never pushes: the caller does. */
 export async function rebaseOntoDefault(
@@ -71,9 +76,10 @@ export async function rebaseOntoDefault(
   defaultBranchOf: (repoPath: string) => Promise<string | null> = defaultBranch,
 ): Promise<RebaseResult> {
   const base = await defaultBranchOf(repoPath);
-  if (!base) return { ok: false, error: "no default branch", conflicts: [] };
+  if (!base || !isBranchName(base)) return { ok: false, error: `no usable default branch: ${JSON.stringify(base ?? null)}`, conflicts: [] };
   const git = (...args: string[]) => ["-c", "core.hooksPath=/dev/null", "-C", worktreePath, ...args];
-  const fetched = await run("git", git("fetch", "--quiet", "origin", base), { timeoutMs: FETCH_TIMEOUT });
+  // `--end-of-options`: whatever the name, it is a ref, never an option.
+  const fetched = await run("git", git("fetch", "--quiet", "--end-of-options", "origin", base), { timeoutMs: FETCH_TIMEOUT });
   if (fetched.code !== 0) return { ok: false, error: `git fetch failed: ${(fetched.stderr || fetched.stdout).trim() || `exit code ${fetched.code}`}`, conflicts: [] };
   const rebased = await run("git", git("rebase", `origin/${base}`));
   if (rebased.code === 0) return { ok: true, onto: `origin/${base}` };
