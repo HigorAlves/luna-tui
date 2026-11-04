@@ -1,4 +1,4 @@
-// Intake's first read of a new issue: issue_classify on Jev, run through PackRuns like a `POST /runs`
+// Intake's first read of a new issue: issue_classify (Jev, else its fallback engine), run through PackRuns like a `POST /runs`
 // call (the stage container, the Jev credential by name, a pack_runs row for its cost, the day's
 // ceiling). Without a Jev credential it says nothing and intake goes on exactly as before; any
 // other failure is logged once per issue and intake goes on as before. Never throws.
@@ -29,7 +29,7 @@ export function createIssueClassifier(deps: { runs: PackRunsPort; now?: () => Da
   return {
     async classify(issue) {
       try {
-        const { answer, usage } = await deps.runs.run({ pack: "issue_classify", engine: "jev", context: { issue } }, INTAKE_CLIENT);
+        const { answer, usage } = await deps.runs.run({ pack: "issue_classify", context: { issue } }, INTAKE_CLIENT);
         return classificationOf(answer, usage.model, now());
       } catch (thrown) {
         if (!(thrown instanceof RunNoCredentialError)) log(`intake: could not classify ${issue.source ?? issue.title}: ${thrown instanceof Error ? thrown.message : String(thrown)}; going on without it`);

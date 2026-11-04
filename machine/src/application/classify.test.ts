@@ -23,11 +23,11 @@ function runs(result: RunResult | Error) {
 }
 
 describe("the intake classifier", () => {
-  it("runs issue_classify on jev with the issue, as intake, and keeps the picks, the lowest confidence, when and the model", async () => {
+  it("runs issue_classify with the issue, as intake, on the pack's own engine choice, and keeps the picks, the lowest confidence, when and the model", async () => {
     const { port, calls } = runs({ answer, usage: { model: "typesafe-ai/jev", engine: "jev", turns: 1, durationMs: 500, costUsd: 0.00003 } });
     const lines: string[] = [];
     const c = await createIssueClassifier({ runs: port, now: () => NOW, log: (l) => lines.push(l) }).classify(issue);
-    expect(calls).toEqual([{ input: { pack: "issue_classify", engine: "jev", context: { issue } }, client: "intake" }]);
+    expect(calls).toEqual([{ input: { pack: "issue_classify", context: { issue } }, client: "intake" }]);
     expect(c).toEqual({ kind: "question", kindConfidence: 0.98, area: "machine", ready: false, size: 0.2, confidence: 0.85, at: NOW.toISOString(), model: "typesafe-ai/jev" });
     expect(lines).toEqual([]);
   });

@@ -169,8 +169,15 @@ export class PackRuns implements PackRunsPort {
     if (problem) throw new EngineNotAllowedError(problem);
     // A context that does not fit the pack is a ZodError: the route's 400.
     const context = contextSchema(pack).parse(request.context);
+    // A decision pack's default engine that cannot run (no credential, runtime off) gives way to
+    // the pack's next fallback that can (RFC 0005 rule 1); an engine the caller named never does.
     const found = await this.deps.credentials.check(engine);
-    if (!found.available) throw unavailable(engine, found);
+    if (!found.available) {
+      if (request.engine !== undefined || PACKS[pack].kind !== "decision") throw unavailable(engine, found);
+      const next = await this.available(pack, engine, found);
+      this.log(`run: ${pack} moves to ${next} for want of ${engine}: ${found.reason}`);
+      engine = next;
+    }
     await this.checkBudget();
 
     const waited = await this.acquire(signal);
@@ -197,6 +204,23 @@ export class PackRuns implements PackRunsPort {
     } finally {
       this.release();
     }
+  }
+
+  /** The first of the pack's fallback engines that can run, when its default cannot (`found` says why).
+   *  With none, throws naming every engine tried and what each lacks. */
+  private async available(pack: ContextPackId, first: EngineId, found: { reason: string; code?: "disabled" | "budget" }): Promise<EngineId> {
+    const problems: Array<[EngineId, { reason: string; code?: "disabled" | "budget" }]> = [[first, found]];
+    for (const candidate of fallbackCandidates(PACKS[pack], [first])) {
+      const check = await this.deps.credentials.check(candidate);
+      if (check.available) return candidate;
+      problems.push([candidate, check]);
+    }
+    if (problems.length === 1) throw unavailable(first, found);
+    const codes = new Set(problems.map(([, p]) => p.code));
+    const message = `no engine can run ${pack}: ${problems.map(([e, p]) => `${e}: ${p.reason}`).join("; ")}`;
+    const only = codes.size === 1 ? [...codes][0] : undefined;
+    if (only === "disabled") throw new RunEngineDisabledError(message);
+    throw only === "budget" ? new RunEngineBudgetError(message) : new RunNoCredentialError(message);
   }
 
   /** The pack's next fallback after a usage limit on each of `tried`: one whose window neither a

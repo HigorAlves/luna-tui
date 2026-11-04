@@ -85,6 +85,22 @@ describe("PackRuns", () => {
     expect(records[1]).toMatchObject({ runtime: "eve", modelId: "gpt-6-luna-fast", sdkVersion: "1.0.0-rc.1", fingerprint: run.fingerprint });
   });
 
+  it("runs a decision pack on its fallback when the default engine has no credential", async () => {
+    const labels = { kind: { choice: "bug", confidence: 0.9 }, area: { choice: "board", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { score: 1, confidence: 0.7 } };
+    const issue = { title: "Board crashes on resize", description: "It panics." };
+    const result = await runs(fakeSandbox(output({ answer: labels })), { credentials: credentials(["jev"]) }).run({ pack: "issue_classify", context: { issue } }, "intake");
+    expect(result.usage.engine).toBe("claude:haiku");
+    expect(StageInput.parse(seen[0]!.input).engine).toBe("claude:haiku");
+    expect(records.at(-1)).toMatchObject({ pack: "issue_classify", engine: "claude:haiku" });
+  });
+
+  it("names every engine it tried when none has a credential, and never swaps an engine the caller named", async () => {
+    const issue = { title: "t", description: "d" };
+    await expect(runs(fakeSandbox(output()), { credentials: credentials(["jev", "claude:haiku"]) }).run({ pack: "issue_classify", context: { issue } }, null)).rejects.toThrow(/jev.*claude:haiku/s);
+    await expect(runs(fakeSandbox(output()), { credentials: credentials(["jev"]) }).run({ pack: "issue_classify", engine: "jev", context: { issue } }, null)).rejects.toBeInstanceOf(RunNoCredentialError);
+    expect(seen).toHaveLength(0);
+  });
+
   it("runs the pack's default engine when none is asked for, and issue_classify and jira_intake with their own contexts", async () => {
     await runs(fakeSandbox(output())).run({ pack: "chat_triage", context: { chat } }, null);
     expect(StageInput.parse(seen[0]!.input).engine).toBe("claude:haiku");
