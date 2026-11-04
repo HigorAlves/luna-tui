@@ -2,7 +2,7 @@
 // in plain words, then the rule that the answer is the JSON the schema asks for, with a confidence
 // per question. Jev gets the questions on its own wire (runtimes/jev/questions.ts); every other
 // runtime renders this text and asks for structured output on `answerJsonSchema(pack)`.
-import type { PlanContext, Question, QuestionSet, StageInput } from "@hardness/contracts";
+import type { CheckContext, PlanContext, Question, QuestionSet, StageInput } from "@hardness/contracts";
 
 /** What a decision reads: the issue as intake sent it. */
 export type DecisionState = {
@@ -38,9 +38,34 @@ export function renderPlan(plan: PlanContext): string {
   ].join("\n");
 }
 
+const bullets = (title: string, items: string[] | undefined): string[] => (items?.length ? [`${title}:\n${items.map((i) => `- ${i}`).join("\n")}`] : []);
+
+/** A check context as text: a red's slice and failing output, or a change's scope facts. */
+export function renderCheck(check: CheckContext): string {
+  if (check.kind === "red") {
+    return [
+      ...(check.slice ? [`Slice ${check.slice.id}: ${check.slice.title}`, ...bullets("Acceptance", check.slice.acceptance)] : []),
+      `Failing output:\n${check.output ?? "(none)"}`,
+    ].join("\n");
+  }
+  return [
+    ...bullets("Planned files", check.planned),
+    ...bullets("Changed files", check.changed),
+    ...bullets("Not planned and not declared", check.undeclared),
+    ...bullets("Declared out-of-map files", check.declared?.map((d) => `${d.path}: ${d.reason}`)),
+    ...bullets("Removed tests", check.removedTests),
+    ...bullets("New dependencies", check.newDependencies),
+    ...bullets("Added TODOs", check.todos),
+    ...bullets("Secret-looking additions", check.secrets),
+    ...(check.diffSummary ? [`Summary: ${check.diffSummary}`] : []),
+  ].join("\n");
+}
+
 /** The issue intake sent, else a plan context rendered, else the task's own title and description. */
 export function stateOf(input: StageInput): DecisionState {
   const plan = input.context.plan;
+  const check = input.context.check;
+  if (check) return { title: check.kind === "red" ? `Red check: slice ${check.slice?.id ?? "?"}, ${check.slice?.title ?? "?"}` : "Scope check", description: renderCheck(check) };
   if (plan) return { title: plan.brief.split("\n")[0]!, description: renderPlan(plan) };
   const { title, description, labels, source } = input.context.issue ?? { title: input.task.title, description: input.task.description };
   return { title, description, ...(labels && { labels }), ...(source && { source }) };

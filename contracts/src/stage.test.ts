@@ -199,9 +199,9 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check"].sort(),
     );
-    const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage"];
+    const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "red_check", "scope_check"];
     // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
     const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "code_map"];
     for (const pack of PackId.options) {

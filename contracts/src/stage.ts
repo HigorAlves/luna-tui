@@ -117,6 +117,9 @@ export const PackId = z.enum([
   "risk_score",
   "coverage_check",
   "plan_check",
+  // Decisions on the Build stage's own work (a check context, run on demand by the build watch): is a red right, is a change in scope.
+  "red_check",
+  "scope_check",
   // Not a task stage: the replay evals' judge, grading another pack's answer to an eval case.
   "eval_judge",
   // Not a task stage: triages a batch of chat items (Slack or Teams) a client sends to POST /runs.
@@ -492,6 +495,24 @@ export const PlanContext = z.object({
 });
 export type PlanContext = z.infer<typeof PlanContext>;
 
+/** What the build checks (red_check, scope_check) judge: a red slice's failing output, or the facts of a change's scope. */
+export const CheckContext = z.object({
+  kind: z.enum(["red", "scope"]),
+  slice: z.object({ id: z.number().int(), title: z.string(), acceptance: z.array(z.string()) }).optional(),
+  /** red: the failing output's tail. */
+  output: z.string().optional(),
+  planned: z.array(z.string()).optional(),
+  changed: z.array(z.string()).optional(),
+  declared: z.array(z.object({ path: z.string(), reason: z.string() })).optional(),
+  undeclared: z.array(z.string()).optional(),
+  removedTests: z.array(z.string()).optional(),
+  newDependencies: z.array(z.string()).optional(),
+  todos: z.array(z.string()).optional(),
+  secrets: z.array(z.string()).optional(),
+  diffSummary: z.string().optional(),
+});
+export type CheckContext = z.infer<typeof CheckContext>;
+
 /** What shows a change does what the ticket asked, kept on the task for the person who approves it. */
 export const EvidencePack = z.object({
   summary: z.string(),
@@ -637,6 +658,8 @@ export const StageInput = z.object({
     issue: IssueContext.nullable().optional(),
     /** For risk_score, coverage_check and plan_check: the plan to judge; for the plan stage's second rounds, what to fix. */
     plan: PlanContext.nullable().optional(),
+    /** For red_check and scope_check: what to judge about the Build stage's work. */
+    check: CheckContext.nullable().optional(),
     /** For the eval_judge pack: the case, its expectation and the answer to grade. */
     eval: EvalJudgeContext.nullable().optional(),
     /** For chat_triage: the chat batch; the task is synthetic and there is no worktree. */

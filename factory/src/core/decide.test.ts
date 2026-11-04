@@ -1,7 +1,7 @@
 import { PACKS, type StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { decisionSummary, renderDecision, renderPlan, stateOf } from "./decide.ts";
+import { decisionSummary, renderCheck, renderDecision, renderPlan, stateOf } from "./decide.ts";
 
 const questions = PACKS.triage_signals.questions;
 
@@ -66,6 +66,25 @@ describe("a plan as the state", () => {
     expect(text.indexOf("Brief: Guard the empty list")).toBeGreaterThan(-1);
     expect(text.indexOf("Brief:")).toBeLessThan(text.indexOf("# Questions"));
     expect(text).toContain("## fits_record (score)");
+  });
+});
+
+describe("a check context", () => {
+  const base = { schema: 3, stage: "red_check", pack: "red_check", attempt: 1, task: { id: "t", title: "t", description: "", criteria: [], repoPath: "", branch: "", source: null }, plan: null, decisions: [], priorFindings: [], limits: { maxTurns: 1, timeoutMs: 1 }, env: {} };
+
+  it("renders a red's slice, acceptance and failing output", () => {
+    const check = { kind: "red", slice: { id: 2, title: "Export endpoint", acceptance: ["returns csv", "404 on unknown id"] }, output: "AssertionError: expected 404" };
+    const state = stateOf({ ...base, context: { projectContext: null, check } } as never);
+    expect(state.title).toBe("Red check: slice 2, Export endpoint");
+    expect(state.description).toContain("- returns csv");
+    expect(state.description).toContain("AssertionError: expected 404");
+    expect(renderCheck(check as never)).toBe(state.description);
+  });
+
+  it("renders a scope's planned, changed, undeclared, declared, removed, dependency, TODO and secret facts", () => {
+    const check = { kind: "scope", planned: ["a.ts"], changed: ["a.ts", "b.ts"], undeclared: ["b.ts"], declared: [{ path: "c.ts", reason: "shared helper" }], removedTests: ["a.test.ts"], newDependencies: ["left-pad"], todos: ["a.ts: TODO fix"], secrets: [".env"], diffSummary: "two files" };
+    const text = stateOf({ ...base, context: { projectContext: null, check } } as never).description;
+    for (const part of ["Planned files:\n- a.ts", "Changed files:\n- a.ts\n- b.ts", "Not planned and not declared:\n- b.ts", "- c.ts: shared helper", "Removed tests:\n- a.test.ts", "New dependencies:\n- left-pad", "Added TODOs:\n- a.ts: TODO fix", "Secret-looking additions:\n- .env", "Summary: two files"]) expect(text).toContain(part);
   });
 });
 

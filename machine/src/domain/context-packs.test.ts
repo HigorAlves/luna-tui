@@ -16,7 +16,7 @@ describe("context-only packs", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "coverage_check", "jira_intake", "plan_check", "risk_score", "slack_triage", "triage_signals"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "coverage_check", "jira_intake", "plan_check", "red_check", "risk_score", "scope_check", "slack_triage", "triage_signals"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
@@ -59,6 +59,17 @@ describe("buildContextPackInput", () => {
       const input = buildContextPackInput(pack, { plan });
       expect(StageInput.parse(input)).toEqual(input);
       expect(input).toMatchObject({ pack, stage: pack, attempt: 1, task: { title: "Guard the empty list", repoPath: "" }, plan: null, context: { projectContext: null, plan }, limits: { maxTurns: 1 } });
+    }
+  });
+
+  it("builds the build checks' input with the check under context.check", () => {
+    for (const pack of ["red_check", "scope_check"] as const) {
+      const check = { kind: pack === "red_check" ? ("red" as const) : ("scope" as const), output: "AssertionError" };
+      expect(contextSchema(pack).safeParse({ check }).success).toBe(true);
+      expect(contextSchema(pack).safeParse({ plan }).success).toBe(false);
+      const input = buildContextPackInput(pack, { check });
+      expect(StageInput.parse(input)).toEqual(input);
+      expect(input).toMatchObject({ pack, stage: pack, task: { title: pack === "red_check" ? "Red check" : "Scope check", repoPath: "" }, context: { projectContext: null, check }, limits: { maxTurns: 1 } });
     }
   });
 

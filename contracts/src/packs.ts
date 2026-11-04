@@ -407,13 +407,28 @@ const PLAN_CHECK_QUESTIONS: QuestionSet = {
   touchpoints_in_map: { type: "yesno", instructions: "Does every slice touch only files the code map names, or files it declares and explains? Answer yes when the plan has no code map." },
 };
 
+/** What red_check asks of a slice's failing test. */
+const RED_CHECK_QUESTIONS: QuestionSet = {
+  right_reason: { type: "yesno", instructions: "Does the output show the test failing because the behaviour is missing, not because of a typo, a missing import, a wrong path or a broken fixture?" },
+  not_tautological: { type: "yesno", instructions: "Would this test still fail if the behaviour were absent: it asserts the behaviour, not its own setup?" },
+};
+
+/** What scope_check asks of the facts the machine computed over a change. */
+const SCOPE_CHECK_QUESTIONS: QuestionSet = {
+  planned_or_declared: { type: "yesno", instructions: "Is every changed file either planned (in the planned files) or declared with a reason that justifies it? The undeclared files are listed; any of them is a no." },
+  no_new_dependency: { type: "yesno", instructions: "Does the change add no dependency, or only ones the plan or a declared reason calls for? The new dependencies are listed." },
+  no_secret_or_pii: { type: "yesno", instructions: "Do the secret-looking additions contain no real secret or personal data? Answer yes when the list is empty or holds only obvious placeholders." },
+  no_test_removed: { type: "yesno", instructions: "Does the change remove no test? The removed tests are listed; a test removed with the code it covered still counts as removed unless a declared reason explains it." },
+  no_todo: { type: "yesno", instructions: "Does the change leave no TODO, FIXME or XXX that stands in for work the slice should have done? The added ones are listed." },
+};
+
 /** The packs a decision model answers; every other pack is a role's or a script's. */
-type DecisionPackId = "triage_signals" | "risk_score" | "coverage_check" | "plan_check";
+type DecisionPackId = "triage_signals" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check";
 
 /** The engines a decision pack on the plan context runs on: Jev, else a small Claude or Codex model. */
 const DECISION_ENGINES = { default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] } satisfies AgentPack["engines"];
 
-const planDecision = (id: "risk_score" | "coverage_check" | "plan_check", questions: QuestionSet): DecisionPack => ({
+const planDecision = (id: "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check", questions: QuestionSet): DecisionPack => ({
   id,
   kind: "decision",
   questions,
@@ -759,6 +774,9 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
   risk_score: { ...planDecision("risk_score", RISK_QUESTIONS) },
   coverage_check: { ...planDecision("coverage_check", COVERAGE_QUESTIONS) },
   plan_check: { ...planDecision("plan_check", PLAN_CHECK_QUESTIONS) },
+  // The Build stage's decisions: each reads a check context, one call, no worktree.
+  red_check: { ...planDecision("red_check", RED_CHECK_QUESTIONS) },
+  scope_check: { ...planDecision("scope_check", SCOPE_CHECK_QUESTIONS) },
 };
 
 type Choice = { choice: string; confidence: number };

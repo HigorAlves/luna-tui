@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, type CheckSpec, type CiContext, type EngineId, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type ChatTriageContext, type CheckContext, type CheckSpec, type CiContext, type EngineId, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -200,17 +200,18 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
   const issue: IssueContext | null = "issue" in context ? context.issue : null;
   const chat: ChatTriageContext | null = "chat" in context ? context.chat : null;
   const plan: PlanContext | null = "plan" in context ? context.plan : null;
+  const check: CheckContext | null = "check" in context ? context.check : null;
   return {
     schema: 3,
     stage: pack,
     pack,
     ...(engine ? { engine } : {}),
     attempt: 1,
-    task: { id: pack.replace(/_/g, "-"), title: issue?.title ?? plan?.brief.split("\n")[0] ?? "Chat triage", description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
+    task: { id: pack.replace(/_/g, "-"), title: issue?.title ?? plan?.brief.split("\n")[0] ?? (check ? (check.kind === "red" ? "Red check" : "Scope check") : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
     decisions: [],
     priorFindings: [],
-    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(plan ? { plan } : {}) },
+    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}) },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

@@ -99,6 +99,18 @@ describe("the plan stage's decision packs", () => {
     expect(pack.questions.fits_record).toMatchObject({ type: "score", rubric: { no: expect.any(String), partly: expect.any(String), yes: expect.any(String) } });
   });
 
+  it("red_check asks whether the red is for the right reason and the test asserts the behaviour; scope_check asks five yes/no questions over the facts", () => {
+    expect(Object.keys(PACKS.red_check.questions)).toEqual(["right_reason", "not_tautological"]);
+    expect(PACKS.red_check.questions.right_reason).toMatchObject({ type: "yesno", instructions: expect.stringContaining("missing import") });
+    expect(Object.keys(PACKS.scope_check.questions)).toEqual(["planned_or_declared", "no_new_dependency", "no_secret_or_pii", "no_test_removed", "no_todo"]);
+    for (const q of Object.values(PACKS.scope_check.questions)) expect(q.type).toBe("yesno");
+    for (const pack of [PACKS.red_check, PACKS.scope_check]) {
+      expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
+      expect(Object.keys(pack.policy).sort()).toEqual(Object.keys(pack.questions).sort());
+      expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: 1, timeoutMs: pack.timeoutMs, writable: false });
+    }
+  });
+
   it("all three run on Jev by default and a small Claude or Codex model when it is absent, with a bar per question", () => {
     for (const pack of [PACKS.risk_score, PACKS.coverage_check, PACKS.plan_check]) {
       expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });

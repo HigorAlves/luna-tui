@@ -20,6 +20,9 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   risk_score: [],
   coverage_check: [],
   plan_check: [],
+  // Decisions on the Build stage's work, run on demand by the build watch.
+  red_check: [],
+  scope_check: [],
   eval_judge: [],
   chat_triage: [],
 };
