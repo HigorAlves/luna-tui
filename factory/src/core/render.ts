@@ -192,6 +192,13 @@ export interface RenderInput {
   projectContext?: string | null;
 }
 
+/** The line that says where the code graph is, and how far to trust it. */
+function graphText(graph: StageInput["context"]["graph"]): string {
+  if (!graph) return "Code graph: (none: use Glob, Grep and Read)";
+  const built = `built at ${graph.commit.slice(0, 7)} on ${graph.builtAt.slice(0, 10)}`;
+  return `Code graph: ${graph.path}, ${built} (${graph.fresh ? "fresh" : "stale: the base commit is newer; prefer Grep for changed areas"})`;
+}
+
 /** The prompt the model gets. */
 export function renderPrompt({ pack, input, template, projectContext }: RenderInput): string {
   const agent = pack.agent ?? "script";
@@ -229,6 +236,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
       }),
     ),
     "{{context.baseCommit}}": txt(input.context.baseCommit),
+    "{{context.graph}}": graphText(input.context.graph),
     "{{context.ci}}": ciText(input.context.ci),
     "{{context.review}}": reviewText(input.context.review),
     "{{context.threads}}": threadsText(input.context.threads),

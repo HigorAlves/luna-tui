@@ -17,6 +17,11 @@ Branch: {{task.branch}}
 ## Answers and decisions so far
 {{decisions}}
 
+## Code graph
+{{context.graph}}
+
+When it is fresh, follow the `code-discovery` skill: query it with `graphify <verb> … --graph <the path above>` before grepping.
+
 ## Project context
 {{context.projectContext}}
 

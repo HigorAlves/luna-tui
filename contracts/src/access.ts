@@ -39,7 +39,7 @@ export function access(...parts: Partial<Access>[]): Access {
 }
 
 /** The commands that only read: all a read-only helper keeps of its parent's list. */
-const READING_COMMANDS: ReadonlySet<string> = new Set(["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse", "git diff", "git log", "git show", "git merge-base", "git rev-list", "git blame", "git status", "git ls-files", "gh pr view", "gh pr diff", "gh issue view"]);
+const READING_COMMANDS: ReadonlySet<string> = new Set(["cat", "ls", "head", "tail", "wc", "pwd", "echo", "git branch --show-current", "git rev-parse", "git diff", "git log", "git show", "git merge-base", "git rev-list", "git blame", "git status", "git ls-files", "gh pr view", "gh pr diff", "gh issue view", "graphify query", "graphify explain", "graphify path", "graphify affected", "graphify god-nodes"]);
 
 /** `access` narrowed to reading: no writes, subagents, skills or luna tools, and only the
  *  commands that read. What a helper's child run gets of its parent's access. */

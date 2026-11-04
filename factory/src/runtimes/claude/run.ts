@@ -11,6 +11,7 @@ import { decisionSummary, renderDecision, stateOf } from "../../core/decide.ts";
 import { DELEGATE } from "../../core/delegate.ts";
 import { CallJoin } from "../../core/events.ts";
 import type { GuardContext } from "../../core/guards.ts";
+import { GRAPH_ROOT } from "../../core/roots.ts";
 
 import { EMPTY_RUN, type RunOutcome, timeRanOut } from "../../core/output.ts";
 import { FACTORY_RULES } from "../../core/render.ts";
@@ -54,7 +55,7 @@ export function guardPolicy({ pack, input, paths }: Pick<RunContext, "pack" | "i
     branchPrefix: branchPrefixFor(input.task),
     workRoot: paths.work,
     outRoot: paths.out,
-    roots: { scratch: paths.scratch, read: [paths.input, join(paths.factoryRoot, "plugin")] },
+    roots: { scratch: paths.scratch, read: [paths.input, join(paths.factoryRoot, "plugin"), GRAPH_ROOT] },
     web: pack.kind === "agent" && pack.access.web,
     // e2e signs in with the credentials its targets name (`env:QA_PASSWORD`), inline as "$QA_PASSWORD".
     expandable: (input.context.qaTargets ?? []).flatMap((t) => (t.credential?.startsWith("env:") ? [t.credential.slice(4)] : [])),

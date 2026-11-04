@@ -19,6 +19,11 @@ These are a small model's guesses with its confidence; a flagged one is yours to
 ## Answers and decisions so far
 {{decisions}}
 
+## Code graph
+{{context.graph}}
+
+When it is fresh, follow the `code-discovery` skill: query it with `graphify <verb> … --graph <the path above>` before grepping.
+
 ## Project context
 {{context.projectContext}}
 

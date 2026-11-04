@@ -30,6 +30,7 @@ import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
 import { pickEngine } from "../engine.ts";
+import type { Graph } from "../graph.ts";
 import { PolicyStore } from "../policy.ts";
 import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
 
@@ -51,6 +52,10 @@ export interface AgentDeps {
   policies?: PolicyStore;
   /** The task's record (last implementing ledger, every run): implementing resumes its ledger from it, the retro reads it. */
   history?: (taskId: string) => Promise<{ ledger: Ledger | null; runs: RunSummary[] }>;
+  /** The machine's code graphs: a repo's current one is mounted read-only at /graph in every stage. */
+  graph?: Graph;
+  /** Asked for when a repo has no graph yet, so the first build starts without a stage waiting on it. */
+  ensureGraph?: (repoPath: string) => void;
   /** Runs a host command; the locked-test replay uses it for the project's test command. */
   exec?: (
     command: string,
@@ -66,6 +71,9 @@ const TASK_BRANCH_PREFIX = "task/";
 const LOCKED_REPLAY_TIMEOUT_MS = 10 * 60_000;
 
 const MINUTE = 60_000;
+/** Where a repo's graph is mounted in a stage container, and the file the `graphify` verbs read. */
+const GRAPH_MOUNT = "/graph";
+const GRAPH_FILE = "/graph/graphify-out/graph.json";
 /** Kept read-only inside a writable stage's git dir: a planted hook or a rewritten config
  *  would otherwise run on the host, as you, at the next git command the machine issues. */
 const GIT_READ_ONLY = ["hooks", "config"];
@@ -141,6 +149,16 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   // An engine asked for that gave way to the default is said on the task as it starts, not only in the run's events.
   if ("note" in choice && choice.note) await context.note?.(choice.note).catch(() => {});
 
+  // The repo's code graph, read-only at /graph, with how current it is against where this task forked.
+  const baseCommit = await branchBase(workspace.path, task.repoPath);
+  const graphStamp = deps.graph && policy.graph ? await deps.graph.stampOf(task.repoPath) : null;
+  const graphDir = graphStamp ? deps.graph!.currentDir(task.repoPath) : null;
+  if (deps.graph && policy.graph && !graphDir) deps.ensureGraph?.(task.repoPath);
+  const graphContext =
+    graphStamp && graphDir
+      ? { path: GRAPH_FILE, commit: graphStamp.commit, builtAt: graphStamp.builtAt, fresh: baseCommit ? await deps.graph!.isFresh(task.repoPath, graphStamp, baseCommit) : true }
+      : null;
+
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
@@ -150,7 +168,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     attempt: context.attempt,
     approvals: context.approvals,
     priorFindings: pack === "implementing" ? (context.priorFindings ?? []) : [],
-    baseCommit: await branchBase(workspace.path, task.repoPath),
+    baseCommit,
+    graph: graphContext,
     ci: extra.ci ?? null,
     review: extra.review ?? null,
     threads: extra.threads ?? null,
@@ -203,6 +222,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     timeoutMs: input.limits.timeoutMs,
     credential: { env: credential.env, mounts: credential.mounts },
     labels: { "dev.hardness.task": task.id },
+    ...(graphContext && graphDir ? { mounts: [{ host: graphDir, container: GRAPH_MOUNT, readOnly: true }], extraEnv: { LUNA_GRAPH: GRAPH_FILE } } : {}),
     signal: context.signal,
     // The tab's label names the repo too: five repos' Build tabs read apart.
     onStarted: (name) =>

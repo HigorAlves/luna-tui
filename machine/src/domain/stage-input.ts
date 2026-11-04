@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, type CheckSpec, type CiContext, type EngineId, type Finding, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type ChatTriageContext, type CheckSpec, type CiContext, type EngineId, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -84,6 +84,8 @@ export function buildStageInput(opts: {
   review?: ReviewContext | null;
   /** For addressing (a PR task): the unresolved threads the host fetched. */
   threads?: ThreadsContext | null;
+  /** Where the repo's code graph is in the container and how current it is; null when it has none. */
+  graph?: GraphContext | null;
 }): StageInput {
   const { task, stage, attempt, approvals } = opts;
   const pack = opts.pack ?? (stage as PackId);
@@ -127,6 +129,7 @@ export function buildStageInput(opts: {
         pack === "verifying" || (pack === "implementing" && !opts.holdoutCases) ? checkedCases(approvals) : [],
       baseCommit: opts.baseCommit ?? null,
       ci: opts.ci ?? null,
+      graph: opts.graph ?? null,
       ...(opts.plan ? { plan: opts.plan } : {}),
       ...(pack === "e2e" && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
       ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),

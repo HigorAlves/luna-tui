@@ -1,35 +1,31 @@
 ---
 name: code-discovery
-description: Use when discovering or navigating a codebase before planning, implementing, debugging, or refactoring — prefer a Graphify code-graph query over broad Glob/Grep/Read to cut token cost, with automatic fallback to grep when Graphify is absent, stale, or unhealthy.
+description: Use when discovering or navigating a codebase before planning, implementing, debugging, or refactoring — query the repository's read-only Graphify code graph at /graph first, and fall back to Glob, Grep and Read when there is none or the prompt says it is stale.
 ---
 
 # Code Discovery
 
-Discovery — finding the code relevant to a task before changing it — is the largest easily-wasted token cost in a session. When [Graphify](https://github.com/Graphify-Labs/graphify) is available, query the pre-built code graph and `Read` only the cited `source_location`s instead of grepping the tree. Graphify is optional and pre-1.0: every step below is guarded and **falls back to plain Glob/Grep/Read** — discovery never hard-blocks on it.
+Discovery — finding the code relevant to a task before changing it — is the largest easily-wasted token cost in a stage. The machine keeps one [Graphify](https://github.com/Graphify-Labs/graphify) code graph per repository, built from the default branch, and mounts it **read-only** at `/graph`. Query it and `Read` only the cited `source_location`s instead of grepping the tree. Every step below is guarded and **falls back to plain Glob/Grep/Read** — discovery never hard-blocks on the graph.
 
 ## The protocol
 
-1. **Detect + health-check.** `command -v graphify`; graph exists at `graphify-out/graph.json`; graph fresh (`built_at_commit` in graph.json == `git rev-parse HEAD`, or `graphify check-update .` is clean). Binary absent → step 5; never install it.
-2. **Build/refresh when missing or stale** — pure local AST, no API key, seconds: `graphify extract . --code-only` (missing) or `graphify update .` (stale). Just do it. Build fails → step 5, no retry loop. Never run a semantic (non-`--code-only`) build for discovery.
-3. **Load lessons once, if present.** `Read` `graphify-out/reflections/LESSONS.md` before the first query (bounded ≈1500 tokens); prefer its listed nodes, skip its dead ends. Lessons are hints, not ground truth. Absent → skip silently. You only *consume* lessons — never record them; surface which graph nodes you relied on in your summary.
-4. **Query-first.** Answer structural questions by traversal, most-specific verb first:
+1. **Detect.** The `Code graph:` line of your prompt names the graph file (`/graph/graphify-out/graph.json`) and says whether it is fresh; `LUNA_GRAPH` holds the same path. `(none…)`, an unset `LUNA_GRAPH` or a missing file → step 4. A stage never builds or updates a graph: `/graph` is read-only, and the machine rebuilds it when the default branch moves.
+2. **Freshness comes from the prompt.** `(fresh)`: trust it for where things are. `(stale: …)`: the base commit is newer than the graph, so use it for leads only and `Grep` the areas the task changes.
+3. **Query-first.** Answer structural questions by traversal, most-specific verb first, always with `--graph` and the literal path (the bash tool does not expand variables):
    ```bash
-   graphify query "where is auth wired to the database?" --budget 1500
-   graphify explain "RateLimiter"          # one symbol and its connections
-   graphify path "UserService" "DatabasePool"
-   graphify affected "processRefund" --depth 2   # reverse blast radius — leads, not verdicts
+   graphify query "where is auth wired to the database?" --graph /graph/graphify-out/graph.json --budget 1500
+   graphify explain "RateLimiter" --graph /graph/graphify-out/graph.json
+   graphify path "UserService" "DatabasePool" --graph /graph/graphify-out/graph.json
+   graphify affected "processRefund" --depth 2 --graph /graph/graphify-out/graph.json   # reverse blast radius: leads, not verdicts
+   graphify god-nodes --graph /graph/graphify-out/graph.json
    ```
-   Then `Read` only the cited `source_location`s. Noisy answer → raise `--budget` or rephrase before abandoning the graph. Verify every cited caller by reading it — never claim "all callers handled" from graph output alone, least of all from a stale graph. A verb that errors or emits unparseable output → treat the graph as unavailable for that question and fall back (probe new verbs with `graphify <verb> --help`).
-5. **Fallback** (absent / stale / failed / empty): `Glob` candidates, `Grep` symbols, `Read` immediate dependencies. Graceful degradation, not an error — say nothing alarming.
-6. **Keep the graph out of version control** (repo-local exclude, no tracked-file diff):
-   ```bash
-   grep -qxF 'graphify-out/' .git/info/exclude 2>/dev/null || echo 'graphify-out/' >> .git/info/exclude
-   ```
+   Then `Read` only the cited `source_location`s. Noisy answer → raise `--budget` or rephrase before abandoning the graph. Verify every cited caller by reading it. A verb that errors or emits unparseable output → treat the graph as unavailable for that question and fall back.
+4. **Fallback** (none / stale area / failed / empty): `Glob` candidates, `Grep` symbols, `Read` immediate dependencies. Graceful degradation, not an error.
 
 ## Honesty rules
 
 - Never claim you used the graph when you grepped, or vice-versa.
 - The graph points; the code decides — read cited sources before asserting.
-- Freshness is load-bearing for any completeness claim: stale graph → refresh or grep the changed area.
+- Never claim "all callers handled" from graph output alone, least of all from a stale graph.
 
-Deep detail — verb catalog with caveats, `--budget` discipline, LESSONS.md mechanics, worktree exclude paths: [GRAPHIFY.md](references/GRAPHIFY.md) (this body is self-sufficient; read the reference only when you need the full verb surface).
+Deep detail — verb catalog and caveats, `--budget` discipline: [GRAPHIFY.md](references/GRAPHIFY.md) (this body is self-sufficient).

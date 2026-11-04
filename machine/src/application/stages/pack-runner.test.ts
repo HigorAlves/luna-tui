@@ -11,6 +11,7 @@ import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
 import type { StageContext } from "../ports.ts";
+import type { Graph, GraphStamp } from "../graph.ts";
 import { engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "../engine-gates.ts";
 
 const git = (cwd: string, ...args: string[]) =>
@@ -191,6 +192,45 @@ describe("agent stages through packs", () => {
     // A persisted branch that is none of the pipeline's is still refused.
     const main = { ...linked, task: { ...linked.task, branch: "main", worktreePath: repo } };
     expect(await runners(fakeSandbox(output())).implementing!(main)).toMatchObject({ outcome: "fail", detail: { error: expect.stringContaining("refusing to run implementing on branch main") } });
+  });
+
+  describe("the code graph", () => {
+    const stamp: GraphStamp = { schema: 1, commit: "c".repeat(40), builtAt: "2026-11-04T10:00:00Z", nodes: 3, edges: 2, communities: 1, graphify: "0.9.34" };
+    const graphOf = (has: boolean, fresh = true): Graph => ({
+      stampOf: async () => (has ? stamp : null),
+      currentDir: () => (has ? "/state/graphs/repo/current" : null),
+      build: async () => stamp,
+      isFresh: async () => fresh,
+    });
+    const withGraph = (graph: Graph, ensure?: (repo: string) => void) => agentRunners({ ...deps(fakeSandbox(output())), graph, ensureGraph: ensure });
+
+    it("mounts the repo's current graph read-only at /graph, points LUNA_GRAPH at it and says how fresh it is", async () => {
+      await withGraph(graphOf(true)).triage!(context("triage"));
+      expect(seen!.mounts).toEqual([{ host: "/state/graphs/repo/current", container: "/graph", readOnly: true }]);
+      expect(seen!.extraEnv).toMatchObject({ LUNA_GRAPH: "/graph/graphify-out/graph.json" });
+      expect((seen!.input as unknown as StageInput).context.graph).toEqual({ path: "/graph/graphify-out/graph.json", commit: stamp.commit, builtAt: stamp.builtAt, fresh: true });
+    });
+
+    it("marks a graph older than the base commit stale", async () => {
+      await withGraph(graphOf(true, false)).triage!(context("triage"));
+      expect((seen!.input as unknown as StageInput).context.graph).toMatchObject({ fresh: false });
+    });
+
+    it("mounts nothing and says so when the repo has no graph, and asks for a first build", async () => {
+      const ensured: string[] = [];
+      await withGraph(graphOf(false), (repo) => ensured.push(repo)).triage!(context("triage"));
+      expect(seen!.mounts ?? []).toEqual([]);
+      expect(seen!.extraEnv?.LUNA_GRAPH).toBeUndefined();
+      expect((seen!.input as unknown as StageInput).context.graph).toBeNull();
+      expect(ensured).toEqual([repo]);
+    });
+
+    it("leaves the graph out when the repo's luna.yaml turns it off", async () => {
+      writeFileSync(join(repo, "luna.yaml"), "policy:\n  graph: off\n");
+      await withGraph(graphOf(true)).triage!(context("triage"));
+      expect(seen!.mounts ?? []).toEqual([]);
+      expect((seen!.input as unknown as StageInput).context.graph).toBeNull();
+    });
   });
 
   it("gives the sandbox the repo's cache volume, so a retry or the next task of the repo installs warm", async () => {

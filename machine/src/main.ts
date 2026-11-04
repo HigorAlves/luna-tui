@@ -140,6 +140,8 @@ let pipeline: Pipeline;
 const policies = new PolicyStore();
 /** One Graphify code graph per repo, built from its default branch in the runner image. */
 const graph = graphifyGraph({ stateDir: config.stateDir, image: config.runnerImage, worktreesDir: config.worktreesDir, sandbox: runSandbox });
+/** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
+let graphWatch: GraphWatch | null = null;
 /** Each engine's credential as every part of the machine sees it: an engine on a runtime
  *  MACHINE_DISABLE_RUNTIMES turned off, or at a monthly cap (MACHINE_ENGINE_BUDGETS, a repo's
  *  luna.yaml `budget.engines`), is unavailable, as if its credential were missing. */
@@ -182,6 +184,7 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   credentials,
   triageSignals,
   planDecisions,
+  { graph, ensure: (repoPath) => graphWatch?.ensure(repoPath) },
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
@@ -451,7 +454,7 @@ if (config.jira) {
 }
 
 /** The graph watch: each repo's graph is rebuilt when its default branch moves, and built when it has none. */
-const graphWatch = new GraphWatch({
+graphWatch = new GraphWatch({
   graph,
   policies,
   repos: async () => {
@@ -460,10 +463,10 @@ const graphWatch = new GraphWatch({
     return [...new Set(known)];
   },
 });
-const graphTicker = config.agents && config.graphIntervalSecs !== null ? new Ticker(() => void graphWatch.tick(), config.graphIntervalSecs * 1000) : null;
+const graphTicker = config.agents && config.graphIntervalSecs !== null ? new Ticker(() => void graphWatch?.tick(), config.graphIntervalSecs * 1000) : null;
 if (graphTicker) {
   graphTicker.start();
-  void graphWatch.tick();
+  void graphWatch?.tick();
   console.log(`graph: each repo's code graph rebuilt when its default branch moves, checked every ${config.graphIntervalSecs}s`);
 } else {
   console.log("graph: off (MACHINE_GRAPH_INTERVAL=off or agents off); stages run without a code graph");

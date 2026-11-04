@@ -540,6 +540,16 @@ export const EvalJudgeContext = z.object({
 export type EvalJudgeContext = z.infer<typeof EvalJudgeContext>;
 
 /** Schema 2 adds `context.testCases`; schema 3 renames its `test` field to `approach`. */
+/** Where the repo's code graph is in the stage container, and how current. */
+export const GraphContext = z.object({
+  path: z.string(),
+  commit: z.string(),
+  builtAt: z.string(),
+  /** False when the graph was built from a commit older than the task's base commit. */
+  fresh: z.boolean(),
+});
+export type GraphContext = z.infer<typeof GraphContext>;
+
 export const StageInput = z.object({
   schema: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   stage: z.string(),
@@ -614,6 +624,8 @@ export const StageInput = z.object({
     eval: EvalJudgeContext.nullable().optional(),
     /** For chat_triage: the chat batch; the task is synthetic and there is no worktree. */
     chat: ChatTriageContext.nullable().optional(),
+    /** The repo's Graphify code graph, read-only at /graph; null or absent when it has none. */
+    graph: GraphContext.nullable().optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),

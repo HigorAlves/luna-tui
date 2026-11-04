@@ -176,3 +176,18 @@ describe("a symlink whose target does not exist yet", () => {
     expect(write(join(work, "relative-inside"), WRITABLE)).toEqual({ allow: true });
   });
 });
+
+describe("the code graph root", () => {
+  it("is readable in the Claude and the eve policies, and writable in neither", async () => {
+    const { guardPolicy: claudePolicy } = await import("../runtimes/claude/run.ts");
+    const { guardPolicy: evePolicy } = await import("../runtimes/eve/run.ts");
+    const { PACKS } = await import("@hardness/contracts");
+    const paths = { work, out, scratch, input: join(base, "in"), factoryRoot: base };
+    const input = { task: { branch: "task/x", source: null }, context: {} } as never;
+    for (const policy of [claudePolicy({ pack: PACKS.triage, input, paths } as never), evePolicy(PACKS.triage, { input, paths } as never)]) {
+      expect(policy.roots?.read).toContain("/graph");
+      expect(read("/graph/graphify-out/graph.json", {}, { ...policy, workRoot: work }).allow).toBe(true);
+      expect(write("/graph/graphify-out/graph.json", { ...policy, workRoot: work })).toMatchObject({ allow: false });
+    }
+  });
+});

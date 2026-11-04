@@ -23,6 +23,7 @@ import { type GuardContext, branchPrefixFor } from "../../core/guards.ts";
 import { EMPTY_RUN, type RunOutcome, budgetSpent, timeRanOut } from "../../core/output.ts";
 import { type Instructions, NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
 import { DELEGATE, delegatedHelpers } from "../../core/delegate.ts";
+import { GRAPH_ROOT } from "../../core/roots.ts";
 import { GUARDED, appName, eveTools, instructionParts, tokenBudgetPerTurn } from "./compile.ts";
 import type { EveSecrets } from "./agent/secrets.ts";
 
@@ -53,7 +54,7 @@ function instructions(pack: Pack, factoryRoot: string): Instructions {
 export const eve: Runtime = eveRuntime();
 
 /** The stage's guard policy, as the agent's tools read it from LUNA_EVE_GUARD. */
-function guardPolicy(pack: Pack, { input, paths }: RunContext): GuardContext {
+export function guardPolicy(pack: Pack, { input, paths }: RunContext): GuardContext {
   // A decision pack has no tools: with no commands, no web and nothing to write, every guarded call is refused.
   const access = pack.kind === "agent" ? pack.access : null;
   return {
@@ -66,7 +67,7 @@ function guardPolicy(pack: Pack, { input, paths }: RunContext): GuardContext {
     commands: access?.commands ?? [],
     // The model's tools run as the same user as Codex and the runner: only the run's own roots
     // may be named, never the Codex home, HOME, /proc or the secrets file.
-    roots: { scratch: paths.scratch, read: [paths.input] },
+    roots: { scratch: paths.scratch, read: [paths.input, GRAPH_ROOT] },
     web: access?.web ?? false,
   };
 }

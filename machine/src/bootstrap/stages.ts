@@ -7,6 +7,7 @@ import type { Ledger, RunSummary } from "@hardness/contracts";
 
 import type { Config } from "../config.ts";
 import { type Credentials, machineCredentials, removeStaleCodexTemps } from "../adapters/credentials/index.ts";
+import type { Graph } from "../application/graph.ts";
 import type { Watcher } from "../application/ports.ts";
 import { agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
@@ -56,6 +57,8 @@ export async function buildRealStages(
   triageSignals?: TriageSignalDeps,
   /** The plan stage's decisions (coverage, plan check, risk): `decide` is bound late, once PackRuns exists; null runs the stage without them. */
   planDecisions?: { decide: PlanDeps["decide"] },
+  /** The machine's code graphs, mounted read-only in every stage; `ensure` asks for a first build of a repo with none. */
+  graphs?: { graph: Graph; ensure: (repoPath: string) => void },
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -94,6 +97,7 @@ export async function buildRealStages(
     exec: checksExec,
     policies,
     history,
+    ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure } : {}),
   };
   const verifyPack = (context: StageContext) => runAgent(deps, context, "verifying");
   const agents = agentRunners(deps);

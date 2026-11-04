@@ -97,6 +97,16 @@ describe("renderPrompt", () => {
     expect(bare).toContain("base (none)\nci:\n(none)\ntargets:\n(none)");
   });
 
+  it("says where the code graph is and how fresh, or that there is none", () => {
+    const template = "{{context.graph}}";
+    const graph = { path: "/graph/graphify-out/graph.json", commit: "9c1f0e2a7b3d4e5f", builtAt: "2026-11-04T10:00:00Z", fresh: true };
+    const render = (g: typeof graph | null | undefined) => renderPrompt({ pack: PACKS.implementing, input: { ...input, context: { ...input.context, ...(g === undefined ? {} : { graph: g }) } }, template });
+    expect(render(graph)).toContain("Code graph: /graph/graphify-out/graph.json, built at 9c1f0e2 on 2026-11-04 (fresh)");
+    expect(render({ ...graph, fresh: false })).toContain("Code graph: /graph/graphify-out/graph.json, built at 9c1f0e2 on 2026-11-04 (stale: the base commit is newer; prefer Grep for changed areas)");
+    expect(render(null)).toContain("Code graph: (none: use Glob, Grep and Read)");
+    expect(render(undefined)).toContain("Code graph: (none: use Glob, Grep and Read)");
+  });
+
   it("lists the repo's checks for the packs that run them, as the line to type and where", () => {
     const template = "checks:\n{{context.checks}}";
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }, { name: "lint", run: "pnpm lint" }];

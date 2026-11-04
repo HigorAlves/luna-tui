@@ -121,9 +121,18 @@ describe("buildStageInput", () => {
       { at: "awaiting_approval", decision: "approved", reason: "go", answers: {} },
     ]);
     expect(input.priorFindings.map((f) => f.title)).toEqual(["keep", "edge"]);
-    expect(input.context).toEqual({ projectContext: null, testCases: [], baseCommit: "9c1f0e2a", ci: null });
+    expect(input.context).toEqual({ projectContext: null, testCases: [], baseCommit: "9c1f0e2a", ci: null, graph: null });
     expect(input.limits).toEqual({ maxTurns: 80, timeoutMs: 1_800_000 });
     expect(input.env).toEqual({ LUNA_FACTORY: "1" });
+  });
+
+  it("carries the repo's code graph when the machine has one, null when it has none", () => {
+    const graph = { path: "/graph/graphify-out/graph.json", commit: "9c1f0e2a", builtAt: "2026-11-04T10:00:00Z", fresh: true };
+    const build = (g?: typeof graph | null) => buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [], ...(g !== undefined ? { graph: g } : {}) });
+    expect(build(graph).context.graph).toEqual(graph);
+    expect(StageInput.safeParse(build(graph)).success).toBe(true);
+    expect(build().context.graph).toBeNull();
+    expect(build(null).context.graph).toBeNull();
   });
 
   it("sizes implementing's budget to the plan: turns and time scale with the slice count, up to four times", () => {
@@ -214,7 +223,7 @@ describe("buildStageInput", () => {
       logs: "FAIL src/a.test.ts > boom",
     };
     const input = buildStageInput({ task, stage: "ci_watch", attempt: 1, approvals: [], priorFindings: [], ci });
-    expect(input.context).toEqual({ projectContext: null, testCases: [], baseCommit: null, ci });
+    expect(input.context).toEqual({ projectContext: null, testCases: [], baseCommit: null, ci, graph: null });
     expect(StageInput.safeParse(input).success).toBe(true);
     expect("tests" in input.context).toBe(false);
   });
