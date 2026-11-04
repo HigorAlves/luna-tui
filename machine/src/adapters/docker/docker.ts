@@ -88,6 +88,8 @@ export interface SandboxRun {
   services?: Record<string, ServiceSpec>;
   /** Set by `runSandbox` once the services are up: the network to join and what they export. */
   network?: string | null;
+  /** Join no network at all: for a job that needs none (the graph build parses untrusted code). Ignored when a service network is given. */
+  networkNone?: boolean;
   serviceEnv?: Record<string, string>;
   /** `uid:gid` the container runs as. The run folder, the session dir and the worktree are bind
    *  mounts owned by the host user, so the stage must be that user to write them (the image's
@@ -155,7 +157,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   }
   args.push(...identityEnv(run.gitIdentity));
   for (const [key, value] of Object.entries(run.extraEnv ?? {})) args.push("-e", `${key}=${value}`);
-  args.push(...networkArgs(run.network, run.serviceEnv));
+  args.push(...networkArgs(run.network, run.serviceEnv, run.networkNone));
   const [program, ...rest] = run.entrypoint ?? [];
   if (program) args.push("--entrypoint", program);
   args.push(run.image, ...rest);
@@ -164,8 +166,8 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
 }
 
 /** The service network to join and what the services export, when a run has any. */
-function networkArgs(network: string | null | undefined, serviceEnv: Record<string, string> | undefined): string[] {
-  if (!network) return [];
+function networkArgs(network: string | null | undefined, serviceEnv: Record<string, string> | undefined, none?: boolean): string[] {
+  if (!network) return none ? ["--network", "none"] : [];
   return ["--network", network, ...Object.entries(serviceEnv ?? {}).flatMap(([key, value]) => ["-e", `${key}=${value}`])];
 }
 

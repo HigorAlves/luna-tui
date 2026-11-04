@@ -3,7 +3,7 @@
 // with a `current` symlink to the newest. A build is a sandbox job on the runner image with the
 // entrypoint overridden to `/graph-tools/build.py`, over a clean checkout of the default branch
 // mounted read-only; no model, no credential.
-import { readlinkSync } from "node:fs";
+import { readlinkSync, statSync } from "node:fs";
 import { mkdir, readFile, readdir, rename, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -13,6 +13,8 @@ import { ensureCleanCheckout, graphCheckoutPath, headCommit, isAncestor } from "
 import { repoSlug } from "./slug.ts";
 
 const BUILD_TIMEOUT_MS = 15 * 60_000;
+/** Commit folders kept per repo: the current graph and two older ones a running stage may still mount. */
+export const KEEP_GRAPHS = 3;
 
 export interface GraphGit {
   ensureCleanCheckout(repoPath: string, path: string): Promise<string>;
@@ -55,11 +57,12 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
     await rename(tmp, join(repoDir, "current"));
   }
 
-  /** Drops every commit folder but the new one and the one a running stage may still have mounted. */
-  async function prune(repoDir: string, keep: string[]): Promise<void> {
-    for (const name of await readdir(repoDir).catch(() => [])) {
-      if (/^[0-9a-f]{40}$/.test(name) && !keep.includes(name)) await rm(join(repoDir, name), { recursive: true, force: true });
-    }
+  /** Drops every commit folder but the `KEEP_GRAPHS` newest: a stage that mounted an older graph may run for a
+   *  long time, and the default branch can move more than once meanwhile. */
+  async function prune(repoDir: string): Promise<void> {
+    const commits = (await readdir(repoDir).catch(() => [])).filter((name) => /^[0-9a-f]{40}$/.test(name));
+    const newestFirst = commits.map((name) => ({ name, at: statSync(join(repoDir, name)).mtimeMs })).sort((a, b) => b.at - a.at);
+    for (const { name } of newestFirst.slice(KEEP_GRAPHS)) await rm(join(repoDir, name), { recursive: true, force: true });
   }
 
   return {
@@ -74,7 +77,7 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
 
     async build(repoPath, signal) {
       const repoDir = dirOf(repoPath);
-      const checkout = await git.ensureCleanCheckout(repoPath, graphCheckoutPath(repoPath, deps.worktreesDir));
+      const checkout = await git.ensureCleanCheckout(repoPath, graphCheckoutPath(repoSlug(repoPath), deps.worktreesDir));
       const commit = await git.headCommit(checkout);
       const target = join(repoDir, commit);
       const have = await readStamp(target);
@@ -86,7 +89,6 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       const building = join(repoDir, `building-${commit}`);
       await rm(building, { recursive: true, force: true });
       await mkdir(building, { recursive: true });
-      const previous = current(repoPath);
       let result: SandboxResult;
       try {
         result = await deps.sandbox({
@@ -102,6 +104,8 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
           labels: { luna: "graph", "luna.repo": repoSlug(repoPath) },
           mounts: [{ host: building, container: "/graph", readOnly: false }],
           entrypoint: ["python3", "/graph-tools/build.py", "--input", "/work", "--out", "/graph", "--commit", commit],
+          // Parsing untrusted code needs no network at all.
+          networkNone: true,
           signal,
         });
       } catch (error) {
@@ -117,7 +121,7 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       await rm(target, { recursive: true, force: true });
       await rename(building, target);
       await point(repoDir, commit);
-      await prune(repoDir, [commit, ...(previous ? [previous.split("/").pop()!] : [])]);
+      await prune(repoDir);
       return stamp;
     },
 

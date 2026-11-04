@@ -228,7 +228,9 @@ describe("workspaceFor", () => {
 
 describe("graph helpers", () => {
   it("names the graph checkout beside the intake one", () => {
-    expect(graphCheckoutPath("/r/api", "/wt")).toBe("/wt/api/graph");
+    // Keyed by the graph store's slug, never the basename: two repos named api must not share a checkout.
+    expect(graphCheckoutPath("api-0123abcd", "/wt")).toBe("/wt/api-0123abcd/graph");
+    expect(graphCheckoutPath("api-89efcdef", "/wt")).not.toBe(graphCheckoutPath("api-0123abcd", "/wt"));
   });
 
   it("answers the default branch's head and ancestry", async () => {

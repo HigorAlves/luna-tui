@@ -35,7 +35,7 @@ function setup(opts: { stamps?: Record<string, string>; heads?: Record<string, s
     defaultHead: async (repo) => heads.get(repo)!,
     log: (message) => logs.push(message),
   });
-  return { watch, builds, logs, overlap: () => overlap };
+  return { watch, builds, logs, overlap: () => overlap, setHead: (repo: string, head: string) => heads.set(repo, head) };
 }
 
 describe("GraphWatch", () => {
@@ -59,6 +59,19 @@ describe("GraphWatch", () => {
     await watch.tick();
     expect(builds.sort()).toEqual(["/a", "/b"]);
     expect(logs.join("\n")).toMatch(/\/a.*boom/);
+  });
+
+  it("does not retry a build that failed for the same head; a moved head is tried again", async () => {
+    const { watch, builds, setHead } = setup({ heads: { "/a": "1" }, failing: ["/a"] });
+    await watch.tick();
+    await watch.tick();
+    expect(builds).toEqual(["/a"]);
+    watch.ensure("/a");
+    await watch.idle();
+    expect(builds).toEqual(["/a"]);
+    setHead("/a", "2");
+    await watch.tick();
+    expect(builds).toEqual(["/a", "/a"]);
   });
 
   it("ensure() schedules a first build when there is no graph, without waiting for it", async () => {

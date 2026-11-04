@@ -93,8 +93,9 @@ export function intakeCheckoutPath(repoPath: string, worktreesDir: string): stri
 
 /** The read-only checkout the code graph is built from: `<dir>/<repo>/graph`. */
 export const GRAPH_CHECKOUT = "graph";
-export function graphCheckoutPath(repoPath: string, worktreesDir: string): string {
-  return join(worktreesDir, basename(repoPath), GRAPH_CHECKOUT);
+/** The clean checkout a repo's graph is built from, keyed by the graph store's slug: two repos with one basename never share it. */
+export function graphCheckoutPath(slug: string, worktreesDir: string): string {
+  return join(worktreesDir, slug, GRAPH_CHECKOUT);
 }
 
 /** The commit `origin/<default>` points at after a fetch (the repo's HEAD without an origin). */

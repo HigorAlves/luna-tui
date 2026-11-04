@@ -186,6 +186,14 @@ describe("extra mounts and an entrypoint override", () => {
     expect(args).toEqual(expect.arrayContaining(["-v", "/state/graphs/repo/current:/graph:ro"]));
   });
 
+  it("joins no network when asked and no service network is given", () => {
+    expect(sandboxArgs(run({ networkNone: true }), "/i", "/o")).toEqual(expect.arrayContaining(["--network", "none"]));
+    const withServices = sandboxArgs(run({ networkNone: true, network: "svc-net" }), "/i", "/o");
+    expect(withServices).toEqual(expect.arrayContaining(["--network", "svc-net"]));
+    expect(withServices).not.toContain("none");
+    expect(sandboxArgs(run(), "/i", "/o")).not.toContain("--network");
+  });
+
   it("overrides the entrypoint and passes the rest as the command after the image", () => {
     const args = sandboxArgs(run({ entrypoint: ["python3", "/graph-tools/build.py", "--input", "/work", "--out", "/graph"] }), "/i", "/o");
     const at = args.indexOf("--entrypoint");

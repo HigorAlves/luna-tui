@@ -90,6 +90,23 @@ describe("graphifyGraph.build", () => {
     expect(graph.currentDir(repo)).toBe(join(stateDir, "graphs", repoSlug(repo), next));
   });
 
+  it("keeps the three newest graphs, so a stage that mounted an older one is not pulled out from under", async () => {
+    const { graph, repo, setHead, stateDir } = setup();
+    for (const sha of ["a", "b", "c", "d"]) {
+      setHead(sha.repeat(40));
+      await graph.build(repo);
+    }
+    const kept = readdirSync(join(stateDir, "graphs", repoSlug(repo))).filter((n) => /^[0-9a-f]{40}$/.test(n)).sort();
+    expect(kept).toEqual(["b".repeat(40), "c".repeat(40), "d".repeat(40)]);
+  });
+
+  it("gives the build container no network and the slug-keyed checkout", async () => {
+    const { graph, repo, seen, checkouts, stateDir } = setup();
+    await graph.build(repo);
+    expect(seen[0]!.networkNone).toBe(true);
+    expect(checkouts[0]).toBe(join(stateDir, "wt", repoSlug(repo), "graph"));
+  });
+
   it("leaves no current and throws when the build fails", async () => {
     const { graph, repo, stateDir } = setup(2);
     await expect(graph.build(repo)).rejects.toBeInstanceOf(GraphBuildError);
