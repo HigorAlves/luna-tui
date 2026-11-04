@@ -1,13 +1,19 @@
 import { PACKS, PackId, RUNNING } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { packInfo, packStates } from "./packs.ts";
+import { packForState, packInfo, packStates } from "./packs.ts";
 
 describe("packStates", () => {
   it("is the stage of the same name for a stage pack", () => {
     for (const id of ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing", "addressing"] as const) {
       expect(packStates(id)).toEqual([id]);
     }
+  });
+
+  it("runs the planner in test_design, beside the pack of that name, which the pipeline still picks for the state", () => {
+    expect(packStates("plan")).toEqual(["test_design"]);
+    expect(packStates("test_design")).toEqual(["test_design"]);
+    expect(packForState("test_design")).toBe("test_design");
   });
 
   it("runs the memory review inside shipping, and the inbox and on-demand packs in no task state", () => {

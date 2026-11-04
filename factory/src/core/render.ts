@@ -5,6 +5,7 @@
 // project context, so a test needs no files.
 import type { AgentPack, Pack, StageInput } from "@hardness/contracts";
 import { PACKS, type TaskClassification, answerJsonSchema, classificationLine, verdictOf } from "@hardness/contracts";
+import type { TriageRecord } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
 import { callText } from "./transcript.ts";
@@ -205,6 +206,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{task.criteria}}": bullets(input.task.criteria),
     "{{task.branch}}": txt(input.task.branch),
     "{{task.classification}}": classificationLines(input.task.classification),
+    "{{task.record}}": recordText(input.task.record),
     "{{plan.brief}}": txt(input.plan?.brief),
     "{{plan.criteria}}": bullets(input.plan?.criteria),
     "{{plan.assumptions}}": bullets(input.plan?.assumptions),
@@ -272,7 +274,22 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
  *  rounds to; a signal under the pack's own `proceed` bar is flagged (the factory has no repo
  *  policy). `(none)` when intake never ran triage_signals. */
 export function classificationLines(c: TaskClassification | null | undefined): string {
-  const signals = c?.signals;
+  return signalsLine(c?.signals);
+}
+
+/** What triage recorded, for the planner: the goal, the four grades, why, and the signals it read. */
+export function recordText(record: TriageRecord | null | undefined): string {
+  if (!record) return NONE;
+  const signals = signalsLine(record.signals);
+  return [
+    `Goal: ${record.goal}`,
+    `Kind/size/urgency/risk: ${record.kind} / ${record.size} / ${record.urgency} / ${record.risk}`,
+    `Reason: ${record.reason}`,
+    ...(signals === NONE ? [] : [`Signals: ${signals}`]),
+  ].join("\n");
+}
+
+function signalsLine(signals: TaskClassification["signals"] | undefined): string {
   if (!signals) return NONE;
   const pack = PACKS.triage_signals;
   const parts: string[] = [];

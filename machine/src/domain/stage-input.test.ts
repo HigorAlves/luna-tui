@@ -136,9 +136,9 @@ describe("buildStageInput", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["addressing", "chat_triage", "ci_watch", "e2e", "eval_judge", "evidence", "implementing", "jira_intake", "reviewing", "reviewing_memory", "setup", "slack_triage", "test_design", "triage", "triage_signals", "verifying"],
+      ["addressing", "chat_triage", "ci_watch", "e2e", "eval_judge", "evidence", "implementing", "jira_intake", "plan", "reviewing", "reviewing_memory", "setup", "slack_triage", "test_design", "triage", "triage_signals", "verifying"],
     );
-    expect(Object.keys(PACK_LIMITS)).toHaveLength(16);
+    expect(Object.keys(PACK_LIMITS)).toHaveLength(17);
   });
 
   it("builds slack_triage's input around a synthetic task: the batch in context.slack, no plan, no branch, the pack's limits", () => {
@@ -211,7 +211,7 @@ describe("buildStageInput", () => {
 
   it("hands implementing and verifying the repo's checks from luna.yaml, and no other pack", () => {
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }];
-    const build = (stage: Exclude<PackId, "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
+    const build = (stage: Exclude<PackId, "plan" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
     expect(build("implementing").context.checks).toEqual(checks);
     expect(build("verifying").context.checks).toEqual(checks);
     expect(build("triage").context.checks).toBeUndefined();

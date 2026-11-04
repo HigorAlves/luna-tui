@@ -199,6 +199,17 @@ describe("renderPrompt", () => {
     expect(render({ ...classification, signals: undefined })).toContain("signals: (none)");
   });
 
+  it("renders the triage record for the planner: the goal, the four grades, the reason and the signals; (none) before triage ran", () => {
+    const record = {
+      source: "github", kind: "bug", goal: "Stop the board panicking on resize", size: "small", urgency: "high", risk: "low", reason: "one function, tests exist",
+      signals: { kind: { answer: "bug", confidence: 0.9 }, area: { answer: "board", confidence: 0.55 } },
+      qa: [], decision: "plan", at: "2026-11-04T00:00:00.000Z", model: "m",
+    };
+    const render = (r: unknown) => renderPrompt({ pack: PACKS.plan, input: { ...input, pack: "plan", stage: "test_design", task: { ...input.task, record: r as never } }, template: "{{task.record}}" });
+    expect(render(record)).toContain("Goal: Stop the board panicking on resize\nKind/size/urgency/risk: bug / small / high / low\nReason: one function, tests exist\nSignals: kind bug (0.90) · area board (0.55, flagged)");
+    expect(render(null)).toContain("(none)");
+  });
+
   it("renders the case for eval_judge: the pack, the rubric and the JSON as the runner wrote it", () => {
     const template = "{{context.eval.pack}} {{context.eval.case}}\nrubric: {{context.eval.rubric}}\ninput: {{context.eval.input}}\nchecks: {{context.eval.checks}}\nanswer: {{context.eval.answer}}";
     const judged = { pack: "slack_triage" as const, caseId: "incident", rubric: "  P0 for the outage\n", input: '{"a":1}', checks: "[]", answer: '{"items":[]}' };

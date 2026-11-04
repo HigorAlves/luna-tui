@@ -94,6 +94,8 @@ export const PackId = z.enum([
   "setup",
   "triage",
   "test_design",
+  // The planner: runs in the test_design state (the machine's RUNS_IN), as the first half of the plan stage.
+  "plan",
   "implementing",
   "verifying",
   "e2e",

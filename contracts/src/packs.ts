@@ -16,6 +16,7 @@ import { EscalationReason, Finding, LunaConfig, PackId, Risk, type TaskClassific
 export const AgentRole = z.enum([
   "setup-planner",
   "triage-planner",
+  "planner",
   "test-designer",
   "implementer",
   "verifier",
@@ -116,6 +117,22 @@ export const TriageAnswer = z.object({
   /** For `archive`. */
   archiveReason: z.enum(["duplicate", "out_of_scope", "stale", "not_actionable"]).optional(),
 });
+
+/** The planner's answer: the plan the one approval shows, built from triage's record. Every field but
+ *  `kind` and `summary` is absent on `questions`. */
+export const PlanAnswer = z.object({
+  kind: z.enum(["done", "questions"]),
+  summary: z.string(),
+  brief: z.string().optional(),
+  /** Every record goal and ticket criterion, written to be testable. */
+  criteria: z.array(z.string()).optional(),
+  assumptions: z.array(z.string()).optional(),
+  slices: z.array(Slice).optional(),
+  /** A paragraph a person can follow to undo the change. */
+  rollback: z.string().optional(),
+  questions: z.array(Question).max(3).optional(),
+});
+export type PlanAnswer = z.infer<typeof PlanAnswer>;
 
 export const TestDesignAnswer = z.object({
   kind: z.enum(["done", "questions"]),
@@ -414,6 +431,21 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: TestDesignAnswer,
     template: "test_design.md",
+  },
+  plan: {
+    id: "plan",
+    kind: "agent",
+    agent: "planner",
+    helpers: [],
+    skills: ["writing-plans", "code-discovery"],
+    access: access(READ_ONLY, { web: true, commands: ["gh issue view"], luna: ["decision_get"] }),
+    writable: false,
+    maxTurns: 30,
+    timeoutMs: 10 * MINUTE,
+    engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"], fallback: ["codex:sol", "claude:opus"] },
+    effort: "high",
+    answer: PlanAnswer,
+    template: "plan.md",
   },
   implementing: {
     id: "implementing",

@@ -9,6 +9,7 @@ import {
   CloneInput,
   EvidencePack,
   EvalJudgeAnswer,
+  PlanAnswer,
   EvalJudgeContext,
   JiraIntakeContext,
   TaskClassification,
@@ -195,13 +196,33 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "eval_judge", "chat_triage"].sort(),
+      ["setup", "triage", "test_design", "plan", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "eval_judge", "chat_triage"].sort(),
     );
     const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "eval_judge", "chat_triage"];
+    // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
+    const runsInAnotherState: string[] = ["plan"];
     for (const pack of PackId.options) {
-      if (onDemand.includes(pack)) expect(TaskState.options).not.toContain(pack);
+      if (onDemand.includes(pack) || runsInAnotherState.includes(pack)) expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
     }
+  });
+});
+
+describe("the plan pack", () => {
+  it("is the planner on opus, read-only with the web and the decision tool, 30 turns, answering a plan", () => {
+    expect(PACKS.plan).toMatchObject({
+      kind: "agent", agent: "planner", helpers: [], skills: ["writing-plans", "code-discovery"], writable: false, maxTurns: 30, effort: "high", template: "plan.md",
+      engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"], fallback: ["codex:sol", "claude:opus"] },
+    });
+    expect(PACKS.plan.kind === "agent" && PACKS.plan.access).toMatchObject({ read: true, web: true, write: false, luna: expect.arrayContaining(["decision_get"]) });
+  });
+
+  it("answers done with the plan, or questions", () => {
+    const slice = { title: "s", est_loc: 10, touchpoints: ["a.ts"], acceptance: ["ok"] };
+    const plan = { kind: "done", summary: "s", brief: "b", criteria: ["c"], assumptions: ["a"], slices: [slice], rollback: "revert the commit" };
+    expect(PlanAnswer.parse(plan)).toEqual(plan);
+    expect(PlanAnswer.safeParse({ kind: "questions", summary: "s", questions: [{ question: "q", recommended: "r" }] }).success).toBe(true);
+    expect(PlanAnswer.safeParse({ ...plan, kind: "maybe" }).success).toBe(false);
   });
 });
 

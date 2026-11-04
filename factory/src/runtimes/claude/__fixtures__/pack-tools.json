@@ -108,6 +108,38 @@
       "mcp__luna__decision_get"
     ]
   },
+  "plan": {
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Skill",
+      "mcp__luna__step",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(pwd:*)",
+      "Bash(echo:*)",
+      "Bash(git branch --show-current:*)",
+      "Bash(git rev-parse:*)",
+      "WebFetch",
+      "Bash(gh issue view:*)",
+      "mcp__luna__decision_get"
+    ],
+    "tools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Skill",
+      "mcp__luna__step",
+      "Bash",
+      "WebFetch",
+      "mcp__luna__decision_get"
+    ]
+  },
+
   "implementing": {
     "allowedTools": [
       "Read",
