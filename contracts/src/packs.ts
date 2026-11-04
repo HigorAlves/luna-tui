@@ -589,7 +589,9 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     writable: false,
     maxTurns: 1,
     timeoutMs: 1 * MINUTE,
-    engines: only("jev"),
+    // Jev by default; a small Claude or Codex model behind the same questions and schema when Jev
+    // has no credential (RFC 0005 rule 1). Only calibration quality differs.
+    engines: { default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] },
     answer: answerSchema(ISSUE_QUESTIONS),
   },
 };

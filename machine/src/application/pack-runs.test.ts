@@ -172,7 +172,7 @@ describe("PackRuns", () => {
     });
 
     it("never falls back on a pack with no fallback", async () => {
-      await expect(runs(limitedOn(["jev"])).run({ pack: "issue_classify", context: { issue: { title: "t", description: "d" } } }, null)).rejects.toBeInstanceOf(RunRateLimitedError);
+      await expect(runs(limitedOn(["claude:sonnet"])).run({ pack: "jira_intake", context: { jira: { key: "PLAT-1", url: "https://a.atlassian.net/browse/PLAT-1", summary: "Login", description: "Sign in.", issueType: "Story", priority: null, labels: [], dueAt: null, comments: [], repoPath: null } } }, null)).rejects.toBeInstanceOf(RunRateLimitedError);
       expect(seen).toHaveLength(1);
     });
   });
