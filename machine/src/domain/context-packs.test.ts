@@ -16,7 +16,7 @@ describe("context-only packs", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "coverage_check", "jira_intake", "plan_check", "red_check", "risk_score", "scope_check", "slack_triage", "triage_signals"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "coverage_check", "e2e_failure_cause", "finding_classify", "jira_intake", "plan_check", "red_check", "risk_score", "scope_check", "slack_triage", "triage_signals"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
@@ -71,6 +71,18 @@ describe("buildContextPackInput", () => {
       expect(StageInput.parse(input)).toEqual(input);
       expect(input).toMatchObject({ pack, stage: pack, task: { title: pack === "red_check" ? "Red check" : "Scope check", repoPath: "" }, context: { projectContext: null, check }, limits: { maxTurns: 1 } });
     }
+  });
+
+  it("titles the finding and e2e checks' synthetic task", () => {
+    const finding = { path: "src/a.ts", line: 3, severity: "bug", title: "off by one", body: "loops past the end", confidence: 0.8 };
+    const f = buildContextPackInput("finding_classify", { check: { kind: "finding", finding, excerpt: "for (;;) {}" } });
+    expect(StageInput.parse(f)).toEqual(f);
+    expect(f.task.title).toBe("Finding: off by one");
+    expect(f.context.check).toMatchObject({ kind: "finding", excerpt: "for (;;) {}" });
+    const e2e = { verdict: "fail" as const, summary: "login broke", criteria: [{ text: "login", result: "fail" as const }], attempt: 2 };
+    const e = buildContextPackInput("e2e_failure_cause", { check: { kind: "e2e", e2e } });
+    expect(StageInput.parse(e)).toEqual(e);
+    expect(e.task.title).toBe("E2E failure: attempt 2");
   });
 
   it("gives slack_triage and jira_intake exactly the input their own runners build", () => {

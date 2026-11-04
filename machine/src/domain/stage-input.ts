@@ -8,6 +8,13 @@ import type { ApprovalRow, TaskRow } from "./task.ts";
 
 const MINUTE = 60_000;
 
+/** The synthetic task's title for a check context sent to a decision pack. */
+function checkTitle(check: CheckContext): string {
+  if (check.kind === "finding") return `Finding: ${check.finding?.title ?? "?"}`;
+  if (check.kind === "e2e") return `E2E failure: attempt ${check.e2e?.attempt ?? "?"}`;
+  return check.kind === "red" ? "Red check" : "Scope check";
+}
+
 /** Implementing's turns and time scale with the plan's slice count, up to this many times the pack default. */
 export const BUDGET_SCALE_MAX = 4;
 
@@ -212,7 +219,7 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
     pack,
     ...(engine ? { engine } : {}),
     attempt: 1,
-    task: { id: pack.replace(/_/g, "-"), title: issue?.title ?? plan?.brief.split("\n")[0] ?? (check ? (check.kind === "red" ? "Red check" : "Scope check") : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
+    task: { id: pack.replace(/_/g, "-"), title: issue?.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
     decisions: [],
     priorFindings: [],

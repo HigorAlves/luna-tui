@@ -120,6 +120,9 @@ export const PackId = z.enum([
   // Decisions on the Build stage's own work (a check context, run on demand by the build watch): is a red right, is a change in scope.
   "red_check",
   "scope_check",
+  // Decisions on Verify's own work (a check context, run on demand): how severe a review finding is, why a browser run failed.
+  "finding_classify",
+  "e2e_failure_cause",
   // Not a task stage: the replay evals' judge, grading another pack's answer to an eval case.
   "eval_judge",
   // Not a task stage: triages a batch of chat items (Slack or Teams) a client sends to POST /runs.
@@ -495,9 +498,9 @@ export const PlanContext = z.object({
 });
 export type PlanContext = z.infer<typeof PlanContext>;
 
-/** What the build checks (red_check, scope_check) judge: a red slice's failing output, or the facts of a change's scope. */
+/** What the checks (red_check, scope_check, finding_classify, e2e_failure_cause) judge: a red slice's failing output, the facts of a change's scope, a review finding, or a failed browser run. */
 export const CheckContext = z.object({
-  kind: z.enum(["red", "scope"]),
+  kind: z.enum(["red", "scope", "finding", "e2e"]),
   slice: z.object({ id: z.number().int(), title: z.string(), acceptance: z.array(z.string()) }).optional(),
   /** red: the failing output's tail. */
   output: z.string().optional(),
@@ -510,6 +513,18 @@ export const CheckContext = z.object({
   todos: z.array(z.string()).optional(),
   secrets: z.array(z.string()).optional(),
   diffSummary: z.string().optional(),
+  /** finding: the finding to classify, and the file around its line as the machine read it. */
+  finding: Finding.optional(),
+  excerpt: z.string().optional(),
+  /** e2e: the failed run, with the rows that did not pass. */
+  e2e: z
+    .object({
+      verdict: z.enum(["fail", "partial"]),
+      summary: z.string(),
+      criteria: z.array(z.object({ text: z.string(), result: z.enum(["pass", "fail", "partial"]), note: z.string().optional() })),
+      attempt: z.number().int(),
+    })
+    .optional(),
 });
 export type CheckContext = z.infer<typeof CheckContext>;
 

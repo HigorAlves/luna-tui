@@ -16,6 +16,8 @@ export const CONTEXT_OF = {
   plan_check: { key: "plan", schema: PlanContext },
   red_check: { key: "check", schema: CheckContext },
   scope_check: { key: "check", schema: CheckContext },
+  finding_classify: { key: "check", schema: CheckContext },
+  e2e_failure_cause: { key: "check", schema: CheckContext },
 } as const;
 
 export type ContextPackId = keyof typeof CONTEXT_OF;

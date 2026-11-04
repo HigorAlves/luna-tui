@@ -426,13 +426,39 @@ const SCOPE_CHECK_QUESTIONS: QuestionSet = {
   no_todo: { type: "yesno", instructions: "Does the change leave no TODO, FIXME or XXX that stands in for work the slice should have done? The added ones are listed." },
 };
 
+/** What finding_classify asks of one review finding and the code around it. */
+const FINDING_CLASSIFY_QUESTIONS: QuestionSet = {
+  severity: {
+    type: "choice",
+    instructions: "How severe is the review finding, judging it against its excerpt of the code? Read the finding's claim and the lines around it, not the reviewer's own severity label.",
+    criteria: {
+      blocker: "a bug or a security hole a reviewer would block the merge on",
+      should_fix: "wrong or fragile, but mergeable with a follow-up",
+      nit: "style, naming or a suggestion the author may ignore",
+    },
+  },
+};
+
+/** What e2e_failure_cause asks of a failed browser run. */
+const E2E_FAILURE_QUESTIONS: QuestionSet = {
+  cause: {
+    type: "choice",
+    instructions: "Why did the browser run fail? Judge from the summary and the rows that did not pass: did the app misbehave, was the scenario or its driving wrong, or did the environment fail before the scenario was really tried?",
+    criteria: {
+      product_bug: "the app does not do what the scenario asks",
+      test_bug: "the scenario or the way it was driven is wrong; the app behaves as intended",
+      env_flake: "the target, the dev server, the browser or a tool failed; the scenario was never really tried",
+    },
+  },
+};
+
 /** The packs a decision model answers; every other pack is a role's or a script's. */
-type DecisionPackId = "triage_signals" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check";
+type DecisionPackId = "triage_signals" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause";
 
 /** The engines a decision pack on the plan context runs on: Jev, else a small Claude or Codex model. */
 const DECISION_ENGINES = { default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] } satisfies AgentPack["engines"];
 
-const planDecision = (id: "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check", questions: QuestionSet): DecisionPack => ({
+const planDecision = (id: "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause", questions: QuestionSet): DecisionPack => ({
   id,
   kind: "decision",
   questions,
@@ -782,6 +808,9 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
   // The Build stage's decisions: each reads a check context, one call, no worktree.
   red_check: { ...planDecision("red_check", RED_CHECK_QUESTIONS) },
   scope_check: { ...planDecision("scope_check", SCOPE_CHECK_QUESTIONS) },
+  // Verify's decisions: each reads a check context, one call, no worktree.
+  finding_classify: { ...planDecision("finding_classify", FINDING_CLASSIFY_QUESTIONS) },
+  e2e_failure_cause: { ...planDecision("e2e_failure_cause", E2E_FAILURE_QUESTIONS) },
 };
 
 type Choice = { choice: string; confidence: number };

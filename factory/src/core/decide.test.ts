@@ -88,6 +88,30 @@ describe("a check context", () => {
   });
 });
 
+describe("a finding and an e2e check context", () => {
+  const base = { schema: 3, stage: "finding_classify", pack: "finding_classify", attempt: 1, task: { id: "t", title: "t", description: "", criteria: [], repoPath: "", branch: "", source: null }, plan: null, decisions: [], priorFindings: [], limits: { maxTurns: 1, timeoutMs: 1 }, env: {} };
+
+  it("renders a finding with its location and the excerpt", () => {
+    const check = { kind: "finding", finding: { path: "src/a.ts", line: 3, severity: "bug", title: "off by one", body: "loops past the end", confidence: 0.8 }, excerpt: "for (let i = 0; i <= n; i++) {}" };
+    const state = stateOf({ ...base, context: { projectContext: null, check } } as never);
+    expect(state.title).toBe("Finding: off by one");
+    expect(state.description).toContain("Finding (bug, confidence 0.8): off by one");
+    expect(state.description).toContain("src/a.ts:3");
+    expect(state.description).toContain("Excerpt:\nfor (let i = 0; i <= n; i++) {}");
+  });
+
+  it("renders an e2e failure's attempt, summary and each row that did not pass", () => {
+    const check = { kind: "e2e", e2e: { verdict: "fail", summary: "the page never loaded", attempt: 2, criteria: [{ text: "login works", result: "fail", note: "timeout" }, { text: "logout works", result: "pass" }, { text: "reset works", result: "partial" }] } };
+    const state = stateOf({ ...base, context: { projectContext: null, check } } as never);
+    expect(state.title).toBe("E2E failure: attempt 2");
+    expect(state.description).toContain("Attempt 2, verdict fail");
+    expect(state.description).toContain("the page never loaded");
+    expect(state.description).toContain("- login works: fail (timeout)");
+    expect(state.description).toContain("- reset works: partial");
+    expect(state.description).not.toContain("logout works");
+  });
+});
+
 describe("decisionSummary", () => {
   it("is one line per question with its confidence, and names the ones below the pack's bar", () => {
     const answer = { kind: { choice: "bug", confidence: 0.91 }, area: { choice: "board", confidence: 0.62 }, ready: { value: true, p: 0.83 }, size: { score: 1.4, confidence: 0.75 } };

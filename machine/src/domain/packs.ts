@@ -23,6 +23,9 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   // Decisions on the Build stage's work, run on demand by the build watch.
   red_check: [],
   scope_check: [],
+  // Decisions on Verify's work, run on demand by the verify and e2e stages.
+  finding_classify: [],
+  e2e_failure_cause: [],
   eval_judge: [],
   chat_triage: [],
 };

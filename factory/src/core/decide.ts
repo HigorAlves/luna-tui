@@ -48,6 +48,19 @@ export function renderCheck(check: CheckContext): string {
       `Failing output:\n${check.output ?? "(none)"}`,
     ].join("\n");
   }
+  if (check.kind === "finding") {
+    const f = check.finding;
+    return [
+      ...(f ? [`Finding (${f.severity}, confidence ${f.confidence}): ${f.title}`, f.body, `${f.path}:${f.line}`] : ["Finding: (none)"]),
+      `Excerpt:\n${check.excerpt ?? "(none)"}`,
+    ].join("\n");
+  }
+  if (check.kind === "e2e") {
+    const e = check.e2e;
+    return e
+      ? [`Attempt ${e.attempt}, verdict ${e.verdict}`, e.summary, ...bullets("Rows that did not pass", e.criteria.filter((c) => c.result !== "pass").map((c) => `${c.text}: ${c.result}${c.note ? ` (${c.note})` : ""}`))].join("\n")
+      : "E2E failure: (none)";
+  }
   return [
     ...bullets("Planned files", check.planned),
     ...bullets("Changed files", check.changed),
@@ -61,11 +74,24 @@ export function renderCheck(check: CheckContext): string {
   ].join("\n");
 }
 
+function checkTitle(check: CheckContext): string {
+  switch (check.kind) {
+    case "red":
+      return `Red check: slice ${check.slice?.id ?? "?"}, ${check.slice?.title ?? "?"}`;
+    case "finding":
+      return `Finding: ${check.finding?.title ?? "?"}`;
+    case "e2e":
+      return `E2E failure: attempt ${check.e2e?.attempt ?? "?"}`;
+    default:
+      return "Scope check";
+  }
+}
+
 /** The issue intake sent, else a plan context rendered, else the task's own title and description. */
 export function stateOf(input: StageInput): DecisionState {
   const plan = input.context.plan;
   const check = input.context.check;
-  if (check) return { title: check.kind === "red" ? `Red check: slice ${check.slice?.id ?? "?"}, ${check.slice?.title ?? "?"}` : "Scope check", description: renderCheck(check) };
+  if (check) return { title: checkTitle(check), description: renderCheck(check) };
   if (plan) return { title: plan.brief.split("\n")[0]!, description: renderPlan(plan) };
   const { title, description, labels, source } = input.context.issue ?? { title: input.task.title, description: input.task.description };
   return { title, description, ...(labels && { labels }), ...(source && { source }) };

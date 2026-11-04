@@ -112,12 +112,8 @@ describe("the plan stage's decision packs", () => {
   });
 
   it("finding_classify asks one severity choice (blocker, should_fix, nit) and e2e_failure_cause one cause choice (product_bug, test_bug, env_flake), both decisions on the check context", () => {
-    // Read through a plain record until the packs exist: the red must be "the pack is missing", not a type error.
-    const packs = PACKS as Record<string, unknown>;
-    expect(packs).toHaveProperty("finding_classify");
-    expect(packs).toHaveProperty("e2e_failure_cause");
-    const classify = packs.finding_classify as typeof PACKS.red_check;
-    const cause = packs.e2e_failure_cause as typeof PACKS.red_check;
+    const classify = PACKS.finding_classify;
+    const cause = PACKS.e2e_failure_cause;
     expect(Object.keys(classify.questions)).toEqual(["severity"]);
     expect(classify.questions.severity).toMatchObject({ type: "choice", criteria: { blocker: expect.any(String), should_fix: expect.any(String), nit: expect.any(String) } });
     expect(Object.keys(cause.questions)).toEqual(["cause"]);
