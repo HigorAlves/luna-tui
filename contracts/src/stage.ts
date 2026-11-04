@@ -110,6 +110,10 @@ export const PackId = z.enum([
   "jira_intake",
   // A decision before intake: labels an issue (kind, area, ready, size) on a decision model.
   "triage_signals",
+  // Decisions on the plan stage's output (a plan context, run on demand): its risk, whether the scenarios cover the criteria, whether the plan fits the record.
+  "risk_score",
+  "coverage_check",
+  "plan_check",
   // Not a task stage: the replay evals' judge, grading another pack's answer to an eval case.
   "eval_judge",
   // Not a task stage: triages a batch of chat items (Slack or Teams) a client sends to POST /runs.
@@ -121,6 +125,15 @@ export type PackId = z.infer<typeof PackId>;
  *  be one of its pack's `engines.allowed`; the machine checks that against the pack registry. */
 export const StageEngines = z.partialRecord(PackId, EngineId);
 export type StageEngines = z.infer<typeof StageEngines>;
+
+/** The ordered slices the planner proposes; `touchpoints` are repo-relative paths. */
+export const Slice = z.object({
+  title: z.string(),
+  est_loc: z.number().int(),
+  touchpoints: z.array(z.string()),
+  acceptance: z.array(z.string()),
+});
+export type Slice = z.infer<typeof Slice>;
 
 /** One behaviour test_design names: the plan criterion it proves, and how to prove it. */
 export const TestCase = z.object({
@@ -439,6 +452,22 @@ export const TriageRecord = z.object({
 });
 export type TriageRecord = z.infer<typeof TriageRecord>;
 
+/** What the plan stage's decisions read, and what its second round hands the planner and the test
+ *  designer: the record, the plan, the scenarios so far, the criteria no scenario names (`gaps`,
+ *  computed from `cases[].criterion`) and which round this is. */
+export const PlanContext = z.object({
+  record: TriageRecord.nullable(),
+  brief: z.string(),
+  criteria: z.array(z.string()),
+  assumptions: z.array(z.string()),
+  slices: z.array(Slice),
+  rollback: z.string().optional(),
+  cases: z.array(TestCase).optional(),
+  gaps: z.array(z.string()).optional(),
+  round: z.number().int().optional(),
+});
+export type PlanContext = z.infer<typeof PlanContext>;
+
 /** What shows a change does what the ticket asked, kept on the task for the person who approves it. */
 export const EvidencePack = z.object({
   summary: z.string(),
@@ -570,6 +599,8 @@ export const StageInput = z.object({
     jira: JiraIntakeContext.nullable().optional(),
     /** For the triage_signals pack: the issue to label. */
     issue: IssueContext.nullable().optional(),
+    /** For risk_score, coverage_check and plan_check: the plan to judge; for the plan stage's second rounds, what to fix. */
+    plan: PlanContext.nullable().optional(),
     /** For the eval_judge pack: the case, its expectation and the answer to grade. */
     eval: EvalJudgeContext.nullable().optional(),
     /** For chat_triage: the chat batch; the task is synthetic and there is no worktree. */

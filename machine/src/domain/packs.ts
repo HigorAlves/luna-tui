@@ -12,6 +12,10 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   slack_triage: [],
   jira_intake: [],
   triage_signals: [],
+  // Decisions on a plan context, run on demand by the plan stage.
+  risk_score: [],
+  coverage_check: [],
+  plan_check: [],
   eval_judge: [],
   chat_triage: [],
 };

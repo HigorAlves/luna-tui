@@ -2,7 +2,7 @@
 // triage_signals asks what intake needs to label and route an issue.
 import { describe, expect, it } from "vitest";
 
-import { ENGINES, PACKS, PACK_LIMITS, StageInput, answerSchema, applyPolicy, classificationLine, classificationOf } from "./index.ts";
+import { ENGINES, PACKS, PACK_LIMITS, PlanContext, StageInput, answerSchema, applyPolicy, classificationLine, classificationOf, coverageGaps, riskLevelOf } from "./index.ts";
 
 describe("the answer schema of a question set", () => {
   const schema = answerSchema({
@@ -72,6 +72,64 @@ describe("the triage_signals pack", () => {
     expect(StageInput.parse({ ...input, context: { projectContext: null, issue } }).context.issue).toEqual(issue);
     expect(StageInput.parse({ ...input, context: { projectContext: null, issue: { title: "t", description: "" } } }).context.issue).toEqual({ title: "t", description: "" });
     expect(StageInput.safeParse({ ...input, context: { projectContext: null, issue: { title: "t" } } }).success).toBe(false);
+  });
+});
+
+describe("the plan stage's decision packs", () => {
+  it("risk_score asks blast radius, reversibility and data sensitivity as three-level scores", () => {
+    const pack = PACKS.risk_score;
+    expect(pack).toMatchObject({ kind: "decision", writable: false, maxTurns: 1 });
+    expect(Object.keys(pack.questions)).toEqual(["blast_radius", "reversibility", "data_sensitivity"]);
+    for (const q of Object.values(pack.questions)) expect(q).toMatchObject({ type: "score" });
+    expect(Object.keys((pack.questions.blast_radius as { rubric: object }).rubric)).toEqual(["one", "some", "wide"]);
+  });
+
+  it("coverage_check asks whether scenarios pin their criteria, how much they overlap and whether a criterion is untestable", () => {
+    const pack = PACKS.coverage_check;
+    expect(Object.keys(pack.questions)).toEqual(["pins", "redundancy", "untestable"]);
+    expect(pack.questions.pins).toMatchObject({ type: "yesno" });
+    expect(pack.questions.redundancy).toMatchObject({ type: "score", rubric: { none: expect.any(String), some: expect.any(String), heavy: expect.any(String) } });
+    expect(pack.questions.untestable).toMatchObject({ type: "yesno" });
+  });
+
+  it("plan_check asks whether the plan fits the record, its slices cover the criteria and its rollback can be followed", () => {
+    const pack = PACKS.plan_check;
+    expect(Object.keys(pack.questions)).toEqual(["fits_record", "slices_cover_criteria", "rollback_stated"]);
+    expect(pack.questions.fits_record).toMatchObject({ type: "score", rubric: { no: expect.any(String), partly: expect.any(String), yes: expect.any(String) } });
+  });
+
+  it("all three run on Jev by default and a small Claude or Codex model when it is absent, with a bar per question", () => {
+    for (const pack of [PACKS.risk_score, PACKS.coverage_check, PACKS.plan_check]) {
+      expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
+      expect(Object.keys(pack.policy).sort()).toEqual(Object.keys(pack.questions).sort());
+      expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: 1, timeoutMs: pack.timeoutMs, writable: false });
+    }
+  });
+
+  it("riskLevelOf adds the three levels (a score rounds to one, plus 1): 3 to 4 low, 5 to 6 medium, 7 to 9 high", () => {
+    const at = (a: number, b: number, c: number) => riskLevelOf({ blast_radius: { score: a }, reversibility: { score: b }, data_sensitivity: { score: c } });
+    expect(at(0, 0, 0)).toBe("low");
+    expect(at(1, 0, 0)).toBe("low"); // sum 4
+    expect(at(1, 1, 0)).toBe("medium"); // 5
+    expect(at(1, 1, 1)).toBe("medium"); // 6
+    expect(at(2, 1, 1)).toBe("high"); // 7
+    expect(at(2, 2, 2)).toBe("high"); // 9
+    expect(at(0.4, 0.4, 0.4)).toBe("low"); // rounds down
+    expect(at(1.5, 1.5, 1.5)).toBe("high"); // rounds up to 2 each
+  });
+
+  it("coverageGaps lists the criteria no case names, matched after trimming", () => {
+    const cases = [{ criterion: "bad password shows an error" }, { criterion: " locks after five failures " }, { criterion: null }];
+    expect(coverageGaps(["bad password shows an error ", "locks after five failures", "logs the attempt"], cases)).toEqual(["logs the attempt"]);
+    expect(coverageGaps([], cases)).toEqual([]);
+    expect(coverageGaps(["c"], [])).toEqual(["c"]);
+  });
+
+  it("a plan context carries the record, the plan, the scenarios and the gaps, and rides the stage input's context", () => {
+    const plan = { record: null, brief: "b", criteria: ["c"], assumptions: [], slices: [{ title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }], cases: [{ title: "t", criterion: "c", approach: "a" }], gaps: [], round: 1 };
+    expect(PlanContext.parse(plan)).toEqual(plan);
+    const input = { schema: 3, stage: "plan_check", pack: "plan_check", attempt: 1, task: { id: "t", title: "t", description: "", criteria: [], repoPath: "", branch: "", source: null }, plan: null, decisions: [], priorFindings: [], limits: { maxTurns: 1, timeoutMs: 1 }, env: {} };
+    expect(StageInput.parse({ ...input, context: { projectContext: null, plan } }).context.plan).toEqual(plan);
   });
 });
 

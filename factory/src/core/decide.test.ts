@@ -1,7 +1,7 @@
 import { PACKS, type StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { decisionSummary, renderDecision, stateOf } from "./decide.ts";
+import { decisionSummary, renderDecision, renderPlan, stateOf } from "./decide.ts";
 
 const questions = PACKS.triage_signals.questions;
 
@@ -25,6 +25,40 @@ describe("stateOf", () => {
     const base = { task: { title: "T", description: "D" }, context: {} } as unknown as StageInput;
     expect(stateOf(base)).toEqual({ title: "T", description: "D" });
     expect(stateOf({ ...base, context: { issue: { title: "I", description: "E" } } } as unknown as StageInput)).toEqual({ title: "I", description: "E" });
+  });
+});
+
+describe("a plan as the state", () => {
+  const plan = {
+    record: { source: "github", kind: "bug", goal: "Stop the panic", size: "small", urgency: "high", risk: "low", signals: {}, qa: [], decision: "plan", reason: "one function", at: "2026-11-04T00:00:00.000Z", model: "m" },
+    brief: "Guard the empty list in the key handler",
+    criteria: ["no panic on j", "list stays selected"],
+    assumptions: ["board only"],
+    slices: [{ title: "guard j", est_loc: 12, touchpoints: ["board/src/keys.rs"], acceptance: ["no panic on j"] }],
+    rollback: "Revert the commit; nothing else changes.",
+    cases: [{ title: "j on empty", criterion: "no panic on j", approach: "cargo test keys::empty" }],
+    gaps: ["list stays selected"],
+  };
+  const input = { task: { title: "t", description: "d" }, context: { plan } } as unknown as StageInput;
+
+  it("renders the record, brief, criteria, slices, rollback, scenarios by criterion and the gaps", () => {
+    const text = renderPlan(plan as never);
+    expect(text).toContain("Goal: Stop the panic");
+    expect(text).toContain("Brief: Guard the empty list in the key handler");
+    expect(text).toContain("Criteria:\n- no panic on j\n- list stays selected");
+    expect(text).toContain("1. guard j (~12 LOC; touches board/src/keys.rs): no panic on j");
+    expect(text).toContain("Rollback: Revert the commit; nothing else changes.");
+    expect(text).toContain("Scenarios:\n- no panic on j\n  - j on empty: cargo test keys::empty");
+    expect(text).toContain("No scenario names these criteria:\n- list stays selected");
+  });
+
+  it("is the state a decision sees, ahead of the questions", () => {
+    const state = stateOf(input);
+    expect(state.title).toBe("Guard the empty list in the key handler");
+    const text = renderDecision(PACKS.plan_check.questions, state);
+    expect(text.indexOf("Brief: Guard the empty list")).toBeGreaterThan(-1);
+    expect(text.indexOf("Brief:")).toBeLessThan(text.indexOf("# Questions"));
+    expect(text).toContain("## fits_record (score)");
   });
 });
 

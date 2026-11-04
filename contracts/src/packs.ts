@@ -10,7 +10,7 @@ import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
-import { EscalationReason, Finding, LunaConfig, PackId, Risk, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
+import { EscalationReason, Finding, LunaConfig, PackId, Risk, Slice, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
 
 /** The agent roles. A pack names one; the runner looks its definition up by this. */
 export const AgentRole = z.enum([
@@ -47,15 +47,6 @@ const only = (engine: EngineId) => ({ default: engine, allowed: [engine] });
 
 /** A question the stage could not settle alone. `recommended` is what it would pick. */
 const Question = z.object({ question: z.string(), recommended: z.string().nullable() });
-
-/** The ordered slices triage proposes; `touchpoints` are repo-relative paths. */
-export const Slice = z.object({
-  title: z.string(),
-  est_loc: z.number().int(),
-  touchpoints: z.array(z.string()),
-  acceptance: z.array(z.string()),
-});
-export type Slice = z.infer<typeof Slice>;
 
 /** The hard-outward action a stage may ask for; the board approves it. */
 const Requested = z.object({ kind: z.enum(["publish"]), target: z.string(), payload: z.record(z.string(), z.unknown()) });
@@ -377,8 +368,53 @@ const TRIAGE_SIGNALS: QuestionSet = {
   archive_reason: { type: "choice", instructions: "If it should be archived, why; else none.", criteria: { none: "It should be worked", duplicate: "Another open ticket asks for the same", out_of_scope: "Not this repository's or team's to do", stale: "Overtaken by events; nobody needs it now", not_actionable: "No change an agent could make or verify" } },
 };
 
+/** What risk_score asks about a plan: three scores that riskLevelOf adds up. */
+const RISK_QUESTIONS: QuestionSet = {
+  blast_radius: { type: "score", instructions: "How much of the system does the change touch?", rubric: { one: "One module, its tests", some: "Several modules or a shared one", wide: "A subsystem, a contract others implement, or infrastructure" } },
+  reversibility: { type: "score", instructions: "How easily is it undone?", rubric: { revert: "A revert restores everything", steps: "A revert plus a manual step", hard: "Data or external state changes that a revert does not undo" } },
+  data_sensitivity: { type: "score", instructions: "What data does it handle?", rubric: { none: "No user or secret data", internal: "Internal records", sensitive: "Credentials, payments, personal data" } },
+};
+
+/** The plan's risk from the three scores: each rounds to a level 1 to 3; a sum of 4 or less is low, 5 to 6 medium, 7 to 9 high. */
+export function riskLevelOf(a: { blast_radius: { score: number }; reversibility: { score: number }; data_sensitivity: { score: number } }): Risk {
+  const sum = [a.blast_radius, a.reversibility, a.data_sensitivity].reduce((total, answer) => total + Math.round(answer.score) + 1, 0);
+  return sum <= 4 ? "low" : sum <= 6 ? "medium" : "high";
+}
+
+/** What coverage_check asks about the scenarios. The per-criterion gap list is not asked: coverageGaps computes it. */
+const COVERAGE_QUESTIONS: QuestionSet = {
+  pins: { type: "yesno", instructions: "Does each scenario pin the criterion it names: would it fail if that criterion were not met?" },
+  redundancy: { type: "score", instructions: "How much do the scenarios overlap?", rubric: { none: "Each proves something the others do not", some: "A few restate another", heavy: "Most restate one check" } },
+  untestable: { type: "yesno", instructions: "Is any criterion written so that no scenario could ever prove it?" },
+};
+
+/** The criteria no scenario names (exact match after trimming): what the test designer's next round is told to cover. */
+export const coverageGaps = (criteria: string[], cases: { criterion: string | null }[]): string[] => criteria.filter((c) => !cases.some((k) => (k.criterion ?? "").trim() === c.trim()));
+
+/** What plan_check asks about the plan against triage's record. */
+const PLAN_CHECK_QUESTIONS: QuestionSet = {
+  fits_record: { type: "score", instructions: "Does the plan build what the record's goal asks, no more, no less?", rubric: { no: "It builds something else or far more", partly: "It misses part of the goal or adds unasked work", yes: "It builds the goal" } },
+  slices_cover_criteria: { type: "yesno", instructions: "Does every criterion appear in some slice's acceptance?" },
+  rollback_stated: { type: "yesno", instructions: "Could a person follow the rollback paragraph at 2 a.m.?" },
+};
+
 /** The packs a decision model answers; every other pack is a role's or a script's. */
-type DecisionPackId = "triage_signals";
+type DecisionPackId = "triage_signals" | "risk_score" | "coverage_check" | "plan_check";
+
+/** The engines a decision pack on the plan context runs on: Jev, else a small Claude or Codex model. */
+const DECISION_ENGINES = { default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] } satisfies AgentPack["engines"];
+
+const planDecision = (id: "risk_score" | "coverage_check" | "plan_check", questions: QuestionSet): DecisionPack => ({
+  id,
+  kind: "decision",
+  questions,
+  policy: samePolicy(questions, { proceed: 0.7, flag: 0.5 }),
+  writable: false,
+  maxTurns: 1,
+  timeoutMs: 1 * MINUTE,
+  engines: DECISION_ENGINES,
+  answer: answerSchema(questions),
+});
 
 export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<DecisionPackId, DecisionPack> = {
   setup: {
@@ -664,6 +700,10 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     engines: { default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] },
     answer: answerSchema(TRIAGE_SIGNALS),
   },
+  // The plan stage's decisions: each reads a plan context, one call, no worktree.
+  risk_score: planDecision("risk_score", RISK_QUESTIONS),
+  coverage_check: planDecision("coverage_check", COVERAGE_QUESTIONS),
+  plan_check: planDecision("plan_check", PLAN_CHECK_QUESTIONS),
 };
 
 type Choice = { choice: string; confidence: number };

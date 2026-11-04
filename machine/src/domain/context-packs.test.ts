@@ -8,14 +8,15 @@ import { buildContextPackInput, buildJiraIntakeInput, buildSlackTriageInput } fr
 const chat = { source: "slack" as const, me: { id: "U1", name: "higor" }, items: [{ id: "C1:1", place: "#eng", kind: "channel" as const, author: "@marta", isBot: false, text: "review?" }] };
 const issue = { title: "Board crashes on resize", description: "It panics.", labels: ["bug"] };
 const jira = { key: "PLAT-1", url: "https://a.atlassian.net/browse/PLAT-1", summary: "Login", description: "Sign in.", issueType: "Story", priority: null, labels: [], dueAt: null, comments: [], repoPath: null };
+const plan = { record: null, brief: "Guard the empty list", criteria: ["no panic"], assumptions: [], slices: [{ title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["no panic"] }], cases: [{ title: "t", criterion: "no panic", approach: "run it" }] };
 const slack = { me: { id: "U1", name: "higor" }, watches: [], rules: "", items: [] };
 
 describe("context-only packs", () => {
-  it("are the packs that run in no task state, but for the deny list: slack_triage, jira_intake, triage_signals and chat_triage", () => {
+  it("are the packs that run in no task state, but for the deny list: slack_triage, jira_intake, triage_signals, the three plan checks and chat_triage", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "jira_intake", "slack_triage", "triage_signals"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "coverage_check", "jira_intake", "plan_check", "risk_score", "slack_triage", "triage_signals"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
@@ -29,6 +30,11 @@ describe("context-only packs", () => {
 
   it("take an object with the pack's own key and nothing else", () => {
     expect(contextSchema("chat_triage").safeParse({ chat }).success).toBe(true);
+    for (const pack of ["risk_score", "coverage_check", "plan_check"] as const) {
+      expect(packStates(pack)).toEqual([]);
+      expect(contextSchema(pack).safeParse({ plan }).success).toBe(true);
+      expect(contextSchema(pack).safeParse({ issue }).success).toBe(false);
+    }
     expect(contextSchema("triage_signals").safeParse({ issue }).success).toBe(true);
     expect(contextSchema("jira_intake").safeParse({ jira }).success).toBe(true);
     expect(contextSchema("chat_triage").safeParse({ issue }).success).toBe(false);
@@ -46,6 +52,14 @@ describe("buildContextPackInput", () => {
     expect(StageInput.parse(issueInput)).toEqual(issueInput);
     expect(issueInput).toMatchObject({ pack: "triage_signals", task: { id: "triage-signals", title: "Board crashes on resize", description: "It panics." }, context: { projectContext: null, issue }, limits: { maxTurns: 1, timeoutMs: 60_000 } });
     expect(issueInput).not.toHaveProperty("engine");
+  });
+
+  it("builds the plan checks' input around a synthetic task named for the brief, the plan under context.plan", () => {
+    for (const pack of ["risk_score", "coverage_check", "plan_check"] as const) {
+      const input = buildContextPackInput(pack, { plan });
+      expect(StageInput.parse(input)).toEqual(input);
+      expect(input).toMatchObject({ pack, stage: pack, attempt: 1, task: { title: "Guard the empty list", repoPath: "" }, plan: null, context: { projectContext: null, plan }, limits: { maxTurns: 1 } });
+    }
   });
 
   it("gives slack_triage and jira_intake exactly the input their own runners build", () => {

@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, type CheckSpec, type CiContext, type EngineId, type Finding, type IssueContext, type JiraIntakeContext, type Ledger, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type ChatTriageContext, type CheckSpec, type CiContext, type EngineId, type Finding, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -184,17 +184,18 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
   const { maxTurns, timeoutMs } = PACK_LIMITS[pack];
   const issue: IssueContext | null = "issue" in context ? context.issue : null;
   const chat: ChatTriageContext | null = "chat" in context ? context.chat : null;
+  const plan: PlanContext | null = "plan" in context ? context.plan : null;
   return {
     schema: 3,
     stage: pack,
     pack,
     ...(engine ? { engine } : {}),
     attempt: 1,
-    task: { id: pack.replace(/_/g, "-"), title: issue?.title ?? "Chat triage", description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
+    task: { id: pack.replace(/_/g, "-"), title: issue?.title ?? plan?.brief.split("\n")[0] ?? "Chat triage", description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
     decisions: [],
     priorFindings: [],
-    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}) },
+    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(plan ? { plan } : {}) },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

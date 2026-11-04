@@ -2,7 +2,7 @@
 // in plain words, then the rule that the answer is the JSON the schema asks for, with a confidence
 // per question. Jev gets the questions on its own wire (runtimes/jev/questions.ts); every other
 // runtime renders this text and asks for structured output on `answerJsonSchema(pack)`.
-import type { Question, QuestionSet, StageInput } from "@hardness/contracts";
+import type { PlanContext, Question, QuestionSet, StageInput } from "@hardness/contracts";
 
 /** What a decision reads: the issue as intake sent it. */
 export type DecisionState = {
@@ -12,8 +12,33 @@ export type DecisionState = {
   source?: string;
 };
 
-/** The issue intake sent, else the task's own title and description. */
+/** A plan context as text a decision reads: the record, the brief, the criteria, the assumptions,
+ *  the slices with their acceptance, the rollback, the scenarios grouped by the criterion they
+ *  name, and the criteria none names. */
+export function renderPlan(plan: PlanContext): string {
+  const list = (items: string[]) => items.map((item) => `- ${item}`).join("\n");
+  const r = plan.record;
+  const byCriterion = new Map<string, string[]>();
+  for (const c of plan.cases ?? []) {
+    const key = c.criterion ?? "(no criterion)";
+    byCriterion.set(key, [...(byCriterion.get(key) ?? []), `  - ${c.title}: ${c.approach}`]);
+  }
+  return [
+    ...(r ? [`Goal: ${r.goal}`, `Record: ${r.kind} / size ${r.size} / urgency ${r.urgency} / risk ${r.risk}: ${r.reason}`] : []),
+    `Brief: ${plan.brief}`,
+    `Criteria:\n${list(plan.criteria)}`,
+    ...(plan.assumptions.length ? [`Assumptions:\n${list(plan.assumptions)}`] : []),
+    `Slices:\n${plan.slices.map((s, i) => `${i + 1}. ${s.title} (~${s.est_loc} LOC; touches ${s.touchpoints.join(", ") || "?"}): ${s.acceptance.join("; ") || "(no acceptance)"}`).join("\n")}`,
+    ...(plan.rollback ? [`Rollback: ${plan.rollback}`] : []),
+    ...(byCriterion.size ? [`Scenarios:\n${[...byCriterion].map(([criterion, lines]) => `- ${criterion}\n${lines.join("\n")}`).join("\n")}`] : []),
+    ...(plan.gaps?.length ? [`No scenario names these criteria:\n${list(plan.gaps)}`] : []),
+  ].join("\n");
+}
+
+/** The issue intake sent, else a plan context rendered, else the task's own title and description. */
 export function stateOf(input: StageInput): DecisionState {
+  const plan = input.context.plan;
+  if (plan) return { title: plan.brief.split("\n")[0]!, description: renderPlan(plan) };
   const { title, description, labels, source } = input.context.issue ?? { title: input.task.title, description: input.task.description };
   return { title, description, ...(labels && { labels }), ...(source && { source }) };
 }
