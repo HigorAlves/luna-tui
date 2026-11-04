@@ -11,12 +11,20 @@ ARG RUST_VERSION=1.99.1
 ARG FACTORY_REF=unknown
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash git ca-certificates ripgrep curl \
+ && apt-get install -y --no-install-recommends bash git ca-certificates ripgrep curl python3 python3-pip \
  && arch="$(dpkg --print-architecture)" \
  && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.tar.gz" \
     | tar -xz -C /usr/local --strip-components=1 "gh_${GH_VERSION}_linux_${arch}/bin/gh" \
  && gh --version \
  && rm -rf /var/lib/apt/lists/*
+
+# Graphify, pinned, for the machine's per-repo code graph: a graph build is this image with the
+# entrypoint overridden to /graph-tools/build.py (code-only, no model), and a stage reads the
+# result read-only at /graph with the `graphify query` verbs. Installed as root, before USER node.
+ARG GRAPHIFY_VERSION=0.9.34
+RUN pip3 install --no-cache-dir --break-system-packages "graphifyy==${GRAPHIFY_VERSION}"
+COPY machine/runner/graph/build.py /graph-tools/build.py
+RUN chmod -R a+rX /graph-tools
 
 # Go, for repos whose suite is `go test ./...` (fixtures/golden-cli is one). The stage runs
 # with HOME=/tmp on a read-only root, so the module and build caches land on the tmpfs;
