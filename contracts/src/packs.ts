@@ -452,13 +452,26 @@ const E2E_FAILURE_QUESTIONS: QuestionSet = {
   },
 };
 
+/** What evidence_format asks of a change and the browser run behind it. */
+const EVIDENCE_FORMAT_QUESTIONS: QuestionSet = {
+  format: {
+    type: "choice",
+    instructions: "Which format shows this change to the person who approves it? Judge from the record, the surface, what the browser run left (a recording or replayable steps) and whether the video image exists.",
+    criteria: {
+      video: "a user-visible change a person should watch happen: a web surface, scenarios the browser drove, a recording or replayable steps, and the video image is there",
+      captures: "a user-visible change screenshots show well enough, or a recording is not possible",
+      text: "no user-visible surface: an API, a library, docs, data, infrastructure",
+    },
+  },
+};
+
 /** The packs a decision model answers; every other pack is a role's or a script's. */
-type DecisionPackId = "triage_signals" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause";
+type DecisionPackId = "triage_signals" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "evidence_format";
 
 /** The engines a decision pack on the plan context runs on: Jev, else a small Claude or Codex model. */
 const DECISION_ENGINES = { default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] } satisfies AgentPack["engines"];
 
-const planDecision = (id: "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause", questions: QuestionSet): DecisionPack => ({
+const planDecision = (id: "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "evidence_format", questions: QuestionSet): DecisionPack => ({
   id,
   kind: "decision",
   questions,
@@ -811,6 +824,8 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
   // Verify's decisions: each reads a check context, one call, no worktree.
   finding_classify: { ...planDecision("finding_classify", FINDING_CLASSIFY_QUESTIONS) },
   e2e_failure_cause: { ...planDecision("e2e_failure_cause", E2E_FAILURE_QUESTIONS) },
+  // Evidence's decision: reads an evidence context, one call, no worktree.
+  evidence_format: { ...planDecision("evidence_format", EVIDENCE_FORMAT_QUESTIONS) },
 };
 
 type Choice = { choice: string; confidence: number };

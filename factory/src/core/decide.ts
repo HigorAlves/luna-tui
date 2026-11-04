@@ -2,7 +2,7 @@
 // in plain words, then the rule that the answer is the JSON the schema asks for, with a confidence
 // per question. Jev gets the questions on its own wire (runtimes/jev/questions.ts); every other
 // runtime renders this text and asks for structured output on `answerJsonSchema(pack)`.
-import type { CheckContext, PlanContext, Question, QuestionSet, StageInput } from "@hardness/contracts";
+import type { CheckContext, EvidenceContext, PlanContext, Question, QuestionSet, StageInput } from "@hardness/contracts";
 
 /** What a decision reads: the issue as intake sent it. */
 export type DecisionState = {
@@ -74,6 +74,23 @@ export function renderCheck(check: CheckContext): string {
   ].join("\n");
 }
 
+/** An evidence context as text: the record, the risk, the surface, the browser run, the video image, the changed paths. */
+export function renderEvidence(evidence: EvidenceContext): string {
+  const r = evidence.record;
+  const e = evidence.e2e;
+  const run = e.ran
+    ? `ran, verdict ${e.verdict ?? "?"}, ${e.scenarios} scenario${e.scenarios === 1 ? "" : "s"}, ${e.hasVideo ? "a recording" : "no recording"}, ${e.hasSteps ? "replayable steps" : "no replayable steps"}`
+    : `did not run${e.skippedReason ? ` (${e.skippedReason})` : ""}`;
+  return [
+    ...(r ? [`Goal: ${r.goal}`, `Record: ${r.kind} / size ${r.size} / urgency ${r.urgency} / risk ${r.risk}: ${r.reason}`] : []),
+    `Risk: ${evidence.risk ?? "unknown"}`,
+    `Web surface: ${evidence.webSurface ? "yes" : "no"}`,
+    `E2E: ${run}`,
+    `Video image: ${evidence.videoImage ? "present" : "absent"}`,
+    ...bullets("Changed files", evidence.changed),
+  ].join("\n");
+}
+
 function checkTitle(check: CheckContext): string {
   switch (check.kind) {
     case "red":
@@ -91,6 +108,8 @@ function checkTitle(check: CheckContext): string {
 export function stateOf(input: StageInput): DecisionState {
   const plan = input.context.plan;
   const check = input.context.check;
+  const evidence = input.context.evidence;
+  if (evidence) return { title: evidence.record ? `Evidence format: ${evidence.record.goal}` : "Evidence format", description: renderEvidence(evidence) };
   if (check) return { title: checkTitle(check), description: renderCheck(check) };
   if (plan) return { title: plan.brief.split("\n")[0]!, description: renderPlan(plan) };
   const { title, description, labels, source } = input.context.issue ?? { title: input.task.title, description: input.task.description };

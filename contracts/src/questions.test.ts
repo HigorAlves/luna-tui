@@ -127,10 +127,7 @@ describe("the plan stage's decision packs", () => {
   });
 
   it("evidence_format asks one format choice (video, captures, text) on the evidence context, a decision like the others", () => {
-    // Read through a plain record until the pack exists: the red must be "the pack is missing", not a type error.
-    const packs = PACKS as Record<string, unknown>;
-    expect(packs).toHaveProperty("evidence_format");
-    const pack = packs.evidence_format as typeof PACKS.red_check;
+    const pack = PACKS.evidence_format;
     expect(pack.kind).toBe("decision");
     expect(Object.keys(pack.questions)).toEqual(["format"]);
     expect(pack.questions.format).toMatchObject({ type: "choice", criteria: { video: expect.stringContaining("recording"), captures: expect.any(String), text: expect.stringContaining("API") } });

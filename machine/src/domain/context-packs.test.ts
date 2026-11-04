@@ -16,7 +16,7 @@ describe("context-only packs", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "coverage_check", "e2e_failure_cause", "finding_classify", "jira_intake", "plan_check", "red_check", "risk_score", "scope_check", "slack_triage", "triage_signals"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "coverage_check", "e2e_failure_cause", "evidence_format", "finding_classify", "jira_intake", "plan_check", "red_check", "risk_score", "scope_check", "slack_triage", "triage_signals"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
@@ -71,6 +71,20 @@ describe("buildContextPackInput", () => {
       expect(StageInput.parse(input)).toEqual(input);
       expect(input).toMatchObject({ pack, stage: pack, task: { title: pack === "red_check" ? "Red check" : "Scope check", repoPath: "" }, context: { projectContext: null, check }, limits: { maxTurns: 1 } });
     }
+  });
+
+  it("builds evidence_format's input with the evidence context under context.evidence, titled by the record's goal or the task", () => {
+    const e2e = { ran: true, verdict: "pass", hasVideo: true, hasSteps: true, scenarios: 2, skippedReason: null };
+    const evidence = { record: null, risk: "low" as const, webSurface: true, e2e, videoImage: true };
+    expect(contextSchema("evidence_format").safeParse({ evidence }).success).toBe(true);
+    expect(contextSchema("evidence_format").safeParse({ plan }).success).toBe(false);
+    expect(packStates("evidence_format")).toEqual([]);
+    expect(isContextPack("evidence_format")).toBe(true);
+    const input = buildContextPackInput("evidence_format", { evidence });
+    expect(StageInput.parse(input)).toEqual(input);
+    expect(input).toMatchObject({ pack: "evidence_format", stage: "evidence_format", task: { title: "Evidence format", repoPath: "" }, plan: null, context: { projectContext: null, evidence }, limits: { maxTurns: 1 } });
+    const record = { source: "github", kind: "bug", goal: "Pressing j on an empty list must not panic", size: "small", urgency: "normal", risk: "low" as const, signals: {}, qa: [], decision: "plan" as const, reason: "r", at: "2026-11-03T12:00:00.000Z", model: "m" };
+    expect(buildContextPackInput("evidence_format", { evidence: { ...evidence, record } }).task.title).toBe("Evidence format: Pressing j on an empty list must not panic");
   });
 
   it("titles the finding and e2e checks' synthetic task", () => {

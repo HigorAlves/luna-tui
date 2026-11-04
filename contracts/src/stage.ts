@@ -61,6 +61,9 @@ export const ArtifactKind = z.enum([
   "diff",
   "findings",
   "rules",
+  // A video's narration and its caption files (.srt, .vtt).
+  "audio",
+  "captions",
 ]);
 export type ArtifactKind = z.infer<typeof ArtifactKind>;
 
@@ -129,6 +132,8 @@ export const PackId = z.enum([
   "chat_triage",
   // Opens the plan stage (runs in test_design): reads the repo's code graph and names the components, files and owners the goal touches.
   "code_map",
+  // A decision on Evidence (an evidence context, run on demand): which format shows the change best.
+  "evidence_format",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -448,8 +453,9 @@ export type ArchiveReason = z.infer<typeof ArchiveReason>;
 
 /** Why a stage stopped on purpose: `plan_wrong` the plan cannot be built as written (triage runs again),
  *  `env_broken` the sandbox or toolchain is, `flaky_tests` the tests do not hold still, `too_complex`
- *  the work is bigger than one stage, `undeclared_scope` it needs files or packages the plan did not name. */
-export const EscalationReason = z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"]);
+ *  the work is bigger than one stage, `undeclared_scope` it needs files or packages the plan did not name, `head_moved` the PR head moved after
+ *  the evidence pack was made (Evidence runs again). */
+export const EscalationReason = z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "head_moved", "other"]);
 export type EscalationReason = z.infer<typeof EscalationReason>;
 
 /** How risky a change or a ticket reads: on one scale for the triage record and the evidence pack. */
@@ -551,10 +557,44 @@ export const EvidencePack = z.object({
   rollback: z.string(),
   howToVerify: z.string(),
   commitSha: z.string(),
-  media: z.array(z.object({ kind: z.enum(["video", "screenshot", "har", "report"]), label: z.string(), url: z.string() })),
+  media: z.array(z.object({ kind: z.enum(["video", "screenshot", "har", "report", "cover", "captions", "audio"]), label: z.string(), url: z.string() })),
+  /** The narrated walkthrough, when the format is video: where it is, the critic's verdict and scores, its defects, the rounds spent. */
+  video: z
+    .object({
+      file: z.string(),
+      durationS: z.number(),
+      verdict: z.enum(["ship", "one_more_pass", "degraded"]),
+      scores: z.record(z.string(), z.number()),
+      defects: z.array(z.object({ priority: z.enum(["P0", "P1", "P2"]), t: z.number(), scene: z.string().nullable(), element: z.string().nullable(), symptom: z.string(), fix: z.string() })),
+      rounds: z.number().int(),
+      transcript: z.string().optional(),
+    })
+    .nullable()
+    .optional(),
+  /** Why a format was degraded (video to captures, captures to text). */
+  note: z.string().optional(),
   at: z.string(),
 });
 export type EvidencePack = z.infer<typeof EvidencePack>;
+
+/** What evidence_format reads: the record, the risk, whether the change has a web surface, what the browser run left, and whether the video image exists. */
+export const EvidenceContext = z.object({
+  record: TriageRecord.nullable(),
+  risk: Risk.nullable(),
+  webSurface: z.boolean(),
+  e2e: z.object({
+    ran: z.boolean(),
+    verdict: z.string().nullable(),
+    hasVideo: z.boolean(),
+    hasSteps: z.boolean(),
+    scenarios: z.number().int(),
+    skippedReason: z.string().nullable(),
+  }),
+  videoImage: z.boolean(),
+  /** Repo-relative paths the change touched; the caller caps it at 50. */
+  changed: z.array(z.string()).optional(),
+});
+export type EvidenceContext = z.infer<typeof EvidenceContext>;
 
 /** What the jira_intake pack reads: the issue, as Jira gives it, plus where it would land. */
 export const JiraIntakeContext = z.object({
@@ -688,6 +728,8 @@ export const StageInput = z.object({
     plan: PlanContext.nullable().optional(),
     /** For red_check and scope_check: what to judge about the Build stage's work. */
     check: CheckContext.nullable().optional(),
+    /** For evidence_format: the change's record, surface and browser run. */
+    evidence: EvidenceContext.nullable().optional(),
     /** For the eval_judge pack: the case, its expectation and the answer to grade. */
     eval: EvalJudgeContext.nullable().optional(),
     /** For chat_triage: the chat batch; the task is synthetic and there is no worktree. */

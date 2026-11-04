@@ -97,6 +97,21 @@ describe("finish", () => {
   });
 });
 
+describe("scanArtifacts media", () => {
+  it("maps narration audio to audio and caption files to captions", () => {
+    const dir = outDir();
+    mkdirSync(join(dir, "files", "video"), { recursive: true });
+    for (const name of ["voice.wav", "voice.mp3", "walkthrough.srt", "walkthrough.vtt", "meta.json"]) writeFileSync(join(dir, "files", "video", name), "x");
+    expect(scanArtifacts(dir).map((a) => [a.kind, a.label])).toEqual([
+      ["report", "meta.json"],
+      ["audio", "voice.mp3"],
+      ["audio", "voice.wav"],
+      ["captions", "walkthrough.srt"],
+      ["captions", "walkthrough.vtt"],
+    ]);
+  });
+});
+
 describe("scanArtifacts", () => {
   it("lists every file under files/ with its kind, path relative to /out, and sha256, sorted", () => {
     const dir = outDir();

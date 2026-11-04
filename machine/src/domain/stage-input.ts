@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, CodeMapAnswer, type CheckContext, type CheckSpec, type CiContext, type CoverageSummary, type EngineId, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type ChatTriageContext, CodeMapAnswer, type CheckContext, type CheckSpec, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -13,6 +13,11 @@ function checkTitle(check: CheckContext): string {
   if (check.kind === "finding") return `Finding: ${check.finding?.title ?? "?"}`;
   if (check.kind === "e2e") return `E2E failure: attempt ${check.e2e?.attempt ?? "?"}`;
   return check.kind === "red" ? "Red check" : "Scope check";
+}
+
+/** The synthetic task's title for an evidence context sent to evidence_format. */
+function evidenceTitle(evidence: EvidenceContext): string {
+  return evidence.record ? `Evidence format: ${evidence.record.goal}` : "Evidence format";
 }
 
 /** Implementing's turns and time scale with the plan's slice count, up to this many times the pack default. */
@@ -216,17 +221,18 @@ export function buildContextPackInput(pack: ContextPackId, context: PackContext,
   const chat: ChatTriageContext | null = "chat" in context ? context.chat : null;
   const plan: PlanContext | null = "plan" in context ? context.plan : null;
   const check: CheckContext | null = "check" in context ? context.check : null;
+  const evidence: EvidenceContext | null = "evidence" in context ? context.evidence : null;
   return {
     schema: 3,
     stage: pack,
     pack,
     ...(engine ? { engine } : {}),
     attempt: 1,
-    task: { id: pack.replace(/_/g, "-"), title: issue?.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
+    task: { id: pack.replace(/_/g, "-"), title: issue?.title ?? plan?.brief.split("\n")[0] ?? (check ? checkTitle(check) : evidence ? evidenceTitle(evidence) : "Chat triage"), description: issue?.description ?? "", criteria: [], repoPath: "", branch: "", source: null },
     plan: null,
     decisions: [],
     priorFindings: [],
-    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}) },
+    context: { projectContext: null, ...(issue ? { issue } : {}), ...(chat ? { chat } : {}), ...(plan ? { plan } : {}), ...(check ? { check } : {}), ...(evidence ? { evidence } : {}) },
     limits: { maxTurns, timeoutMs },
     env: { LUNA_FACTORY: "1" },
   };

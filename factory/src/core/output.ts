@@ -53,6 +53,8 @@ const kindOf = (rel: string): StageArtifact["kind"] => {
   if (/\.(png|jpe?g)$/i.test(b)) return "screenshot";
   if (/\.(webm|mp4)$/i.test(b)) return "video";
   if (/\.har$/i.test(b)) return "har";
+  if (/\.(wav|mp3)$/i.test(b)) return "audio";
+  if (/\.(srt|vtt)$/i.test(b)) return "captions";
   if (/\.diff$/i.test(b)) return "diff";
   if (rel.startsWith("files/tests/")) return "test";
   return "report";

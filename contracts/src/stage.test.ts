@@ -7,6 +7,8 @@ import {
   ChatTriageAnswer,
   ChatTriageContext,
   CloneInput,
+  EscalationReason,
+  EvidenceContext,
   EvidencePack,
   EvalJudgeAnswer,
   CodeMapAnswer,
@@ -199,9 +201,9 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "finding_classify", "e2e_failure_cause"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format"].sort(),
     );
-    const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "red_check", "scope_check", "finding_classify", "e2e_failure_cause"];
+    const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format"];
     // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
     const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "code_map"];
     for (const pack of PackId.options) {
@@ -349,8 +351,9 @@ describe("TaskClassification", () => {
 });
 
 describe("ArtifactKind", () => {
-  it("lists the nine kinds", () => {
-    expect(ArtifactKind.options).toHaveLength(9);
+  it("lists the eleven kinds, audio and captions among them", () => {
+    expect(ArtifactKind.options).toHaveLength(11);
+    expect(ArtifactKind.options).toEqual(expect.arrayContaining(["audio", "captions"]));
   });
 });
 
@@ -434,10 +437,33 @@ describe("TriageRecord and EvidencePack", () => {
     expect(TriageRecord.safeParse({ ...record, risk: "huge" }).success).toBe(false);
     expect(EvidencePack.safeParse({ ...evidence, format: "slides" }).success).toBe(false);
   });
+  it("carry a video's verdict, scores and defects, and a note when a format was degraded", () => {
+    const video = { file: "walkthrough.mp4", durationS: 92.4, verdict: "ship", scores: { hook: 8, clarity: 9 }, rounds: 1, defects: [{ priority: "P1", t: 12.5, scene: "cart", element: "cta", symptom: "the headline is cut off", fix: "shorten the heading to two lines" }], transcript: "Here is the cart." };
+    const rich = { ...evidence, format: "video", note: "the critic passed round 2", video, media: [{ kind: "video", label: "walkthrough", url: "w.mp4" }, { kind: "cover", label: "cover", url: "c.jpg" }, { kind: "captions", label: "captions", url: "c.srt" }, { kind: "audio", label: "voice", url: "v.wav" }] };
+    expect(EvidencePack.parse(rich)).toEqual(rich);
+    expect(EvidencePack.parse({ ...evidence, video: null }).video).toBeNull();
+    expect(EvidencePack.safeParse({ ...rich, video: { ...video, verdict: "maybe" } }).success).toBe(false);
+    expect(EvidencePack.safeParse({ ...rich, video: { ...video, defects: [{ ...video.defects[0], priority: "P9" }] } }).success).toBe(false);
+  });
   it("ride on the stage input's task, absent or null for a task without them", () => {
     const task = { ...stageInputExample.task, record, evidence };
     expect(StageInput.parse({ ...stageInputExample, task }).task).toMatchObject({ record, evidence });
     expect(StageInput.parse({ ...stageInputExample, task: { ...stageInputExample.task, record: null, evidence: null } }).task.record).toBeNull();
     expect(StageInput.parse(stageInputExample).task.record).toBeUndefined();
+  });
+});
+
+describe("EvidenceContext and head_moved", () => {
+  const e2e = { ran: true, verdict: "pass", hasVideo: true, hasSteps: true, scenarios: 3, skippedReason: null };
+  const context = { record: null, risk: "low", webSurface: true, e2e, videoImage: false };
+  it("is what evidence_format reads, and rides on the stage input's context", () => {
+    expect(EvidenceContext.parse(context)).toEqual(context);
+    expect(EvidenceContext.parse({ ...context, record: null, risk: null, changed: ["a.ts"] }).changed).toEqual(["a.ts"]);
+    expect(EvidenceContext.safeParse({ ...context, risk: "huge" }).success).toBe(false);
+    expect(EvidenceContext.safeParse({ ...context, e2e: { ...e2e, scenarios: 1.5 } }).success).toBe(false);
+    expect(StageInput.parse({ ...stageInputExample, schema: 3, context: { projectContext: null, evidence: context } }).context.evidence).toEqual(context);
+  });
+  it("head_moved is an escalation reason", () => {
+    expect(EscalationReason.options).toContain("head_moved");
   });
 });

@@ -1,7 +1,7 @@
 // The context-only packs: those that run in no task state (packStates), so a client may run one
 // on data it sends (`POST /runs`). Each reads one key of the stage input's context, with that
 // key's schema. A context-only pack that is not for clients is on NOT_ON_DEMAND instead. Pure.
-import { ChatTriageContext, CheckContext, IssueContext, JiraIntakeContext, type PackId, PlanContext, SlackTriageContext } from "@hardness/contracts";
+import { ChatTriageContext, CheckContext, IssueContext, JiraIntakeContext, EvidenceContext, type PackId, PlanContext, SlackTriageContext } from "@hardness/contracts";
 import { z } from "zod";
 
 import { packStates } from "./packs.ts";
@@ -18,6 +18,7 @@ export const CONTEXT_OF = {
   scope_check: { key: "check", schema: CheckContext },
   finding_classify: { key: "check", schema: CheckContext },
   e2e_failure_cause: { key: "check", schema: CheckContext },
+  evidence_format: { key: "evidence", schema: EvidenceContext },
 } as const;
 
 export type ContextPackId = keyof typeof CONTEXT_OF;
@@ -32,7 +33,8 @@ export type PackContext =
   | { issue: IssueContext }
   | { chat: ChatTriageContext }
   | { plan: PlanContext }
-  | { check: CheckContext };
+  | { check: CheckContext }
+  | { evidence: EvidenceContext };
 
 /** Whether a client may run the pack on data it sends: it runs in no task state, has a context a
  *  client can send, and is not on the deny list. */

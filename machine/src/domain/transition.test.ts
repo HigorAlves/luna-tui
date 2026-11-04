@@ -30,6 +30,28 @@ describe("archive", () => {
   });
 });
 
+describe("evidence at the ship gate", () => {
+  it("a feature task sent back at awaiting_ship re-runs evidence", () => {
+    expect(transition(at("awaiting_ship", { retries: { ...NO_RETRIES, total: 2 } }), { type: "sent_back" })).toMatchObject({ state: "evidence", effect: { kind: "run", stage: "evidence" }, retries: { total: 2 } });
+  });
+  it("a review verdict sent back at awaiting_ship is still dropped", () => {
+    expect(transition(at("awaiting_ship", { route: "review" }), { type: "sent_back" })).toMatchObject({ state: "closed" });
+  });
+  it("head_moved from shipping re-runs evidence with retries and the reason kept", () => {
+    const retries = { ...NO_RETRIES, total: 2, e2e: 1 };
+    const step = transition(at("shipping", { retries }), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "the PR head moved (abc1234 to def5678)" });
+    expect(step).toMatchObject({ state: "evidence", effect: { kind: "run", stage: "evidence" }, retries: { total: 2, e2e: 1 }, reason: "the PR head moved (abc1234 to def5678)" });
+  });
+  it("head_moved from any other stage waits for a person", () => {
+    for (const state of ["verifying", "delivering", "evidence"] as const) {
+      expect(transition(at(state), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r" })).toMatchObject({ state: "escalated", resumeTo: state, escalation: "head_moved" });
+    }
+  });
+  it("head_moved from shipping on a review route waits for a person", () => {
+    expect(transition(at("shipping", { route: "review" }), { type: "stage_done", outcome: "escalated", escalation: "head_moved", reason: "r" }).state).toBe("escalated");
+  });
+});
+
 describe("typed escalations", () => {
   it("plan_wrong sends a feature task back to triage with its retries kept", () => {
     const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2 } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "the plan names a module that does not exist" });

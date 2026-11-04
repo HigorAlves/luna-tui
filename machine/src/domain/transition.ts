@@ -194,6 +194,8 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       // A review verdict sent back is dropped: the comment review already went out.
       if (task.route === "review" && state === "awaiting_ship") return done(retries);
       if (task.route !== "feature") break;
+      // The ship gate is a preview: a note sends it back to Evidence, which makes the pack again.
+      if (state === "awaiting_ship") return run("evidence", retries);
       if (state === "awaiting_approval") return run(event.from === "triage" ? "triage" : "test_design", retries);
       if (state === "awaiting_test_check") return run("test_design", retries);
       break;
@@ -312,6 +314,10 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
     // is no plan to redo, and triage itself cannot send the task to triage.
     if (event.escalation === "plan_wrong" && task.route === "feature" && state !== "triage" && state !== "setup") {
       return { ...run("triage", retries), reason: event.reason };
+    }
+    // The PR head moved after the evidence pack was made: Evidence runs again, retries kept; its format is kept too.
+    if (event.escalation === "head_moved" && task.route === "feature" && state === "shipping") {
+      return { ...run("evidence", retries), reason: event.reason };
     }
     // Too complex for the default engine: one more run on the pack's stronger one before a person is asked.
     if (event.escalation === "too_complex" && state === "implementing" && (retries.stronger ?? 0) < 1 && retries.total < IMPLEMENTER_CAP && stronger(PACKS.implementing)) {

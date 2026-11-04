@@ -1,7 +1,7 @@
 import { PACKS, type StageInput } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { decisionSummary, renderCheck, renderDecision, renderPlan, stateOf } from "./decide.ts";
+import { decisionSummary, renderCheck, renderDecision, renderEvidence, renderPlan, stateOf } from "./decide.ts";
 
 const questions = PACKS.triage_signals.questions;
 
@@ -116,5 +116,31 @@ describe("decisionSummary", () => {
   it("is one line per question with its confidence, and names the ones below the pack's bar", () => {
     const answer = { kind: { choice: "bug", confidence: 0.91 }, area: { choice: "board", confidence: 0.62 }, ready: { value: true, p: 0.83 }, size: { score: 1.4, confidence: 0.75 } };
     expect(decisionSummary(questions, answer, 0.7)).toBe("kind bug (0.91) · area board (0.62) · ready yes (p 0.83) · size 1.4 (0.75) · below 0.7: area");
+  });
+});
+
+describe("an evidence context", () => {
+  const base = { schema: 3, stage: "evidence_format", pack: "evidence_format", attempt: 1, task: { id: "t", title: "Evidence format", description: "", criteria: [], repoPath: "", branch: "", source: null }, plan: null, decisions: [], priorFindings: [], limits: { maxTurns: 1, timeoutMs: 1 }, env: {} };
+  const record = { source: "github", kind: "feature", area: "board", goal: "Show the cart total", size: "small", urgency: "normal", risk: "low", signals: { area: { answer: "web", confidence: 0.9 } }, qa: [], decision: "plan", reason: "r", at: "2026-11-04T00:00:00.000Z", model: "m" };
+  const evidence = { record, risk: "medium", webSurface: true, e2e: { ran: true, verdict: "pass", hasVideo: true, hasSteps: true, scenarios: 3, skippedReason: null }, videoImage: false, changed: ["web/cart.tsx", "web/cart.css"] };
+
+  it("renders the goal, risk, surface, the browser run, the video image and the changed paths", () => {
+    const text = renderEvidence(evidence as never);
+    for (const part of ["Goal: Show the cart total", "Record: feature", "Risk: medium", "Web surface: yes", "E2E: ran, verdict pass, 3 scenarios, a recording, replayable steps", "Video image: absent", "Changed files:\n- web/cart.tsx\n- web/cart.css"]) expect(text).toContain(part);
+  });
+
+  it("says why e2e did not run and that there is no surface", () => {
+    const text = renderEvidence({ record: null, risk: null, webSurface: false, e2e: { ran: false, verdict: null, hasVideo: false, hasSteps: false, scenarios: 0, skippedReason: "no web surface" }, videoImage: true } as never);
+    expect(text).toContain("Web surface: no");
+    expect(text).toContain("E2E: did not run (no web surface)");
+    expect(text).toContain("Video image: present");
+    expect(text).not.toContain("Goal:");
+  });
+
+  it("is the state a decision sees, titled by the goal", () => {
+    const state = stateOf({ ...base, context: { projectContext: null, evidence } } as never);
+    expect(state.title).toBe("Evidence format: Show the cart total");
+    expect(state.description).toBe(renderEvidence(evidence as never));
+    expect(renderDecision(PACKS.evidence_format.questions, state)).toContain("## format (choice)");
   });
 });
