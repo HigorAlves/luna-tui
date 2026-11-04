@@ -1,6 +1,6 @@
 ---
 name: video-script
-description: Write the script and the timeline of a narrated walkthrough from the approved scenarios, or fix named scenes of an earlier one; the timeline shape, the rules the machine checks, and the files to write
+description: Write the script and the timeline of a narrated walkthrough from the approved scenarios, or fix named scenes of an earlier one; the timeline shape, the rules the machine checks, and the answer that carries both
 when_to_use: Use in the video_script and video_fix stages of Evidence.
 ---
 
@@ -10,7 +10,7 @@ when_to_use: Use in the video_script and video_fix stages of Evidence.
 
 ## Files
 
-Write both under `/out/files/video/`: `script.md` (per scene: id, title, the narration, one line on what is on screen) and `timeline.json`. Never edit `/work`.
+Answer both: `script` (markdown; per scene: id, title, the narration, one line on what is on screen) and `timeline` (the JSON object below). You write no file; the machine writes `script.md` and `timeline.json` from the answer. `/work` is read-only.
 
 ## timeline.json
 

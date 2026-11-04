@@ -223,7 +223,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     ...(extra.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}),
     ...(extra.coverage ? { coverage: extra.coverage } : {}),
     holdoutCases: policy.holdoutCases,
-    qaTargets: policy.qaTargets,
+    // The recorder drives the one target the film is recorded against; the e2e pack picks from the repo's list.
+    qaTargets: pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : policy.qaTargets,
     ...(extra.video ? { video: extra.video } : {}),
     checks: policy.checks,
     history: extra.history ?? ((pack === "implementing" || pack === "reviewing_memory") && deps.history ? await deps.history(task.id) : null),

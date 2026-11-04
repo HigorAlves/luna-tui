@@ -6,7 +6,7 @@ import { z } from "zod";
 const Num = z.number().finite();
 
 export const Scene = z.object({
-  id: z.string().min(1),
+  id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/, "a scene id is letters, digits, _ or -, at most 64"),
   title: z.string(),
   kind: z.enum(["card", "demo"]),
   start: Num,

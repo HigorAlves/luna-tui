@@ -472,10 +472,10 @@ describe("EvidenceContext and head_moved", () => {
 describe("the video packs", () => {
   const video = (id: "video_script" | "video_fix" | "recording" | "video_qa") => PACKS[id] as Exclude<(typeof PACKS)[typeof id], { kind: "decision" }>;
 
-  it("video_script and video_fix are the video director on sonnet: they write the script and the timeline, never the worktree", () => {
+  it("video_script and video_fix are the video director on sonnet: they answer the script and the timeline and can write nothing, not even /out", () => {
     for (const id of ["video_script", "video_fix"] as const) {
-      expect(video(id)).toMatchObject({ kind: "agent", agent: "video-director", helpers: [], skills: ["video-script"], writable: true, maxTurns: 25, timeoutMs: 600_000, effort: "medium", template: `${id}.md`, engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
-      expect(video(id).access).toMatchObject({ read: true, write: true });
+      expect(video(id)).toMatchObject({ kind: "agent", agent: "video-director", helpers: [], skills: ["video-script"], writable: false, maxTurns: 25, timeoutMs: 600_000, effort: "medium", template: `${id}.md`, engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
+      expect(video(id).access).toMatchObject({ read: true, write: false });
     }
   });
 

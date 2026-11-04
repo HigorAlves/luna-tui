@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, symlinkSync, mkdtempSync, readFileSync, realpath
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import type { AgentExtra } from "./pack-runner.ts";
@@ -38,8 +38,10 @@ beforeEach(() => {
   mkdirSync(stateDir);
 });
 
-function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("pass" | "fail")[]; recorder?: "ok" | "escalated" | "no-timing" | "symlink" } = {}) {
+function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("pass" | "fail")[]; recorder?: "ok" | "escalated" | "no-timing" | "symlink"; heads?: string[]; answerOnly?: boolean } = {}) {
   const calls: { pack: string; runId: string; extra: AgentExtra; at: number }[] = [];
+  const heads = [...(opts.heads ?? [])];
+  const git = { head: async () => heads.length > 1 ? heads.shift()! : (heads[0] ?? "aaa1111"), reset: vi.fn(async () => {}) };
   const tools: { tool: string; run: SandboxRun }[] = [];
   const scripts = [...(opts.scripts ?? [])];
   const critics = [...(opts.critics ?? [shipAnswer])];
@@ -54,7 +56,7 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
     const usage = { turns: 2, costUsd: 0.25 };
     if (pack === "video_script" || pack === "video_fix") {
       const tl = scripts.length > 0 ? scripts.shift() : timeline();
-      files(sub.runId, { "script.md": "# script", "timeline.json": JSON.stringify(tl) });
+      if (!opts.answerOnly) files(sub.runId, { "script.md": "# script", "timeline.json": JSON.stringify(tl) });
       return { outcome: "pass", usage, detail: { answer: { script: "# script", timeline: tl, facts: [], durationEstimateS: 60 } } };
     }
     if (pack === "recording") {
@@ -95,18 +97,47 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
     return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" };
   };
   const notes: string[] = [];
-  const pipeline = videoPipeline({ sandbox, image: "video:1", stateDir, runPack, log: () => {} });
+  const pipeline = videoPipeline({ sandbox, image: "video:1", stateDir, runPack, git, log: () => {} });
+  const worktree = join(root, "wt");
   const context = (runId = "run-1"): StageContext =>
-    ({ task: { id: "11111111-2222-3333-4444-555555555555" }, stage: "evidence", attempt: 1, runId, approvals: [], signal: new AbortController().signal, note: async (t: string) => void notes.push(t) }) as unknown as StageContext;
+    ({ task: { id: "11111111-2222-3333-4444-555555555555", worktreePath: worktree }, stage: "evidence", attempt: 1, runId, approvals: [], signal: new AbortController().signal, note: async (t: string) => void notes.push(t) }) as unknown as StageContext;
   const qa = join(root, "qa");
   mkdirSync(qa, { recursive: true });
   writeFileSync(join(qa, "steps.jsonl"), '{"scenario":"a","step":"click"}\n{"scenario":"a","step":"fill"}\n');
   writeFileSync(join(qa, "qa-manifest.json"), JSON.stringify({ video: { chapters: [{ title: "A", start: 0 }] } }));
   const input = (over: Partial<VideoInput> = {}): VideoInput => ({ scenarios, record: null, pack: { summary: "s", howToVerify: "h", risk: "low" }, e2eDir: qa, target: { name: "local", baseUrl: "http://127.0.0.1:3000", credential: null }, fixCards: [], ...over });
-  return { pipeline, context, input, calls, tools, notes };
+  return { pipeline, context, input, calls, tools, notes, git, worktree };
 }
 
 describe("videoPipeline", () => {
+  it("resets the worktree after the recorder (its demo spec never lingers) and keeps the head it found", async () => {
+    const h = harness();
+    const out = await h.pipeline(h.context(), h.input());
+    expect(out.ok).toBe(true);
+    expect(h.git.reset).toHaveBeenCalledTimes(1);
+    expect(h.git.reset).toHaveBeenCalledWith(h.worktree, "aaa1111");
+  });
+
+  it("fails the film and resets the branch when a video sub-run moved the head: nothing an agent commits here reaches the PR", async () => {
+    // Heads seen: before script, after script, before recording, after recording (moved).
+    const h = harness({ heads: ["aaa1111", "aaa1111", "aaa1111", "bbb2222", "bbb2222"] });
+    const out = await h.pipeline(h.context(), h.input());
+    expect(out.ok).toBe(false);
+    if (out.ok) return;
+    expect(out.reason).toMatch(/recording.*changed the branch|history/i);
+    expect(h.git.reset).toHaveBeenCalledWith(h.worktree, "aaa1111");
+    expect(h.calls.map((c) => c.pack)).toEqual(["video_script", "recording"]);
+  });
+
+  it("takes the script and the timeline from the director's answer: it has no tool that writes a file", async () => {
+    const h = harness({ answerOnly: true });
+    const out = await h.pipeline(h.context(), h.input());
+    expect(out.ok).toBe(true);
+    if (!out.ok) return;
+    expect(readFileSync(join(out.jobDir, "script.md"), "utf8")).toBe("# script");
+    expect(JSON.parse(readFileSync(join(out.jobDir, "timeline.json"), "utf8"))).toMatchObject({ meta: { clock: "voice" } });
+  });
+
   it("ships on the first round: script, narration, cards, recording, compose, measure, a cold critic", async () => {
     const h = harness();
     const out = await h.pipeline(h.context(), h.input());

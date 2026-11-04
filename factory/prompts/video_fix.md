@@ -1,6 +1,6 @@
 # VIDEO FIX STAGE — one round on the named scenes
 
-You are `{{agent}}`, attempt {{attempt}}. The film was judged and sent back. Change only the scenes the cards below name; every other scene keeps its id, text and times. You may write under `/out/files/video/` only; do not edit anything in `/work`.
+You are `{{agent}}`, attempt {{attempt}}. The film was judged and sent back. Change only the scenes the cards below name; every other scene keeps its id, text and times. Give the whole script and timeline back in your answer: you have no tool that writes a file, and `/work` is read-only.
 
 ## Task
 {{task.title}}
@@ -24,7 +24,7 @@ You are `{{agent}}`, attempt {{attempt}}. The film was judged and sent back. Cha
 {{context.projectContext}}
 
 ## What to do
-1. Use the `video-script` skill. Rewrite `/out/files/video/script.md` and `/out/files/video/timeline.json` with only the named scenes changed; keep the film contiguous, under 240 s, with every number cited or labelled `SCHEMATIC`.
+1. Use the `video-script` skill. Rewrite the script and the timeline with only the named scenes changed; keep the film contiguous, under 240 s, with every number cited or labelled `SCHEMATIC`; answer them as `script` and `timeline`.
 2. Answer `{script, timeline, facts, durationEstimateS}`: the same as the files.
 
 ## Rules

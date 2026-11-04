@@ -4,7 +4,7 @@
 // with its guard's decision, usage); only the facts for the task's log are taken from it, the
 // rest stays in the file.
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, readFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { type ArtifactKind, StageOutput, isStreamEvent } from "@hardness/contracts";
@@ -77,9 +77,16 @@ export async function ingestStageOutput(opts: {
     // mirror them under runs/<id>/files/ without doubling that prefix, which is where the
     // evidence stage (runs/<id>/files/qa/) and the board expect them.
     const dest = join(base, artifact.path.replace(/^files\//, ""));
+    const src = join(outDir, artifact.path);
+    // The container wrote /out: a link there would make the copy read whatever host file it points at.
+    const info = await lstat(src).catch(() => null);
+    if (info && !info.isFile()) {
+      events.push({ at: new Date().toISOString(), kind: "note", payload: { skipped: true, path: artifact.path, label: artifact.label, reason: "not a regular file" } });
+      continue;
+    }
     try {
       await mkdir(dirname(dest), { recursive: true });
-      await copyFile(join(outDir, artifact.path), dest);
+      await copyFile(src, dest);
     } catch (error) {
       if (exists(error)) throw error;
       events.push({

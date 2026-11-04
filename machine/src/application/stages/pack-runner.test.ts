@@ -160,6 +160,16 @@ describe("agent stages through packs", () => {
     }
   });
 
+  it("hands the recorder only the target the film is recorded against, never the whole luna.yaml list", async () => {
+    const d = deps(fakeSandbox(output({})));
+    const target = { name: "staging", baseUrl: "https://staging.example", credential: null };
+    const video = { scenarios: [], record: null, pack: { summary: "s", howToVerify: "h", risk: null }, steps: [], chapters: [], target, narration: null, timeline: null, report: null, transcript: null, sheets: [], fixCards: [] };
+    await runAgent(d, context("evidence"), "recording", { video });
+    expect((seen?.input as { context: { qaTargets?: unknown } }).context.qaTargets).toEqual([target]);
+    await runAgent(d, context("evidence"), "recording", { video: { ...video, target: null } });
+    expect((seen?.input as { context: { qaTargets?: unknown } }).context.qaTargets).toEqual([]);
+  });
+
   it("hands a video pack its VideoContext and mounts what the caller asks for, after the worktree's own mounts", async () => {
     const d = deps(fakeSandbox(output()));
     const video = { scenarios: [], record: null, pack: { summary: "s", howToVerify: "h", risk: null }, steps: [], chapters: [], target: null, narration: null, timeline: null, report: null, transcript: null, sheets: ["/evidence/sheets/beats_sheet.jpg"], fixCards: [] };

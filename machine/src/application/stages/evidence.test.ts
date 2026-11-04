@@ -388,6 +388,15 @@ describe("evidenceStage", () => {
       expect(saved[0]![1]).toMatchObject({ evidence: { format: "captures", note: "the QA target is not re-entrant" } });
     });
 
+    it("skips the pipeline when the manifest names a target luna.yaml does not know: the veto never fails open", async () => {
+      browserRun({ target: { name: "ghost", baseUrl: "https://evil.example/app" } });
+      const p = pipeline();
+      const { run, saved } = stage({ ...wantVideo, video: p.fn, policies: { for: async () => ({ decisions: {}, qaTargets: [{ name: "local", baseUrl: "http://localhost:3000/app", credential: null, reentrant: false }] }) } });
+      await run(taskContext());
+      expect(p.calls).toEqual([]);
+      expect(saved[0]![1]).toMatchObject({ evidence: { format: "captures", note: "the QA target is unknown or not re-entrant" } });
+    });
+
     it("turns a send-back note into a fix card and reuses the previous film's job dir", async () => {
       browserRun();
       mkdirSync(join(stateDir, "runs", "ev-prev-video"), { recursive: true });

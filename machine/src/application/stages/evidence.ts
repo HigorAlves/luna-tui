@@ -298,6 +298,8 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       else if (!hasVideo && !hasSteps) addNote("the browser run left neither a recording nor replayable steps");
       else if (!deps.video) addNote("the video pipeline is not wired");
       else if (target?.reentrant === false) addNote("the QA target is not re-entrant");
+      // A manifest naming a target luna.yaml does not know resolves to none: the film is not recorded against a guess.
+      else if (targetName !== null && !target) addNote("the QA target is unknown or not re-entrant");
       else film = true;
       if (!film) format = "captures";
     }

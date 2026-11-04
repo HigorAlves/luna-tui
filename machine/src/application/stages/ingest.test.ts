@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -49,6 +50,21 @@ describe("ingestStageOutput", () => {
     const result = await runner({ task: { id: "t1" }, stage: "evidence", attempt: 1, runId: "ev", approvals: [] } as never);
     expect(result.outcome).toBe("pass");
     expect(result.detail).toMatchObject({ verdict: "pass" });
+  });
+
+  it("skips an artifact that is a symlink: a container can point one at a host file, and the copy would follow it", async () => {
+    const secret = join(outDir, "..", `ingest-secret-${process.pid}`);
+    await writeFile(secret, "private key material");
+    await mkdir(join(outDir, "files", "qa"), { recursive: true });
+    await symlink(secret, join(outDir, "files", "qa", "leak.png"));
+    await writeFile(join(outDir, "files", "qa", "ok.png"), "png");
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output({ artifacts: [{ kind: "screenshot", path: "files/qa/leak.png", label: "leak", sha256: "" }, { kind: "screenshot", path: "files/qa/ok.png", label: "ok", sha256: "" }] })));
+    await writeFile(join(outDir, "events.jsonl"), "");
+    const { artifacts, events } = await ingestStageOutput({ outDir, runId: "r-link", stateDir });
+    expect(artifacts.map((a) => a.label)).toEqual(["ok"]);
+    expect(existsSync(join(stateDir, "runs", "r-link", "files", "qa", "leak.png"))).toBe(false);
+    expect(events.some((e) => e.kind === "note" && (e.payload as { skipped?: boolean }).skipped === true)).toBe(true);
+    await rm(secret);
   });
 
   it("parses the result, events and copies artifacts with a computed sha256", async () => {

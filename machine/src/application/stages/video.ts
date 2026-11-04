@@ -13,6 +13,7 @@ import { z } from "zod";
 
 import { Timeline, checkTimeline } from "../../../runner-video/tools/lib/timeline.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
+import { headCommit as worktreeHead, resetWorktree } from "../../adapters/git/worktree.ts";
 import { type VideoTool, runVideoTool } from "../video-jobs.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import type { AgentExtra } from "./pack-runner.ts";
@@ -26,6 +27,8 @@ export interface VideoPipelineDeps {
   image: string;
   stateDir: string;
   runPack: (pack: VideoPack, context: StageContext, extra: AgentExtra) => Promise<StageResult>;
+  /** The task worktree's head and a hard reset to a commit: a video sub-run that moved the branch is undone on the spot. Tests inject fakes. */
+  git?: { head: (worktreePath: string) => Promise<string>; reset: (worktreePath: string, ref: string) => Promise<void> };
   log?: (line: string) => void;
 }
 
@@ -100,11 +103,23 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
     };
     const sub = (suffix: string, engine?: StageContext["engine"]): StageContext => ({ ...context, runId: `${context.runId}-${suffix}`, started: undefined, resume: undefined, engine });
     const subFiles = (runId: string) => join(deps.stateDir, "runs", runId, "files", "video");
+    const git = deps.git ?? { head: worktreeHead, reset: resetWorktree };
+    const worktree = context.task.worktreePath ?? null;
     const run = async (pack: VideoPack, suffix: string, extra: AgentExtra, engine?: StageContext["engine"]) => {
       const subContext = sub(suffix, engine);
-      const result = await deps.runPack(pack, subContext, extra);
+      const before = worktree ? (await git.head(worktree)).trim() : null;
+      let result = await deps.runPack(pack, subContext, extra);
       spent.turns += result.usage?.turns ?? 0;
       spent.costUsd += result.usage?.costUsd ?? 0;
+      if (worktree && before !== null) {
+        // These runs come after Verify: nothing they commit may reach the branch. The recorder also leaves its
+        // demo spec in the worktree, so its run always ends in a reset to the head it found.
+        const after = (await git.head(worktree)).trim();
+        if (pack === "recording" || after !== before) await git.reset(worktree, before);
+        if (after !== before) {
+          result = { outcome: "fail", detail: { error: `the ${pack} run changed the branch's history (${before.slice(0, 7)} → ${after.slice(0, 7)}); the worktree was reset to ${before.slice(0, 7)}` } };
+        }
+      }
       return { result, dir: subFiles(subContext.runId) };
     };
     const tool = async (name: VideoTool, args: string[]) => {
@@ -162,8 +177,10 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       const checked = checkTimeline(parsed.data, { scenarios: titles });
       if (checked.errors.length > 0) return { error: `the timeline breaks its rules: ${checked.errors.join("; ")}`, problems: checked.errors };
       await writeFile(join(jobDir, "timeline.json"), JSON.stringify(parsed.data, null, 2));
+      // The director has no file tool: the script rides in its answer (a file left by an older image is still read).
       const script = await trusted(dir, "script.md", SMALL);
-      if (script) await writeFile(join(jobDir, "script.md"), await readFile(script));
+      const text = script ? await readFile(script, "utf8") : typeof (answer as { script?: unknown } | undefined)?.script === "string" ? ((answer as { script: string }).script).slice(0, SMALL) : null;
+      if (text !== null) await writeFile(join(jobDir, "script.md"), text);
       return { timeline: parsed.data };
     };
     /** Script (or fix) with one more try when the timeline breaks the rules; the second error list rides as cards. */

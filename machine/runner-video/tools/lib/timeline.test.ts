@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type Timeline, checkTimeline } from "./timeline.ts";
+import { Timeline, checkTimeline } from "./timeline.ts";
 
 /** A 60-second narrated walkthrough: a hook card, two demo scenes (one per approved scenario), an end card. */
 const valid: Timeline = {
@@ -33,6 +33,12 @@ describe("checkTimeline", () => {
     expect(checkTimeline(small, { scenarios }).errors.join("\n")).toMatch(/84/);
     const long = { ...valid, meta: { ...valid.meta, dur: 250 }, scenes: valid.scenes.map((s) => (s.id === "end" ? { ...s, end: 250 } : s)) };
     expect(checkTimeline(long, { scenarios }).errors.join("\n")).toMatch(/240/);
+  });
+
+  it("accepts only plain scene ids: they name files and ffmpeg filter pads", () => {
+    const odd = { ...valid, scenes: valid.scenes.map((s) => (s.id === "total" ? { ...s, id: "a];movie=/etc/passwd[x" } : s)) };
+    expect(Timeline.safeParse(odd).success).toBe(false);
+    expect(Timeline.safeParse(valid).success).toBe(true);
   });
 
   it("makes an uncited number on screen an error unless it is labelled SCHEMATIC", () => {

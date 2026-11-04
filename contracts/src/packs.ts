@@ -706,9 +706,9 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     agent: "video-director",
     helpers: [],
     skills: ["video-script"],
-    // It writes /out/files/video/script.md and timeline.json; the prompt forbids edits to /work.
-    access: access(READ_ONLY, { write: true }),
-    writable: true,
+    // It answers the script and the timeline; the machine writes them. No edit tool: nothing after Verify may change the worktree.
+    access: access(READ_ONLY),
+    writable: false,
     maxTurns: 25,
     timeoutMs: 10 * MINUTE,
     engines: only("claude:sonnet"),
@@ -754,8 +754,9 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     agent: "video-director",
     helpers: [],
     skills: ["video-script"],
-    access: access(READ_ONLY, { write: true }),
-    writable: true,
+    // It answers the script and the timeline; the machine writes them. No edit tool: nothing after Verify may change the worktree.
+    access: access(READ_ONLY),
+    writable: false,
     maxTurns: 25,
     timeoutMs: 10 * MINUTE,
     engines: only("claude:sonnet"),
