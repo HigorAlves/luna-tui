@@ -204,12 +204,13 @@ flowchart TD
 |---|---|
 | `board/` | The Luna TUI board, the Rust TUI and herdr plugin. A client of the machine. |
 | `machine/` | The orchestrator: TypeScript on Node 24+, HTTP API plus an SSE stream, Postgres for state. |
-| `factory/` | What runs inside a stage container: the runner and its three runtimes (`claude` on the Claude Agent SDK, `eve` on Vercel's eve, `jev` on TypeSafe's SDK or the AI SDK's decision API through the Vercel AI Gateway), the roles, the prompt templates, the skills plugin, the guards and the `luna` tools. |
+| `factory/` | What runs inside a stage container: the runner and its three runtimes (`claude` on the Claude Agent SDK, `eve` on Vercel's eve, `jev` on TypeSafe's SDK or the AI SDK's decision API through the Vercel AI Gateway), the roles, the prompt templates, the skills plugin, the guards and the `luna` tools; with a Laminar key from the machine, the runner continues the machine's trace inside the container (`factory/src/core/telemetry.ts`, `runtimes/eve/agent/laminar.ts`). |
 | `contracts/` | Types shared by the machine, the factory and the board, including the pack registry. |
 | `fixtures/` | Fixture repos used by `pnpm golden` (one seeded bug or feature each). |
 | `evals/` | Replay evals (`pnpm eval`): eval cases per pack, graded by schema, checks and the `eval_judge` pack, with a scorecard per engine. See [evals/README.md](../evals/README.md). |
+| `observe/` | ClickHouse config for the `observe` compose profile (Laminar, the local trace and eval UI; see [configuration](configuration.md#observability-laminar)). |
 | `docs/` | This folder. |
-| `compose.yaml` | Postgres and the machine (`docker compose up`); `pnpm dev` starts only Postgres. |
+| `compose.yaml` | Postgres and the machine (`docker compose up`); `pnpm dev` starts only Postgres; `--profile observe` adds Laminar. |
 
 ## Layout inside `machine/src`
 
@@ -217,10 +218,10 @@ Grouped by layer, not by technology:
 
 - `domain/` — pure types and logic with no I/O: task/stage-run/event rows, the transition engine, locked-files/pr-body/detect-checks helpers, memory-rule parsing, stage-input building.
 - `application/` — use cases and ports: `pipeline.ts` (orchestrates the transition engine and the stage runners), `task-store.ts` (the persistence port `pipeline.ts` depends on, never a concrete DB call), `ports.ts` (the `StageRunner`/`StageContext`/`StageResult` contract), the stage runners under `application/stages/` (`pack-runner.ts`, `verify.ts`, `deliver.ts`, `ship.ts`, `ci.ts`, `e2e.ts`, `evidence.ts`, `memory.ts`, `ingest.ts`, `stubs.ts`), the GitHub poll loop (`intake.ts`), and the Jira pieces (`jira.ts` the port, `jira-sync.ts`, `jira-intake.ts`, `jira-watch.ts`, `jira-tasks.ts` behind the routes, `sla.ts` the ticket clocks).
-- `adapters/` — everything that talks to the outside world: `persistence/` (Postgres via TypeORM, implementing the `TaskStore` port), `http/` (the Hono API), `docker/` (the stage sandbox), `process/` (the generic subprocess runner), `git/` (worktrees), `github/` (the GitHub API through Octokit, behind the `GitHub` port in `application/github.ts`), `jira/` (Jira Cloud REST v3 over `fetch` and the ADF converter, behind the `Jira` port in `application/jira.ts`). `http/` also announces running stage containers on the event stream, which the board follows in herdr tabs.
+- `adapters/` — everything that talks to the outside world: `persistence/` (Postgres via TypeORM, implementing the `TaskStore` port), `http/` (the Hono API), `docker/` (the stage sandbox), `process/` (the generic subprocess runner), `git/` (worktrees), `github/` (the GitHub API through Octokit, behind the `GitHub` port in `application/github.ts`), `jira/` (Jira Cloud REST v3 over `fetch` and the ADF converter, behind the `Jira` port in `application/jira.ts`), `laminar/` (run traces and eval records to a local Laminar over `@lmnr-ai/lmnr`, behind the `Telemetry` port in `application/telemetry.ts`, a no-op without a key). `http/` also announces running stage containers on the event stream, which the board follows in herdr tabs.
 - `bootstrap/` — wires the above together at startup (`stages.ts`); `main.ts` itself is just the entry point.
 
-Dependencies point inward: `adapters` depend on `application` ports, `application` depends on `domain` types, nothing in `domain` or `application` imports `typeorm`, `pg`, `hono`, or shells out to `docker` directly, and nothing but `adapters/github/` imports Octokit.
+Dependencies point inward: `adapters` depend on `application` ports, `application` depends on `domain` types, nothing in `domain` or `application` imports `typeorm`, `pg`, `hono`, or shells out to `docker` directly, and nothing but `adapters/github/` imports Octokit, and nothing but `adapters/laminar/` imports `@lmnr-ai/lmnr`.
 
 This is a lightweight application of ports-and-adapters, not a formal DI container: most stage runners already took their dependencies as plain function parameters before this layout existed (`deps.exec`, `deps.runPack`, `deps.sandbox`), so the move mostly made that existing seam's *location* match its *role*. A port got a named interface only where three or more call sites actually shared one (`TaskStore`, `GitHub`, the generic `exec`).
 

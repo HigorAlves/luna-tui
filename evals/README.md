@@ -35,6 +35,11 @@ The credentials are the machine's: the Claude subscription token, the Codex logi
 
 The scorecard gives, per pack and engine, the pass rate, the mean judge score, the mean turns and duration, and the summed cost (`n/a` when the runtime reports none). Without `--save-baseline` it is compared with the engine's saved baseline, over the cases both ran. Every run folder (the input, the output, the transcript) stays under `evals/.runs/`, which git ignores; delete it whenever.
 
+
+## In Laminar
+
+With a Laminar key set (`LMNR_PROJECT_API_KEY`, or `~/.config/hardness/lmnr-project-api-key`; see [configuration](../docs/configuration.md#observability-laminar)), each `pnpm eval` run on an engine is an evaluation in the group named after the pack, so two engines' runs compare side by side in the UI, and each case is a trace (`eval:<pack>`) in the session `eval-<pack>-<time>`, with the case's model turns and tool calls under it (the container continues the trace, as it does for a stage). A datapoint carries the case's input as data, the expectation as target, the answer and its three grades as output, and the scores `pass`, `schema`, `checks` (the share passed), `judge`, `turns` and `costUsd`. `MACHINE_TRACES=full` attaches each case's transcript. Without a key nothing changes: the scorecards and baselines here stay the record.
+
 ## Add a case
 
 `<pack>/cases/<id>/` holds two files:
