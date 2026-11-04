@@ -136,6 +136,32 @@ describe("the plan stage's decision packs", () => {
     expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: 1, timeoutMs: pack.timeoutMs, writable: false });
   });
 
+  it("the ship decisions exist: event_class, comment_intent, fix_scope and evidence_valid each ask one choice, worth_learning one yes/no, all decisions like the others", () => {
+    // Read through a plain record until the packs exist: the red must be "the pack is missing", not a type error.
+    const packs = PACKS as Record<string, unknown>;
+    const choices: Record<string, [string, string[]]> = {
+      event_class: ["event", ["comment", "approval", "changes_requested", "push", "noise"]],
+      comment_intent: ["intent", ["question", "nit", "change_request", "disagreement"]],
+      fix_scope: ["scope", ["in_place", "re_verify_partial", "re_plan"]],
+      evidence_valid: ["validity", ["valid", "refresh_text", "refresh_media"]],
+    };
+    for (const [id, [question, labels]] of Object.entries(choices)) {
+      expect(packs, id).toHaveProperty(id);
+      const pack = packs[id] as typeof PACKS.red_check;
+      expect(pack.kind).toBe("decision");
+      expect(Object.keys(pack.questions)).toEqual([question]);
+      const q = pack.questions[question]!;
+      expect(q.type).toBe("choice");
+      expect(Object.keys((q as { criteria: Record<string, string> }).criteria)).toEqual(labels);
+      expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
+      expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: 1, timeoutMs: pack.timeoutMs, writable: false });
+    }
+    expect(packs).toHaveProperty("worth_learning");
+    const worth = packs.worth_learning as typeof PACKS.red_check;
+    expect(Object.keys(worth.questions)).toEqual(["worth"]);
+    expect(worth.questions.worth).toMatchObject({ type: "yesno" });
+  });
+
   it("all three run on Jev by default and a small Claude or Codex model when it is absent, with a bar per question", () => {
     for (const pack of [PACKS.risk_score, PACKS.coverage_check, PACKS.plan_check]) {
       expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
