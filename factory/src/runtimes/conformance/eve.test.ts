@@ -6,8 +6,9 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, expect, it } from "vitest";
 
-import { compileAndBuild } from "../eve/build.ts";
+import { compileAndBuild, compileAndBuildDecide } from "../eve/build.ts";
 import { eveRuntime } from "../eve/run.ts";
+import { CAPS_NO_TOOLS, DECISION_TABLE } from "./decision.ts";
 import { GOLDEN, PACK, conformance, masked, runScenario } from "./table.ts";
 
 const FACTORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -16,6 +17,7 @@ const agentsDir = mkdtempSync(join(FACTORY_ROOT, ".eve-agents-conformance-"));
 
 beforeAll(() => {
   compileAndBuild(PACK, { factoryRoot: FACTORY_ROOT, outDir: agentsDir, model: "scripted" });
+  compileAndBuildDecide({ factoryRoot: FACTORY_ROOT, outDir: agentsDir, model: "scripted" });
 }, 180_000);
 afterAll(() => rmSync(agentsDir, { recursive: true, force: true }));
 
@@ -29,6 +31,18 @@ conformance(
   },
   { resetsAt: false, schemaIssue: false, tools: true, text: true, delegate: true },
   { timeoutMs: 60_000 },
+);
+
+conformance(
+  "eve (decide)",
+  "codex:luna",
+  (script) => {
+    const file = join(agentsDir, `script-${Math.random().toString(36).slice(2)}.json`);
+    writeFileSync(file, JSON.stringify(script));
+    return eveRuntime({ agentsDir, serverEnv: { LUNA_EVE_SCRIPT: file } });
+  },
+  { resetsAt: false, schemaIssue: false, ...CAPS_NO_TOOLS },
+  { timeoutMs: 60_000, table: DECISION_TABLE },
 );
 
 it("the eve runtime's transcript of the golden run", async () => {
