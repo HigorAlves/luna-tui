@@ -179,3 +179,18 @@ describe("sandboxExecArgs", () => {
     expect(CACHE_ENV).toEqual(expect.arrayContaining(["CARGO_HOME=/cache/cargo", "CARGO_TARGET_DIR=/cache/cargo-target"]));
   });
 });
+
+describe("extra mounts and an entrypoint override", () => {
+  it("mounts the extra mounts after the credential's, read-only when asked", () => {
+    const args = sandboxArgs(run({ mounts: [{ host: "/state/graphs/repo/current", container: "/graph", readOnly: true }] }), "/i", "/o");
+    expect(args).toEqual(expect.arrayContaining(["-v", "/state/graphs/repo/current:/graph:ro"]));
+  });
+
+  it("overrides the entrypoint and passes the rest as the command after the image", () => {
+    const args = sandboxArgs(run({ entrypoint: ["python3", "/graph-tools/build.py", "--input", "/work", "--out", "/graph"] }), "/i", "/o");
+    const at = args.indexOf("--entrypoint");
+    expect(at).toBeGreaterThan(0);
+    expect(args[at + 1]).toBe("python3");
+    expect(args.slice(args.indexOf("img:1") + 1)).toEqual(["/graph-tools/build.py", "--input", "/work", "--out", "/graph"]);
+  });
+});
