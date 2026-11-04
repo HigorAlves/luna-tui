@@ -22,6 +22,71 @@ function qaDir(runId = "e2e-run"): string {
 const runner = (e2e: { runId: string; detail?: Record<string, unknown> } | null) =>
   evidenceRunner({ stateDir, latestE2e: async () => e2e });
 
+describe("evidenceRunner: one manifest row per approved scenario", () => {
+  const scenarios = [
+    { title: "Rejects a bad password", criterion: "no crash", approach: "Given a user, When a bad password is sent, Then 401" },
+    { title: "Shows the export button", criterion: null, approach: "Given a report, When opened, Then the button shows" },
+  ];
+  const approved = {
+    ...context,
+    approvals: [{ kind: "awaiting_approval", decision: "approved", requested: { cases: scenarios } }],
+  } as unknown as StageContext;
+  const row = (text: string, result = "pass") => ({ text, result, evidence: [] });
+  const write = (manifest: Record<string, unknown>) => writeFileSync(join(qaDir(), "qa-manifest.json"), JSON.stringify({ verdict: "pass", ...manifest }));
+
+  it("passes when every scenario has its row and chapter, and lists them with the chapter start", async () => {
+    write({ acceptance: [row(scenarios[0]!.title), row(scenarios[1]!.title, "partial")], video: { file: "qa.webm", chapters: [{ title: scenarios[0]!.title, start: 0 }, { title: scenarios[1]!.title, start: 12.5 }] } });
+    const result = await runner({ runId: "e2e-run" })(approved);
+    expect(result.outcome).toBe("pass");
+    expect(result.detail?.evidence).toMatchObject({
+      rows: 2,
+      scenarios: [
+        { text: scenarios[0]!.title, criterion: "no crash", result: "pass", chapter: 0 },
+        { text: scenarios[1]!.title, criterion: null, result: "partial", chapter: 12.5 },
+      ],
+    });
+  });
+
+  it("fails naming the scenario that has no manifest row", async () => {
+    write({ acceptance: [row(scenarios[0]!.title)] });
+    const result = await runner({ runId: "e2e-run" })(approved);
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ verdict: "partial", error: `1 approved scenario(s) have no manifest row: ${scenarios[1]!.title}` });
+  });
+
+  it("matches titles verbatim: a reworded row is a missing one", async () => {
+    write({ acceptance: [row("rejects a bad password"), row(scenarios[1]!.title)] });
+    const result = await runner({ runId: "e2e-run" })(approved);
+    expect(result.detail?.error).toContain(scenarios[0]!.title);
+  });
+
+  it("fails naming the scenario that has no chapter when the manifest has a video", async () => {
+    write({ acceptance: [row(scenarios[0]!.title), row(scenarios[1]!.title)], video: { file: "qa.webm", chapters: [{ title: scenarios[0]!.title, start: 0 }] } });
+    const result = await runner({ runId: "e2e-run" })(approved);
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ error: `1 approved scenario(s) have no video chapter: ${scenarios[1]!.title}` });
+  });
+
+  it("needs no chapter without a video, and keeps a fail verdict a fail", async () => {
+    write({ acceptance: [row(scenarios[0]!.title), row(scenarios[1]!.title)] });
+    expect((await runner({ runId: "e2e-run" })(approved)).outcome).toBe("pass");
+    write({ verdict: "fail", acceptance: [row(scenarios[0]!.title, "fail")] });
+    expect((await runner({ runId: "e2e-run" })(approved)).detail).toMatchObject({ verdict: "fail" });
+  });
+
+  it("behaves as before for a legacy manifest and no approved scenarios", async () => {
+    write({});
+    const result = await runner({ runId: "e2e-run" })(context);
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).not.toHaveProperty("error");
+  });
+
+  it("asks nothing of a skipped manifest", async () => {
+    write({ verdict: "skipped" });
+    expect((await runner({ runId: "e2e-run" })(approved)).outcome).toBe("pass");
+  });
+});
+
 describe("evidenceRunner", () => {
   it("passes on a pass manifest and lists artifacts and thumbnails", async () => {
     const dir = qaDir();

@@ -49,7 +49,7 @@ export function approvedPlan(approvals: ApprovalRow[]): StageInput["plan"] {
 
 /** The test cases approved at the last test check; anything malformed is dropped. A case
  *  recorded under schema 2 (`test` for `approach`) is read as today's shape. */
-function checkedCases(approvals: ApprovalRow[]): TestCase[] {
+export function approvedCases(approvals: ApprovalRow[]): TestCase[] {
   // The one approval carries the scenarios now; a legacy test check, when a task has one, wins.
   const approval =
     approvals.findLast((a) => a.kind === "awaiting_test_check" && a.decision === "approved") ??
@@ -139,7 +139,7 @@ export function buildStageInput(opts: {
     context: {
       projectContext: opts.projectContext ?? null,
       testCases:
-        pack === "verifying" || pack === "e2e" || (pack === "implementing" && !opts.holdoutCases) ? checkedCases(approvals) : [],
+        pack === "verifying" || pack === "e2e" || (pack === "implementing" && !opts.holdoutCases) ? approvedCases(approvals) : [],
       baseCommit: opts.baseCommit ?? null,
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,

@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { readFile, readdir } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 
+import { approvedCases } from "../../domain/stage-input.ts";
 import type { StageResult, StageRunner } from "../ports.ts";
 
 export interface EvidenceDeps {
@@ -16,6 +17,12 @@ export interface EvidenceDeps {
 }
 
 const MANIFEST = "qa-manifest.json";
+
+interface Manifest {
+  verdict?: unknown;
+  acceptance?: Array<{ text?: unknown; result?: unknown } | null>;
+  video?: { chapters?: Array<{ title?: unknown; start?: unknown } | null> } | null;
+}
 const IMAGES = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif"]);
 const VIDEOS = new Set([".webm", ".mp4", ".mov"]);
 const THUMBNAILS = 3;
@@ -52,9 +59,10 @@ export function evidenceRunner(deps: EvidenceDeps): StageRunner {
     const manifestPath = qaDir ? join(qaDir, MANIFEST) : undefined;
 
     let verdict: string | undefined;
+    let manifest: Manifest = {};
     if (manifestPath) {
       try {
-        const manifest = JSON.parse(await readFile(manifestPath, "utf8")) as { verdict?: unknown };
+        manifest = JSON.parse(await readFile(manifestPath, "utf8")) as Manifest;
         verdict = typeof manifest.verdict === "string" ? manifest.verdict : "unreadable";
       } catch (error) {
         verdict = (error as NodeJS.ErrnoException)?.code === "ENOENT" ? undefined : "unreadable";
@@ -97,7 +105,26 @@ export function evidenceRunner(deps: EvidenceDeps): StageRunner {
         sha256: createHash("sha256").update(await readFile(path)).digest("hex"),
       });
     }
-    const passed = verdict === "pass" || verdict === "skipped";
+    // Every approved scenario is shown by a row keyed by its title, and by a chapter when there is a recording.
+    const approved = verdict === "skipped" || verdict === "unreadable" ? [] : approvedCases(context.approvals);
+    const rows = Array.isArray(manifest.acceptance) ? manifest.acceptance : [];
+    const chapters = Array.isArray(manifest.video?.chapters) ? manifest.video!.chapters! : [];
+    const hasVideo = manifest.video !== undefined && manifest.video !== null;
+    const scenarios = approved.map((c) => {
+      const found = rows.find((r) => typeof r?.text === "string" && r.text.trim() === c.title.trim());
+      const chapter = chapters.find((ch) => typeof ch?.title === "string" && ch.title.trim() === c.title.trim());
+      const result = found?.result === "pass" || found?.result === "fail" || found?.result === "partial" ? found.result : "missing";
+      return { text: c.title, criterion: c.criterion ?? null, result, chapter: typeof chapter?.start === "number" ? chapter.start : null, hasChapter: chapter !== undefined };
+    });
+    const noRow = scenarios.filter((s) => s.result === "missing").map((s) => s.text);
+    const noChapter = hasVideo ? scenarios.filter((s) => !s.hasChapter).map((s) => s.text) : [];
+    const gaps = [
+      ...(noRow.length > 0 ? [`${noRow.length} approved scenario(s) have no manifest row: ${noRow.join(", ")}`] : []),
+      ...(noChapter.length > 0 ? [`${noChapter.length} approved scenario(s) have no video chapter: ${noChapter.join(", ")}`] : []),
+    ];
+    if (gaps.length > 0 && verdict !== "fail") verdict = "partial";
+    const passed = gaps.length === 0 && (verdict === "pass" || verdict === "skipped");
+    const shown = approved.length > 0 ? { rows: rows.length, scenarios: scenarios.map(({ hasChapter: _, ...s }) => s) } : {};
     const thumbnails = artifacts.filter((a) => a.kind === "screenshot").slice(0, THUMBNAILS).map((a) => a.path);
     return {
       outcome: passed ? "pass" : "fail",
@@ -107,8 +134,9 @@ export function evidenceRunner(deps: EvidenceDeps): StageRunner {
         artifactCount: artifacts.length,
         manifestPath,
         thumbnails,
+        ...(gaps.length > 0 ? { error: gaps.join("; ") } : {}),
         // The ship approval's `requested.evidence`, which the board shows.
-        evidence: { verdict, artifactCount: artifacts.length, manifest: manifestPath, thumbnails },
+        evidence: { verdict, artifactCount: artifacts.length, manifest: manifestPath, thumbnails, ...shown },
       },
       artifacts,
     };
