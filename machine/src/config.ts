@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { type EngineBudgets, RUNNING, type RuntimeId, type TaskState, engineBudgetKeyProblem } from "@hardness/contracts";
 
+import type { TracesMode } from "./application/telemetry.ts";
 import { isLoopback } from "./adapters/http/access.ts";
 import { DEFAULT_GATE_SECS, parseDuration } from "./domain/sla.ts";
 
@@ -76,6 +77,8 @@ export interface Config {
   /** What happens to a task mid-stage when the machine stops: back to the queue (its stage re-runs
    *  on boot, no approval needed) or escalated for you to resume, as before. */
   restartPolicy: RestartPolicy;
+  /** Run traces to a local Laminar (`MACHINE_TRACES`, `LMNR_*`); `{ mode: "off" }` without a key. */
+  traces: TracesConfig;
 }
 
 export interface SlackInboxConfig {
@@ -107,6 +110,26 @@ export interface JiraConfig {
 
 export type RestartPolicy = "requeue" | "escalate";
 const RESTART_POLICIES: readonly RestartPolicy[] = ["requeue", "escalate"];
+
+/** Where the machine sends run traces (`MACHINE_TRACES`, the `LMNR_*` variables); off without a key. */
+export type TracesConfig =
+  | { mode: "off" }
+  | {
+      mode: Exclude<TracesMode, "off">;
+      laminar: {
+        projectApiKey: string;
+        /** Laminar as the machine reaches it: scheme and host, no port. */
+        baseUrl: string;
+        /** Laminar as a stage container reaches it (`LMNR_STAGE_BASE_URL`): the host's gateway by default. */
+        stageBaseUrl: string;
+        httpPort: number;
+        grpcPort: number;
+      };
+    };
+
+const TRACES_MODES: readonly TracesMode[] = ["off", "metadata", "full"];
+/** The Laminar key's file in `~/.config/hardness`, read when `LMNR_PROJECT_API_KEY` is unset. */
+export const LMNR_KEY_FILE = "lmnr-project-api-key";
 
 function optionalPositiveInt(env: NodeJS.ProcessEnv, key: string): number | null {
   const raw = env[key];
@@ -179,6 +202,40 @@ function secretFileSync(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+function portFrom(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
+  const raw = env[key];
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 65_535) throw new Error(`${key} must be a port number, got "${raw}"`);
+  return value;
+}
+
+/** `MACHINE_TRACES` and the Laminar address and key. Exported for the evals runner, which has no
+ *  machine config of its own: `tracesConfig(process.env, homedir())`. */
+export function tracesConfig(env: NodeJS.ProcessEnv, home: string): TracesConfig {
+  const key = env.LMNR_PROJECT_API_KEY?.trim() || secretFileSync(join(home, ".config", "hardness", LMNR_KEY_FILE));
+  const raw = env.MACHINE_TRACES?.trim();
+  if (raw !== undefined && raw !== "" && !TRACES_MODES.includes(raw as TracesMode)) throw new Error(`MACHINE_TRACES must be off, metadata or full, got "${raw}"`);
+  const mode = (raw || (key ? "metadata" : "off")) as TracesMode;
+  if (mode === "off") return { mode };
+  if (!key) throw new Error(`MACHINE_TRACES=${mode} needs a Laminar project key: set LMNR_PROJECT_API_KEY or put one in ~/.config/hardness/${LMNR_KEY_FILE}`);
+  const hostUrl = (name: string, fallback: string): string => {
+    const value = (env[name]?.trim() || fallback).replace(/\/+$/, "");
+    if (!/^https?:\/\/[^/:\s]+$/.test(value)) throw new Error(`${name} must be a scheme and host without a port, like ${fallback}, got "${env[name]}"`);
+    return value;
+  };
+  return {
+    mode,
+    laminar: {
+      projectApiKey: key,
+      baseUrl: hostUrl("LMNR_BASE_URL", "http://localhost"),
+      stageBaseUrl: hostUrl("LMNR_STAGE_BASE_URL", "http://host.docker.internal"),
+      httpPort: portFrom(env, "LMNR_HTTP_PORT", 8000),
+      grpcPort: portFrom(env, "LMNR_GRPC_PORT", 8001),
+    },
+  };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -339,5 +396,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     disabledRuntimes: disabledRuntimes(env),
     engineBudgets: engineBudgets(env),
     restartPolicy,
+    traces: tracesConfig(env, home),
   };
 }

@@ -10,6 +10,7 @@ import {
   DEFAULT_PORT,
   DEFAULT_RETENTION_DAYS,
   loadConfig,
+  tracesConfig,
 } from "./config.ts";
 
 describe("loadConfig", () => {
@@ -37,6 +38,7 @@ describe("loadConfig", () => {
       disabledRuntimes: [],
       engineBudgets: {},
       restartPolicy: "requeue",
+      traces: { mode: "off" },
       worktreeRetentionDays: 7,
       maxPerRepo: null,
       maxPerStage: {},
@@ -205,6 +207,35 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ HOME: "/home/me", MACHINE_ENGINE_BUDGETS: "gpt=5" })).toThrow(/^MACHINE_ENGINE_BUDGETS: gpt: not an engine or a credential/);
     expect(() => loadConfig({ HOME: "/home/me", MACHINE_ENGINE_BUDGETS: "openai=lots" })).toThrow('MACHINE_ENGINE_BUDGETS must list <engine or credential>=<USD> pairs, got "openai=lots"');
     expect(() => loadConfig({ HOME: "/home/me", MACHINE_ENGINE_BUDGETS: "openai=-1" })).toThrow(/MACHINE_ENGINE_BUDGETS must list/);
+  });
+
+  it("turns traces off without a Laminar key, and on (metadata) with one", () => {
+    expect(loadConfig({ HOME: "/home/me" }).traces).toEqual({ mode: "off" });
+    expect(loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: " key-1 " }).traces).toEqual({
+      mode: "metadata",
+      laminar: { projectApiKey: "key-1", baseUrl: "http://localhost", stageBaseUrl: "http://host.docker.internal", httpPort: 8000, grpcPort: 8001 },
+    });
+  });
+
+  it("reads MACHINE_TRACES and the LMNR_* address, and refuses a mode without a key or a bad value", () => {
+    expect(loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "full", LMNR_BASE_URL: "http://lmnr-app/", LMNR_STAGE_BASE_URL: "http://lmnr-app", LMNR_HTTP_PORT: "8100", LMNR_GRPC_PORT: "8101" }).traces).toEqual({
+      mode: "full",
+      laminar: { projectApiKey: "k", baseUrl: "http://lmnr-app", stageBaseUrl: "http://lmnr-app", httpPort: 8100, grpcPort: 8101 },
+    });
+    expect(loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "off" }).traces).toEqual({ mode: "off" });
+    expect(() => loadConfig({ HOME: "/home/me", MACHINE_TRACES: "full" })).toThrow(/^MACHINE_TRACES=full needs a Laminar project key: set LMNR_PROJECT_API_KEY/);
+    expect(() => loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", MACHINE_TRACES: "loud" })).toThrow(/^MACHINE_TRACES must be off, metadata or full, got "loud"/);
+    expect(() => loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", LMNR_HTTP_PORT: "x" })).toThrow(/^LMNR_HTTP_PORT must be a port number, got "x"/);
+    expect(() => loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", LMNR_BASE_URL: "localhost:8000" })).toThrow(/^LMNR_BASE_URL must be a scheme and host without a port, like http:\/\/localhost, got "localhost:8000"/);
+    expect(() => loadConfig({ HOME: "/home/me", LMNR_PROJECT_API_KEY: "k", LMNR_STAGE_BASE_URL: "host.docker.internal:8001" })).toThrow(/^LMNR_STAGE_BASE_URL must be a scheme and host without a port/);
+  });
+
+  it("reads the Laminar key from ~/.config/hardness/lmnr-project-api-key when the variable is unset", () => {
+    const home = mkdtempSync(join(tmpdir(), "config-home-"));
+    mkdirSync(join(home, ".config", "hardness"), { recursive: true });
+    writeFileSync(join(home, ".config", "hardness", "lmnr-project-api-key"), "from-file\n");
+    expect(tracesConfig({}, home)).toEqual({ mode: "metadata", laminar: { projectApiKey: "from-file", baseUrl: "http://localhost", stageBaseUrl: "http://host.docker.internal", httpPort: 8000, grpcPort: 8001 } });
+    expect(tracesConfig({ LMNR_PROJECT_API_KEY: "from-env" }, home)).toMatchObject({ laminar: { projectApiKey: "from-env" } });
   });
 
   it("reads a custom retention window, including 0 to disable pruning", () => {
