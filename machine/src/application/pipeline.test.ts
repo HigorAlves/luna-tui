@@ -12,7 +12,7 @@ import type { StageContext, StageResult, StageRunner } from "./ports.ts";
 import { loadConfig } from "../config.ts";
 import { StubStages } from "./stages/stubs.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { type BudgetAlert, Pipeline, SourceImmutableError, TaskNotFoundError } from "./pipeline.ts";
+import { type BudgetAlert, Pipeline, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan } from "../domain/stage-input.ts";
 import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
@@ -1239,6 +1239,59 @@ describe("aborting a running stage", () => {
     expect(aborted).toMatchObject({ state: "escalated", reason: "aborted" });
     expect(released).toBe(true);
     expect((await pipeline.stageRuns(a.id)).at(-1)).toMatchObject({ stage: "triage", status: "aborted" });
+  });
+});
+
+describe("archiving a running stage", () => {
+  it("stops the stage and waits for its container to let go before the close step removes the worktree", async () => {
+    let released = false;
+    const slowToDie: StageRunner = ({ signal }) =>
+      new Promise<StageResult>((resolve) =>
+        signal.addEventListener(
+          "abort",
+          () =>
+            setTimeout(() => {
+              released = true;
+              resolve({ outcome: "fail" });
+            }, 30),
+          { once: true },
+        ),
+      );
+    let reached = 0;
+    const runnerFor = (stage: TaskState) =>
+      stage === "triage"
+        ? (context: Parameters<StageRunner>[0]) => {
+            reached++;
+            return slowToDie(context);
+          }
+        : stubs.runnerFor(stage);
+    /** Whether the container had let go each time the close step removed a worktree. */
+    const removals: boolean[] = [];
+    const exec = async (command: string, args: string[]) => {
+      if (command === "git" && args.includes("worktree")) removals.push(released);
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    pipeline = new Pipeline(db, runnerFor, { closeDeps: { exec, worktreeRemove: true } });
+    const a = await newTask();
+    await pipeline.start(a.id);
+    while (reached < 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    await db.query('update tasks set repo_path = $1, worktree_path = $2 where id = $3', ["/r/a", "/r/a/.orc/wt", a.id]);
+
+    const archived = await pipeline.archive(a.id, "rejected");
+
+    expect(archived).toMatchObject({ state: "archived", archiveReason: "rejected", worktreePath: null });
+    expect(released).toBe(true);
+    expect(removals).toEqual([true]);
+    expect((await pipeline.stageRuns(a.id)).at(-1)).toMatchObject({ stage: "triage", status: "aborted" });
+  });
+
+  it("archives only from the states the caller names, checked under the row lock", async () => {
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
+    const a = await newTask();
+    await expect(pipeline.archive(a.id, "sla_expired", { onlyFrom: new Set<TaskState>(["awaiting_answers"]) })).rejects.toThrow(TaskMovedError);
+    expect((await pipeline.get(a.id)).state).toBe("draft");
+    const archived = await pipeline.archive(a.id, "sla_expired", { onlyFrom: new Set<TaskState>(["draft"]) });
+    expect(archived).toMatchObject({ state: "archived", archiveReason: "sla_expired" });
   });
 });
 

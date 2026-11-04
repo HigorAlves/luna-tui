@@ -143,6 +143,14 @@ export class TaskNotFoundError extends Error {
 }
 
 /** The task has a stage running, so it cannot be deleted until you abort it. */
+/** The task is no longer in a state the caller required: a tick decided on a stale row. */
+export class TaskMovedError extends Error {
+  constructor(id: string, state: TaskState, expected: Iterable<TaskState>) {
+    super(`task ${id} is ${state}, not ${[...expected].join(" or ")}`);
+    this.name = "TaskMovedError";
+  }
+}
+
 export class TaskBusyError extends Error {
   constructor(id: string, state: TaskState) {
     super(`task ${id} is ${state}; abort it first`);

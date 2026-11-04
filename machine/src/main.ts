@@ -14,7 +14,7 @@ import { loadConfig } from "./config.ts";
 import { createDataSource, poolSizeFor } from "./adapters/persistence/data-source.ts";
 import { computeMetrics } from "./adapters/persistence/metrics-query.ts";
 import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS } from "./adapters/persistence/prune.ts";
-import { type SlaRow, applySlaActions } from "./application/sla-actions.ts";
+import { AUTO_ARCHIVE_GATES, type SlaRow, applySlaActions } from "./application/sla-actions.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { createIssueClassifier } from "./application/classify.ts";
@@ -454,7 +454,7 @@ const slaTicker = new Ticker(() => {
         const reminders = (await pipeline.events(task.id)).filter((event) => event.kind === "sla.reminder");
         rows.push({ task, sla, targets, lastReminderAt: reminders.length ? new Date(Math.max(...reminders.map((event) => event.at.getTime()))) : null });
       }
-      await applySlaActions(rows, new Date(), { record: (id, kind, payload) => pipeline.record(id, kind, payload), archive: (id, reason) => pipeline.archive(id, reason) });
+      await applySlaActions(rows, new Date(), { record: (id, kind, payload) => pipeline.record(id, kind, payload), archive: (id, reason) => pipeline.archive(id, reason, { onlyFrom: AUTO_ARCHIVE_GATES }) });
     })
     .catch((error: unknown) => console.warn("sla tick failed", error));
 }, MINUTE_MS);

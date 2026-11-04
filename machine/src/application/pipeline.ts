@@ -9,7 +9,7 @@ import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
@@ -32,7 +32,7 @@ import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../domain/task.ts";
+export { IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -161,6 +161,8 @@ interface Extra {
   detail?: Record<string, unknown>;
   /** Your answer to the gate the task is waiting at. */
   decision?: DecisionRecord;
+  /** States the task must still be in, checked under its row lock: a decision made on a listed row. */
+  onlyFrom?: ReadonlySet<TaskState>;
 }
 
 /** A stage run a restart found still running in its container: drive it from where it is. */
@@ -638,16 +640,19 @@ export class Pipeline {
     return (await this.store.getTask(id)) ?? task;
   }
 
-  /** Ends the task as archived, with a reason, from any state that has not ended: a running stage
-   *  is stopped and the close steps run (the worktree goes). */
-  async archive(id: string, reason: ArchiveReason): Promise<TaskRow> {
-    const task = await this.dispatch(id, { type: "archive", reason });
+  /** Ends the task as archived, with a reason, from any state that has not ended (or only from
+   *  `onlyFrom`, for a caller that decided on a listed row). The row ends first, under its lock;
+   *  a running stage is then stopped and waited out; only then do the close steps run, so the
+   *  worktree is never removed under a container that still has it. */
+  async archive(id: string, reason: ArchiveReason, options: { onlyFrom?: ReadonlySet<TaskState> } = {}): Promise<TaskRow> {
+    const step = await this.apply(id, { type: "archive", reason }, { onlyFrom: options.onlyFrom });
     this.loops.get(id)?.abort();
     await this.store.updateTask(id, { queued: false });
     clearTimeout(this.resumeTimers.get(id));
     this.resumeTimers.delete(id);
-    if (!(await this.untilLoopEnds(id, ABORT_WIND_DOWN_MS))) return task;
-    return (await this.store.getTask(id)) ?? task;
+    await this.untilLoopEnds(id, ABORT_WIND_DOWN_MS);
+    if (step.effect.kind === "done") await this.close(id);
+    return this.get(id);
   }
 
   /** True once id's stage loop has let go of its slot, false if it has not within `ms`. */
@@ -1330,6 +1335,7 @@ export class Pipeline {
 
   private async apply(id: string, event: PipelineEvent, extra: Extra): Promise<Step> {
     const { step, logged } = await this.store.withTaskLock(id, async (task, tx) => {
+      if (extra.onlyFrom && !extra.onlyFrom.has(task.state)) throw new TaskMovedError(id, task.state, extra.onlyFrom);
       const step = transition(task, event);
       const open = extra.decision ? await tx.findOpenApproval(id) : null;
       // Approving the plan adopts triage's criteria: the ticket's, refined and added to.
