@@ -27,6 +27,13 @@ describe("sandboxArgs", () => {
     }
   });
 
+  it("passes the trace context in and adds the host alias only for a trace backend on host.docker.internal", () => {
+    const traced = sandboxArgs(run({ extraEnv: { LMNR_BASE_URL: "http://host.docker.internal", LMNR_SPAN_CONTEXT: "c" } }), "/in", "/out");
+    expect(traced).toEqual(expect.arrayContaining(["-e", "LMNR_BASE_URL=http://host.docker.internal", "--add-host", "host.docker.internal:host-gateway"]));
+    expect(sandboxArgs(run({ extraEnv: { LMNR_BASE_URL: "http://lmnr-app" } }), "/in", "/out")).not.toContain("--add-host");
+    expect(sandboxArgs(run(), "/in", "/out")).not.toContain("--add-host");
+  });
+
   it("keeps the SDK's sessions on the host when given a session mount, so a session survives the attempt", () => {
     const args = sandboxArgs(run({ sessionMount: "/state/tasks/t1/session" }), "/in", "/out");
     expect(args).toEqual(expect.arrayContaining(["-v", "/state/tasks/t1/session:/session", "-e", "CLAUDE_CONFIG_DIR=/session"]));

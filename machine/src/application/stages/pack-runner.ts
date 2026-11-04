@@ -339,7 +339,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       ...(isFile(join(workspace.path, ".git")) ? [{ host: join(workspace.path, ".git"), container: "/work/.git", readOnly: true }] : []),
       ...(extra.mounts ?? []),
     ],
-    ...(graphContext && graphDir ? { extraEnv: { LUNA_GRAPH: GRAPH_FILE } } : {}),
+    // The graph's path for the pack, and what the stage container needs to continue the machine's trace.
+    extraEnv: { ...(graphContext && graphDir ? { LUNA_GRAPH: GRAPH_FILE } : {}), ...(context.traceEnv ?? {}) },
     signal: context.signal,
     // The tab's label names the repo too: five repos' Build tabs read apart.
     onStarted: (name) => {

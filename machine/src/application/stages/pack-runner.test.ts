@@ -138,6 +138,14 @@ describe("agent stages through packs", () => {
     expect(result.detail).toMatchObject({ brief: "did it" });
   });
 
+  it("hands the sandbox the run's trace context as extra env, and nothing when there is none", async () => {
+    const d = deps(fakeSandbox(output()));
+    await runAgent(d, { ...context("triage"), traceEnv: { LMNR_SPAN_CONTEXT: "ctx" } }, "triage");
+    expect(seen?.extraEnv).toEqual({ LMNR_SPAN_CONTEXT: "ctx" });
+    await runAgent(d, context("triage"), "triage");
+    expect(seen?.extraEnv).toEqual({});
+  });
+
   it("runs e2e in the QA image and every other pack in the base image", async () => {
     const d = deps(fakeSandbox(output()));
     await runAgent(d, context("e2e"), "e2e");

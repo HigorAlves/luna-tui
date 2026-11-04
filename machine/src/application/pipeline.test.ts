@@ -20,6 +20,27 @@ import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
 import type { CloseReport } from "./close-task.ts";
 import { toStageRun } from "../adapters/http/serialize.ts";
+import { type RunEnd, type RunStart, type Telemetry, noTelemetry } from "./telemetry.ts";
+
+/** A telemetry that keeps what it was told. */
+function recordingTelemetry() {
+  const spans: Array<{ start: RunStart; events: Array<{ name: string; payload: Record<string, unknown> | undefined }>; end: RunEnd | null }> = [];
+  const telemetry: Telemetry = {
+    ...noTelemetry(),
+    mode: "metadata",
+    run: (start) => {
+      const span = { start, events: [] as Array<{ name: string; payload: Record<string, unknown> | undefined }>, end: null as RunEnd | null };
+      spans.push(span);
+      return {
+        event: (name, payload) => void span.events.push({ name, payload }),
+        traceId: () => `trace-${spans.length}`,
+        childEnv: () => ({ LMNR_SPAN_CONTEXT: `ctx-${spans.length}` }),
+        end: async (end) => void (span.end = end),
+      };
+    },
+  };
+  return { telemetry, spans };
+}
 
 let db: DataSource;
 const stubs = new StubStages();
@@ -476,6 +497,35 @@ describe("the whole pipeline with stub stages", () => {
       "reviewing_memory",
     ]);
     expect(approvals.every((a) => a.decision === "approved" && a.decidedAt)).toBe(true);
+  });
+});
+
+describe("telemetry", () => {
+  it("tells the telemetry about each stage run: a span in the task's session, the container when it starts, the outcome and usage when it ends", async () => {
+    const { telemetry, spans } = recordingTelemetry();
+    let traceEnvSeen: Record<string, string> | undefined;
+    const triage: StageRunner = async ({ started, traceEnv }) => {
+      traceEnvSeen = traceEnv;
+      await started?.({ container: "hardness-abc-triage-1", inputCommit: "deadbeef", engine: "claude:opus" });
+      return {
+        outcome: "pass",
+        detail: { summary: "a plan" },
+        usage: { turns: 3, costUsd: 0.05 },
+        events: [{ at: "2026-11-03T00:00:00.000Z", kind: "note", payload: { note: "hello" } }],
+        run: { transcriptPath: "/state/runs/r1/transcript.log", info: { runtime: "claude", engine: "claude:opus", modelId: "claude-opus-5-5", sdk: { name: "sdk", version: "1" }, fingerprint: "b".repeat(64) } },
+      };
+    };
+    const traced = new Pipeline(db, (stage) => (stage === "triage" ? triage : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true, telemetry });
+    const task = await traced.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
+    await traced.start(task.id);
+    const span = spans.find((s) => s.start.stage === "triage")!;
+    expect(span.start).toMatchObject({ kind: "stage", pack: "triage", engine: null, sessionId: task.id, taskId: task.id, stage: "triage", attempt: 1 });
+    expect(span.events.map((e) => e.name)).toEqual(["started", "note"]);
+    expect(span.events[0]!.payload).toEqual({ container: "hardness-abc-triage-1", engine: "claude:opus" });
+    expect(span.end).toMatchObject({ outcome: "pass", status: "passed", engine: "claude:opus", summary: "a plan", turns: 3, costUsd: 0.05, transcriptPath: "/state/runs/r1/transcript.log", info: { modelId: "claude-opus-5-5" } });
+    expect(typeof span.end!.durationMs).toBe("number");
+    expect(traceEnvSeen).toEqual({ LMNR_SPAN_CONTEXT: "ctx-1" });
+    await traced.shutdown();
   });
 });
 

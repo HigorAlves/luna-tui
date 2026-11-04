@@ -15,6 +15,7 @@ import { type PipelineEvent, type Step, transition } from "../domain/transition.
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { Credentials } from "../adapters/credentials/index.ts";
+import { type RunSpan, type Telemetry, noTelemetry } from "./telemetry.ts";
 import { fallbackCandidates } from "../domain/engine-choice.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { pickEngine } from "./engine.ts";
@@ -91,6 +92,8 @@ export interface NewTask {
 }
 
 export interface PipelineOptions {
+  /** Where each stage run is reported as a span; the no-op without a backend. */
+  telemetry?: Telemetry;
   /** Called after each event is stored; the API streams these to the board. */
   onEvent?: (event: EventRow) => void;
   /** The Jira site (`https://acme.atlassian.net`): with it, a `PLAT-123` in a new ticket's text links the issue. Null: no detection. */
@@ -248,6 +251,7 @@ export class Pipeline {
   private readonly pausedOn = new Map<string, CredentialOwner>();
   private readonly credentials: Pick<Credentials, "check">;
   private readonly engineBudgets: Pick<EngineBudgetWatch, "afterRun"> | null;
+  private readonly telemetry: Telemetry;
   private supervisor: NodeJS.Timeout | undefined;
 
   constructor(
@@ -276,6 +280,7 @@ export class Pipeline {
     this.jiraSite = options.jiraSite ?? null;
     this.credentials = options.credentials ?? { check: () => Promise.resolve({ available: true }) };
     this.engineBudgets = options.engineBudgets ?? null;
+    this.telemetry = options.telemetry ?? noTelemetry();
   }
 
   /** The repo's policy, from its luna.yaml. */
@@ -1584,6 +1589,11 @@ export class Pipeline {
     if (!resume) await this.log(id, "stage.started", { stage, attempt }, runId);
     if (fallback) await this.log(id, "stage.engine", { stage, pack: packForState(stage), engine: fallback.engine, reason: fallback.reason }, runId);
 
+    const t0 = Date.now();
+    const span: RunSpan = this.telemetry.run({ kind: "stage", pack: packForState(stage), engine: fallback?.engine ?? resume?.engine ?? null, sessionId: id, taskId: id, stage, attempt });
+    if (fallback) span.event("engine", { engine: fallback.engine, reason: fallback.reason });
+    let repo: string | null = null;
+
     let result: StageResult;
     let error: string | undefined;
     /** The engine the run is on, as the runner says when it starts: what its cost counts against. */
@@ -1594,6 +1604,7 @@ export class Pipeline {
         this.approvals(id),
         stage === "implementing" ? this.latestVerifyingFindings(id) : Promise.resolve([]),
       ]);
+      repo = task.repoPath;
       result = await this.runnerFor(stage)({
         task,
         stage,
@@ -1606,9 +1617,11 @@ export class Pipeline {
         ...(fallback ? { engine: fallback.engine } : {}),
         started: (facts) => {
           ranOn = facts.engine ?? ranOn;
+          span.event("started", { container: facts.container, engine: facts.engine ?? null });
           return this.store.markStageRunStarted(runId, { containerId: facts.container, inputCommit: facts.inputCommit, ...(facts.engine ? { engine: facts.engine } : {}) });
         },
         note: (text) => this.log(id, "stage.note", { stage, note: text }, runId),
+        traceEnv: span.childEnv(),
       });
     } catch (thrown) {
       error = thrown instanceof Error ? thrown.message : String(thrown);
@@ -1636,6 +1649,23 @@ export class Pipeline {
       ...(result.usage ? { turns: result.usage.turns, costUsd: result.usage.costUsd?.toString() ?? null } : {}),
       ...(stage === "verifying" ? { cases: casesOf(result.detail) } : {}),
       ...runFacts(result.run?.info),
+    });
+    if (result.rateLimited) span.event("rate_limited", { resetsAt: result.detail?.resetsAt ?? null });
+    if (result.outcome === "escalated") span.event("escalated", { reason: result.detail?.reason ?? null });
+    for (const item of result.events ?? []) span.event(item.kind.replace(/^stage\./, ""), item.payload);
+    await span.end({
+      outcome,
+      status,
+      engine: ranOn,
+      error: error ?? (typeof result.detail?.error === "string" ? result.detail.error : null),
+      summary: typeof result.detail?.summary === "string" ? result.detail.summary : null,
+      repo,
+      model: result.run?.info?.modelId ?? null,
+      turns: result.usage?.turns ?? null,
+      costUsd: result.usage?.costUsd ?? null,
+      durationMs: Date.now() - t0,
+      info: result.run?.info ?? null,
+      transcriptPath: result.run?.transcriptPath ?? null,
     });
     if (result.usage?.costUsd) {
       await this.raiseAlerts(id);
