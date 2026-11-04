@@ -23,7 +23,9 @@ export function blastRadius(graph: GraphJson, changed: string[], depth = 2): str
   const dependents = new Map<string, string[]>();
   for (const link of graph.links ?? []) {
     const target = idOf(link.target);
-    dependents.set(target, [...(dependents.get(target) ?? []), idOf(link.source)]);
+    const list = dependents.get(target);
+    if (list) list.push(idOf(link.source));
+    else dependents.set(target, [idOf(link.source)]);
   }
   let frontier = new Set([...files].filter(([, file]) => touched.has(file)).map(([id]) => id));
   const seen = new Set(frontier);

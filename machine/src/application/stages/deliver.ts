@@ -29,6 +29,15 @@ export async function pushBranch(exec: ExecFn, branch: string, cwd: string): Pro
 }
 
 /** Opens the PR for a task's branch with the caveman body. */
+/** The ref a Build checkpoint goes to: outside refs/heads and refs/tags, so no CI runs on it and no PR head moves. */
+export const checkpointRef = (branch: string): string => `refs/luna/wip/${branch}`;
+
+/** Pushes the worktree's HEAD to the branch's checkpoint ref (forced: the ref is the machine's own). Returns an error message on failure. */
+export async function pushCheckpoint(exec: ExecFn, branch: string, cwd: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<string | null> {
+  const pushed = await exec("git", [...HOST_GIT, "-C", cwd, "push", "--force", "origin", `HEAD:${checkpointRef(branch)}`], options);
+  return pushed.code === 0 ? null : `git push failed: ${describe(pushed)}`;
+}
+
 export async function openTaskPr(github: GitHub, slug: string, context: StageContext, draft: boolean) {
   const { task } = context;
   const { title, body } = buildPr({ task, plan: approvedPlan(context.approvals), repoSlug: slug });

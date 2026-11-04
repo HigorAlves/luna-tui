@@ -826,8 +826,10 @@ describe("the engine a stage runs on", () => {
 
     it("keeps the ledger of an aborted run and has pushed the committed slice once", async () => {
       const calls: string[][] = [];
-      const hostExec = vi.fn(async (cmd: string, args: string[]) => {
+      const pushOptions: Array<{ timeoutMs?: number; signal?: AbortSignal } | undefined> = [];
+      const hostExec = vi.fn(async (cmd: string, args: string[], options?: { cwd?: string; signal?: AbortSignal; timeoutMs?: number }) => {
         calls.push([cmd, ...args]);
+        if (args.includes("push")) pushOptions.push(options);
         return { code: 0, stdout: "", stderr: "" };
       });
       const result = await runAgent({ ...deps(aborting), hostExec, watchEvery: 5 }, context("implementing"), "implementing");
@@ -835,7 +837,25 @@ describe("the engine a stage runs on", () => {
       const pushes = calls.filter((c) => c.includes("push"));
       expect(pushes).toHaveLength(1);
       expect(pushes[0]!.slice(0, 4)).toEqual(["git", "-c", "core.hooksPath=/dev/null", "-C"]);
-      expect(pushes[0]!.slice(5)).toEqual(["push", "-u", "origin", expect.stringMatching(/^task\//)]);
+      // A checkpoint goes to a ref that triggers no CI and is nobody's PR head; Deliver updates the branch itself.
+      expect(pushes[0]!.slice(5)).toEqual(["push", "--force", "origin", expect.stringMatching(/^HEAD:refs\/luna\/wip\/task\//)]);
+      expect(pushOptions[0]?.timeoutMs).toBeGreaterThan(0);
+      expect(pushOptions[0]?.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it("pushes once per tip: two slices committed on the same HEAD make one push", async () => {
+      const pushed: string[][] = [];
+      const hostExec = vi.fn(async (_cmd: string, args: string[]) => {
+        if (args.includes("push")) pushed.push(args);
+        return { code: 0, stdout: "", stderr: "" };
+      });
+      const twoOnOneTip = (run: SandboxRun) => {
+        mkdirSync(join(run.runDir, "out"), { recursive: true });
+        writeFileSync(join(run.runDir, "out", "ledger.json"), JSON.stringify({ schema: 1, slices: [1, 2].map((id) => ({ id, title: `s${id}`, status: "committed", commit: "same" })) }));
+      };
+      const result = await runAgent({ ...deps(fakeSandbox(output(), twoOnOneTip)), hostExec, watchEvery: 5 }, context("implementing"), "implementing");
+      expect(result.outcome).toBe("pass");
+      expect(pushed).toHaveLength(1);
     });
 
     it("never fails the stage on a failed push, and counts it", async () => {

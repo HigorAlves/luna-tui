@@ -6,7 +6,9 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { type Decide, buildChecks, buildWatch } from "./build-watch.ts";
+import type { CheckContext } from "@hardness/contracts";
+
+import { type Decide, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch } from "./build-watch.ts";
 
 const ledger = (slices: Array<{ id: number; status: string; commit?: string | null }>) =>
   JSON.stringify({ schema: 1, slices: slices.map((s) => ({ id: s.id, title: `slice ${s.id}`, status: s.status, commit: s.commit ?? null })) });
@@ -130,5 +132,49 @@ describe("build checks", () => {
     expect(JSON.parse(readFileSync(join(out, "checks", "red-1.json"), "utf8"))).toEqual({ verdict: "proceed", problems: [] });
     expect((await c.finalFacts([{ path: "src/extra.ts" }])).undeclared).toEqual([]);
     expect(await c.lastVerdict()).toBe("skipped");
+  });
+});
+
+describe("bounds a run's checks", () => {
+  const ledgerOf = (slices: Array<{ id: number; status: string; note?: string; commit?: string | null }>) =>
+    JSON.stringify({ schema: 1, slices: slices.map((s) => ({ id: s.id, title: `slice ${s.id}`, status: s.status, commit: s.commit ?? null, note: s.note ?? null })) });
+  const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it("judges at most MAX_REDS_PER_SLICE reds of one slice and MAX_SCOPE_REQUESTS scope requests", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-watch-caps-"));
+    mkdirSync(join(out, "checks"), { recursive: true });
+    const reds: string[] = [];
+    const requests: string[] = [];
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onRed: async (s) => void reds.push(s.note ?? ""), onScopeRequest: async (r) => void requests.push(r.diffSummary) });
+    for (const n of [1, 2, 3, 4]) {
+      writeFileSync(join(out, "ledger.json"), ledgerOf([{ id: 1, status: "red", note: `attempt ${n} failed with a long enough note` }]));
+      writeFileSync(join(out, "checks", "scope-request.json"), JSON.stringify({ diffSummary: `request ${n}`, outOfMap: [] }));
+      await wait(40);
+    }
+    await watch.stop();
+    expect(reds).toHaveLength(MAX_REDS_PER_SLICE);
+    expect(requests).toHaveLength(MAX_SCOPE_REQUESTS);
+  });
+
+  it("hands the decision only the tail of a long red note, and keeps the verdict it gave in memory", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-watch-mem-"));
+    const seen: CheckContext[] = [];
+    const checks = buildChecks({
+      outDir: out, repoPath: "/r", worktree: "/wt", inputCommit: "base", slices: [{ title: "s1", est_loc: 1, touchpoints: ["a.ts"], acceptance: ["ok"] }], planned: ["a.ts"],
+      decide: async (pack, check) => {
+        seen.push(check);
+        return pack === "red_check"
+          ? { right_reason: { value: true, p: 0.9 }, not_tautological: { value: true, p: 0.9 } }
+          : { planned_or_declared: { value: true, p: 0.9 }, no_new_dependency: { value: true, p: 0.9 }, no_secret_or_pii: { value: true, p: 0.9 }, no_test_removed: { value: true, p: 0.9 }, no_todo: { value: false, p: 0.1 } };
+      },
+      overrides: {},
+      git: { nameStatus: async () => "M\ta.ts", diff: async () => "+++ b/a.ts\n+// TODO later\n" },
+    });
+    await checks.onRed({ id: 1, title: "s1", status: "red", commit: null, note: "x".repeat(10_000) });
+    expect(seen[0]!.output!.length).toBeLessThanOrEqual(NOTE_TAIL);
+    await checks.onScopeRequest({ diffSummary: "d", outOfMap: [] });
+    expect(await checks.lastVerdict()).toBe("flag");
+    writeFileSync(join(out, "checks", "scope.json"), JSON.stringify({ verdict: "proceed", problems: [] }));
+    expect(await checks.lastVerdict()).toBe("flag");
   });
 });

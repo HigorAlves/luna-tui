@@ -34,9 +34,18 @@ export interface BuildWatch {
   seen: ReadonlySet<number>;
 }
 
+/** Reds of one slice judged per run: the first attempt and one rewrite; the rest are the agent's to settle. */
+export const MAX_REDS_PER_SLICE = 2;
+/** Scope requests judged per run: the first and two fix passes. */
+export const MAX_SCOPE_REQUESTS = 3;
+/** The tail of a red note a decision sees: the failing lines are at the end, and a note is agent-written. */
+export const NOTE_TAIL = 4096;
+
 export function buildWatch(options: BuildWatchOptions): BuildWatch {
   const seen = new Set<number>();
   const reds = new Set<string>();
+  const redsPerSlice = new Map<number, number>();
+  let scopeRequests = 0;
   let lastRequest = "";
   let stopped = false;
   let tick: Promise<void> = Promise.resolve();
@@ -54,8 +63,9 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
         for (const key of [...reds]) if (key.startsWith(`${slice.id}:`)) reds.delete(key);
       } else if (options.onRed && slice.note) {
         const key = `${slice.id}:${slice.note}`;
-        if (!reds.has(key)) {
+        if (!reds.has(key) && (redsPerSlice.get(slice.id) ?? 0) < MAX_REDS_PER_SLICE) {
           reds.add(key);
+          redsPerSlice.set(slice.id, (redsPerSlice.get(slice.id) ?? 0) + 1);
           try {
             await options.onRed(slice);
           } catch (error) {
@@ -90,6 +100,8 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
       return; // half-written: the next tick retries
     }
     lastRequest = text;
+    if (scopeRequests >= MAX_SCOPE_REQUESTS) return;
+    scopeRequests += 1;
     try {
       await options.onScopeRequest(request);
     } catch (error) {
@@ -192,10 +204,13 @@ export function buildChecks(deps: BuildChecksDeps) {
     return scopeFacts({ nameStatus, addedLines, planned: deps.planned, declared });
   };
 
+  /** The verdict the last scope_check came to, kept here: the answer file lives under /out, which the container can rewrite. */
+  let verdict = "skipped";
+
   return {
     async onRed(slice: LedgerSlice): Promise<void> {
       const planned = Slice.safeParse(deps.slices[slice.id - 1]);
-      const answer = await judge("red_check", { kind: "red", slice: { id: slice.id, title: slice.title, acceptance: planned.success ? planned.data.acceptance : [] }, output: slice.note ?? "" });
+      const answer = await judge("red_check", { kind: "red", slice: { id: slice.id, title: slice.title, acceptance: planned.success ? planned.data.acceptance : [] }, output: (slice.note ?? "").slice(-NOTE_TAIL) });
       await write(`red-${slice.id}.json`, answer);
     },
     async onScopeRequest(request: ScopeRequest): Promise<void> {
@@ -208,18 +223,14 @@ export function buildChecks(deps: BuildChecksDeps) {
       const answer = facts
         ? await judge("scope_check", { kind: "scope", planned: deps.planned, ...facts, declared: request.outOfMap, diffSummary: request.diffSummary })
         : { verdict: "skipped", problems: [] };
+      verdict = answer.verdict;
       await write("scope.json", { ...answer, ...(facts ? { facts } : {}) });
     },
     /** The authoritative facts, over the final diff, with the files the answer declared. */
     finalFacts: factsFor,
     /** The verdict the last scope_check came to, or "skipped" when the implementer never asked. */
     async lastVerdict(): Promise<string> {
-      try {
-        const parsed = JSON.parse(await readFile(join(checksDir, "scope.json"), "utf8")) as { verdict?: unknown };
-        return typeof parsed.verdict === "string" ? parsed.verdict : "skipped";
-      } catch {
-        return "skipped";
-      }
+      return verdict;
     },
   };
 }

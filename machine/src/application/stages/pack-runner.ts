@@ -28,7 +28,10 @@ import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
 import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
-import { pushBranch } from "./deliver.ts";
+import { pushCheckpoint } from "./deliver.ts";
+
+/** A checkpoint push that takes longer than this is given up (the final Deliver push is authoritative). */
+const PUSH_TIMEOUT_MS = 60_000;
 import { type Decide, buildChecks, buildWatch } from "./build-watch.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
@@ -229,6 +232,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   }
   // Implementing: every slice that turns committed is pushed as it lands, one push at a time.
   const pushes = { attempted: 0, ok: 0 };
+  let lastPushed: string | null = null;
   const pushErrors: string[] = [];
   let watch: ReturnType<typeof buildWatch> | null = null;
   let pushing: Promise<void> = Promise.resolve();
@@ -262,9 +266,16 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       onCommitted: async (slice) => {
         if (!hostExec) return;
         pushing = pushing.then(async () => {
+          // One push per tip: two slices committed on the same HEAD need one checkpoint, and a tip
+          // already on the remote is not pushed again.
+          const tip = await headCommit(workspace.path).catch(() => null);
+          if (tip && tip === lastPushed) return;
           pushes.attempted += 1;
-          const error = await pushBranch(hostExec, workspace.branch, workspace.path).catch((e: Error) => e.message);
-          if (error === null) pushes.ok += 1;
+          const error = await pushCheckpoint(hostExec, workspace.branch, workspace.path, { timeoutMs: PUSH_TIMEOUT_MS, signal: context.signal }).catch((e: Error) => e.message);
+          if (error === null) {
+            pushes.ok += 1;
+            lastPushed = tip;
+          }
           else {
             pushErrors.push(error);
             await context.note?.(`slice ${slice.id} not pushed: ${error}`).catch(() => {});

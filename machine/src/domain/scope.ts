@@ -25,8 +25,9 @@ export interface ScopeFacts {
 
 const TOML = /\.toml$/;
 const HEADER = /^\[+([^\]]+)\]+\s*$/;
-const TOKEN = /xox[abposr]-|ghp_|github_pat_|\bsk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{12}|eyJ[A-Za-z0-9_-]{20,}/;
-const SECRET_FILE = /(^|\/)(\.env(\..*)?|[^/]+\.pem|[^/]+\.key)$/;
+const TOKEN = /xox[abposr]-|gh[oprsu]_|github_pat_|\bsk-[A-Za-z0-9_-]{20,}|\b[sr]k_(live|test)_[A-Za-z0-9]{10,}|AKIA[0-9A-Z]{12}|eyJ[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+const SECRET_FILE = /(^|\/)(\.env(\..*)?|\.envrc|\.npmrc|id_(rsa|ecdsa|ed25519)|[^/]+\.(pem|key|p12|pfx))$/;
+/** A match is named by its first four characters: the fact is that one exists, never its value. */
 
 /** The added lines of a unified diff (`git diff <from> <to>`). */
 export function addedLinesOf(diff: string): AddedLine[] {
@@ -114,7 +115,7 @@ export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[];
     todos: input.addedLines.filter((l) => /\b(TODO|FIXME|XXX)\b/.test(l.line)).map((l) => `${l.path}: ${l.line.trim()}`),
     secrets: [
       ...changed.filter((p) => !deleted.has(p) && SECRET_FILE.test(p)),
-      ...input.addedLines.filter((l) => TOKEN.test(l.line)).map((l) => `${l.path}: ${l.line.trim()}`),
+      ...input.addedLines.filter((l) => TOKEN.test(l.line)).map((l) => `${l.path}: ${TOKEN.exec(l.line)![0].slice(0, 4)}\u2026`),
     ],
   };
 }

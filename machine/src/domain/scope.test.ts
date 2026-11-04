@@ -91,6 +91,24 @@ describe("scopeFacts", () => {
       ],
     });
     expect(facts.todos).toEqual(["src/a.ts: // TODO: handle empty", "src/a.ts: // FIXME"]);
-    expect(facts.secrets).toEqual([".env.local", "keys/server.pem", "deploy.key", "src/a.ts: const t = \"ghp_abcdefghijklmnopqrstuvwxyz0123456789\""]);
+    // A matched token is named by its first four characters only: the fact is that one exists, never its value.
+    expect(facts.secrets).toEqual([".env.local", "keys/server.pem", "deploy.key", "src/a.ts: ghp_\u2026"]);
+  });
+});
+
+describe("secret patterns", () => {
+  it("knows the common token shapes and key files, and masks every match", () => {
+    // Built at runtime so no token-shaped literal sits in the repository (GitHub's push protection reads test files too).
+    const filler = (n: number) => "a1b2c3d4e5".repeat(4).slice(0, n);
+    const lines = [
+      ["sk", "live", filler(24)].join("_"),
+      `token = ${["gho", filler(36)].join("_")}`,
+      `key: ${"AIza" + filler(35)}`,
+      ["-----BEGIN RSA PRIVATE", "KEY-----"].join(" "),
+      ["npm", filler(36)].join("_"),
+    ].map((line) => ({ path: "src/x.ts", line }));
+    const facts = scopeFacts({ nameStatus: "A\tsrc/x.ts\nA\t.ssh/id_rsa\nA\t.npmrc\nA\tcerts/a.p12\nA\t.envrc", addedLines: lines, planned: [], declared: [] });
+    expect(facts.secrets).toEqual([".ssh/id_rsa", ".npmrc", "certs/a.p12", ".envrc", "src/x.ts: sk_l\u2026", "src/x.ts: gho_\u2026", "src/x.ts: AIza\u2026", "src/x.ts: ----\u2026", "src/x.ts: npm_\u2026"]);
+    expect(JSON.stringify(facts)).not.toContain("abcdefghijklmnopqrstuvwxyz");
   });
 });
