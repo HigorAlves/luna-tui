@@ -21,6 +21,7 @@ import type { EventRow } from "./domain/task.ts";
 import { groundTruthWriter } from "./application/ground-truth.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
+import { retroFactsOf } from "./application/stages/memory.ts";
 import { shippedStream } from "./application/ship-loop.ts";
 import type { ShipDecide } from "./application/stages/ship-fixes.ts";
 import type { TriageSignalDeps } from "./application/stages/triage-signals.ts";
@@ -200,6 +201,8 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
       outcome: run.outcome ?? run.status,
       turns: run.turns,
       costUsd: run.costUsd === null ? null : Number(run.costUsd),
+      engine: run.engine,
+      durationMs: run.startedAt && run.endedAt ? run.endedAt.getTime() - run.startedAt.getTime() : null,
     }));
     return { ledger: ledger.success ? ledger.data : null, runs };
   },
@@ -217,6 +220,11 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
     decisions: evidenceDecisions,
   },
   shipDecisions,
+  async (taskId) => {
+    const [task, events, runs, finish] = await Promise.all([pipeline.get(taskId), pipeline.events(taskId), pipeline.stageRuns(taskId), pipeline.latestStageFinish(taskId, "implementing")]);
+    const ledger = Ledger.safeParse(finish?.detail?.ledger);
+    return retroFactsOf({ task, ledger: ledger.success ? ledger.data : null, events, runs: runs.length });
+  },
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
@@ -307,7 +315,7 @@ pipeline = new Pipeline(db, runnerFor, {
   maxPerStage: config.maxPerStage,
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
-  closeDeps: { exec, worktreeRemove: false, watcher },
+  closeDeps: { exec, worktreeRemove: false, watcher, github },
   ...(config.groundTruth ? { groundTruth: groundTruthWriter(config.stateDir) } : {}),
   policies,
   // The queue's usage windows go by the engine each stage really runs on, credential fallback included.

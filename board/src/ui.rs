@@ -883,9 +883,12 @@ pub(crate) fn evidence_lines(value: &Value) -> Vec<String> {
 /// Counts, calibration and the proposed rules text from `requested.rules`, at most 12 lines of
 /// it, each cut to `width` columns. Empty when the review proposed nothing.
 pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
-    let Some(markdown) = value["markdown"].as_str().filter(|m| !m.trim().is_empty()) else {
+    let markdown = value["markdown"].as_str().unwrap_or("");
+    let recalibration = value["recalibration"].as_array().map_or(0, Vec::len);
+    let updates = value["promptUpdates"].as_array().map_or(0, Vec::len);
+    if markdown.trim().is_empty() && recalibration == 0 && updates == 0 {
         return Vec::new();
-    };
+    }
     const MAX: usize = 12;
     let mut counts = format!(
         "{} incident(s) · {} pattern(s)",
@@ -897,6 +900,9 @@ pub(crate) fn rules_lines(value: &Value, width: usize) -> Vec<String> {
     }
     let text: Vec<&str> = markdown.lines().filter(|l| !l.trim().is_empty()).collect();
     let mut lines = vec![counts];
+    if recalibration > 0 || updates > 0 {
+        lines.push(format!("recalibration: {recalibration} · prompt updates: {updates}"));
+    }
     lines.extend(text.iter().take(MAX).map(|l| l.chars().take(width).collect::<String>()));
     if text.len() > MAX {
         lines.push(format!("… +{} more", text.len() - MAX));
@@ -2982,6 +2988,19 @@ mod tests {
         assert_eq!(lines[13], "… +3 more");
         assert!(rules_lines(&Value::Null, 20).is_empty());
         assert!(rules_lines(&serde_json::json!({"markdown": "  \n"}), 20).is_empty());
+    }
+
+    #[test]
+    fn rules_lines_add_the_recalibration_and_prompt_update_counts_when_present() {
+        let v: Value = serde_json::json!({"markdown": "- one\n", "incidents": 1, "patterns": 0,
+            "recalibration": [{"dimension": "size"}, {"dimension": "risk"}], "promptUpdates": [{"pack": "implementing", "change": "x"}]});
+        let lines = rules_lines(&v, 40);
+        assert_eq!(lines[0], "1 incident(s) · 0 pattern(s)");
+        assert_eq!(lines[1], "recalibration: 2 · prompt updates: 1");
+        assert_eq!(lines[2], "- one");
+        // A retro that proposed no rules text but did recalibrate still shows what it learned.
+        let only: Value = serde_json::json!({"markdown": "", "recalibration": [{"dimension": "size"}]});
+        assert_eq!(rules_lines(&only, 40), vec!["0 incident(s) · 0 pattern(s)".to_string(), "recalibration: 1 · prompt updates: 0".to_string()]);
     }
 }
 

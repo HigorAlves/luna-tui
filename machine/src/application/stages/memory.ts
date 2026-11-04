@@ -4,16 +4,28 @@
 // owns the merge that the close step applies when the proposal is approved.
 import { readFile } from "node:fs/promises";
 
+import { type DecisionOverrides, type Ledger, PACKS, type ShipContext, applyPolicy } from "@hardness/contracts";
+
+import type { EventRow, TaskRow } from "../../domain/task.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
 export const CONTEXT_FILE = "docs/agents/project-context.md";
 export const CAP_LINES = 150;
 export const CAP_BYTES = 6144;
 
+/** The facts the retro compares: what was predicted and what happened, computed by the machine. */
+export type RetroFacts = NonNullable<ShipContext["retro"]>;
+
 export interface MemoryDeps {
-  /** Runs the reviewing_memory pack. */
-  runPack: (context: StageContext) => Promise<StageResult>;
+  /** Runs the reviewing_memory pack; with `ship`, the retro facts ride in its input as `context.ship`. */
+  runPack: (context: StageContext, ship?: ShipContext) => Promise<StageResult>;
   stateDir: string;
+  /** The task's predicted-against-actual facts; absent or null, the retro runs without them and without the worth_learning question. */
+  facts?: (taskId: string) => Promise<RetroFacts | null>;
+  /** Runs worth_learning on a retro context; bound late (once PackRuns exists), null asks nothing. */
+  decide?: ((pack: "worth_learning", ship: ShipContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
+  /** The repo's own confidence bars for worth_learning (luna.yaml `policy.decisions`). */
+  overrides?: (repoPath: string | null) => Promise<DecisionOverrides | undefined>;
 }
 
 const answerOf = (detail: Record<string, unknown> | undefined): Record<string, unknown> => {
@@ -23,9 +35,33 @@ const answerOf = (detail: Record<string, unknown> | undefined): Record<string, u
 
 const countOf = (value: unknown): number => (Array.isArray(value) ? value.length : 0);
 
+/** One line of what the facts say, for the note of a retro that was not worth running. */
+const factsLine = (facts: RetroFacts): string =>
+  `${facts.actual.retries.total} retries, ${facts.actual.escalations} escalations, ${facts.actual.added + facts.actual.removed} lines changed against ${facts.predicted.estLoc ?? "an unknown number of"} planned`;
+
+/** True only for a confident "no": a failed, unsure or missing decision never skips the retro. */
+async function notWorthLearning(deps: MemoryDeps, ship: ShipContext, repoPath: string | null): Promise<boolean> {
+  const decide = deps.decide;
+  if (!decide) return false;
+  try {
+    const answer = await decide("worth_learning", ship, repoPath);
+    const overall = applyPolicy(PACKS.worth_learning, answer, await deps.overrides?.(repoPath)).overall;
+    const worth = (answer.worth ?? {}) as { value?: unknown };
+    return overall === "proceed" && worth.value === false;
+  } catch {
+    return false;
+  }
+}
+
 export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
   return async (context) => {
-    const result = await deps.runPack(context);
+    const facts = deps.facts ? await deps.facts(context.task.id).catch(() => null) : null;
+    const ship: ShipContext | undefined = facts ? { kind: "retro", retro: facts } : undefined;
+    // A task with nothing surprising in it teaches nothing: the question comes before the expensive pack.
+    if (facts && ship && (await notWorthLearning(deps, ship, context.task.repoPath ?? null))) {
+      return { outcome: "pass", detail: { rules: null, note: `no retro: ${factsLine(facts)}` } };
+    }
+    const result = await deps.runPack(context, ship);
     if (result.outcome !== "pass") return result;
 
     const answer = answerOf(result.detail);
@@ -38,7 +74,13 @@ export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
         markdown = "";
       }
     }
-    if (markdown.trim() === "") {
+    const learned = {
+      ...(Array.isArray(answer.recalibration) ? { recalibration: answer.recalibration } : {}),
+      ...(Array.isArray(answer.graphMisses) ? { graphMisses: answer.graphMisses } : {}),
+      ...(Array.isArray(answer.promptUpdates) ? { promptUpdates: answer.promptUpdates } : {}),
+    };
+    const hasLearned = Object.values(learned).some((v) => (v as unknown[]).length > 0);
+    if (markdown.trim() === "" && !hasLearned) {
       return {
         ...result,
         detail: { ...result.detail, rules: null, note: "no rules proposed: nothing repeated enough to be a pattern" },
@@ -54,6 +96,7 @@ export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
           calibration: answer.calibration ?? null,
           incidents: countOf(answer.incidents),
           patterns: countOf(answer.patterns),
+          ...learned,
         },
       },
     };
@@ -147,4 +190,27 @@ export function mergeRules(existing: string | null, markdown: string): string {
     lines = [...lines.slice(0, end), ...(end === at + 1 ? [""] : []), ...fresh, ...(tail.length && tail[0]!.trim() !== "" ? [""] : []), ...tail];
   }
   return `${lines.join("\n")}\n`;
+}
+
+/** The retro's facts for a finished task, from the machine's own records: predicted (the triage record, the plan's estimates) against actual (the diff, retries, escalations, format, wall time). */
+export function retroFactsOf(input: {
+  task: Pick<TaskRow, "record" | "diffAdded" | "diffRemoved" | "retries" | "evidence" | "createdAt" | "updatedAt">;
+  ledger: Ledger | null;
+  events: Array<Pick<EventRow, "kind" | "payload">>;
+  runs: number;
+}): RetroFacts {
+  const { task } = input;
+  const est = (input.ledger?.slices ?? []).map((s) => s.estLoc).filter((n): n is number => typeof n === "number");
+  return {
+    predicted: { size: task.record?.size ?? null, risk: task.record?.risk ?? null, estLoc: est.length > 0 ? est.reduce((a, b) => a + b, 0) : null },
+    actual: {
+      added: task.diffAdded ?? 0,
+      removed: task.diffRemoved ?? 0,
+      retries: { verify: task.retries.verify, e2e: task.retries.e2e, ci: task.retries.ci, total: task.retries.total },
+      escalations: input.events.filter((e) => e.kind === "transition" && e.payload.to === "escalated").length,
+      format: task.evidence?.format ?? null,
+      durationMin: Math.max(0, Math.round((task.updatedAt.getTime() - task.createdAt.getTime()) / 60_000)),
+    },
+    runs: input.runs,
+  };
 }

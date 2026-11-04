@@ -1128,12 +1128,18 @@ export class Pipeline {
     return { markdown: rules.markdown, apply: gate.response?.applyRules !== false };
   }
 
+  /** The task's PR when the last shipping run ended in a merge (the monitor's `detail.merged`), else null. */
+  private async mergedPr(id: string): Promise<{ prUrl: string; number: number } | null> {
+    const detail = (await this.latestStageFinish(id, "shipping"))?.detail;
+    return detail?.merged && typeof detail.prUrl === "string" && typeof detail.number === "number" ? { prUrl: detail.prUrl, number: detail.number } : null;
+  }
+
   /** Runs the host-side close step for a task that just closed and logs what it did. Never throws. */
   private async close(id: string): Promise<void> {
     if (!this.closeDeps) return;
     try {
       const task = await this.get(id);
-      const report = await closeTask({ ...task, rules: await this.approvedRules(id) }, this.closeDeps);
+      const report = await closeTask({ ...task, rules: await this.approvedRules(id), merged: await this.mergedPr(id) }, this.closeDeps);
       if (report.worktreeRemoved) {
         await this.store.updateTask(id, { worktreePath: null });
       }

@@ -107,6 +107,15 @@ describe("renderPrompt", () => {
     for (const part of ["### Thread T9 at a.ts:7", "@ana (2026-11-04T10:00:00Z): why a map here?", "How to verify: press e", "Commit: 9c1f0e2"]) expect(prompt).toContain(part);
   });
 
+  it("renders the retro's predicted-against-actual table for the retro, and none without facts", () => {
+    const template = readFileSync(new URL("../../prompts/reviewing_memory.md", import.meta.url), "utf8");
+    const retro = { predicted: { size: "small", risk: "low", estLoc: 120 }, actual: { added: 300, removed: 40, retries: { verify: 1, e2e: 0, ci: 1, total: 2 }, escalations: 1, format: "captures", durationMin: 95 }, runs: 11 };
+    const prompt = renderPrompt({ pack: PACKS.reviewing_memory, input: { ...input, stage: "reviewing_memory", pack: "reviewing_memory", context: { projectContext: null, ship: { kind: "retro" as const, retro } } }, template });
+    expect(prompt).not.toContain("{{");
+    for (const part of ["| size | small | 340 lines changed (+300 -40) |", "| estimated LOC | 120 | 340 |", "verify 1, e2e 0, ci 1, 2 in all", "| escalations | 0 | 1 |", "| format | (chosen at Evidence) | captures |", "95 min", "Stage runs: 11"]) expect(prompt).toContain(part);
+    expect(renderPrompt({ pack: PACKS.reviewing_memory, input, template })).toContain("predicted against actual\n(none)");
+  });
+
   it("says where the code graph is and how fresh, or that there is none", () => {
     const template = "{{context.graph}}";
     const graph = { path: "/graph/graphify-out/graph.json", commit: "9c1f0e2a7b3d4e5f", builtAt: "2026-11-04T10:00:00Z", fresh: true };

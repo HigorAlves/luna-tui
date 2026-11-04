@@ -287,6 +287,26 @@ const shipText = (ship: StageInput["context"]["ship"]): string => {
   return e ? `${e.actor}${e.isBot ? " (bot)" : ""} ${e.kind}${e.state ? ` (${e.state})` : ""}: ${e.body}` : NONE;
 };
 
+/** The retro's facts as the table the pack compares: predicted against actual, then the runs. */
+const retroText = (ship: StageInput["context"]["ship"]): string => {
+  const r = ship?.retro;
+  if (!r) return NONE;
+  const loc = r.actual.added + r.actual.removed;
+  return [
+    "| Dimension | Predicted | Actual |",
+    "|---|---|---|",
+    `| size | ${r.predicted.size ?? "unknown"} | ${loc} lines changed (+${r.actual.added} -${r.actual.removed}) |`,
+    `| estimated LOC | ${r.predicted.estLoc ?? "unknown"} | ${loc} |`,
+    `| risk | ${r.predicted.risk ?? "unknown"} | (see the pack) |`,
+    `| iterations | 0 retries | verify ${r.actual.retries.verify}, e2e ${r.actual.retries.e2e}, ci ${r.actual.retries.ci}, ${r.actual.retries.total} in all |`,
+    `| escalations | 0 | ${r.actual.escalations} |`,
+    `| format | (chosen at Evidence) | ${r.actual.format ?? "none"} |`,
+    `| wall time | unknown | ${r.actual.durationMin === null ? "unknown" : `${r.actual.durationMin} min`} |`,
+    "",
+    `Stage runs: ${r.runs}`,
+  ].join("\n");
+};
+
 function graphText(graph: StageInput["context"]["graph"]): string {
   if (!graph) return "Code graph: (none: use Glob, Grep and Read)";
   const built = `built at ${graph.commit.slice(0, 7)} on ${graph.builtAt.slice(0, 10)}`;
@@ -339,6 +359,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{context.review}}": reviewText(input.context.review),
     "{{context.threads}}": threadsText(input.context.threads),
     "{{context.ship}}": shipText(input.context.ship),
+    "{{context.retro}}": retroText(input.context.ship),
     "{{context.checks}}": input.context.checks
       ? bullets(
           input.context.checks.map((c) => {

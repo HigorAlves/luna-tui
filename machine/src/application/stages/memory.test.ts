@@ -83,3 +83,62 @@ describe("withMemoryReview", () => {
     expect(result.detail).toMatchObject({ shipped: true, rules: null, note: expect.stringMatching(/docker down/) });
   });
 });
+
+describe("the retro's worth_learning question", () => {
+  const facts = { predicted: { size: "small", risk: "low", estLoc: 120 }, actual: { added: 30, removed: 5, retries: { verify: 0, e2e: 0, ci: 0, total: 0 }, escalations: 0, format: "text", durationMin: 20 }, runs: 8 };
+  const rich = { ...context, task: { id: "t1", repoPath: "/repo" } as unknown as TaskRow } as StageContext;
+
+  function wire(worth: Record<string, unknown> | Error, answer: Record<string, unknown> = { incidents: [], patterns: [] }, withFacts = true) {
+    const stateDir = mkdtempSync(join(tmpdir(), "memory-"));
+    const path = join(stateDir, "rules.md");
+    writeFileSync(path, "- r\n");
+    const calls: unknown[][] = [];
+    const runPack = async (...args: unknown[]): Promise<StageResult> => {
+      calls.push(args);
+      return { outcome: "pass", detail: { answer }, artifacts: [{ kind: "rules", path, label: "rules.md", sha256: "x" }] };
+    };
+    const decide = async () => {
+      if (worth instanceof Error) throw worth;
+      return { worth };
+    };
+    return { run: memoryReviewRunner({ runPack, stateDir, decide, ...(withFacts ? { facts: async () => facts } : {}) }), calls };
+  }
+
+  it("skips the pack on a confident no: no rules, a note from the facts, the gate still opens", async () => {
+    const { run, calls } = wire({ value: false, p: 0.05 });
+    const result = await run(rich);
+    expect(result).toMatchObject({ outcome: "pass", detail: { rules: null, note: "no retro: 0 retries, 0 escalations, 35 lines changed against 120 planned" } });
+    expect(calls).toEqual([]);
+  });
+
+  it("runs the pack, with the facts as its context, on a yes, an unsure answer, a failed decision, and when the machine has no facts", async () => {
+    for (const worth of [{ value: true, p: 0.9 }, { value: false, p: 0.45 }, new Error("no model")]) {
+      const { run, calls } = wire(worth);
+      expect((await run(rich)).detail?.rules).not.toBeNull();
+      expect(calls[0]![1]).toEqual({ kind: "retro", retro: facts });
+    }
+    const none = wire({ value: false, p: 0.01 }, undefined, false);
+    expect((await none.run(rich)).detail?.rules).not.toBeNull();
+    expect(none.calls[0]![1]).toBeUndefined();
+  });
+
+  it("puts the recalibration, the graph misses and the prompt updates the pack answered into the rules", async () => {
+    const recalibration = [{ dimension: "size", predicted: "small", actual: "large", note: "the export touched the auth layer" }];
+    const promptUpdates = [{ pack: "implementing", change: "ask for the layer map first" }];
+    const { run } = wire({ value: true, p: 0.9 }, { incidents: [], patterns: [], recalibration, graphMisses: ["src/auth.ts"], promptUpdates });
+    expect((await run(rich)).detail?.rules).toMatchObject({ markdown: "- r\n", recalibration, graphMisses: ["src/auth.ts"], promptUpdates });
+  });
+});
+
+describe("retroFactsOf", () => {
+  it("sets what was predicted against what happened, from the task's own records", async () => {
+    const { retroFactsOf } = await import("./memory.ts");
+    const facts = retroFactsOf({
+      task: { record: { size: "small", risk: "low" }, diffAdded: 300, diffRemoved: 40, retries: { verify: 1, e2e: 0, ci: 2, total: 3, stronger: 0 }, evidence: { format: "captures" }, createdAt: new Date("2026-11-04T10:00:00Z"), updatedAt: new Date("2026-11-04T11:35:00Z") } as unknown as TaskRow,
+      ledger: { schema: 1, slices: [{ id: 1, title: "a", status: "committed", commit: "x", estLoc: 100 }, { id: 2, title: "b", status: "committed", commit: "y", estLoc: 20 }, { id: 3, title: "c", status: "committed", commit: "z" }] },
+      events: [{ kind: "transition", payload: { to: "escalated" } }, { kind: "transition", payload: { to: "closed" } }, { kind: "stage.note", payload: { to: "escalated" } }],
+      runs: 11,
+    });
+    expect(facts).toEqual({ predicted: { size: "small", risk: "low", estLoc: 120 }, actual: { added: 300, removed: 40, retries: { verify: 1, e2e: 0, ci: 2, total: 3 }, escalations: 1, format: "captures", durationMin: 95 }, runs: 11 });
+  });
+});

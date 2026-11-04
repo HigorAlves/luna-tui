@@ -16,7 +16,7 @@ import { type AgentExtra, agentRunners, runAgent } from "../application/stages/p
 import { ciWatchRunner } from "../application/stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
 import { type EvidenceDeps, type EvidenceStageDeps, evidenceStage } from "../application/stages/evidence.ts";
-import { memoryReviewRunner, withMemoryReview } from "../application/stages/memory.ts";
+import { type RetroFacts, memoryReviewRunner, withMemoryReview } from "../application/stages/memory.ts";
 import type { StageContext, StageResult, StageRunner } from "../application/ports.ts";
 import { type PlanDeps, planStage } from "../application/stages/plan.ts";
 import { type TriageSignalDeps, withTriageSignals } from "../application/stages/triage-signals.ts";
@@ -80,6 +80,8 @@ export async function buildRealStages(
   },
   /** Ship's review-loop decisions (event_class, comment_intent, fix_scope, evidence_valid): `decide` is bound late, once PackRuns exists; null sends every review event to a person. */
   shipDecisions: { decide: ShipDecide | null } = { decide: null },
+  /** The retro's predicted-against-actual facts for a task, computed by the machine; absent, the retro runs without them and without worth_learning. */
+  retroFacts?: (taskId: string) => Promise<RetroFacts | null>,
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -233,8 +235,14 @@ export async function buildRealStages(
         }),
       }),
       memoryReviewRunner({
-        runPack: async (context) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null }),
+        runPack: async (context, ship) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null, ...(ship ? { ship } : {}) }),
         stateDir: config.stateDir,
+        ...(retroFacts ? { facts: retroFacts } : {}),
+        // worth_learning binds late, with the other ship decisions.
+        get decide() {
+          return shipDecisions.decide;
+        },
+        overrides: async (repoPath) => (await policies.for(repoPath)).decisions.worth_learning,
       }),
     ),
   };

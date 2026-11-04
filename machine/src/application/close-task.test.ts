@@ -135,3 +135,53 @@ describe("closeTask rules step", () => {
     expect(body.indexOf("- Run pnpm verify")).toBeLessThan(body.indexOf("## Conventions"));
   });
 });
+
+describe("closeTask after a merge: the rules go to their own branch and a draft PR", () => {
+  const rules = { markdown: "- Run pnpm verify before any commit. @bob #12\n", apply: true };
+  const target = (path: string) => ({ id: "0a1b2c3d-1111-2222-3333-444455556666", title: "Export CSV", repoPath: "/repo", worktreePath: path, rules, merged: { prUrl: "https://github.com/o/a/pull/7", number: 7 } });
+
+  function wire(over: { push?: number; defaultBranch?: string | null } = {}) {
+    const calls: string[][] = [];
+    const exec: CloseDeps["exec"] = async (_c, args) => {
+      const a = args.slice(args.indexOf("-C") + 2);
+      calls.push(a);
+      return { code: a[0] === "push" ? (over.push ?? 0) : 0, stdout: "", stderr: over.push ? "denied" : "" };
+    };
+    const opened: unknown[][] = [];
+    const github = { openPr: async (slug: string, pr: unknown) => (opened.push([slug, pr]), { url: "https://github.com/o/a/pull/9", number: 9, isDraft: true }) };
+    const deps: CloseDeps = { exec, worktreeRemove: false, github, slugOf: async () => "o/a", defaultBranchOf: async () => (over.defaultBranch === undefined ? "main" : over.defaultBranch) };
+    return { calls, opened, deps };
+  }
+
+  it("branches from origin's default branch, commits, pushes with -u and opens a draft PR that links the task's PR", async () => {
+    const { readFileSync } = await import("node:fs");
+    const path = worktree();
+    const { calls, opened, deps } = wire();
+    const report = await closeTask(target(path), deps);
+    expect(report.steps[0]).toMatchObject({ step: "rules", ok: true, note: expect.stringContaining("luna/memory-0a1b2c3d") });
+    expect(report.steps[0]!.note).toContain("https://github.com/o/a/pull/9");
+    expect(calls.map((c) => c.join(" "))).toEqual([
+      "fetch --quiet --end-of-options origin main",
+      "checkout -B luna/memory-0a1b2c3d origin/main",
+      "add docs/agents/project-context.md",
+      "-c commit.gpgsign=false commit -m docs(context): rules from the memory review",
+      "push -u origin luna/memory-0a1b2c3d",
+    ]);
+    expect(readFileSync(join(path, "docs/agents/project-context.md"), "utf8")).toContain("- Run pnpm verify before any commit.");
+    expect(opened).toHaveLength(1);
+    const [slug, pr] = opened[0] as [string, { title: string; body: string; head: string; draft: boolean }];
+    expect(slug).toBe("o/a");
+    expect(pr).toMatchObject({ title: "docs(agents): rules from Export CSV", head: "luna/memory-0a1b2c3d", draft: true });
+    expect(pr.body).toContain("https://github.com/o/a/pull/7");
+    expect(pr.body).not.toMatch(/@bob|#12/);
+  });
+
+  it("never touches the merged branch, and says so when the push or the default branch is unusable", async () => {
+    const refused = wire({ push: 1 });
+    expect((await closeTask(target(worktree()), refused.deps)).steps[0]).toMatchObject({ ok: false, note: expect.stringContaining("git push failed") });
+    expect(refused.opened).toEqual([]);
+    const odd = wire({ defaultBranch: "--upload-pack=x" });
+    expect((await closeTask(target(worktree()), odd.deps)).steps[0]).toMatchObject({ ok: false, note: expect.stringContaining("default branch") });
+    expect(odd.calls).toEqual([]);
+  });
+});

@@ -36,7 +36,7 @@ const SHA = /^[0-9a-f]{40,64}$/;
 /** A model's text made safe to post: one line, no HTML, no `@mention`, no `#N` auto-link, capped. */
 export const postable = (text: string, cap = REPLY_CAP): string => safe(text).slice(0, cap).trim();
 
-export type ShipDecisionPack = "event_class" | "comment_intent" | "fix_scope" | "evidence_valid";
+export type ShipDecisionPack = "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning";
 export type ShipDecide = (pack: ShipDecisionPack, ship: ShipContext, repoPath: string | null) => Promise<Record<string, unknown>>;
 export type LoopPack = "pr_reply" | "addressing" | "verifying" | "ci_watch";
 /** What a sub-run is handed: the ship context for pr_reply; for the others the extra the pack reads. */
@@ -70,7 +70,7 @@ export interface FixDeps {
   evidence: EvidenceHandle;
 }
 
-const KEY: Record<ShipDecisionPack, string> = { event_class: "event", comment_intent: "intent", fix_scope: "scope", evidence_valid: "validity" };
+const KEY: Record<ShipDecisionPack, string> = { event_class: "event", comment_intent: "intent", fix_scope: "scope", evidence_valid: "validity", worth_learning: "worth" };
 
 /** Asks a ship decision and applies its policy and the repo's overrides; never throws. A failed or unsure answer is `ok: false` with why. */
 export async function judgeShip(
