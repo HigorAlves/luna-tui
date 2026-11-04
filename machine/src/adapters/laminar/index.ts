@@ -61,6 +61,8 @@ const ATTR_PROVIDER = "gen_ai.system";
 /** A transcript longer than this is cut to its tail: the end of a run is what explains it. */
 export const TRANSCRIPT_MAX_CHARS = 200_000;
 const CUT_MARK = "[… earlier output cut]\n";
+/** The span of a run the backend could not start: answers every call, keeps nothing. */
+const NO_SPAN: RunSpan = { event: () => {}, traceId: () => null, childEnv: () => ({}), end: () => Promise.resolve() };
 
 const loadSdk = async (): Promise<LaminarSdk> => (await import("@lmnr-ai/lmnr")) as unknown as LaminarSdk;
 
@@ -101,7 +103,15 @@ export async function createLaminarTelemetry(options: LaminarOptions, sdk?: Lami
     const name = `${start.kind}:${start.kind === "stage" ? start.stage : start.pack}`;
     const facts = startOf(start);
     const tags = [start.kind, ...(start.pack ? [start.pack] : []), ...(start.engine ? [start.engine] : [])];
-    const span = Laminar.startSpan({ name, input: facts, spanType: start.kind === "eval" ? "EXECUTOR" : "DEFAULT", sessionId: start.sessionId, metadata: facts, tags });
+    // A span the SDK refuses to start (not initialized, a bad context) is a no-op span: a trace
+    // backend never fails a run. Said once per span.
+    let span: LaminarSpanLike;
+    try {
+      span = Laminar.startSpan({ name, input: facts, spanType: start.kind === "eval" ? "EXECUTOR" : "DEFAULT", sessionId: start.sessionId, metadata: facts, tags });
+    } catch (error) {
+      warn(`laminar: span start failed: ${error instanceof Error ? error.message : String(error)}`);
+      return NO_SPAN;
+    }
     return {
       event: (eventName, payload = {}) => void span.addEvent(eventName, { payload: JSON.stringify(payload) }),
       traceId: () => Laminar.getLaminarSpanContext(span)?.traceId ?? null,
@@ -122,15 +132,19 @@ export async function createLaminarTelemetry(options: LaminarOptions, sdk?: Lami
           const transcript = await transcriptText(end.transcriptPath);
           if (transcript !== null) output.transcript = transcript;
         }
+        // Whatever fails on the way out, the span ends: an unended span leaks in the SDK's batch.
         await safe("span end failed", async () => {
-          const attributes: Record<string, string | number> = {};
-          if (end.model) attributes[ATTR_RESPONSE_MODEL] = end.model;
-          if (typeof end.costUsd === "number") attributes[ATTR_TOTAL_COST] = end.costUsd;
-          if (end.info?.runtime) attributes[ATTR_PROVIDER] = end.info.runtime;
-          if (Object.keys(attributes).length > 0) span.setAttributes(attributes);
-          if (end.error || end.outcome === "fail") span.setStatus({ code: STATUS_ERROR, ...(end.error ? { message: end.error } : {}) });
-          Laminar.withSpan(span, () => Laminar.setSpanOutput(output));
-          span.end();
+          try {
+            const attributes: Record<string, string | number> = {};
+            if (end.model) attributes[ATTR_RESPONSE_MODEL] = end.model;
+            if (typeof end.costUsd === "number") attributes[ATTR_TOTAL_COST] = end.costUsd;
+            if (end.info?.runtime) attributes[ATTR_PROVIDER] = end.info.runtime;
+            if (Object.keys(attributes).length > 0) span.setAttributes(attributes);
+            if (end.error || end.outcome === "fail") span.setStatus({ code: STATUS_ERROR, ...(end.error ? { message: end.error } : {}) });
+            Laminar.withSpan(span, () => Laminar.setSpanOutput(output));
+          } finally {
+            span.end();
+          }
         });
       },
     };

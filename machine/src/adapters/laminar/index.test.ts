@@ -228,4 +228,29 @@ describe("createLaminarTelemetry", () => {
     expect((await telemetry.evaluation({ name: "e", groupName: "g" })).id).toBeNull();
     expect(warnings).toContain("laminar: could not create the evaluation: boom");
   });
+  it("never throws into a run: a span the SDK refuses to start is a no-op, and a span whose output cannot be set still ends", async () => {
+    const sdk = fakeSdk();
+    const warnings: string[] = [];
+    let refuse = true;
+    const startSpan = sdk.Laminar.startSpan;
+    sdk.Laminar.startSpan = (opts) => {
+      if (refuse) throw new Error("not initialized");
+      return startSpan(opts);
+    };
+    sdk.Laminar.setSpanOutput = () => {
+      throw new Error("circular");
+    };
+    const telemetry = await createLaminarTelemetry({ ...options, mode: "metadata" }, sdk, (line) => warnings.push(line));
+    const refused = telemetry.run({ kind: "pack", pack: "chat_triage", engine: "claude:haiku", client: "board" });
+    refused.event("started");
+    expect(refused.traceId()).toBeNull();
+    expect(refused.childEnv()).toEqual({});
+    await expect(refused.end({ outcome: "pass" })).resolves.toBeUndefined();
+    expect(warnings).toEqual(["laminar: span start failed: not initialized"]);
+    refuse = false;
+    await telemetry.run({ kind: "pack", pack: "chat_triage", engine: "claude:haiku", client: "board" }).end({ outcome: "pass" });
+    expect(spans).toHaveLength(1);
+    expect(spans[0]!.ended).toBe(true);
+    expect(warnings[1]).toBe("laminar: span end failed: circular");
+  });
 });
