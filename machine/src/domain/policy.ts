@@ -34,6 +34,8 @@ export interface Policy {
   maxConcurrent: number | null;
   /** Keep test_design's cases away from the implementer, so it cannot overfit to them. */
   holdoutCases: boolean;
+  /** Keep a Graphify code graph of this repo for its stages (luna.yaml `policy.graph`, default on). */
+  graph: boolean;
   /** Where the e2e stage may drive the app, besides the dev server it boots itself. */
   qaTargets: QaTarget[];
   /** The repo's own checks (luna.yaml); null means detect them from the tree. */
@@ -67,6 +69,7 @@ export const DEFAULT_POLICY: Policy = {
   autoApprovePlanMinutes: null,
   maxConcurrent: null,
   holdoutCases: false,
+  graph: true,
   qaTargets: [],
   checks: null,
   services: {},

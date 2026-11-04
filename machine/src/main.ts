@@ -44,6 +44,9 @@ import { SlaClocks } from "./application/sla.ts";
 import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
 import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
+import { graphifyGraph } from "./adapters/graph/graphify.ts";
+import { runSandbox } from "./adapters/docker/docker.ts";
+import { GraphWatch } from "./application/graph-watch.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
 import { PgTaskStore } from "./adapters/persistence/task-store.ts";
 import { machineCredentials } from "./adapters/credentials/index.ts";
@@ -135,6 +138,8 @@ const watcher = new StreamWatcher(bus);
 let pipeline: Pipeline;
 /** Every repo's luna.yaml (or older PIPELINE.md), read on demand; shared so a bad edit warns once. */
 const policies = new PolicyStore();
+/** One Graphify code graph per repo, built from its default branch in the runner image. */
+const graph = graphifyGraph({ stateDir: config.stateDir, image: config.runnerImage, worktreesDir: config.worktreesDir, sandbox: runSandbox });
 /** Each engine's credential as every part of the machine sees it: an engine on a runtime
  *  MACHINE_DISABLE_RUNTIMES turned off, or at a monthly cap (MACHINE_ENGINE_BUDGETS, a repo's
  *  luna.yaml `budget.engines`), is unavailable, as if its credential were missing. */
@@ -445,6 +450,25 @@ if (config.jira) {
   console.log("jira: off until MACHINE_JIRA_SITE, MACHINE_JIRA_EMAIL and MACHINE_JIRA_TOKEN are set");
 }
 
+/** The graph watch: each repo's graph is rebuilt when its default branch moves, and built when it has none. */
+const graphWatch = new GraphWatch({
+  graph,
+  policies,
+  repos: async () => {
+    const known = [...Object.values(config.repoMap), ...(await repoMap.remembered())];
+    for (const task of await pipeline.list()) if (task.repoPath && !isTerminal(task.state)) known.push(task.repoPath);
+    return [...new Set(known)];
+  },
+});
+const graphTicker = config.agents && config.graphIntervalSecs !== null ? new Ticker(() => void graphWatch.tick(), config.graphIntervalSecs * 1000) : null;
+if (graphTicker) {
+  graphTicker.start();
+  void graphWatch.tick();
+  console.log(`graph: each repo's code graph rebuilt when its default branch moves, checked every ${config.graphIntervalSecs}s`);
+} else {
+  console.log("graph: off (MACHINE_GRAPH_INTERVAL=off or agents off); stages run without a code graph");
+}
+
 /** The minute tick: a gate goes overdue, a stage passes 80% of its target, with no event to say so. */
 const slaTicker = new Ticker(() => {
   void pipeline
@@ -477,6 +501,7 @@ async function shutdown(): Promise<void> {
   jiraWatch?.stop();
   jiraIntake?.stop();
   slaTicker.stop();
+  graphTicker?.stop();
   pulls.stop();
   slackInbox.stop();
   socket?.stop();

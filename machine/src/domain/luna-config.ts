@@ -126,6 +126,7 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     autoApprovePlanMinutes: policy.auto_approve_plan_minutes ?? null,
     maxConcurrent: policy.max_concurrent ?? null,
     holdoutCases: policy.holdout_cases ?? false,
+    graph: policy.graph !== "off",
     qaTargets: qa_targets.map((target) => ({ name: target.name, baseUrl: target.url, credential: target.credential ?? null })),
     checks: checks ?? null,
     services,

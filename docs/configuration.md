@@ -51,6 +51,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `MACHINE_REPO_MAP` | unset | `owner/name=/abs/path` pairs: the checkout an imported issue's task works in. Without a match, the checkouts up to two folders under `MACHINE_REPOS_DIR` (`~/Developer/orc` and `~/Developer/projects/orc`) are matched by their `origin` remote. A folder you pick in the board's clone prompt that already is a checkout is linked instead of cloned, and the link is kept in `<state dir>/repo-links.json`, so a renamed remote needs no setting |
 | `MACHINE_REPOS_DIR` | `~/Developer` | where `MACHINE_REPO_MAP`'s fallback scan looks |
 | `MACHINE_THREAD_REPLIES` | on | set to `off` to stop the machine replying in the thread a task came from (a comment on its GitHub issue; a Slack thread when the pair below is set) when it is picked up, needs you, escalates, pauses, gets its PR and closes |
+| `MACHINE_GRAPH_INTERVAL` | `600` | seconds between checks of each known repo's default branch; when it moved, the machine rebuilds that repo's code graph (Graphify, in the runner image) under `<MACHINE_STATE_DIR>/graphs/<repo>/<commit>/`, and builds one for a repo that has none. `off` stops the watch |
 | `MACHINE_GROUND_TRUTH` | on | set to `off` to stop the machine keeping each approved plan, with what the proposal said and what was edited before approval (and who approved), as `<MACHINE_STATE_DIR>/ground-truth/plan/<taskId>-<approvalId>.json`; the files stay on your machine, never in a repo, and feed later evals |
 | `MACHINE_SLACK_TOKEN` / `MACHINE_SLACK_CHANNEL` | unset | a bot token (`chat:write`) and a channel id: one Slack thread per task is opened there and every reply above lands in it. Both or neither |
 | `MACHINE_SLACK_USER_TOKEN` | unset | your User OAuth Token (`xoxp-…`) from the internal app in `slack/manifest.json`: the inbox reads what you see and replies as you. Unset: the inbox is off and every Slack call says so |
@@ -107,6 +108,7 @@ policy:
   auto_approve_plan_minutes: 15           # a plan whose risk is low and whose checks (coverage, plan, risk) all proceeded is approved by itself after this long
   max_concurrent: 1                       # running tasks this repo may hold at once (over MACHINE_MAX_PER_REPO)
   holdout_cases: false                    # true keeps test_design's cases away from the implementer; verifying still judges by them
+  graph: on                               # off keeps the machine from building a code graph of this repo (default on; see MACHINE_GRAPH_INTERVAL)
   decisions:                              # per decision pack, per question: when an answer is acted on (proceed) and when a person decides (below flag)
     triage_signals:                       # also risk_score, coverage_check and plan_check; a question left out keeps the pack's bar
       kind: { proceed: 0.8, flag: 0.5 }

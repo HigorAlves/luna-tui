@@ -36,6 +36,8 @@ export interface Config {
   githubPoll: { repos: string[]; intervalMs: number; label: string };
   /** The token every GitHub call uses (`GITHUB_TOKEN`, else `GH_TOKEN`); null means GitHub is off. */
   githubToken: string | null;
+  /** Seconds between checks of each repo's default branch for a graph rebuild; null (`MACHINE_GRAPH_INTERVAL=off`) turns the watch off. */
+  graphIntervalSecs: number | null;
   /** The PR inbox: poll every open PR involving you. `MACHINE_GITHUB_PRS=off` turns it off. */
   githubPrs: { enabled: boolean; intervalMs: number };
   /** `owner/name` to the checkout's path, for issues GitHub intake imports. */
@@ -108,6 +110,16 @@ function optionalPositiveInt(env: NodeJS.ProcessEnv, key: string): number | null
   if (raw === undefined || raw === "") return null;
   const value = Number(raw);
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${key} must be a positive integer, got "${raw}"`);
+  return value;
+}
+
+/** `MACHINE_GRAPH_INTERVAL`: seconds between graph rebuild checks (default 600), or `off`. */
+function graphIntervalSecs(env: NodeJS.ProcessEnv): number | null {
+  const raw = env.MACHINE_GRAPH_INTERVAL;
+  if (raw === undefined || raw === "") return 600;
+  if (raw === "off") return null;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) throw new Error(`MACHINE_GRAPH_INTERVAL must be a positive integer (seconds) or off, got "${raw}"`);
   return value;
 }
 
@@ -287,6 +299,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     stateDir,
     githubPoll: { repos, intervalMs: pollSeconds * 1000, label: env.MACHINE_GITHUB_LABEL ?? "ready-for-agent" },
     githubPrs: { enabled: env.MACHINE_GITHUB_PRS !== "off", intervalMs: prsSeconds * 1000 },
+    graphIntervalSecs: graphIntervalSecs(env),
     githubToken: env.GITHUB_TOKEN?.trim() || env.GH_TOKEN?.trim() || null,
     repoMap,
     reposDir: env.MACHINE_REPOS_DIR ?? join(home, "Developer"),

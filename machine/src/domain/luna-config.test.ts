@@ -44,6 +44,7 @@ describe("parseLunaConfig", () => {
       autoApprovePlanMinutes: 15,
       maxConcurrent: 1,
       holdoutCases: true,
+      graph: true,
       qaTargets: [{ name: "staging", baseUrl: "https://stg.example.com", credential: "env:QA_PASSWORD" }],
       checks: [
         { name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] },
@@ -64,6 +65,13 @@ describe("parseLunaConfig", () => {
       engineBudgets: { "openai:sol": 10, codex: 0 },
       decisions: {},
     });
+  });
+
+  it("reads policy.graph: on by default, off when the repo says so", () => {
+    expect(parseLunaConfig("").graph).toBe(true);
+    expect(parseLunaConfig("policy:\n  graph: on\n").graph).toBe(true);
+    expect(parseLunaConfig("policy:\n  graph: off\n").graph).toBe(false);
+    expect(() => parseLunaConfig("policy:\n  graph: maybe\n")).toThrow(/policy\.graph/);
   });
 
   it("reads policy.decisions: per decision pack, per question, a repo's own confidence bars", () => {

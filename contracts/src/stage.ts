@@ -361,6 +361,8 @@ export const LunaConfig = z.object({
       auto_approve_plan_minutes: z.number().int().positive().optional(),
       max_concurrent: z.number().int().positive().optional(),
       holdout_cases: z.boolean().optional(),
+      // Whether the machine keeps a code graph of this repo for its stages (default on).
+      graph: z.enum(["on", "off"]).optional(),
       // Per decision pack, per question: the repo's own confidence bars over the pack's.
       decisions: z.record(z.string(), z.record(z.string(), ConfidencePolicySchema)).optional(),
     })
