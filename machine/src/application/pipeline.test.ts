@@ -1733,6 +1733,41 @@ describe("ci_watch outside the pool", () => {
   }, WIND_DOWN_TIMEOUT_MS);
 });
 
+describe("shipping outside the pool", () => {
+  it("gives the slot back while the monitor waits for a merge, so another task can start", async () => {
+    let merged: (() => void) | undefined;
+    const waiting: StageRunner = () => new Promise<StageResult>((resolve) => { merged = () => resolve({ outcome: "pass" }); });
+    const runnerFor = (stage: TaskState) => (stage === "shipping" ? waiting : stage === "triage" ? holding : stubs.runnerFor(stage));
+    pipeline = new Pipeline(db, runnerFor, { hasConfig: () => true, maxConcurrentTasks: 1 });
+    const a = await newTask();
+    await db.query("update tasks set state = 'shipping', queued = true, queued_at = now() where id = $1", [a.id]);
+    await pipeline.tick();
+    await until(async () => merged !== undefined, "a to be waiting on the merge");
+    expect(pipeline.slots).toMatchObject({ max: 1, active: 0 });
+    const b = await newTask();
+    expect(await pipeline.start(b.id)).toMatchObject({ state: "triage", queued: false });
+    merged!();
+    await until(async () => (await pipeline.get(a.id)).state === "reviewing_memory", "a to reach the retro gate");
+    await pipeline.abort(b.id);
+    await pipeline.shutdown();
+  }, WIND_DOWN_TIMEOUT_MS);
+
+  it("runs a shipping stage again after a restart instead of escalating it, and likewise ci_watch", async () => {
+    for (const [stage, next] of [["shipping", "reviewing_memory"], ["ci_watch", "evidence"]] as const) {
+      const task = await newTask();
+      await db.query("update tasks set state = $2, queued = false, updated_at = now() - interval '5 minutes' where id = $1", [task.id, stage]);
+      await db.query(`insert into stage_runs (task_id, stage, attempt, status, started_at) values ($1, $2, 1, 'running', now() - interval '5 minutes')`, [task.id, stage]);
+      const restarted = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true });
+      expect(await restarted.recover()).toBe(0);
+      const runs = (await restarted.stageRuns(task.id)).filter((r) => r.stage === stage);
+      expect(runs).toMatchObject([{ attempt: 1, status: "aborted" }, { attempt: 2, status: "passed" }]);
+      expect((await restarted.get(task.id)).state).not.toBe("escalated");
+      expect((await restarted.events(task.id)).map((e) => e.kind)).toContain("stage.restarted");
+      expect(next).toBeTruthy();
+    }
+  });
+});
+
 describe("the engine a stage run started on", () => {
   it("is recorded on the run as soon as the runner knows it, and shown with the run", async () => {
     const task = await newTask();

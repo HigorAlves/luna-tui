@@ -201,6 +201,9 @@ function casesOf(detail: Record<string, unknown> | undefined): StageRunCase[] | 
   return rows.length > 0 ? rows : null;
 }
 
+/** Stages that only poll GitHub from the host: a restart runs them again. */
+const HOST_POLLERS: ReadonlySet<TaskState> = new Set<TaskState>(["ci_watch", "shipping"]);
+
 export class Pipeline {
   private readonly store: TaskStore;
   private readonly onEvent: (event: EventRow) => void;
@@ -216,7 +219,7 @@ export class Pipeline {
   private readonly removeContainer: (name: string) => Promise<void>;
   /** The stage each loop is driving right now, for the per-stage caps. */
   private readonly stages = new Map<string, TaskState>();
-  /** Loops polling ci_watch: they hold no slot, so the pool is free for work that computes. */
+  /** Loops polling GitHub (ci_watch, and shipping while its monitor waits for a merge): they hold no slot, so the pool is free for work that computes. */
   private readonly offPool = new Set<string>();
   private readonly revertCommit: (worktreePath: string, sha: string) => Promise<void>;
   private readonly diffStat: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
@@ -989,6 +992,15 @@ export class Pipeline {
           engine: run.engine,
         });
         if (this.inline) await loop;
+      } else if (HOST_POLLERS.has(task.state)) {
+        // ci_watch and shipping run on the host, hold no container and are idempotent (the monitor's cursor is on disk):
+        // a restart runs them again rather than asking a person.
+        const dead = (await this.store.listStageRuns(task.id)).findLast((r) => r.status === "running" && r.stage === task.state);
+        if (dead) await this.store.markRunningStageRunsAborted([dead.id]);
+        await this.log(task.id, "stage.restarted", { stage: task.state, reason: "the machine restarted mid-stage" }, dead?.id);
+        const controller = this.reserveSlot(task.id, task.state);
+        const loop = this.startLoop(task.id, task.state, controller);
+        if (this.inline) await loop;
       } else {
         const dead = (await this.store.listStageRuns(task.id)).findLast((r) => r.stage === task.state && r.containerId);
         if (dead?.containerId) await this.removeContainer(dead.containerId).catch(() => {});
@@ -1239,12 +1251,12 @@ export class Pipeline {
           await this.log(id, "stage.held", { stage, reason: `${stage} is at its cap of ${this.maxPerStage[stage]}` });
           return;
         }
-        // ci_watch polls GitHub for up to 45 minutes and computes nothing: it gives its slot
-        // back for that long, and the queue is looked at right away.
-        const polling = stage === "ci_watch";
+        // ci_watch polls GitHub for up to 45 minutes, and shipping's monitor for days, and neither
+        // computes anything: they give their slot back for that long, and the queue is looked at right away.
+        const polling = stage === "ci_watch" || stage === "shipping";
         if (polling) {
           this.offPool.add(id);
-          this.fillSlots().catch((error: unknown) => console.error("could not fill slots during ci_watch", error));
+          this.fillSlots().catch((error: unknown) => console.error(`could not fill slots during ${stage}`, error));
         }
         // A too_complex escalation gets one run on the pack's stronger engine, handed over like a usage-limit fallback.
         if (stage === "implementing" && !resume && !fallback && (await this.get(id)).retries.strongerNext) {
@@ -1309,7 +1321,7 @@ export class Pipeline {
         // queued task, and gets one as soon as a loop ends.
         if (stage && polling && this.active() > this.maxConcurrentTasks) {
           await this.enqueue(id);
-          await this.log(id, "slot.waited", { stage, reason: "the pool filled while ci_watch was polling" });
+          await this.log(id, "slot.waited", { stage, reason: `the pool filled while ${stage === "ci_watch" ? "ci_watch" : "shipping"} was polling` });
           return;
         }
       }

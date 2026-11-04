@@ -11,7 +11,9 @@ import { packComplete } from "../../domain/evidence-pack.ts";
 import type { PublishEvidence } from "../evidence-publish.ts";
 import { type GitHub, messageOf } from "../github.ts";
 import type { StageResult, StageRunner } from "../ports.ts";
+import { emptyCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
 import { type DeliverDeps, openTaskPr, pushBranch } from "./deliver.ts";
+import type { ShipMonitor } from "./ship-monitor.ts";
 
 export interface ShipDeps extends DeliverDeps {
   /** The Evidence Pack of the task: where it is read from and saved to, how it is published, where its local copy lives. Absent means ship without one. */
@@ -23,6 +25,10 @@ export interface ShipDeps extends DeliverDeps {
   };
   /** The worktree's HEAD, the head the push just set; tests inject one. */
   headCommit?: (worktreePath: string) => Promise<string>;
+  /** Watches the PR after the publish until it merges (ship-monitor.ts); absent, the stage passes once the PR is ready. */
+  monitor?: ShipMonitor;
+  /** Where the ship cursor lives; with it, a restarted run knows the pack is already published and goes straight to the monitor. */
+  stateDir?: string;
 }
 
 export function shipRunnerWith(deps: ShipDeps): StageRunner {
@@ -66,11 +72,22 @@ export function shipRunnerWith(deps: ShipDeps): StageRunner {
       const existing = await deps.github.findPr(slug, task.branch);
       // Delivering was skipped (an older task): open the PR ready, as shipping used to.
       const pr = existing ?? (await openTaskPr(deps.github, slug, context, false));
-      const phase = await evidencePhase(slug, pr.number, task.id, cwd);
+      // A restart re-runs this stage: a pack already published on this very head is not published again.
+      const cursor = deps.stateDir ? await loadCursor(deps.stateDir, task.id) : null;
+      const head = cursor?.published ? (await headOf(cwd)).trim() : null;
+      const already = head !== null && cursor?.published?.sha === head;
+      const phase: Awaited<ReturnType<typeof evidencePhase>> = already ? { published: { resumed: true } } : await evidencePhase(slug, pr.number, task.id, cwd);
       if ("stop" in phase) return phase.stop;
+      if (deps.stateDir && "published" in phase && !already) {
+        const sha = (await headOf(cwd)).trim();
+        await saveCursor(deps.stateDir, task.id, { ...(cursor ?? emptyCursor({ slug, number: pr.number })), pr: { slug, number: pr.number }, published: { sha } });
+      }
       const shown = "published" in phase ? { published: phase.published, ...(phase.note ? { note: phase.note } : {}) } : deps.evidence ? { evidence: "none" } : {};
       if (existing?.isDraft) await deps.github.markPrReady(slug, existing.number);
-      return { outcome: "pass", detail: { prUrl: pr.url, readied: existing?.isDraft === true, ...shown } };
+      const detail = { prUrl: pr.url, readied: existing?.isDraft === true, ...shown };
+      if (!deps.monitor) return { outcome: "pass", detail };
+      const watched = await deps.monitor(context, { slug, number: pr.number, url: pr.url });
+      return watched.outcome === "pass" ? { ...watched, detail: { ...detail, ...watched.detail } } : watched;
     } catch (error) {
       return { outcome: "fail", detail: { error: messageOf(error) } };
     }

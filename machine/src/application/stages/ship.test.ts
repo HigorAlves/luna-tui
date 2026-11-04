@@ -56,6 +56,46 @@ describe("shipping", () => {
   });
 });
 
+describe("shipping with a monitor", () => {
+  const HEAD = "abc1234def5678abc1234def5678abc1234def56";
+  const completePack = { summary: "s", format: "text" as const, scenarios: [{ text: "x", test: null, result: "pass" as const }], findings: [], outOfMap: [], risk: "low" as const, rollback: "r", howToVerify: "h", commitSha: HEAD, media: [], at: "2026-11-04T10:00:00.000Z" };
+  const wire = async (over: { monitor?: ShipDeps["monitor"] } = {}) => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const stateDir = await mkdtemp(join(tmpdir(), "ship-"));
+    const github = fakeGitHub({ findPr: async () => pr(true), prHeadSha: async () => HEAD, markPrReady: async () => {} });
+    const publish = vi.fn(async () => ({ pack: completePack, comment: "created" as const, assets: 0 }));
+    const evidence = { load: async () => completePack, save: async () => {}, publish, store: { dirFor: () => "/e" } };
+    const monitor = over.monitor ?? vi.fn(async () => ({ outcome: "pass" as const, detail: { merged: { sha: "m1", at: null, by: "machine" }, prUrl: "https://x/pull/3", number: 3 } }));
+    const context = { task: { id: "t1", title: "feat", description: "d", criteria: [], branch: "hardness/t1", worktreePath: "/wt", repoPath: "/repo", source: null } as unknown as TaskRow, stage: "shipping", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal } as StageContext;
+    const run = shipRunnerWith({ exec: vi.fn(async () => ok()), github, slugOf: async () => "a/b", evidence, headCommit: async () => HEAD, monitor, stateDir });
+    return { run, context, publish, github, monitor: monitor as ReturnType<typeof vi.fn>, stateDir };
+  };
+
+  it("runs the monitor after the publish and the ready mark, and its result is the stage's, with what ship did beside it", async () => {
+    const { run, context, publish, github, monitor } = await wire();
+    const result = await run(context);
+    expect(monitor).toHaveBeenCalledWith(context, { slug: "a/b", number: 3, url: "https://x/pull/3" });
+    expect(result).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" }, readied: true, published: { assets: 0 } } });
+    expect(publish.mock.invocationCallOrder[0]).toBeLessThan((github.markPrReady as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]!);
+    expect((github.markPrReady as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]).toBeLessThan(monitor.mock.invocationCallOrder[0]!);
+  });
+
+  it("returns an escalation from the monitor as it is", async () => {
+    const { run, context } = await wire({ monitor: async () => ({ outcome: "escalated", detail: { escalation: "head_moved", reason: "r", options: [] } }) });
+    expect(await run(context)).toMatchObject({ outcome: "escalated", detail: { escalation: "head_moved" } });
+  });
+
+  it("on a restart finds the pack published on this head and goes straight to the monitor", async () => {
+    const { run, context, publish, monitor } = await wire();
+    await run(context);
+    await run(context);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(monitor).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("shipping with an Evidence Pack", () => {
   const HEAD = "abc1234def5678abc1234def5678abc1234def56";
   const pack = (over: Partial<EvidencePack> = {}): EvidencePack => ({

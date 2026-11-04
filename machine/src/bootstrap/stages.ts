@@ -25,6 +25,7 @@ import { prReviewRunner } from "../application/stages/pr-review.ts";
 import { videoPipeline } from "../application/stages/video.ts";
 import { setupRunner } from "../application/stages/setup.ts";
 import { shipRunnerWith } from "../application/stages/ship.ts";
+import { shipMonitor } from "../application/stages/ship-monitor.ts";
 import { loadCredential } from "../adapters/credentials/claude.ts";
 import { imageExists, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
@@ -186,6 +187,16 @@ export async function buildRealStages(
         github,
         // Ship publishes the task's Evidence Pack once it is complete and its commit is the PR head.
         evidence: { load: evidenceDeps.load, save: (taskId, pack) => evidenceDeps.save(taskId, { evidence: pack }), publish: publishEvidence, store: new EvidenceStore(config.stateDir) },
+        // Then the PR is watched until it merges: by policy the machine merges it, else a person does.
+        stateDir: config.stateDir,
+        monitor: shipMonitor({
+          github,
+          policies,
+          evidence: { load: evidenceDeps.load },
+          stateDir: config.stateDir,
+          pollMs: config.shipPoll.intervalMs,
+          maxWaitMs: config.shipPoll.maxWaitDays * 86_400_000,
+        }),
       }),
       memoryReviewRunner({
         runPack: async (context) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null }),
