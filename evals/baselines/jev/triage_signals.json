@@ -3,17 +3,17 @@
   "pack": "triage_signals",
   "engine": "jev",
   "judge": "claude:opus",
-  "at": "2026-11-03T16:48:40.506Z",
+  "at": "2026-11-04T12:41:36.782Z",
   "model": "typesafe-ai/jev",
   "summary": {
     "cases": 3,
     "passed": 3,
     "passRate": 1,
-    "meanJudgeScore": 0.8833333333333333,
+    "meanJudgeScore": 0.8399999999999999,
     "meanTurns": 1,
-    "meanDurationMs": 582.3333333333334,
-    "costUsd": 0.000095592,
-    "judgeCostUsd": 0.0781116
+    "meanDurationMs": 590.6666666666666,
+    "costUsd": 0.00013415,
+    "judgeCostUsd": 0.091313
   },
   "cases": [
     {
@@ -49,22 +49,39 @@
           "check": "size.score within 0..1.5",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "urgency.score within 1..3",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk.score within 0.5..1.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive.value = false",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": {
-        "score": 0.95,
+        "score": 0.85,
         "pass": true,
         "reasons": [
-          "size.score 0.92: small, which fits a one-function guard and its test (empty-list bounds check in board/src/pr_view.rs); it is not in the lower part of the 0–1.5 band, but it is still reasonable.",
-          "kind bug at confidence 1: right. The issue reports a panic with steps, actual and expected behaviour, and the rubric says high confidence is right here.",
-          "area board at confidence 1: right. It matches the label, the stack location in board/src/pr_view.rs and the PR view in the title.",
-          "ready true with p 0.92: right. The steps, the actual panic message and the expected behaviour for the empty case are all given, so an agent can start without asking anything."
+          "urgency.score 1.32 (confidence 0.47) is at the low end of normal. The rubric asks for normal to high for a crash someone hits, so this undersells it slightly.",
+          "size.score 0.92: small fits the one-function fix with its test, but it is near the top of the allowed band.",
+          "risk.score 1.11 is low, which fits an isolated Rust change with a test.",
+          "kind bug and area board, both at confidence 1, match the issue text, its board label and the pr_view.rs path. High confidence is warranted here.",
+          "ready true (p 0.92) is correct because the issue gives steps, actual and expected behaviour.",
+          "archive false (p 0.09) with reason none is correct: this is real work, not a duplicate and not stale."
         ],
-        "costUsd": 0.038588
+        "costUsd": 0.0437293
       },
       "turns": 1,
-      "durationMs": 698,
-      "costUsd": 0.000032550000000000005,
+      "durationMs": 913,
+      "costUsd": 0.0000454,
       "model": "typesafe-ai/jev"
     },
     {
@@ -90,22 +107,39 @@
           "check": "ready.value = false",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "urgency.score within 0..1.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk.score within 0..1.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive.value = false",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": {
-        "score": 0.8,
+        "score": 0.72,
         "pass": true,
         "reasons": [
-          "area.choice 'machine' is neither of the rubric's plausible areas (factory, where the judge pack runs; contracts, where its engine is set). The low confidence of 0.27 is honest about the doubt, but the pick itself is off-target.",
-          "kind 'question' at confidence 1 is right: the issue asks for a decision and explicitly says 'no code change asked for yet'.",
-          "ready false (p 0.2) is right: the issue has no acceptance criteria an agent could verify.",
-          "size 0.22 is small, which is reasonable for a decision-only question with no code change."
+          "risk.score 1.44 only just passes the 0–1.5 check and doesn't match the rubric's 'none or low' for a question that changes no code. The low confidence (0.22) shows the model was unsure.",
+          "area.choice 'machine' is neither of the rubric's two plausible areas (factory or contracts). The low confidence (0.27) is honest, but the pick itself is off.",
+          "urgency.score 1.15 is high-ish for an issue nothing is waiting on, but the rubric still counts it as low urgency.",
+          "kind 'question' at confidence 1 is correct: the issue asks for a decision and explicitly asks for no code change.",
+          "ready=false (p 0.19) is correct: there are no acceptance criteria an agent could verify.",
+          "archive=false with archive_reason 'none' is correct: this is a real, current question, not a duplicate and not stale."
         ],
-        "costUsd": 0.0188088
+        "costUsd": 0.025817899999999998
       },
       "turns": 1,
-      "durationMs": 498,
-      "costUsd": 0.000030576,
+      "durationMs": 407,
+      "costUsd": 0.00004343,
       "model": "typesafe-ai/jev"
     },
     {
@@ -141,22 +175,38 @@
           "check": "size.score within 0.5..2.5",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "urgency.score within 0..1.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk.score within 1..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive.value = false",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": {
-        "score": 0.9,
+        "score": 0.95,
         "pass": true,
         "reasons": [
-          "size.score 1.96 sits near the top of the allowed 0.5–2.5 band. A bump plus a handful of call sites in stage.ts and api.ts reads as small, so a score closer to 1 would fit better. It is still within 'small to medium'.",
-          "kind.choice is chore, which is correct: it is a dependency bump with call-site updates and the issue says 'no behaviour change'. Confidence 1 is justified.",
-          "area.choice is contracts, which is correct: the work is in contracts/package.json and contracts/src. It is not placed in machine.",
-          "ready.value is true, which is correct: the issue states how to verify it ('pnpm --filter @hardness/contracts test' and typecheck pass with no deprecation warnings)."
+          "risk.score 1.37 sits at the low end of the medium band; the low confidence (0.64) fits, but shared types every package imports could justify a slightly higher score",
+          "kind chore / area contracts are correct: it is a dependency bump with call-site switches and no behaviour change, in contracts/src",
+          "ready true (p 0.94) is right: the issue names its done condition (contracts test and typecheck pass with no deprecation warnings)",
+          "size 1.96 fits a small-to-medium change: one package.json bump plus a handful of schemas in stage.ts and api.ts",
+          "urgency 0.64 is right for a deprecation with no breakage; archive false with reason none is right for real, current work"
         ],
-        "costUsd": 0.020714800000000002
+        "costUsd": 0.021765800000000002
       },
       "turns": 1,
-      "durationMs": 551,
-      "costUsd": 0.000032466000000000004,
+      "durationMs": 452,
+      "costUsd": 0.00004532,
       "model": "typesafe-ai/jev"
     }
   ]
