@@ -5,7 +5,8 @@
   "exports": {
     "./run-once": "./src/application/stages/run-once.ts",
     "./credentials": "./src/adapters/credentials/index.ts",
-    "./docker": "./src/adapters/docker/docker.ts"
+    "./docker": "./src/adapters/docker/docker.ts",
+    "./telemetry": "./src/bootstrap/telemetry.ts"
   },
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/main.ts",
@@ -39,6 +40,7 @@
   "dependencies": {
     "@hardness/contracts": "workspace:*",
     "@hono/node-server": "^2.1.5",
+    "@lmnr-ai/lmnr": "^0.8.58",
     "hono": "^4.13.13",
     "octokit": "^5.0.5",
     "pg": "^8.23.1",
