@@ -6,7 +6,8 @@ site
 fixtures
 docs
 design
-machine/runner
+machine/runner/*
+!machine/runner/graph
 machine/runner-qa
 **/.env
 **/.env.*
