@@ -183,7 +183,7 @@ export interface Task {
   sla: TaskSla | null;
   /** The task's own engine per pack (`PATCH /tasks/:id/stages`); a pack left out runs on luna.yaml's, else its default. */
   stages: StageEngines;
-  /** What issue_classify said about the issue the task came from; null when intake did not run it. */
+  /** What triage_signals said about the issue the task came from; null when intake did not run it. */
   classification: TaskClassification | null;
   /** What triage decided and why; null before it ran. */
   record: TriageRecord | null;

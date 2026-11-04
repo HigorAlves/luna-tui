@@ -81,7 +81,7 @@ describe("a task snapshot's lastRun and gate", () => {
 });
 
 describe("a task snapshot's classification", () => {
-  it("is what intake stored from issue_classify, in one task and in the list; null on a task intake did not classify", async () => {
+  it("is what intake stored from triage_signals, in one task and in the list; null on a task intake did not classify", async () => {
     const classification = { kind: "bug", area: "board", ready: true, size: 1, confidence: 0.85, at: "2026-11-03T12:00:00.000Z", model: "typesafe-ai/jev" };
     const classified = await pipeline.createTask({ title: "Board crashes", classification });
     const plain = await pipeline.createTask({ title: "Login" });

@@ -53,7 +53,7 @@ describe("GET /engines", () => {
   it("says each engine's spend this calendar month and the machine's cap on it", async () => {
     await db.query("truncate pack_runs");
     const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true });
-    await new PgPackRunStore(db).record({ pack: "issue_classify", engine: "jev", model: "m", client: null, ok: true, error: null, turns: 1, durationMs: 1, costUsd: 1.25, startedAt: new Date().toISOString(), endedAt: new Date().toISOString() });
+    await new PgPackRunStore(db).record({ pack: "triage_signals", engine: "jev", model: "m", client: null, ok: true, error: null, turns: 1, durationMs: 1, costUsd: 1.25, startedAt: new Date().toISOString(), endedAt: new Date().toISOString() });
     const engineBudgets = new EngineBudgetWatch({ budgets: { typesafe: 5 }, spend: new PgTaskStore(db), onAlert: () => {} });
     const engines = (await (await createApp({ db, pipeline, bus: new Bus(), credentials: fixedCredentials({}), engineBudgets }).request("/engines")).json()) as Array<Record<string, unknown>>;
     expect(engines.find((e) => e.id === "jev")).toMatchObject({ available: true, spentThisMonthUsd: 1.25, budgetUsd: 5 });

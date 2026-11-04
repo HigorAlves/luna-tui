@@ -74,7 +74,7 @@ describe("delegate", () => {
     expect(delegatedHelpers(pack, "claude")).toEqual([HELPER]);
     expect(delegatedHelpers(pack, "eve")).toEqual(pack.helpers);
     expect(delegatedHelpers(PACKS.reviewing, "claude")).toEqual([]);
-    expect(delegatedHelpers(PACKS.issue_classify, "jev")).toEqual([]);
+    expect(delegatedHelpers(PACKS.triage_signals, "jev")).toEqual([]);
     const options = { input: input(), paths: { factoryRoot: FACTORY_ROOT, work: root, out: root, input: root }, runtimes: {}, emit: () => {}, startedAt: 0, turnsUsed: () => 0 };
     expect(delegationFor("claude", { ...options, pack: PACKS.reviewing })).toBeNull();
     expect(delegationFor("claude", { ...options, pack })?.tool.description).toMatch(/- security-reviewer \(codex:sol\): Reviews a diff/);

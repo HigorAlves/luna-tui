@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { decisionSummary, renderDecision, stateOf } from "./decide.ts";
 
-const questions = PACKS.issue_classify.questions;
+const questions = PACKS.triage_signals.questions;
 
 describe("renderDecision", () => {
   it("puts the state first, then every question with its type and labels, then the answer rule", () => {

@@ -1,4 +1,4 @@
-// What a runtime that answers a decision pack plays the conformance table with: issue_classify,
+// What a runtime that answers a decision pack plays the conformance table with: triage_signals,
 // answered as the pack's own schema asks (a runtime with a wire of its own, like Jev, has its
 // table beside its test).
 import { PACKS } from "@hardness/contracts";
@@ -13,10 +13,14 @@ const ANSWER = {
   area: { choice: "board", confidence: 0.62 },
   ready: { value: true, p: 0.83 },
   size: { score: 1.4, confidence: 0.75 },
+  urgency: { score: 1, confidence: 0.7 },
+  risk: { score: 0.5, confidence: 0.8 },
+  archive: { value: false, p: 0.05 },
+  archive_reason: { choice: "none", confidence: 0.9 },
 };
 
 export const DECISION_TABLE: TablePack = {
-  pack: PACKS.issue_classify,
+  pack: PACKS.triage_signals,
   valid: ANSWER,
   expected: ANSWER,
   off: { ...ANSWER, kind: { choice: "epic", confidence: 0.9 } },

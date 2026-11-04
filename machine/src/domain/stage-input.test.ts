@@ -122,11 +122,11 @@ describe("buildStageInput", () => {
     }
   });
 
-  it("has no plan before one is approved, and covers all eleven stage packs plus slack_triage, jira_intake, issue_classify, eval_judge and chat_triage", () => {
+  it("has no plan before one is approved, and covers all eleven stage packs plus slack_triage, jira_intake, triage_signals, eval_judge and chat_triage", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["addressing", "chat_triage", "ci_watch", "e2e", "eval_judge", "evidence", "implementing", "issue_classify", "jira_intake", "reviewing", "reviewing_memory", "setup", "slack_triage", "test_design", "triage", "verifying"],
+      ["addressing", "chat_triage", "ci_watch", "e2e", "eval_judge", "evidence", "implementing", "jira_intake", "reviewing", "reviewing_memory", "setup", "slack_triage", "test_design", "triage", "triage_signals", "verifying"],
     );
     expect(Object.keys(PACK_LIMITS)).toHaveLength(16);
   });
@@ -201,7 +201,7 @@ describe("buildStageInput", () => {
 
   it("hands implementing and verifying the repo's checks from luna.yaml, and no other pack", () => {
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }];
-    const build = (stage: Exclude<PackId, "slack_triage" | "jira_intake" | "issue_classify" | "eval_judge" | "chat_triage">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
+    const build = (stage: Exclude<PackId, "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
     expect(build("implementing").context.checks).toEqual(checks);
     expect(build("verifying").context.checks).toEqual(checks);
     expect(build("triage").context.checks).toBeUndefined();

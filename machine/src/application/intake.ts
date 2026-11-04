@@ -1,5 +1,5 @@
 // Polls GitHub for labelled issues and turns each new one into a task in Intake, through the
-// GitHub port. With a Jev credential, issue_classify reads each new issue first: a question Jev is
+// GitHub port. With a Jev credential, triage_signals reads each new issue first: a question Jev is
 // sure of on every answer becomes no task, and the issue hears why once (once per run of the
 // machine: it keeps no record of the comment); anything else becomes a task as before, with the
 // classification kept on it.
@@ -17,7 +17,7 @@ export interface GitHubIntakeOptions {
   github: GitHub;
   /** The local checkout for `owner/name`, so an imported issue needs no hand edit; null when unknown. */
   resolveRepo?: (repo: string) => Promise<string | null>;
-  /** issue_classify on Jev; absent or answering null, every new issue becomes a task as without it. */
+  /** triage_signals on Jev; absent or answering null, every new issue becomes a task as without it. */
   classifier?: IssueClassifier | null;
 }
 

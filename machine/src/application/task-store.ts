@@ -20,7 +20,7 @@ export interface NewTaskRow {
   jira?: JiraLink | null;
   /** The task's own engine per pack (the work order's `stages`). */
   stages?: StageEngines;
-  /** What issue_classify said about the issue, when intake ran it. */
+  /** What triage_signals said about the issue, when intake ran it. */
   classification?: TaskClassification | null;
   record?: TriageRecord | null;
   evidence?: EvidencePack | null;

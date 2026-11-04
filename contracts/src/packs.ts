@@ -301,8 +301,8 @@ const LEDGER_TOOLS: LunaTool[] = ["slice_init", "slice_set", "slice_list", "deci
 /** What the setup planner may run to learn a repo: version prints and listings, nothing that builds. */
 const PROBE_COMMANDS = ["which", "command -v", "find", "node", "npm", "pnpm", "yarn", "go", "cargo", "rustc", "python", "python3", "pip", "make", "docker", "git log", "git ls-files"];
 
-/** What issue_classify asks about an issue before intake turns it into a ticket. */
-const ISSUE_QUESTIONS: QuestionSet = {
+/** What triage_signals asks about an issue before intake turns it into a ticket. */
+const TRIAGE_SIGNALS: QuestionSet = {
   kind: {
     type: "choice",
     instructions: "What kind of work does this issue ask for?",
@@ -335,10 +335,14 @@ const ISSUE_QUESTIONS: QuestionSet = {
       large: "Several packages, or a new subsystem",
     },
   },
+  urgency: { type: "score", instructions: "How soon does this need to land?", rubric: { low: "Whenever: no one is waiting", normal: "This cycle", high: "This week: someone is blocked", urgent: "Now: production is wrong or a deadline is today" } },
+  risk: { type: "score", instructions: "How much could the change break?", rubric: { none: "Docs or copy", low: "Isolated code with tests", medium: "Shared code other features depend on", high: "Auth, payments, data migrations, deletion, CI or infrastructure" } },
+  archive: { type: "yesno", instructions: "Should this be archived instead of worked: a duplicate, out of scope, stale, or nothing an agent can act on?" },
+  archive_reason: { type: "choice", instructions: "If it should be archived, why; else none.", criteria: { none: "It should be worked", duplicate: "Another open ticket asks for the same", out_of_scope: "Not this repository's or team's to do", stale: "Overtaken by events; nobody needs it now", not_actionable: "No change an agent could make or verify" } },
 };
 
 /** The packs a decision model answers; every other pack is a role's or a script's. */
-type DecisionPackId = "issue_classify";
+type DecisionPackId = "triage_signals";
 
 export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<DecisionPackId, DecisionPack> = {
   setup: {
@@ -593,39 +597,68 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     answer: ChatTriageAnswer,
     template: "chat_triage.md",
   },
-  issue_classify: {
-    id: "issue_classify",
+  triage_signals: {
+    id: "triage_signals",
     // Labels an issue on Jev: one call, no worktree, reached through POST /runs. Nothing in intake
     // calls it yet; a caller acts on answers at or above `policy` and takes the agent path below.
     kind: "decision",
-    questions: ISSUE_QUESTIONS,
-    policy: samePolicy(ISSUE_QUESTIONS, { proceed: 0.7, flag: 0.5 }),
+    questions: TRIAGE_SIGNALS,
+    // Archiving a ticket by machine wants a higher bar than labelling it.
+    policy: { ...samePolicy(TRIAGE_SIGNALS, { proceed: 0.7, flag: 0.5 }), archive: { proceed: 0.9, flag: 0.7 } },
     writable: false,
     maxTurns: 1,
     timeoutMs: 1 * MINUTE,
     // Jev by default; a small Claude or Codex model behind the same questions and schema when Jev
     // has no credential (RFC 0005 rule 1). Only calibration quality differs.
     engines: { default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] },
-    answer: answerSchema(ISSUE_QUESTIONS),
+    answer: answerSchema(TRIAGE_SIGNALS),
   },
 };
 
-type IssueAnswer = { kind: { choice: string; confidence: number }; area: { choice: string; confidence: number }; ready: { value: boolean; p: number }; size: { score: number; confidence: number } };
+type Choice = { choice: string; confidence: number };
+type Score = { score: number; confidence: number };
+type YesNo = { value: boolean; p: number };
+type IssueAnswer = { kind: Choice; area: Choice; ready: YesNo; size: Score; urgency: Score; risk: Score; archive: YesNo; archive_reason: Choice };
 
-/** issue_classify's validated answer as a task keeps it: the picks, and the least sure answer's
- *  confidence (a yes/no's is its distance from a coin toss: max(p, 1 - p)). */
+/** triage_signals's validated answer as a task keeps it: the picks, every answer's own confidence
+ *  under `signals`, and the least sure answer's confidence (a yes/no's is its distance from a
+ *  coin toss: max(p, 1 - p)). */
 export function classificationOf(answer: Record<string, unknown>, model: string, at: Date): TaskClassification {
-  const { kind, area, ready, size } = answer as IssueAnswer;
-  const confidence = Math.min(kind.confidence, area.confidence, Math.max(ready.p, 1 - ready.p), size.confidence);
-  return { kind: kind.choice, kindConfidence: kind.confidence, area: area.choice, ready: ready.value, size: size.score, confidence, at: at.toISOString(), model };
+  const { kind, area, ready, size, urgency, risk, archive, archive_reason } = answer as IssueAnswer;
+  const yn = (a: YesNo) => Math.max(a.p, 1 - a.p);
+  const confidence = Math.min(kind.confidence, area.confidence, yn(ready), size.confidence, urgency.confidence, risk.confidence, yn(archive), archive_reason.confidence);
+  const signals = {
+    kind: { answer: kind.choice, confidence: kind.confidence },
+    area: { answer: area.choice, confidence: area.confidence },
+    ready: { answer: ready.value, confidence: yn(ready) },
+    size: { answer: size.score, confidence: size.confidence },
+    urgency: { answer: urgency.score, confidence: urgency.confidence },
+    risk: { answer: risk.score, confidence: risk.confidence },
+    archive: { answer: archive.value, confidence: yn(archive) },
+    archive_reason: { answer: archive_reason.choice, confidence: archive_reason.confidence },
+  };
+  return {
+    kind: kind.choice, kindConfidence: kind.confidence, area: area.choice, ready: ready.value, size: size.score,
+    urgency: urgency.score, risk: risk.score, archive: archive.value, archiveReason: archive_reason.choice,
+    confidence, at: at.toISOString(), model, signals,
+  };
 }
 
+const levelOf = (question: QuestionSet[string], score: number): string => {
+  const labels = Object.keys((question as { rubric: Record<string, string> }).rubric);
+  return labels[Math.min(labels.length - 1, Math.max(0, Math.round(score)))]!;
+};
+
 /** A classification in one line, for an issue comment, a log or a prompt:
- *  `question · machine · not ready · size tiny · lowest confidence 0.85 (typesafe-ai/jev)`. */
+ *  `question · machine · not ready · size tiny · lowest confidence 0.85 (typesafe-ai/jev)`,
+ *  with ` · urgency <label> · risk <label>` when it has them and ` · archive? <reason>` when it suggests archiving. */
 export function classificationLine(c: TaskClassification): string {
-  const sizes = Object.keys((ISSUE_QUESTIONS.size as { rubric: Record<string, string> }).rubric);
-  const size = sizes[Math.min(sizes.length - 1, Math.max(0, Math.round(c.size)))];
-  return `${c.kind} · ${c.area} · ${c.ready ? "ready" : "not ready"} · size ${size} · lowest confidence ${c.confidence.toFixed(2)} (${c.model})`;
+  const extra = [
+    c.urgency !== undefined ? ` · urgency ${levelOf(TRIAGE_SIGNALS.urgency!, c.urgency)}` : "",
+    c.risk !== undefined ? ` · risk ${levelOf(TRIAGE_SIGNALS.risk!, c.risk)}` : "",
+    c.archive ? ` · archive? ${c.archiveReason ?? "yes"}` : "",
+  ].join("");
+  return `${c.kind} · ${c.area} · ${c.ready ? "ready" : "not ready"} · size ${levelOf(TRIAGE_SIGNALS.size!, c.size)} · lowest confidence ${c.confidence.toFixed(2)} (${c.model})${extra}`;
 }
 
 /** A helper as the pack its child run is: the helper's role on its engine, the parent's access

@@ -1,7 +1,7 @@
 {
   "schema": 3,
-  "stage": "issue_classify",
-  "pack": "issue_classify",
+  "stage": "triage_signals",
+  "pack": "triage_signals",
   "attempt": 1,
   "task": {
     "id": "eval-board-key-panic",

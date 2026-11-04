@@ -179,7 +179,7 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.jira_intake, input, template })).toContain("issue:\n(none)\ndescription:\n(none)");
   });
 
-  it("renders issue_classify's first read for jira_intake when intake had one, (none) when not", () => {
+  it("renders triage_signals's first read for jira_intake when intake had one, (none) when not", () => {
     const jira = { key: "PLAT-1", url: "u", summary: "s", description: "", issueType: null, priority: null, labels: [], dueAt: null, comments: [], repoPath: null };
     const classification = { kind: "bug", area: "board", ready: true, size: 1.2, confidence: 0.82, at: "2026-11-03T12:00:00.000Z", model: "typesafe-ai/jev" };
     const render = (j: object) => renderPrompt({ pack: PACKS.jira_intake, input: { ...input, pack: "jira_intake", stage: "jira_intake", context: { projectContext: null, jira: j as never } }, template: "hint: {{context.jira.classification}}" });

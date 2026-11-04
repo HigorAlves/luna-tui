@@ -1,6 +1,6 @@
 import { MigrationInterface, QueryRunner } from "typeorm";
 
-/** What issue_classify said about the issue a task came from (`classification`), and pack_runs'
+/** What triage_signals said about the issue a task came from (`classification`), and pack_runs'
  *  cost to the micro-dollar: a Jev call costs a few thousandths of a cent, which four places
  *  recorded as nothing. */
 export class AddTaskClassification1794570000000 implements MigrationInterface {

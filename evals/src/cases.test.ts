@@ -103,8 +103,8 @@ describe("the seed cases", () => {
   const EVALS = resolve(import.meta.dirname, "..");
   const packs = readdirSync(EVALS, { withFileTypes: true }).filter((d) => d.isDirectory() && existsSync(join(EVALS, d.name, "cases"))).map((d) => d.name);
 
-  it("cover triage, slack_triage and issue_classify, three cases each at least", () => {
-    expect(packs.sort()).toEqual(expect.arrayContaining(["issue_classify", "slack_triage", "triage"]));
+  it("cover triage, slack_triage and triage_signals, three cases each at least", () => {
+    expect(packs.sort()).toEqual(expect.arrayContaining(["triage_signals", "slack_triage", "triage"]));
     for (const pack of packs) expect(loadCases(EVALS, pack as "triage").length).toBeGreaterThanOrEqual(3);
   });
 

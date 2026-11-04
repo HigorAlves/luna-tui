@@ -136,7 +136,7 @@ describe("the engines each pack may run on", () => {
 
   it("keeps today's models as the defaults", () => {
     const defaults = Object.fromEntries(Object.values(PACKS).map((p) => [p.id, p.engines.default]));
-    expect(defaults).toMatchObject({ setup: "claude:opus", triage: "claude:opus", implementing: "claude:sonnet", verifying: "claude:opus", slack_triage: "claude:haiku", jira_intake: "claude:sonnet", issue_classify: "jev" });
+    expect(defaults).toMatchObject({ setup: "claude:opus", triage: "claude:opus", implementing: "claude:sonnet", verifying: "claude:opus", slack_triage: "claude:haiku", jira_intake: "claude:sonnet", triage_signals: "jev" });
   });
 });
 

@@ -2,7 +2,7 @@
 // new one into a ticket in Intake, after the jira_intake pack has read it: `ready` makes the
 // ticket with the pack's title, description and criteria; `needs_brief` asks the questions back
 // on the issue and waits for it to change; `not_for_agent` says why once and moves on. With a
-// Jev credential, issue_classify reads the issue first: a question Jev is sure of on every answer
+// Jev credential, triage_signals reads the issue first: a question Jev is sure of on every answer
 // is declined like `not_for_agent` without running jira_intake; anything else goes to jira_intake
 // as before, the classification passed as a hint and kept on the ticket. An
 // issue already behind a ticket (by its key) is never imported twice; one the machine spoke
@@ -30,7 +30,7 @@ export interface JiraIntakeOptions {
   repos: () => Promise<string[]>;
   /** The jira_intake pack; null (agents off) imports every issue as it reads in Jira. */
   triager: JiraTriager | null;
-  /** issue_classify on Jev, before jira_intake; absent or answering null, intake runs as without it. */
+  /** triage_signals on Jev, before jira_intake; absent or answering null, intake runs as without it. */
   classifier?: IssueClassifier | null;
   /** How often repos are checked for a due poll; each repo polls at its own `every`. */
   tickMs?: number;
@@ -150,7 +150,7 @@ export class JiraIntake {
 
   private async consider(issue: JiraIssue, repoPath: string, comments: "none" | "milestones" | "gates"): Promise<void> {
     const classification = (await this.options.classifier?.classify(issueContext(issue))) ?? null;
-    const overrides = (await this.options.policies.for(repoPath)).decisions.issue_classify ?? {};
+    const overrides = (await this.options.policies.for(repoPath)).decisions.triage_signals ?? {};
     if (confidentQuestion(classification, overrides)) {
       this.answered.set(issue.key, issue.updated);
       await this.comment(issue, `Not for an agent: it reads as a question, not a change (${classificationLine(classification)}).`);
@@ -191,7 +191,7 @@ export class JiraIntake {
   }
 }
 
-/** What issue_classify reads of a Jira issue. */
+/** What triage_signals reads of a Jira issue. */
 export function issueContext(issue: JiraIssue): IssueContext {
   return { title: issue.summary, description: issue.description, labels: issue.labels, source: `jira:${issue.key}` };
 }

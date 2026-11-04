@@ -9,7 +9,7 @@ import { packStates } from "./packs.ts";
 export const CONTEXT_OF = {
   slack_triage: { key: "slack", schema: SlackTriageContext },
   jira_intake: { key: "jira", schema: JiraIntakeContext },
-  issue_classify: { key: "issue", schema: IssueContext },
+  triage_signals: { key: "issue", schema: IssueContext },
   chat_triage: { key: "chat", schema: ChatTriageContext },
 } as const;
 

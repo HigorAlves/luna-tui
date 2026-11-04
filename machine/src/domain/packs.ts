@@ -9,7 +9,7 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   // The inboxes' packs and the decision pack callers run on demand: no task, so no task state.
   slack_triage: [],
   jira_intake: [],
-  issue_classify: [],
+  triage_signals: [],
   eval_judge: [],
   chat_triage: [],
 };

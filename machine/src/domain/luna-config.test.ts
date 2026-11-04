@@ -67,9 +67,9 @@ describe("parseLunaConfig", () => {
   });
 
   it("reads policy.decisions: per decision pack, per question, a repo's own confidence bars", () => {
-    const text = "policy:\n  decisions:\n    issue_classify:\n      kind: { proceed: 0.9 }\n      area: { proceed: 0.6, flag: 0.4 }\n";
-    expect(parseLunaConfig(text).decisions).toEqual({ issue_classify: { kind: { proceed: 0.9 }, area: { proceed: 0.6, flag: 0.4 } } });
-    expect(() => parseLunaConfig("policy:\n  decisions:\n    issue_classify:\n      kind: { proceed: 1.5 }\n")).toThrow(/policy\.decisions/);
+    const text = "policy:\n  decisions:\n    triage_signals:\n      kind: { proceed: 0.9 }\n      area: { proceed: 0.6, flag: 0.4 }\n";
+    expect(parseLunaConfig(text).decisions).toEqual({ triage_signals: { kind: { proceed: 0.9 }, area: { proceed: 0.6, flag: 0.4 } } });
+    expect(() => parseLunaConfig("policy:\n  decisions:\n    triage_signals:\n      kind: { proceed: 1.5 }\n")).toThrow(/policy\.decisions/);
   });
 
   it("reads sla.archive in seconds, off as null, and leaves it out when the file says nothing", () => {

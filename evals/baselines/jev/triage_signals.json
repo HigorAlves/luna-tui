@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "pack": "issue_classify",
+  "pack": "triage_signals",
   "engine": "jev",
   "judge": "claude:opus",
   "at": "2026-11-03T16:48:40.506Z",
@@ -20,7 +20,7 @@
       "id": "board-key-panic",
       "pass": true,
       "schema": {
-        "check": "answer on the issue_classify schema",
+        "check": "answer on the triage_signals schema",
         "pass": true,
         "detail": null
       },
@@ -71,7 +71,7 @@
       "id": "judge-engine-question",
       "pass": true,
       "schema": {
-        "check": "answer on the issue_classify schema",
+        "check": "answer on the triage_signals schema",
         "pass": true,
         "detail": null
       },
@@ -112,7 +112,7 @@
       "id": "zod-upgrade-contracts",
       "pass": true,
       "schema": {
-        "check": "answer on the issue_classify schema",
+        "check": "answer on the triage_signals schema",
         "pass": true,
         "detail": null
       },

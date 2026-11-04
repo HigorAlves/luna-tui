@@ -43,7 +43,7 @@ export interface JiraIntakeDeps {
 /** The port JiraIntake triages through; null (agents off) imports every issue as it is. */
 export interface JiraTriager {
   /** The pack's verdict on one issue, or null when the run failed (logged). `classification`,
-   *  issue_classify's first read when intake ran it, rides in the pack's context as a hint. */
+   *  triage_signals's first read when intake ran it, rides in the pack's context as a hint. */
   triage(issue: JiraIssue, repoPath: string | null, classification?: TaskClassification | null): Promise<JiraIntakeAnswer | null>;
 }
 

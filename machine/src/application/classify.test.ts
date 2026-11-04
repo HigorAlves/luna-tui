@@ -1,4 +1,4 @@
-// Intake's classifier: issue_classify through PackRuns, recorded as intake's; no Jev credential
+// Intake's classifier: triage_signals through PackRuns, recorded as intake's; no Jev credential
 // and every failure answer null, the first silently, the rest with a line.
 import type { RunInput, RunResult } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
@@ -7,7 +7,7 @@ import { confidentQuestion, createIssueClassifier } from "./classify.ts";
 import { type PackRunsPort, QueueFullError, RunFailedError, RunNoCredentialError, RunOverBudgetError } from "./pack-runs.ts";
 
 const issue = { title: "Which Postgres do we support?", description: "Is 14 fine?", labels: ["question"], source: "jira:HAR-7" };
-const answer = { kind: { choice: "question", confidence: 0.98 }, area: { choice: "machine", confidence: 0.9 }, ready: { value: false, p: 0.1 }, size: { score: 0.2, confidence: 0.85 } };
+const answer = { kind: { choice: "question", confidence: 0.98 }, area: { choice: "machine", confidence: 0.9 }, ready: { value: false, p: 0.1 }, size: { score: 0.2, confidence: 0.85 }, urgency: { score: 1, confidence: 0.8 }, risk: { score: 0.2, confidence: 0.9 }, archive: { value: false, p: 0.02 }, archive_reason: { choice: "none", confidence: 0.95 } };
 const NOW = new Date("2026-11-03T12:00:00Z");
 
 function runs(result: RunResult | Error) {
@@ -23,12 +23,13 @@ function runs(result: RunResult | Error) {
 }
 
 describe("the intake classifier", () => {
-  it("runs issue_classify with the issue, as intake, on the pack's own engine choice, and keeps the picks, the lowest confidence, when and the model", async () => {
+  it("runs triage_signals with the issue, as intake, on the pack's own engine choice, and keeps the picks, the lowest confidence, when and the model", async () => {
     const { port, calls } = runs({ answer, usage: { model: "typesafe-ai/jev", engine: "jev", turns: 1, durationMs: 500, costUsd: 0.00003 } });
     const lines: string[] = [];
     const c = await createIssueClassifier({ runs: port, now: () => NOW, log: (l) => lines.push(l) }).classify(issue);
-    expect(calls).toEqual([{ input: { pack: "issue_classify", context: { issue } }, client: "intake" }]);
-    expect(c).toEqual({ kind: "question", kindConfidence: 0.98, area: "machine", ready: false, size: 0.2, confidence: 0.85, at: NOW.toISOString(), model: "typesafe-ai/jev" });
+    expect(calls).toEqual([{ input: { pack: "triage_signals", context: { issue } }, client: "intake" }]);
+    expect(c).toMatchObject({ kind: "question", kindConfidence: 0.98, area: "machine", ready: false, size: 0.2, urgency: 1, risk: 0.2, archive: false, archiveReason: "none", confidence: 0.8, at: NOW.toISOString(), model: "typesafe-ai/jev" });
+    expect(c?.signals?.archive).toEqual({ answer: false, confidence: 0.98 });
     expect(lines).toEqual([]);
   });
 

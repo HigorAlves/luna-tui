@@ -324,7 +324,7 @@ const packRuns = buildPackRuns(config, {
 });
 // A run folder a crash left holds a client's context: never kept.
 await packRuns?.clearLeftovers();
-/** Intake's first read of a new issue: issue_classify on Jev through the same PackRuns, recorded
+/** Intake's first read of a new issue: triage_signals on Jev through the same PackRuns, recorded
  *  as the `intake` client. Without a Jev credential it answers nothing and intake runs as before. */
 const classifier = packRuns ? createIssueClassifier({ runs: packRuns }) : null;
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;

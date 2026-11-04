@@ -1,5 +1,5 @@
 // Decision packs: the questions are data, the answer schema is derived from them, and
-// issue_classify asks what intake needs to label and route an issue.
+// triage_signals asks what intake needs to label and route an issue.
 import { describe, expect, it } from "vitest";
 
 import { ENGINES, PACKS, PACK_LIMITS, StageInput, answerSchema, applyPolicy, classificationLine, classificationOf } from "./index.ts";
@@ -49,7 +49,7 @@ describe("the triage_signals pack", () => {
     expect(pack).not.toHaveProperty("access");
     expect(pack).not.toHaveProperty("template");
     expect(ENGINES.jev.model).toBe("typesafe/jev");
-    expect(PACK_LIMITS.issue_classify).toEqual({ maxTurns: pack.maxTurns, timeoutMs: pack.timeoutMs, writable: false });
+    expect(PACK_LIMITS.triage_signals).toEqual({ maxTurns: pack.maxTurns, timeoutMs: pack.timeoutMs, writable: false });
   });
 
   it("runs on Jev by default and on a small Claude or Codex model when Jev is absent", () => {
@@ -62,12 +62,12 @@ describe("the triage_signals pack", () => {
     expect(Object.keys(area?.type === "choice" ? area.criteria : {})).toEqual(["board", "machine", "factory", "contracts", "site"]);
     expect(ready).toMatchObject({ type: "yesno", instructions: expect.stringMatching(/acceptance criteria/) });
     expect(size?.type === "score" && Object.keys(size.rubric).length).toBeGreaterThanOrEqual(2);
-    const answer = { kind: { choice: "feature", confidence: 0.8 }, area: { choice: "machine", confidence: 0.75 }, ready: { value: false, p: 0.3 }, size: { score: 1.5, confidence: 0.7 } };
+    const answer = { kind: { choice: "feature", confidence: 0.8 }, area: { choice: "machine", confidence: 0.75 }, ready: { value: false, p: 0.3 }, size: { score: 1.5, confidence: 0.7 }, urgency: { score: 1, confidence: 0.7 }, risk: { score: 1, confidence: 0.7 }, archive: { value: false, p: 0.1 }, archive_reason: { choice: "none", confidence: 0.9 } };
     expect(pack.answer.parse(answer)).toEqual(answer);
   });
 
   it("reads the issue from the stage input's context", () => {
-    const input = { schema: 3, stage: "issue_classify", pack: "issue_classify", attempt: 1, task: { id: "t", title: "t", description: "", criteria: [], repoPath: "", branch: "", source: null }, plan: null, decisions: [], priorFindings: [], limits: { maxTurns: 1, timeoutMs: 1 }, env: {} };
+    const input = { schema: 3, stage: "triage_signals", pack: "triage_signals", attempt: 1, task: { id: "t", title: "t", description: "", criteria: [], repoPath: "", branch: "", source: null }, plan: null, decisions: [], priorFindings: [], limits: { maxTurns: 1, timeoutMs: 1 }, env: {} };
     const issue = { title: "Board crashes on resize", description: "Steps: resize the terminal.", labels: ["bug"], source: "jira:HAR-12" };
     expect(StageInput.parse({ ...input, context: { projectContext: null, issue } }).context.issue).toEqual(issue);
     expect(StageInput.parse({ ...input, context: { projectContext: null, issue: { title: "t", description: "" } } }).context.issue).toEqual({ title: "t", description: "" });
@@ -76,24 +76,32 @@ describe("the triage_signals pack", () => {
 });
 
 describe("an issue's classification", () => {
-  const answer = { kind: { choice: "question", confidence: 0.97 }, area: { choice: "machine", confidence: 0.9 }, ready: { value: false, p: 0.15 }, size: { score: 0.2, confidence: 0.8 } };
+  const answer = { kind: { choice: "question", confidence: 0.97 }, area: { choice: "machine", confidence: 0.9 }, ready: { value: false, p: 0.15 }, size: { score: 0.2, confidence: 0.8 }, urgency: { score: 1, confidence: 0.85 }, risk: { score: 0.9, confidence: 0.9 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.95 } };
 
   it("keeps each pick and the least sure answer's confidence, a yes/no's being its distance from a coin toss", () => {
     const at = new Date("2026-11-03T12:00:00Z");
-    expect(classificationOf(answer, "typesafe-ai/jev", at)).toEqual({ kind: "question", kindConfidence: 0.97, area: "machine", ready: false, size: 0.2, confidence: 0.8, at: "2026-11-03T12:00:00.000Z", model: "typesafe-ai/jev" });
+    expect(classificationOf(answer, "typesafe-ai/jev", at)).toEqual({
+      kind: "question", kindConfidence: 0.97, area: "machine", ready: false, size: 0.2, urgency: 1, risk: 0.9, archive: false, archiveReason: "none", confidence: 0.8, at: "2026-11-03T12:00:00.000Z", model: "typesafe-ai/jev",
+      signals: {
+        kind: { answer: "question", confidence: 0.97 }, area: { answer: "machine", confidence: 0.9 }, ready: { answer: false, confidence: 0.85 }, size: { answer: 0.2, confidence: 0.8 },
+        urgency: { answer: 1, confidence: 0.85 }, risk: { answer: 0.9, confidence: 0.9 }, archive: { answer: false, confidence: 0.95 }, archive_reason: { answer: "none", confidence: 0.95 },
+      },
+    });
     expect(classificationOf({ ...answer, ready: { value: true, p: 0.6 } }, "m", at).confidence).toBeCloseTo(0.6, 10);
   });
 
   it("reads in one line, the size by its rubric level", () => {
     const c = classificationOf(answer, "typesafe-ai/jev", new Date(0));
-    expect(classificationLine(c)).toBe("question · machine · not ready · size tiny · lowest confidence 0.80 (typesafe-ai/jev)");
+    expect(classificationLine(c)).toBe("question · machine · not ready · size tiny · lowest confidence 0.80 (typesafe-ai/jev) · urgency normal · risk low");
     expect(classificationLine({ ...c, ready: true, size: 2.6 })).toMatch(/· ready · size large ·/);
+    expect(classificationLine({ ...c, archive: true, archiveReason: "duplicate" })).toMatch(/ · archive\? duplicate$/);
+    expect(classificationLine({ kind: "bug", area: "board", ready: true, size: 1, confidence: 0.9, at: "", model: "m" })).toBe("bug · board · ready · size small · lowest confidence 0.90 (m)");
   });
 });
 
 describe("confidence policy", () => {
-  const pack = PACKS.issue_classify;
-  const answer = { kind: { choice: "question", confidence: 0.9 }, area: { choice: "machine", confidence: 0.55 }, ready: { value: false, p: 0.3 }, size: { score: 0.2, confidence: 0.8 } };
+  const pack = PACKS.triage_signals;
+  const answer = { kind: { choice: "question", confidence: 0.9 }, area: { choice: "machine", confidence: 0.55 }, ready: { value: false, p: 0.3 }, size: { score: 0.2, confidence: 0.8 }, urgency: { score: 1, confidence: 0.85 }, risk: { score: 1, confidence: 0.9 }, archive: { value: false, p: 0.02 }, archive_reason: { choice: "none", confidence: 0.95 } };
   it("gives every question a proceed and a flag bar, flag below proceed, both in (0, 1]", () => {
     for (const [name, p] of Object.entries(pack.policy)) {
       expect(p.flag, name).toBeGreaterThan(0);
@@ -104,7 +112,7 @@ describe("confidence policy", () => {
   });
   it("judges each answer against its own bar and the whole answer by its worst question", () => {
     const v = applyPolicy(pack, answer);
-    expect(v.verdicts).toEqual({ kind: "proceed", area: "flag", ready: "proceed", size: "proceed" }); // ready: max(0.3, 0.7) = 0.7, at the proceed bar
+    expect(v.verdicts).toEqual({ kind: "proceed", area: "flag", ready: "proceed", size: "proceed", urgency: "proceed", risk: "proceed", archive: "proceed", archive_reason: "proceed" }); // ready: max(0.3, 0.7) = 0.7, at the proceed bar
     expect(v.overall).toBe("flag");
     expect(v.below).toEqual(["area"]);
   });

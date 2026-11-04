@@ -50,7 +50,7 @@ export interface GhIssue {
   title: string;
   body: string | null;
   url: string;
-  /** Its labels' names, for issue_classify; absent when the adapter did not read them. */
+  /** Its labels' names, for triage_signals; absent when the adapter did not read them. */
   labels?: string[];
 }
 

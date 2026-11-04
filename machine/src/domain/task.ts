@@ -43,7 +43,7 @@ export interface TaskRow {
   requestHash: string | null;
   /** The task's own engine per pack, over luna.yaml's and the pack's default; a pack's entry is fixed once its stage starts. */
   stages: StageEngines;
-  /** What issue_classify said about the issue the task came from; null when intake did not run it. */
+  /** What triage_signals said about the issue the task came from; null when intake did not run it. */
   classification: TaskClassification | null;
   /** What triage decided about the ticket and why; null before it ran. */
   record: TriageRecord | null;

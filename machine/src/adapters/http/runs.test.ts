@@ -80,7 +80,7 @@ describe("POST /runs", () => {
       [{ pack: "eval_judge", context: {} }, "not_on_demand"],
       [{ pack: "chat_triage", engine: "claude:opus", context: { chat } }, "engine_not_allowed"],
       [{ pack: "chat_triage", context: { issue: { title: "t", description: "d" } } }, "invalid_request"],
-      [{ pack: "issue_classify", context: { issue: { title: "t" } } }, "invalid_request"],
+      [{ pack: "triage_signals", context: { issue: { title: "t" } } }, "invalid_request"],
       [{ pack: "nope", context: {} }, "invalid_request"],
     ];
     for (const [body, error] of cases) {
@@ -94,7 +94,7 @@ describe("POST /runs", () => {
 
   it("is 409 runtime_disabled for an engine on a runtime MACHINE_DISABLE_RUNTIMES turned off, without running", async () => {
     const credentials = gatedCredentials(fixedCredentials({}), [runtimeKillSwitch(["jev"])]);
-    const response = await post(appWith(output(), { deps: { credentials } }), { pack: "issue_classify", engine: "jev", context: { issue: { title: "t", description: "d" } } });
+    const response = await post(appWith(output(), { deps: { credentials } }), { pack: "triage_signals", engine: "jev", context: { issue: { title: "t", description: "d" } } });
     expect(response.status).toBe(409);
     expect(await response.json()).toEqual({ error: "runtime_disabled", message: "jev: disabled by MACHINE_DISABLE_RUNTIMES" });
     expect(await db.query("select 1 from pack_runs")).toEqual([]);
@@ -103,11 +103,11 @@ describe("POST /runs", () => {
   it("runs a decision pack on claude:haiku when its default engine is off, and accepts the engine by name", async () => {
     const credentials = gatedCredentials(fixedCredentials({}), [runtimeKillSwitch(["jev"])]);
     const issue = { title: "t", description: "d" };
-    const labels = { kind: { choice: "bug", confidence: 0.9 }, area: { choice: "board", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { score: 1, confidence: 0.7 } };
-    const fell = await post(appWith(output({ answer: labels }), { deps: { credentials } }), { pack: "issue_classify", context: { issue } });
+    const labels = { kind: { choice: "bug", confidence: 0.9 }, area: { choice: "board", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { score: 1, confidence: 0.7 }, urgency: { score: 1, confidence: 0.8 }, risk: { score: 1, confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
+    const fell = await post(appWith(output({ answer: labels }), { deps: { credentials } }), { pack: "triage_signals", context: { issue } });
     expect(fell.status).toBe(200);
     expect(((await fell.json()) as { usage: { engine: string } }).usage.engine).toBe("claude:haiku");
-    const named = await post(appWith(output({ answer: labels })), { pack: "issue_classify", engine: "claude:haiku", context: { issue } });
+    const named = await post(appWith(output({ answer: labels })), { pack: "triage_signals", engine: "claude:haiku", context: { issue } });
     expect(named.status).toBe(200);
   });
 
@@ -117,7 +117,7 @@ describe("POST /runs", () => {
     const response = await post(appWith(output(), { deps: { credentials } }), { pack: "chat_triage", engine: "codex:luna", context: { chat } });
     expect(response.status).toBe(200);
     const over = gatedCredentials(fixedCredentials({}), [engineBudgetGate({ budgets: { "codex:luna": 0, jev: 2 }, spend: { engineSpendSinceUsd: async () => new Map([["jev", 2.5]]) } })]);
-    const refused = await post(appWith(output(), { deps: { credentials: over } }), { pack: "issue_classify", engine: "jev", context: { issue: { title: "t", description: "d" } } });
+    const refused = await post(appWith(output(), { deps: { credentials: over } }), { pack: "triage_signals", engine: "jev", context: { issue: { title: "t", description: "d" } } });
     expect(refused.status).toBe(409);
     expect(await refused.json()).toEqual({ error: "budget", message: "jev: over its monthly budget ($2.50 of $2.00 on jev)" });
   });

@@ -103,7 +103,7 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
 
 /** Turns a decision may take on Claude. The answer is one model call, but the SDK delivers a
  *  structured output through its own tool turn, so a cap of one ends the run before the JSON
- *  arrives (seen on the issue_classify evals: "Reached maximum number of turns (1)"); the third
+ *  arrives (seen on the triage_signals evals: "Reached maximum number of turns (1)"); the third
  *  turn is slack for one retry after a schema error. The pack's own limit stays 1: its turns are
  *  model calls, and the eval scorecard counts those. */
 const DECIDE_TURNS = 3;

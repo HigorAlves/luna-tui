@@ -62,7 +62,7 @@ function wire(over: { triager?: boolean; comments?: JiraPolicy["comments"]; clas
   return { jira, pipeline, intake, triaged, hints, read, logs, setNow: (d: Date) => (now = d) };
 }
 
-describe("JiraIntake with issue_classify", () => {
+describe("JiraIntake with triage_signals", () => {
   it("reads each new issue first, declines a question Jev is sure of without jira_intake, saying why once with the classification", async () => {
     const { jira, pipeline, intake, triaged, read, logs } = wire({ classify: (issue) => classified(issue.title === "Rotate the prod password" ? "question" : "feature") });
     await intake.tick();

@@ -95,7 +95,7 @@ describe("Pipeline.findBySource", () => {
   });
 });
 
-describe("GitHubIntake with issue_classify", () => {
+describe("GitHubIntake with triage_signals", () => {
   const classified = (kind: string, confidence = 0.9) => ({ kind, area: "machine", ready: kind !== "question", size: 1, confidence, at: "2026-11-03T12:00:00.000Z", model: "typesafe-ai/jev" });
   const labelled = [{ ...issues[0]!, labels: ["enhancement"] }, { ...issues[1]!, title: "How do I turn on dark mode?", labels: [] }];
 

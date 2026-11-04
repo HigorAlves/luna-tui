@@ -107,7 +107,7 @@ export const PackId = z.enum([
   // Not a task stage either: reads a Jira issue before it becomes a ticket (read-only on the repo).
   "jira_intake",
   // A decision before intake: labels an issue (kind, area, ready, size) on a decision model.
-  "issue_classify",
+  "triage_signals",
   // Not a task stage: the replay evals' judge, grading another pack's answer to an eval case.
   "eval_judge",
   // Not a task stage: triages a batch of chat items (Slack or Teams) a client sends to POST /runs.
@@ -379,7 +379,7 @@ export const QaTarget = z.object({
 });
 export type QaTarget = z.infer<typeof QaTarget>;
 
-/** What issue_classify said about the issue a task came from, as intake stores it: each answer's
+/** What triage_signals said about the issue a task came from, as intake stores it: each answer's
  *  pick (`size` is the rubric score, 0 tiny to 3 large), the lowest of the answers' confidences,
  *  when and on which model. A hint for people and for jira_intake; it decides nothing alone. */
 export const TaskClassification = z.object({
@@ -389,9 +389,17 @@ export const TaskClassification = z.object({
   area: z.string(),
   ready: z.boolean(),
   size: z.number(),
+  /** How soon (rubric score, 0 low to 3 urgent) and how risky (0 none to 3 high); absent on classifications stored before triage_signals asked. */
+  urgency: z.number().optional(),
+  risk: z.number().optional(),
+  /** The archive suggestion and why (`none` when it should be worked). */
+  archive: z.boolean().optional(),
+  archiveReason: z.string().optional(),
   confidence: z.number().min(0).max(1),
   at: z.string(),
   model: z.string(),
+  /** Every question's answer with its own confidence. */
+  signals: z.record(z.string(), z.object({ answer: z.union([z.string(), z.number(), z.boolean(), z.null()]), confidence: z.number().min(0).max(1) })).optional(),
 });
 export type TaskClassification = z.infer<typeof TaskClassification>;
 
@@ -461,12 +469,12 @@ export const JiraIntakeContext = z.object({
   comments: z.array(z.string()),
   /** The repo the ticket would use, when known, so the agent can check the ask against the code. */
   repoPath: z.string().nullable(),
-  /** issue_classify's first read, when intake ran it: a hint, not a verdict. */
+  /** triage_signals's first read, when intake ran it: a hint, not a verdict. */
   classification: TaskClassification.nullable().optional(),
 });
 export type JiraIntakeContext = z.infer<typeof JiraIntakeContext>;
 
-/** What issue_classify reads: an issue as the notch or intake sends it. `source` says where it
+/** What triage_signals reads: an issue as the notch or intake sends it. `source` says where it
  *  came from (`jira:HAR-12`, a GitHub URL), for the record. */
 export const IssueContext = z.object({
   title: z.string(),
@@ -556,7 +564,7 @@ export const StageInput = z.object({
     slack: SlackTriageContext.nullable().optional(),
     /** For the jira_intake pack: the issue to read before it becomes a ticket. */
     jira: JiraIntakeContext.nullable().optional(),
-    /** For the issue_classify pack: the issue to label. */
+    /** For the triage_signals pack: the issue to label. */
     issue: IssueContext.nullable().optional(),
     /** For the eval_judge pack: the case, its expectation and the answer to grade. */
     eval: EvalJudgeContext.nullable().optional(),

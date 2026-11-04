@@ -11,11 +11,11 @@ const jira = { key: "PLAT-1", url: "https://a.atlassian.net/browse/PLAT-1", summ
 const slack = { me: { id: "U1", name: "higor" }, watches: [], rules: "", items: [] };
 
 describe("context-only packs", () => {
-  it("are the packs that run in no task state, but for the deny list: slack_triage, jira_intake, issue_classify and chat_triage", () => {
+  it("are the packs that run in no task state, but for the deny list: slack_triage, jira_intake, triage_signals and chat_triage", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "issue_classify", "jira_intake", "slack_triage"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "jira_intake", "slack_triage", "triage_signals"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
@@ -29,7 +29,7 @@ describe("context-only packs", () => {
 
   it("take an object with the pack's own key and nothing else", () => {
     expect(contextSchema("chat_triage").safeParse({ chat }).success).toBe(true);
-    expect(contextSchema("issue_classify").safeParse({ issue }).success).toBe(true);
+    expect(contextSchema("triage_signals").safeParse({ issue }).success).toBe(true);
     expect(contextSchema("jira_intake").safeParse({ jira }).success).toBe(true);
     expect(contextSchema("chat_triage").safeParse({ issue }).success).toBe(false);
     expect(contextSchema("chat_triage").safeParse({ chat, issue }).success).toBe(false);
@@ -38,13 +38,13 @@ describe("context-only packs", () => {
 });
 
 describe("buildContextPackInput", () => {
-  it("builds chat_triage's and issue_classify's input around a synthetic task with the context under its key", () => {
+  it("builds chat_triage's and triage_signals's input around a synthetic task with the context under its key", () => {
     const chatInput = buildContextPackInput("chat_triage", { chat }, "codex:luna");
     expect(StageInput.parse(chatInput)).toEqual(chatInput);
     expect(chatInput).toMatchObject({ pack: "chat_triage", stage: "chat_triage", engine: "codex:luna", attempt: 1, task: { id: "chat-triage", title: "Chat triage", repoPath: "", branch: "", source: null }, plan: null, context: { projectContext: null, chat }, limits: { maxTurns: 3, timeoutMs: 180_000 } });
-    const issueInput = buildContextPackInput("issue_classify", { issue });
+    const issueInput = buildContextPackInput("triage_signals", { issue });
     expect(StageInput.parse(issueInput)).toEqual(issueInput);
-    expect(issueInput).toMatchObject({ pack: "issue_classify", task: { id: "issue-classify", title: "Board crashes on resize", description: "It panics." }, context: { projectContext: null, issue }, limits: { maxTurns: 1, timeoutMs: 60_000 } });
+    expect(issueInput).toMatchObject({ pack: "triage_signals", task: { id: "triage-signals", title: "Board crashes on resize", description: "It panics." }, context: { projectContext: null, issue }, limits: { maxTurns: 1, timeoutMs: 60_000 } });
     expect(issueInput).not.toHaveProperty("engine");
   });
 

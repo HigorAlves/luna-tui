@@ -18,8 +18,8 @@ const issue = { title: "Board crashes on resize", description: "Resize the termi
 
 const input = (context: Partial<StageInput["context"]> = { issue }): StageInput => ({
   schema: 3,
-  stage: "issue_classify",
-  pack: "issue_classify",
+  stage: "triage_signals",
+  pack: "triage_signals",
   attempt: 1,
   task: { id: "t1", title: "From the task", description: "Task text", criteria: [], repoPath: "", branch: "", source: null },
   plan: null,
@@ -35,7 +35,7 @@ function context(over: Partial<RunContext> = {}) {
   const events: RunEvent[] = [];
   const print = transcript((line) => lines.push(line));
   const ctx: RunContext = {
-    pack: PACKS.issue_classify,
+    pack: PACKS.triage_signals,
     engine: resolveEngine("jev"),
     input: input(),
     prompt: "",
@@ -56,6 +56,10 @@ const answers = {
   area: { type: "choice", choice: "board", confidence: 0.62, probabilities: {} },
   ready: { type: "noul", noul: 0.83 },
   size: { type: "score", score: 1.4, confidence: 0.75, legend: {}, probabilities: {} },
+  urgency: { type: "score", score: 1, confidence: 0.7, legend: {}, probabilities: {} },
+  risk: { type: "score", score: 0.5, confidence: 0.8, legend: {}, probabilities: {} },
+  archive: { type: "noul", noul: 0.05 },
+  archive_reason: { type: "choice", choice: "none", confidence: 0.9, probabilities: {} },
 };
 
 function fake(result: unknown = { model: "jev-2026-10", answers, usage: { input_tokens: 412, output_tokens: 9 } }) {
@@ -77,7 +81,7 @@ describe("the Jev runtime", () => {
     expect(request.state).toEqual(issue);
     expect(request.model).toBe(resolveEngine("jev").modelId);
     expect(request.questions.ready).toEqual({ type: "noul", instructions: expect.stringMatching(/acceptance criteria/) });
-    expect(Object.keys(request.questions)).toEqual(["kind", "area", "ready", "size"]);
+    expect(Object.keys(request.questions)).toEqual(["kind", "area", "ready", "size", "urgency", "risk", "archive", "archive_reason"]);
     expect(options.signal).toBeInstanceOf(AbortSignal);
   });
 
@@ -93,10 +97,10 @@ describe("the Jev runtime", () => {
     const run = await jevRuntime(() => typesafeTransport(() => client)).run(ctx);
     expect(run).toMatchObject({ ok: true, error: null, turns: 1, model: "jev-2026-10", rateLimited: false });
     expect(run.costUsd).toBeCloseTo((412 * 0.042) / 1_000_000, 8);
-    expect(run.structured).toEqual({ kind: { choice: "bug", confidence: 0.91 }, area: { choice: "board", confidence: 0.62 }, ready: { value: true, p: 0.83 }, size: { score: 1.4, confidence: 0.75 } });
-    expect(PACKS.issue_classify.answer.safeParse(run.structured).success).toBe(true);
+    expect(run.structured).toEqual({ kind: { choice: "bug", confidence: 0.91 }, area: { choice: "board", confidence: 0.62 }, ready: { value: true, p: 0.83 }, size: { score: 1.4, confidence: 0.75 }, urgency: { score: 1, confidence: 0.7 }, risk: { score: 0.5, confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } });
+    expect(PACKS.triage_signals.answer.safeParse(run.structured).success).toBe(true);
     expect(run.durationMs).toBeGreaterThanOrEqual(0);
-    expect(run.text).toBe("kind bug (0.91) · area board (0.62) · ready yes (p 0.83) · size 1.4 (0.75) · below 0.7: area");
+    expect(run.text).toBe("kind bug (0.91) · area board (0.62) · ready yes (p 0.83) · size 1.4 (0.75) · urgency 1 (0.70) · risk 0.5 (0.80) · archive no (p 0.05) · archive_reason none (0.90) · below 0.7: area");
     expect(events).toContainEqual({ kind: "usage", payload: { model: "jev-2026-10", inputTokens: 412, outputTokens: 9, costUsd: 0.0000173 } });
     expect(lines.join("\n")).toContain("412 in · 9 out");
   });
@@ -148,7 +152,7 @@ describe("the Jev runtime", () => {
 
   it("ends the stage with the reason when the questions cannot be put in Jev's words, never throws", async () => {
     const { client } = fake();
-    const pack = { ...PACKS.issue_classify, questions: { kind: { type: "choice", instructions: "x", criteria: [] } } } as unknown as RunContext["pack"];
+    const pack = { ...PACKS.triage_signals, questions: { kind: { type: "choice", instructions: "x", criteria: [] } } } as unknown as RunContext["pack"];
     const run = await jevRuntime(() => typesafeTransport(() => client)).run(context({ pack }).ctx);
     expect(run).toMatchObject({ ok: false, structured: null, error: expect.stringMatching(/^jev: .*criteria/) });
   });
@@ -169,6 +173,10 @@ const decided = {
   area: { type: "choice", choice: "board", probabilities: { board: 0.62, machine: 0.38 } },
   ready: { type: "boolean", probability: 0.83 },
   size: { type: "score", score: 1.4, probabilities: { 0: 0.05, 1: 0.5, 2: 0.4, 3: 0.05 } },
+  urgency: { type: "score", score: 1, probabilities: { 1: 1 } },
+  risk: { type: "score", score: 0.5, probabilities: { 0: 0.5, 1: 0.5 } },
+  archive: { type: "boolean", probability: 0.05 },
+  archive_reason: { type: "choice", choice: "none", probabilities: { none: 0.9, stale: 0.1 } },
 };
 
 function fakeDecide(result: unknown = { answers: decided, usage: { inputTokens: 380, outputTokens: 0 }, response: { modelId: "typesafe-ai/jev-1.14.0" }, providerMetadata: { typesafe: { confidence: { kind: 0.93 } } } }) {
@@ -200,7 +208,7 @@ describe("the Jev runtime on the Vercel AI Gateway", () => {
     const { ctx, lines } = context();
     const run = await jevRuntime(() => transport).run(ctx);
     expect(run).toMatchObject({ ok: true, turns: 1, model: "typesafe-ai/jev-1.14.0" });
-    expect(run.structured).toEqual({ kind: { choice: "bug", confidence: 0.93 }, area: { choice: "board", confidence: 0.62 }, ready: { value: true, p: 0.83 }, size: { score: 1.4, confidence: 0.5 } });
+    expect(run.structured).toEqual({ kind: { choice: "bug", confidence: 0.93 }, area: { choice: "board", confidence: 0.62 }, ready: { value: true, p: 0.83 }, size: { score: 1.4, confidence: 0.5 }, urgency: { score: 1, confidence: 1 }, risk: { score: 0.5, confidence: 0.5 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } });
     expect(run.costUsd).toBeCloseTo((380 * 0.042) / 1_000_000, 12);
     expect(lines.join("\n")).toContain("via gateway · 380 in · 0 out");
   });

@@ -86,28 +86,28 @@ describe("PackRuns", () => {
   });
 
   it("runs a decision pack on its fallback when the default engine has no credential", async () => {
-    const labels = { kind: { choice: "bug", confidence: 0.9 }, area: { choice: "board", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { score: 1, confidence: 0.7 } };
+    const labels = { kind: { choice: "bug", confidence: 0.9 }, area: { choice: "board", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { score: 1, confidence: 0.7 }, urgency: { score: 1, confidence: 0.8 }, risk: { score: 1, confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
     const issue = { title: "Board crashes on resize", description: "It panics." };
-    const result = await runs(fakeSandbox(output({ answer: labels })), { credentials: credentials(["jev"]) }).run({ pack: "issue_classify", context: { issue } }, "intake");
+    const result = await runs(fakeSandbox(output({ answer: labels })), { credentials: credentials(["jev"]) }).run({ pack: "triage_signals", context: { issue } }, "intake");
     expect(result.usage.engine).toBe("claude:haiku");
     expect(StageInput.parse(seen[0]!.input).engine).toBe("claude:haiku");
-    expect(records.at(-1)).toMatchObject({ pack: "issue_classify", engine: "claude:haiku" });
+    expect(records.at(-1)).toMatchObject({ pack: "triage_signals", engine: "claude:haiku" });
   });
 
   it("names every engine it tried when none has a credential, and never swaps an engine the caller named", async () => {
     const issue = { title: "t", description: "d" };
-    await expect(runs(fakeSandbox(output()), { credentials: credentials(["jev", "claude:haiku"]) }).run({ pack: "issue_classify", context: { issue } }, null)).rejects.toThrow(/jev.*claude:haiku/s);
-    await expect(runs(fakeSandbox(output()), { credentials: credentials(["jev"]) }).run({ pack: "issue_classify", engine: "jev", context: { issue } }, null)).rejects.toBeInstanceOf(RunNoCredentialError);
+    await expect(runs(fakeSandbox(output()), { credentials: credentials(["jev", "claude:haiku"]) }).run({ pack: "triage_signals", context: { issue } }, null)).rejects.toThrow(/jev.*claude:haiku/s);
+    await expect(runs(fakeSandbox(output()), { credentials: credentials(["jev"]) }).run({ pack: "triage_signals", engine: "jev", context: { issue } }, null)).rejects.toBeInstanceOf(RunNoCredentialError);
     expect(seen).toHaveLength(0);
   });
 
-  it("runs the pack's default engine when none is asked for, and issue_classify and jira_intake with their own contexts", async () => {
+  it("runs the pack's default engine when none is asked for, and triage_signals and jira_intake with their own contexts", async () => {
     await runs(fakeSandbox(output())).run({ pack: "chat_triage", context: { chat } }, null);
     expect(StageInput.parse(seen[0]!.input).engine).toBe("claude:haiku");
-    const labels = { kind: { choice: "bug", confidence: 0.9 }, area: { choice: "board", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { score: 1, confidence: 0.7 } };
-    const classified = await runs(fakeSandbox(output({ answer: labels }))).run({ pack: "issue_classify", context: { issue: { title: "Board crashes on resize", description: "It panics." } } }, "notch");
+    const labels = { kind: { choice: "bug", confidence: 0.9 }, area: { choice: "board", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { score: 1, confidence: 0.7 }, urgency: { score: 1, confidence: 0.8 }, risk: { score: 1, confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
+    const classified = await runs(fakeSandbox(output({ answer: labels }))).run({ pack: "triage_signals", context: { issue: { title: "Board crashes on resize", description: "It panics." } } }, "notch");
     expect(classified.answer).toEqual(labels);
-    expect(StageInput.parse(seen[1]!.input)).toMatchObject({ pack: "issue_classify", engine: "jev", context: { issue: { title: "Board crashes on resize" } } });
+    expect(StageInput.parse(seen[1]!.input)).toMatchObject({ pack: "triage_signals", engine: "jev", context: { issue: { title: "Board crashes on resize" } } });
     const jira = { key: "PLAT-1", url: "https://a.atlassian.net/browse/PLAT-1", summary: "Login", description: "Sign in.", issueType: "Story", priority: null, labels: [], dueAt: null, comments: [], repoPath: null };
     const verdictOf = { verdict: "ready", reason: "clear", title: "Login", description: "d", criteria: ["c"] };
     expect((await runs(fakeSandbox(output({ answer: verdictOf }))).run({ pack: "jira_intake", context: { jira } }, null)).answer).toEqual(verdictOf);
