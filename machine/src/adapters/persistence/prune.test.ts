@@ -127,6 +127,22 @@ describe("pruneOldRuns", () => {
       expect(await db.getRepository(StageRunEntity).findBy({ taskId: oldId })).toEqual([]);
     });
 
+    it("removes the sub-run folders derived from a pruned run's id with it, and no other run's", async () => {
+      const stateDir = mkdtempSync(join(tmpdir(), "prune-"));
+      const oldId = await seedClosedTask(new Date(Date.now() - 100 * 24 * 60 * 60 * 1000));
+      const recentId = await seedClosedTask(new Date());
+      const oldDir = await runFolder(stateDir, oldId);
+      const recentDir = await runFolder(stateDir, recentId);
+      for (const dir of [oldDir, recentDir]) for (const suffix of ["-plan", "-tests-1"]) mkdirSync(`${dir}${suffix}`, { recursive: true });
+
+      await pruneOldRuns(db, 90, stateDir);
+
+      expect(existsSync(`${oldDir}-plan`)).toBe(false);
+      expect(existsSync(`${oldDir}-tests-1`)).toBe(false);
+      expect(existsSync(`${recentDir}-plan`)).toBe(true);
+      expect(existsSync(`${recentDir}-tests-1`)).toBe(true);
+    });
+
     it("tolerates a missing folder", async () => {
       const stateDir = mkdtempSync(join(tmpdir(), "prune-"));
       await seedClosedTask(new Date(Date.now() - 100 * 24 * 60 * 60 * 1000));

@@ -210,6 +210,14 @@ describe("renderPrompt", () => {
     expect(render(null)).toContain("(none)");
   });
 
+  it("renders the plan stage's second round: the criteria no scenario names, the earlier scenarios and the plan check's findings, (none) otherwise", () => {
+    const plan = { record: null, brief: "b", criteria: ["c1"], assumptions: [], slices: [], gaps: ["c1"], review: ["the rollback could not be followed"], cases: [{ title: "t", criterion: "c1", approach: "run it" }] };
+    const template = "gaps:\n{{context.plan.gaps}}\nreview:\n{{context.plan.review}}\ncases:\n{{context.plan.cases}}";
+    const render = (p: unknown) => renderPrompt({ pack: PACKS.plan, input: { ...input, pack: "plan", stage: "test_design", context: { projectContext: null, plan: p as never } }, template });
+    expect(render(plan)).toContain("gaps:\n- c1\nreview:\n- the rollback could not be followed\ncases:\n- t (criterion: c1): run it");
+    expect(render(undefined)).toContain("gaps:\n(none)\nreview:\n(none)\ncases:\n(none)");
+  });
+
   it("renders the case for eval_judge: the pack, the rubric and the JSON as the runner wrote it", () => {
     const template = "{{context.eval.pack}} {{context.eval.case}}\nrubric: {{context.eval.rubric}}\ninput: {{context.eval.input}}\nchecks: {{context.eval.checks}}\nanswer: {{context.eval.answer}}";
     const judged = { pack: "slack_triage" as const, caseId: "incident", rubric: "  P0 for the outage\n", input: '{"a":1}', checks: "[]", answer: '{"items":[]}' };

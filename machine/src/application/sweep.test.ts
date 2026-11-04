@@ -109,6 +109,26 @@ describe("sweepRunFolders", () => {
     expect(existsSync(join(stateDir, "runs", "orphan-run"))).toBe(false);
     expect(await sweepRunFolders(db, join(stateDir, "nowhere"))).toBe(0);
   });
+
+  it("keeps the sub-run folders a stage run derived from its own id (the plan stage's planner and test designer)", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "state-"));
+    const task = await db.getRepository(TaskEntity).save({
+      title: "x", description: "", criteria: [], repoPath: null, branch: null, worktreePath: null,
+      state: "closed", retries: { ...NO_RETRIES }, resumeTo: null, reason: null,
+    });
+    const rows = (await db.query(
+      "insert into stage_runs (task_id, stage, attempt, status, started_at) values ($1, 'test_design', 1, 'passed', now()) returning id",
+      [task.id],
+    )) as { id: string }[];
+    const owned = rows[0]!.id;
+    for (const name of [owned, `${owned}-plan`, `${owned}-tests-2`, "orphan-run", `${owned.slice(0, 35)}x-plan`]) mkdirSync(join(stateDir, "runs", name), { recursive: true });
+
+    expect(await sweepRunFolders(db, stateDir)).toBe(2);
+    expect(existsSync(join(stateDir, "runs", `${owned}-plan`))).toBe(true);
+    expect(existsSync(join(stateDir, "runs", `${owned}-tests-2`))).toBe(true);
+    expect(existsSync(join(stateDir, "runs", "orphan-run"))).toBe(false);
+    expect(existsSync(join(stateDir, "runs", `${owned.slice(0, 35)}x-plan`))).toBe(false);
+  });
 });
 
 describe("sweepImages", () => {

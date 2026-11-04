@@ -17,6 +17,7 @@ import { pruneOldRuns, prunePackRuns, pruneTombstones, TOMBSTONE_RETENTION_DAYS 
 import { AUTO_ARCHIVE_GATES, type SlaRow, applySlaActions } from "./application/sla-actions.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
+import type { PlanDeps } from "./application/stages/plan.ts";
 import type { TriageSignalDeps } from "./application/stages/triage-signals.ts";
 import { createIssueClassifier } from "./application/classify.ts";
 import { GitHubIntake } from "./application/intake.ts";
@@ -152,6 +153,8 @@ const credentials = gatedCredentials(machineCredentials(), [
 if (config.disabledRuntimes.length > 0) console.log(`runtimes off (MACHINE_DISABLE_RUNTIMES): ${config.disabledRuntimes.join(", ")}`);
 /** Triage's signals: the classifier is built after the stages (it needs PackRuns), so it is bound below. */
 const triageSignals: TriageSignalDeps = { classify: null, save: (id, patch) => engineSpend.updateTask(id, patch) };
+/** The plan stage's decisions run through PackRuns, which is built below: bound once it exists. */
+const planDecisions: { decide: PlanDeps["decide"] } = { decide: null };
 const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   config,
   watcher,
@@ -172,6 +175,7 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   github,
   credentials,
   triageSignals,
+  planDecisions,
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
@@ -332,6 +336,7 @@ await packRuns?.clearLeftovers();
  *  as the `intake` client. Without a Jev credential it answers nothing and intake runs as before. */
 const classifier = packRuns ? createIssueClassifier({ runs: packRuns }) : null;
 if (classifier) triageSignals.classify = (issue) => classifier.classify(issue);
+if (packRuns) planDecisions.decide = async (pack, plan) => (await packRuns.run({ pack, context: { plan } }, "plan")).answer;
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 const app = createApp({
   db,

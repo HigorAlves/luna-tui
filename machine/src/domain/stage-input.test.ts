@@ -49,6 +49,35 @@ const finding = (confidence: number, title: string) => ({
   confidence,
 });
 
+describe("buildStageInput's pack and plan", () => {
+  const slices = [{ title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }];
+  const planContext = { record: null, brief: "the plan", criteria: ["c1"], assumptions: ["a1"], slices, rollback: "revert", gaps: ["c1"], round: 2 };
+
+  it("runs a pack other than the state's own when asked: the planner in test_design, with that pack's limits", () => {
+    const input = buildStageInput({ task, stage: "test_design", pack: "plan", attempt: 1, approvals: [], priorFindings: [] });
+    expect(input).toMatchObject({ stage: "test_design", pack: "plan", limits: { maxTurns: PACK_LIMITS.plan.maxTurns, timeoutMs: PACK_LIMITS.plan.timeoutMs } });
+    expect(buildStageInput({ task, stage: "test_design", attempt: 1, approvals: [], priorFindings: [] }).pack).toBe("test_design");
+  });
+
+  it("hands a plan under review to the stage: context.plan as given, and the plan every stage reads rebuilt from it before any approval", () => {
+    const input = buildStageInput({ task, stage: "test_design", attempt: 1, approvals: [], priorFindings: [], plan: planContext });
+    expect(input.context.plan).toEqual(planContext);
+    expect(input.plan).toEqual({ brief: "the plan", criteria: ["c1"], assumptions: ["a1"], slices, rollback: "revert" });
+    expect(StageInput.safeParse(input).success).toBe(true);
+  });
+
+  it("reads rollback and the cases from the approved plan, and the cases reach implementing without a test check", () => {
+    const cases = [{ title: "t", criterion: "c1", approach: "run a.test.ts" }];
+    const approvals = [approval({ requested: { brief: "b", criteria: ["c1"], assumptions: [], slices, rollback: "revert it", cases } })];
+    const input = buildStageInput({ task, stage: "implementing", attempt: 1, approvals, priorFindings: [] });
+    expect(input.plan).toMatchObject({ brief: "b", rollback: "revert it", slices });
+    expect(input.context.testCases).toEqual(cases);
+    // A legacy test check, when one exists, still wins.
+    const legacy = [...approvals, approval({ kind: "awaiting_test_check", requested: { cases: [{ title: "legacy", criterion: null, approach: "x" }] } })];
+    expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: legacy, priorFindings: [] }).context.testCases).toEqual([{ title: "legacy", criterion: null, approach: "x" }]);
+  });
+});
+
 describe("buildStageInput", () => {
   const slices = [{ title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }];
   const approvals = [

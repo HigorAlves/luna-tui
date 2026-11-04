@@ -46,7 +46,8 @@ export async function sweepWorktrees(db: DataSource, days: number): Promise<Work
 }
 
 /** Removes `<stateDir>/runs/<id>` folders with no stage_runs row: a deleted task orphans its
- *  runs' folders, and prune only removes the folders of the rows it deletes. */
+ *  runs' folders, and prune only removes the folders of the rows it deletes. A folder named
+ *  `<id>-<suffix>` belongs to that row: the plan stage runs its packs as sub-runs under such ids. */
 export async function sweepRunFolders(db: DataSource, stateDir: string): Promise<number> {
   const runsDir = join(stateDir, "runs");
   let names: string[];
@@ -57,7 +58,12 @@ export async function sweepRunFolders(db: DataSource, stateDir: string): Promise
   }
   if (names.length === 0) return 0;
   const owned = new Set(((await db.query("select id from stage_runs")) as { id: string }[]).map((r) => r.id));
-  const orphans = names.filter((name) => !owned.has(name));
+  const ownedBy = (name: string): boolean => {
+    if (owned.has(name)) return true;
+    for (let i = name.indexOf("-"); i !== -1; i = name.indexOf("-", i + 1)) if (owned.has(name.slice(0, i))) return true;
+    return false;
+  };
+  const orphans = names.filter((name) => !ownedBy(name));
   await Promise.all(orphans.map((name) => rm(join(runsDir, name), { recursive: true, force: true })));
   return orphans.length;
 }

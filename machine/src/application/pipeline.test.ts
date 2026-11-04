@@ -16,7 +16,7 @@ import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { type BudgetAlert, Pipeline, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
-import { approvedPlan } from "../domain/stage-input.ts";
+import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
 import type { CloseReport } from "./close-task.ts";
 import { toStageRun } from "../adapters/http/serialize.ts";
@@ -108,6 +108,62 @@ describe("triage's record", () => {
     const task = await p.createTask({ title: "Login page" });
     await p.start(task.id);
     expect(TriageRecord.parse((await p.get(task.id)).record)).toMatchObject({ ...record, source: "manual", decision: "plan", signals: {}, qa: [] });
+  });
+});
+
+describe("the plan gate", () => {
+  const slices = [{ title: "guard j", est_loc: 12, touchpoints: ["board/src/keys.rs"], acceptance: ["no panic"] }];
+  const cases = [{ title: "j on empty", criterion: "no panic", approach: "cargo test keys::empty" }];
+  const planned: StageResult = {
+    outcome: "pass",
+    detail: {
+      brief: "Guard the empty list", criteria: ["no panic"], assumptions: ["board only"], slices, rollback: "revert the commit", cases,
+      risk: { level: "low", scores: { blast_radius: 0, reversibility: 0, data_sensitivity: 0 } },
+      verdicts: { coverage: "proceed", plan: "proceed", risk: "proceed" }, rounds: { tests: 1, plan: 1 }, flagged: [],
+    },
+  };
+
+  it("shows the plan, the scenarios, the risk and the verdicts at one gate; approving it builds with the slices and the scenarios", async () => {
+    stubs.plan("test_design", planned);
+    const seen: Array<{ plan: unknown; testCases: unknown }> = [];
+    const runner = (stage: TaskState): StageRunner =>
+      stage === "implementing"
+        ? async (context) => {
+            const input = buildStageInput({ task: context.task, stage: "implementing", attempt: 1, approvals: context.approvals, priorFindings: [] });
+            seen.push({ plan: input.plan, testCases: input.context.testCases });
+            return { outcome: "fail" };
+          }
+        : stubs.runnerFor(stage);
+    pipeline = new Pipeline(db, runner, { inline: true, hasConfig: () => true });
+    const task = await newTask();
+    expect((await pipeline.start(task.id)).state).toBe("awaiting_approval");
+    expect(await stagesRun(task.id)).toEqual(["triage", "test_design"]);
+    const [gate] = await pipeline.approvals(task.id);
+    expect(gate).toMatchObject({ kind: "awaiting_approval", decision: null, requested: planned.detail });
+    expect(gate!.requested).not.toHaveProperty("outcome");
+
+    await pipeline.decide(task.id, "approved");
+    expect(seen[0]).toMatchObject({ plan: { brief: "Guard the empty list", slices, rollback: "revert the commit" }, testCases: cases });
+  });
+
+  it("replaces the scenarios on the gate, which is what implementing then reads", async () => {
+    stubs.plan("test_design", planned);
+    const task = await newTask();
+    await pipeline.start(task.id);
+    const edited = [{ title: "edited", criterion: "no panic", approach: "run it" }];
+    await pipeline.editCases(task.id, edited);
+    const [gate] = await pipeline.approvals(task.id);
+    expect(gate!.requested).toMatchObject({ brief: "Guard the empty list", cases: edited });
+    await pipeline.decide(task.id, "approved");
+    expect(approvedPlan(await pipeline.approvals(task.id))).toMatchObject({ rollback: "revert the commit" });
+    expect(buildStageInput({ task: await pipeline.get(task.id), stage: "implementing", attempt: 1, approvals: await pipeline.approvals(task.id), priorFindings: [] }).context.testCases).toEqual(edited);
+  });
+
+  it("refuses to edit scenarios at a gate that has none: a triage outcome", async () => {
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "archive", archiveReason: "duplicate" } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    await expect(pipeline.editCases(task.id, cases)).rejects.toThrow(/no test cases/i);
   });
 });
 
@@ -410,13 +466,15 @@ describe("editing the plan before approving", () => {
   });
 });
 
-describe("editing the test cases at the test check", () => {
+describe("editing the test cases", () => {
   const designed = [{ title: "old", criterion: "c1", approach: "a" }];
 
-  it("rejects editing cases anywhere but the test check", async () => {
+  it("rejects editing cases at a gate that carries none, and before any gate is open", async () => {
+    stubs.plan("triage", { outcome: "needs_input", detail: { questions: [{ question: "q", recommended: "r" }] } });
     const task = await newTask();
+    await expect(pipeline.editCases(task.id, designed)).rejects.toThrow(/no test cases/i);
     await pipeline.start(task.id);
-    expect((await pipeline.get(task.id)).state).toBe("awaiting_approval");
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_answers");
     await expect(pipeline.editCases(task.id, designed)).rejects.toThrow(/no test cases/i);
   });
 });
@@ -1174,7 +1232,7 @@ describe("timer-approved plans", () => {
   const policies = (minutes: number | null) => ({ for: async () => ({ ...DEFAULT_POLICY, autoApprovePlanMinutes: minutes }) });
   const confident = (over: Record<string, unknown> = {}): StageResult => ({
     outcome: "pass",
-    detail: { brief: "b", confidence: "high", risk: "low", ...over },
+    detail: { brief: "b", risk: { level: "low", scores: {} }, verdicts: { coverage: "proceed", plan: "proceed", risk: "proceed" }, ...over },
   });
 
   it("approves a confident, low-risk plan by itself once the policy's minutes have passed", async () => {
@@ -1191,7 +1249,7 @@ describe("timer-approved plans", () => {
     expect((await pipeline.get(task.id)).state).toBe("awaiting_ship");
     expect((await pipeline.approvals(task.id))[0]).toMatchObject({
       decision: "approved",
-      reason: "auto-approved after 10 min: triage reported high confidence and low risk",
+      reason: "auto-approved after 10 min: low risk and every check proceeded",
     });
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toContain("plan.auto_approved");
   });
@@ -1211,12 +1269,13 @@ describe("timer-approved plans", () => {
     expect((await pipeline.get(tui.id)).state).toBe("awaiting_ship");
   });
 
-  it("keeps waiting when confidence is not high, risk is not low, triage asked questions, or the policy is off", async () => {
+  it("keeps waiting when a check did not proceed, risk is not low, the plan stage asked questions, or the policy is off", async () => {
     const cases: Array<[number | null, StageResult]> = [
-      [10, confident({ confidence: "medium" })],
-      [10, confident({ risk: "medium" })],
+      [10, confident({ verdicts: { coverage: "proceed", plan: "flag", risk: "proceed" } })],
+      [10, confident({ verdicts: { coverage: "proceed", plan: "proceed", risk: "skipped" } })],
+      [10, confident({ risk: { level: "medium", scores: {} } })],
       [10, confident({ risk: undefined })],
-      [10, { outcome: "needs_input", needsInput: [{ question: "q", recommended: "r" }], detail: { confidence: "high", risk: "low" } }],
+      [10, { outcome: "needs_input", needsInput: [{ question: "q", recommended: "r" }], detail: { risk: { level: "low", scores: {} } } }],
       [null, confident()],
     ];
     for (const [minutes, result] of cases) {

@@ -45,7 +45,22 @@ const call = async (path: string, init?: RequestInit) => {
 const newTask = () => pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
 
 describe("PATCH /tasks/:id/cases", () => {
-  it("is 409 no_cases away from the test check, and 400 for a malformed case", async () => {
+  it("replaces the scenarios on the plan gate and answers the task, keeping the rest of the plan", async () => {
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", cases: [{ title: "old", criterion: "c", approach: "a" }] } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    const cases = [{ title: "new", criterion: "c", approach: "a2" }];
+
+    const edited = await call(`/tasks/${task.id}/cases`, json({ cases }));
+    expect(edited).toMatchObject({ status: 200, body: { id: task.id, state: "awaiting_approval" } });
+    const detail = await call(`/tasks/${task.id}`);
+    const approvals = detail.body.approvals as Array<{ kind: string; requested: Record<string, unknown> }>;
+    expect(approvals.find((a) => a.kind === "awaiting_approval")?.requested).toMatchObject({ brief: "b", cases });
+    expect((await pipeline.events(task.id)).filter((e) => e.kind === "cases.edited").map((e) => e.payload)).toEqual([{ count: 1 }]);
+  });
+
+  it("is 409 no_cases away from a gate that carries scenarios, and 400 for a malformed case", async () => {
+    stubs.plan("triage", { outcome: "needs_input", detail: { questions: [{ question: "q", recommended: "r" }] } });
     const task = await newTask();
     await pipeline.start(task.id);
     const early = await call(`/tasks/${task.id}/cases`, json({ cases: [{ title: "t", criterion: "c", approach: "a" }] }));

@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { type CiContext, EscalationReason, type Ledger, PACKS, type PackId, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type CiContext, EscalationReason, type Ledger, PACKS, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext } from "@hardness/contracts";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -81,6 +81,8 @@ export interface AgentExtra {
   history?: { ledger: Ledger | null; runs: RunSummary[] } | null;
   /** setup: run over the repo checkout itself, read-only, no task worktree or branch. */
   checkout?: boolean;
+  /** The plan stage's packs: the plan under review (the test designer reads it as its plan; a second round carries the gaps or the review). */
+  plan?: PlanContext;
 }
 
 export async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}): Promise<StageResult> {
@@ -122,7 +124,9 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   const resume = context.resume;
   const inputCommit = resume?.inputCommit ?? (await headCommit(workspace.path));
   const gitDir = await commonGitDir(task.repoPath);
-  const container = resume?.container ?? `hardness-${task.id.slice(0, 8)}-${context.stage.replaceAll("_", "-")}-${context.attempt}`;
+  // A pack the state is not named for (the planner in test_design) names its container after itself.
+  const unit = pack === context.stage ? context.stage : pack;
+  const container = resume?.container ?? `hardness-${task.id.slice(0, 8)}-${unit.replaceAll("_", "-")}-${context.attempt}`;
   const runDir = join(deps.stateDir, "runs", context.runId);
   // The task's own engine for the pack, else luna.yaml's, else the default; a re-attached run
   // keeps the engine its container started on, and a fallback after a usage limit runs the engine
@@ -140,6 +144,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   const input = buildStageInput({
     task: { ...task, branch: workspace.branch },
     stage: context.stage,
+    pack,
+    ...(extra.plan ? { plan: extra.plan } : {}),
     engine: choice.engine,
     attempt: context.attempt,
     approvals: context.approvals,
@@ -383,6 +389,22 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       },
     });
   }
+  if (pack === "plan") {
+    const answer = answerOf(output.answer);
+    const list = (value: unknown, fallback: string[]): string[] => (Array.isArray(value) ? value.map(String) : fallback);
+    return merged({
+      ...mapped,
+      detail: {
+        ...mapped.detail,
+        summary: typeof answer?.summary === "string" ? answer.summary : output.summary,
+        brief: typeof answer?.brief === "string" ? answer.brief : typeof answer?.summary === "string" ? answer.summary : output.summary,
+        criteria: list(answer?.criteria, task.criteria),
+        assumptions: list(answer?.assumptions, []),
+        slices: Array.isArray(answer?.slices) ? answer.slices : [],
+        ...(typeof answer?.rollback === "string" ? { rollback: answer.rollback } : {}),
+      },
+    });
+  }
   if (pack === "test_design") {
     const cases = answerOf(output.answer)?.cases;
     return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, cases: Array.isArray(cases) ? cases : [] } });
@@ -396,10 +418,11 @@ const sharedPolicies = new PolicyStore();
 const answerOf = (answer: unknown): Record<string, unknown> | undefined =>
   answer && typeof answer === "object" ? (answer as Record<string, unknown>) : undefined;
 
-// verifying, evidence, e2e, ci_watch and reviewing_memory are each wrapped in their own
+// test_design is the plan stage (stages/plan.ts), built in bootstrap/stages.ts with the planner and the
+// decisions. verifying, evidence, e2e, ci_watch and reviewing_memory are each wrapped in their own
 // stage-specific runner in bootstrap/stages.ts (around the same runAgent call), so the
 // blanket map below only needs the packs that are dispatched unmodified.
-const AGENT_PACKS: PackId[] = ["triage", "test_design", "implementing"];
+const AGENT_PACKS: PackId[] = ["triage", "implementing"];
 
 /** Runners for the stages that run as packs. Every other stage stays a stub. */
 export function agentRunners(deps: AgentDeps): Partial<Record<TaskState, StageRunner>> {

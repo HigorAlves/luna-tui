@@ -108,7 +108,7 @@ beforeEach(() => {
 describe("agent stages through packs", () => {
   it("registers a runner for every pack dispatched unmodified; the rest are wrapped in bootstrap", () => {
     const r = runners(fakeSandbox(output()));
-    expect(Object.keys(r).sort()).toEqual(["implementing", "test_design", "triage"]);
+    expect(Object.keys(r).sort()).toEqual(["implementing", "triage"]);
   });
 
   it("sends a StageInput to a read-only sandbox and returns outcome, events, artifacts and usage", async () => {
@@ -211,10 +211,22 @@ describe("agent stages through packs", () => {
     expect(bare.detail).not.toHaveProperty("confidence");
   });
 
+  it("runs the plan pack in the test_design state: its own pack and limits in the input, its own container, the plan under review in context", async () => {
+    const plan = { record: null, brief: "b", criteria: ["c"], assumptions: [], slices: [], round: 2, gaps: ["c"] };
+    const answer = { kind: "done", summary: "s", brief: "the brief", criteria: ["c1"], assumptions: ["a1"], slices: [{ title: "s1", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }], rollback: "revert" };
+    const result = await runAgent(deps(fakeSandbox(output({ answer }))), { ...context("test_design"), runId: "r1-plan" }, "plan", { plan });
+    const input = seen!.input as unknown as StageInput;
+    expect(input).toMatchObject({ stage: "test_design", pack: "plan", context: { plan }, plan: { brief: "b" } });
+    expect(input.limits.maxTurns).toBe(30);
+    expect(seen!.name).toMatch(/-plan-1$/);
+    expect(seen!.runDir).toMatch(/runs\/r1-plan$/);
+    expect(result.detail).toMatchObject({ brief: "the brief", criteria: ["c1"], assumptions: ["a1"], rollback: "revert", slices: [{ title: "s1" }] });
+    expect(result.detail).not.toHaveProperty("outcome");
+  });
+
   it("keeps the test cases test_design answered, for the test check", async () => {
     const cases = [{ title: "rejects a bad password", criterion: "works", approach: "run a.test.ts, confirm it rejects" }];
-    const run = runners(fakeSandbox(output({ answer: { kind: "done", summary: "s", cases } })));
-    const result = await run.test_design!(context("test_design"));
+    const result = await runAgent(deps(fakeSandbox(output({ answer: { kind: "done", summary: "s", cases } }))), context("test_design"), "test_design");
     expect(result.detail).toMatchObject({ summary: "did it", cases });
     expect(result.detail).not.toHaveProperty("tests");
   });
@@ -418,11 +430,11 @@ describe("agent stages through packs", () => {
 
     it("does not apply to a read-only pack", async () => {
       seedTests();
-      const run = runners(fakeSandbox(output(), (r) => {
+      const sandbox = fakeSandbox(output(), (r) => {
         writeFileSync(join(r.worktree, "test", "cart.test.js"), "new\n");
         commitIn(r.worktree);
-      }));
-      const result = await run.test_design!(context("test_design"));
+      });
+      const result = await runAgent(deps(sandbox), context("test_design"), "test_design");
       expect(result.outcome).toBe("pass");
     });
 

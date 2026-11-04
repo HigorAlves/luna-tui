@@ -14,6 +14,7 @@ import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
 import { type EvidenceDeps, evidenceRunner } from "../application/stages/evidence.ts";
 import { memoryReviewRunner, withMemoryReview } from "../application/stages/memory.ts";
 import type { StageContext, StageResult, StageRunner } from "../application/ports.ts";
+import { type PlanDeps, planStage } from "../application/stages/plan.ts";
 import { type TriageSignalDeps, withTriageSignals } from "../application/stages/triage-signals.ts";
 import { prAddressRunner } from "../application/stages/pr-address.ts";
 import { prReviewRunner } from "../application/stages/pr-review.ts";
@@ -53,6 +54,8 @@ export async function buildRealStages(
   engineCredentials: Credentials = machineCredentials(),
   /** Triage's first read of a ticket with no signals; `classify` is bound late, once PackRuns exists. */
   triageSignals?: TriageSignalDeps,
+  /** The plan stage's decisions (coverage, plan check, risk): `decide` is bound late, once PackRuns exists; null runs the stage without them. */
+  planDecisions?: { decide: PlanDeps["decide"] },
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -97,6 +100,14 @@ export async function buildRealStages(
   const real: Partial<Record<TaskState, StageRunner>> = {
     ...agents,
     ...(triageSignals && agents.triage ? { triage: withTriageSignals(agents.triage, triageSignals) } : {}),
+    // The plan stage runs in test_design: the planner, the test designer, then three decisions, each pack a sub-run.
+    test_design: planStage({
+      runPack: (pack, subContext, extra) => runAgent(deps, subContext, pack, extra.plan ? { plan: extra.plan } : {}),
+      get decide() {
+        return planDecisions?.decide ?? null;
+      },
+      policies: { for: (repoPath) => policies.for(repoPath) },
+    }),
     // Setup reads the repo checkout itself (no worktree yet) and proves what it proposes in the image.
     setup: setupRunner({ runPack: (context) => runAgent(deps, context, "setup", { checkout: true }), exec: checksExec, stateDir: config.stateDir }),
     // ci_watch polls the PR's checks on the host and only calls its pack when one is red.

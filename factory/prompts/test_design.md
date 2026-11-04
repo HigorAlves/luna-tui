@@ -1,8 +1,8 @@
 # TEST DESIGN STAGE — plan how each criterion gets proven (read-only)
 
-You are `{{agent}}`, attempt {{attempt}}. The worktree is `/work`. Read the approved plan and name, for each criterion, how it will be proven once implementing is done. You never touch `/work`; you only answer.
+You are `{{agent}}`, attempt {{attempt}}. The worktree is `/work`. Read the plan and name, for each criterion, how it will be proven once implementing is done. You never touch `/work`; you only answer.
 
-## Approved plan
+## Plan
 Task: {{task.title}} (branch {{task.branch}})
 
 Brief: {{plan.brief}}
@@ -15,6 +15,12 @@ Assumptions:
 
 Slices:
 {{plan.slices}}
+
+## Criteria no scenario names yet
+{{context.plan.gaps}}
+
+If this lists criteria, an earlier round of scenarios missed them: write scenarios for each, keeping the ones that already hold. These were the earlier scenarios:
+{{context.plan.cases}}
 
 ## Decisions so far
 {{decisions}}

@@ -465,6 +465,8 @@ export const PlanContext = z.object({
   cases: z.array(TestCase).optional(),
   gaps: z.array(z.string()).optional(),
   round: z.number().int().optional(),
+  /** What plan_check found wrong with the last plan, for the planner's next round. */
+  review: z.array(z.string()).optional(),
 });
 export type PlanContext = z.infer<typeof PlanContext>;
 
@@ -560,8 +562,10 @@ export const StageInput = z.object({
       brief: z.string(),
       criteria: z.array(z.string()),
       assumptions: z.array(z.string()),
-      /** The slices triage proposed, when it split the work. */
+      /** The slices the planner proposed, when it split the work. */
       slices: z.array(z.unknown()).optional(),
+      /** How to undo the change, from the plan. */
+      rollback: z.string().optional(),
     })
     .nullable(),
   decisions: z.array(

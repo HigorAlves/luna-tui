@@ -34,13 +34,17 @@ export function approvedPlan(approvals: ApprovalRow[]): StageInput["plan"] {
     criteria: strings(requested.criteria),
     assumptions: strings(requested.assumptions),
     ...(Array.isArray(requested.slices) ? { slices: requested.slices } : {}),
+    ...(typeof requested.rollback === "string" ? { rollback: requested.rollback } : {}),
   };
 }
 
 /** The test cases approved at the last test check; anything malformed is dropped. A case
  *  recorded under schema 2 (`test` for `approach`) is read as today's shape. */
 function checkedCases(approvals: ApprovalRow[]): TestCase[] {
-  const approval = approvals.findLast((a) => a.kind === "awaiting_test_check" && a.decision === "approved");
+  // The one approval carries the scenarios now; a legacy test check, when a task has one, wins.
+  const approval =
+    approvals.findLast((a) => a.kind === "awaiting_test_check" && a.decision === "approved") ??
+    approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved" && Array.isArray(a.requested.cases));
   const cases = approval?.requested.cases;
   if (!Array.isArray(cases)) return [];
   return cases.flatMap((c) => {
@@ -53,6 +57,10 @@ function checkedCases(approvals: ApprovalRow[]): TestCase[] {
 export function buildStageInput(opts: {
   task: TaskRow;
   stage: TaskState;
+  /** The pack to run when it is not the one the state is named for (the planner runs in test_design). */
+  pack?: PackId;
+  /** A plan under review: handed to the stage as `context.plan`, and, before any approval, as the plan it reads. */
+  plan?: PlanContext | null;
   /** The engine engine-choice picked; absent, the factory runs the pack's default. */
   engine?: EngineId;
   attempt: number;
@@ -78,8 +86,11 @@ export function buildStageInput(opts: {
   threads?: ThreadsContext | null;
 }): StageInput {
   const { task, stage, attempt, approvals } = opts;
-  const pack = stage as PackId;
-  const plan = approvedPlan(approvals);
+  const pack = opts.pack ?? (stage as PackId);
+  const underReview = opts.plan
+    ? { brief: opts.plan.brief, criteria: opts.plan.criteria, assumptions: opts.plan.assumptions, slices: opts.plan.slices, ...(opts.plan.rollback !== undefined ? { rollback: opts.plan.rollback } : {}) }
+    : null;
+  const plan = approvedPlan(approvals) ?? underReview;
   const { maxTurns, timeoutMs } = budgetFor(pack, plan?.slices?.length ?? 0);
   return {
     schema: 3,
@@ -116,6 +127,7 @@ export function buildStageInput(opts: {
         pack === "verifying" || (pack === "implementing" && !opts.holdoutCases) ? checkedCases(approvals) : [],
       baseCommit: opts.baseCommit ?? null,
       ci: opts.ci ?? null,
+      ...(opts.plan ? { plan: opts.plan } : {}),
       ...(pack === "e2e" && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),
       ...((pack === "implementing" || pack === "verifying") && opts.checks ? { checks: opts.checks } : {}),
       ...(pack === "reviewing" && opts.review ? { review: opts.review } : {}),

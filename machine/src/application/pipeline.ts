@@ -527,11 +527,12 @@ export class Pipeline {
     return this.get(id);
   }
 
-  /** Replaces test_design's cases while the test check is open; everything else on the gate stays. */
+  /** Replaces the scenarios on the open gate that carries them (the plan gate, or a legacy test check); everything else on the gate stays. */
   async editCases(id: string, cases: TestCase[]): Promise<TaskRow> {
     await this.store.withTaskLock(id, async (_task, tx) => {
       const open = await tx.findOpenApproval(id);
-      if (!open || open.kind !== "awaiting_test_check") throw new NoCasesToEditError(id);
+      const carriesCases = open?.kind === "awaiting_test_check" || (open?.kind === "awaiting_approval" && Array.isArray(open.requested.cases));
+      if (!open || !carriesCases) throw new NoCasesToEditError(id);
       await tx.updateApprovalRequested(open, { ...open.requested, cases });
     });
     await this.log(id, "cases.edited", { count: cases.length });
@@ -876,10 +877,12 @@ export class Pipeline {
       if (minutes === null) continue;
       const open = (await this.store.listApprovals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
       if (!open) continue;
-      const { confidence, risk, questions } = open.requested;
-      if (confidence !== "high" || risk !== "low" || (Array.isArray(questions) && questions.length > 0)) continue;
+      // Low risk, every check a clear yes, and nothing asked: the plan stage's own findings are the bar.
+      const { risk, verdicts, questions } = open.requested as { risk?: { level?: unknown }; verdicts?: Record<string, unknown>; questions?: unknown };
+      const checks = Object.values(verdicts ?? {});
+      if (risk?.level !== "low" || checks.length === 0 || checks.some((verdict) => verdict !== "proceed") || (Array.isArray(questions) && questions.length > 0)) continue;
       if (Date.now() - open.createdAt.getTime() < minutes * 60_000) continue;
-      const reason = `auto-approved after ${minutes} min: triage reported high confidence and low risk`;
+      const reason = `auto-approved after ${minutes} min: low risk and every check proceeded`;
       await this.log(task.id, "plan.auto_approved", { reason });
       await this.decide(task.id, "approved", reason).catch((error: unknown) =>
         console.error(`could not auto-approve the plan of task ${task.id}`, error),

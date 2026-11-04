@@ -14,6 +14,13 @@ Branch: {{task.branch}}
 ## Ticket criteria
 {{task.criteria}}
 
+## What the plan check found wrong with your last plan
+{{context.plan.review}}
+
+If this lists findings, you are re-planning: fix each one and keep what was right. This was the last plan:
+Brief: {{plan.brief}}
+{{plan.slices}}
+
 ## Answers and decisions so far
 {{decisions}}
 
