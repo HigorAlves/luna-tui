@@ -8,6 +8,7 @@ allowBuilds:
   esbuild: true
   sharp: true
   unrs-resolver: false
+  protobufjs: false
 minimumReleaseAgeExclude:
   - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.311'
   - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.311'
