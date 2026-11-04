@@ -49,7 +49,9 @@ export type VideoOutcome =
 export type VideoPipeline = (context: StageContext, input: VideoInput) => Promise<VideoOutcome>;
 
 const MINUTE = 60_000;
-const TOOL_TIMEOUT: Record<VideoTool, number> = { narrate: 15 * MINUTE, cards: 15 * MINUTE, compose: 10 * MINUTE, measure: 15 * MINUTE };
+// The smoke's twenty-second film took eleven minutes cold on a laptop CPU (kokoro and whisper, 240 card frames):
+// a two-minute film with several cards needs room, and a job that hangs is still cut off well inside the stage's hour.
+const TOOL_TIMEOUT: Record<VideoTool, number> = { narrate: 30 * MINUTE, cards: 30 * MINUTE, compose: 10 * MINUTE, measure: 20 * MINUTE };
 const SMALL = 2 * 1024 * 1024;
 const NARRATION_MAX = 20 * 1024 * 1024;
 const RECORDING_MAX = 4 * 1024 ** 3;
