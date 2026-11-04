@@ -701,9 +701,9 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     answer: answerSchema(TRIAGE_SIGNALS),
   },
   // The plan stage's decisions: each reads a plan context, one call, no worktree.
-  risk_score: planDecision("risk_score", RISK_QUESTIONS),
-  coverage_check: planDecision("coverage_check", COVERAGE_QUESTIONS),
-  plan_check: planDecision("plan_check", PLAN_CHECK_QUESTIONS),
+  risk_score: { ...planDecision("risk_score", RISK_QUESTIONS) },
+  coverage_check: { ...planDecision("coverage_check", COVERAGE_QUESTIONS) },
+  plan_check: { ...planDecision("plan_check", PLAN_CHECK_QUESTIONS) },
 };
 
 type Choice = { choice: string; confidence: number };
