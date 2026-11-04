@@ -201,6 +201,7 @@ describe("agent stages through packs", () => {
       currentDir: () => (has ? "/state/graphs/repo/current" : null),
       build: async () => stamp,
       isFresh: async () => fresh,
+      recordMisses: async () => {},
     });
     const withGraph = (graph: Graph, ensure?: (repo: string) => void) => agentRunners({ ...deps(fakeSandbox(output())), graph, ensureGraph: ensure });
 
@@ -768,6 +769,48 @@ describe("the engine a stage runs on", () => {
     };
     await expect(runAgent({ ...deps(broken), credentials }, context("triage"), "triage")).rejects.toThrow(/docker/);
     expect(log).toEqual(["prepare claude:opus", "release claude:opus"]);
+  });
+
+  describe("scope after the run", () => {
+    const slice = { title: "s", est_loc: 5, touchpoints: ["b.txt"], acceptance: ["ok"] };
+    const planned = (): StageContext => ({
+      ...context("implementing"),
+      approvals: [{ id: "ap1", kind: "awaiting_approval", decision: "approved", requested: { brief: "b", criteria: [], assumptions: [], slices: [slice] } } as unknown as StageContext["approvals"][number]],
+    });
+    const commitFiles = (...names: string[]) => (r: SandboxRun) => {
+      for (const name of names) writeFileSync(join(r.worktree, name), "x\n");
+      git(r.worktree, "add", "-A");
+      git(r.worktree, "commit", "-q", "-m", "slice");
+    };
+    const graphWith = (misses: unknown[]): Graph => ({
+      stampOf: async () => null,
+      currentDir: () => null,
+      build: async () => ({}) as GraphStamp,
+      isFresh: async () => true,
+      recordMisses: async (_repo, miss) => void misses.push(miss),
+    });
+
+    it("fails the stage on a changed file the plan does not name and the answer does not declare, one finding per file", async () => {
+      const result = await runners(fakeSandbox(output(), commitFiles("b.txt", "extra.txt"))).implementing!(planned());
+      expect(result.outcome).toBe("fail");
+      expect(result.detail).toMatchObject({ error: expect.stringContaining("extra.txt"), scope: { facts: { undeclared: ["extra.txt"] } } });
+      expect(result.findings).toEqual([expect.objectContaining({ path: "extra.txt", severity: "scope", confidence: 1 })]);
+    });
+
+    it("passes when the file is declared, records it as a graph miss, and reports the scope", async () => {
+      const misses: unknown[] = [];
+      const answer = { kind: "done", summary: "x", outOfMap: [{ path: "extra.txt", reason: "shared helper" }] };
+      const d = { ...deps(fakeSandbox(output({ answer } as Partial<StageOutput>), commitFiles("b.txt", "extra.txt"))), graph: graphWith(misses) };
+      const result = await agentRunners(d).implementing!(planned());
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).toMatchObject({ scope: { facts: { undeclared: [] }, verdict: "skipped" } });
+      expect(misses).toEqual([{ task: "11111111-2222-3333-4444-555555555555", at: expect.any(String), files: ["extra.txt"] }]);
+    });
+
+    it("does not judge a task with no plan (a PR task): nothing is undeclared", async () => {
+      const result = await runners(fakeSandbox(output(), commitFiles("extra.txt"))).implementing!(context("implementing"));
+      expect(result.outcome).toBe("pass");
+    });
   });
 
   describe("build watch", () => {

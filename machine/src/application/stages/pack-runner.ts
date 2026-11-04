@@ -1,7 +1,8 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { type CiContext, EscalationReason, Ledger, PACKS, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type CiContext, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext } from "@hardness/contracts";
 import { existsSync } from "node:fs";
+import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
 import { basename, join } from "node:path";
 
@@ -11,6 +12,7 @@ import {
   commonGitDir,
   gitIdentity,
   diffNameStatus,
+  diffText,
   ensureWorktree,
   headCommit,
   defaultBranch,
@@ -27,7 +29,7 @@ import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-file
 import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
 import { pushBranch } from "./deliver.ts";
-import { buildWatch } from "./build-watch.ts";
+import { type Decide, buildChecks, buildWatch } from "./build-watch.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
@@ -66,6 +68,8 @@ export interface AgentDeps {
   ) => Promise<ExecResult>;
   /** Runs a command on the host (not in the stage image): the build watch pushes the task branch with it. */
   hostExec?: (command: string, args: string[], options?: { cwd?: string; signal?: AbortSignal; timeoutMs?: number }) => Promise<ExecResult>;
+  /** Runs a decision pack on a check context (red_check, scope_check) for the build watch; null runs Build without the checks. Read at call time: main.ts binds it late. */
+  decide?: Decide | null;
   /** How often the build watch looks at the run's ledger, in ms. */
   watchEvery?: number;
 }
@@ -98,6 +102,18 @@ export interface AgentExtra {
   /** The plan stage's packs: the plan under review (the test designer reads it as its plan; a second round carries the gaps or the review). */
   plan?: PlanContext;
 }
+
+/** The files the plan's slices touch, with the code map's files when it has one. */
+function plannedFiles(plan: StageInput["plan"]): string[] {
+  const touched = (plan?.slices ?? []).flatMap((slice) => {
+    const parsed = Slice.safeParse(slice);
+    return parsed.success ? parsed.data.touchpoints : [];
+  });
+  const map = (plan as { map?: { files?: string[] } | null } | null)?.map;
+  return [...new Set([...touched, ...(map?.files ?? [])])];
+}
+
+const OutOfMap = z.array(z.object({ path: z.string(), reason: z.string() }));
 
 export async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}): Promise<StageResult> {
   const { task } = context;
@@ -214,14 +230,35 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   const pushErrors: string[] = [];
   let watch: ReturnType<typeof buildWatch> | null = null;
   let pushing: Promise<void> = Promise.resolve();
+  // The machine's side of the checks the implementer asks for: a red slice and the change's scope.
+  const checks =
+    pack === "implementing" && !extra.checkout
+      ? buildChecks({
+          outDir: join(runDir, "out"),
+          repoPath: task.repoPath,
+          worktree: workspace.path,
+          inputCommit,
+          slices: input.plan?.slices ?? [],
+          planned: plannedFiles(input.plan),
+          get decide() {
+            return deps.decide ?? null;
+          },
+          overrides: policy.decisions,
+          git: { nameStatus: (from, to) => diffNameStatus(workspace.path, from, to), diff: (from, to) => diffText(workspace.path, from, to) },
+          log: (line) => void context.note?.(line).catch(() => {}),
+        })
+      : null;
   const startWatch = (): void => {
-    if (pack !== "implementing" || !deps.hostExec || watch) return;
+    if (!checks || watch) return;
     const hostExec = deps.hostExec;
     watch = buildWatch({
       outDir: join(runDir, "out"),
       every: deps.watchEvery ?? 2000,
       log: (line) => void context.note?.(line).catch(() => {}),
-      onCommitted: (slice) => {
+      onRed: checks.onRed,
+      onScopeRequest: checks.onScopeRequest,
+      onCommitted: async (slice) => {
+        if (!hostExec) return;
         pushing = pushing.then(async () => {
           pushes.attempted += 1;
           const error = await pushBranch(hostExec, workspace.branch, workspace.path).catch((e: Error) => e.message);
@@ -442,6 +479,45 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           confidence: 1,
         })),
       });
+    }
+    // The change's scope, from the final diff: a file outside the plan that the answer did not declare, or a
+    // removed test, fails the stage here, before Verify. Declared files the machine accepted become graph misses.
+    if (pack === "implementing" && checks) {
+      const answered = OutOfMap.safeParse(answerOf(output.answer)?.outOfMap);
+      const declared = answered.success ? answered.data : [];
+      try {
+        const facts = await checks.finalFacts(declared);
+        mapped.detail = { ...mapped.detail, scope: { facts, verdict: await checks.lastVerdict() } };
+        const wrong = [...facts.undeclared, ...facts.removedTests.filter((t) => !facts.undeclared.includes(t))];
+        if (wrong.length > 0) {
+          return merged({
+            ...mapped,
+            outcome: "fail",
+            detail: {
+              ...mapped.detail,
+              error: `${facts.undeclared.length > 0 ? `changed files outside the plan and not declared: ${facts.undeclared.join(", ")}` : ""}${facts.undeclared.length > 0 && facts.removedTests.length > 0 ? "; " : ""}${facts.removedTests.length > 0 ? `removed tests: ${facts.removedTests.join(", ")}` : ""}`,
+            },
+            findings: wrong.map((path) => ({
+              path,
+              line: 0,
+              start_line: null,
+              severity: "scope",
+              title: facts.removedTests.includes(path) ? "test removed" : "file outside the plan, not declared",
+              body: facts.removedTests.includes(path)
+                ? "The change removes this test; restore it."
+                : "The plan's slices and the code map do not name this file and the answer did not declare it. Revert it, or declare it in outOfMap with the reason the slice needs it.",
+              suggestion_code: null,
+              confidence: 1,
+            })),
+          });
+        }
+        const accepted = declared.filter((d) => facts.changed.includes(d.path)).map((d) => d.path);
+        if (accepted.length > 0 && deps.graph && task.repoPath) {
+          await deps.graph.recordMisses(task.repoPath, { task: task.id, at: new Date().toISOString(), files: accepted }).catch((e: Error) => void context.note?.(`graph misses not recorded: ${e.message}`).catch(() => {}));
+        }
+      } catch (error) {
+        await context.note?.(`scope facts unavailable: ${(error as Error).message}`).catch(() => {});
+      }
     }
   }
   if (pack === "triage") {

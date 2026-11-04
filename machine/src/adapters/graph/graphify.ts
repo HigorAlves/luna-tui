@@ -4,7 +4,7 @@
 // entrypoint overridden to `/graph-tools/build.py`, over a clean checkout of the default branch
 // mounted read-only; no model, no credential.
 import { readlinkSync, statSync } from "node:fs";
-import { mkdir, readFile, readdir, rename, rm, symlink } from "node:fs/promises";
+import { appendFile, mkdir, readFile, readdir, rename, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
 
 import { GraphBuildError, type Graph, type GraphStamp } from "../../application/graph.ts";
@@ -123,6 +123,11 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       await point(repoDir, commit);
       await prune(repoDir);
       return stamp;
+    },
+
+    async recordMisses(repoPath, miss) {
+      await mkdir(dirOf(repoPath), { recursive: true });
+      await appendFile(join(dirOf(repoPath), "misses.jsonl"), `${JSON.stringify(miss)}\n`);
     },
 
     async isFresh(repoPath, stamp, baseCommit) {

@@ -15,6 +15,7 @@ function setup(opts: { stamps?: Record<string, string>; heads?: Record<string, s
   const graph: Graph = {
     stampOf: async (repo) => (stamps.has(repo) ? stamp(stamps.get(repo)!) : null),
     currentDir: () => null,
+    recordMisses: async () => {},
     build: async (repo) => {
       running++;
       overlap ||= running > 1;

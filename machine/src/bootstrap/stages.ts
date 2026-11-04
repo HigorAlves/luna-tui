@@ -9,6 +9,7 @@ import type { Config } from "../config.ts";
 import { type Credentials, machineCredentials, removeStaleCodexTemps } from "../adapters/credentials/index.ts";
 import type { Graph } from "../application/graph.ts";
 import type { Watcher } from "../application/ports.ts";
+import type { Decide } from "../application/stages/build-watch.ts";
 import { agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
@@ -59,6 +60,8 @@ export async function buildRealStages(
   planDecisions?: { decide: PlanDeps["decide"] },
   /** The machine's code graphs, mounted read-only in every stage; `ensure` asks for a first build of a repo with none. */
   graphs?: { graph: Graph; ensure: (repoPath: string) => void },
+  /** Build's checks (red_check, scope_check): `decide` is bound late, once PackRuns exists; null runs Build without them. */
+  buildDecisions?: { decide: Decide | null },
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -96,6 +99,9 @@ export async function buildRealStages(
     watcher,
     exec: checksExec,
     hostExec: exec,
+    get decide() {
+      return buildDecisions?.decide ?? null;
+    },
     policies,
     history,
     ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure } : {}),

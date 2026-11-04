@@ -19,6 +19,7 @@ import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns
 import type { EventRow } from "./domain/task.ts";
 import { groundTruthWriter } from "./application/ground-truth.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
+import type { Decide } from "./application/stages/build-watch.ts";
 import type { TriageSignalDeps } from "./application/stages/triage-signals.ts";
 import { createIssueClassifier } from "./application/classify.ts";
 import { GitHubIntake } from "./application/intake.ts";
@@ -163,6 +164,8 @@ if (config.disabledRuntimes.length > 0) console.log(`runtimes off (MACHINE_DISAB
 const triageSignals: TriageSignalDeps = { classify: null, save: (id, patch) => engineSpend.updateTask(id, patch) };
 /** The plan stage's decisions run through PackRuns, which is built below: bound once it exists. */
 const planDecisions: { decide: PlanDeps["decide"] } = { decide: null };
+/** Build's red and scope checks run through PackRuns too: bound once it exists. */
+const buildDecisions: { decide: Decide | null } = { decide: null };
 const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   config,
   watcher,
@@ -185,6 +188,7 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   triageSignals,
   planDecisions,
   { graph, ensure: (repoPath) => graphWatch?.ensure(repoPath) },
+  buildDecisions,
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
@@ -347,6 +351,7 @@ await packRuns?.clearLeftovers();
 const classifier = packRuns ? createIssueClassifier({ runs: packRuns }) : null;
 if (classifier) triageSignals.classify = (issue) => classifier.classify(issue);
 if (packRuns) planDecisions.decide = async (pack, plan) => (await packRuns.run({ pack, context: { plan } }, "plan")).answer;
+if (packRuns) buildDecisions.decide = async (pack, check) => (await packRuns.run({ pack, context: { check } }, "build")).answer;
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 const app = createApp({
   db,

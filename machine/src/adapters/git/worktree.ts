@@ -226,6 +226,11 @@ export function diffNameStatus(path: string, from: string, to: string): Promise<
   return execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--name-status", from, to]);
 }
 
+/** `git diff <from> <to>` in `path`: the unified diff, for reading what a change added. */
+export function diffText(path: string, from: string, to: string): Promise<string> {
+  return execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--no-color", "--no-ext-diff", from, to]);
+}
+
 /** Undoes one commit with a new commit on top (never rewrites history a person may have fetched). */
 export async function revertCommit(path: string, sha: string): Promise<void> {
   await execOrThrow("git", [...HOST_GIT, "-C", path, "-c", "commit.gpgsign=false", "revert", "--no-edit", sha]);

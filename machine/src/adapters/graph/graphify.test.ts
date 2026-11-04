@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -140,5 +140,18 @@ describe("graphifyGraph.isFresh", () => {
     expect(await graph.isFresh(root, stampFor(one), two)).toBe(false);
     expect(await graph.isFresh(root, stampFor(two), one)).toBe(true);
     expect(await graph.isFresh(root, stampFor("c".repeat(40)), two)).toBe(true);
+  });
+});
+
+describe("graphifyGraph.recordMisses", () => {
+  it("appends one JSON line per call to graphs/<slug>/misses.jsonl", async () => {
+    const { graph, repo, stateDir } = setup();
+    await graph.recordMisses(repo, { task: "t1", at: "2026-11-04T10:00:00Z", files: ["a.ts"] });
+    await graph.recordMisses(repo, { task: "t2", at: "2026-11-04T11:00:00Z", files: ["b.ts", "c.ts"] });
+    const lines = readFileSync(join(stateDir, "graphs", repoSlug(repo), "misses.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(lines).toEqual([
+      { task: "t1", at: "2026-11-04T10:00:00Z", files: ["a.ts"] },
+      { task: "t2", at: "2026-11-04T11:00:00Z", files: ["b.ts", "c.ts"] },
+    ]);
   });
 });

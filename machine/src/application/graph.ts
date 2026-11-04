@@ -29,6 +29,15 @@ export interface Graph {
   build(repoPath: string, signal?: AbortSignal): Promise<GraphStamp>;
   /** False only when the graph is older than `baseCommit`: its commit is a strict ancestor of it. */
   isFresh(repoPath: string, stamp: GraphStamp, baseCommit: string): Promise<boolean>;
+  /** Appends the files a task changed that its plan and the code map did not name (accepted by scope_check), one JSON line per call. */
+  recordMisses(repoPath: string, miss: GraphMiss): Promise<void>;
+}
+
+/** One line of a repo's `misses.jsonl`: where the code map was short. */
+export interface GraphMiss {
+  task: string;
+  at: string;
+  files: string[];
 }
 
 /** The graph of a machine that builds none: every repo is without one. */
@@ -40,5 +49,6 @@ export function noGraph(): Graph {
       throw new GraphBuildError("code graphs are off");
     },
     isFresh: async () => true,
+    recordMisses: async () => {},
   };
 }
