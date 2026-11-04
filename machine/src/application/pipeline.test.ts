@@ -57,10 +57,9 @@ beforeEach(async () => {
 /** A ticket in Intake (draft), ready for `pipeline.start()` to run triage. */
 const newTask = () => pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
 
-/** Starts a task and approves the plan and the test names, which reaches the implementer. */
+/** Starts a task and approves the one plan gate (after triage and the plan stage), which reaches the implementer. */
 async function startAndApprove(id: string) {
   await pipeline.start(id);
-  await pipeline.decide(id, "approved");
   return pipeline.decide(id, "approved");
 }
 
@@ -84,13 +83,14 @@ describe("creating and starting", () => {
     expect((await pipeline.update(task.id, { source: { ...source } })).source).toEqual(source);
   });
 
-  it("runs triage on start and waits for you to approve the plan", async () => {
+  it("runs triage and the plan stage on start and waits for you to approve the plan", async () => {
     const task = await newTask();
     const started = await pipeline.start(task.id);
 
     expect(started.state).toBe("awaiting_approval");
     expect(await pipeline.stageRuns(task.id)).toMatchObject([
       { stage: "triage", attempt: 1, status: "passed", outcome: "pass" },
+      { stage: "test_design", attempt: 1, status: "passed", outcome: "pass" },
     ]);
     expect(await pipeline.approvals(task.id)).toMatchObject([
       { kind: "awaiting_approval", decision: null },
@@ -108,6 +108,56 @@ describe("triage's record", () => {
     const task = await p.createTask({ title: "Login page" });
     await p.start(task.id);
     expect(TriageRecord.parse((await p.get(task.id)).record)).toMatchObject({ ...record, source: "manual", decision: "plan", signals: {}, qa: [] });
+  });
+});
+
+describe("triage outcomes", () => {
+  const record = { kind: "question", goal: "answer how to run the board", size: "tiny", urgency: "normal", risk: "none", reason: "asks how, changes nothing" };
+
+  it("waits at one gate for an archive, and approving it archives with the reason, skipping the plan stage", async () => {
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "archive", archiveReason: "duplicate", record, brief: "same as #7" } });
+    const task = await newTask();
+    expect((await pipeline.start(task.id)).state).toBe("awaiting_approval");
+    expect(await stagesRun(task.id)).toEqual(["triage"]);
+
+    const archived = await pipeline.decide(task.id, "approved");
+    expect(archived).toMatchObject({ state: "archived", archiveReason: "duplicate" });
+    expect(await stagesRun(task.id)).toEqual(["triage"]);
+    expect((await pipeline.approvals(task.id))[0]).toMatchObject({ kind: "awaiting_approval", decision: "approved" });
+  });
+
+  it("maps a reason the task does not keep onto the ones it does", async () => {
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "archive", archiveReason: "stale", record } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    expect(await pipeline.decide(task.id, "approved")).toMatchObject({ state: "archived", archiveReason: "rejected" });
+  });
+
+  it("records the reply on approving a conversation, then archives it as not for an agent", async () => {
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "conversation", reply: "Use `pnpm dev`.", record } });
+    const task = await newTask();
+    expect((await pipeline.start(task.id)).state).toBe("awaiting_approval");
+
+    const archived = await pipeline.decide(task.id, "approved");
+    expect(archived).toMatchObject({ state: "archived", archiveReason: "not_for_agent" });
+    const events = await pipeline.events(task.id);
+    const reply = events.find((e) => e.kind === "task.reply");
+    expect(reply?.payload).toEqual({ body: "Use `pnpm dev`." });
+    expect(events.findIndex((e) => e.kind === "task.reply")).toBeLessThan(events.findIndex((e) => e.kind === "transition" && e.payload.to === "archived"));
+  });
+
+  it("re-runs triage when an outcome gate is sent back, and the plan stage when the plan is", async () => {
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "archive", archiveReason: "duplicate", record } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    const again = await pipeline.decide(task.id, "sent_back", "it is not a duplicate");
+    // The second triage run is the stub default: a plan outcome, so the plan stage runs and one approval waits.
+    expect(again.state).toBe("awaiting_approval");
+    expect(await stagesRun(task.id)).toEqual(["triage", "triage", "test_design"]);
+
+    const resent = await pipeline.decide(task.id, "sent_back", "redo the scenarios");
+    expect(resent.state).toBe("awaiting_approval");
+    expect(await stagesRun(task.id)).toEqual(["triage", "triage", "test_design", "test_design"]);
   });
 });
 
@@ -132,7 +182,7 @@ describe("the setup gate", () => {
     const approved = await p.decide(task.id, "approved");
     expect(written).toEqual([[dir, "checks: []\n"]]);
     expect(approved.state).toBe("awaiting_approval");
-    expect(await stagesRun(task.id)).toEqual(["setup", "triage"]);
+    expect(await stagesRun(task.id)).toEqual(["setup", "triage", "test_design"]);
     expect((await p.events(task.id)).map((e) => e.kind)).toContain("config.written");
   });
 
@@ -142,7 +192,7 @@ describe("the setup gate", () => {
     const p = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: onDisk });
     const task = await p.createTask({ title: "Login page", repoPath: dir });
     expect((await p.start(task.id)).state).toBe("awaiting_approval");
-    expect(await stagesRun(task.id)).toEqual(["triage"]);
+    expect(await stagesRun(task.id)).toEqual(["triage", "test_design"]);
   });
 
   it("sends the proposal back with a note that re-runs setup, and closes a setup-only task once approved", async () => {
@@ -173,7 +223,7 @@ describe("the setup gate", () => {
 });
 
 describe("the whole pipeline with stub stages", () => {
-  it("runs every stage once and closes after your four approvals", async () => {
+  it("runs every stage once and closes after your three approvals", async () => {
     const task = await newTask();
     await startAndApprove(task.id);
     expect((await pipeline.get(task.id)).state).toBe("awaiting_ship");
@@ -196,7 +246,6 @@ describe("the whole pipeline with stub stages", () => {
     const approvals = await pipeline.approvals(task.id);
     expect(approvals.map((a) => a.kind)).toEqual([
       "awaiting_approval",
-      "awaiting_test_check",
       "awaiting_ship",
       "reviewing_memory",
     ]);
@@ -217,7 +266,7 @@ describe("closing", () => {
     });
     const created = await closing.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
     await closing.start(created.id);
-    for (let i = 0; i < 4; i++) await closing.decide(created.id, "approved");
+    for (let i = 0; i < 3; i++) await closing.decide(created.id, "approved");
 
     expect((await closing.get(created.id)).state).toBe("closed");
     const event = (await closing.events(created.id)).find((e) => e.kind === "task.closed");
@@ -237,7 +286,7 @@ describe("closing", () => {
     });
     const created = await closing.createTask({ title: "Login page", criteria: ["x"] });
     await closing.start(created.id);
-    for (let i = 0; i < 4; i++) await closing.decide(created.id, "approved");
+    for (let i = 0; i < 3; i++) await closing.decide(created.id, "approved");
 
     expect((await closing.get(created.id)).state).toBe("closed");
     const event = (await closing.events(created.id)).find((e) => e.kind === "task.closed");
@@ -259,7 +308,7 @@ describe("memory review decision", () => {
     stubs.plan("shipping", { outcome: "pass", detail: { rules: { markdown: "- r\n" } } });
     const created = await p.createTask({ title: "Login page", criteria: ["x"] });
     await p.start(created.id);
-    for (let i = 0; i < 3; i++) await p.decide(created.id, "approved");
+    for (let i = 0; i < 2; i++) await p.decide(created.id, "approved");
     return created.id;
   }
 
@@ -287,7 +336,7 @@ describe("memory review decision", () => {
 describe("acceptance criteria", () => {
   it("adopts triage's refined criteria when you approve the plan", async () => {
     const criteria = ["Bad password shows an error", "Five failures lock the account"];
-    stubs.plan("triage", { outcome: "pass", detail: { brief: "b", criteria } });
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria } });
     const task = await newTask();
     await pipeline.start(task.id);
 
@@ -296,7 +345,7 @@ describe("acceptance criteria", () => {
   });
 
   it("keeps the ticket's criteria when triage proposes none", async () => {
-    stubs.plan("triage", { outcome: "pass", detail: { brief: "b", criteria: [] } });
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: [] } });
     const task = await newTask();
     await pipeline.start(task.id);
 
@@ -308,7 +357,7 @@ describe("acceptance criteria", () => {
 describe("editing the plan before approving", () => {
   it("merges edited fields into the open plan approval, keeping what you didn't touch", async () => {
     const slices = [{ title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }];
-    stubs.plan("triage", {
+    stubs.plan("test_design", {
       outcome: "pass",
       detail: { brief: "old brief", criteria: ["c1"], assumptions: ["a1"], slices },
     });
@@ -322,7 +371,7 @@ describe("editing the plan before approving", () => {
   });
 
   it("is what gets adopted once you approve", async () => {
-    stubs.plan("triage", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
     const task = await newTask();
     await pipeline.start(task.id);
 
@@ -344,7 +393,7 @@ describe("editing the plan before approving", () => {
   });
 
   it("keeps a revision of what changed and logs the edited fields, instead of overwriting silently", async () => {
-    stubs.plan("triage", { outcome: "pass", detail: { brief: "old", criteria: ["c1"], assumptions: ["a1"] } });
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "old", criteria: ["c1"], assumptions: ["a1"] } });
     const task = await newTask();
     await pipeline.start(task.id);
 
@@ -359,44 +408,10 @@ describe("editing the plan before approving", () => {
     const edited = (await pipeline.events(task.id)).filter((e) => e.kind === "plan.edited");
     expect(edited.map((e) => e.payload)).toEqual([{ fields: ["brief", "assumptions"], gate: "awaiting_approval" }]);
   });
-
-  it("edits the approved plan at the test check too, and test_design's input reads the edit", async () => {
-    stubs.plan("triage", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
-    const task = await newTask();
-    await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved");
-    expect((await pipeline.get(task.id)).state).toBe("awaiting_test_check");
-
-    await pipeline.editPlan(task.id, { criteria: ["c1", "c2"] });
-
-    const approvals = await pipeline.approvals(task.id);
-    const plan = approvals.findLast((a) => a.kind === "awaiting_approval");
-    expect(plan?.decision).toBe("approved");
-    expect(plan?.requested).toMatchObject({ criteria: ["c1", "c2"], revisions: [{ before: { criteria: ["c1"] }, after: { criteria: ["c1", "c2"] } }] });
-    expect(approvedPlan(approvals)?.criteria).toEqual(["c1", "c2"]);
-    expect((await pipeline.get(task.id)).criteria).toEqual(["c1", "c2"]);
-    const edited = (await pipeline.events(task.id)).filter((e) => e.kind === "plan.edited");
-    expect(edited.map((e) => e.payload)).toEqual([{ fields: ["criteria"], gate: "awaiting_test_check" }]);
-  });
 });
 
 describe("editing the test cases at the test check", () => {
   const designed = [{ title: "old", criterion: "c1", approach: "a" }];
-
-  it("replaces the cases on the open test-check approval, keeps its other fields, and logs it", async () => {
-    stubs.plan("test_design", { outcome: "pass", detail: { summary: "found vitest", cases: designed } });
-    const task = await newTask();
-    await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved");
-    const cases = [{ title: "new", criterion: "c1", approach: "a2" }, { title: "more", criterion: "c1", approach: "a3" }];
-
-    await pipeline.editCases(task.id, cases);
-
-    const open = (await pipeline.approvals(task.id)).find((a) => a.kind === "awaiting_test_check" && a.decision === null);
-    expect(open?.requested).toMatchObject({ summary: "found vitest", cases });
-    const edited = (await pipeline.events(task.id)).filter((e) => e.kind === "cases.edited");
-    expect(edited.map((e) => e.payload)).toEqual([{ count: 2 }]);
-  });
 
   it("rejects editing cases anywhere but the test check", async () => {
     const task = await newTask();
@@ -425,7 +440,7 @@ describe("gates", () => {
       decision: "answered",
       response: { answers: { "Email or username?": "Email" } },
     });
-    expect(await stagesRun(task.id)).toEqual(["triage", "triage"]);
+    expect(await stagesRun(task.id)).toEqual(["triage", "triage", "test_design"]);
   });
 
   it("re-runs triage when you send the plan back, keeping your reason", async () => {
@@ -599,7 +614,7 @@ describe("test_change undoes verifying's tests", () => {
     const task = await newTask();
     const after = await startAndApprove(task.id);
     // Inline, the loop went straight on into test_design, which the stub answered.
-    expect(after.state).toBe("awaiting_test_check");
+    expect(after.state).toBe("awaiting_approval");
     expect(reverted).toEqual([["/wt/x", "bbb"]]);
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toContain("tests.reverted");
   });
@@ -960,7 +975,7 @@ describe("fallback across engines", () => {
     expect(ran).toEqual(["codex:sol", "claude:opus"]);
 
     const runs = await pipeline.stageRuns(task.id);
-    expect(runs.map((r) => [r.stage, r.engine, r.status, r.outcome])).toEqual([
+    expect(runs.slice(0, 2).map((r) => [r.stage, r.engine, r.status, r.outcome])).toEqual([
       ["triage", "codex:sol", "paused", "rate_limited"],
       ["triage", "claude:opus", "passed", "pass"],
     ]);
@@ -1055,9 +1070,8 @@ describe("budgets", () => {
     pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, budget: { taskUsd: 2 } });
     stubs.plan("triage", costly(3));
     const task = await newTask();
-    expect((await pipeline.start(task.id)).state).toBe("awaiting_approval");
 
-    const held = await pipeline.decide(task.id, "approved");
+    const held = await pipeline.start(task.id);
     expect(held).toMatchObject({ state: "escalated", reason: "budget: task spent $3.00 of $2.00", resumeTo: "test_design" });
     expect(await stagesRun(task.id)).toEqual(["triage"]);
   });
@@ -1066,7 +1080,8 @@ describe("budgets", () => {
     pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, budget: { dailyUsd: 2 } });
     stubs.plan("triage", costly(3));
     const a = await newTask();
-    expect((await pipeline.start(a.id)).state).toBe("awaiting_approval");
+    // a's triage spent the day's ceiling, so its plan stage is parked before it runs.
+    expect(await pipeline.start(a.id)).toMatchObject({ state: "test_design", queued: true });
 
     const b = await newTask();
     expect(await pipeline.start(b.id)).toMatchObject({ state: "triage", queued: true });
@@ -1083,15 +1098,14 @@ describe("budgets", () => {
     pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, budget: { dailyUsd: 2 } });
     stubs.plan("triage", costly(3));
     const task = await newTask();
-    expect((await pipeline.start(task.id)).state).toBe("awaiting_approval");
 
-    expect(await pipeline.decide(task.id, "approved")).toMatchObject({ state: "test_design", queued: true });
+    expect(await pipeline.start(task.id)).toMatchObject({ state: "test_design", queued: true });
     expect(await stagesRun(task.id)).toEqual(["triage"]);
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toContain("budget.held");
 
     await backdateRuns(task.id);
     await pipeline.tick();
-    expect(await pipeline.get(task.id)).toMatchObject({ state: "awaiting_test_check", queued: false });
+    expect(await pipeline.get(task.id)).toMatchObject({ state: "awaiting_approval", queued: false });
   });
 });
 
@@ -1105,8 +1119,7 @@ describe("a repo's monthly budget and the alerts", () => {
     pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies({ "/r/a": 2 }) });
     stubs.plan("triage", costly(3));
     const a = await pipeline.createTask({ title: "a", repoPath: "/r/a" });
-    expect((await pipeline.start(a.id)).state).toBe("awaiting_approval");
-    expect(await pipeline.decide(a.id, "approved")).toMatchObject({ state: "test_design", queued: true });
+    expect(await pipeline.start(a.id)).toMatchObject({ state: "test_design", queued: true });
     const held = (await pipeline.events(a.id)).find((e) => e.kind === "budget.held");
     expect(held?.payload.reason).toBe("budget: /r/a spent $3.00 of $2.00 this month");
 
@@ -1122,7 +1135,7 @@ describe("a repo's monthly budget and the alerts", () => {
     // Last month's spend does not count.
     await db.query("update stage_runs set started_at = date_trunc('month', now()) - interval '1 day'");
     await pipeline.tick();
-    expect(await pipeline.get(a.id)).toMatchObject({ state: "awaiting_test_check", queued: false });
+    expect(await pipeline.get(a.id)).toMatchObject({ state: "awaiting_approval", queued: false });
     expect(await pipeline.get(a2.id)).toMatchObject({ state: "awaiting_approval", queued: false });
   });
 
@@ -1137,13 +1150,11 @@ describe("a repo's monthly budget and the alerts", () => {
     stubs.plan("triage", costly(8.5), costly(8.5));
     stubs.plan("test_design", costly(0.6));
     const a = await pipeline.createTask({ title: "a", repoPath: "/r/a" });
+    // Triage spends 8.5 (80% of both ceilings), then the plan stage 0.6 (90%): one start, both lines.
     await pipeline.start(a.id);
     expect(alerts).toEqual([
       { scope: "task", taskId: a.id, repo: "/r/a", pct: 80, spentUsd: 8.5, limitUsd: 10 },
       { scope: "repo", taskId: a.id, repo: "/r/a", pct: 80, spentUsd: 8.5, limitUsd: 10 },
-    ]);
-    await pipeline.decide(a.id, "approved");
-    expect(alerts.slice(2)).toEqual([
       { scope: "task", taskId: a.id, repo: "/r/a", pct: 90, spentUsd: 9.1, limitUsd: 10 },
       { scope: "repo", taskId: a.id, repo: "/r/a", pct: 90, spentUsd: 9.1, limitUsd: 10 },
     ]);
@@ -1168,7 +1179,7 @@ describe("timer-approved plans", () => {
 
   it("approves a confident, low-risk plan by itself once the policy's minutes have passed", async () => {
     pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(10) });
-    stubs.plan("triage", confident());
+    stubs.plan("test_design", confident());
     const task = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
     await pipeline.start(task.id);
     await pipeline.tick();
@@ -1176,7 +1187,8 @@ describe("timer-approved plans", () => {
 
     await db.query("update approvals set created_at = now() - interval '11 minutes'");
     await pipeline.tick();
-    expect((await pipeline.get(task.id)).state).toBe("awaiting_test_check");
+    // The stubs carry it through to the shipping gate.
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_ship");
     expect((await pipeline.approvals(task.id))[0]).toMatchObject({
       decision: "approved",
       reason: "auto-approved after 10 min: triage reported high confidence and low risk",
@@ -1186,7 +1198,7 @@ describe("timer-approved plans", () => {
 
   it("never approves a Luna Notch task's plan: the notch's own AutoApproval decides (RFC 0004)", async () => {
     pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(10) });
-    stubs.plan("triage", confident(), confident());
+    stubs.plan("test_design", confident(), confident());
     const source = { kind: "notch", ref: "LUNA-14", id: "8f1c0d7e-0000-0000-0000-000000000000" } as const;
     const notch = await pipeline.createTask({ title: "n", repoPath: "/r/a", source });
     const tui = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
@@ -1196,7 +1208,7 @@ describe("timer-approved plans", () => {
     await pipeline.tick();
     expect((await pipeline.get(notch.id)).state).toBe("awaiting_approval");
     expect((await pipeline.events(notch.id)).map((e) => e.kind)).not.toContain("plan.auto_approved");
-    expect((await pipeline.get(tui.id)).state).toBe("awaiting_test_check");
+    expect((await pipeline.get(tui.id)).state).toBe("awaiting_ship");
   });
 
   it("keeps waiting when confidence is not high, risk is not low, triage asked questions, or the policy is off", async () => {
@@ -1210,7 +1222,7 @@ describe("timer-approved plans", () => {
     for (const [minutes, result] of cases) {
       await db.query("truncate tasks cascade");
       pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(minutes) });
-      stubs.plan("triage", result);
+      stubs.plan("test_design", result);
       const task = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
       const started = await pipeline.start(task.id);
       await db.query("update approvals set created_at = now() - interval '11 minutes'");
@@ -1409,19 +1421,18 @@ describe("per-stage caps", () => {
     const runnerFor = (stage: TaskState) => (stage === "test_design" ? holdOnce : stubs.runnerFor(stage));
     pipeline = new Pipeline(db, runnerFor, { inline: true, hasConfig: () => true, maxConcurrentTasks: 4, maxPerStage: { test_design: 1 } });
     const b = await newTask();
-    await pipeline.start(b.id);
-    // a is parked at test_design (inline, so after b's start: a loop's end fills the queue).
+    // a is parked at test_design, and takes its one slot (and holds).
     const a = await newTask();
     await db.query("update tasks set state = 'test_design', queued = true, queued_at = now() where id = $1", [a.id]);
-    // a takes test_design's one slot (and holds); b, approved, is parked before test_design.
     const ticked = pipeline.tick();
     await until(async () => held === 1, "a to hold test_design");
-    expect(await pipeline.decide(b.id, "approved")).toMatchObject({ state: "test_design", queued: true });
+    // b's triage passes; its plan stage is parked before test_design, whose slot is a's.
+    expect(await pipeline.start(b.id)).toMatchObject({ state: "test_design", queued: true });
     expect((await pipeline.events(b.id)).map((e) => e.kind)).toContain("stage.held");
     await pipeline.abort(a.id);
     await ticked;
     await pipeline.tick();
-    expect(await pipeline.get(b.id)).toMatchObject({ state: "awaiting_test_check", queued: false });
+    expect(await pipeline.get(b.id)).toMatchObject({ state: "awaiting_approval", queued: false });
   }, WIND_DOWN_TIMEOUT_MS);
 
   it("reads MACHINE_MAX_PER_STAGE as stage=n pairs", () => {
@@ -1801,7 +1812,7 @@ describe("concurrency", () => {
     expect(startedB).toMatchObject({ state: "triage", queued: true });
 
     finishFirst();
-    while ((await pipeline.get(a.id)).state === "triage") {
+    while ((await pipeline.get(a.id)).state !== "awaiting_approval") {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
@@ -1841,7 +1852,7 @@ describe("concurrency", () => {
     while (resolvers.length < 2) await new Promise((resolve) => setTimeout(resolve, 5));
     resolvers[1]?.();
 
-    while ((await pipeline.get(a.id)).state === "triage" || (await pipeline.get(b.id)).state === "triage") {
+    while ((await pipeline.get(a.id)).state !== "awaiting_approval" || (await pipeline.get(b.id)).state !== "awaiting_approval") {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
 
@@ -1864,6 +1875,9 @@ describe("events", () => {
 
     expect(seen).toEqual([
       "task.created",
+      "transition",
+      "stage.started",
+      "stage.finished",
       "transition",
       "stage.started",
       "stage.finished",

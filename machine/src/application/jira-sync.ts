@@ -107,12 +107,17 @@ export class JiraSync {
   }
 
   private async react(event: EventRow): Promise<void> {
-    if (event.kind !== "transition" && event.kind !== "stage.finished" && event.kind !== "sla.reminder") return;
+    if (event.kind !== "transition" && event.kind !== "stage.finished" && event.kind !== "sla.reminder" && event.kind !== "task.reply") return;
     const task = await this.options.pipeline.get(event.taskId);
     const link = jiraOf(task);
     if (!link) return;
     const policy = (await this.options.pipeline.policyFor(task.repoPath)).jira;
     if (!policy) return;
+
+    if (event.kind === "task.reply") {
+      if (policy.comments !== "none" && typeof event.payload.body === "string" && event.payload.body) await this.comment(link, event.payload.body);
+      return;
+    }
 
     if (event.kind === "sla.reminder") {
       // One line per gate entry (the tick records one); only for a repo that asked for gate comments.

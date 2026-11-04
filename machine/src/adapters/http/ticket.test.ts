@@ -45,20 +45,6 @@ const call = async (path: string, init?: RequestInit) => {
 const newTask = () => pipeline.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
 
 describe("PATCH /tasks/:id/cases", () => {
-  it("replaces the cases at the test check and answers the task", async () => {
-    stubs.plan("test_design", { outcome: "pass", detail: { summary: "s", cases: [{ title: "old", criterion: "c", approach: "a" }] } });
-    const task = await newTask();
-    await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved");
-    const cases = [{ title: "new", criterion: "c", approach: "a2" }];
-
-    const edited = await call(`/tasks/${task.id}/cases`, json({ cases }));
-    expect(edited).toMatchObject({ status: 200, body: { id: task.id, state: "awaiting_test_check" } });
-    const detail = await call(`/tasks/${task.id}`);
-    const approvals = detail.body.approvals as Array<{ kind: string; requested: Record<string, unknown> }>;
-    expect(approvals.find((a) => a.kind === "awaiting_test_check")?.requested).toMatchObject({ summary: "s", cases });
-  });
-
   it("is 409 no_cases away from the test check, and 400 for a malformed case", async () => {
     const task = await newTask();
     await pipeline.start(task.id);
@@ -69,22 +55,23 @@ describe("PATCH /tasks/:id/cases", () => {
   });
 });
 
-describe("PATCH /tasks/:id/plan at the test check", () => {
-  it("edits the approved plan once the test check is open", async () => {
-    stubs.plan("triage", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
+describe("PATCH /tasks/:id/plan at the plan gate", () => {
+  it("edits the plan the one gate shows", async () => {
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
     const task = await newTask();
     await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved");
 
     const edited = await call(`/tasks/${task.id}/plan`, json({ criteria: ["c1", "c2"] }));
-    expect(edited).toMatchObject({ status: 200, body: { state: "awaiting_test_check", criteria: ["c1", "c2"] } });
+    expect(edited).toMatchObject({ status: 200, body: { state: "awaiting_approval" } });
+    const detail = await call(`/tasks/${task.id}`);
+    const approvals = detail.body.approvals as Array<{ kind: string; requested: Record<string, unknown> }>;
+    expect(approvals.find((a) => a.kind === "awaiting_approval")?.requested).toMatchObject({ criteria: ["c1", "c2"] });
   });
 
   it("finishes every one of more concurrent edits on one task than the pool has connections", async () => {
-    stubs.plan("triage", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
     const task = await newTask();
     await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved");
     const { max } = (db.driver as unknown as { options: { extra: { max: number } } }).options.extra;
     const edits = Array.from({ length: max + 8 }, (_, i) => call(`/tasks/${task.id}/plan`, json({ brief: `b${i}` })));
     let timer: NodeJS.Timeout | undefined;
@@ -103,7 +90,6 @@ describe("GET /tasks/:id/diff", () => {
     const task = await newTask();
     await pipeline.start(task.id);
     await pipeline.decide(task.id, "approved");
-    await pipeline.decide(task.id, "approved");
 
     const all = await call(`/tasks/${task.id}/diff`);
     expect(all).toMatchObject({ status: 200, body: { base: "b", head: "h", files: [{ path: "a.ts", status: "M", added: 1, removed: 0 }] } });
@@ -121,7 +107,6 @@ describe("GET /tasks/:id/diff", () => {
     const task = await newTask();
     await pipeline.start(task.id);
     await pipeline.decide(task.id, "approved");
-    await pipeline.decide(task.id, "approved");
     for (const file of ["b.ts", "..", "*"]) {
       expect(await call(`/tasks/${task.id}/diff?file=${encodeURIComponent(file)}`)).toMatchObject({ status: 404, body: { error: "no_file" } });
     }
@@ -131,7 +116,6 @@ describe("GET /tasks/:id/diff", () => {
     stubs.plan("implementing", { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/broken" } });
     const task = await newTask();
     await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved");
     await pipeline.decide(task.id, "approved");
     expect(await call(`/tasks/${task.id}/diff`)).toMatchObject({ status: 500, body: { error: "internal" } });
   });
@@ -143,7 +127,6 @@ describe("GET /tasks/:id/diff", () => {
     stubs.plan("implementing", { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/wt/gone" } });
     const built = await newTask();
     await pipeline.start(built.id);
-    await pipeline.decide(built.id, "approved");
     await pipeline.decide(built.id, "approved");
     expect(await call(`/tasks/${built.id}/diff`)).toMatchObject({ status: 404, body: { error: "no_worktree" } });
   });

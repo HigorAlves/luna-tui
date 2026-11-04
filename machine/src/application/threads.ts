@@ -73,6 +73,8 @@ export class ThreadReplies {
       if (WAITING_ON_USER.has(to) && to !== from) return this.reply(event.taskId, `Needs you: ${ASKS[to] ?? to}.`);
       return;
     }
+    // A conversation outcome's answer, drafted by triage and approved in one click: posted as the ticket's reply.
+    if (event.kind === "task.reply") return typeof event.payload.body === "string" && event.payload.body ? this.reply(event.taskId, event.payload.body) : undefined;
     if (event.kind === "sla.reminder") {
       const gate = event.payload.gate as TaskState;
       return this.reply(event.taskId, `Still waiting on you: ${ASKS[gate] ?? gate}.`);

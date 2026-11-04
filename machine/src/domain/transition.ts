@@ -1,7 +1,7 @@
 // The pipeline as a pure function: given a task's state and an event, return the next
 // state and what the machine should do next. No database, no I/O, so every path is
 // unit tested. The graph is documented in docs/architecture.md.
-import { type ArchiveReason, type EscalationReason, RUNNING, TERMINAL, type TaskRoute, type TaskState } from "@hardness/contracts";
+import { type ArchiveReason, type EscalationReason, RUNNING, TERMINAL, type TaskRoute, type TaskState, type TriageOutcome } from "@hardness/contracts";
 
 /** Failures allowed in one retry loop (verify, e2e, ci) before asking you. */
 export const LOOP_CAP = 3;
@@ -34,12 +34,14 @@ export type StageOutcome = "pass" | "fail" | "needs_input" | "test_change" | "es
 export type PipelineEvent =
   /** `setup` when the repo has no luna.yaml yet: the setup gate runs before triage. */
   | { type: "start"; setup?: boolean }
-  | { type: "stage_done"; outcome: StageOutcome; reason?: string; escalation?: EscalationReason }
+  /** `triage` is the outcome triage picked; absent means `plan`. */
+  | { type: "stage_done"; outcome: StageOutcome; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
   | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
   | { type: "approved" }
-  | { type: "sent_back" }
+  /** `from` says which stage opened the gate: `triage` (a reply or an archive to confirm) or `plan` (the plan stage's scenarios). */
+  | { type: "sent_back"; from?: "triage" | "plan" }
   | { type: "rate_limited" }
   | { type: "window_reset" }
   | { type: "abort" }
@@ -179,7 +181,7 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       if (state === "draft") return run(task.route === "feature" && event.setup ? "setup" : ENTRY[task.route], retries);
       break;
     case "answered":
-      if (state === "awaiting_answers") return run("triage", retries);
+      if (state === "awaiting_answers") return run(task.resumeTo ?? "triage", retries);
       break;
     case "approved":
       return approved(task, event);
@@ -188,7 +190,7 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       // A review verdict sent back is dropped: the comment review already went out.
       if (task.route === "review" && state === "awaiting_ship") return done(retries);
       if (task.route !== "feature") break;
-      if (state === "awaiting_approval") return run("triage", retries);
+      if (state === "awaiting_approval") return run(event.from === "triage" ? "triage" : "test_design", retries);
       if (state === "awaiting_test_check") return run("test_design", retries);
       break;
     case "stage_done":
@@ -203,8 +205,8 @@ function gateStage(task: Snapshot): TaskState | null {
     case "awaiting_setup":
       return "setup";
     case "awaiting_answers":
+      return task.resumeTo ?? "triage";
     case "awaiting_approval":
-      return "triage";
     case "awaiting_test_check":
       return "test_design";
     case "awaiting_ship":
@@ -235,8 +237,8 @@ function approved(task: Snapshot, event: PipelineEvent): Move {
   if (state === "awaiting_setup") return task.route === "setup" ? done(retries) : run("triage", retries);
   if (task.route !== "feature") throw new TransitionError(task, event);
   switch (state) {
+    // The one approval, after the plan stage's scenarios; awaiting_test_check is the legacy gate.
     case "awaiting_approval":
-      return run("test_design", retries);
     case "awaiting_test_check":
       return enterImplementing(retries);
     case "awaiting_ship":
@@ -315,12 +317,14 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       if (outcome === "fail") return escalate("setup failed", "setup", retries);
       break;
     case "triage":
-      if (outcome === "pass") return wait("awaiting_approval", retries);
+      // A reply or an archive waits for one click; everything else goes to the plan stage.
+      if (outcome === "pass") return event.triage === "conversation" || event.triage === "archive" ? wait("awaiting_approval", retries) : run("test_design", retries);
       if (outcome === "needs_input") return wait("awaiting_answers", retries);
       if (outcome === "fail") return escalate("triage failed", "triage", retries);
       break;
     case "test_design":
-      if (outcome === "pass") return wait("awaiting_test_check", retries);
+      if (outcome === "pass") return wait("awaiting_approval", retries);
+      if (outcome === "needs_input") return { ...wait("awaiting_answers", retries), resumeTo: "test_design" };
       if (outcome === "fail") return escalate("test design failed", "test_design", retries);
       break;
     case "implementing":

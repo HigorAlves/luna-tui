@@ -64,7 +64,7 @@ describe("ThreadReplies", () => {
     ]);
 
     stubs.plan("delivering", { outcome: "pass", detail: { prUrl: "https://github.com/o/a/pull/7", prNumber: 7 } });
-    for (let i = 0; i < 4; i++) await pipeline.decide(task.id, "approved");
+    for (let i = 0; i < 3; i++) await pipeline.decide(task.id, "approved");
     await replies.idle();
     const bodies = comments.map((c) => c.at(-1));
     expect(bodies).toContain("PR opened: https://github.com/o/a/pull/7");

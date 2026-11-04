@@ -62,8 +62,7 @@ describe("JiraSync", () => {
     expect(jira.issues.get("PLAT-123")!.status).toBe("To Do");
 
     stubs.plan("delivering", { outcome: "pass", detail: { prUrl: "https://github.com/o/a/pull/7", prNumber: 7 } });
-    await pipeline.decide(task.id, "approved"); // plan → test_design → awaiting_test_check
-    await pipeline.decide(task.id, "approved"); // → implementing → … → awaiting_ship
+    await pipeline.decide(task.id, "approved"); // the plan → implementing → … → awaiting_ship
     await sync.idle();
     expect(jira.issues.get("PLAT-123")!.status).toBe("In Review");
     expect(jira.writes.filter((w) => w[0] === "transition").map((w) => w[2])).toEqual(["11", "21"]);
@@ -96,7 +95,6 @@ describe("JiraSync", () => {
     const task = await pipeline.createTask({ title: "Fix PLAT-123", repoPath: "/r/a" });
     await pipeline.start(task.id);
     await pipeline.decide(task.id, "approved");
-    await pipeline.decide(task.id, "approved");
     await sync.idle();
     // implementing wanted In Progress: already there, no write. awaiting_ship wanted Done: In Progress cannot reach Done.
     expect(jira.writes.filter((w) => w[0] === "transition")).toEqual([]);
@@ -116,7 +114,6 @@ describe("JiraSync", () => {
     jira.transition = refuse;
     const task = await pipeline.createTask({ title: "PLAT-123", repoPath: "/r/a" });
     await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved");
     await pipeline.decide(task.id, "approved"); // implementing: the move is refused; the task goes on to awaiting_ship
     await sync.idle();
     const mid = await pipeline.get(task.id);
@@ -138,7 +135,6 @@ describe("JiraSync", () => {
     stubs.plan("delivering", { outcome: "pass", detail: { prUrl: "https://github.com/o/a/pull/9" } });
     const task = await pipeline.createTask({ title: "PLAT-123 x", repoPath: "/r/a" });
     await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved");
     await pipeline.decide(task.id, "approved");
     await sync.idle();
     const write = jira.writes.find((w) => w[0] === "transition")!;
@@ -179,7 +175,6 @@ describe("JiraSync", () => {
     const t2 = await none.pipeline.createTask({ title: "PLAT-123 b", repoPath: "/r/a" });
     await none.pipeline.start(t2.id);
     await none.pipeline.decide(t2.id, "approved");
-    await none.pipeline.decide(t2.id, "approved");
     await none.sync.idle();
     expect(none.jira.comments["PLAT-123"]).toBeUndefined();
     expect(none.jira.issues.get("PLAT-123")!.status).toBe("In Review");
@@ -203,7 +198,6 @@ describe("JiraSync", () => {
     const task = await pipeline.createTask({ title: "PLAT-123", repoPath: "/r/a" });
     await pipeline.start(task.id);
     await pipeline.decide(task.id, "approved");
-    await pipeline.decide(task.id, "approved");
     await sync.idle();
     expect((await pipeline.get(task.id)).state).toBe("escalated");
     expect(jira.issues.get("PLAT-123")!.status).toBe("Blocked");
@@ -226,7 +220,6 @@ describe("JiraSync", () => {
     const task = await pipeline.createTask({ title: "PLAT-123", repoPath: "/r/a" });
     await pipeline.start(task.id);
     await pipeline.decide(task.id, "approved");
-    await pipeline.decide(task.id, "approved");
     await sync.idle();
     expect(jira.issues.get("PLAT-123")!.status).toBe("In Review");
     expect(jira.writes.filter((w) => w[0] === "transition").map((w) => w[2])).toEqual(["11", "21"]);
@@ -248,7 +241,6 @@ describe("JiraSync", () => {
     const task = await pipeline.createTask({ title: "PLAT-123", repoPath: "/r/a" });
     await pipeline.start(task.id);
     await pipeline.decide(task.id, "approved");
-    await pipeline.decide(task.id, "approved");
     release();
     await sync.idle();
     expect(jira.issues.get("PLAT-123")!.status).toBe("In Review");
@@ -260,7 +252,6 @@ describe("JiraSync", () => {
     stubs.plan("delivering", { outcome: "pass", detail: { prUrl: "https://github.com/o/a/pull/7", prNumber: 7 } });
     const task = await pipeline.createTask({ title: "Login", repoPath: "/r/a", source: { kind: "jira", key: "PLAT-123", url: `${SITE}/browse/PLAT-123`, issueType: "Bug" } });
     await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved");
     await pipeline.decide(task.id, "approved");
     await sync.idle();
     expect(jira.comments["PLAT-123"]).toEqual(["PR opened: https://github.com/o/a/pull/7"]);
@@ -277,7 +268,6 @@ describe("JiraSync", () => {
     jira.issues.get("PLAT-123")!.status = "In Progress";
     const task = await pipeline.createTask({ title: "Fix PLAT-123", repoPath: "/r/a" });
     await pipeline.start(task.id);
-    await pipeline.decide(task.id, "approved");
     await pipeline.decide(task.id, "approved");
     await sync.idle();
     expect((await pipeline.get(task.id)).jira?.blocked).toMatchObject({ wanted: "Done", current: "In Progress" });

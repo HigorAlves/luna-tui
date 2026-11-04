@@ -105,7 +105,7 @@ describe("the Jira routes", () => {
     // Linking the same task to its own issue again is a refresh, not a conflict.
     expect((await post(`/tasks/${first.id}/jira`, { key: "PLAT-123" })).status).toBe(200);
     await pipeline.start(first.id);
-    for (let i = 0; i < 4; i++) await pipeline.decide(first.id, "approved");
+    for (let i = 0; i < 3; i++) await pipeline.decide(first.id, "approved");
     expect((await pipeline.get(first.id)).state).toBe("closed");
     expect((await post(`/tasks/${second.id}/jira`, { key: "PLAT-123" })).status).toBe(200);
   });

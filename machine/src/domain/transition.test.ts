@@ -77,10 +77,9 @@ describe("happy path", () => {
   it("goes from draft to closed through every stage and gate", () => {
     const steps = play(at("draft"), [
       { type: "start" },
-      pass, // triage
-      approved, // plan
-      pass, // test design
-      approved, // test names
+      { type: "stage_done", outcome: "pass", triage: "plan" }, // triage
+      pass, // plan stage: planner, test design, checks
+      approved, // the one approval, after the scenarios
       pass, // implementing
       pass, // verifying
       pass, // e2e
@@ -94,9 +93,8 @@ describe("happy path", () => {
 
     expect(steps.map((s) => s.state)).toEqual([
       "triage",
-      "awaiting_approval",
       "test_design",
-      "awaiting_test_check",
+      "awaiting_approval",
       "implementing",
       "verifying",
       "e2e",
@@ -113,9 +111,16 @@ describe("happy path", () => {
   });
 
   it("asks to run each stage and to wait at each gate", () => {
-    const [started, triaged] = play(at("draft"), [{ type: "start" }, pass]);
+    const [started, triaged, planned] = play(at("draft"), [{ type: "start" }, pass, pass]);
     expect(started?.effect).toEqual({ kind: "run", stage: "triage" });
-    expect(triaged?.effect).toEqual({ kind: "wait", gate: "awaiting_approval" });
+    expect(triaged?.effect).toEqual({ kind: "run", stage: "test_design" });
+    expect(planned?.effect).toEqual({ kind: "wait", gate: "awaiting_approval" });
+  });
+
+  it("never reaches awaiting_test_check on the feature route (the state stays valid)", () => {
+    const steps = play(at("draft"), [{ type: "start" }, pass, pass, approved]);
+    expect(steps.map((s) => s.state)).not.toContain("awaiting_test_check");
+    expect(TaskState.options).toContain("awaiting_test_check");
   });
 });
 
@@ -128,8 +133,35 @@ describe("gates", () => {
     expect(steps.map((s) => s.state)).toEqual(["awaiting_answers", "triage"]);
   });
 
-  it("re-runs triage when the plan is sent back", () => {
-    expect(transition(at("awaiting_approval"), sentBack).state).toBe("triage");
+  it("runs the plan stage after triage, in the fast lane too, and waits for a person on a reply or an archive", () => {
+    for (const triage of ["plan", "fast_lane"] as const) {
+      expect(transition(at("triage"), { type: "stage_done", outcome: "pass", triage })).toMatchObject({ state: "test_design", effect: { kind: "run", stage: "test_design" } });
+    }
+    for (const triage of ["conversation", "archive"] as const) {
+      expect(transition(at("triage"), { type: "stage_done", outcome: "pass", triage })).toMatchObject({ state: "awaiting_approval", effect: { kind: "wait", gate: "awaiting_approval" } });
+    }
+  });
+
+  it("re-runs triage when a triage gate is sent back, and the plan stage when the plan is", () => {
+    expect(transition(at("awaiting_approval"), { type: "sent_back", from: "triage" }).state).toBe("triage");
+    expect(transition(at("awaiting_approval"), { type: "sent_back", from: "plan" }).state).toBe("test_design");
+    expect(transition(at("awaiting_approval"), sentBack).state).toBe("test_design");
+  });
+
+  it("asks the plan stage's questions at awaiting_answers and returns to that stage when they are answered", () => {
+    const steps = play(at("test_design"), [{ type: "stage_done", outcome: "needs_input" }, { type: "answered" }]);
+    expect(steps[0]).toMatchObject({ state: "awaiting_answers", resumeTo: "test_design" });
+    expect(steps[1]).toMatchObject({ state: "test_design", effect: { kind: "run", stage: "test_design" }, resumeTo: null });
+  });
+
+  it("approves the plan into the implementer", () => {
+    expect(transition(at("awaiting_approval"), approved)).toMatchObject({ state: "implementing", retries: { total: 1 } });
+  });
+
+  it("keeps awaiting_test_check's legacy edges", () => {
+    expect(transition(at("awaiting_test_check"), approved).state).toBe("implementing");
+    expect(transition(at("awaiting_test_check"), sentBack).state).toBe("test_design");
+    expect(transition(at("test_design"), { type: "stage_done", outcome: "pass" }).state).toBe("awaiting_approval");
   });
 
   it("re-runs the test designer when test names are sent back", () => {
@@ -318,7 +350,7 @@ describe("stop at a gate (a Luna Notch Stop)", () => {
   it.each<[TaskState, TaskState]>([
     ["awaiting_setup", "setup"],
     ["awaiting_answers", "triage"],
-    ["awaiting_approval", "triage"],
+    ["awaiting_approval", "test_design"],
     ["awaiting_test_check", "test_design"],
     ["awaiting_ship", "evidence"],
   ])("escalates a task at %s as stopped; a retry re-runs %s, the stage that opened the gate", (gate, stage) => {

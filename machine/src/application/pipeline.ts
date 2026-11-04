@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskRoute, type TaskSource, type TaskState, type TestCase, type EvidencePack, type TriageRecord, credentialOwner } from "@hardness/contracts";
+import { type ArchiveReason, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, TriageOutcome, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskRoute, type TaskSource, type TaskState, type TestCase, type EvidencePack, type TriageRecord, credentialOwner } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -155,6 +155,9 @@ interface DecisionRecord {
   reason?: string;
   response?: Record<string, unknown>;
 }
+
+/** Triage's archive reasons as the task's `ArchiveReason` keeps them (the set the board and the API pin). */
+const TRIAGE_ARCHIVE: Record<string, ArchiveReason> = { duplicate: "duplicate", out_of_scope: "not_for_agent", not_actionable: "not_for_agent", stale: "rejected" };
 
 interface Extra {
   /** Stage output to keep, e.g. triage questions shown at the next gate. */
@@ -610,15 +613,25 @@ export class Pipeline {
   }
 
   /** Approves or sends back whatever the task is waiting on, including an escalation. */
-  decide(
+  async decide(
     id: string,
     decision: "approved" | "sent_back",
     reason?: string,
     response?: Record<string, unknown>,
   ): Promise<TaskRow> {
-    const event: PipelineEvent =
-      decision === "approved" ? { type: "approved" } : { type: "sent_back" };
-    return this.dispatch(id, event, { decision: { decision, reason, ...(response ? { response } : {}) } });
+    const record = { decision, reason, ...(response ? { response } : {}) };
+    const task = await this.get(id);
+    const open = task.state === "awaiting_approval" ? (await this.approvals(id)).find((a) => a.kind === "awaiting_approval" && a.decision === null) : undefined;
+    const outcome = open?.requested.outcome;
+    if (decision === "approved" && (outcome === "archive" || outcome === "conversation")) {
+      // One click: a reply is posted on the ticket's thread and an archive is final; neither plans.
+      if (outcome === "conversation") await this.log(id, "task.reply", { body: String(open!.requested.reply ?? "") });
+      const why: ArchiveReason = outcome === "conversation" ? "not_for_agent" : TRIAGE_ARCHIVE[String(open!.requested.archiveReason)] ?? "rejected";
+      return this.archive(id, why, { decision: record });
+    }
+    // A gate that carries triage's outcome came from triage; any other open approval is the plan stage's.
+    const event: PipelineEvent = decision === "approved" ? { type: "approved" } : { type: "sent_back", from: outcome === undefined ? "plan" : "triage" };
+    return this.dispatch(id, event, { decision: record });
   }
 
   /** Stops the running (or merely queued) stage and waits for you. */
@@ -644,8 +657,8 @@ export class Pipeline {
    *  `onlyFrom`, for a caller that decided on a listed row). The row ends first, under its lock;
    *  a running stage is then stopped and waited out; only then do the close steps run, so the
    *  worktree is never removed under a container that still has it. */
-  async archive(id: string, reason: ArchiveReason, options: { onlyFrom?: ReadonlySet<TaskState> } = {}): Promise<TaskRow> {
-    const step = await this.apply(id, { type: "archive", reason }, { onlyFrom: options.onlyFrom });
+  async archive(id: string, reason: ArchiveReason, options: { onlyFrom?: ReadonlySet<TaskState>; decision?: DecisionRecord } = {}): Promise<TaskRow> {
+    const step = await this.apply(id, { type: "archive", reason }, { onlyFrom: options.onlyFrom, ...(options.decision ? { decision: options.decision } : {}) });
     this.loops.get(id)?.abort();
     await this.store.updateTask(id, { queued: false });
     clearTimeout(this.resumeTimers.get(id));
@@ -1201,6 +1214,7 @@ export class Pipeline {
                 type: "stage_done",
                 outcome: result.outcome,
                 ...(typeof result.detail?.reason === "string" ? { reason: result.detail.reason } : {}),
+                ...(stage === "triage" && TriageOutcome.safeParse(result.detail?.outcome).success ? { triage: result.detail!.outcome as TriageOutcome } : {}),
                 ...(EscalationReason.safeParse(result.detail?.escalation).success ? { escalation: result.detail!.escalation as EscalationReason } : {}),
               };
         const detail =
