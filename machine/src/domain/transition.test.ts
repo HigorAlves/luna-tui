@@ -20,6 +20,23 @@ const at = (state: TaskState, overrides: Partial<Snapshot> = {}): Snapshot => ({
   ...overrides,
 });
 
+describe("typed escalations", () => {
+  it("plan_wrong sends a feature task back to triage with its retries kept", () => {
+    const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2 } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "the plan names a module that does not exist" });
+    expect(step).toMatchObject({ state: "triage", effect: { kind: "run", stage: "triage" }, retries: { total: 2 }, reason: "the plan names a module that does not exist" });
+  });
+  it.each(["env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"] as const)("%s waits for a person", (escalation) => {
+    const step = transition(at("verifying"), { type: "stage_done", outcome: "escalated", escalation, reason: "r" });
+    expect(step).toMatchObject({ state: "escalated", resumeTo: "verifying", escalation });
+  });
+  it("plan_wrong on a PR route still escalates: there is no plan to redo", () => {
+    expect(transition(at("addressing", { route: "address" }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" }).state).toBe("escalated");
+  });
+  it("plan_wrong from triage itself waits for a person: re-running it would loop", () => {
+    expect(transition(at("triage"), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "r" }).state).toBe("escalated");
+  });
+});
+
 /** The route a state is only reachable on; everything else walks the feature pipeline. */
 const routeOf = (state: TaskState): TaskRoute => (state === "reviewing" ? "review" : state === "addressing" ? "address" : "feature");
 

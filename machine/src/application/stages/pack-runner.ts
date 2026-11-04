@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { type CiContext, type Ledger, PACKS, type PackId, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext } from "@hardness/contracts";
+import { type CiContext, EscalationReason, type Ledger, PACKS, type PackId, type ReviewContext, type RunSummary, type ServiceSpec, type TaskState, type ThreadsContext } from "@hardness/contracts";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { basename, join } from "node:path";
@@ -284,6 +284,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           summary: output.summary,
           reason: typeof stopped?.reason === "string" && stopped.reason ? stopped.reason : output.summary,
           options: Array.isArray(stopped?.options) ? stopped.options : [],
+          escalation: EscalationReason.safeParse(stopped?.escalation).data ?? "other",
         },
       }),
     );

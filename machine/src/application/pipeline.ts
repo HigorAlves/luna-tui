@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type BudgetAlert, type CredentialOwner, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskRoute, type TaskSource, type TaskState, type TestCase, type EvidencePack, type TriageRecord, credentialOwner } from "@hardness/contracts";
+import { type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskRoute, type TaskSource, type TaskState, type TestCase, type EvidencePack, type TriageRecord, credentialOwner } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -1184,6 +1184,7 @@ export class Pipeline {
                 type: "stage_done",
                 outcome: result.outcome,
                 ...(typeof result.detail?.reason === "string" ? { reason: result.detail.reason } : {}),
+                ...(EscalationReason.safeParse(result.detail?.escalation).success ? { escalation: result.detail!.escalation as EscalationReason } : {}),
               };
         const detail =
           result.needsInput?.length || result.requested?.length
@@ -1329,6 +1330,7 @@ export class Pipeline {
         payload: {
           event: event.type,
           ...(event.type === "stage_done" ? { outcome: event.outcome } : {}),
+          ...(step.escalation ? { escalation: step.escalation } : {}),
           from: task.state,
           to: step.state,
           ...(step.reason ? { reason: step.reason } : {}),
@@ -1355,7 +1357,7 @@ export class Pipeline {
         await tx.insertApproval({
           taskId: id,
           kind: step.effect.gate,
-          requested: { ...extra.detail, ...(step.reason ? { reason: step.reason } : {}) },
+          requested: { ...extra.detail, ...(step.reason ? { reason: step.reason } : {}), ...(step.escalation ? { escalation: step.escalation } : {}) },
         });
       }
       return { step, logged };

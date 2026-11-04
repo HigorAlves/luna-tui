@@ -10,7 +10,7 @@ import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
-import { Finding, LunaConfig, PackId, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
+import { EscalationReason, Finding, LunaConfig, PackId, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
 
 /** The agent roles. A pack names one; the runner looks its definition up by this. */
 export const AgentRole = z.enum([
@@ -66,6 +66,8 @@ export const SetupAnswer = z.object({
   config: LunaConfig.optional(),
   /** What the agent could not settle from the tree, for you to check: one line each. */
   notes: z.array(z.string()).optional(),
+  /** Why it escalated, when `kind` is "escalated". */
+  escalation: EscalationReason.optional(),
   reason: z.string().optional(),
   options: z.array(z.string()).optional(),
 });
@@ -108,6 +110,8 @@ export const ImplementingAnswer = z.object({
   summary: z.string(),
   commit: z.string().nullable().optional(),
   slices: z.object({ done: z.number().int(), total: z.number().int() }).optional(),
+  /** Why it escalated, when `kind` is "escalated". */
+  escalation: EscalationReason.optional(),
   reason: z.string().optional(),
   options: z.array(z.string()).optional(),
   request: z.string().optional(),
@@ -119,6 +123,8 @@ export const VerifyingAnswer = z.object({
   findings: z.array(Finding),
   results: z.array(VerifyResult).optional(),
   kind: z.enum(["escalated"]).optional(),
+  /** Why it escalated, when `kind` is "escalated". */
+  escalation: EscalationReason.optional(),
   reason: z.string().optional(),
   options: z.array(z.string()).optional(),
 });
@@ -127,6 +133,8 @@ export const E2eAnswer = z.object({
   verdict: z.enum(["pass", "fail", "partial", "skipped"]),
   summary: z.string(),
   kind: z.enum(["done", "escalated"]).optional(),
+  /** Why it escalated, when `kind` is "escalated". */
+  escalation: EscalationReason.optional(),
   reason: z.string().optional(),
   options: z.array(z.string()).optional(),
   criteria: z
@@ -144,6 +152,8 @@ export const CiWatchAnswer = z.object({
   runUrl: z.string().nullable().optional(),
   findings: z.array(Finding),
   requested: z.array(Requested).optional(),
+  /** Why it escalated, when `kind` is "escalated". */
+  escalation: EscalationReason.optional(),
   reason: z.string().optional(),
   options: z.array(z.string()).optional(),
 });
@@ -167,6 +177,8 @@ export const PrReviewAnswer = z.object({
   comments: z.array(
     z.object({ path: z.string(), line: z.number().int(), side: z.enum(["RIGHT", "LEFT"]).default("RIGHT"), body: z.string() }),
   ),
+  /** Why it escalated, when `kind` is "escalated". */
+  escalation: EscalationReason.optional(),
   reason: z.string().optional(),
   options: z.array(z.string()).optional(),
 });
@@ -177,6 +189,8 @@ export const PrAddressAnswer = z.object({
   summary: z.string(),
   commit: z.string().nullable().optional(),
   replies: z.array(z.object({ threadId: z.string(), body: z.string(), resolve: z.boolean() })),
+  /** Why it escalated, when `kind` is "escalated". */
+  escalation: EscalationReason.optional(),
   reason: z.string().optional(),
   options: z.array(z.string()).optional(),
 });

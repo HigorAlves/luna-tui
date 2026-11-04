@@ -393,6 +393,12 @@ export const TaskClassification = z.object({
 });
 export type TaskClassification = z.infer<typeof TaskClassification>;
 
+/** Why a stage stopped on purpose: `plan_wrong` the plan cannot be built as written (triage runs again),
+ *  `env_broken` the sandbox or toolchain is, `flaky_tests` the tests do not hold still, `too_complex`
+ *  the work is bigger than one stage, `undeclared_scope` it needs files or packages the plan did not name. */
+export const EscalationReason = z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"]);
+export type EscalationReason = z.infer<typeof EscalationReason>;
+
 /** How risky a change or a ticket reads: on one scale for the triage record and the evidence pack. */
 export const Risk = z.enum(["none", "low", "medium", "high"]);
 export type Risk = z.infer<typeof Risk>;

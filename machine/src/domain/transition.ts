@@ -1,7 +1,7 @@
 // The pipeline as a pure function: given a task's state and an event, return the next
 // state and what the machine should do next. No database, no I/O, so every path is
 // unit tested. The graph is documented in docs/architecture.md.
-import { RUNNING, type TaskRoute, type TaskState } from "@hardness/contracts";
+import { type EscalationReason, RUNNING, type TaskRoute, type TaskState } from "@hardness/contracts";
 
 /** Failures allowed in one retry loop (verify, e2e, ci) before asking you. */
 export const LOOP_CAP = 3;
@@ -34,7 +34,7 @@ export type StageOutcome = "pass" | "fail" | "needs_input" | "test_change" | "es
 export type PipelineEvent =
   /** `setup` when the repo has no luna.yaml yet: the setup gate runs before triage. */
   | { type: "start"; setup?: boolean }
-  | { type: "stage_done"; outcome: StageOutcome; reason?: string }
+  | { type: "stage_done"; outcome: StageOutcome; reason?: string; escalation?: EscalationReason }
   | { type: "answered" }
   | { type: "approved" }
   | { type: "sent_back" }
@@ -61,6 +61,8 @@ export interface Step extends Snapshot {
   effect: Effect;
   /** Why the task was escalated, for the board. */
   reason?: string;
+  /** The typed reason an escalating stage gave, when it gave one. */
+  escalation?: EscalationReason;
 }
 
 /** A step before the route is stamped on it: what the graph functions build. */
@@ -291,7 +293,12 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
 
   // The agent stopped on purpose and says why: a human decides, so no retry is spent.
   if (outcome === "escalated" && RUNNING.has(state)) {
-    return escalate(event.reason || `${state} escalated`, state, retries);
+    // A plan that cannot be built as written goes back to triage, retries kept; on a PR route there
+    // is no plan to redo, and triage itself cannot send the task to triage.
+    if (event.escalation === "plan_wrong" && task.route === "feature" && state !== "triage" && state !== "setup") {
+      return { ...run("triage", retries), reason: event.reason };
+    }
+    return { ...escalate(event.reason || `${state} escalated`, state, retries), ...(event.escalation ? { escalation: event.escalation } : {}) };
   }
   if (task.route !== "feature" && task.route !== "setup") return prStageDone(task, event);
 

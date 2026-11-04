@@ -77,7 +77,7 @@ describe("renderPrompt", () => {
 
   it("names each pack's own escalation shape: questions, escalated, needs_brief, or none", () => {
     expect(escalationLine(PACKS.test_design)).toContain('kind "questions"');
-    for (const id of ["setup", "implementing", "verifying", "e2e", "ci_watch", "reviewing", "addressing"] as const) expect(escalationLine(PACKS[id])).toContain('kind "escalated" with reason and options[]');
+    for (const id of ["setup", "implementing", "verifying", "e2e", "ci_watch", "reviewing", "addressing"] as const) expect(escalationLine(PACKS[id])).toContain('kind "escalated" with escalation (plan_wrong · env_broken · flaky_tests · too_complex · undeclared_scope · other), reason and options[]');
     expect(escalationLine(PACKS.jira_intake)).toContain('verdict "needs_brief"');
     expect(escalationLine(PACKS.slack_triage)).toContain("no escalation");
     expect(escalationLine(PACKS.reviewing_memory)).toContain("no escalation");

@@ -178,7 +178,7 @@ export function escalationLine(pack: Pack): string {
   const kinds = properties.kind?.enum ?? [];
   const verdicts = properties.verdict?.enum ?? [];
   if (kinds.includes("questions")) return 'A question you cannot settle from the stage input ends the stage: answer kind "questions" (at most three, each with a recommended answer).';
-  if (kinds.includes("escalated")) return 'What you cannot settle from the stage input ends the stage: answer kind "escalated" with reason and options[].';
+  if (kinds.includes("escalated")) return 'What you cannot settle from the stage input ends the stage: answer kind "escalated" with escalation (plan_wrong · env_broken · flaky_tests · too_complex · undeclared_scope · other), reason and options[].';
   if (verdicts.includes("needs_brief")) return 'What you cannot settle from the issue ends the stage: verdict "needs_brief" with reason and questions[] (at most three, each with a recommended answer).';
   return "This stage has no escalation: settle what the input leaves open with the rules in your prompt.";
 }

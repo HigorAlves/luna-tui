@@ -151,7 +151,15 @@ describe("agent stages through packs", () => {
     const run = runners(fakeSandbox(output({ ...over, summary: "stopped", answer })));
     const result = await run.implementing!(context("implementing"));
     expect(result.outcome).toBe("escalated");
-    expect(result.detail).toMatchObject({ reason: "needs a new dependency", options: ["add it", "drop it"] });
+    expect(result.detail).toMatchObject({ reason: "needs a new dependency", options: ["add it", "drop it"], escalation: "other" });
+  });
+
+  it("carries the agent's typed escalation reason, and reads one off the enum as other", async () => {
+    const answer = { kind: "escalated", summary: "stopped", reason: "the plan names a module that does not exist", options: [], escalation: "plan_wrong" };
+    const wrong = await runners(fakeSandbox(output({ schema: 2 as const, outcome: "escalated" as const, summary: "stopped", answer }))).implementing!(context("implementing"));
+    expect(wrong.detail).toMatchObject({ escalation: "plan_wrong" });
+    const off = await runners(fakeSandbox(output({ schema: 2 as const, outcome: "escalated" as const, summary: "stopped", answer: { ...answer, escalation: "gremlins" } }))).implementing!(context("implementing"));
+    expect(off.detail).toMatchObject({ escalation: "other" });
   });
 
   it("refuses to write on a branch the pipeline does not own, whatever the task row says", async () => {
