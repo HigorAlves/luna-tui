@@ -170,6 +170,8 @@ async function run(ctx: RunContext, options: EveOptions): Promise<RunOutcome> {
         LUNA_EVE_SCRATCH: paths.scratch,
         LUNA_EVE_GUARD: JSON.stringify(guard),
         LUNA_EVE_BRIDGE_URL: served.url,
+        // Laminar's key for agent/laminar.ts; its address (LMNR_BASE_URL, LMNR_GRPC_PORT) passes through serverEnv as it is.
+        ...(env.LMNR_PROJECT_API_KEY ? { LMNR_PROJECT_API_KEY: env.LMNR_PROJECT_API_KEY } : {}),
       }),
       stdio: ["ignore", "pipe", "pipe"],
     });

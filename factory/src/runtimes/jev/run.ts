@@ -8,6 +8,7 @@ import { type QuestionSet, type ResolvedEngine, lowestBar } from "@hardness/cont
 
 import { decisionSummary, stateOf } from "../../core/decide.ts";
 import { EMPTY_RUN, type RunOutcome } from "../../core/output.ts";
+import { NO_TELEMETRY } from "../../core/telemetry.ts";
 import { NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
 import { gatewayTransport } from "./gateway.ts";
 import { typesafeTransport } from "./typesafe.ts";
@@ -60,7 +61,7 @@ export function jevRuntime(transport: () => JevTransport = jevTransport): Runtim
     },
     // No role, rules or skills: the pack's questions are all it is told.
     instructions: () => NO_INSTRUCTIONS,
-    async run({ pack, engine, input, dry, emit }: RunContext): Promise<RunOutcome> {
+    async run({ pack, engine, input, dry, emit, telemetry }: RunContext): Promise<RunOutcome> {
       if (pack.kind !== "decision") return { ...EMPTY_RUN, error: `pack ${pack.id} is not a decision pack` };
       const t0 = Date.now();
       let via: JevTransport | null = null;
@@ -74,6 +75,13 @@ export function jevRuntime(transport: () => JevTransport = jevTransport): Runtim
             structured = process.env.LUNA_STAGE_DRY_STRUCTURED ? (JSON.parse(process.env.LUNA_STAGE_DRY_STRUCTURED) as Record<string, unknown>) : null; // test seam
           } catch {}
           return { ...EMPTY_RUN, ok: true, structured, text: "dry-run" };
+        }
+        // Laminar's AI SDK integration, for the Gateway path (experimental_decide); TypeSafe's SDK has none.
+        if (via.via === "gateway") {
+          await (telemetry ?? NO_TELEMETRY).aiSdk(async (integration) => {
+            const { registerTelemetry } = await import("ai");
+            registerTelemetry(integration as Parameters<typeof registerTelemetry>[0]);
+          });
         }
         const reply = await via.decide(call, AbortSignal.timeout(deadlineMs(input.limits.timeoutMs)));
         const durationMs = Date.now() - t0;

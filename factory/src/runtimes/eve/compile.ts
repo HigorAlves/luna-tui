@@ -83,6 +83,7 @@ export function agentFiles(pack: AgentPack, options: CompileOptions): Record<str
   const app = join(options.outDir, name);
   const lib = join(options.factoryRoot, "src", "runtimes", "eve");
   const fromAgent = (file: string) => importPath(join(app, "agent"), join(lib, file));
+  const fromInstrumentation = (file: string) => importPath(join(app, "agent", "instrumentation"), join(lib, file));
   const fromTools = (file: string) => importPath(join(app, "agent", "tools"), join(lib, file));
 
   const model =
@@ -130,6 +131,7 @@ export function agentFiles(pack: AgentPack, options: CompileOptions): Record<str
     "agent/instructions.md": instructions,
     "agent/channels/eve.ts": `export { default } from "${importPath(join(app, "agent", "channels"), join(lib, "agent", "channel.ts"))}";\n`,
     "agent/sandbox.ts": `export { default, environment } from "${fromAgent("sandbox.ts")}";\n`,
+    "agent/instrumentation/laminar.ts": `export { default } from "${fromInstrumentation("agent/laminar.ts")}";\n`,
     ...tools,
   };
 }

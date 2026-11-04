@@ -58,6 +58,7 @@ describe("agentFiles", () => {
     expect(files["agent/tools/web_fetch.ts"]).toBe('export { web_fetch as default } from "../../../../src/runtimes/eve/agent/tools.ts";\n');
     expect(files["agent/channels/eve.ts"]).toContain("src/runtimes/eve/agent/channel.ts");
     expect(files["agent/sandbox.ts"]).toContain("src/runtimes/eve/sandbox.ts");
+    expect(files["agent/instrumentation/laminar.ts"]).toBe('export { default } from "../../../../src/runtimes/eve/agent/laminar.ts";\n');
   });
 
   it("compiles web_fetch in only for a pack with the web", () => {

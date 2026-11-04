@@ -22,6 +22,7 @@ import { runInfo } from "./core/fingerprint.ts";
 import { lunaHandlers } from "./core/luna-tools.ts";
 import { EMPTY_RUN, type RunOutcome, finish, settle } from "./core/output.ts";
 import { renderPrompt } from "./core/render.ts";
+import { factoryTelemetry } from "./core/telemetry.ts";
 import { readJson, readStageInput } from "./core/stage-io.ts";
 import { transcript } from "./core/transcript.ts";
 import { RUNTIMES } from "./runtimes/index.ts";
@@ -53,6 +54,10 @@ const emit: Emit = (event) => {
 const checkWaitMs = DRY ? 0 : Number(env.LUNA_CHECK_WAIT_MS ?? 90_000);
 const luna = lunaHandlers({ ledgerPath: join(OUT, "ledger.json"), ledger: input.context.ledger ?? null, decisions: input.decisions, emit, checksDir: join(OUT, "checks"), checkWaitMs: Number.isFinite(checkWaitMs) ? checkWaitMs : 90_000 });
 
+// Laminar, when the machine's traces are on: this run's spans nest under the machine's span for it.
+const telemetry = await factoryTelemetry(env);
+if (telemetry.on) out("luna factory · traces on (Laminar)");
+
 out(`luna factory · pack ${pack.id} as ${pack.kind === "decision" ? "a decision" : (pack.agent ?? "script")} (attempt ${input.attempt})`);
 
 // Script-only pack (evidence): no model. The outcome comes from the QA manifest e2e left.
@@ -79,6 +84,8 @@ try {
 } finally {
   rmSync(scratch, { recursive: true, force: true });
 }
+// The spans must leave before the process exits.
+await telemetry.flush();
 // A rate limit, however the runtime learned of it, is one event.
 if (run.rateLimited) emit({ kind: "rate_limit", payload: { resetsAt: run.resetsAt } });
 finish(OUT, pack, run, { ledger: luna.state.ledger, events, run: info });
@@ -106,7 +113,7 @@ async function runStage(): Promise<RunOutcome> {
   // so far are its calls so far, which is never fewer.
   const turnsUsed = () => events.filter((e) => e.kind === "tool_call").length;
   const delegating = delegationFor(runtime.id, { pack, input: input!, paths, runtimes: RUNTIMES, emit, print: out, startedAt, turnsUsed });
-  const run = await runtime.run({ pack, engine, input: input!, prompt, paths, luna: withDelegate(luna, delegating), dry: DRY, emit, delegate: delegating?.tool ?? null });
+  const run = await runtime.run({ pack, engine, input: input!, prompt, paths, luna: withDelegate(luna, delegating), dry: DRY, emit, delegate: delegating?.tool ?? null, telemetry });
   // A dry run answers nothing unless the test seam gave it an answer; that one is settled.
   return withChildren(DRY && run.structured === null ? run : settle(run, pack), delegating);
 }

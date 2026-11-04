@@ -5,6 +5,7 @@ import type { Pack, ResolvedEngine, RuntimeId, StageInput } from "@hardness/cont
 import type { DelegateTool } from "./delegate.ts";
 import type { Emit } from "./events.ts";
 import type { RunOutcome } from "./output.ts";
+import type { FactoryTelemetry } from "./telemetry.ts";
 
 export interface RunContext {
   pack: Pack;
@@ -37,6 +38,9 @@ export interface RunContext {
    *  (core/delegate.ts): a runtime serves it beside the luna tools, its calls go to `luna.call`.
    *  Null in a child: delegation has depth 1. */
   delegate?: DelegateTool | null;
+  /** Laminar inside the container (core/telemetry.ts): wraps query(), registers the AI SDK; off
+   *  (NO_TELEMETRY) when the machine passed no key, and when a test builds the context without it. */
+  telemetry?: FactoryTelemetry;
 }
 
 /** What a runtime gives the model besides the prompt, as its fingerprint reads it (core/fingerprint.ts). */

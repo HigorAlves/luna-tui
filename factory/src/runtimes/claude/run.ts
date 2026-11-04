@@ -15,6 +15,7 @@ import { GRAPH_ROOT } from "../../core/roots.ts";
 
 import { EMPTY_RUN, type RunOutcome, timeRanOut } from "../../core/output.ts";
 import { FACTORY_RULES } from "../../core/render.ts";
+import { NO_TELEMETRY } from "../../core/telemetry.ts";
 import { type Instructions, NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
 import { claudeTools } from "./access.ts";
 import { PLUGIN_NAME, agentDefinitions } from "./agents.ts";
@@ -157,7 +158,8 @@ async function drive(ctx: RunContext, transport: Transport | undefined, prompt: 
     abortController.abort();
   }, deadline);
   try {
-    const query = transport ?? (await import("@anthropic-ai/claude-agent-sdk")).query;
+    // Laminar's Claude Agent SDK integration: every turn, tool call and subagent as a span, when on.
+    const query = (ctx.telemetry ?? NO_TELEMETRY).wrapQuery(transport ?? (await import("@anthropic-ai/claude-agent-sdk")).query);
     const raw = env.LUNA_STAGE_DEBUG === "1" ? join(paths.out, "raw.jsonl") : null;
     for await (const msg of query({ prompt, options: { ...options, abortController } })) {
       if (raw) appendFileSync(raw, `${JSON.stringify(msg)}\n`);
