@@ -1,0 +1,165 @@
+{
+  "schema": 1,
+  "pack": "issue_classify",
+  "engine": "claude:haiku",
+  "judge": "claude:opus",
+  "at": "2026-11-04T01:51:58.953Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 3,
+    "passed": 3,
+    "passRate": 1,
+    "meanJudgeScore": 0.9333333333333332,
+    "meanTurns": 2,
+    "meanDurationMs": 2898.3333333333335,
+    "costUsd": 0.0010917700000000002,
+    "judgeCostUsd": 0.0447141
+  },
+  "cases": [
+    {
+      "id": "board-key-panic",
+      "pass": true,
+      "schema": {
+        "check": "answer on the issue_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice = \"bug\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "area.choice = \"board\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "ready.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "size.score within 0..1.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": {
+        "score": 0.95,
+        "pass": true,
+        "reasons": [
+          "kind: bug at 0.97 fits the issue. It reports a panic ('index out of bounds') and gives steps, actual and expected behaviour.",
+          "area: board at 0.97 fits. The issue names board/src/pr_view.rs and carries the 'board' label. The rubric says high confidence is right here.",
+          "ready: true with p 0.9 fits. The issue has steps to reproduce, the actual behaviour, the expected behaviour and the file, so an agent can take it.",
+          "size: 0.5 with confidence 0.8 fits the rubric's 'small: one function and its test'. The 0.8 is a little cautious but reasonable."
+        ],
+        "costUsd": 0.007170400000000001
+      },
+      "turns": 2,
+      "durationMs": 1781,
+      "costUsd": 0.00031552,
+      "model": "claude-haiku-5-5"
+    },
+    {
+      "id": "judge-engine-question",
+      "pass": true,
+      "schema": {
+        "check": "answer on the issue_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice = \"question\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "ready.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": {
+        "score": 0.9,
+        "pass": true,
+        "reasons": [
+          "ready.p 0.3 is somewhat high: the issue says outright that no code change is asked for and it has no criteria an agent could verify, so readiness should be close to 0.",
+          "size 0.5 at confidence 0.5 adds nothing for a request that asks for a decision, though it is honestly hedged rather than wrong.",
+          "kind.choice question at confidence 0.9 matches the issue, which asks 'looking for a decision… no code change asked for yet'.",
+          "area.choice factory is a fair reading (factory and contracts are both plausible), and the low 0.35 confidence matches the rubric's call for honesty about that.",
+          "ready.value false is correct: the issue has no acceptance criteria an agent could verify."
+        ],
+        "costUsd": 0.018796
+      },
+      "turns": 2,
+      "durationMs": 4746,
+      "costUsd": 0.00041564,
+      "model": "claude-haiku-5-5"
+    },
+    {
+      "id": "zod-upgrade-contracts",
+      "pass": true,
+      "schema": {
+        "check": "answer on the issue_classify schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice = \"chore\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "area.choice = \"contracts\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "ready.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "size.score within 0.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": {
+        "score": 0.95,
+        "pass": true,
+        "reasons": [
+          "kind: chore (0.93) is right. The issue is a zod bump that switches call sites and says 'no behaviour change', so it is not a feature.",
+          "area: contracts (0.95) is right. The work touches only contracts/package.json and contracts/src (stage.ts, api.ts), not machine.",
+          "ready: true (p 0.9) is right. The issue says how to verify it: the pnpm --filter @hardness/contracts test and typecheck pass with no deprecation warnings.",
+          "size: 1.2 fits small to medium for a version bump plus a handful of call sites in two files. Confidence 0.75 is a sensible hedge.",
+          "Small gap: the answer gives no rationale, so a reader cannot see why it chose these labels. The output shape may not allow one."
+        ],
+        "costUsd": 0.0187477
+      },
+      "turns": 2,
+      "durationMs": 2168,
+      "costUsd": 0.00036061000000000003,
+      "model": "claude-haiku-5-5"
+    }
+  ]
+}
