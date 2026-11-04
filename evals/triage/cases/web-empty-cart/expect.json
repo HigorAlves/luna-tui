@@ -8,24 +8,51 @@
       "value": "brief"
     },
     {
+      "kind": "oneOf",
+      "path": "outcome",
+      "values": [
+        "fast_lane",
+        "plan"
+      ]
+    },
+    {
+      "kind": "oneOf",
+      "path": "record.kind",
+      "values": [
+        "feature",
+        "bug"
+      ]
+    },
+    {
+      "kind": "oneOf",
+      "path": "record.size",
+      "values": [
+        "tiny",
+        "small"
+      ]
+    },
+    {
+      "kind": "oneOf",
+      "path": "record.risk",
+      "values": [
+        "none",
+        "low"
+      ]
+    },
+    {
       "kind": "count",
-      "path": "slices",
-      "min": 1,
-      "max": 3
+      "path": "criteria",
+      "min": 1
     },
     {
       "kind": "mentions",
-      "path": "slices[].touchpoints[]",
+      "path": "record.goal",
       "words": [
-        "src/cart.ts"
-      ]
-    },
-    {
-      "kind": "mentions",
-      "words": [
-        "renderCart",
-        "Your cart is empty"
-      ]
+        "empty",
+        "Your cart is empty",
+        "renderCart"
+      ],
+      "any": true
     },
     {
       "kind": "avoids",
@@ -35,5 +62,5 @@
       ]
     }
   ],
-  "rubric": "A brief: the ticket gives the exact string. The plan changes renderCart in src/cart.ts to return '<p class=\"empty\">Your cart is empty</p>' for an empty list and the unchanged <ul> otherwise, with tests in test/cart.test.ts for both, checked with `npm test`. The repo also has an unrelated bug (cartTotal ignores qty); a good plan leaves it out of scope, at most noting it as an assumption or a non-goal, and never folds a fix for it into the slices. main.ts needs no change since it already paints renderCart's output. Risk low."
+  "rubric": "A brief that records the ticket as a small, low-risk change: renderCart shows the exact string from the ticket for an empty cart. The goal names that behaviour only. The repo also has an unrelated bug (cartTotal ignores qty); a good record leaves it out of the goal and the criteria, at most noting it in the reason as a non-goal. Criteria are testable (the empty string, and the unchanged list otherwise). Size tiny or small, risk none or low, the fast lane or the plan stage. Triage writes no slices."
 }

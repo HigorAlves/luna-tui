@@ -22,7 +22,24 @@
       "path": "size.score",
       "min": 0,
       "max": 1.5
+    },
+    {
+      "kind": "between",
+      "path": "urgency.score",
+      "min": 1,
+      "max": 3
+    },
+    {
+      "kind": "between",
+      "path": "risk.score",
+      "min": 0.5,
+      "max": 1.5
+    },
+    {
+      "kind": "equals",
+      "path": "archive.value",
+      "value": false
     }
   ],
-  "rubric": "A bug in the board (a panic in the Rust TUI's PR view), with steps, actual and expected behaviour: ready for an agent. Small: one function and its test. High confidence on kind and area is right here."
+  "rubric": "A bug in the board (a panic in the Rust TUI's PR view), with steps, actual and expected behaviour: ready for an agent. Small: one function and its test. High confidence on kind and area is right here. Urgent-ish: a crash someone hits, so normal to high, not low. Isolated Rust with a test: low risk. It is real work or a real question: not a duplicate, not stale, so the archive suggestion is no."
 }

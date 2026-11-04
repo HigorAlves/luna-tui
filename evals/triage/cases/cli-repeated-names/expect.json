@@ -8,40 +8,52 @@
       "value": "brief"
     },
     {
+      "kind": "oneOf",
+      "path": "outcome",
+      "values": [
+        "fast_lane",
+        "plan"
+      ]
+    },
+    {
+      "kind": "oneOf",
+      "path": "record.kind",
+      "values": [
+        "bug"
+      ]
+    },
+    {
+      "kind": "oneOf",
+      "path": "record.size",
+      "values": [
+        "tiny",
+        "small"
+      ]
+    },
+    {
+      "kind": "oneOf",
+      "path": "record.risk",
+      "values": [
+        "none",
+        "low"
+      ]
+    },
+    {
       "kind": "count",
-      "path": "slices",
-      "min": 1,
-      "max": 2
+      "path": "criteria",
+      "min": 1
     },
     {
       "kind": "mentions",
-      "path": "slices[].touchpoints[]",
+      "path": "record.goal",
       "words": [
-        "main.go"
-      ]
-    },
-    {
-      "kind": "mentions",
-      "path": "summary",
-      "words": [
-        "main.go"
-      ]
-    },
-    {
-      "kind": "mentions",
-      "words": [
-        "+=",
-        "add up",
+        "repeated",
+        "same name",
         "sum",
+        "add up",
         "accumulat"
       ],
       "any": true
-    },
-    {
-      "kind": "mentions",
-      "words": [
-        "go test"
-      ]
     },
     {
       "kind": "avoids",
@@ -51,5 +63,5 @@
       ]
     }
   ],
-  "rubric": "A brief: the ticket is precise. The plan places the bug in Run in main.go, where `totals[name] = amount` overwrites instead of adding (`+=`), fixes it in one small slice and adds a test case in main_test.go with a repeated name (the ticket's alice/bob input), checked with `go test ./...`. Output stays sorted by name and the existing error handling for bad lines and amounts is kept. No new features (blank lines and comments are a different ticket), no refactor of main(). Risk none or low."
+  "rubric": "A brief that records the ticket and sends it to the fast lane (or the plan stage): a precise bug, the sum of repeated names in Run in main.go, tiny or small, risk none or low. The record's goal is one sentence about repeated names adding up instead of overwriting; criteria keep every ticket criterion and make each testable (the alice/bob input prints the sum, output stays sorted, bad lines and amounts keep their errors). Triage writes no slices and no assumptions: the planner does. No archive, no reply: the ticket asks for a change."
 }

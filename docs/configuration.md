@@ -104,12 +104,13 @@ toolchains: { node: "24", rust: "1.99" }  # what the repo builds with; recorded 
 policy:
   qa: web                                 # web (default) runs e2e when the change renders; none never does
   monthly_budget_usd: 40                  # this repo's tasks park once the calendar month has cost this much
-  auto_approve_plan_minutes: 15           # a plan triage marked high confidence / low risk is approved by itself after this long
+  auto_approve_plan_minutes: 15           # a plan whose risk is low and whose checks (coverage, plan, risk) all proceeded is approved by itself after this long
   max_concurrent: 1                       # running tasks this repo may hold at once (over MACHINE_MAX_PER_REPO)
   holdout_cases: false                    # true keeps test_design's cases away from the implementer; verifying still judges by them
   decisions:                              # per decision pack, per question: when an answer is acted on (proceed) and when a person decides (below flag)
-    triage_signals:
+    triage_signals:                       # also risk_score, coverage_check and plan_check; a question left out keeps the pack's bar
       kind: { proceed: 0.8, flag: 0.5 }
+      archive: { proceed: 0.95 }          # archiving by machine wants a higher bar than labelling (the pack's own: 0.9 / 0.7)
 qa_targets:                               # where e2e may drive the app; the credential is a reference, never a value
   - { name: staging, url: https://stg.example.com, credential: env:QA_PASSWORD }
 jira:                                     # how this repo's tasks talk to Jira (needs MACHINE_JIRA_SITE/EMAIL/TOKEN)
@@ -185,4 +186,4 @@ Inside a stage container the runner sees `/in/stage.json`, `/out`, `/work` (the 
 
 ## Board
 
-The board uses whichever machine answers: `http://127.0.0.1:4317` (`pnpm dev`) first, then `http://127.0.0.1:4318` (`pnpm start`), checked again on every reconnect. `HARDNESS_MACHINE_URL` pins one address instead. When `MACHINE_API_TOKEN` or `~/.config/hardness/machine-api-token` holds a token, the board sends it on every call. `HARDNESS_REPOS_DIR` is where the board's repo search (`R`) looks for repos (default `~/Developer`).
+The board uses whichever machine answers: `http://127.0.0.1:4317` (`pnpm dev`) first, then `http://127.0.0.1:4318` (`pnpm start`), checked again on every reconnect. `HARDNESS_MACHINE_URL` pins one address instead. When `MACHINE_API_TOKEN` or `~/.config/hardness/machine-api-token` holds a token, the board sends it on every call. `HARDNESS_REPOS_DIR` is where the board's repo search (`R`) looks for repos (default `~/Developer`). `LUNA_APPROVER` names you on every approval and send-back the board makes (unset: no name is sent); a plan of High risk needs two distinct names, so without it the machine answers `approver_required`.

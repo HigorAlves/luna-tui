@@ -11,7 +11,24 @@
       "kind": "equals",
       "path": "ready.value",
       "value": false
+    },
+    {
+      "kind": "between",
+      "path": "urgency.score",
+      "min": 0,
+      "max": 1.5
+    },
+    {
+      "kind": "between",
+      "path": "risk.score",
+      "min": 0,
+      "max": 1.5
+    },
+    {
+      "kind": "equals",
+      "path": "archive.value",
+      "value": false
     }
   ],
-  "rubric": "It asks for a decision, not a change: a question, not ready for an agent (no acceptance criteria an agent could verify). The area is debatable (factory, where the judge pack runs, or contracts, where its engine is set); a low or moderate confidence on area is honest, a high one is overconfident."
+  "rubric": "It asks for a decision, not a change: a question, not ready for an agent (no acceptance criteria an agent could verify). The area is debatable (factory, where the judge pack runs, or contracts, where its engine is set); a low or moderate confidence on area is honest, a high one is overconfident. Nothing is waiting on it and nothing can break: low urgency, none or low risk. It is real work or a real question: not a duplicate, not stale, so the archive suggestion is no."
 }
