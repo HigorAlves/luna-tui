@@ -7,6 +7,7 @@ import { type Pack, answerJsonSchema } from "@hardness/contracts";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { decisionSummary, renderDecision, stateOf } from "../../core/decide.ts";
 import { DELEGATE } from "../../core/delegate.ts";
 import { CallJoin } from "../../core/events.ts";
 import type { GuardContext } from "../../core/guards.ts";
@@ -62,6 +63,7 @@ export function guardPolicy({ pack, input, paths }: Pick<RunContext, "pack" | "i
 
 async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> {
   const { pack, engine, input, prompt, paths, luna, dry, emit } = ctx;
+  if (pack.kind === "decision") return decide(ctx, transport);
   if (pack.kind !== "agent" || pack.agent === null) return { ...EMPTY_RUN, error: `pack ${pack.id} has no agent to run` };
   // A call's event joins the stream's tool_use and the hook's decision, whichever comes first.
   const calls = new CallJoin(emit, isGuarded);
@@ -93,14 +95,49 @@ async function run(ctx: RunContext, transport?: Transport): Promise<RunOutcome> 
 
   if (dry) {
     const { mcpServers: _m, hooks: _h, env: _e, agents, ...printable } = options;
-    emit({ kind: "session", payload: { model: engine.modelId, text: JSON.stringify({ ...printable, agents: Object.keys(agents), hooks: ["PreToolUse"], mcpServers: ["luna"] }, null, 2) } });
-    let structured: Record<string, unknown> | null = null;
-    try {
-      structured = env.LUNA_STAGE_DRY_STRUCTURED ? (JSON.parse(env.LUNA_STAGE_DRY_STRUCTURED) as Record<string, unknown>) : null; // test seam
-    } catch {}
-    return { ...EMPTY_RUN, ok: true, structured, text: "dry-run" };
+    return dryRun(ctx, JSON.stringify({ ...printable, agents: Object.keys(agents), hooks: ["PreToolUse"], mcpServers: ["luna"] }, null, 2));
   }
 
+  return drive(ctx, transport, prompt, options, calls);
+}
+
+/** A decision pack on Claude: one turn, no tools, no agent, the questions as the prompt and the
+ *  answer schema as the structured output. Confidence is self-reported; calibration is the eval's job. */
+async function decide(ctx: RunContext, transport?: Transport): Promise<RunOutcome> {
+  const { pack, engine, input, dry, emit } = ctx;
+  if (pack.kind !== "decision") throw new Error(`decide() called for ${pack.id}`);
+  const options: Options = {
+    systemPrompt: "You answer typed questions about a software ticket for an automated pipeline. Be calibrated and terse.",
+    tools: [],
+    allowedTools: [],
+    permissionMode: "dontAsk",
+    maxTurns: 1,
+    outputFormat: { type: "json_schema", schema: answerJsonSchema(pack) },
+    model: engine.modelId,
+    effort: "low",
+    settingSources: [],
+    env: { ...env, LUNA_FACTORY: "1" },
+  };
+  if (dry) return dryRun(ctx, JSON.stringify({ ...options, env: undefined }, null, 2));
+  const prompt = renderDecision(pack.questions, stateOf(input));
+  const run = await drive(ctx, transport, prompt, options, new CallJoin(emit, isGuarded));
+  if (run.structured) emit({ kind: "text", payload: { text: decisionSummary(pack.questions, run.structured, pack.minConfidence) } });
+  return run;
+}
+
+/** A dry run: what would be sent, printed, and the answer the test seam gives, if it gives one. */
+function dryRun({ engine, emit }: RunContext, printed: string): RunOutcome {
+  emit({ kind: "session", payload: { model: engine.modelId, text: printed } });
+  let structured: Record<string, unknown> | null = null;
+  try {
+    structured = env.LUNA_STAGE_DRY_STRUCTURED ? (JSON.parse(env.LUNA_STAGE_DRY_STRUCTURED) as Record<string, unknown>) : null; // test seam
+  } catch {}
+  return { ...EMPTY_RUN, ok: true, structured, text: "dry-run" };
+}
+
+/** Follows `query()` to its result: the messages become run events, and the deadline ends the run cleanly. */
+async function drive(ctx: RunContext, transport: Transport | undefined, prompt: string, options: Options, calls: CallJoin): Promise<RunOutcome> {
+  const { engine, input, paths, emit } = ctx;
   const t0 = Date.now();
   const run: RunOutcome = { ...EMPTY_RUN };
   // The stage ends itself at its deadline, before the machine kills the container.

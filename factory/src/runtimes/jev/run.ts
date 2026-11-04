@@ -4,8 +4,9 @@
 // preferred when set) and TypeSafe's own SDK (TYPESAFE_API_KEY). Jev is opt-in and metered: with
 // neither key the stage ends with a reason, not a crash. A call's cost is its tokens at the
 // catalog's price.
-import type { QuestionSet, ResolvedEngine, StageInput } from "@hardness/contracts";
+import type { QuestionSet, ResolvedEngine } from "@hardness/contracts";
 
+import { decisionSummary, stateOf } from "../../core/decide.ts";
 import { EMPTY_RUN, type RunOutcome } from "../../core/output.ts";
 import { NO_INSTRUCTIONS, type RunContext, type Runtime, deadlineMs } from "../../core/runtime.ts";
 import { gatewayTransport } from "./gateway.ts";
@@ -42,33 +43,12 @@ export function jevTransport(env: NodeJS.ProcessEnv = process.env): JevTransport
   return env.AI_GATEWAY_API_KEY?.trim() ? gatewayTransport() : typesafeTransport();
 }
 
-/** What Jev reads: the issue the notch or intake sent, else the task's own title and description. */
-export function stateOf(input: StageInput): Record<string, Json> {
-  const { title, description, labels, source } = input.context.issue ?? { title: input.task.title, description: input.task.description };
-  return { title, description, ...(labels && { labels }), ...(source && { source }) };
-}
-
 /** The call's cost at the catalog's price; null without a price or a token count. */
 export function costOf(pricing: ResolvedEngine["pricing"], inputTokens: number | null, outputTokens: number | null): number | null {
   if (!pricing || inputTokens === null) return null;
   // Rounded to 8 decimals, what pack_runs keeps: float noise (0.00003255000000000001) stops there.
   const usd = (inputTokens * pricing.inputPerMTokUsd + (outputTokens ?? 0) * (pricing.outputPerMTokUsd ?? 0)) / 1_000_000;
   return Math.round(usd * 1e8) / 1e8;
-}
-
-const two = (n: number) => n.toFixed(2);
-
-/** One line per answer for the board, and which fall below the pack's confidence floor. */
-function summary(answer: Record<string, any>, minConfidence: number): string {
-  const low: string[] = [];
-  const parts = Object.entries(answer).map(([name, a]) => {
-    const confidence = "p" in a ? Math.max(a.p, 1 - a.p) : a.confidence;
-    if (confidence < minConfidence) low.push(name);
-    if ("choice" in a) return `${name} ${a.choice} (${two(a.confidence)})`;
-    if ("p" in a) return `${name} ${a.value ? "yes" : "no"} (p ${two(a.p)})`;
-    return `${name} ${Math.round(a.score * 100) / 100} (${two(a.confidence)})`;
-  });
-  return [...parts, ...(low.length > 0 ? [`below ${minConfidence}: ${low.join(", ")}`] : [])].join(" · ");
 }
 
 export function jevRuntime(transport: () => JevTransport = jevTransport): Runtime {
@@ -109,7 +89,7 @@ export function jevRuntime(transport: () => JevTransport = jevTransport): Runtim
           return { ...run, error: `jev: the answer does not fit ${pack.id}: ${issues}` };
         }
         const answer = parsed.data as Record<string, unknown>;
-        const text = summary(answer, pack.minConfidence);
+        const text = decisionSummary(pack.questions, answer, pack.minConfidence);
         emit({ kind: "text", payload: { text } });
         return { ...run, ok: true, structured: answer, text };
       } catch (e) {

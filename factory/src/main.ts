@@ -82,7 +82,8 @@ if (run.rateLimited) emit({ kind: "rate_limit", payload: { resetsAt: run.resetsA
 finish(OUT, pack, run, { ledger: luna.state.ledger, events, run: info });
 
 async function runStage(): Promise<RunOutcome> {
-  // A decision pack has no prompt: its runtime sends the pack's questions and the input as data.
+  // A decision pack has no prompt template: its runtime renders the questions and the input itself
+  // (core/decide.ts for Claude and eve, Jev's own wire for Jev).
   let prompt = "";
   let template = JSON.stringify(pack.kind === "decision" ? pack.questions : null);
   if (pack.kind !== "decision") {
