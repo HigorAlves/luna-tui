@@ -2,7 +2,7 @@
 // issue_classify asks what intake needs to label and route an issue.
 import { describe, expect, it } from "vitest";
 
-import { ENGINES, PACKS, PACK_LIMITS, StageInput, answerSchema, classificationLine, classificationOf } from "./index.ts";
+import { ENGINES, PACKS, PACK_LIMITS, StageInput, answerSchema, applyPolicy, classificationLine, classificationOf } from "./index.ts";
 
 describe("the answer schema of a question set", () => {
   const schema = answerSchema({
@@ -32,8 +32,9 @@ describe("the answer schema of a question set", () => {
 describe("the issue_classify pack", () => {
   const pack = PACKS.issue_classify;
 
-  it("is a decision: no role, tools or template, and a 0.7 confidence floor", () => {
-    expect(pack).toMatchObject({ kind: "decision", writable: false, minConfidence: 0.7 });
+  it("is a decision: no role, tools or template, and a policy bar per question", () => {
+    expect(pack).toMatchObject({ kind: "decision", writable: false });
+    expect(pack).not.toHaveProperty("minConfidence");
     expect(pack).not.toHaveProperty("agent");
     expect(pack).not.toHaveProperty("access");
     expect(pack).not.toHaveProperty("template");
@@ -77,5 +78,32 @@ describe("an issue's classification", () => {
     const c = classificationOf(answer, "typesafe-ai/jev", new Date(0));
     expect(classificationLine(c)).toBe("question · machine · not ready · size tiny · lowest confidence 0.80 (typesafe-ai/jev)");
     expect(classificationLine({ ...c, ready: true, size: 2.6 })).toMatch(/· ready · size large ·/);
+  });
+});
+
+describe("confidence policy", () => {
+  const pack = PACKS.issue_classify;
+  const answer = { kind: { choice: "question", confidence: 0.9 }, area: { choice: "machine", confidence: 0.55 }, ready: { value: false, p: 0.3 }, size: { score: 0.2, confidence: 0.8 } };
+  it("gives every question a proceed and a flag bar, flag below proceed, both in (0, 1]", () => {
+    for (const [name, p] of Object.entries(pack.policy)) {
+      expect(p.flag, name).toBeGreaterThan(0);
+      expect(p.flag, name).toBeLessThanOrEqual(p.proceed);
+      expect(p.proceed, name).toBeLessThanOrEqual(1);
+    }
+    expect(Object.keys(pack.policy).sort()).toEqual(Object.keys(pack.questions).sort());
+  });
+  it("judges each answer against its own bar and the whole answer by its worst question", () => {
+    const v = applyPolicy(pack, answer);
+    expect(v.verdicts).toEqual({ kind: "proceed", area: "flag", ready: "proceed", size: "proceed" }); // ready: max(0.3, 0.7) = 0.7, at the proceed bar
+    expect(v.overall).toBe("flag");
+    expect(v.below).toEqual(["area"]);
+  });
+  it("asks a person when a question is under its flag bar", () => {
+    expect(applyPolicy(pack, { ...answer, area: { choice: "machine", confidence: 0.3 } }).overall).toBe("ask");
+  });
+  it("takes a repo's overrides question by question", () => {
+    const v = applyPolicy(pack, answer, { area: { proceed: 0.5 } });
+    expect(v.verdicts.area).toBe("proceed");
+    expect(v.overall).toBe("proceed");
   });
 });

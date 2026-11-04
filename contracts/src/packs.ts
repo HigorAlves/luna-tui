@@ -8,7 +8,7 @@ import { z } from "zod";
 import { type Access, type LunaTool, NO_ACCESS, access, readOnly } from "./access.ts";
 import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
-import { type QuestionSet, answerSchema } from "./questions.ts";
+import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
 import { Finding, LunaConfig, PackId, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
 
@@ -271,8 +271,8 @@ export interface AgentPack extends PackBase {
 export interface DecisionPack extends PackBase {
   kind: "decision";
   questions: QuestionSet;
-  /** Below this confidence the answers are not acted on, and the caller takes the agent path. */
-  minConfidence: number;
+  /** Per question, the confidence at which an answer is acted on (`proceed`) and the one below which a person decides (`flag`). */
+  policy: DecisionPolicy;
 }
 
 export type Pack = AgentPack | DecisionPack;
@@ -582,10 +582,10 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
   issue_classify: {
     id: "issue_classify",
     // Labels an issue on Jev: one call, no worktree, reached through POST /runs. Nothing in intake
-    // calls it yet; a caller acts on answers above minConfidence and takes the agent path below.
+    // calls it yet; a caller acts on answers at or above `policy` and takes the agent path below.
     kind: "decision",
     questions: ISSUE_QUESTIONS,
-    minConfidence: 0.7,
+    policy: samePolicy(ISSUE_QUESTIONS, { proceed: 0.7, flag: 0.5 }),
     writable: false,
     maxTurns: 1,
     timeoutMs: 1 * MINUTE,

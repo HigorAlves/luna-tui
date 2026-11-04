@@ -1,7 +1,7 @@
 // A repo's own say over the pipeline. The policy shape is shared by `luna.yaml`
 // (luna-config.ts, the current file) and `PIPELINE.md` (parsed here, deprecated: its front
 // matter only ever set the knobs below). Pure: parsing only.
-import type { CheckSpec, EngineBudgets, ServiceSpec, StageEngines } from "@hardness/contracts";
+import type { CheckSpec, DecisionOverrides, EngineBudgets, ServiceSpec, StageEngines } from "@hardness/contracts";
 
 import type { SlaTargets } from "./sla.ts";
 
@@ -50,6 +50,8 @@ export interface Policy {
   engines: StageEngines;
   /** Monthly caps on this repo's stage runs by engine or credential (luna.yaml `budget.engines`). */
   engineBudgets: EngineBudgets;
+  /** The repo's own confidence bars per decision pack, per question (luna.yaml `policy.decisions`), over the pack's. */
+  decisions: Record<string, DecisionOverrides>;
 }
 
 /** `qa_target: <name> <base url> [credential ref]`, one line per target; the ref is `env:NAME`. */
@@ -73,6 +75,7 @@ export const DEFAULT_POLICY: Policy = {
   sla: {},
   engines: {},
   engineBudgets: {},
+  decisions: {},
 };
 
 export class PolicyParseError extends Error {
@@ -127,7 +130,7 @@ const qaTarget = (key: string, raw: string): QaTarget => {
 
 /** The policy a PIPELINE.md declares; unknown keys are ignored, a bad value throws. */
 export function parsePolicy(text: string): Policy {
-  const policy: Policy = { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {} };
+  const policy: Policy = { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {}, decisions: {} };
   for (const { key, value } of frontMatter(text)) {
     switch (key) {
       case "qa":

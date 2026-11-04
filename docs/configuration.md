@@ -106,6 +106,9 @@ policy:
   auto_approve_plan_minutes: 15           # a plan triage marked high confidence / low risk is approved by itself after this long
   max_concurrent: 1                       # running tasks this repo may hold at once (over MACHINE_MAX_PER_REPO)
   holdout_cases: false                    # true keeps test_design's cases away from the implementer; verifying still judges by them
+  decisions:                              # per decision pack, per question: when an answer is acted on (proceed) and when a person decides (below flag)
+    issue_classify:
+      kind: { proceed: 0.8, flag: 0.5 }
 qa_targets:                               # where e2e may drive the app; the credential is a reference, never a value
   - { name: staging, url: https://stg.example.com, credential: env:QA_PASSWORD }
 jira:                                     # how this repo's tasks talk to Jira (needs MACHINE_JIRA_SITE/EMAIL/TOKEN)

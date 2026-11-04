@@ -2,7 +2,7 @@
 // call (the stage container, the Jev credential by name, a pack_runs row for its cost, the day's
 // ceiling). Without a Jev credential it says nothing and intake goes on exactly as before; any
 // other failure is logged once per issue and intake goes on as before. Never throws.
-import { type IssueContext, PACKS, type TaskClassification, classificationOf } from "@hardness/contracts";
+import { type DecisionOverrides, type IssueContext, PACKS, type TaskClassification, classificationOf } from "@hardness/contracts";
 
 import { type PackRunsPort, RunNoCredentialError } from "./pack-runs.ts";
 
@@ -17,8 +17,10 @@ export interface IssueClassifier {
 /** Whether intake may act on a classification alone: Jev calls the issue a question and is at or
  *  above the pack's floor on that kind (the other answers do not bear on it; a classification
  *  stored before `kindConfidence` falls back to its lowest). Anything less goes to jira_intake. */
-export function confidentQuestion(c: TaskClassification | null): c is TaskClassification {
-  return c !== null && c.kind === "question" && (c.kindConfidence ?? c.confidence) >= PACKS.issue_classify.minConfidence;
+export function confidentQuestion(c: TaskClassification | null, overrides: DecisionOverrides = {}): c is TaskClassification {
+  if (c === null || c.kind !== "question") return false;
+  const bar = { ...PACKS.issue_classify.policy.kind, ...overrides.kind };
+  return (c.kindConfidence ?? c.confidence) >= bar.proceed!;
 }
 
 export function createIssueClassifier(deps: { runs: PackRunsPort; now?: () => Date; log?: (line: string) => void }): IssueClassifier {

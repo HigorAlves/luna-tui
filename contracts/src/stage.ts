@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import { EngineBudgets, EngineId } from "./engines.ts";
+import { ConfidencePolicySchema } from "./questions.ts";
 
 /** What a stage run decided. Lives here, not in api.ts, so the two files do not import each other in a loop. */
 export const StageOutcome = z.enum(["pass", "fail", "needs_input", "test_change", "escalated"]);
@@ -340,6 +341,8 @@ export const LunaConfig = z.object({
       auto_approve_plan_minutes: z.number().int().positive().optional(),
       max_concurrent: z.number().int().positive().optional(),
       holdout_cases: z.boolean().optional(),
+      // Per decision pack, per question: the repo's own confidence bars over the pack's.
+      decisions: z.record(z.string(), z.record(z.string(), ConfidencePolicySchema)).optional(),
     })
     .optional(),
   qa_targets: z

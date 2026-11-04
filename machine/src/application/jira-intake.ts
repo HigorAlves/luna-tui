@@ -150,7 +150,8 @@ export class JiraIntake {
 
   private async consider(issue: JiraIssue, repoPath: string, comments: "none" | "milestones" | "gates"): Promise<void> {
     const classification = (await this.options.classifier?.classify(issueContext(issue))) ?? null;
-    if (confidentQuestion(classification)) {
+    const overrides = (await this.options.policies.for(repoPath)).decisions.issue_classify ?? {};
+    if (confidentQuestion(classification, overrides)) {
       this.answered.set(issue.key, issue.updated);
       await this.comment(issue, `Not for an agent: it reads as a question, not a change (${classificationLine(classification)}).`);
       this.log(`jira intake: ${issue.key} not for an agent: classified as a question (${classificationLine(classification)})`);

@@ -69,7 +69,7 @@ describe("the pack registry", () => {
       expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: pack.maxTurns, timeoutMs: pack.timeoutMs, writable: pack.writable });
       if (pack.kind === "decision") {
         expect(pack.writable, pack.id).toBe(false);
-        expect(pack.minConfidence, pack.id).toBeGreaterThan(0);
+        for (const q of Object.keys(pack.questions)) expect(pack.policy[q]?.proceed, `${pack.id}.${q}`).toBeGreaterThan(0);
         continue;
       }
       expect(pack.kind, pack.id).toBe(pack.agent ? "agent" : "script");

@@ -60,6 +60,12 @@ describe("a confident question", () => {
     expect(confidentQuestion(null)).toBe(false);
   });
 
+  it("takes a repo's override of the kind's bar", () => {
+    expect(confidentQuestion({ ...c, kindConfidence: 0.9 }, { kind: { proceed: 0.95 } })).toBe(false);
+    expect(confidentQuestion({ ...c, kindConfidence: 0.9 })).toBe(true);
+    expect(confidentQuestion({ ...c, kindConfidence: 0.6 }, { kind: { proceed: 0.5 } })).toBe(true);
+  });
+
   it("reads a classification stored before kindConfidence by its lowest confidence", () => {
     const { kindConfidence: _, ...old } = c;
     expect(confidentQuestion({ ...old, confidence: 0.85 })).toBe(true);

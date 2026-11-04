@@ -23,6 +23,7 @@ describe("parsePolicy", () => {
       sla: {},
       engines: {},
       engineBudgets: {},
+      decisions: {},
     });
   });
 
@@ -44,6 +45,7 @@ describe("parsePolicy", () => {
       sla: {},
       engines: {},
       engineBudgets: {},
+      decisions: {},
     });
   });
 

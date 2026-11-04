@@ -4,7 +4,7 @@
 // preferred when set) and TypeSafe's own SDK (TYPESAFE_API_KEY). Jev is opt-in and metered: with
 // neither key the stage ends with a reason, not a crash. A call's cost is its tokens at the
 // catalog's price.
-import type { QuestionSet, ResolvedEngine } from "@hardness/contracts";
+import { type QuestionSet, type ResolvedEngine, lowestBar } from "@hardness/contracts";
 
 import { decisionSummary, stateOf } from "../../core/decide.ts";
 import { EMPTY_RUN, type RunOutcome } from "../../core/output.ts";
@@ -89,7 +89,7 @@ export function jevRuntime(transport: () => JevTransport = jevTransport): Runtim
           return { ...run, error: `jev: the answer does not fit ${pack.id}: ${issues}` };
         }
         const answer = parsed.data as Record<string, unknown>;
-        const text = decisionSummary(pack.questions, answer, pack.minConfidence);
+        const text = decisionSummary(pack.questions, answer, lowestBar(pack.policy));
         emit({ kind: "text", payload: { text } });
         return { ...run, ok: true, structured: answer, text };
       } catch (e) {

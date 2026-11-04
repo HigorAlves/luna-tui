@@ -3,7 +3,7 @@
 // guards as PreToolUse hooks, the luna tools as an in-process MCP server) and `query()` is
 // followed to its result, its messages and the hooks' decisions turned into run events as it goes.
 import type { Options, Query } from "@anthropic-ai/claude-agent-sdk";
-import { type Pack, answerJsonSchema } from "@hardness/contracts";
+import { type Pack, answerJsonSchema, lowestBar } from "@hardness/contracts";
 import { appendFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -121,7 +121,7 @@ async function decide(ctx: RunContext, transport?: Transport): Promise<RunOutcom
   if (dry) return dryRun(ctx, JSON.stringify({ ...options, env: undefined }, null, 2));
   const prompt = renderDecision(pack.questions, stateOf(input));
   const run = await drive(ctx, transport, prompt, options, new CallJoin(emit, isGuarded));
-  if (run.structured) emit({ kind: "text", payload: { text: decisionSummary(pack.questions, run.structured, pack.minConfidence) } });
+  if (run.structured) emit({ kind: "text", payload: { text: decisionSummary(pack.questions, run.structured, lowestBar(pack.policy)) } });
   return run;
 }
 

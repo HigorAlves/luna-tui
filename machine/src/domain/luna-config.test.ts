@@ -62,7 +62,14 @@ describe("parseLunaConfig", () => {
       sla: {},
       engines: { triage: "claude:opus" },
       engineBudgets: { "openai:sol": 10, codex: 0 },
+      decisions: {},
     });
+  });
+
+  it("reads policy.decisions: per decision pack, per question, a repo's own confidence bars", () => {
+    const text = "policy:\n  decisions:\n    issue_classify:\n      kind: { proceed: 0.9 }\n      area: { proceed: 0.6, flag: 0.4 }\n";
+    expect(parseLunaConfig(text).decisions).toEqual({ issue_classify: { kind: { proceed: 0.9 }, area: { proceed: 0.6, flag: 0.4 } } });
+    expect(() => parseLunaConfig("policy:\n  decisions:\n    issue_classify:\n      kind: { proceed: 1.5 }\n")).toThrow(/policy\.decisions/);
   });
 
   it("is the defaults for an empty file or an empty mapping, and a missing section stays at its default", () => {
