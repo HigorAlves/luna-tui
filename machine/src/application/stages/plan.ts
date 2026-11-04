@@ -12,6 +12,7 @@
 // `<runId>-plan-<n>`, `<runId>-tests-<n>`): its own folder and container, not resumable (a
 // restart re-runs the stage), and on the pack's own engine, never the stage's.
 import {
+  CodeMapAnswer,
   type DecisionOverrides,
   PACKS,
   type PlanContext,
@@ -35,11 +36,13 @@ type DecisionPackName = "risk_score" | "coverage_check" | "plan_check";
 
 export interface PlanDeps {
   /** Runs one pack as a sub-run of this stage: `context` already carries the derived run id. `extra.plan` reaches the pack as `context.plan`. */
-  runPack: (pack: "plan" | "plan_fast" | "test_design" | "test_design_fast", context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
+  runPack: (pack: "plan" | "plan_fast" | "test_design" | "test_design_fast" | "code_map", context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
   /** Runs a decision pack on a plan context and answers its answer; null when no decision can run (agents off, no runtime). Read at call time: main.ts binds it late. */
   decide: ((pack: DecisionPackName, plan: PlanContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** Each repo's luna.yaml bars for the decisions. */
-  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides> }> };
+  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean }> };
+  /** The machine's code graphs: a repo with one (and its luna.yaml `policy.graph` on) gets a code map before the plan. */
+  graph?: { stampOf(repoPath: string): Promise<unknown | null> };
   log?: (line: string) => void;
 }
 
@@ -52,7 +55,7 @@ const flag = (answer: Record<string, unknown>, question: string): boolean | null
 };
 
 /** What a decision's answer says is wrong, whatever its confidence: a confident "no" is a finding too. */
-function problemsOf(pack: DecisionPackName, answer: Record<string, unknown>): string[] {
+function problemsOf(pack: DecisionPackName, answer: Record<string, unknown>, hasMap: boolean): string[] {
   if (pack === "coverage_check") {
     return [
       ...(flag(answer, "pins") === false ? ["the scenarios do not each pin the criterion they name"] : []),
@@ -65,6 +68,8 @@ function problemsOf(pack: DecisionPackName, answer: Record<string, unknown>): st
       ...(score(answer, "fits_record") < 1.5 ? ["the plan does not build what the record's goal asks, no more and no less"] : []),
       ...(flag(answer, "slices_cover_criteria") === false ? ["a criterion appears in no slice's acceptance"] : []),
       ...(flag(answer, "rollback_stated") === false ? ["the rollback paragraph could not be followed at 2 a.m."] : []),
+      // Asked of every plan, a finding only when there is a map to stay inside.
+      ...(hasMap && flag(answer, "touchpoints_in_map") === false ? ["a slice touches files outside the code map"] : []),
     ];
   }
   return [];
@@ -108,13 +113,24 @@ export function planStage(deps: PlanDeps): StageRunner {
         const answer = await deps.decide(pack, plan, task.repoPath);
         const overrides = (await deps.policies.for(task.repoPath)).decisions[pack];
         const { overall } = applyPolicy(PACKS[pack], answer, overrides);
-        const problems = problemsOf(pack, answer);
+        const problems = problemsOf(pack, answer, Boolean(plan.map));
         return { verdict: overall === "proceed" && problems.length > 0 ? "flag" : overall, problems, answer };
       } catch (error) {
         log(`plan stage: ${pack} skipped for task ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
         return { verdict: "skipped", problems: [], answer: null };
       }
     };
+
+    // The code map opens the stage when the repo has a graph. It is advice: a failed run is logged and the stage plans without one.
+    let map: CodeMapAnswer | null = null;
+    if (task.repoPath && deps.graph && (await deps.policies.for(task.repoPath)).graph !== false && (await deps.graph.stampOf(task.repoPath))) {
+      const mapped = await deps.runPack("code_map", sub("map"), {});
+      results.push(mapped);
+      const parsed = CodeMapAnswer.safeParse(mapped.detail?.map);
+      if (mapped.outcome === "pass" && parsed.success) map = parsed.data;
+      else log(`plan stage: code_map skipped for task ${task.id}: ${mapped.outcome === "pass" ? "no usable map" : String(mapped.detail?.error ?? mapped.outcome)}`);
+    }
+    const mapPart = map ? { map } : {};
 
     let lane: "fast" | "full" = task.record?.decision === "fast_lane" ? "fast" : "full";
     let laneNote: string | undefined;
@@ -143,7 +159,11 @@ export function planStage(deps: PlanDeps): StageRunner {
       planRuns += 1;
       planRunsOnLane += 1;
       const planned = await deps.runPack(lane === "fast" ? "plan_fast" : "plan", sub(planRuns === 1 ? "plan" : `plan-${planRuns}`), {
-        ...(plan ? { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, ...(review ? { review } : {}) } } : {}),
+        ...(plan
+          ? { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, ...(review ? { review } : {}), ...mapPart } }
+          : map
+            ? { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], map } }
+            : {}),
       });
       if (planned.outcome !== "pass") return ended(planned);
       results.push(planned);
@@ -170,7 +190,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         roundsOnThisPlan += 1;
         testRuns += 1;
         const designed = await deps.runPack(lane === "fast" ? "test_design_fast" : "test_design", sub(`tests-${testRuns}`), {
-          plan: { record: task.record ?? null, ...plan, ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), round: roundsOnThisPlan },
+          plan: { record: task.record ?? null, ...plan, ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), round: roundsOnThisPlan, ...mapPart },
         });
         if (designed.outcome !== "pass") return ended(designed);
         results.push(designed);
@@ -178,14 +198,14 @@ export function planStage(deps: PlanDeps): StageRunner {
         gaps = coverageGaps(plan.criteria, cases);
         // The fast lane asks nothing of coverage_check and designs once: a criterion left unnamed is flagged below.
         if (lane === "fast") break;
-        coverage = await judge("coverage_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}) });
+        coverage = await judge("coverage_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}), ...mapPart });
         if (gaps.length === 0 || roundsOnThisPlan >= COVERAGE_ROUNDS) break;
       }
       if (lane === "fast" && gaps.length > 0) flagged.add("coverage");
       if (gaps.length > 0 && coverage.verdict === "proceed") coverage = { ...coverage, verdict: "flag" };
 
       // The plan against the record: a finding sends the planner back, within the cap.
-      planCheck = await judge("plan_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}) });
+      planCheck = await judge("plan_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}), ...mapPart });
       if (lane === "fast") {
         // One plan check, no re-run: unsure whether the plan fits means the ticket needs the full path.
         if (planCheck.verdict !== "ask") break;
@@ -197,7 +217,7 @@ export function planStage(deps: PlanDeps): StageRunner {
       review = planCheck.problems.length ? planCheck.problems : ["the plan check could not tell whether the plan fits the record"];
     }
 
-    const riskJudged = await judge("risk_score", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}) });
+    const riskJudged = await judge("risk_score", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}), ...mapPart });
     const answer = riskJudged.answer;
     const scores = answer ? { blast_radius: score(answer, "blast_radius"), reversibility: score(answer, "reversibility"), data_sensitivity: score(answer, "data_sensitivity") } : {};
     // The decision may raise the risk above triage's grade, never lower it: one small-model call must not drop the second approver.
@@ -222,6 +242,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         verdicts,
         rounds: { tests: testRuns, plan: planRuns },
         flagged: [...flagged],
+        map,
         lane,
         ...(laneNote ? { laneNote } : {}),
       },

@@ -32,6 +32,9 @@ export function renderPlan(plan: PlanContext): string {
     ...(plan.rollback ? [`Rollback: ${plan.rollback}`] : []),
     ...(byCriterion.size ? [`Scenarios:\n${[...byCriterion].map(([criterion, lines]) => `- ${criterion}\n${lines.join("\n")}`).join("\n")}`] : []),
     ...(plan.gaps?.length ? [`No scenario names these criteria:\n${list(plan.gaps)}`] : []),
+    ...(plan.map
+      ? [`Code map (confidence ${plan.map.confidence}):\n- components: ${plan.map.components.join(", ") || "?"}\n- files: ${plan.map.files.join(", ") || "?"}\n- owners: ${plan.map.owners.join(", ") || "?"}${plan.map.note ? `\n- note: ${plan.map.note}` : ""}`]
+      : []),
   ].join("\n");
 }
 

@@ -9,7 +9,9 @@ import {
   CloneInput,
   EvidencePack,
   EvalJudgeAnswer,
+  CodeMapAnswer,
   PlanAnswer,
+  PlanContext,
   TestDesignAnswer,
   EvalJudgeContext,
   JiraIntakeContext,
@@ -197,11 +199,11 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map"].sort(),
     );
     const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage"];
     // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
-    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast"];
+    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "code_map"];
     for (const pack of PackId.options) {
       if (onDemand.includes(pack) || runsInAnotherState.includes(pack)) expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
@@ -230,6 +232,33 @@ describe("the plan pack", () => {
     expect(PlanAnswer.parse(plan)).toEqual(plan);
     expect(PlanAnswer.safeParse({ kind: "questions", summary: "s", questions: [{ question: "q", recommended: "r" }] }).success).toBe(true);
     expect(PlanAnswer.safeParse({ ...plan, kind: "maybe" }).success).toBe(false);
+  });
+});
+
+describe("the code_map pack", () => {
+  it("is the code-mapper on haiku at low effort, 8 turns, read-only with the graph's verbs, git shortlog and git log", () => {
+    expect(PACKS.code_map).toMatchObject({
+      kind: "agent", agent: "code-mapper", helpers: [], writable: false, maxTurns: 8, effort: "low", template: "code_map.md", answer: CodeMapAnswer,
+      engines: { default: "claude:haiku", allowed: ["claude:haiku"] },
+    });
+    const access = PACKS.code_map.kind === "agent" ? PACKS.code_map.access : null;
+    expect(access).toMatchObject({ read: true, write: false, web: false });
+    expect(access?.commands).toEqual(expect.arrayContaining(["graphify query", "graphify affected", "graphify god-nodes", "git shortlog", "git log"]));
+  });
+
+  it("answers components, files, owners and a confidence, with an optional note", () => {
+    const map = { components: ["board keys"], files: ["board/src/keys.rs"], owners: ["@marta"], confidence: 0.8 };
+    expect(CodeMapAnswer.parse({ ...map, note: "no tests found" })).toEqual({ ...map, note: "no tests found" });
+    expect(CodeMapAnswer.safeParse({ ...map, confidence: 1.4 }).success).toBe(false);
+    expect(CodeMapAnswer.safeParse({ components: [], files: [] }).success).toBe(false);
+  });
+
+  it("rides on a plan context as an optional map", () => {
+    const plan = { record: null, brief: "b", criteria: [], assumptions: [], slices: [] };
+    const map = { components: ["c"], files: ["a.ts"], owners: [], confidence: 0.5 };
+    expect(PlanContext.parse({ ...plan, map })).toEqual({ ...plan, map });
+    expect(PlanContext.parse({ ...plan, map: null }).map).toBeNull();
+    expect(PlanContext.parse(plan).map).toBeUndefined();
   });
 });
 

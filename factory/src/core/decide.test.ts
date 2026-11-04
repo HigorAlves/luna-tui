@@ -52,6 +52,13 @@ describe("a plan as the state", () => {
     expect(text).toContain("No scenario names these criteria:\n- list stays selected");
   });
 
+  it("renders the code map when the plan has one, and says nothing when it has none", () => {
+    expect(renderPlan(plan as never)).not.toContain("Code map");
+    const withMap = renderPlan({ ...plan, map: { components: ["board keys"], files: ["board/src/keys.rs", "board/src/app.rs"], owners: ["@marta"], confidence: 0.8, note: "no tests found" } } as never);
+    expect(withMap).toContain("Code map (confidence 0.8):\n- components: board keys\n- files: board/src/keys.rs, board/src/app.rs\n- owners: @marta\n- note: no tests found");
+    expect(renderPlan({ ...plan, map: null } as never)).not.toContain("Code map");
+  });
+
   it("is the state a decision sees, ahead of the questions", () => {
     const state = stateOf(input);
     expect(state.title).toBe("Guard the empty list in the key handler");

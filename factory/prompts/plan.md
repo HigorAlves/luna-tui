@@ -24,6 +24,11 @@ Brief: {{plan.brief}}
 ## Answers and decisions so far
 {{decisions}}
 
+## Code map
+{{context.plan.map}}
+
+The map names the components and files the goal touches, from the repo's code graph, and who owns them. Plan inside it: a slice that touches a file the map does not name must say why in its acceptance, or the plan check will flag it.
+
 ## Code graph
 {{context.graph}}
 

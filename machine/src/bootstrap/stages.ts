@@ -111,6 +111,7 @@ export async function buildRealStages(
         return planDecisions?.decide ?? null;
       },
       policies: { for: (repoPath) => policies.for(repoPath) },
+      ...(graphs ? { graph: graphs.graph } : {}),
     }),
     // Setup reads the repo checkout itself (no worktree yet) and proves what it proposes in the image.
     setup: setupRunner({ runPack: (context) => runAgent(deps, context, "setup", { checkout: true }), exec: checksExec, stateDir: config.stateDir }),

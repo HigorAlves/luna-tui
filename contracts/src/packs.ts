@@ -10,7 +10,7 @@ import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
-import { EscalationReason, Finding, LunaConfig, PackId, Risk, Slice, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
+import { CodeMapAnswer, EscalationReason, Finding, LunaConfig, PackId, Risk, Slice, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
 
 /** The agent roles. A pack names one; the runner looks its definition up by this. */
 export const AgentRole = z.enum([
@@ -19,6 +19,8 @@ export const AgentRole = z.enum([
   "planner",
   "fast-planner",
   "test-designer",
+  // Opens the plan stage: maps the goal onto the code graph.
+  "code-mapper",
   "implementer",
   "verifier",
   "qa-validator",
@@ -402,6 +404,7 @@ const PLAN_CHECK_QUESTIONS: QuestionSet = {
   fits_record: { type: "score", instructions: "Does the plan build what the record's goal asks, no more, no less?", rubric: { no: "It builds something else or far more", partly: "It misses part of the goal or adds unasked work", yes: "It builds the goal" } },
   slices_cover_criteria: { type: "yesno", instructions: "Does every criterion appear in some slice's acceptance?" },
   rollback_stated: { type: "yesno", instructions: "Could a person follow the rollback paragraph at 2 a.m.?" },
+  touchpoints_in_map: { type: "yesno", instructions: "Does every slice touch only files the code map names, or files it declares and explains? Answer yes when the plan has no code map." },
 };
 
 /** The packs a decision model answers; every other pack is a role's or a script's. */
@@ -488,6 +491,22 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "high",
     answer: PlanAnswer,
     template: "plan.md",
+  },
+  code_map: {
+    id: "code_map",
+    kind: "agent",
+    agent: "code-mapper",
+    helpers: [],
+    skills: ["code-discovery"],
+    // Reads the graph and the repo; git shortlog and log name the owners when there is no CODEOWNERS.
+    access: access(READ_ONLY, { commands: ["git shortlog", "git log"] }),
+    writable: false,
+    maxTurns: 8,
+    timeoutMs: 5 * MINUTE,
+    engines: only("claude:haiku"),
+    effort: "low",
+    answer: CodeMapAnswer,
+    template: "code_map.md",
   },
   plan_fast: {
     id: "plan_fast",

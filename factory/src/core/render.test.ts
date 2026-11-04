@@ -107,6 +107,16 @@ describe("renderPrompt", () => {
     expect(render(undefined)).toContain("Code graph: (none: use Glob, Grep and Read)");
   });
 
+  it("renders the code map the planner reads: components, files, owners and the note", () => {
+    const template = "{{context.plan.map}}";
+    const plan = { record: null, brief: "b", criteria: [], assumptions: [], slices: [] };
+    const map = { components: ["board keys", "board app"], files: ["board/src/keys.rs"], owners: ["@marta", "@lee"], confidence: 0.7, note: "tests not placed" };
+    const render = (p: unknown) => renderPrompt({ pack: PACKS.plan, input: { ...input, context: { ...input.context, plan: p } } as never, template });
+    expect(render({ ...plan, map })).toContain("Components: board keys, board app\nFiles:\n- board/src/keys.rs\nOwners: @marta, @lee\nConfidence: 0.7\nNote: tests not placed");
+    expect(render(plan)).toContain("(none)");
+    expect(render({ ...plan, map: null })).toContain("(none)");
+  });
+
   it("lists the repo's checks for the packs that run them, as the line to type and where", () => {
     const template = "checks:\n{{context.checks}}";
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }, { name: "lint", run: "pnpm lint" }];

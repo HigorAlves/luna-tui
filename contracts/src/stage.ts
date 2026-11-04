@@ -121,6 +121,8 @@ export const PackId = z.enum([
   "eval_judge",
   // Not a task stage: triages a batch of chat items (Slack or Teams) a client sends to POST /runs.
   "chat_triage",
+  // Opens the plan stage (runs in test_design): reads the repo's code graph and names the components, files and owners the goal touches.
+  "code_map",
 ]);
 export type PackId = z.infer<typeof PackId>;
 
@@ -460,6 +462,19 @@ export type TriageRecord = z.infer<typeof TriageRecord>;
 /** What the plan stage's decisions read, and what its second round hands the planner and the test
  *  designer: the record, the plan, the scenarios so far, the criteria no scenario names (`gaps`,
  *  computed from `cases[].criterion`) and which round this is. */
+export const CodeMapAnswer = z.object({
+  /** The parts of the system the goal touches: graph communities or top-level folders. */
+  components: z.array(z.string()),
+  /** Repo-relative files the goal touches, deduplicated, at most 40. */
+  files: z.array(z.string()),
+  /** Who owns those files: CODEOWNERS entries, else the top committers. */
+  owners: z.array(z.string()),
+  confidence: z.number().min(0).max(1),
+  /** What the mapper could not place. */
+  note: z.string().optional(),
+});
+export type CodeMapAnswer = z.infer<typeof CodeMapAnswer>;
+
 export const PlanContext = z.object({
   record: TriageRecord.nullable(),
   brief: z.string(),
@@ -472,6 +487,8 @@ export const PlanContext = z.object({
   round: z.number().int().optional(),
   /** What plan_check found wrong with the last plan, for the planner's next round. */
   review: z.array(z.string()).optional(),
+  /** The code map the plan stage opened with, for the planner and the decisions; null when the repo has no graph. */
+  map: CodeMapAnswer.nullable().optional(),
 });
 export type PlanContext = z.infer<typeof PlanContext>;
 

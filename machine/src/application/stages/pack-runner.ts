@@ -427,6 +427,10 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       },
     });
   }
+  if (pack === "code_map") {
+    const answer = answerOf(output.answer);
+    return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, ...(answer ? { map: answer } : {}) } });
+  }
   if (pack === "test_design" || pack === "test_design_fast") {
     const cases = answerOf(output.answer)?.cases;
     return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, cases: Array.isArray(cases) ? cases : [] } });

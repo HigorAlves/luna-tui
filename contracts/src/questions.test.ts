@@ -92,9 +92,10 @@ describe("the plan stage's decision packs", () => {
     expect(pack.questions.untestable).toMatchObject({ type: "yesno" });
   });
 
-  it("plan_check asks whether the plan fits the record, its slices cover the criteria and its rollback can be followed", () => {
+  it("plan_check asks whether the plan fits the record, its slices cover the criteria, its rollback can be followed and its slices stay inside the code map", () => {
     const pack = PACKS.plan_check;
-    expect(Object.keys(pack.questions)).toEqual(["fits_record", "slices_cover_criteria", "rollback_stated"]);
+    expect(Object.keys(pack.questions)).toEqual(["fits_record", "slices_cover_criteria", "rollback_stated", "touchpoints_in_map"]);
+    expect(pack.questions.touchpoints_in_map).toMatchObject({ type: "yesno", instructions: expect.stringContaining("code map") });
     expect(pack.questions.fits_record).toMatchObject({ type: "score", rubric: { no: expect.any(String), partly: expect.any(String), yes: expect.any(String) } });
   });
 

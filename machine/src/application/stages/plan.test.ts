@@ -32,15 +32,23 @@ const cased = (...criteria: Array<string | null>): StageResult => ({
 const good = {
   risk_score: { blast_radius: { score: 0, confidence: 0.9 }, reversibility: { score: 0, confidence: 0.9 }, data_sensitivity: { score: 0, confidence: 0.9 } },
   coverage_check: { pins: { value: true, p: 0.95 }, redundancy: { score: 0, confidence: 0.9 }, untestable: { value: false, p: 0.05 } },
-  plan_check: { fits_record: { score: 2, confidence: 0.9 }, slices_cover_criteria: { value: true, p: 0.95 }, rollback_stated: { value: true, p: 0.95 } },
+  plan_check: { fits_record: { score: 2, confidence: 0.9 }, slices_cover_criteria: { value: true, p: 0.95 }, rollback_stated: { value: true, p: 0.95 }, touchpoints_in_map: { value: true, p: 0.95 } },
 };
 const bad = { ...good.plan_check, rollback_stated: { value: false, p: 0.05 } };
+const mapped = (over: Record<string, unknown> = {}): StageResult => ({
+  outcome: "pass",
+  detail: { summary: "mapped", map: { components: ["board keys"], files: ["board/src/keys.rs"], owners: ["@marta"], confidence: 0.8 }, ...over },
+  events: [{ at: "t", kind: "stage.note", payload: { from: "map" } }],
+  usage: { turns: 1, costUsd: 0.01 },
+});
+const theMap = { components: ["board keys"], files: ["board/src/keys.rs"], owners: ["@marta"], confidence: 0.8 };
+const withGraph = { graph: { stampOf: async () => ({ commit: "c" }) } };
 
 interface Call { pack: string; runId: string; context: StageContext; plan?: PlanContext }
 const fastTask = { ...task, record: { ...record, decision: "fast_lane", risk: "low" } } as unknown as TaskRow;
 const needsFull: StageResult = { outcome: "pass", detail: { summary: "a second component appears", needsFullPlan: true }, events: [{ at: "t", kind: "stage.note", payload: { from: "fast" } }] };
 
-function setup(script: { plan?: StageResult[]; test_design?: StageResult[]; plan_fast?: StageResult[]; test_design_fast?: StageResult[]; answers?: Partial<Record<"risk_score" | "coverage_check" | "plan_check", Array<Record<string, unknown> | Error>>> } = {}, over: Partial<PlanDeps> = {}) {
+function setup(script: { plan?: StageResult[]; test_design?: StageResult[]; plan_fast?: StageResult[]; test_design_fast?: StageResult[]; code_map?: StageResult[]; answers?: Partial<Record<"risk_score" | "coverage_check" | "plan_check", Array<Record<string, unknown> | Error>>> } = {}, over: Partial<PlanDeps> = {}) {
   const calls: Call[] = [];
   const decided: Array<{ pack: string; plan: PlanContext; repo: string | null }> = [];
   const queues = {
@@ -48,6 +56,7 @@ function setup(script: { plan?: StageResult[]; test_design?: StageResult[]; plan
     test_design: [...(script.test_design ?? [cased("no panic", "stays selected")])],
     plan_fast: [...(script.plan_fast ?? [planned()])],
     test_design_fast: [...(script.test_design_fast ?? [cased("no panic", "stays selected")])],
+    code_map: [...(script.code_map ?? [mapped()])],
   };
   const answers = Object.fromEntries((["risk_score", "coverage_check", "plan_check"] as const).map((p) => [p, [...(script.answers?.[p] ?? [])]]));
   const deps: PlanDeps = {
@@ -62,12 +71,68 @@ function setup(script: { plan?: StageResult[]; test_design?: StageResult[]; plan
       if (next instanceof Error) throw next;
       return next;
     },
-    policies: { for: async () => ({ decisions: {} }) },
+    policies: { for: async () => ({ decisions: {}, graph: true }) },
     log: () => {},
     ...over,
   };
   return { run: planStage(deps), calls, decided, deps };
 }
+
+describe("planStage's code map", () => {
+  it("runs code_map first, under <runId>-map, when the repo has a graph, and hands the map to the planner and every decision", async () => {
+    const { run, calls, decided } = setup({}, withGraph);
+    const result = await run(context());
+    expect(calls.map((c) => [c.pack, c.runId])).toEqual([["code_map", "r1-map"], ["plan", "r1-plan"], ["test_design", "r1-tests-1"]]);
+    expect(calls[1]!.plan).toMatchObject({ record, map: theMap });
+    expect(calls[2]!.plan).toMatchObject({ map: theMap });
+    for (const d of decided) expect(d.plan).toMatchObject({ map: theMap });
+    expect(result.detail).toMatchObject({ map: theMap });
+    expect(result.events).toContainEqual({ at: "t", kind: "stage.note", payload: { from: "map" } });
+    expect(result.usage?.turns).toBe(6);
+  });
+
+  it("does not call code_map without a graph, or with the repo's graph off, and the detail says map null", async () => {
+    for (const over of [{}, { graph: { stampOf: async () => null } }, { ...withGraph, policies: { for: async () => ({ decisions: {}, graph: false }) } }]) {
+      const { run, calls, decided } = setup({}, over);
+      const result = await run(context());
+      expect(calls.map((c) => c.pack)).toEqual(["plan", "test_design"]);
+      expect(calls[0]!.plan).toBeUndefined();
+      for (const d of decided) expect(d.plan.map ?? null).toBeNull();
+      expect(result.detail).toMatchObject({ map: null });
+    }
+  });
+
+  it("goes on without a map when code_map fails, and says why in the log", async () => {
+    const lines: string[] = [];
+    const { run, calls } = setup({ code_map: [{ outcome: "fail", detail: { error: "timed out" } }] }, { ...withGraph, log: (l) => lines.push(l) });
+    const result = await run(context());
+    expect(calls.map((c) => c.pack)).toEqual(["code_map", "plan", "test_design"]);
+    expect(result.outcome).toBe("pass");
+    expect(result.detail).toMatchObject({ map: null });
+    expect(lines).toEqual([expect.stringContaining("code_map")]);
+  });
+
+  it("keeps the map on the planner's re-runs", async () => {
+    const { run, calls } = setup({ answers: { plan_check: [bad, good.plan_check] } }, withGraph);
+    await run(context());
+    const replans = calls.filter((c) => c.pack === "plan");
+    expect(replans).toHaveLength(2);
+    expect(replans[1]!.plan).toMatchObject({ map: theMap, round: 2 });
+  });
+
+  it("makes a slice outside the map a plan_check finding only when a map exists", async () => {
+    const outside = { ...good.plan_check, touchpoints_in_map: { value: false, p: 0.05 } };
+    const withMap = setup({ answers: { plan_check: [outside] } }, withGraph);
+    const flagged = await withMap.run(context());
+    expect(withMap.calls.filter((c) => c.pack === "plan").length).toBeGreaterThan(1);
+    expect(withMap.calls.filter((c) => c.pack === "plan")[1]!.plan).toMatchObject({ review: ["a slice touches files outside the code map"] });
+    expect(flagged.detail).toMatchObject({ verdicts: { plan: "flag" } });
+    const noMap = setup({ answers: { plan_check: [outside] } });
+    const clean = await noMap.run(context());
+    expect(noMap.calls.filter((c) => c.pack === "plan")).toHaveLength(1);
+    expect(clean.detail).toMatchObject({ verdicts: { plan: "proceed" }, flagged: [] });
+  });
+});
 
 describe("planStage", () => {
   it("runs the planner, the test designer, then coverage, plan and risk decisions, and returns the plan for the one approval", async () => {

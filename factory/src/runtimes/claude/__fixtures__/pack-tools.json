@@ -582,5 +582,38 @@
   "chat_triage": {
     "allowedTools": [],
     "tools": []
+  },
+  "code_map": {
+    "allowedTools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Skill",
+      "mcp__luna__step",
+      "Bash(cat:*)",
+      "Bash(ls:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(pwd:*)",
+      "Bash(echo:*)",
+      "Bash(git branch --show-current:*)",
+      "Bash(git rev-parse:*)",
+      "Bash(graphify query:*)",
+      "Bash(graphify explain:*)",
+      "Bash(graphify path:*)",
+      "Bash(graphify affected:*)",
+      "Bash(graphify god-nodes:*)",
+      "Bash(git shortlog:*)",
+      "Bash(git log:*)"
+    ],
+    "tools": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Skill",
+      "mcp__luna__step",
+      "Bash"
+    ]
   }
 }

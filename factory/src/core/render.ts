@@ -192,6 +192,19 @@ export interface RenderInput {
   projectContext?: string | null;
 }
 
+/** The code map the plan stage opens with, as the planner reads it. */
+function mapText(map: NonNullable<StageInput["context"]["plan"]>["map"]): string {
+  if (!map) return NONE;
+  const list = (items: string[]) => (items.length ? items.join(", ") : "?");
+  return [
+    `Components: ${list(map.components)}`,
+    `Files:\n${map.files.length ? map.files.map((f) => `- ${f}`).join("\n") : "- ?"}`,
+    `Owners: ${list(map.owners)}`,
+    `Confidence: ${map.confidence}`,
+    ...(map.note ? [`Note: ${map.note}`] : []),
+  ].join("\n");
+}
+
 /** The line that says where the code graph is, and how far to trust it. */
 function graphText(graph: StageInput["context"]["graph"]): string {
   if (!graph) return "Code graph: (none: use Glob, Grep and Read)";
@@ -214,6 +227,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{task.branch}}": txt(input.task.branch),
     "{{task.classification}}": classificationLines(input.task.classification),
     "{{task.record}}": recordText(input.task.record),
+    "{{context.plan.map}}": mapText(input.context.plan?.map),
     "{{context.plan.gaps}}": bullets(input.context.plan?.gaps),
     "{{context.plan.review}}": bullets(input.context.plan?.review),
     "{{context.plan.cases}}": bullets((input.context.plan?.cases ?? []).map((c) => `${c.title}${c.criterion ? ` (criterion: ${c.criterion})` : ""}: ${c.approach}`)),
