@@ -7,6 +7,8 @@ import { WAITING_ON_USER, type TaskState } from "@hardness/contracts";
 import { basename } from "node:path";
 
 import { safe } from "../domain/evidence-markdown.ts";
+import { archivedNotice } from "../domain/notices.ts";
+import { carriesSecret, postable } from "../domain/postable.ts";
 import { fromNotch } from "../domain/jira-link.ts";
 import { type GitHub, messageOf } from "./github.ts";
 import type { EventRow, TaskRow } from "../domain/task.ts";
@@ -74,12 +76,12 @@ export class ThreadReplies {
       if (to === "escalated") return this.reply(event.taskId, `Escalated: ${safe(String(event.payload.reason ?? "see the board"))}.`);
       if (to === "paused_rate_limit") return this.reply(event.taskId, "Paused on a usage limit; it resumes by itself.");
       if (to === "closed") return this.reply(event.taskId, "Closed.");
-      if (to === "archived") return this.reply(event.taskId, `Archived: ${String(event.payload.archiveReason ?? "no reason given")}.`);
+      if (to === "archived") return this.reply(event.taskId, archivedNotice(event.payload.archiveReason));
       if (WAITING_ON_USER.has(to) && to !== from) return this.reply(event.taskId, `Needs you: ${ASKS[to] ?? to}.`);
       return;
     }
-    // A conversation outcome's answer, drafted by triage and approved in one click: posted as the ticket's reply.
-    if (event.kind === "task.reply") return typeof event.payload.body === "string" && event.payload.body ? this.reply(event.taskId, event.payload.body) : undefined;
+    // A conversation outcome's answer (approved in one tap) and triage's questions: posted where the card came from, and nowhere else.
+    if (event.kind === "task.reply" || event.kind === "task.questions") return typeof event.payload.body === "string" && event.payload.body ? this.toSource(event.taskId, event.payload.body) : undefined;
     if (event.kind === "sla.reminder") {
       const gate = event.payload.gate as TaskState;
       return this.reply(event.taskId, `Still waiting on you: ${ASKS[gate] ?? gate}.`);
@@ -94,6 +96,30 @@ export class ThreadReplies {
       seen.add(url);
       this.announced.set(event.taskId, seen);
       return this.reply(event.taskId, `PR opened: ${url}`);
+    }
+  }
+
+  /** Text a model or a person wrote, flattened with `postable`, to the card's own source only: its GitHub issue, or the Slack thread it came
+   *  from through your user token. A card with no source gets nothing; a Jira ticket is JiraSync's. Text that carries a token is not posted. */
+  private async toSource(taskId: string, text: string): Promise<void> {
+    const task = await this.options.pipeline.get(taskId);
+    if (fromNotch(task)) return;
+    const body = postable(text);
+    if (!body) return;
+    // Flattening redacts a token, but a text that carried one is a drafted answer nobody should post as it stands.
+    if (carriesSecret(text)) {
+      console.warn(`not posting to the source of task ${taskId}: the text carried a secret-shaped token`);
+      return;
+    }
+    const source = task.source;
+    if (source?.kind === "github") return this.comment(task, body);
+    if (source?.kind !== "slack") return;
+    const port = this.options.slackPort?.();
+    if (!port) return;
+    try {
+      await port.postMessage(source.channel, body, source.ts);
+    } catch (error) {
+      console.warn(`slack post to the source thread failed for task ${taskId}: ${messageOf(error)}`);
     }
   }
 

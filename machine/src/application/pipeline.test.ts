@@ -441,18 +441,22 @@ describe("triage outcomes", () => {
     expect(await pipeline.decide(task.id, "approved")).toMatchObject({ state: "archived", archiveReason: "rejected" });
   });
 
-  it("records the reply on approving a conversation, then archives it as not for an agent", async () => {
+  it("records the reply on approving a conversation, then ends it closed", async () => {
     stubs.plan("triage", { outcome: "pass", detail: { outcome: "conversation", reply: "Use `pnpm dev`.", record } });
     const task = await newTask();
     expect((await pipeline.start(task.id)).state).toBe("awaiting_approval");
 
-    const archived = await pipeline.decide(task.id, "approved");
-    expect(archived).toMatchObject({ state: "archived", archiveReason: "not_for_agent" });
+    const closed = await pipeline.decide(task.id, "approved");
+    expect(closed).toMatchObject({ state: "closed", archiveReason: null });
     const events = await pipeline.events(task.id);
     const reply = events.find((e) => e.kind === "task.reply");
     expect(reply?.payload).toEqual({ body: "Use `pnpm dev`." });
-    // The reply is posted only by the request that closed the gate: after the archive, never before it.
-    expect(events.findIndex((e) => e.kind === "task.reply")).toBeGreaterThan(events.findIndex((e) => e.kind === "transition" && e.payload.to === "archived"));
+    // The reply is posted only by the request that closed the gate: after the close, never before it.
+    expect(events.findIndex((e) => e.kind === "task.reply")).toBeGreaterThan(events.findIndex((e) => e.kind === "transition" && e.payload.to === "closed"));
+    expect(events.some((e) => e.kind === "transition" && e.payload.to === "archived")).toBe(false);
+    // A second tap finds the gate shut and posts nothing more.
+    await expect(pipeline.decide(task.id, "approved")).rejects.toThrow();
+    expect((await pipeline.events(task.id)).filter((e) => e.kind === "task.reply")).toHaveLength(1);
   });
 
   it("re-runs triage when an outcome gate is sent back, and the plan stage when the plan is", async () => {
@@ -2321,6 +2325,10 @@ describe("ingested stage output", () => {
     expect(asking.state).toBe("awaiting_answers");
     const [approval] = await pipeline.approvals(task.id);
     expect(approval?.requested).toMatchObject({ summary: "s", questions: needsInput, actions: requested });
+    // The questions also go out as one flattened comment row, which the source's thread and ticket replies read.
+    const asked = (await pipeline.events(task.id)).filter((e) => e.kind === "task.questions");
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.payload.body).toBe("Luna needs your answers to go on: 1) Which db? (suggested: pg)");
   });
 });
 

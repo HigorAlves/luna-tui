@@ -499,8 +499,8 @@ export const TaskClassification = z.object({
 });
 export type TaskClassification = z.infer<typeof TaskClassification>;
 
-/** Why a task was archived instead of closed. */
-export const ArchiveReason = z.enum(["duplicate", "sla_expired", "rejected", "not_for_agent", "pr_closed"]);
+/** Why a task was archived instead of closed. `no_setup` and `no_answer`: nobody set the repo up, nobody answered triage's questions, within the SLA (`sla_expired` is what older cards carry). */
+export const ArchiveReason = z.enum(["duplicate", "sla_expired", "rejected", "not_for_agent", "pr_closed", "no_setup", "no_answer"]);
 export type ArchiveReason = z.infer<typeof ArchiveReason>;
 
 /** Why a stage stopped on purpose: `plan_wrong` the plan cannot be built as written (triage runs again),

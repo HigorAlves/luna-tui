@@ -50,7 +50,7 @@ describe("loadConfig", () => {
       slack: null,
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null },
       jira: null,
-      sla: { gateSecs: 3600, cycleSecs: null },
+      sla: { gateSecs: 172_800, cycleSecs: null },
     });
   });
 
@@ -272,7 +272,7 @@ describe("loadConfig", () => {
   });
 
   it("reads the SLA defaults: a one-hour gate unless told otherwise, no cycle unless told, off for none", () => {
-    expect(loadConfig({}).sla).toEqual({ gateSecs: 3600, cycleSecs: null });
+    expect(loadConfig({}).sla).toEqual({ gateSecs: 172_800, cycleSecs: null });
     expect(loadConfig({ MACHINE_SLA_GATE: "30m", MACHINE_SLA_CYCLE: "3d" }).sla).toEqual({ gateSecs: 1800, cycleSecs: 259_200 });
     expect(loadConfig({ MACHINE_SLA_GATE: "off" }).sla.gateSecs).toBeNull();
     expect(() => loadConfig({ MACHINE_SLA_GATE: "soon" })).toThrow(/MACHINE_SLA_GATE must be a duration/);

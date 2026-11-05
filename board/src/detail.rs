@@ -409,7 +409,7 @@ pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'stat
     let gate = detail.and_then(|d| d.open_approval()).filter(|a| a.kind_or_guess() == "awaiting_approval");
     let approve_plan = match gate {
         Some(a) if a.outcome() == Some("archive") => "a archive the ticket · r send back (triage again)".to_string(),
-        Some(a) if a.outcome() == Some("conversation") => "a post the reply and archive · r send back (triage again)".to_string(),
+        Some(a) if a.outcome() == Some("conversation") => "a post the reply and close · r send back (triage again)".to_string(),
         Some(a) if a.requested["risk"]["level"].as_str() == Some("high") => {
             let who = if a.approvers().is_empty() { "first of two approvers; set LUNA_APPROVER" } else { "second of two approvers" };
             format!("a approve ({who}) · r send back · e edit the plan")
@@ -673,7 +673,7 @@ fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'s
         lines.extend(facts);
     }
     if let Some(reply) = approval.reply() {
-        lines.extend([Line::default(), proposal_heading("Reply (a posts it on the ticket and archives it)")]);
+        lines.extend([Line::default(), proposal_heading("Reply (a posts it where the ticket came from and closes it)")]);
         lines.extend(reply.lines().map(|l| Line::from(format!("  {l}"))));
     }
     if approval.outcome() == Some("archive") {
@@ -1551,7 +1551,7 @@ mod tests {
         assert!(strip(r#"{"brief":"b","risk":{"level":"high"}}"#).contains("a approve (first of two approvers; set LUNA_APPROVER)"));
         assert!(strip(PLAN_GATE).contains("a approve (second of two approvers)"), "{}", strip(PLAN_GATE));
         assert!(strip(r#"{"outcome":"archive","archiveReason":"duplicate"}"#).contains("a archive the ticket · r send back"));
-        assert!(strip(r#"{"outcome":"conversation","reply":"x"}"#).contains("a post the reply and archive · r send back"));
+        assert!(strip(r#"{"outcome":"conversation","reply":"x"}"#).contains("a post the reply and close · r send back"));
     }
 
     #[test]

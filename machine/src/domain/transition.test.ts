@@ -180,6 +180,12 @@ describe("gates", () => {
     }
   });
 
+  it("ends a conversation closed once its reply is approved, and nowhere else", () => {
+    expect(transition(at("awaiting_approval"), { type: "replied" })).toMatchObject({ state: "closed", effect: { kind: "done" } });
+    expect(() => transition(at("triage"), { type: "replied" })).toThrow();
+    expect(() => transition(at("awaiting_ship"), { type: "replied" })).toThrow();
+  });
+
   it("re-runs triage when a triage gate is sent back, and the plan stage when the plan is", () => {
     expect(transition(at("awaiting_approval"), { type: "sent_back", from: "triage" }).state).toBe("triage");
     expect(transition(at("awaiting_approval"), { type: "sent_back", from: "plan" }).state).toBe("test_design");

@@ -10,6 +10,7 @@ import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { questionsComment } from "../domain/notices.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
@@ -687,12 +688,16 @@ export class Pipeline {
     }
     if (approver) answered = { ...answered, approver };
     const record = { decision, reason, ...(answered ? { response: answered } : {}) };
-    if (decision === "approved" && (outcome === "archive" || outcome === "conversation")) {
-      // One click: an archive is final and a reply is posted on the ticket's thread; neither plans. The
-      // archive runs under the row lock, so only the request that closed the gate goes on to post.
-      const why: ArchiveReason = outcome === "conversation" ? "not_for_agent" : TRIAGE_ARCHIVE[String(open!.requested.archiveReason)] ?? "rejected";
-      const archived = await this.archive(id, why, { decision: record });
-      if (outcome === "conversation") await this.log(id, "task.reply", { body: String(open!.requested.reply ?? "") });
+    if (decision === "approved" && outcome === "conversation") {
+      // One tap: the reply is posted where the card came from and the conversation ends closed, not archived. The close runs under
+      // the row lock, so only the request that closed the gate goes on to post.
+      await this.dispatch(id, { type: "replied" }, { decision: record, onlyFrom: new Set<TaskState>(["awaiting_approval"]) });
+      await this.log(id, "task.reply", { body: String(open!.requested.reply ?? "") });
+      return this.get(id);
+    }
+    if (decision === "approved" && outcome === "archive") {
+      // One click: an archive is final and neither plans nor posts.
+      const archived = await this.archive(id, TRIAGE_ARCHIVE[String(open!.requested.archiveReason)] ?? "rejected", { decision: record });
       return (await this.store.getTask(id)) ?? archived;
     }
     // A gate that carries triage's outcome came from triage; any other open approval is the plan stage's.
@@ -1544,6 +1549,11 @@ export class Pipeline {
     });
 
     this.onEvent(logged);
+    // Triage's questions, as one comment for the card's own source to post (the thread and ticket replies read this row).
+    const asked = extra.detail?.questions;
+    if (step.effect.kind === "wait" && step.effect.gate === "awaiting_answers" && Array.isArray(asked) && asked.length > 0) {
+      await this.log(id, "task.questions", { body: questionsComment(asked as Array<{ question: string; recommended: string | null }>) });
+    }
     return step;
   }
 

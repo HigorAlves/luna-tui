@@ -25,7 +25,7 @@ export interface SlaTargets {
   /** Keyed by running stage. */
   stage: Record<string, number>;
   cycle: number | null;
-  /** How long a ticket may sit at an intake gate before it is archived; null (the default) never. */
+  /** How long a ticket may sit at an intake gate before it is archived; null means `off`, absent means the diagram's five days (`triage.sla.archive_days`). */
   archive: number | null;
 }
 
@@ -35,7 +35,8 @@ export interface SlaDefaults {
   cycle: number | null;
 }
 
-export const DEFAULT_GATE_SECS = 3600;
+/** A gate reminds after two days, as the diagram draws every gate's SLA (it was an hour before wave 9). */
+export const DEFAULT_GATE_SECS = 2 * 86_400;
 
 export interface SlaInput {
   task: Pick<TaskRow, "state" | "createdAt" | "jira">;

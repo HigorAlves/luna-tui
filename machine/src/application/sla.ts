@@ -2,9 +2,10 @@
 // state), the running stage run's start and its repo's targets, at the moment it is serialized.
 // Nothing is stored beyond `state_since`; a minute tick (main.ts) recomputes every open task
 // from one list and one stage-run query, and republishes the tasks whose clocks flipped.
-import { TaskSla, isTerminal } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, TaskSla, isTerminal } from "@hardness/contracts";
 
-import { type SlaDefaults, computeSla, slaFlags } from "../domain/sla.ts";
+import { type SlaDefaults, type SlaTargets, computeSla, slaFlags } from "../domain/sla.ts";
+import { AUTO_ARCHIVE_GATES } from "./sla-actions.ts";
 import type { TaskRow } from "../domain/task.ts";
 import type { Policy } from "../domain/policy.ts";
 
@@ -65,7 +66,7 @@ export class SlaClocks {
         try {
           const policy = await policyOf(task.repoPath);
           const stageStartedAt = policy.sla.stage?.[task.state] ? await startOf(task) : null;
-          const sla = computeSla({ task, stateSince: task.stateSince, stageStartedAt, targets: policy.sla, defaults: this.options.defaults }, now);
+          const sla = computeSla({ task, stateSince: task.stateSince, stageStartedAt, targets: triageGateTargets(task.state, policy), defaults: this.options.defaults }, now);
           this.shown.set(task.id, slaFlags(sla));
           return sla;
         } catch (error) {
@@ -75,4 +76,11 @@ export class SlaClocks {
       }),
     );
   }
+}
+
+/** The repo's targets, with the triage gates' reminder (`triage.sla.reminder_days`) where the repo moved it off the diagram's two days and its `sla` block names no gate target. */
+function triageGateTargets(state: string, policy: Policy): Partial<SlaTargets> {
+  const days = policy.factory.triage.sla.reminder_days;
+  if (policy.sla.gate !== undefined || !AUTO_ARCHIVE_GATES.has(state as never) || days === FACTORY_DEFAULTS.triage.sla.reminder_days) return policy.sla;
+  return { ...policy.sla, gate: days * 86_400 };
 }

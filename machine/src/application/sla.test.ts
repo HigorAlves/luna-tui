@@ -71,3 +71,18 @@ describe("SlaClocks", () => {
     expect(sla?.stage).toBeNull();
   });
 });
+
+describe("SlaClocks and the triage gates' reminder", () => {
+  const since = new Date("2026-11-01T00:00:00Z");
+  const task = (state: string) => ({ id: "t", state, createdAt: since, stateSince: since, jira: null }) as never;
+  const clocks = (policy: object) => new SlaClocks({ pipeline: { policyFor: async () => ({ ...DEFAULT_POLICY, ...policy }) as never, runningStageStarts: async () => new Map() }, defaults: { gate: 172_800, cycle: null }, now: () => new Date("2026-11-01T01:00:00Z") });
+  const triage = (days: number) => ({ factory: { ...DEFAULT_POLICY.factory, triage: { ...DEFAULT_POLICY.factory.triage, sla: { reminder_days: days, archive_days: 5 } } } });
+
+  it("reminds after the repo's triage.sla.reminder_days at the setup and questions gates, when its sla block names no gate", async () => {
+    expect((await clocks(triage(1)).for(task("awaiting_answers")))?.gate?.targetSecs).toBe(86_400);
+    expect((await clocks(triage(1)).for(task("awaiting_setup")))?.gate?.targetSecs).toBe(86_400);
+    expect((await clocks(triage(1)).for(task("awaiting_approval")))?.gate?.targetSecs).toBe(172_800);
+    expect((await clocks({ ...triage(1), sla: { gate: 600 } }).for(task("awaiting_answers")))?.gate?.targetSecs).toBe(600);
+    expect((await clocks(triage(2)).for(task("awaiting_answers")))?.gate?.targetSecs).toBe(172_800);
+  });
+});

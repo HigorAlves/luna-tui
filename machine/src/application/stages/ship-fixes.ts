@@ -20,7 +20,7 @@ import {
 
 import { HOST_GIT, type GitExec, type RebaseResult } from "../../adapters/git/worktree.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
-import { redact, safe } from "../../domain/evidence-markdown.ts";
+import { carriesSecret, postable } from "../../domain/postable.ts";
 import type { PublishEvidence } from "../evidence-publish.ts";
 import { type GitHub, messageOf } from "../github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
@@ -28,16 +28,11 @@ import { pushBranch } from "./deliver.ts";
 import { followUp } from "./pr-address.ts";
 import { gatherPr } from "./pr-review.ts";
 
-/** The longest a reply the monitor posts may be, after flattening. */
-export const REPLY_CAP = 1500;
+export { REPLY_CAP, carriesSecret, postable } from "../../domain/postable.ts";
 /** The longest the sentence a fix adds to the pack's summary may be. */
 const SUMMARY_ADD_CAP = 200;
 const SHA = /^[0-9a-f]{40,64}$/;
 
-/** A model's text made safe to post: one line, no HTML, no `@mention`, no `#N` auto-link, capped. */
-export const postable = (text: string, cap = REPLY_CAP): string => safe(text).slice(0, cap).trim();
-/** Whether the text carried a token-shaped string: such a drafted answer is never posted. */
-export const carriesSecret = (text: string): boolean => redact(text) !== text;
 export const SECRET_REASON = "the drafted answer carried a secret-shaped token";
 
 export type ShipDecisionPack = "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning";

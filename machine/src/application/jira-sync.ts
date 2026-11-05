@@ -13,6 +13,8 @@ import { WAITING_ON_USER, type JiraLink, type TaskState } from "@hardness/contra
 
 import { safe } from "../domain/evidence-markdown.ts";
 import { jiraOf } from "../domain/jira-link.ts";
+import { archivedNotice } from "../domain/notices.ts";
+import { carriesSecret, postable } from "../domain/postable.ts";
 import type { JiraPolicy, Policy } from "../domain/policy.ts";
 import type { ArtifactRow, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { type Jira, messageOf } from "./jira.ts";
@@ -109,7 +111,7 @@ export class JiraSync {
   }
 
   private async react(event: EventRow): Promise<void> {
-    if (event.kind !== "transition" && event.kind !== "stage.finished" && event.kind !== "sla.reminder" && event.kind !== "task.reply" && event.kind !== "task.shipped") return;
+    if (event.kind !== "transition" && event.kind !== "stage.finished" && event.kind !== "sla.reminder" && event.kind !== "task.reply" && event.kind !== "task.questions" && event.kind !== "task.shipped") return;
     const task = await this.options.pipeline.get(event.taskId);
     const link = jiraOf(task);
     if (!link) return;
@@ -126,8 +128,11 @@ export class JiraSync {
       return;
     }
 
-    if (event.kind === "task.reply") {
-      if (policy.comments !== "none" && typeof event.payload.body === "string" && event.payload.body) await this.comment(link, event.payload.body);
+    if (event.kind === "task.reply" || event.kind === "task.questions") {
+      // Flattened like every outward text, and only onto the ticket the card came from (`jiraOf(task)` is its own link).
+      const raw = typeof event.payload.body === "string" ? event.payload.body : "";
+      const body = postable(raw);
+      if (policy.comments !== "none" && task.source?.kind === "jira" && body && !carriesSecret(raw)) await this.comment(link, body);
       return;
     }
 
@@ -154,7 +159,7 @@ export class JiraSync {
       // An intake import was already told "Picked up" by JiraIntake when the ticket was made.
       if (from === "draft" && event.payload.event === "start" && task.source?.kind !== "jira") await this.comment(link, `Picked up as task #${task.id.slice(0, 8)} on the Luna board.`);
       else if (to === "closed") await this.comment(link, await this.closing(task));
-      else if (to === "archived") await this.comment(link, `Archived: ${String(event.payload.archiveReason ?? "no reason given")}.`);
+      else if (to === "archived") await this.comment(link, archivedNotice(event.payload.archiveReason));
       else if (policy.comments === "gates" && WAITING_ON_USER.has(to) && to !== from) {
         await this.comment(link, to === "escalated" ? `Escalated: ${safe(String(event.payload.reason ?? "see the board"))}.` : `Needs you: ${ASKS[to] ?? to}.`);
       }

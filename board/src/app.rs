@@ -4103,7 +4103,7 @@ mod tests {
         assert!(matches!(app.mode, Mode::ArchiveReason { cursor: 2, .. }));
         press(&mut app, KeyCode::Esc);
         assert!(matches!(app.mode, Mode::Normal));
-        assert_eq!(ARCHIVE_REASONS.map(|(name, _)| name), ["duplicate", "sla_expired", "rejected", "not_for_agent", "pr_closed"]);
+        assert_eq!(ARCHIVE_REASONS.map(|(name, _)| name), ["duplicate", "sla_expired", "rejected", "not_for_agent", "pr_closed", "no_setup", "no_answer"]);
         app.focus = app.tasks[1].column_index();
         app.select("bbbbbbbb0000", true);
         press(&mut app, KeyCode::Char('Z'));

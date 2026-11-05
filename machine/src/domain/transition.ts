@@ -43,6 +43,8 @@ export type PipelineEvent =
   /** Ends the task without shipping or closing it: from any state that has not ended. */
   | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
+  /** A conversation outcome's reply was approved at its gate: the reply goes where the card came from and the card ends closed. */
+  | { type: "replied" }
   | { type: "approved" }
   /** `from` says which stage opened the gate: `triage` (a reply or an archive to confirm) or `plan` (the plan stage's scenarios). */
   | { type: "sent_back"; from?: "triage" | "plan" }
@@ -186,6 +188,9 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       break;
     case "answered":
       if (state === "awaiting_answers") return run(task.resumeTo ?? "triage", retries);
+      break;
+    case "replied":
+      if (state === "awaiting_approval" && task.route === "feature") return done(retries);
       break;
     case "approved":
       return approved(task, event);

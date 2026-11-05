@@ -134,7 +134,7 @@ pub struct Task {
     pub retries: Retries,
     pub resume_to: Option<String>,
     pub reason: Option<String>,
-    /// Why the ticket was archived (`duplicate`, `sla_expired`, `rejected`, `not_for_agent`, `pr_closed`); absent otherwise and from machines that predate archiving.
+    /// Why the ticket was archived (`duplicate`, `sla_expired`, `rejected`, `not_for_agent`, `pr_closed`, `no_setup`, `no_answer`); absent otherwise and from machines that predate archiving.
     #[serde(default)]
     pub archive_reason: Option<String>,
     /// What every stage run of this ticket has cost so far; None when unknown.
@@ -1747,12 +1747,14 @@ pub enum Look {
 }
 
 /// Why a ticket may be archived, in the order the picker lists them: the machine's `ArchiveReason`.
-pub const ARCHIVE_REASONS: [(&str, &str); 5] = [
+pub const ARCHIVE_REASONS: [(&str, &str); 7] = [
     ("duplicate", "duplicate of another ticket"),
     ("sla_expired", "nobody answered in time"),
     ("rejected", "decided against"),
     ("not_for_agent", "not work for an agent"),
     ("pr_closed", "its PR was closed"),
+    ("no_setup", "nobody set the repository up in time"),
+    ("no_answer", "nobody answered the questions in time"),
 ];
 
 /// The first 8 characters of a task id: what cards and watch-tab labels show.

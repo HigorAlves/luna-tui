@@ -563,10 +563,14 @@ const slaTicker = new Ticker(() => {
       const rows: SlaRow[] = [];
       for (const task of gated) {
         const sla = clocks.get(task.id) ?? null;
-        const targets = (await pipeline.policyFor(task.repoPath)).sla;
-        if (!sla?.gate?.overdue && typeof targets.archive !== "number") continue;
+        const policy = await pipeline.policyFor(task.repoPath);
+        const targets = policy.sla;
+        // The diagram's `triage.sla.archive_days` (five) when the repo's sla block says nothing; 0 turns it off.
+        const defaultArchive = policy.factory.triage.sla.archive_days > 0 ? policy.factory.triage.sla.archive_days * 86_400 : null;
+        const archiving = AUTO_ARCHIVE_GATES.has(task.state) && (targets.archive !== undefined ? typeof targets.archive === "number" : defaultArchive !== null);
+        if (!sla?.gate?.overdue && !archiving) continue;
         const reminders = (await pipeline.events(task.id)).filter((event) => event.kind === "sla.reminder");
-        rows.push({ task, sla, targets, lastReminderAt: reminders.length ? new Date(Math.max(...reminders.map((event) => event.at.getTime()))) : null });
+        rows.push({ task, sla, targets, defaultArchive, lastReminderAt: reminders.length ? new Date(Math.max(...reminders.map((event) => event.at.getTime()))) : null });
       }
       await applySlaActions(rows, new Date(), { record: (id, kind, payload) => pipeline.record(id, kind, payload), archive: (id, reason) => pipeline.archive(id, reason, { onlyFrom: AUTO_ARCHIVE_GATES }) });
     })

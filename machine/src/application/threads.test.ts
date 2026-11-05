@@ -178,3 +178,47 @@ describe("an escalation's reason reaches a channel flattened", () => {
     expect(body).toContain("[redacted]");
   });
 });
+
+describe("ThreadReplies: a reply and triage's questions go to the card's own source only", () => {
+  const slackSource = { kind: "slack" as const, channel: "C0SRC", ts: "1700.01", permalink: "https://x.slack.com/archives/C0SRC/p1" };
+  const event = (taskId: string, kind: string, body: string) => ({ id: "e", taskId, kind, payload: { body }, at: new Date(), stageRunId: null }) as never;
+
+  it("posts a conversation's reply on the GitHub issue, flattened, and not in the machine's own Slack thread", async () => {
+    const { pipeline, replies, comments, posts } = wire({ slack: true });
+    const task = await pipeline.createTask({ title: "Q", repoPath: "/r/a", source });
+    await replies.handle(event(task.id, "task.reply", "Use\n`pnpm dev` <b>and</b> ask @bob about #12"));
+    expect(comments).toHaveLength(1);
+    expect(comments[0]![2]).not.toMatch(/\n|<b>|@bob|#12/);
+    expect(comments[0]![2]).toContain("pnpm dev");
+    expect(posts).toEqual([]);
+  });
+
+  it("posts the questions into the Slack thread the card came from, through your user token", async () => {
+    const slackPort = fakeSlack();
+    const { pipeline, replies, comments } = wire({ slackPort });
+    const task = await pipeline.createTask({ title: "Q", repoPath: "/r/a", source: slackSource as never });
+    await replies.handle(event(task.id, "task.questions", "Luna needs your answers to go on: 1) Is this a bug?"));
+    expect(slackPort.postMessage).toHaveBeenCalledWith("C0SRC", expect.stringContaining("Is this a bug?"), "1700.01");
+    expect(comments).toEqual([]);
+  });
+
+  it("posts nothing for a card with no source, for a notch card, or for text carrying a token", async () => {
+    const slackPort = fakeSlack();
+    const { pipeline, replies, comments } = wire({ slackPort });
+    const manual = await pipeline.createTask({ title: "M", repoPath: "/r/a" });
+    await replies.handle(event(manual.id, "task.reply", "an answer"));
+    const gh = await pipeline.createTask({ title: "G", repoPath: "/r/a", source });
+    await replies.handle(event(gh.id, "task.reply", `here is a key ${["ghp", "a".repeat(36)].join("_")}`));
+    expect(comments).toEqual([]);
+    expect(slackPort.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("never posts to a thread the card did not come from: a GitHub card's questions stay off Slack", async () => {
+    const slackPort = fakeSlack();
+    const { pipeline, replies, comments } = wire({ slackPort });
+    const gh = await pipeline.createTask({ title: "G", repoPath: "/r/a", source });
+    await replies.handle(event(gh.id, "task.questions", "Luna needs your answers to go on: 1) Which one?"));
+    expect(comments).toHaveLength(1);
+    expect(slackPort.postMessage).not.toHaveBeenCalled();
+  });
+});

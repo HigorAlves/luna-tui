@@ -350,7 +350,7 @@ const SHARED: &[Binding] = &[
     b("a", "answer triage's questions", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_answers"]), 90),
     b("a", "approve the plan", Group::Gate, Scope::Board, |app| plan_gate(app, None), 90),
     b("a", "archive the ticket (one click)", Group::Gate, Scope::Board, |app| plan_gate(app, Some("archive")), 90),
-    b("a", "post the reply and archive the ticket", Group::Gate, Scope::Board, |app| plan_gate(app, Some("conversation")), 90),
+    b("a", "post the reply and close the ticket", Group::Gate, Scope::Board, |app| plan_gate(app, Some("conversation")), 90),
     b("a", "approve the tests", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_test_check"]), 90),
     b("a", "ship: approve and open the PR", Group::Gate, Scope::Board, |app| gate_is(app, &["awaiting_ship"]), 90),
     b("a", "retry the escalation, with guidance", Group::Gate, Scope::Board, |app| gate_is(app, &["escalated"]), 90),
@@ -1154,7 +1154,7 @@ mod tests {
         let a = bindings_for(&approval, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();
         assert_eq!((a.0.label, a.1), ("approve the plan", Avail::On));
         // A gate triage opened for a reply or an archive says what `a` does there, once its detail is loaded.
-        for (outcome, label) in [("archive", "archive the ticket (one click)"), ("conversation", "post the reply and archive the ticket")] {
+        for (outcome, label) in [("archive", "archive the ticket (one click)"), ("conversation", "post the reply and close the ticket")] {
             let mut gate = app_with(vec![task("t1", "awaiting_approval", true, false, true)]);
             let task_json = r#"{"id":"t1","title":"Login page","description":"","criteria":[],"repoPath":"/r/app","branch":null,"worktreePath":"/w/app","state":"awaiting_approval","column":"Build",
                 "waitingOnYou":true,"running":false,"queued":false,"retries":{"verify":0,"e2e":0,"ci":0,"total":0},"resumeTo":null,"reason":null,

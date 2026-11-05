@@ -88,7 +88,7 @@ and a test fails when they drift from the registry.
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and archive the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `A` | memory review: approve, skip the rules |
 | `r` | send back with a reason |
 | `x` then `S` | ship: approve and open the PR |
@@ -223,7 +223,7 @@ link is the board's `J`):
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and archive the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `A` | memory review: approve, skip the rules |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
@@ -524,7 +524,7 @@ What the ticket shows:
 
 | Key | Does |
 |---|---|
-| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and archive the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
+| `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
 
