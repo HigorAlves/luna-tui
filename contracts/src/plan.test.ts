@@ -146,8 +146,8 @@ describe("the v2.2 plan contracts", () => {
     });
 
     it("takes only plain repo-relative paths from a model: no glob, no absolute path, no `..`, no NUL; the rest is dropped and kept by name", () => {
-      for (const ok of ["src/a.ts", "a.ts", "docs/read me.md", ".github/x.yml", "src/a..b.ts"]) expect(isPlainRepoPath(ok), ok).toBe(true);
-      for (const bad of ["**", "src/*.ts", "src/**/a.ts", "a?.ts", "{a,b}.ts", "[ab].ts", "/etc/passwd", "C:\\x", "\\\\host\\share", "../x", "a/../b", "a\0b", "", " ", "x".repeat(301), "a\nb"]) expect(isPlainRepoPath(bad), JSON.stringify(bad)).toBe(false);
+      for (const ok of ["src/a.ts", "a.ts", "docs/read me.md", ".github/x.yml", "src/a..b.ts", "app/[team]/page.tsx", "app/(shop)/cart.tsx", "app/[...slug]/page.tsx", "a!b.ts"]) expect(isPlainRepoPath(ok), ok).toBe(true);
+      for (const bad of ["**", "src/*.ts", "src/**/a.ts", "a?.ts", "{a,b}.ts", "/etc/passwd", "C:\\x", "\\\\host\\share", "../x", "a/../b", "a\0b", "", " ", "x".repeat(301), "a\nb"]) expect(isPlainRepoPath(bad), JSON.stringify(bad)).toBe(false);
       const { steps, slices } = stepsOfAnswer([{ description: "d", files: ["src/a.ts", "**", { path: "../../etc/passwd", new: true }, { path: "src/new.ts", new: true }], done_when: ["x"], est_loc: 1 }]);
       expect(steps[0]).toMatchObject({ files: ["src/a.ts", "src/new.ts"], new_files: ["src/new.ts"], touchpoints: ["src/a.ts", "src/new.ts"], dropped_files: ["**", "../../etc/passwd"] });
       expect(slices[0]!.touchpoints).toEqual(["src/a.ts", "src/new.ts"]);

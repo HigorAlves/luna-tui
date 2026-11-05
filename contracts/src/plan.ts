@@ -144,9 +144,9 @@ export type PlanStep = z.infer<typeof PlanStep>;
 /** Text a model wrote, made one line and cut: whitespace (newlines included) collapsed, then at most `max` characters. */
 export const oneLine = (text: string, max: number): string => text.replace(/\s+/g, " ").trim().slice(0, max);
 
-const GLOB_CHARACTER = /[*?[\]{}]/;
+const GLOB_CHARACTER = /[*?{}]/;
 
-/** A path a model named that the machine may treat as one file: relative to the repo, no glob character, no `..`, no NUL, no control character,
+/** A path a model named that the machine may treat as one file: relative to the repo, no `*`, `?`, `{` or `}` (brackets and parentheses are ordinary in real paths and read literally), no `..`, no NUL, no control character,
  *  not absolute (POSIX, drive or UNC), at most 300 characters. Anything else is dropped where it came in, never matched or opened. */
 export function isPlainRepoPath(path: string): boolean {
   if (path.length === 0 || path.length > 300 || path.trim() !== path || path.trim() === "") return false;

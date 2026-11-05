@@ -38,7 +38,7 @@ When it is fresh, follow the `code-discovery` skill: query it with `graphify <ve
 ## What to do
 1. Read only the one or two files the change touches (Glob, Grep, Read).
 2. Pick one answer:
-   - `kind: "done"`: `summary`, `brief`, `criteria[]` (each testable), `assumptions[]`, `steps[]` (one to three, each `{description, files[], done_when[], est_loc}`; a file the step creates is `{path, new: true}`; every criterion is named by some step's `done_when`), `outOfScope[]` and `rollback`.
+   - `kind: "done"`: `summary`, `brief`, `criteria[]` (each testable), `assumptions[]`, `steps[]` (one to three, each `{description, files[], done_when[], est_loc}`, `files` being repo-relative files or directories, never a glob, an absolute path or `..`; a file the step creates is `{path, new: true}`; every criterion is named by some step's `done_when`), `outOfScope[]` and `rollback`.
    - `kind: "needs_full_plan"`: only `summary`, saying why the ticket is not fast-lane work: a second component, a migration or data change a revert does not undo, auth, payments, deletion, CI or infrastructure, more than three slices, or a goal you cannot make testable.
    - `kind: "questions"`: only when no reasonable default exists. At most 3 items `{question, recommended}`.
 3. Earlier answers in the decisions above are binding. `mcp__luna__decision_get` returns a settled decision by key.

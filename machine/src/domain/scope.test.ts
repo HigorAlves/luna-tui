@@ -42,6 +42,20 @@ describe("scopeFacts", () => {
     expect(scopeFacts({ ...none, nameStatus: status("M\tsrc/a.ts", "A\tother.ts"), planned: ["src/a.ts"] }).undeclared).toEqual(["other.ts"]);
   });
 
+  it("reads a planned path literally: brackets and parentheses are part of a real path, and name that file only, or a directory's whole subtree", () => {
+    const planned = ["app/[team]/billing.ts", "app/(shop)"];
+    expect(scopeFacts({ ...none, nameStatus: "M\tapp/[team]/billing.ts", planned }).undeclared).toEqual([]);
+    expect(scopeFacts({ ...none, nameStatus: "M\tapp/t/billing.ts", planned }).undeclared).toEqual(["app/t/billing.ts"]);
+    expect(scopeFacts({ ...none, nameStatus: "M\tapp/(shop)/cart.tsx", planned }).undeclared).toEqual([]);
+    expect(scopeFacts({ ...none, nameStatus: "M\tapp/x/billing.ts\nM\tapp/a/billing.ts", planned: ["app/[ab]/billing.ts"] }).undeclared).toEqual(["app/x/billing.ts", "app/a/billing.ts"]);
+  });
+
+  it("reads a planned entry as a glob only when it holds * ? or {, which only a plan stored before this wave can", () => {
+    expect(scopeFacts({ ...none, nameStatus: "M\tsrc/deep/a.ts\nM\tsrc/b.js", planned: ["src/**/*.ts"] }).undeclared).toEqual(["src/b.js"]);
+    expect(scopeFacts({ ...none, nameStatus: "M\tsrc/a.ts\nM\tsrc/b.js", planned: ["src/{a,c}.ts"] }).undeclared).toEqual(["src/b.js"]);
+    expect(scopeFacts({ ...none, nameStatus: "M\tsrc/a1.ts\nM\tsrc/ab.ts", planned: ["src/a?.ts"] }).undeclared).toEqual([]);
+  });
+
   it("matches a planned glob, and has no undeclared files when the plan names none", () => {
     expect(scopeFacts({ ...none, nameStatus: "M\tsrc/deep/a.ts", planned: ["src/**/*.ts"] }).undeclared).toEqual([]);
     expect(scopeFacts({ ...none, nameStatus: "M\tsrc/a.ts", planned: [] }).undeclared).toEqual([]);

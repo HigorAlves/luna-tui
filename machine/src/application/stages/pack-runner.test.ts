@@ -345,6 +345,15 @@ describe("agent stages through packs", () => {
     expect(old.detail?.cases).toEqual(v1);
   });
 
+  it("flattens and caps what the planner says it changed before it is stored on the gate: one line, no markup, no mention, no issue reference", async () => {
+    const answer = { kind: "done", summary: "s", brief: "b", criteria: ["c"], slices: [{ title: "s", est_loc: 1, touchpoints: ["a.ts"], acceptance: ["c"] }], changed: `dropped x\n<img src=x> @everyone closes #12 [t](https://evil.example) ${"w".repeat(2000)}` };
+    const result = await runAgent(deps(fakeSandbox(output({ answer }))), { ...context("test_design"), runId: "r1-plan" }, "plan", {});
+    const changed = String(result.detail?.changed);
+    expect(changed.length).toBeLessThanOrEqual(1000);
+    expect(changed).not.toMatch(/\n|<img|@everyone|#12|\]\(/);
+    expect(changed.startsWith("dropped x")).toBe(true);
+  });
+
   it("runs the plan pack in the test_design state: its own pack and limits in the input, its own container, the plan under review in context", async () => {
     const plan = { record: null, brief: "b", criteria: ["c"], assumptions: [], slices: [], round: 2, gaps: ["c"] };
     const answer = { kind: "done", summary: "s", brief: "the brief", criteria: ["c1"], assumptions: ["a1"], slices: [{ title: "s1", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }], rollback: "revert" };

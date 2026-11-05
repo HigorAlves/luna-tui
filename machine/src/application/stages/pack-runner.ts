@@ -24,6 +24,7 @@ import {
 } from "../../adapters/git/worktree.ts";
 import { CredentialWaitError, type CredentialMount, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
+import { safe } from "../../domain/evidence-markdown.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
@@ -619,7 +620,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
         ...(planned ? { steps: planned.steps } : {}),
         ...(Array.isArray(answer?.outOfScope) ? { outOfScope: list(answer.outOfScope, []) } : {}),
         ...(typeof answer?.migration === "string" ? { migration: answer.migration } : {}),
-        ...(typeof answer?.changed === "string" ? { changed: answer.changed.slice(0, 1000) } : {}),
+        ...(typeof answer?.changed === "string" ? { changed: safe(answer.changed).slice(0, 1000) } : {}),
         ...(Array.isArray(answer?.flags) ? { flags: list(answer.flags, []) } : {}),
         ...(typeof answer?.rollback === "string" ? { rollback: answer.rollback } : {}),
         // The fast planner refusing the lane: the plan stage plans again in full.

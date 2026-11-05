@@ -228,6 +228,10 @@ describe("renderPrompt", () => {
     expect(render()).toContain("(none)");
   });
 
+  it("tells both planners to name files or directories, never a glob", () => {
+    for (const name of ["plan.md", "plan_fast.md"]) expect(readFileSync(new URL(`../../prompts/${name}`, import.meta.url), "utf8"), name).toMatch(/never a glob/);
+  });
+
   it("renders the fast planner's prompt with the map locate found, the risk and no placeholder left", () => {
     const real = readFileSync(new URL("../../prompts/plan_fast.md", import.meta.url), "utf8");
     const plan = { record: null, brief: "", criteria: [], assumptions: [], slices: [], map: { components: ["cart"], files: [{ path: "src/cart.ts", role: "change" }], entry_points: [], owners: ["@marta"], confidence: 0.6 }, risk: { level: "low" } };

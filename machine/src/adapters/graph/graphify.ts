@@ -7,7 +7,7 @@ import { existsSync, readlinkSync, statSync } from "node:fs";
 import { appendFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, symlink } from "node:fs/promises";
 import { join, sep } from "node:path";
 
-import { FACTORY_DEFAULTS } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, isPlainRepoPath } from "@hardness/contracts";
 
 import { GraphBuildError, type Graph, type GraphStamp } from "../../application/graph.ts";
 import type { GraphJson } from "../../domain/blast-radius.ts";
@@ -176,8 +176,9 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
     async owners(repoPath, paths) {
       if (!current(repoPath)) return null;
       const text = await ownersText(repoPath).catch(() => null);
-      const plain = paths.filter((p) => p.length > 0 && p.length <= 300 && !/[*?[\]{}\0]/.test(p) && !p.startsWith("/") && !p.split("/").includes(".."));
-      return { owners: text === null ? [] : requiredOwners(plain, parseCodeowners(text)), codeowners: text !== null };
+      const plain = paths.filter(isPlainRepoPath);
+      const dropped = paths.length - plain.length;
+      return { owners: text === null ? [] : requiredOwners(plain, parseCodeowners(text)), codeowners: text !== null, ...(dropped > 0 ? { dropped } : {}) };
     },
 
     async impact(repoPath, files) {

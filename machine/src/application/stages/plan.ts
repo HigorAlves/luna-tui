@@ -20,7 +20,7 @@ import {
   type PlanContext,
   type PlanRisk,
   type PlanStep,
-  type Risk,
+  Risk,
   type TestCase,
   type Verdict,
   applyPolicy,
@@ -65,7 +65,7 @@ export interface PlanDeps {
     /** Where the goal's words point in the graph, with who owns it and how stale the graph is; null when there is none. Seeds the mapper and marks the map. */
     locate?(repoPath: string, text: string, options?: { staleCommits?: number }): Promise<GraphLocation | null>;
     /** Who owns these paths at the default branch (CODEOWNERS); null when the repo has no graph. The fast lane asks it about the plan's own files. */
-    owners?(repoPath: string, paths: string[]): Promise<{ owners: RequiredOwners[]; codeowners: boolean } | null>;
+    owners?(repoPath: string, paths: string[]): Promise<{ owners: RequiredOwners[]; codeowners: boolean; dropped?: number } | null>;
   };
   log?: (line: string) => void;
 }
@@ -222,6 +222,13 @@ export function planStage(deps: PlanDeps): StageRunner {
     const scored = answer ? riskOf(answer as Parameters<typeof riskOf>[0]) : null;
     let level: Risk = scored ? maxRisk(scored.level, graded) : graded;
     let risk: PlanRisk = { level, machine: level, ...(scored ? { product: scored.product, scores } : { scores }), ...(complexity === "S" || complexity === "M" || complexity === "L" || complexity === "XL" ? { complexity } : {}) };
+    // A person's raised risk at an earlier plan gate (changes requested, a plan found wrong) is the floor of this one: it applied then and does not lapse.
+    const earlier = context.approvals.findLast((a) => a.kind === "awaiting_approval" && (a.requested.overrides as { risk?: { applied?: unknown } } | null | undefined)?.risk?.applied === true);
+    const raisedTo = Risk.safeParse((earlier?.requested.overrides as { risk?: { level?: unknown } } | undefined)?.risk?.level);
+    if (raisedTo.success && raisedTo.data !== level) {
+      level = maxRisk(level, raisedTo.data);
+      risk = { ...risk, level, machine: level };
+    }
     const riskPart = { risk };
     // A plan found wrong in Build, Verify or review comes back with its evidence: the planner's alone.
     const replanPart = context.replan ? { replan: context.replan } : {};
@@ -306,6 +313,7 @@ export function planStage(deps: PlanDeps): StageRunner {
           if (found === "failed") verdict = { why: "the code graph could not be asked" };
           else if (found === null) verdict = { why: "no code graph" };
           else if (paths.length === 0) verdict = { why: "the fast plan names no file" };
+          else if (found.dropped && found.dropped > 0) verdict = { why: `${found.dropped} paths could not be looked up in CODEOWNERS` };
           else if (!found.codeowners) verdict = { why: "the repository has no CODEOWNERS" };
           else {
             const teams = new Set(found.owners.flatMap((o) => o.owners)).size;
@@ -360,7 +368,10 @@ export function planStage(deps: PlanDeps): StageRunner {
       }
       const underBar = report.score < coverageBar;
       if (lane === "fast" && report.gaps.length > 0) flagged.add("coverage");
-      if ((gaps.length > 0 || notes.length > 0 || underBar) && coverage.verdict === "proceed") coverage = { ...coverage, verdict: "flag" };
+      // What the decision excused as untestable is a person's to see: the verdict is at least `flag` and the gate names each excused criterion.
+      const excused = report.untestable.map((id) => `${id} (${textOf([id])[0]})`);
+      if ((gaps.length > 0 || notes.length > 0 || underBar || excused.length > 0) && coverage.verdict === "proceed") coverage = { ...coverage, verdict: "flag" };
+      if (excused.length > 0) flagged.add(`coverage: excused as untestable, not covered: ${excused.join(", ")}`);
 
       // The plan against the record: a finding sends the planner back, within the cap.
       // The facts by script, then the two things a script cannot judge, asked of the record, the scenarios, the map, the risk and the steps:

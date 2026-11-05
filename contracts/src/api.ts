@@ -159,7 +159,13 @@ export const DecisionInput = z.object({
   /** At the memory review gate: false approves without writing the proposed rules. */
   applyRules: z.boolean().optional(),
   /** Who is deciding, by name. A plan of High risk needs two distinct names; any decision keeps its own. */
-  approver: z.string().trim().min(1).max(100).optional(),
+  approver: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .refine((name) => ["Latin", "Cyrillic", "Greek"].filter((script) => new RegExp(`\\p{Script=${script}}`, "u").test(name)).length <= 1, { message: "a name mixes letters of different scripts" })
+    .optional(),
 });
 export type DecisionInput = z.infer<typeof DecisionInput>;
 

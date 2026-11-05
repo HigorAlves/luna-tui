@@ -64,7 +64,8 @@ function changedOf(nameStatus: string): string[] {
     .filter(Boolean);
 }
 
-const GLOB = /[*?[\]{}!]/;
+/** A planned entry is read as a glob only with one of these: brackets, parentheses and `!` are ordinary in real paths (`app/[team]/page.tsx`). */
+const GLOB = /[*?{]/;
 function isPlanned(path: string, planned: string[]): boolean {
   return planned.some((entry) => {
     const bare = entry.replace(/^\.\//, "");

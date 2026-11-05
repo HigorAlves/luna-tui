@@ -315,6 +315,32 @@ describe("planStage", () => {
     expect(decided[0]!.repo).toBe("/repo");
   });
 
+  describe("a person's raised risk survives a re-plan", () => {
+    const approval = (overrides: unknown, kind = "awaiting_approval") => ({ kind, decision: "sent_back", requested: { overrides } }) as never;
+
+    it("takes the higher of the raised level and the scored one as the floor, written to risk.machine, so the new gate is high too", async () => {
+      const raised = approval({ risk: { level: "high", reason: "touches billing", applied: true } });
+      const result = await setup().run(context({ approvals: [approval({ risk: { level: "low", reason: "r", applied: false } }), raised] }));
+      expect(result.detail).toMatchObject({ risk: { level: "high", machine: "high" }, approvalRule: { needed: 2 } });
+    });
+
+    it("ignores a lowered override (kept, not applied) and a gate that is not the plan's, and never lowers the scored level", async () => {
+      const lowered = approval({ risk: { level: "low", reason: "behind a flag", applied: false } });
+      expect((await setup().run(context({ approvals: [lowered] }))).detail).toMatchObject({ risk: { level: "medium", machine: "medium" } });
+      const elsewhere = approval({ risk: { level: "high", reason: "r", applied: true } }, "awaiting_ship");
+      expect((await setup().run(context({ approvals: [elsewhere] }))).detail).toMatchObject({ risk: { level: "medium" } });
+      const low = approval({ risk: { level: "medium", reason: "r", applied: true } });
+      const high = { ...task, record: { ...record, risk: "high" } } as unknown as TaskRow;
+      expect((await setup().run(context({ task: high, approvals: [low] }))).detail).toMatchObject({ risk: { level: "high" } });
+    });
+
+    it("reads a malformed override as none", async () => {
+      for (const bad of [{ risk: { level: "huge", applied: true } }, { risk: "high" }, null, "x"]) {
+        expect((await setup().run(context({ approvals: [approval(bad)] }))).detail).toMatchObject({ risk: { level: "medium" } });
+      }
+    });
+  });
+
   describe("a plan that reaches the control plane", () => {
     const lowTask = { ...task, record: { ...record, risk: "low" } } as unknown as TaskRow;
     const touching = (...files: string[]) => planned({ slices: [{ title: "g", est_loc: 3, touchpoints: files, acceptance: ["no panic", "stays selected"] }] });
@@ -515,7 +541,18 @@ describe("planStage", () => {
       const { run, calls } = setup({ test_design: [scenes(["C1"])], answers: { coverage_check: [untestable] } });
       const result = await run(context());
       expect(calls.filter((c) => c.pack === "test_design")).toHaveLength(1);
-      expect(result.detail).toMatchObject({ coverageReport: { score: 1, gaps: ["C2"], untestable: ["C2"] }, flagged: ["coverage"] });
+      expect(result.detail).toMatchObject({ coverageReport: { score: 1, gaps: ["C2"], untestable: ["C2"] }, verdicts: { coverage: "flag" } });
+      expect(result.detail?.flagged).toEqual(expect.arrayContaining(["coverage", "coverage: excused as untestable, not covered: C2 (stays selected)"]));
+      expect(result.detail?.flagged).toHaveLength(2);
+    });
+
+    it("never lets an excused criterion leave the coverage verdict at proceed, whatever the decision's own bars say", async () => {
+      const untestable = { ...good.coverage_check, untestable: { value: true, p: 0.95 } };
+      const lax = { policies: { for: async () => ({ decisions: { coverage_check: { untestable: { proceed: 0, flag: 0 } } }, graph: true }) } };
+      const { run } = setup({ test_design: [scenes(["C1"])], answers: { coverage_check: [untestable] } }, lax);
+      const result = await run(context());
+      expect(result.detail).toMatchObject({ coverageReport: { untestable: ["C2"] }, verdicts: { coverage: "flag" } });
+      expect(result.detail?.flagged).toContain("coverage");
     });
 
     it("hands coverage_check the criteria with their ids and the scenarios, and no steps, brief, map, risk or record", async () => {
@@ -725,6 +762,12 @@ describe("planStage", () => {
         const open = { policies: { for: async () => ({ decisions: {}, graph: true, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2 }, fast_lane: { max_risk: "low" as const, max_size: "S" as const, excluded_types: [], cross_team: true } } }) } };
         const many = fast({}, { graph: graphOf({ owners: owners([["@marta"], ["@lee"]]) }), policies: open.policies as never });
         expect((await many.run(ctx())).detail).toMatchObject({ lane: "fast" });
+      });
+
+      it("flags `owners not checked` when some of the plan's paths could not be looked up, never reading them as owner-free", async () => {
+        const dropping = { owners: async (_r: string, paths: string[]) => ({ owners: [{ path: paths[0] ?? "x", owners: ["@marta"] }], codeowners: true, dropped: 2 }) };
+        const result = await fast({}, { graph: graphOf(dropping) }).run(ctx());
+        expect(result.detail).toMatchObject({ lane: "fast", flagged: [expect.stringMatching(/^owners not checked: 2 paths could not be looked up/)] });
       });
 
       it("keeps the lane and says why when the owners could not be checked: no CODEOWNERS, no files, no answer", async () => {

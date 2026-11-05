@@ -232,7 +232,10 @@ describe("graphifyGraph.locate and impact", () => {
     const none = setup();
     expect(await none.graph.owners(none.repo, ["a.ts"])).toBeNull();
     // Only plain repo paths are asked about: a glob or a parent path names nothing.
-    expect(await graph.owners(repo, ["**", "../x", "/etc/passwd", "src/*"])).toEqual({ owners: [], codeowners: true });
+    expect(await graph.owners(repo, ["**", "../x", "/etc/passwd", "src/*"])).toEqual({ owners: [], codeowners: true, dropped: 4 });
+    // Brackets and parentheses are ordinary in a real path: looked up, not dropped. A path it dropped is counted, never read as owner-free.
+    const next = await built({ codeowners: "app/ @acme/web\n" });
+    expect(await next.graph.owners(next.repo, ["app/[team]/page.tsx", "app/(shop)/cart.tsx", "x/*"])).toEqual({ owners: [{ path: "app/[team]/page.tsx", owners: ["@acme/web"] }, { path: "app/(shop)/cart.tsx", owners: ["@acme/web"] }], codeowners: true, dropped: 1 });
   });
 
   it("answers impact from the current graph: importers and tests", async () => {

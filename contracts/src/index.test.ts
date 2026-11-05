@@ -138,6 +138,18 @@ describe("decision input", () => {
       reason: "rules skipped",
     });
   });
+  it("refuses an approver's name whose letters mix Latin, Cyrillic or Greek (a look-alike reads as another person), and takes a single script of any kind", () => {
+    const name = (approver: string) => DecisionInput.safeParse({ decision: "approved", approver }).success;
+    expect(name("ana")).toBe(true);
+    expect(name("\u0430na")).toBe(false); // Cyrillic а + Latin na
+    expect(name("\u03bflga")).toBe(false); // Greek omicron + Latin
+    expect(name("\u0430\u043d\u0430")).toBe(true); // all Cyrillic
+    expect(name("\u03b1\u03bb\u03b5\u03be")).toBe(true); // all Greek
+    expect(name("\u7530\u4e2d")).toBe(true);
+    expect(name("ana-maria o'neil 2nd")).toBe(true);
+    expect(name("ana \u0430na")).toBe(false);
+    expect(name("ana@corp.com")).toBe(true);
+  });
   it("takes an approver by name, trimmed, and refuses an empty one", () => {
     expect(DecisionInput.parse({ decision: "approved", approver: "  ana " })).toEqual({ decision: "approved", approver: "ana" });
     expect(DecisionInput.safeParse({ decision: "approved", approver: "   " }).success).toBe(false);
