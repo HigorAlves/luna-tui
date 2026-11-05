@@ -92,6 +92,9 @@ export type JiraIntakeAnswer = z.infer<typeof JiraIntakeAnswer>;
 export const TriageOutcome = z.enum(["plan", "fast_lane", "conversation", "archive"]);
 export type TriageOutcome = z.infer<typeof TriageOutcome>;
 
+/** What the triage agent may pick: the machine decides the fast lane from its rule, so it is not on offer (an old stored record with `fast_lane` still parses as a TriageOutcome). */
+export const TriageAgentOutcome = z.enum(["plan", "conversation", "archive"]);
+
 /** What triage writes of the ticket: the goal in one sentence and why it decided as it did, with an optional summary (at most
  *  120 words). The machine composes the rest of the record from its own facts. A draft written before wave 9 also carries the
  *  four grades; they still parse and are ignored. */
@@ -110,7 +113,7 @@ export const TriageAnswer = z.object({
   kind: z.enum(["brief", "questions"]),
   summary: z.string(),
   /** Absent means `plan`. */
-  outcome: TriageOutcome.optional(),
+  outcome: TriageAgentOutcome.optional(),
   /** Required when `kind` is `brief`. */
   record: RecordDraft.optional(),
   /** The ticket's criteria, refined until testable. */

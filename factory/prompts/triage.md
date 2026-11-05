@@ -37,8 +37,7 @@ When it is fresh, follow the `code-discovery` skill: query it with `graphify <ve
      - `outcome`:
        - `conversation` when the ticket asks something and changes nothing: delegate the drafting to `reply-drafter` (ticket reply) and put its text in `reply`.
        - `archive` when the archive signal above is confident or you agree with it: set `archiveReason` to `duplicate`, `out_of_scope`, `stale` or `not_actionable`.
-       - `fast_lane` when risk is none or low and size is tiny or small.
-       - `plan` otherwise (the default).
+       - `plan` otherwise (the default). The fast lane is not yours to pick: the machine checks its rule (low risk, small, not infra or data, one owning team) and sends the card there itself.
    - `kind: "questions"`: only when no reasonable default exists. At most 3 items `{question, recommended}`; `recommended` is mandatory.
 3. `mcp__luna__card_search` finds cards of this repository that look related (ids, titles, states, one-line summaries); when one is, say "related to card X" in the `reason`. You have 12 turns: the signals are already read, so spend them on the record, not on a tour of the repo.
 4. Earlier answers in the decisions above are binding. Never re-ask them. `mcp__luna__decision_get` returns a settled decision by key.

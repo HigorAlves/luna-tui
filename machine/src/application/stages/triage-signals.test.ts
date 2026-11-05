@@ -259,3 +259,45 @@ describe("withTriageSignals and the bounds on asking", () => {
     expect(third).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("q1") } });
   });
 });
+
+describe("withTriageSignals and the fast lane", () => {
+  const sure = { kind: { answer: "bug", confidence: 0.95 }, size: { answer: "S", confidence: 0.9 }, risk_prelim: { answer: "low", confidence: 0.95 } };
+  const reading = (over: Record<string, unknown> = {}, signals: Record<string, unknown> = {}) => ({ ...classification, signals: { ...sure, ...signals }, ...over }) as NonNullable<TaskRow["classification"]>;
+  const lane = async (c: NonNullable<TaskRow["classification"]>, agent: StageResult = agentPass(), graph?: Parameters<typeof withTriageSignals>[1]["graph"]) => {
+    const saved: Array<{ record?: { decision: string } }> = [];
+    const result = await withTriageSignals(async () => agent, { classify: null, ...(graph ? { graph } : {}), save: async (_id, patch) => void saved.push(patch as never) })(context({ task: task({ classification: c }) }));
+    return { result, decision: saved.find((p) => p.record)?.record?.decision };
+  };
+
+  it("takes the fast lane by the rule: low risk, small, not infra or data, with no owner clash", async () => {
+    const { result, decision } = await lane(reading());
+    expect(decision).toBe("fast_lane");
+    expect(result.detail).toMatchObject({ outcome: "fast_lane", laneNote: expect.stringContaining("no code graph") });
+  });
+
+  it("does not take it because the agent says so, when the card is medium risk", async () => {
+    const { result, decision } = await lane(reading({ riskPrelim: "medium" }), agentPass({ outcome: "fast_lane" }));
+    expect(decision).toBe("plan");
+    expect(result.detail).toMatchObject({ outcome: "plan", laneNote: expect.stringContaining("preliminary risk is medium") });
+  });
+
+  it("plans a card that is infra, or too big, or whose size signal is only flagged", async () => {
+    expect((await lane(reading({ typeOfWork: "infra" }))).decision).toBe("plan");
+    expect((await lane(reading({ sizeBucket: "M" }))).decision).toBe("plan");
+    expect((await lane(reading(), agentPass(), undefined)).decision).toBe("fast_lane");
+    expect((await lane(reading({}, { size: { answer: "S", confidence: 0.5 } }))).decision).toBe("plan");
+  });
+
+  it("reads the owners from the code graph: one team is fine, two are not", async () => {
+    const graph = (owners: Array<{ path: string; owners: string[] }>) => ({ locate: async () => ({ owners }) });
+    expect((await lane(reading(), agentPass(), graph([{ path: "a", owners: ["@acme/cart"] }]))).decision).toBe("fast_lane");
+    const clash = await lane(reading(), agentPass(), graph([{ path: "a", owners: ["@acme/cart"] }, { path: "b", owners: ["@acme/auth"] }]));
+    expect(clash.decision).toBe("plan");
+    expect(clash.result.detail).toMatchObject({ laneNote: expect.stringContaining("2 owning teams") });
+  });
+
+  it("leaves a reply or an archive as the agent decided it", async () => {
+    expect((await lane(reading(), agentPass({ outcome: "conversation" }))).decision).toBe("conversation");
+    expect((await lane(reading(), agentPass({ outcome: "archive" }))).decision).toBe("archive");
+  });
+});

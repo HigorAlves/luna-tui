@@ -130,7 +130,7 @@ describe("triage's record", () => {
     const p = new Pipeline(db, saving, { inline: true, hasConfig: () => true });
     const task = await p.createTask({ title: "Login page", classification });
     await p.start(task.id);
-    expect(TriageRecord.parse((await p.get(task.id)).record)).toMatchObject({ ...record, summary: "A panic on j.", kind: "bug", typeOfWork: "backend", size: "S", riskPrelim: "low", source: "manual", decision: "plan", signals: {}, qa: [], decisionBy: "machine", version: 1, goalRef: "none" });
+    expect(TriageRecord.parse((await p.get(task.id)).record)).toMatchObject({ ...record, summary: "A panic on j.", kind: "bug", typeOfWork: "backend", size: "S", riskPrelim: "low", source: "manual", decision: "fast_lane", signals: {}, qa: [], decisionBy: "machine", version: 1, goalRef: "none" });
   });
 });
 

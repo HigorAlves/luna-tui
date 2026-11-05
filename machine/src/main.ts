@@ -194,7 +194,7 @@ const credentials = gatedCredentials(machineCredentials(), [
 ]);
 if (config.disabledRuntimes.length > 0) console.log(`runtimes off (MACHINE_DISABLE_RUNTIMES): ${config.disabledRuntimes.join(", ")}`);
 /** Triage's signals: the classifier is built after the stages (it needs PackRuns), so it is bound below. */
-const triageSignals: TriageSignalDeps = { classify: null, policy: (repoPath) => policies.for(repoPath), save: (id, patch) => engineSpend.updateTask(id, patch) };
+const triageSignals: TriageSignalDeps = { classify: null, graph, policy: (repoPath) => policies.for(repoPath), save: (id, patch) => engineSpend.updateTask(id, patch) };
 /** The plan stage's decisions run through PackRuns, which is built below: bound once it exists. */
 const planDecisions: { decide: PlanDeps["decide"] } = { decide: null };
 /** Build's red and scope checks run through PackRuns too: bound once it exists. */

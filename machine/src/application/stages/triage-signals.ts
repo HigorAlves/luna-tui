@@ -4,6 +4,8 @@
 // says so, and triage goes on.
 import { type ClassifyOptions, type DecisionOverrides, FACTORY_DEFAULTS, type FactoryConfig, type IssueContext, type NeedsInputItem, RecordDraft, type TaskClassification, TriageOutcome, TriageRecord } from "@hardness/contracts";
 
+import type { RequiredOwners } from "../../domain/codeowners.ts";
+import { fastLane } from "../../domain/fast-lane.ts";
 import { goalRefOf } from "../../domain/goal-ref.ts";
 import { composeRecord, recordComplete } from "../../domain/triage-record.ts";
 import { askedQuestions, triageVerdicts } from "../../domain/triage-policy.ts";
@@ -16,6 +18,8 @@ export interface TriageSignalDeps {
   classify: ((issue: IssueContext, repoPath: string | null, options?: ClassifyOptions) => Promise<TaskClassification | null>) | null;
   /** The repo's policy: its scoring weights and bands turn the sub-scores into a priority, its confidence bars decide what is asked. Absent: the diagram's. */
   policy?: (repoPath: string) => Promise<{ factory: FactoryConfig; decisions?: Record<string, DecisionOverrides> }>;
+  /** The code graph, for the owners the fast-lane rule reads; absent (or a repo without one) skips that condition. */
+  graph?: { locate(repoPath: string, text: string, options?: { staleCommits?: number }): Promise<{ owners: RequiredOwners[] } | null> };
   save: (id: string, patch: Partial<TaskRow>) => Promise<void>;
   log?: (line: string) => void;
 }
@@ -43,10 +47,9 @@ function answersOf(approvals: StageContext["approvals"]): NonNullable<IssueConte
 }
 
 /** The record the machine composes around triage's words: null only when there is no valid draft. A record missing a field is returned as it is; `recordComplete` says what. */
-function recordOf(context: StageContext, result: StageResult, task: TaskRow): Partial<TriageRecord> | null {
+function recordOf(context: StageContext, result: StageResult, task: TaskRow, decision: TriageOutcome): Partial<TriageRecord> | null {
   const draft = RecordDraft.safeParse(result.detail?.record);
   if (!draft.success) return null;
-  const outcome = TriageOutcome.safeParse(result.detail?.outcome);
   const qa = context.approvals.flatMap((a) => {
     if (a.decision !== "answered") return [];
     const answers = (a.response?.answers ?? {}) as Record<string, unknown>;
@@ -57,7 +60,7 @@ function recordOf(context: StageContext, result: StageResult, task: TaskRow): Pa
     ...(typeof result.detail?.summary === "string" ? { summary: result.detail.summary } : {}),
     classification: task.classification,
     source: task.source?.kind ?? "manual",
-    decision: outcome.success ? outcome.data : "plan",
+    decision,
     qa,
     goalRef: goalRefOf({ text: `${task.title}\n${task.description}` }),
     previous: task.record,
@@ -110,6 +113,22 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
       const asked = askedQuestions(verdicts).sort((x, y) => x.confidence - y.confidence);
       if (asked.length > 0) return ask(asked.map(({ question, recommended }) => ({ question, recommended })), asked.map(({ field, guess, confidence }) => ({ field, guess, confidence })));
     }
+    /** The decision: the agent's own for a reply or an archive; otherwise `fast_lane` only when the machine's rule says so, else `plan`. */
+    const laneOf = async (ctx: StageContext, res: StageResult): Promise<{ decision: TriageOutcome; note?: string | undefined }> => {
+      const said = TriageOutcome.safeParse(res.detail?.outcome);
+      if (said.success && (said.data === "conversation" || said.data === "archive")) return { decision: said.data };
+      const c = ctx.task.classification;
+      if (!c?.sizeBucket || !c.riskPrelim || !c.typeOfWork) return { decision: "plan" };
+      const fastConfig = (repo?.factory ?? FACTORY_DEFAULTS).fast_lane;
+      const verdicts = triageVerdicts(c, caps, { ...(repo?.decisions?.triage_signals ? { overrides: repo.decisions.triage_signals } : {}) });
+      let owners: RequiredOwners[] | null = null;
+      if (deps.graph && task.repoPath) {
+        const located = await deps.graph.locate(task.repoPath, `${task.title}\n${task.description}`, { staleCommits: (repo?.factory ?? FACTORY_DEFAULTS).graph.stale_commits }).catch(() => null);
+        owners = located?.owners ?? null;
+      }
+      const lane = fastLane({ riskPrelim: c.riskPrelim, size: c.sizeBucket, typeOfWork: c.typeOfWork }, owners, fastConfig, verdicts);
+      return lane.fast ? { decision: "fast_lane", ...(lane.skipped ? { note: lane.skipped } : {}) } : { decision: "plan", note: `not the fast lane: ${lane.failing}` };
+    };
     /** One run of the agent, its questions held to the bounds. */
     const runAgent = async (ctx: StageContext): Promise<StageResult> => {
       const agent = await triage(ctx);
@@ -119,14 +138,18 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
     let finalContext = enriched;
     if (result.outcome === "pass") {
       // The machine composes the record and checks it: an incomplete one sends the agent round once with what is missing, then a person decides.
-      let record = recordOf(finalContext, result, finalContext.task);
+      const lane = await laneOf(finalContext, result);
+      let record = recordOf(finalContext, result, finalContext.task, lane.decision);
       let check = recordComplete(record);
       if (!check.complete) {
         const guidance = { id: "triage-record", taskId: task.id, kind: "triage", requested: {}, decision: "sent_back", reason: `The record you wrote is incomplete: ${check.missing.join(", ")}. Write the summary (at most 120 words), the goal sentence, the decision and the reason in full.`, response: null, createdAt: new Date(), decidedAt: new Date() } as unknown as StageContext["approvals"][number];
         finalContext = { ...enriched, approvals: [...enriched.approvals, guidance] };
         result = await runAgent(finalContext);
         if (result.outcome === "pass") {
-          record = recordOf(finalContext, result, finalContext.task);
+          const again = await laneOf(finalContext, result);
+          lane.decision = again.decision;
+          lane.note = again.note;
+          record = recordOf(finalContext, result, finalContext.task, lane.decision);
           check = recordComplete(record);
           if (!check.complete) return { ...result, outcome: "escalated", detail: { ...result.detail, reason: `triage could not write a complete Triage Record: missing ${check.missing.join(", ")}`, escalation: "other" } };
         }
@@ -139,6 +162,8 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
         } catch (error) {
           log(`triage record for task ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
         }
+        // The lane is the machine's: `detail.outcome` is what the pipeline and the card.fast_lane fact read.
+        result = { ...result, detail: { ...result.detail, outcome: lane.decision, ...(lane.note ? { laneNote: lane.note } : {}) } };
         // The card.triaged event carries the number of the record it replaces, not the record.
         if (task.record) result = { ...result, detail: { ...result.detail, previousVersion: task.record.version ?? 1 } };
       }
