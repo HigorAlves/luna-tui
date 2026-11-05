@@ -2361,3 +2361,36 @@ describe("closing the loop", () => {
     expect((await p.events(plain.id)).map((e) => e.kind)).not.toContain("task.shipped");
   });
 });
+
+describe("the Build Report and the Verify Report ride on the finishes", () => {
+  const finish = async (id: string, stage: string) => (await pipeline.events(id)).filter((e) => e.kind === "stage.finished" && e.payload.stage === stage).at(-1);
+
+  it("attaches the Build Report to the passing implementing finish and the Verify Report to the passing ci_watch finish", async () => {
+    stubs.plan("implementing", { outcome: "pass", run: { outputCommit: "b17" }, detail: { scope: { facts: { changed: ["src/a.ts"], undeclared: [], removedTests: [] } } } });
+    stubs.plan("verifying", { outcome: "pass", detail: { findings: [{ path: "src/a.ts", line: 2, severity: "nit", title: "name", body: "b", confidence: 0.5 }], results: [{ outcome: "pass" }] } });
+    stubs.plan("delivering", { outcome: "pass", detail: { prNumber: 42 } });
+    const task = await newTask();
+    await startAndApprove(task.id);
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_ship");
+
+    const build = (await finish(task.id, "implementing"))?.payload.detail as { report?: { headSha: string; diffSummary: { files: string[] }; scopeCheck: { clean: boolean } } };
+    expect(build.report).toMatchObject({ headSha: "b17", diffSummary: { files: ["src/a.ts"] }, scopeCheck: { clean: true }, version: 2 });
+    const verify = (await finish(task.id, "ci_watch"))?.payload.detail as { report?: { prNumber: number; findings: { title: string }[]; tests: { total: number } } };
+    expect(verify.report).toMatchObject({ prNumber: 42, tests: { total: 1 }, version: 2 });
+    expect(verify.report?.findings.map((f) => f.title)).toEqual(["name"]);
+
+    const reports = await pipeline.reports(task.id);
+    expect(reports.build).toMatchObject({ headSha: "b17" });
+    expect(reports.verify).toMatchObject({ prNumber: 42 });
+  });
+
+  it("leaves a failing finish without a report, and the reports null before their stage passed", async () => {
+    stubs.plan("implementing", { outcome: "fail" });
+    const task = await newTask();
+    await startAndApprove(task.id);
+    const first = (await pipeline.events(task.id)).find((e) => e.kind === "stage.finished" && e.payload.stage === "implementing");
+    expect(first?.payload).toMatchObject({ status: "failed" });
+    expect(first?.payload.detail).toBeUndefined();
+    expect(await pipeline.reports((await newTask()).id)).toEqual({ build: null, verify: null });
+  });
+});

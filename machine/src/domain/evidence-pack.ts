@@ -1,7 +1,7 @@
 // The Evidence Pack a change is shown by: assembled on the host from what the stages before Evidence
 // left (the record, the plan, the browser run's manifest, Verify's findings, Build's out-of-map files).
 // Pure: the caller reads the files and says what time it is.
-import type { EvidencePack, Finding, Risk, TriageRecord } from "@hardness/contracts";
+import type { EvidencePack, Finding, Risk, TriageRecord, VerifyReport } from "@hardness/contracts";
 import { existsSync } from "node:fs";
 
 export interface EvidencePackInput {
@@ -20,6 +20,8 @@ export interface EvidencePackInput {
   howToVerify: string;
   note?: string;
   video?: EvidencePack["video"];
+  /** The Verify Report (ci_watch's passing finish) when one exists: the pack then carries the v2 fields. */
+  verifyReport?: VerifyReport | null;
   now: Date;
 }
 
@@ -38,8 +40,26 @@ function summaryOf(input: EvidencePackInput, risk: Risk): string {
   return `${goal}. ${shown[0]!.toUpperCase()}${shown.slice(1)}. Shown as ${input.format}; risk ${risk}.`;
 }
 
+/** The v2.2 fields, from the Verify Report. */
+function v2Of(report: VerifyReport, media: EvidencePack["media"]): Pick<EvidencePack, "results" | "findingsDetail" | "version"> & { media: EvidencePack["media"] } {
+  const passed = report.e2e.scenarios.filter((s) => s.result === "pass").length;
+  return {
+    // `unit` stands for every check verifying ran until the checks are told apart (wave 12).
+    results: {
+      unit: report.tests.total > 0 ? report.tests : null,
+      integration: null,
+      e2e: report.e2e.verdict === null && report.e2e.scenarios.length === 0 ? null : { verdict: report.e2e.verdict, passed, total: report.e2e.scenarios.length },
+      coverageDelta: report.coverageDelta ? { added: report.coverageDelta.total.added, covered: report.coverageDelta.total.covered } : null,
+    },
+    findingsDetail: report.findings.map((f) => ({ id: f.id ?? "", title: f.title, severity: f.severity, resolution: f.resolution?.status ?? null })),
+    media: media.map((m) => (/^https?:\/\//i.test(m.url) ? m : { ...m, localPath: m.url })),
+    version: 2,
+  };
+}
+
 export function assembleEvidencePack(input: EvidencePackInput): EvidencePack {
   const risk = input.plan.risk ?? input.record?.risk ?? "medium";
+  const v2 = input.verifyReport ? v2Of(input.verifyReport, input.media) : null;
   return {
     summary: summaryOf(input, risk),
     format: input.format,
@@ -50,7 +70,8 @@ export function assembleEvidencePack(input: EvidencePackInput): EvidencePack {
     rollback: input.plan.rollback?.trim() || DEFAULT_ROLLBACK,
     howToVerify: input.howToVerify,
     commitSha: input.commitSha,
-    media: input.media,
+    media: v2 ? v2.media : input.media,
+    ...(v2 ? { results: v2.results, findingsDetail: v2.findingsDetail, version: v2.version } : {}),
     ...(input.video !== undefined ? { video: input.video } : {}),
     ...(input.note ? { note: input.note } : {}),
     at: input.now.toISOString(),

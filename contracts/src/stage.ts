@@ -614,7 +614,15 @@ export const EvidencePack = z.object({
   rollback: z.string(),
   howToVerify: z.string(),
   commitSha: z.string(),
-  media: z.array(z.object({ kind: z.enum(["video", "screenshot", "har", "report", "cover", "captions", "audio"]), label: z.string(), url: z.string() })),
+  media: z.array(
+    z.object({
+      kind: z.enum(["video", "screenshot", "har", "report", "cover", "captions", "audio"]),
+      label: z.string(),
+      url: z.string(),
+      /** v2.2: where the file is on the machine, when `url` is not that path. */
+      localPath: z.string().optional(),
+    }),
+  ),
   /** The narrated walkthrough, when the format is video: where it is, the critic's verdict and scores, its defects, the rounds spent. */
   video: z
     .object({
@@ -631,6 +639,18 @@ export const EvidencePack = z.object({
   /** Why a format was degraded (video to captures, captures to text). */
   note: z.string().optional(),
   at: z.string(),
+  // v2.2, all optional: a pack made before the wave has none of them. Filled from the Verify Report when one exists.
+  results: z
+    .object({
+      unit: z.object({ passed: z.number().int(), total: z.number().int() }).nullable(),
+      integration: z.object({ passed: z.number().int(), total: z.number().int() }).nullable(),
+      e2e: z.object({ verdict: z.string().nullable(), passed: z.number().int(), total: z.number().int() }).nullable(),
+      coverageDelta: z.object({ added: z.number().int(), covered: z.number().int() }).nullable(),
+    })
+    .optional(),
+  findingsDetail: z.array(z.object({ id: z.string(), title: z.string(), severity: z.string(), resolution: z.string().nullable() })).optional(),
+  previewUrl: z.string().optional(),
+  version: z.number().int().optional(),
 });
 export type EvidencePack = z.infer<typeof EvidencePack>;
 

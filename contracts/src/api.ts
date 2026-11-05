@@ -10,6 +10,7 @@ import type { AgentPack, AgentRole, Pack } from "./packs.ts";
 import { type CredentialOwner, EngineId } from "./engines.ts";
 import type { ModelEntry, RuntimeId } from "./models.ts";
 import { CardEntryFields } from "./card.ts";
+import type { TaskReports } from "./reports.ts";
 import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskClassification, type TaskRoute, TaskSource, TestCase, ArchiveReason, type EvidencePack, type TriageRecord } from "./stage.ts";
 
 export const NewTaskInput = z.object({
@@ -335,6 +336,8 @@ export interface TaskDetail {
   approvals: Approval[];
   events: TaskEvent[];
   artifacts: Artifact[];
+  /** The v2.2 Build and Verify Reports, assembled from the task's runs and events; each null until its stage passed. */
+  reports?: TaskReports;
 }
 
 /**

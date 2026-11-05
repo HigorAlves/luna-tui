@@ -292,13 +292,14 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
 
   app.get("/tasks/:id", async (c) => {
     const id = taskId(c);
-    const [task, stageRuns, approvals, events, artifacts, usage] = await Promise.all([
+    const [task, stageRuns, approvals, events, artifacts, usage, reports] = await Promise.all([
       pipeline.get(id),
       pipeline.stageRuns(id),
       pipeline.approvals(id),
       pipeline.events(id),
       pipeline.artifacts(id),
       pipeline.taskUsage(id),
+      pipeline.reports(id),
     ]);
     return c.json({
       task: await serialize(task, usage),
@@ -306,6 +307,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
       approvals: approvals.map(toApproval),
       events: events.slice(-RECENT_EVENTS).map(toEvent),
       artifacts: artifacts.map(toArtifact),
+      reports,
     });
   });
 

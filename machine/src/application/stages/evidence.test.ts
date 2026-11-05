@@ -246,6 +246,19 @@ describe("evidenceStage", () => {
     expect(asked[0]![0]).toEqual({ record, risk: "medium", webSurface: true, e2e: { ran: true, verdict: "pass", hasVideo: true, hasSteps: true, scenarios: 2, skippedReason: null }, videoImage: true, changed: ["web/cart.tsx", "web/format.ts"] });
   });
 
+  it("fills the pack's v2 fields from the Verify Report on ci_watch's finish, and none without one", async () => {
+    browserRun();
+    const report = { prNumber: 3, headSha: "abc1234def", findings: [], tests: { passed: 2, total: 2 }, coverageDelta: null, e2e: { verdict: "pass", scenarios: [], artifacts: [] }, envReproduction: null, overrides: [], version: 2 };
+    const withReport = stage({ latestFinish: async (_id, name) => (name === "ci_watch" ? { runId: "ci", detail: { report } } : (finishes[name] ?? null)) });
+    await withReport.run(taskContext());
+    const [, patch] = withReport.saved[0]! as [string, { evidence: Record<string, any> }];
+    expect(patch.evidence).toMatchObject({ version: 2, results: { unit: { passed: 2, total: 2 }, integration: null } });
+
+    const without = stage();
+    await without.run(taskContext());
+    expect((without.saved[0]![1] as { evidence: Record<string, unknown> }).evidence).not.toHaveProperty("results");
+  });
+
   it("assembles a captures pack, keeps its media locally and saves it on the task", async () => {
     const dir = browserRun();
     const { run, saved } = stage();

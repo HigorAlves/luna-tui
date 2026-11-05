@@ -1,4 +1,4 @@
-import { EvidencePack, type Finding } from "@hardness/contracts";
+import { EvidencePack, type Finding, type VerifyReport } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import { assembleEvidencePack, packComplete } from "./evidence-pack.ts";
@@ -28,6 +28,41 @@ const full = {
   howToVerify: "open https://stg.example.com/cart",
   now,
 };
+
+const verifyReport: VerifyReport = {
+  prNumber: 7,
+  headSha: "abc1234def5678",
+  findings: [{ ...finding(), id: "F1", resolution: { status: "fixed", by: "implementer", commit: "c0ffee" } }, { ...finding({ title: "naming" }), id: "F2" }],
+  tests: { passed: 9, total: 10 },
+  coverageDelta: { files: [], total: { added: 20, covered: 18 }, report: "lcov.info" },
+  e2e: { verdict: "pass", scenarios: [{ text: "a", result: "pass" }, { text: "b", result: "fail" }, { text: "c", result: "pass" }], artifacts: [] },
+  envReproduction: null,
+  overrides: [],
+  version: 2,
+};
+
+describe("assembleEvidencePack with a Verify Report", () => {
+  it("fills results, findingsDetail, the local path of kept media and the version", () => {
+    const pack = assembleEvidencePack({ ...full, verifyReport, media: [...full.media, { kind: "video", label: "remote", url: "https://x.example/v.mp4" }] });
+    expect(EvidencePack.parse(pack)).toEqual(pack);
+    expect(pack.version).toBe(2);
+    // unit stands for every check verifying ran until the checks are told apart (wave 12); e2e counts the manifest's rows.
+    expect(pack.results).toEqual({ unit: { passed: 9, total: 10 }, integration: null, e2e: { verdict: "pass", passed: 2, total: 3 }, coverageDelta: { added: 20, covered: 18 } });
+    expect(pack.findingsDetail).toEqual([
+      { id: "F1", title: "total is not memoised", severity: "should_fix", resolution: "fixed" },
+      { id: "F2", title: "naming", severity: "should_fix", resolution: null },
+    ]);
+    expect(pack.media[0]).toMatchObject({ url: "/state/evidence/t/abc/walk.mp4", localPath: "/state/evidence/t/abc/walk.mp4" });
+    expect(pack.media[3]?.localPath).toBeUndefined();
+  });
+
+  it("leaves a pack without a Verify Report exactly as before, and a v1 pack parses", () => {
+    const pack = assembleEvidencePack(full);
+    for (const key of ["results", "findingsDetail", "version", "previewUrl"]) expect(pack).not.toHaveProperty(key);
+    expect(pack.media.every((m) => m.localPath === undefined)).toBe(true);
+    expect(EvidencePack.safeParse(pack).success).toBe(true);
+  });
+});
 
 describe("assembleEvidencePack", () => {
   it("fills every section and is a valid EvidencePack", () => {

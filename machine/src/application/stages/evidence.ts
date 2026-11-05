@@ -4,7 +4,7 @@
 // a mechanical veto), assembles the Evidence Pack, keeps a local copy of its media and saves the pack
 // on the task. The pack and its files show up in the ship approval's `requested`, the gate Ship publishes from.
 import { type TruthSink, evidenceFormatTruth, recordIdOf } from "../decision-truth.ts";
-import { type ArtifactKind, type EvidenceContext, EvidencePack, Finding, PACKS, Risk, type TaskState, applyPolicy } from "@hardness/contracts";
+import { type ArtifactKind, type EvidenceContext, EvidencePack, Finding, PACKS, Risk, type TaskState, VerifyReport, applyPolicy } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
@@ -395,12 +395,15 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       const item = objectOf(o);
       return typeof item?.path === "string" && typeof item.reason === "string" ? [{ path: item.path, reason: item.reason }] : [];
     });
+    // ci_watch's passing finish carries the Verify Report; the pack takes its v2 fields from it when there is one.
+    const reported = VerifyReport.safeParse((await deps.latestFinish(task.id, "ci_watch").catch(() => null))?.detail?.report);
     const pack = assembleEvidencePack({
       task: { title: task.title, description: task.description },
       record: task.record ?? null,
       plan: { rollback: plan?.rollback ?? null, risk: risk.success ? risk.data : null },
       scenarios: facts.scenarios.map((s) => ({ text: s.text, criterion: s.criterion, result: s.result === "pass" || s.result === "partial" || s.result === "skipped" ? s.result : "fail", test: s.test })),
       findings,
+      ...(reported.success ? { verifyReport: reported.data } : {}),
       outOfMap,
       media,
       commitSha,

@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, TriageOutcome, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskRoute, type TaskSource, type TaskState, type TestCase, type EvidencePack, type TriageRecord, credentialOwner, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, TriageOutcome, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -24,6 +24,7 @@ import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import type { StageResult, StageRunner } from "./ports.ts";
 import { shippedEvent } from "./ship-loop.ts";
+import { buildReportOf, verifyReportOf } from "./reports.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
@@ -1726,6 +1727,7 @@ export class Pipeline {
       await this.store.updateTask(id, { branch: result.workspace.branch, worktreePath: result.workspace.worktreePath });
     }
     await this.recordTriad(id, stage, status, result);
+    const report = status === "passed" ? await this.reportFor(id, stage, { stage, attempt, status, outcome, ...(result.detail ? { detail: result.detail } : {}) }).catch(() => null) : null;
     await this.log(
       id,
       "stage.finished",
@@ -1735,13 +1737,30 @@ export class Pipeline {
         status,
         outcome,
         ...(error ? { error } : {}),
-        ...(result.detail ? { detail: result.detail } : {}),
+        ...(result.detail || report ? { detail: { ...result.detail, ...(report ? { report } : {}) } } : {}),
         // What the next implementing attempt is handed as prior findings (see latestVerifyingFindings).
         ...(result.findings?.length ? { findings: result.findings } : {}),
       },
       runId,
     );
     return result;
+  }
+
+  /** The v2.2 report a passing finish carries: Build's on `implementing`, Verify's on `ci_watch` (the last step of verify). */
+  private async reportFor(id: string, stage: TaskState, finishing: Record<string, unknown>): Promise<BuildReport | VerifyReport | null> {
+    if (stage !== "implementing" && stage !== "ci_watch") return null;
+    const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
+    // This run's finish is not logged yet: it is the newest row.
+    const current: EventRow = { id: "0", taskId: id, stageRunId: null, kind: "stage.finished", payload: finishing, at: new Date() };
+    return stage === "implementing" ? buildReportOf(task, runs, [...events, current]) : verifyReportOf(task, runs, [...events, current]);
+  }
+
+  /** The task's Build and Verify Reports, each null until its stage has passed; `GET /tasks/:id` shows them. */
+  async reports(id: string): Promise<TaskReports> {
+    const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
+    const build = buildReportOf(task, runs, events);
+    const ciPassed = runs.some((r) => r.stage === "ci_watch" && r.status === "passed");
+    return { build, verify: ciPassed ? verifyReportOf(task, runs, events) : null };
   }
 
   private async log(

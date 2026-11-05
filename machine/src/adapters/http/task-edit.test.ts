@@ -63,3 +63,21 @@ describe("PATCH /tasks/:id", () => {
     expect(await patch(task.id, { title: "Login page", repoPath: "/r/a" })).toMatchObject({ status: 200, body: { title: "Login page" } });
   });
 });
+
+describe("GET /tasks/:id reports", () => {
+  const detail = async (id: string) => (await (await createApp({ db, pipeline, bus: new Bus() }).request(`/tasks/${id}`)).json()) as { reports: { build: unknown; verify: unknown } };
+
+  it("shows both reports null before a stage passed, and the reports once the task reached its ship gate", async () => {
+    const fresh = await pipeline.createTask({ title: "Login" });
+    expect((await detail(fresh.id)).reports).toEqual({ build: null, verify: null });
+
+    stubs.plan("implementing", { outcome: "pass", run: { outputCommit: "b17" } });
+    stubs.plan("delivering", { outcome: "pass", detail: { prNumber: 9 } });
+    const task = await pipeline.createTask({ title: "Login page", criteria: ["c"] });
+    await pipeline.start(task.id);
+    await pipeline.decide(task.id, "approved");
+    const { reports } = await detail(task.id);
+    expect(reports.build).toMatchObject({ headSha: "b17", version: 2 });
+    expect(reports.verify).toMatchObject({ prNumber: 9, version: 2 });
+  });
+});
