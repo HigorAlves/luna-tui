@@ -1,0 +1,6 @@
+#!/bin/sh
+# The stage's entry in any image that carries the machine's layer: the factory on the layer's own Node.
+export PATH="/opt/luna/bin:$PATH"
+export LUNA_FACTORY_ROOT=/opt/luna/factory-src/factory
+export CODEX_HOME="${CODEX_HOME:-/tmp/.codex}" EVE_TELEMETRY_DISABLED=1 GOTOOLCHAIN="${GOTOOLCHAIN:-local}"
+exec /opt/luna/bin/node /opt/luna/factory-src/factory/src/main.ts "$@"

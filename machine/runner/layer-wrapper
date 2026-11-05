@@ -1,0 +1,3 @@
+#!/bin/sh
+# Runs the layer's binary of this name with the layer's shared libraries (libstdc++ and friends) in reach.
+exec env LD_LIBRARY_PATH="/opt/luna/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" "/opt/luna/libexec/$(basename "$0")" "$@"
