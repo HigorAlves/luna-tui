@@ -154,7 +154,7 @@ function dependencyOf({ path, line, section }: AddedLine): string | null {
   return null;
 }
 
-export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[]; removedLines?: AddedLine[]; /** The tests the tests step committed, by scenario: the scope is measured from that commit, and any change to one of these files is a weakened test. */ scenarioTests?: readonly { scenario: string; file: string }[]; planned: string[]; declared: { path: string; reason?: string }[];
+export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[]; removedLines?: AddedLine[]; /** The tests the tests step committed, by scenario: the scope is measured from that commit, and any change to one of these files is a weakened test. */ scenarioTests?: readonly { scenario: string; file: string }[]; /** Every path of the tests commit (helpers and fixtures included): none may change without a person. */ protectedPaths?: readonly string[]; planned: string[]; declared: { path: string; reason?: string }[];
   /** An approved plan exists: an empty planned list then switches nothing off (every changed file is undeclared). */
   planPresent?: boolean }): ScopeFacts {
   const changed = changedOf(input.nameStatus);
@@ -171,11 +171,11 @@ export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[];
       ...input.addedLines.filter((l) => TOKEN.test(l.line)).map((l) => `${l.path}: ${TOKEN.exec(l.line)![0].slice(0, 4)}\u2026`),
     ],
     switchedOff: input.addedLines.filter((l) => SWITCHED_OFF.test(l.line)).map((l) => `${l.path}: ${l.line.trim()}`),
-    weakened: weakenedOf(input.removedLines ?? [], input.addedLines, input.nameStatus, input.scenarioTests ?? []),
+    weakened: weakenedOf(input.removedLines ?? [], input.addedLines, input.nameStatus, input.scenarioTests ?? [], input.protectedPaths ?? []),
   };
 }
 
-function weakenedOf(removed: AddedLine[], added: AddedLine[], nameStatus: string, scenarioTests: readonly { scenario: string; file: string }[]): string[] {
+function weakenedOf(removed: AddedLine[], added: AddedLine[], nameStatus: string, scenarioTests: readonly { scenario: string; file: string }[], protectedPaths: readonly string[]): string[] {
   const tagsOf = (lines: AddedLine[]) => lines.flatMap((l) => [...l.line.matchAll(SCENARIO_TAG)].map((m) => m[1]!));
   // A tag counts as kept only on an added line of a test file: a tag re-added in production code keeps nothing.
   const kept = new Set(tagsOf(added.filter((l) => looksLikeTestPath(l.path))));
@@ -183,7 +183,10 @@ function weakenedOf(removed: AddedLine[], added: AddedLine[], nameStatus: string
   // The scenario tests are fixed once committed: any change to a file that holds one (a delete or a rename-away included), tag untouched or not.
   const touched = new Set(nameStatus.split("\n").filter((l) => l.trim()).flatMap((l) => l.split("\t").slice(1)));
   const changed = scenarioTests.filter((t) => touched.has(t.file)).map((t) => t.scenario);
-  return [...new Set([...changed, ...lost])];
+  // Every other path of the tests commit is protected as well, named by its path.
+  const mapped = new Set(scenarioTests.map((t) => t.file));
+  const others = protectedPaths.filter((p) => touched.has(p) && !mapped.has(p)).map((p) => `file:${p}`);
+  return [...new Set([...changed, ...lost, ...others])];
 }
 
 /** The facts as issues, each with a severity: a blocker for an undeclared file, a removed, switched-off or weakened test and a secret; should_fix for a dependency the plan did not name and an unrelated refactor the check judged; a nit for a TODO. `judged` names what scope_check's answers found beyond the facts.
@@ -196,7 +199,7 @@ export function scopeIssues(facts: ScopeFacts, judged: readonly string[]): Scope
     ...facts.undeclared.map((p) => issue("blocker", "undeclared_file", `${p}: changed outside the plan and not declared`, p)),
     ...facts.removedTests.map((p) => issue("blocker", "test_removed", `${p}: test removed`, p)),
     ...facts.switchedOff.map((t) => issue("blocker", "switched_off_test", `test switched off: ${t}`, where(t))),
-    ...facts.weakened.map((id) => issue("blocker", "test_weakened", `${id}: the scenario's tagged test was changed after the tests commit`)),
+    ...facts.weakened.map((id) => (id.startsWith("file:") ? issue("blocker", "test_weakened", `${id.slice(5)}: a file of the tests commit was changed`, id.slice(5)) : issue("blocker", "test_weakened", `${id}: the scenario's tagged test was changed after the tests commit`))),
     ...facts.secrets.map((s) => issue("blocker", "secret", `secret-looking addition: ${s}`, where(s))),
     ...facts.newDependencies.map((d) => issue("should_fix", "new_dependency", `dependency the plan did not name: ${d}`, where(d))),
     ...(judged.includes("unrelated_refactor") ? [issue("should_fix", "unrelated_refactor", "an unrelated refactor rides in the change")] : []),

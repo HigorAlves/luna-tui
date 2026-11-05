@@ -3,6 +3,7 @@
 // machine's own events, never anything a model or a ticket wrote beyond what a stage detail already holds.
 import { type FactoryConfig, type BuildProgress, type BuildReport, CoverageSummary, DiffSummary, Finding, type VerifyReport, mergeDuplicateFindings, normaliseFinding } from "@hardness/contracts";
 
+import { safe } from "../domain/evidence-markdown.ts";
 import { budgetRowsOf, buildBudget } from "../domain/build-budget.ts";
 import type { EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 
@@ -67,7 +68,9 @@ export function buildReportOf(task: TaskRow, runs: readonly StageRunRow[], event
     return (severity === "blocker" || severity === "should_fix" || severity === "nit") && typeof item?.kind === "string" && typeof item.text === "string" ? [{ severity, kind: item.kind, text: item.text }] : [];
   });
   const counted = events.flatMap((e) => (e.kind === "stage.finished" && e.payload.stage === "implementing" ? [objectOf(e.payload.tokens)] : []));
-  const tokens = counted.some((t) => typeof t?.input === "number" && typeof t.output === "number") ? counted.reduce((sum, t) => sum + (typeof t?.input === "number" && typeof t.output === "number" ? t.input + t.output : 0), 0) : null;
+  const whole = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
+  const valid = counted.filter((t) => whole(t?.input) && whole(t?.output));
+  const tokens = valid.length > 0 ? valid.reduce((sum, t) => sum + (t!.input as number) + (t!.output as number), 0) : null;
   const step = objectOf(finish?.detail.testsStep);
   const planned = (Array.isArray(step?.scenarioTests) ? (step!.scenarioTests as unknown[]) : []).flatMap((t) => {
     const item = objectOf(t);
@@ -85,7 +88,7 @@ export function buildReportOf(task: TaskRow, runs: readonly StageRunRow[], event
     headSha: passed.outputCommit,
     // The sandbox's environment hash exists from wave 11.
     envHash: null,
-    diffSummary: { added: task.diffAdded, removed: task.diffRemoved, files: stringsOf(facts?.changed) },
+    diffSummary: { added: task.diffAdded, removed: task.diffRemoved, files: stringsOf(facts?.changed).slice(0, 200).map((p) => safe(p).slice(0, 300)) },
     declaredFiles,
     tests: planned.map((t) => ({ scenario: t.scenario, file: t.file, before: reds.has(t.scenario) ? ("fail" as const) : null, after: greens.has(t.scenario) ? ("pass" as const) : null })),
     runs: mine.map((r) => ({ attempt: r.attempt, outcome: r.outcome, engine: r.engine, durationMs: durationOf(r) })),

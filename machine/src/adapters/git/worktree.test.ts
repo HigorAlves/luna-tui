@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { commitsSince, dirtyFiles, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
+import { commitsSince, currentBranch, dirtyFiles, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -298,7 +298,7 @@ describe("the tests step's git", () => {
     writeFileSync(join(root, "cart.test.ts"), "t\n");
     const sha = await commitAll(root, "test(abc): scenarios\n\nplan version 2");
     const read = await readCommitDiff(root, sha!);
-    expect(read).toMatchObject({ nameStatus: "A\tcart.test.ts", modes: { "cart.test.ts": "100644" } });
+    expect(read).toMatchObject({ nameStatus: "A\tcart.test.ts", modes: { "cart.test.ts": "100644" }, parent: git(root, "rev-parse", "HEAD~1") });
     expect(read!.diff).toContain("+t");
     git(root, "checkout", "-q", "-b", "other", "HEAD~1");
     expect(await readCommitDiff(root, sha!)).toBeNull();
@@ -307,19 +307,64 @@ describe("the tests step's git", () => {
 });
 
 describe("commitsSince", () => {
-  it("lists the commits made after a time with each file's name and added and removed counts, and no content", async () => {
+  const repo = () => {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "since-")));
     git(root, "init", "-q", "-b", "main");
     writeFileSync(join(root, "a.txt"), "one\n");
     git(root, "add", "-A");
-    execFileSync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "old", "--date=2020-01-01T00:00:00Z"], { env: { ...process.env, GIT_COMMITTER_DATE: "2020-01-01T00:00:00Z" } });
+    git(root, "commit", "-q", "-m", "old");
+    return { root, from: git(root, "rev-parse", "HEAD") };
+  };
+
+  it("lists the commits made after a sha with each file's name and added and removed counts, and no content", async () => {
+    const { root, from } = repo();
     writeFileSync(join(root, "a.txt"), "one\ntwo\nthree\n");
     writeFileSync(join(root, "b.txt"), "secret content\n");
     git(root, "add", "-A");
     git(root, "commit", "-q", "-m", "fix: the person's change");
-    const commits = await commitsSince(root, "2024-01-01T00:00:00Z");
+    const commits = await commitsSince(root, from);
     expect(commits).toEqual([{ sha: expect.stringMatching(/^[0-9a-f]{40}$/), files: expect.arrayContaining([{ path: "a.txt", added: 2, removed: 0 }, { path: "b.txt", added: 1, removed: 0 }]) }]);
     expect(JSON.stringify(commits)).not.toContain("secret content");
-    expect(await commitsSince(root, new Date(Date.now() + 86_400_000).toISOString())).toEqual([]);
+    expect(await commitsSince(root, git(root, "rev-parse", "HEAD"))).toEqual([]);
+  });
+
+  it("does not select by committer date, which the agent can set: a commit dated in the past is listed, one dated in the future too, by the sha range alone", async () => {
+    const { root, from } = repo();
+    writeFileSync(join(root, "b.txt"), "x\n");
+    git(root, "add", "-A");
+    execFileSync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "back-dated", "--date=2001-01-01T00:00:00Z"], { env: { ...process.env, GIT_COMMITTER_DATE: "2001-01-01T00:00:00Z" } });
+    expect((await commitsSince(root, from)).length).toBe(1);
+  });
+
+  it("refuses a `since` that is not a sha, and keeps its answer small: 100 commits, 200 files a commit, 300 characters of path", async () => {
+    const { root, from } = repo();
+    expect(await commitsSince(root, "--all")).toEqual([]);
+    expect(await commitsSince(root, "2024-01-01")).toEqual([]);
+    for (let i = 0; i < 3; i++) {
+      for (let f = 0; f < 205; f++) writeFileSync(join(root, `f${i}-${f}.txt`), "x\n");
+      git(root, "add", "-A");
+      git(root, "commit", "-q", "-m", `c${i}`);
+    }
+    const commits = await commitsSince(root, from);
+    expect(commits).toHaveLength(3);
+    expect(commits[0]!.files).toHaveLength(200);
+    mkdirSync(join(root, "d".repeat(150)), { recursive: true });
+    writeFileSync(join(root, "d".repeat(150), "e".repeat(200)), "x\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "long");
+    expect((await commitsSince(root, from))[0]!.files[0]!.path.length).toBeLessThanOrEqual(300);
+  });
+});
+
+describe("currentBranch", () => {
+  it("names the branch the worktree is on", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "branch-")));
+    git(root, "init", "-q", "-b", "main");
+    writeFileSync(join(root, "a.txt"), "a\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "init");
+    expect(await currentBranch(root)).toBe("main");
+    git(root, "checkout", "-q", "-b", "task/x");
+    expect(await currentBranch(root)).toBe("task/x");
   });
 });

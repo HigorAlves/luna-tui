@@ -113,7 +113,9 @@ export interface PipelineOptions {
   /** Writes what a person did after an escalation (the commits made on the branch since, names and counts) once they resume the card; answers the file's path. */
   escalationTruth?: (task: TaskRow, approval: ApprovalRow, commits: CommitFact[], corrected: string | null) => Promise<string>;
   /** The commits made on the branch after a time, with each file's name and line counts (no content). */
-  commitsSince?: (worktreePath: string, sinceIso: string) => Promise<CommitFact[]>;
+  commitsSince?: (worktreePath: string, sinceSha: string) => Promise<CommitFact[]>;
+  /** The worktree's HEAD now: the escalated gate stores it, and what a person commits after it is ground truth. */
+  headOf?: (worktreePath: string) => Promise<string>;
   /** Runs the `escalation_reason` decision on a Build escalation; its `decide` is bound late and read at call time (null: the agent's own word stands). */
   escalationDecide?: { decide: Decide | null };
   /** Whether the repo already has a luna.yaml; a task on one without runs setup first. Tests pass a fake. */
@@ -293,6 +295,7 @@ export class Pipeline {
   private readonly escalationDecide: { decide: Decide | null };
   private readonly escalationTruth: NonNullable<PipelineOptions["escalationTruth"]> | undefined;
   private readonly commitsSince: NonNullable<PipelineOptions["commitsSince"]> | undefined;
+  private readonly headOf: PipelineOptions["headOf"];
   private readonly writeConfig: (repoPath: string, text: string) => Promise<void>;
   private readonly inline: boolean;
   private maxConcurrentTasks: number;
@@ -344,6 +347,7 @@ export class Pipeline {
     this.escalationDecide = options.escalationDecide ?? { decide: null };
     this.escalationTruth = options.escalationTruth;
     this.commitsSince = options.commitsSince;
+    this.headOf = options.headOf;
     this.hasConfig = options.hasConfig ?? ((repoPath) => existsSync(join(repoPath, CONFIG_FILE)));
     this.writeConfig = options.writeConfig ?? ((repoPath, text) => writeFile(join(repoPath, CONFIG_FILE), text));
     this.inline = options.inline ?? false;
@@ -1003,7 +1007,8 @@ export class Pipeline {
       const approval = (await this.approvals(task.id)).find((a) => a.id === approvalId);
       if (!approval) return;
       const corrected = (await this.events(task.id)).findLast((e) => e.kind === "escalation.corrected" && e.payload.approval === approvalId)?.payload.to;
-      const commits = task.worktreePath && this.commitsSince ? await this.commitsSince(task.worktreePath, approval.createdAt.toISOString()).catch((): CommitFact[] => []) : [];
+      const since = approval.requested.headSha;
+      const commits = task.worktreePath && this.commitsSince && typeof since === "string" && /^[0-9a-f]{7,64}$/.test(since) ? await this.commitsSince(task.worktreePath, since).catch((): CommitFact[] => []) : [];
       await this.log(task.id, "ground_truth.written", { path: await this.escalationTruth(task, approval, commits, typeof corrected === "string" ? corrected : null) });
     } catch (error) {
       await this.log(task.id, "ground_truth.failed", { error: error instanceof Error ? error.message : String(error) }).catch(() => {});
@@ -1665,12 +1670,13 @@ export class Pipeline {
               };
         // An escalation from Build, the machine's own included, carries a decided reason: a fact where one decides, else the typed decision.
         const decided = stage === "implementing" ? await this.decideBuildEscalation(id, result, planned, { secondScopeRed, stuck: stuck ?? null }) : null;
+        const headSha = decided && this.headOf ? await this.headOf((await this.get(id)).worktreePath ?? "").catch(() => null) : null;
         const next: PipelineEvent = decided ? { type: "stage_done", outcome: "escalated", reason: decided.reasonText, escalation: decided.decision.reason } : planned;
         const detail =
           result.needsInput?.length || result.requested?.length || decided
             ? {
                 ...result.detail,
-                ...(decided ? { escalationDecision: { reason: decided.decision.reason, confidence: decided.decision.confidence, source: decided.decision.source, agentReason: decided.decision.agentReason, ...(decided.decision.recordId ? { recordId: decided.decision.recordId } : {}) }, summary: decided.decision.summary, outputTail: decided.decision.outputTail } : {}),
+                ...(decided ? { escalationDecision: { reason: decided.decision.reason, confidence: decided.decision.confidence, source: decided.decision.source, agentReason: decided.decision.agentReason, ...(decided.decision.recordId ? { recordId: decided.decision.recordId } : {}) }, summary: decided.decision.summary, outputTail: decided.decision.outputTail, ...(headSha ? { headSha } : {}) } : {}),
                 ...(result.needsInput?.length ? { questions: result.needsInput } : {}),
                 ...(result.requested?.length ? { actions: result.requested } : {}),
               }
@@ -1991,6 +1997,7 @@ export class Pipeline {
       facts: {
         ...(why.secondScopeRed ? { scopeTwice: true } : {}),
         ...(detail.envBroken === true ? { envBroken: true } : {}),
+        ...(detail.headMoved === true ? { headMoved: true } : {}),
         ...(budget ? { budget: { spent: String(budget.spent), numbers: `${String(budget.iterations)} of ${limits.max_iterations} iterations, ${budget.tokens === null ? "tokens not counted" : `${String(budget.tokens)} of ${limits.max_tokens} tokens`}, ${String(budget.minutes)} of ${limits.max_minutes} minutes`, consecutiveReds: Number(budget.consecutiveReds ?? 0) } } : {}),
         notes: [...(why.stuck ? ["the stuck detector stopped the same failure repeating"] : []), ...(planned.outcome !== "escalated" ? [`the machine escalated: ${preview.reason ?? "a cap was reached"}`] : [])],
       },
@@ -2004,6 +2011,12 @@ export class Pipeline {
   /** How many implementing runs of the card ended in a scope red (a blocker the scope check found). */
   private async scopeReds(id: string): Promise<number> {
     return (await this.store.findFinishedEvents(id)).filter((e) => e.payload.stage === "implementing" && objectOf(e.payload.detail)?.scopeRed === true).length;
+  }
+
+  /** The commit the card's first implementing run started from, from the machine's own `stage_runs` rows (the host read it before the container ran); undefined before any run has one. */
+  private async firstInputCommitOf(id: string): Promise<string | undefined> {
+    const runs = (await this.stageRuns(id)).filter((r) => r.stage === "implementing" && r.inputCommit && /^[0-9a-f]{7,64}$/.test(r.inputCommit)).sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime());
+    return runs[0]?.inputCommit ?? undefined;
   }
 
   /** The sha of the tests commit the machine itself made, from the newest implementing finish row that kept one (a sha, nothing else); undefined when there is none. */
@@ -2093,6 +2106,7 @@ export class Pipeline {
       repo = task.repoPath;
       const budgetMinutes = stage === "implementing" && task.route === "feature" ? await this.buildMinutesLeft(id, task.repoPath) : undefined;
       const testsCommit = stage === "implementing" && task.route === "feature" ? await this.testsCommitOf(id) : undefined;
+      const firstInputCommit = stage === "implementing" && task.route === "feature" ? await this.firstInputCommitOf(id) : undefined;
       // The entry contract of Build: the feature route builds only from what Plan hands over; what is missing goes back to the planner (once per card), then to a person.
       const entry = stage === "implementing" && task.route === "feature" && !resume ? buildEntryOf(approvals, task.record) : null;
       if (entry && !entry.ok) {
@@ -2109,6 +2123,7 @@ export class Pipeline {
         ...(replan ? { replan } : {}),
         ...(budgetMinutes !== undefined ? { budgetMinutes } : {}),
         ...(testsCommit ? { testsCommit } : {}),
+        ...(firstInputCommit ? { firstInputCommit } : {}),
         signal,
         ...(resume ? { resume: { container: resume.container, inputCommit: resume.inputCommit, engine: resume.engine } } : {}),
         ...(fallback ? { engine: fallback.engine } : {}),

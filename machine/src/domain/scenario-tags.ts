@@ -3,7 +3,7 @@
 // per line. The writer can run any code in its container, so nothing here trusts it: a deleted or renamed-away file, a control-plane path, a
 // symlink or a nested repository is never a test. Pure.
 import { addedLinesOf } from "./scope.ts";
-import { looksLikeTestPath } from "./locked-files.ts";
+import { inTestDir, looksLikeTestPath } from "./locked-files.ts";
 import { isControlPlane } from "./control-plane.ts";
 
 export interface ScenarioTagFacts {
@@ -23,6 +23,7 @@ export interface ScenarioTagFacts {
 const FIXTURE_DIR = /(^|\/)(__fixtures__|__snapshots__|fixtures?|testdata|__mocks__|mocks?)\//i;
 const SOURCE_EXT = /\.(?:[cm]?[jt]sx?|py|go|rs|rb|java|kt|swift|cs|php)$/i;
 const TAG = /@scenario:([A-Za-z0-9_-]+)/g;
+const BARE_TEST = /(^|\/)(test|spec)\.[^./]+$/i;
 const SYMLINK = "120000";
 const GITLINK = "160000";
 
@@ -35,9 +36,29 @@ function controlPlaneAnywhere(path: string): boolean {
 export function scenarioTags(input: { nameStatus: string; diff: string; scenarios: readonly { id?: string }[]; testFiles?: readonly string[]; /** The new mode of each added or changed path (`git diff --raw`); a symlink or a gitlink is never a test. */ modes?: Readonly<Record<string, string>> }): ScenarioTagFacts {
   const mapTests = new Set(input.testFiles ?? []);
   const modes = input.modes ?? {};
-  const isTest = (path: string) => !controlPlaneAnywhere(path) && modes[path] !== SYMLINK && modes[path] !== GITLINK && (mapTests.has(path) || (looksLikeTestPath(path) && SOURCE_EXT.test(path)));
-  const isFixture = (path: string) => !controlPlaneAnywhere(path) && modes[path] !== SYMLINK && modes[path] !== GITLINK && FIXTURE_DIR.test(path);
-  const allowed = (path: string) => isTest(path) || isFixture(path);
+  const plain = (path: string) => !controlPlaneAnywhere(path) && modes[path] !== SYMLINK && modes[path] !== GITLINK;
+  // A bare `test.<ext>` or `spec.<ext>` is a test only inside a test directory; any other test-named file needs a source extension.
+  const isTest = (path: string) => plain(path) && (mapTests.has(path) || (looksLikeTestPath(path) && SOURCE_EXT.test(path) && (!BARE_TEST.test(path) || inTestDir(path))));
+  const tagged: Record<string, string> = {};
+  const ambiguous: string[] = [];
+  for (const added of addedLinesOf(input.diff)) {
+    if (!isTest(added.path)) continue;
+    const ids = [...new Set([...added.line.matchAll(TAG)].map((m) => m[1]!))];
+    if (ids.length > 1) {
+      if (!ambiguous.includes(added.path)) ambiguous.push(added.path);
+    } else if (ids.length === 1) {
+      tagged[ids[0]!] ??= added.path;
+    }
+  }
+  const taggedDirs = [...new Set(Object.values(tagged).map((p) => p.split("/").slice(0, -1).join("/")))];
+  // A fixture is taken only as an added file under a test directory or beside a tagged test; a modified or deleted one elsewhere (a mock production imports) is a production change.
+  const fixtureOk = (path: string, status: string) => {
+    if (!plain(path) || !FIXTURE_DIR.test(path)) return false;
+    if (inTestDir(path)) return true;
+    if (!status.startsWith("A")) return false;
+    const home = path.slice(0, FIXTURE_DIR.exec(path)!.index).replace(/\/$/, "");
+    return taggedDirs.some((d) => (home === "" ? d === "" : d === home || d.startsWith(`${home}/`)));
+  };
   const rows = input.nameStatus.split("\n").filter((l) => l.trim()).map((l) => l.split("\t"));
   const nonTest: string[] = [];
   const removed: string[] = [];
@@ -50,21 +71,10 @@ export function scenarioTags(input: { nameStatus: string; diff: string; scenario
     if (/^[DR]/.test(status)) {
       // What goes away is judged by its old path: deleting or renaming production code away is a production change.
       if (isTest(old)) removed.push(old);
-      else if (!isFixture(old)) flag(old);
+      else if (!fixtureOk(old, "D")) flag(old);
     }
     if (status.startsWith("D")) continue;
-    if (!allowed(path)) flag(path);
-  }
-  const tagged: Record<string, string> = {};
-  const ambiguous: string[] = [];
-  for (const added of addedLinesOf(input.diff)) {
-    if (!isTest(added.path)) continue;
-    const ids = [...new Set([...added.line.matchAll(TAG)].map((m) => m[1]!))];
-    if (ids.length > 1) {
-      if (!ambiguous.includes(added.path)) ambiguous.push(added.path);
-    } else if (ids.length === 1) {
-      tagged[ids[0]!] ??= added.path;
-    }
+    if (!isTest(path) && !fixtureOk(path, status)) flag(path);
   }
   const ids = input.scenarios.flatMap((s) => (s.id ? [s.id] : []));
   const missing = ids.filter((id) => !(id in tagged));

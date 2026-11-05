@@ -57,6 +57,14 @@ describe("the machine's own count of iterations", () => {
   });
 });
 
+describe("numbers read from rows", () => {
+  it("ignores a token count that is not a non-negative integer: a forged negative one cannot hide what was spent", () => {
+    const budget = buildBudget([run("implementing", 0, 1)], [finished({ input: -9_000_000, output: 1 }), finished({ input: 1.5, output: 1 }), finished({ input: 1_900_000, output: 100_001 })], limits);
+    expect(budget).toMatchObject({ tokens: 2_000_001, spent: "tokens" });
+    expect(buildBudget([run("implementing", 0, 1)], [finished({ input: -1, output: 1 })], limits)).toMatchObject({ tokens: null, tokensCounted: false });
+  });
+});
+
 describe("rateLimitWaitMs", () => {
   const now = Date.UTC(2026, 10, 5, 12, 0);
   it("waits for the provider's reset, at least 1 minute and at most 30", () => {

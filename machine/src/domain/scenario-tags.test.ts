@@ -60,4 +60,19 @@ describe("scenarioTags", () => {
     const facts = scenarioTags({ nameStatus: "A\tweb/cart.test.ts", diff: text, scenarios });
     expect(facts).toMatchObject({ ok: false, ambiguous: ["web/cart.test.ts"], missing: ["S1", "S2"] });
   });
+
+  it("accepts a fixture only as an added file under a test directory or beside a tagged test: a modified or deleted fixture elsewhere, or an added one far from the tests, is a production change", () => {
+    const text = diff("web/cart.test.ts", `it("a @scenario:S1", () => {`, `it("b @scenario:S2", () => {`);
+    const run = (rows: string[]) => scenarioTags({ nameStatus: ["A\tweb/cart.test.ts", ...rows].join("\n"), diff: text, scenarios }).nonTest;
+    expect(run(["M\tsrc/mocks/server.ts"])).toEqual(["src/mocks/server.ts"]);
+    expect(run(["D\tsrc/__mocks__/db.ts"])).toEqual(["src/__mocks__/db.ts"]);
+    expect(run(["A\tsrc/mocks/new.ts"])).toEqual(["src/mocks/new.ts"]);
+    expect(run(["A\tweb/__fixtures__/cart.json", "A\ttests/mocks/db.ts", "M\ttests/fixtures/old.json"])).toEqual([]);
+  });
+
+  it("counts a bare test.<ext> or spec.<ext> as a test only inside a test directory", () => {
+    const text = diff("tests/a.test.ts", `it("a @scenario:S1", () => {`, `it("b @scenario:S2", () => {`);
+    const run = (rows: string[]) => scenarioTags({ nameStatus: ["A\ttests/a.test.ts", ...rows].join("\n"), diff: text, scenarios }).nonTest;
+    expect(run(["A\tsrc/spec.ts", "A\tlib/test.py", "A\ttests/spec.ts", "A\ttests/test.py", "A\tsrc/test_cart.py", "A\tsrc/cart.spec.ts"])).toEqual(["src/spec.ts", "lib/test.py"]);
+  });
 });

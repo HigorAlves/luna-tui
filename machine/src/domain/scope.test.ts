@@ -151,6 +151,14 @@ describe("scenario tests are fixed once committed", () => {
     expect(scopeFacts({ ...none, nameStatus: "R100\tweb/other.test.ts\tweb/moved.test.ts", scenarioTests: tests }).weakened).toEqual(["S3"]);
   });
 
+  it("protects every path of the tests commit, not only the first file that holds each tag: a helper or a fixture it added is weakened when changed", () => {
+    const protectedPaths = ["web/cart.test.ts", "web/helper.test.ts", "web/__fixtures__/cart.json"];
+    const facts = scopeFacts({ ...none, nameStatus: "M\tweb/helper.test.ts\nD\tweb/__fixtures__/cart.json", scenarioTests: tests, protectedPaths });
+    expect(facts.weakened).toEqual(["file:web/helper.test.ts", "file:web/__fixtures__/cart.json"]);
+    const issues = scopeIssues({ ...facts, changed: [], undeclared: [], removedTests: [], newDependencies: [], todos: [], secrets: [], switchedOff: [] }, []);
+    expect(issues).toEqual([expect.objectContaining({ severity: "blocker", kind: "test_weakened", path: "web/helper.test.ts" }), expect.objectContaining({ severity: "blocker", kind: "test_weakened", path: "web/__fixtures__/cart.json" })]);
+  });
+
   it("is empty when the change leaves the scenario test files alone", () => {
     expect(scopeFacts({ ...none, nameStatus: "M\tsrc/a.ts\nA\tweb/new.test.ts", scenarioTests: tests }).weakened).toEqual([]);
   });

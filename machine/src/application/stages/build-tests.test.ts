@@ -59,6 +59,7 @@ function fakes(trees: Array<{ nameStatus: string; diff: string }>, over: Partial
       },
       reset: async () => void calls.push("discard"),
       readCommit: async () => null,
+      branch: async () => "task/x",
     },
     ...over,
   };
@@ -280,22 +281,53 @@ describe("Build's tests step", () => {
     expect(f.calls).toEqual(["implement", "implement", "sweep"]);
   });
 
-  it("does not write the tests twice: a card whose tests commit exists goes straight to the implementer, with the tests listed from that commit", async () => {
+  const recordedCommit = (parent = "base0", tree = tagged("S1")) => ({ ...tree, parent });
+
+  it("does not write the tests twice: a card whose tests commit exists goes straight to the implementer, with the tests listed from that commit, the scope measured from it and every path in it protected", async () => {
     const reads: string[] = [];
-    const f = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async (_w, sha) => (reads.push(sha), tagged("S1")) } });
-    await buildTestsStep(f.deps)(context([v2], { testsCommit: "def5678" }));
+    const f = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async (_w, sha) => (reads.push(sha), { ...recordedCommit(), nameStatus: "A\tweb/cart.test.ts\nA\tweb/__fixtures__/cart.json" }) } });
+    await buildTestsStep(f.deps)(context([v2], { testsCommit: "def5678", firstInputCommit: "base0" }));
     expect(f.calls).toEqual(["implement", "sweep"]);
     expect(reads).toEqual(["def5678"]);
-    expect(f.implemented[0]!.scenarioTests).toEqual([{ scenario: "S1", file: "web/cart.test.ts" }]);
+    expect(f.implemented[0]).toMatchObject({ scenarioTests: [{ scenario: "S1", file: "web/cart.test.ts" }], scopeBase: "def5678", testsFiles: ["web/cart.test.ts", "web/__fixtures__/cart.json"] });
   });
 
-  it("accepts as the tests commit only the sha the machine itself made: a commit with the right subject that the container forged is not looked for, and a recorded sha that is not on the branch runs the step again", async () => {
-    const f = fakes([tagged("S1")]);
-    await buildTestsStep(f.deps)(context([v2]));
-    expect(f.calls[0]).toBe("writer");
+  it("reads the recorded tests commit the same way on a resume", async () => {
+    const f = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async () => recordedCommit() } });
+    await buildTestsStep(f.deps)(context([v2], { testsCommit: "def5678", firstInputCommit: "base0", resume: { container: "c", inputCommit: null } }));
+    expect(f.implemented[0]).toMatchObject({ scopeBase: "def5678", scenarioTests: [{ scenario: "S1", file: "web/cart.test.ts" }] });
+  });
+
+  it("escalates head_moved when the recorded tests commit is no longer on the branch: the writer never runs on a HEAD the container moved", async () => {
     const g = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async () => null } });
-    await buildTestsStep(g.deps)(context([v2], { testsCommit: "def5678" }));
-    expect(g.calls[0]).toBe("writer");
+    const result = await buildTestsStep(g.deps)(context([v2], { testsCommit: "def5678", firstInputCommit: "base0" }));
+    expect(g.calls).toEqual([]);
+    expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "head_moved", headMoved: true } });
+  });
+
+  it("does not accept a recorded commit whose parent is not the commit the card's first run started from, or whose own diff does not check out", async () => {
+    const parent = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async () => recordedCommit("forged") } });
+    expect(await buildTestsStep(parent.deps)(context([v2], { testsCommit: "def5678", firstInputCommit: "base0" }))).toMatchObject({ outcome: "escalated", detail: { escalation: "head_moved" } });
+    expect(parent.calls).toEqual([]);
+    const production = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async () => ({ ...recordedCommit(), nameStatus: "A\tweb/cart.test.ts\nM\tsrc/auth/guard.ts" }) } });
+    expect(await buildTestsStep(production.deps)(context([v2], { testsCommit: "def5678", firstInputCommit: "base0" }))).toMatchObject({ outcome: "escalated" });
+    expect(production.calls).toEqual([]);
+    const unknown = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async () => recordedCommit() } });
+    expect(await buildTestsStep(unknown.deps)(context([v2], { testsCommit: "def5678" }))).toMatchObject({ outcome: "escalated" });
+  });
+
+  it("checks the worktree is on the writer's branch before it commits, and escalates when the container switched it", async () => {
+    const f = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, branch: async () => "main" } });
+    const result = await buildTestsStep(f.deps)(context([v2]));
+    expect(f.calls).not.toContain("commit");
+    expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "head_moved" } });
+  });
+
+  it("passes every path of the tests it committed on, so each is protected, with the scope measured from the commit it made", async () => {
+    const two = { nameStatus: "A\tweb/cart.test.ts\nA\tweb/helper.test.ts", diff: tagged("S1").diff };
+    const f = fakes([two]);
+    await buildTestsStep(f.deps)(context([v2]));
+    expect(f.implemented[0]).toMatchObject({ scopeBase: "abc1234", testsFiles: ["web/cart.test.ts", "web/helper.test.ts"] });
   });
 
   it("reads the writer's changes against the base it started from, and refuses a HEAD the container moved: the tree goes back to the base and the writer is sent back once, then a person", async () => {

@@ -341,28 +341,37 @@ export async function stagePending(path: string, base: string): Promise<{ nameSt
 }
 
 /** What the commit `sha` changed, only when it is an ancestor of HEAD (the machine's own tests commit, never one found by its subject); null otherwise. */
-export async function readCommitDiff(path: string, sha: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string> } | null> {
+export async function readCommitDiff(path: string, sha: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string>; parent: string } | null> {
   if (!/^[0-9a-f]{7,64}$/.test(sha)) return null;
   if (!(await isAncestor(path, sha, "HEAD"))) return null;
-  const [nameStatus, diff, raw] = await Promise.all([
+  const [nameStatus, diff, raw, parent] = await Promise.all([
     execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--name-status", "--format=", sha]),
     execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--no-color", "--no-ext-diff", "--format=", sha]),
     execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--raw", "--format=", sha]),
+    execOrThrow("git", [...HOST_GIT, "-C", path, "rev-parse", `${sha}^`]).catch(() => ""),
   ]);
-  return { nameStatus, diff, modes: modesOf(raw) };
+  return { nameStatus, diff, modes: modesOf(raw), parent };
 }
 
-/** The commits made on the checked-out branch after `sinceIso`, newest first, each with its files' names and added and removed line counts (`--numstat`); never a diff. */
-export async function commitsSince(path: string, sinceIso: string): Promise<Array<{ sha: string; files: Array<{ path: string; added: number; removed: number }> }>> {
-  const out = await execOrThrow("git", [...HOST_GIT, "-C", path, "log", `--since=${sinceIso}`, "-n", "100", "--numstat", "--format=commit %H"]);
+/** The branch the worktree is on (`HEAD` when detached). */
+export function currentBranch(path: string): Promise<string> {
+  return execOrThrow("git", [...HOST_GIT, "-C", path, "rev-parse", "--abbrev-ref", "HEAD"]);
+}
+
+/** The commits between `sinceSha` and HEAD (`git log <sha>..HEAD`), newest first, each with its files' names and added and removed line counts (`--numstat`); never a diff, never selected by a date the agent could set. At most 100 commits, 200 files a commit and 300 characters of path; anything that is not a sha gives nothing. */
+export async function commitsSince(path: string, sinceSha: string): Promise<Array<{ sha: string; files: Array<{ path: string; added: number; removed: number }> }>> {
+  if (!/^[0-9a-f]{7,64}$/.test(sinceSha)) return [];
+  const out = await exec("git", [...HOST_GIT, "-C", path, "log", `${sinceSha}..HEAD`, "-n", "100", "--numstat", "--format=commit %H"]);
+  if (out.code !== 0) return [];
   const commits: Array<{ sha: string; files: Array<{ path: string; added: number; removed: number }> }> = [];
-  for (const line of out.split("\n")) {
+  for (const line of out.stdout.split("\n")) {
     if (line.startsWith("commit ")) {
       commits.push({ sha: line.slice(7).trim(), files: [] });
     } else if (line.trim() && commits.length > 0) {
       const [added, removed, ...name] = line.split("\t");
+      const files = commits.at(-1)!.files;
       // A binary file counts "-": no line numbers to give.
-      commits.at(-1)!.files.push({ path: name.join("\t"), added: Number(added) || 0, removed: Number(removed) || 0 });
+      if (files.length < 200) files.push({ path: name.join("\t").slice(0, 300), added: Number(added) || 0, removed: Number(removed) || 0 });
     }
   }
   return commits;

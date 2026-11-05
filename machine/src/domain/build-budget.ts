@@ -51,7 +51,8 @@ export function buildBudget(runs: readonly RunFacts[], events: readonly { kind: 
     } else if (kind === "stage.finished" && payload.stage === "implementing") {
       machineIterations += 1;
       const t = payload.tokens as { input?: unknown; output?: unknown } | undefined;
-      if (t && typeof t.input === "number" && typeof t.output === "number") tokens = (tokens ?? 0) + t.input + t.output;
+      // Only non-negative whole numbers count: a row with anything else (a negative, a fraction) is ignored, never allowed to lower what was spent.
+      if (t && Number.isInteger(t.input) && Number.isInteger(t.output) && (t.input as number) >= 0 && (t.output as number) >= 0) tokens = (tokens ?? 0) + (t.input as number) + (t.output as number);
     }
   }
   // The ledger is a file the agent writes: the machine's own rows (each implementing run, each failed sweep) count too, and the larger count stands.

@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { copyFile, lstat, mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+import { isReservedKind } from "../../domain/reserved-kinds.ts";
 import { type ArtifactKind, StageOutput, isStreamEvent } from "@hardness/contracts";
 
 import type { StageResult } from "../ports.ts";
@@ -54,12 +55,18 @@ export async function ingestStageOutput(opts: {
   } catch (error) {
     if (exists(error)) throw error;
   }
+  let dropped = 0;
   for (const line of lines.split("\n")) {
     if (line.trim() === "") continue;
     try {
       const item = JSON.parse(line) as Partial<IngestedEvent>;
       if (typeof item.kind !== "string") throw new Error("no kind");
       if (isStreamEvent({ kind: item.kind })) continue;
+      // A container can write any line: one whose stored kind is a row only the machine writes is not taken.
+      if (isReservedKind(item.kind)) {
+        dropped += 1;
+        continue;
+      }
       events.push({
         at: typeof item.at === "string" ? item.at : new Date().toISOString(),
         kind: item.kind,
@@ -69,6 +76,8 @@ export async function ingestStageOutput(opts: {
       events.push({ at: new Date().toISOString(), kind: "stage.malformed", payload: { line } });
     }
   }
+
+  if (dropped > 0) events.push({ at: new Date().toISOString(), kind: "note", payload: { note: `${dropped} container event${dropped === 1 ? "" : "s"} of a kind only the machine writes ${dropped === 1 ? "was" : "were"} dropped` } });
 
   const artifacts: IngestedArtifact[] = [];
   const base = join(stateDir, "runs", runId, "files");

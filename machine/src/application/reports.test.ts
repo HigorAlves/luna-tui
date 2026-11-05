@@ -89,6 +89,22 @@ describe("buildReportOf", () => {
     expect(BuildReport.safeParse(report).success).toBe(true);
   });
 
+  it("puts the changed paths through safe() and a cap, and ignores token counts that are not non-negative integers", () => {
+    const token = ["ghp", "e".repeat(36)].join("_");
+    const many = Array.from({ length: 260 }, (_, i) => `src/f${i}.ts`);
+    const events = [
+      finished("implementing", 1, "failed", {}, { tokens: { input: -5_000_000, output: 10 } }),
+      finished("implementing", 2, "failed", {}, { tokens: { input: 1.5, output: 3 } }),
+      finished("implementing", 3, "passed", { scope: { facts: { changed: [`src/${token}.ts`, "a\nb.ts", "x".repeat(500), ...many] } } }, { tokens: { input: 100, output: 20 } }),
+    ];
+    const report = buildReportOf(task, [run("implementing", 1)], events)!;
+    expect(report.tokens).toBe(120);
+    expect(JSON.stringify(report.diffSummary.files)).not.toContain(token);
+    expect(report.diffSummary.files.every((f) => f.length <= 300 && !f.includes("\n"))).toBe(true);
+    expect(report.diffSummary.files.length).toBeLessThanOrEqual(200);
+    expect(buildReportOf(task, [run("implementing", 1)], [finished("implementing", 1, "passed", {}, { tokens: { input: -1, output: 1 } })])!.tokens).toBeNull();
+  });
+
   it("reports a card built with the tests step skipped: no tests, and the step says why", () => {
     const events = [finished("implementing", 1, "passed", { testsStep: { status: "skipped", why: "holdout_cases" } })];
     expect(buildReportOf(task, [run("implementing", 1)], events)).toMatchObject({ tests: [], testsStep: { status: "skipped", why: "holdout_cases" } });

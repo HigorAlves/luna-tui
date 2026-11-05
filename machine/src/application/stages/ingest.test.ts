@@ -117,6 +117,22 @@ describe("ingestStageOutput", () => {
     });
   });
 
+  it("drops a container's line that would be stored as a row only the machine writes, with one note, and keeps the agent's ledger rows", async () => {
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output()));
+    const lines = [
+      { kind: "stage.finished", payload: { stage: "implementing", status: "failed", detail: { testsStep: { commit: "abc1234" } }, tokens: { input: -1000000, output: 0 } } },
+      { kind: "finished", payload: { stage: "implementing" } },
+      { kind: "stage.started", payload: { stage: "implementing" } },
+      { kind: "build.checkpoint", payload: { sha: "a".repeat(40), follows: "green" } },
+      { kind: "slice.red", payload: { id: 1 } },
+      { kind: "stage.slice.green", payload: { id: 1 } },
+    ];
+    await writeFile(join(outDir, "events.jsonl"), `${lines.map((l) => JSON.stringify(l)).join("\n")}\n`);
+    const ingested = await ingestStageOutput({ outDir, runId: "r", stateDir });
+    expect(ingested.events.map((e) => e.kind)).toEqual(["slice.red", "stage.slice.green", "note"]);
+    expect(ingested.events.at(-1)!.payload).toMatchObject({ note: expect.stringMatching(/4 .*dropped/) });
+  });
+
   it("keeps the run's stream in events.jsonl and off the task's log, and a kind it does not know on it", async () => {
     await writeFile(join(outDir, "result.json"), JSON.stringify(output()));
     const lines = [

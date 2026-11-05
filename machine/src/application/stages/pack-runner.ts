@@ -137,6 +137,8 @@ export interface AgentExtra {
   baseCommit?: string;
   /** pr_reply: the thread and the pack, built by the host; a reviewer's text only ever rides here. */
   ship?: ShipContext;
+  /** implementing: every path of the tests commit, protected from change. */
+  testsFiles?: string[];
   /** implementing, feature route: the commit the scope is measured from (the tests commit the machine made); absent, the branch's base. */
   scopeBase?: string;
   /** implementing: the tests Build's tests step made, one per scenario. */
@@ -311,12 +313,13 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           outDir: join(runDir, "out"),
           repoPath: task.repoPath,
           worktree: workspace.path,
-          // The feature route measures the scope over the card's whole change (from the tests commit, else the branch's base), so a fix run that changes nothing still sees what an earlier run committed; a route with no plan keeps the run's own commit.
-          inputCommit: input.plan != null ? (extra.scopeBase ?? baseCommit ?? inputCommit) : inputCommit,
+          // The feature route measures the scope over the card's whole change, so a fix run that changes nothing still sees what an earlier run committed: from the vetted tests commit, else the commit the card's first implementing run started from (the machine's own stage_runs row; the first run's own start, read by the host before the container ran). Never from a ref or a later run's commit: with none of them the check fails closed. A route with no plan keeps the run's own commit.
+          inputCommit: input.plan != null ? (extra.scopeBase ?? context.firstInputCommit ?? (context.attempt === 1 ? inputCommit : null)) : inputCommit,
           slices: input.plan?.slices ?? [],
           planned: plannedFiles(input.plan),
           planPresent: input.plan != null,
           ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
+          ...(extra.testsFiles?.length ? { protectedPaths: extra.testsFiles } : {}),
           get decide() {
             return deps.decide ?? null;
           },

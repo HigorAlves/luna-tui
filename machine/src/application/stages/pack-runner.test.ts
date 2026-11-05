@@ -956,9 +956,16 @@ describe("the engine a stage runs on", () => {
     it("computes the scope over the card's whole change on the feature route: a fix run that changes nothing still sees the undeclared file the first run committed", async () => {
       const first = await runners(fakeSandbox(output(), commitFiles("b.txt", "extra.txt"))).implementing!(planned());
       expect(first).toMatchObject({ outcome: "fail", detail: { scopeRed: true } });
-      const again = { ...planned(), runId: "run-2", task: { ...planned().task, branch: first.workspace!.branch, worktreePath: first.workspace!.worktreePath } } as StageContext;
+      const again = { ...planned(), runId: "run-2", attempt: 2, firstInputCommit: first.run!.inputCommit!, task: { ...planned().task, branch: first.workspace!.branch, worktreePath: first.workspace!.worktreePath } } as StageContext;
       const second = await runners(fakeSandbox(output(), () => {})).implementing!(again);
       expect(second).toMatchObject({ outcome: "fail", detail: { scopeRed: true, scope: { facts: { undeclared: ["extra.txt"] } } } });
+    });
+
+    it("never measures the scope from a ref or from a later run's own commit: with no tests commit and no recorded first input commit, a second run fails closed", async () => {
+      const first = await runners(fakeSandbox(output(), commitFiles("b.txt", "extra.txt"))).implementing!(planned());
+      const again = { ...planned(), runId: "run-2", attempt: 2, task: { ...planned().task, branch: first.workspace!.branch, worktreePath: first.workspace!.worktreePath } } as StageContext;
+      const second = await runners(fakeSandbox(output(), () => {})).implementing!(again);
+      expect(second).toMatchObject({ outcome: "escalated", detail: { envBroken: true, reason: expect.stringMatching(/scope/i) } });
     });
 
     it("keeps the run's own commit as the scope's base on a route with no plan (the PR routes)", async () => {

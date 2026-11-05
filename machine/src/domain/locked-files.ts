@@ -9,6 +9,11 @@ const TEST_DIR_PATTERN = /(^|\/)(__tests__|tests?|spec)\//i;
 // to a locked test isn't missed just because its own suffix has more than one segment.
 const TEST_NAME_PATTERN = /^(test|spec)[._]|[._](test|spec)([._]|$)/i;
 
+/** Whether the path is under a test directory (`tests/`, `__tests__/`, `spec/`). */
+export function inTestDir(path: string): boolean {
+  return TEST_DIR_PATTERN.test(path);
+}
+
 export function looksLikeTestPath(path: string): boolean {
   if (TEST_DIR_PATTERN.test(path)) return true;
   const base = path.slice(path.lastIndexOf("/") + 1);

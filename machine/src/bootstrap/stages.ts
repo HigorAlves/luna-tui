@@ -33,7 +33,7 @@ import { loadCredential } from "../adapters/credentials/claude.ts";
 import { imageExists, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
-import { HOST_GIT, changedPaths, gitIdentity, commitAll, headCommit, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
+import { HOST_GIT, changedPaths, gitIdentity, commitAll, currentBranch, headCommit, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
@@ -209,6 +209,7 @@ export async function buildRealStages(
         },
         reset: resetWorktree,
         readCommit: readCommitDiff,
+        branch: currentBranch,
       },
     }),
     ...(triageSignals && agents.triage ? { triage: withTriageSignals(agents.triage, triageSignals) } : {}),

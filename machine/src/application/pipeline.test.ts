@@ -356,6 +356,7 @@ describe("what a person does after an escalation", () => {
   const stop = { outcome: "escalated" as const, detail: { escalation: "other", reason: "stuck", summary: "stopped", error: "boom" } };
   const learned: Array<Record<string, unknown>> = [];
   const written: Array<{ corrected: string | null; commits: unknown }> = [];
+  const sinces: string[] = [];
   const make = (decide: unknown = async () => tagged({ answer: { reason: { choice: "flaky_tests", confidence: 0.9 } }, recordId: "rec-9" })) =>
     new Pipeline(db, (stage) => (stage === "implementing" ? async () => stop : stubs.runnerFor(stage)), {
       inline: true,
@@ -363,7 +364,8 @@ describe("what a person does after an escalation", () => {
       escalationDecide: { decide: decide as never },
       truth: { learned: async (fact: Record<string, unknown>) => (learned.push(fact), true) } as never,
       escalationTruth: async (_task, _approval, commits, corrected) => (written.push({ corrected, commits }), "/gt/escalation.json"),
-      commitsSince: async () => [{ sha: "a".repeat(40), files: [{ path: "src/a.ts", added: 2, removed: 1 }] }],
+      headOf: async () => "d".repeat(40),
+      commitsSince: async (_worktree, since) => (sinces.push(since), [{ sha: "a".repeat(40), files: [{ path: "src/a.ts", added: 2, removed: 1 }] }]),
     });
   const escalatedCard = async (p: Pipeline) => {
     const task = await p.createTask({ title: "Login" });
@@ -401,6 +403,9 @@ describe("what a person does after an escalation", () => {
     await new PgTaskStore(db).updateTask(id, { worktreePath: "/work/t" });
     await p.correctEscalationReason(id, "env_broken");
     await p.decide(id, "approved", "fixed it");
+    // The escalated gate stored HEAD's sha when it opened; the record reads the commits after that sha, never after a date.
+    expect(sinces).toEqual(["d".repeat(40)]);
+    expect((await p.approvals(id)).find((a) => a.kind === "escalated")!.requested.headSha).toBe("d".repeat(40));
     expect(written).toEqual([{ corrected: "env_broken", commits: [{ sha: "a".repeat(40), files: [{ path: "src/a.ts", added: 2, removed: 1 }] }] }]);
     expect((await p.events(id)).some((e) => e.kind === "ground_truth.written" && e.payload.path === "/gt/escalation.json")).toBe(true);
   });
@@ -422,6 +427,20 @@ describe("the tests commit a later run of the card may trust", () => {
     expect(seen[1]).toBe("abc1234def");
     // The newest finish row with a sha wins; a malformed one is ignored.
     expect(seen[2]).toBe("abc1234def");
+  });
+});
+
+describe("the commit the card's first implementing run started from", () => {
+  it("is read from the machine's own stage run rows and handed to every later run, whatever a later run started from", async () => {
+    const seen: Array<string | undefined> = [];
+    const started = ["a".repeat(40), "b".repeat(40), "c".repeat(40)];
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async (context) => (seen.push(context.firstInputCommit), await context.started?.({ container: "c", inputCommit: started[seen.length - 1]! }), { outcome: "fail" as const, detail: { error: `different ${seen.length}` } }) : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(seen[0]).toBeUndefined();
+    expect(seen[1]).toBe("a".repeat(40));
+    expect(seen[2]).toBe("a".repeat(40));
   });
 });
 

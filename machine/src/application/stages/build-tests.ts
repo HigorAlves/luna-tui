@@ -19,7 +19,7 @@ export interface TestsDiff {
 
 export interface BuildTestsDeps {
   /** The implementer, handed the tests the step made (by scenario). */
-  implement: (context: StageContext, extra: { scenarioTests?: { scenario: string; file: string }[]; sweepFailures?: { name: string; tail: string }[]; scopeBase?: string }) => Promise<StageResult>;
+  implement: (context: StageContext, extra: { scenarioTests?: { scenario: string; file: string }[]; sweepFailures?: { name: string; tail: string }[]; scopeBase?: string; /** Every path of the tests commit: none may change without a person. */ testsFiles?: string[] }) => Promise<StageResult>;
   /** The test writer, as a sub-run; a second round carries what the first left out as `plan.review`. */
   runWriter: (context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
   /** The red_check decision for one scenario's test; `skipped` when it did not answer in time (it never blocks). `problems` are what a confident no said is wrong. */
@@ -41,8 +41,10 @@ export interface BuildTestsDeps {
     commit: (worktree: string, subject: string, body: string) => Promise<string>;
     /** Puts the worktree back on `base`: whatever the writer left or committed is gone. */
     reset: (worktree: string, base: string) => Promise<void>;
-    /** What the commit `sha` changed, when it is an ancestor of HEAD; null otherwise. The sha is the one the machine itself recorded, never one found by its subject. */
-    readCommit: (worktree: string, sha: string) => Promise<TestsDiff | null>;
+    /** What the commit `sha` changed and its parent, when it is an ancestor of HEAD; null otherwise. The sha is the one the machine itself recorded, never one found by its subject. */
+    readCommit: (worktree: string, sha: string) => Promise<(TestsDiff & { parent: string }) | null>;
+    /** The branch the worktree is on now. */
+    branch: (worktree: string) => Promise<string>;
   };
 }
 
@@ -107,7 +109,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     };
     const scenarios = approvedScenarios(context.approvals);
     if (task.route !== "feature") return deps.implement(context, {});
-    if (context.resume || !task.repoPath || scenarios.length === 0) return implementSwept({});
+    if (!task.repoPath || scenarios.length === 0) return implementSwept({});
 
     /** What the writer's runs cost: added to the run the stage reports, so the budget counts them. */
     let writerUsage: StageResult["usage"];
@@ -115,17 +117,22 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       const usage = addUsage(writerUsage, result.usage);
       return { ...result, ...(usage ? { usage } : {}), detail: { ...result.detail, testsStep } };
     };
-    if (await deps.holdout(task.repoPath)) return withStep(await implementSwept({}), { status: "skipped", why: "holdout_cases" });
-
     const subject = `test(${task.id.slice(0, 8)}): scenarios`;
     const testsOf = (facts: ScenarioTagFacts) => Object.entries(facts.tagged).map(([scenario, file]) => ({ scenario, file }));
     const worktree = task.worktreePath;
-    // Only the sha the machine itself committed (kept on the stage's finish row) is the tests commit, and only while it is on the branch.
-    const earlier = worktree && context.testsCommit ? await deps.git.readCommit(worktree, context.testsCommit) : null;
-    if (earlier) {
-      const facts = scenarioTags({ ...earlier, scenarios });
-      return withStep(await implementSwept({ scenarioTests: testsOf(facts), scopeBase: context.testsCommit! }), { status: "committed", commit: context.testsCommit!, resumed: true, scenarioTests: testsOf(facts) });
+    const headMoved = (reason: string): StageResult => ({ outcome: "escalated", detail: { escalation: "head_moved", headMoved: true, reason, testsStep: { status: "failed", problems: [reason] } } });
+    const pathsOf = (nameStatus: string): string[] => nameStatus.split("\n").filter((l) => l.trim()).filter((l) => !l.startsWith("D")).map((l) => l.split("\t").at(-1) ?? "").filter(Boolean);
+    // Only the sha the machine itself committed (kept on a finish row the machine wrote) is the tests commit: it must still be on the branch, its parent must be the
+    // commit the card's first run started from (a stage_runs row), and its own diff must pass the tag check. A resumed run reads it the same way.
+    if (context.testsCommit && worktree) {
+      const read = await deps.git.readCommit(worktree, context.testsCommit);
+      if (!read) return headMoved("the tests commit the machine made is no longer on the branch: the branch was moved, so nothing is written on it");
+      const facts = scenarioTags({ ...read, scenarios });
+      if (!context.firstInputCommit || read.parent !== context.firstInputCommit || !facts.ok) return headMoved("the recorded tests commit does not check out against the commit the card's first run started from");
+      return withStep(await implementSwept({ scenarioTests: testsOf(facts), scopeBase: context.testsCommit, testsFiles: pathsOf(read.nameStatus) }), { status: "committed", commit: context.testsCommit, resumed: true, scenarioTests: testsOf(facts) });
     }
+    if (context.resume) return implementSwept({});
+    if (await deps.holdout(task.repoPath)) return withStep(await implementSwept({}), { status: "skipped", why: "holdout_cases" });
 
     const approved = context.approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
     const plan = Plan.safeParse(approved?.requested.plan);
@@ -153,6 +160,8 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
         tagMisses += 1;
         continue;
       }
+      // The commit is made on the branch the host chose for the run: a container that switched the worktree to another branch gets nothing committed.
+      if (written.workspace?.branch && (await deps.git.branch(where)) !== written.workspace.branch) return headMoved("the worktree is not on the task's branch: the branch was moved");
       const pending = await deps.git.pending(where, base);
       const facts = scenarioTags({ ...pending, scenarios });
       if (!facts.ok) {
@@ -182,7 +191,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       for (const j of judged) await context.emit?.("scenario.red", { scenario: j.id });
       const sha = await deps.git.commit(where, subject, `plan version ${plan.success ? plan.data.version : 2}`);
       await deps.checkpoint(context, where, "red").catch(() => {});
-      const result = await implementSwept({ scenarioTests: testsOf(facts), scopeBase: sha });
+      const result = await implementSwept({ scenarioTests: testsOf(facts), scopeBase: sha, testsFiles: pathsOf(pending.nameStatus) });
       const skipped = judged.some((j) => j.verdict === "skipped");
       return withStep(result, { status: "committed", commit: sha, tests: Object.keys(facts.tagged).length, scenarioTests: testsOf(facts), ...(skipped ? { redCheck: "skipped" } : {}) });
     }
