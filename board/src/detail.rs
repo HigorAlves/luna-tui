@@ -632,6 +632,17 @@ fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> 
         let ids = task.merged.iter().take(LISTED).filter_map(|m| text(m, "id")).map(|id| id.chars().take(8).collect::<String>()).collect::<Vec<_>>().join(", ");
         lines.push(muted(format!("Merged     {ids}")));
     }
+    let short = |id: &str| plain(id).chars().take(8).collect::<String>();
+    if let Some(into) = &task.merged_into {
+        lines.push(muted(format!("Merged into  {}", short(into))));
+    }
+    if !task.related.is_empty() {
+        lines.push(muted(format!("Related    {}", task.related.iter().take(LISTED).map(|id| short(id)).collect::<Vec<_>>().join(", "))));
+    }
+    if let Some(gate) = detail.and_then(|d| d.open_approval()).filter(|a| a.requested.get("kind").and_then(|k| k.as_str()) == Some("dedup")) {
+        lines.push(muted("Intake     could this be a duplicate? pick with :dedup duplicate <slot> | related <slots> | neither".to_string()));
+        lines.extend(crate::intake::candidates(&gate.requested).iter().map(|c| muted(format!("           {}", c.line()))));
+    }
     if let Some(gate) = detail.and_then(|d| d.open_approval()).filter(|a| a.requested.get("kind").and_then(|k| k.as_str()) == Some("context")) {
         let words = gate
             .requested
@@ -1404,6 +1415,19 @@ mod tests {
         let rows = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
         assert!(rows.contains("Intake     waiting for: which repository it is for, more detail on what is wrong"), "{rows}");
         assert!(rows.contains(":context repo"), "{rows}");
+    }
+
+    #[test]
+    fn the_overview_lists_the_dedup_candidates_and_where_a_merged_card_went() {
+        let (_, mut detail) = fixture();
+        detail.approvals.push(serde_json::from_str(r#"{"kind":"awaiting_setup","requested":{"kind":"dedup","candidates":[{"slot":1,"id":"11111111-0000-0000-0000-000000000000","kind":"open","title":"Checkout fails\u001b[2J","state":"triage","score":0.82}]},"decision":null}"#).unwrap());
+        let extra = r#""reason":null,"mergedInto":"22222222-0000-0000-0000-000000000000","related":["33333333-0000-0000-0000-000000000000"]"#;
+        let task: Task = serde_json::from_str(&TASK.replace(r#""reason":null"#, extra)).unwrap();
+        let rows = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
+        for needle in ["Intake     could this be a duplicate? pick with :dedup duplicate <slot> | related <slots> | neither", "1  11111111  triage", "0.82  Checkout fails", "Merged into  22222222", "Related    33333333"] {
+            assert!(rows.contains(needle), "{needle} missing in\n{rows}");
+        }
+        assert!(!rows.contains('\u{1b}'));
     }
 
     fn col_of(rows: &[String], needle: &str) -> Option<usize> {

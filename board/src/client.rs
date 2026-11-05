@@ -334,6 +334,21 @@ impl Machine {
         Self::json(self.agent.post(self.url(&format!("/backlog/{id}/{action}"))).send_json(json!({}))).map(|_| ())
     }
 
+    /// A person's answer at Intake's dedup gate: `choice` is `duplicate`, `related` or `neither`, `of` ids the gate listed.
+    pub fn answer_dedup(&self, id: &str, choice: &str, of: &[String]) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/dedup"), json!({ "choice": choice, "of": of }))
+    }
+
+    /// The task is a duplicate of `into`: it closes, merged into it.
+    pub fn merge_into(&self, id: &str, into: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/merge"), json!({ "into": into }))
+    }
+
+    /// Undoes a merge: the duplicate comes back as a new card (the answer).
+    pub fn unmerge(&self, id: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/unmerge"), json!({}))
+    }
+
     /// What a person gives Intake's context gate: a repository, a project or more text; the card is checked again.
     pub fn give_context(&self, id: &str, given: Value) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/context"), given)

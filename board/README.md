@@ -193,6 +193,9 @@ and a test fails when they drift from the registry.
 | `:digest` | open the Digest |
 | `:prs` | open Pulls |
 | `:backlog` | open the Backlog |
+| `:dedup duplicate <n> \| related <ns> \| neither` | answer the duplicate question |
+| `:dup <id>` | close as a duplicate of that ticket |
+| `:undup` | bring a closed duplicate back |
 | `:context repo\|project\|text <value>` | answer Intake: repo, project or text |
 | `:slack` | open Slack |
 | `:jira <KEY>` | link that Jira issue (bare: the search) |
@@ -252,6 +255,8 @@ link is the board's `J`):
 | `e` | edit: the plan, the cases or the ticket |
 | `o` | open: the file, the PR or the issue |
 | `E` | pick the selected stage's engine |
+| `M` | close as a duplicate of another |
+| `U` | bring a closed duplicate back |
 
 **Move**
 

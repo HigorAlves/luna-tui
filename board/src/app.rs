@@ -2343,6 +2343,48 @@ impl App {
         Outcome::Continue
     }
 
+    /// `:dedup duplicate <slot> | related <slots> | neither` on the selected ticket: the answer to Intake's dedup gate.
+    fn answer_dedup(&mut self, rest: &str) {
+        let Some(id) = self.selected_id() else {
+            self.notify("select a ticket first", true);
+            return;
+        };
+        let listed = self.detail.as_ref().filter(|d| d.task.id == id).and_then(|d| d.open_approval()).map(|a| crate::intake::candidates(&a.requested)).unwrap_or_default();
+        if listed.is_empty() {
+            self.notify("this ticket is not waiting on a duplicate question (open its detail first)", true);
+            return;
+        }
+        match crate::intake::parse_answer(rest, &listed) {
+            Ok((choice, of)) => self.act(|m| m.answer_dedup(&id, &choice, &of), "answered"),
+            Err(why) => self.notify(why, true),
+        }
+    }
+
+    /// `:dup <id prefix>`: the selected ticket is a duplicate of that one.
+    fn merge_selected(&mut self, rest: &str) {
+        let Some(id) = self.selected_id() else {
+            self.notify("select a ticket first", true);
+            return;
+        };
+        match crate::intake::resolve_prefix(rest, self.tasks.iter().map(|t| t.id.as_str()).filter(|t| *t != id)) {
+            Ok(into) => self.act(|m| m.merge_into(&id, &into), "merged: it closes as a duplicate"),
+            Err(why) => self.notify(why, true),
+        }
+    }
+
+    /// `:undup`: the selected, merged ticket comes back as a new card.
+    fn unmerge_selected(&mut self) {
+        let Some(id) = self.selected_id() else {
+            self.notify("select a ticket first", true);
+            return;
+        };
+        if self.task(&id).is_some_and(|t| t.merged_into.is_none()) {
+            self.notify("this ticket was not merged into another", true);
+            return;
+        }
+        self.act(|m| m.unmerge(&id), "unmerged: it is a new card");
+    }
+
     /// `:context repo|project|text <value>` on the selected ticket: what Intake's gate asked for.
     fn give_context(&mut self, rest: &str) {
         let Some(id) = self.selected_id() else {
@@ -3206,7 +3248,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p", "M", "U"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -3244,6 +3286,8 @@ impl App {
                 None => return self.ticket_key('o', id),
             },
             KeyCode::Char('E') => self.open_engine_picker(id),
+            KeyCode::Char('M') => self.mode = Mode::Command { text: "dup ".into(), pick: None },
+            KeyCode::Char('U') => self.unmerge_selected(),
             KeyCode::Char(c) => return self.ticket_key(c, id),
             _ => {}
         }
@@ -3593,7 +3637,7 @@ impl App {
     /// The names `run_command` knows, aliases left out.
     #[cfg(test)]
     pub(crate) const HANDLED_COMMANDS: &[&str] = &[
-        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "context", "slack", "jira",
+        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "context", "dedup", "dup", "undup", "slack", "jira",
         "help",
     ];
 
@@ -3678,6 +3722,9 @@ impl App {
             "prs" | "pulls" => self.open_pulls(),
             "backlog" => self.open_backlog(),
             "context" => self.give_context(rest),
+            "dedup" => self.answer_dedup(rest),
+            "dup" => self.merge_selected(rest),
+            "undup" => self.unmerge_selected(),
             "slack" => self.open_slack(),
             "jira" => match self.selected_id() {
                 Some(id) if rest.is_empty() => return self.ticket_key('J', &id),

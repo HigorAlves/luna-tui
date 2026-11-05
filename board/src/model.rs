@@ -251,6 +251,11 @@ pub struct Task {
     pub attachments: Vec<Value>,
     #[serde(default)]
     pub merged: Vec<Value>,
+    /// The card (or backlog item) this one was merged into, and the cards linked as related.
+    #[serde(default)]
+    pub merged_into: Option<String>,
+    #[serde(default)]
+    pub related: Vec<String>,
 }
 
 /// The last declared transition Jira refused, until the next one succeeds.

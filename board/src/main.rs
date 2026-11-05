@@ -13,6 +13,7 @@ mod digest;
 mod discover;
 mod herdr;
 mod inbox;
+mod intake;
 mod keys;
 mod model;
 mod notify;
