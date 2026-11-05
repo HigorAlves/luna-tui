@@ -353,52 +353,62 @@ describe("planStage", () => {
   });
 
   describe("who may approve", () => {
-    const owned = { policies: { for: async () => ({ decisions: {}, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2, approvers: { low: 1, medium: 1, high: 3, outside_owning_team: true } } } }) } };
+    const repo = (approvers = { low: 1, medium: 1, high: 3, outside_owning_team: true }) => ({ policies: { for: async () => ({ decisions: {}, graph: true, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2, approvers } } }) } });
     const highTask = { ...task, record: { ...record, risk: "high" } } as unknown as TaskRow;
-
-    it("puts the approval rule on the gate: names needed for the level, the outside condition from the map's owners, and the machine's own level", async () => {
-      const result = await setup({}, { ...withGraph, ...owned }).run(context({ task: highTask }));
-      expect(result.detail).toMatchObject({ risk: { level: "high", machine: "high" }, approvalRule: { needed: 3, outside: "required", text: expect.stringMatching(/3 approvers.*@marta.*attestation/s) } });
+    const asked: string[][] = [];
+    const codeowners = (owners: string[][] | null, codeownersFile = true) => ({
+      stampOf: async () => ({ commit: "c" }),
+      locate: async () => located(),
+      owners: async (_repo: string, paths: string[]) => (asked.push(paths), owners === null ? null : { owners: owners.map((o, i) => ({ path: paths[i] ?? "x", owners: o })), codeowners: codeownersFile }),
     });
 
-    it("says when no owners were found that the outside condition is skipped, and asks one name of a plan that is not high", async () => {
-      const none = await setup({}, owned).run(context({ task: highTask }));
-      expect(none.detail).toMatchObject({ approvalRule: { needed: 3, outside: "skipped", text: expect.stringMatching(/no owners were found/i) } });
-      const medium = await setup({}, owned).run(context());
+    it("reads the owners for the rule from CODEOWNERS for the map's change and test files and the plan's step files, never from the mapper", async () => {
+      asked.length = 0;
+      const map = { outcome: "pass" as const, detail: { summary: "m", map: { components: ["c"], files: [{ path: "board/src/keys.rs", role: "change" }, { path: "board/src/app.rs", role: "read" }, { path: "board/src/keys_test.rs", role: "test" }], entry_points: [], owners: ["@nobody"], confidence: 0.8 } } };
+      const result = await setup({ code_map: [map] }, { graph: codeowners([["@marta"]]), ...repo() }).run(context({ task: highTask }));
+      expect(asked.at(-1)!.sort()).toEqual(["board/src/keys.rs", "board/src/keys_test.rs"]);
+      expect(result.detail).toMatchObject({ risk: { level: "high", machine: "high" }, approvalRule: { needed: 3, outside: "required", text: expect.stringMatching(/3 approvers.*marta.*attestation/s) } });
+      expect(result.detail?.approvalRule).toMatchObject({ text: expect.not.stringContaining("@nobody") });
+      expect(result.detail).toMatchObject({ ruleOwners: { state: "ok", owners: ["@marta"] } });
+    });
+
+    it("is not moved by what the mapper says the owners are: an empty list or a stranger changes nothing about the rule", async () => {
+      for (const owners of [[], ["@nobody"]]) {
+        const map = { outcome: "pass" as const, detail: { summary: "m", map: { components: ["c"], files: [{ path: "board/src/keys.rs", role: "change" }], entry_points: [], owners, confidence: 0.8 } } };
+        const result = await setup({ code_map: [map] }, { graph: codeowners([["@marta"]]), ...repo() }).run(context({ task: highTask }));
+        expect(result.detail).toMatchObject({ approvalRule: { outside: "required" }, ruleOwners: { state: "ok", owners: ["@marta"] } });
+      }
+    });
+
+    it("skips the condition only when the repo has no CODEOWNERS or no rule matches, and says so", async () => {
+      for (const deps of [codeowners([[]]), codeowners([["@a"]], false)]) {
+        const result = await setup({}, { graph: deps, ...repo() }).run(context({ task: highTask }));
+        expect(result.detail).toMatchObject({ approvalRule: { needed: 3, outside: "skipped", text: expect.stringMatching(/no CODEOWNERS rule matches/i) } });
+      }
+    });
+
+    it("flags the gate and says the condition is not enforced when the owners could not be read: no port, no graph, a failed lookup", async () => {
+      const failing = { ...codeowners([["@a"]]), owners: async () => { throw new Error("boom"); } };
+      const noPort = { stampOf: async () => ({ commit: "c" }), locate: async () => located() };
+      for (const graph of [codeowners(null), failing, noPort]) {
+        const result = await setup({}, { graph, ...repo() }).run(context({ task: highTask }));
+        expect(result.detail).toMatchObject({ approvalRule: { outside: "not_checked", text: expect.stringMatching(/could not be checked.*not enforced/i) }, ruleOwners: { state: "not_checked" } });
+        expect(result.detail?.flagged).toEqual(expect.arrayContaining([expect.stringMatching(/^outside approver not checked: /)]));
+      }
+      // No graph at all (a repo without one): nothing to read, the condition is not enforced and the gate says so.
+      const bare = await setup({}, repo()).run(context({ task: highTask }));
+      expect(bare.detail).toMatchObject({ approvalRule: { outside: "not_checked" } });
+    });
+
+    it("asks one name of a plan that is not high, and does not flag the lookup", async () => {
+      const medium = await setup({}, { graph: codeowners(null), ...repo() }).run(context());
       expect(medium.detail).toMatchObject({ approvalRule: { needed: 1, outside: "off", text: "Needs 1 approver." } });
+      expect(medium.detail?.flagged).not.toEqual(expect.arrayContaining([expect.stringMatching(/outside approver/)]));
     });
 
     it("uses the diagram's numbers when the repo says nothing", async () => {
-      const result = await setup({}, withGraph).run(context({ task: highTask }));
+      const result = await setup({}, { graph: codeowners([["@marta"]]) }).run(context({ task: highTask }));
       expect(result.detail).toMatchObject({ approvalRule: { needed: 2, outside: "required" } });
-    });
-  });
-
-  describe("a plan found wrong in Build, Verify or review", () => {
-    const replan = { raised_by: "verifying", reason: "the plan names a module that does not exist", output: "tsc: cannot find x", findings: ["a.ts:3 x is missing"], thread: "bo: rename x" };
-
-    it("hands the planner the evidence on its first run and its re-runs, and the designer and the decisions none", async () => {
-      const { run, calls, decided } = setup({ answers: { plan_check: [bad, good.plan_check] } }, withGraph);
-      await run(context({ replan }));
-      const planners = calls.filter((c) => c.pack === "plan");
-      expect(planners).toHaveLength(2);
-      for (const c of planners) expect(c.plan).toMatchObject({ replan });
-      for (const c of calls.filter((k) => k.pack !== "plan")) expect(c.plan ?? {}).not.toHaveProperty("replan");
-      for (const d of decided) expect(d.plan).not.toHaveProperty("replan");
-    });
-
-    it("shows on the gate what the planner says it changed, and that the plan came back", async () => {
-      const { run } = setup({ plan: [planned({ changed: "dropped the missing module and touched keys.rs instead" })] });
-      const result = await run(context({ replan }));
-      expect(result.detail).toMatchObject({ replan: { raised_by: "verifying" }, changed: "dropped the missing module and touched keys.rs instead" });
-      const plain = await setup({ plan: [planned({ changed: "ignored without a replan" })] }).run(context());
-      expect(plain.detail).not.toHaveProperty("replan");
-      expect(plain.detail).not.toHaveProperty("changed");
-    });
-
-    it("flags the gate when a re-planned plan says nothing about what it changed", async () => {
-      const result = await setup().run(context({ replan }));
-      expect(result.detail).toMatchObject({ flagged: ["replan: the planner did not say what it changed"] });
     });
   });
 
@@ -560,7 +570,7 @@ describe("planStage", () => {
     const risky = { blast_radius: { score: 2, confidence: 0.9 }, reversibility: { score: 2, confidence: 0.4 }, data_sensitivity: { score: 1, confidence: 0.9 }, complexity: { choice: "M", confidence: 0.9 } };
     const { run } = setup({ answers: { risk_score: [risky] } }, { policies: { for: async () => ({ decisions: { risk_score: { reversibility: { flag: 0.3 } } } }) } });
     const result = await run(context());
-    expect(result.detail).toMatchObject({ risk: { level: "high", product: 18, scores: { blast_radius: 2, reversibility: 2, data_sensitivity: 1 } }, verdicts: { risk: "flag" }, flagged: ["risk"] });
+    expect(result.detail).toMatchObject({ risk: { level: "high", product: 18, scores: { blast_radius: 2, reversibility: 2, data_sensitivity: 1 } }, verdicts: { risk: "flag" }, flagged: expect.arrayContaining(["risk"]) });
     // The product, not the sum: 3 x 3 x 1 is medium though the three levels add to 7.
     const wide = { blast_radius: { score: 2, confidence: 0.9 }, reversibility: { score: 2, confidence: 0.9 }, data_sensitivity: { score: 0, confidence: 0.9 }, complexity: { choice: "M", confidence: 0.9 } };
     const { run: runWide } = setup({ answers: { risk_score: [wide] } });

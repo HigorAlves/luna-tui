@@ -331,6 +331,8 @@ function publish(event: EventRow): void {
 
 pipeline = new Pipeline(db, runnerFor, {
   onEvent: publish,
+  // The outside-approver rule reads CODEOWNERS through the code graph port and nothing a model wrote.
+  owners: (repoPath, paths) => graph.owners(repoPath, paths),
   maxConcurrentTasks: config.maxConcurrentTasks,
   maxPerRepo: config.maxPerRepo,
   maxPerStage: config.maxPerStage,
@@ -576,7 +578,9 @@ const slaTicker = new Ticker(() => {
           const found = events.filter((event) => event.kind === kind);
           return found.length ? new Date(Math.max(...found.map((event) => event.at.getTime()))) : null;
         };
-        const owners = escalateAfter === null ? [] : ((await pipeline.approvals(task.id)).find((a) => a.decision === null)?.requested.map as { owners?: unknown } | undefined)?.owners;
+        // Who the escalation names comes from CODEOWNERS (the gate's `ruleOwners`), never from the code map's own `owners`.
+        const ruleOwners = escalateAfter === null ? undefined : ((await pipeline.approvals(task.id)).find((a) => a.decision === null)?.requested.ruleOwners as { state?: unknown; owners?: unknown } | undefined);
+        const owners = ruleOwners?.state === "ok" ? ruleOwners.owners : [];
         rows.push({ task, sla, targets, defaultArchive, escalateAfter, lastReminderAt: latest("sla.reminder"), lastEscalationAt: latest("sla.escalated"), escalateTo: Array.isArray(owners) ? owners.map(String) : [] });
       }
       await applySlaActions(rows, new Date(), { record: (id, kind, payload) => pipeline.record(id, kind, payload), archive: (id, reason) => pipeline.archive(id, reason, { onlyFrom: AUTO_ARCHIVE_GATES }) });

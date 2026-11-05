@@ -36,7 +36,7 @@ import {
 
 import type { RequiredOwners } from "../../domain/codeowners.ts";
 import type { GraphLocation } from "../graph.ts";
-import { approvalRule } from "../../domain/approvers.ts";
+import { type OwnersState, approvalRule, ownersStateOf, ruleFiles } from "../../domain/approvers.ts";
 import { controlPlaneFiles } from "../../domain/control-plane.ts";
 import { triageVerdicts } from "../../domain/triage-policy.ts";
 import { recordIdOf } from "../decision-truth.ts";
@@ -401,6 +401,13 @@ export function planStage(deps: PlanDeps): StageRunner {
       if (stepFiles.some((f) => !allowed.has(f.replace(/^(\.\/)+/, "")) && !created.has(f.replace(/^(\.\/)+/, "")))) flagged.add("plan outside map");
     }
 
+    // Who may approve a high-risk plan reads CODEOWNERS and nothing a model wrote (the mapper's `owners` is display only).
+    let ruleOwners: OwnersState = { state: "skipped" };
+    if (level === "high" && task.repoPath) {
+      const found = deps.graph?.owners ? await deps.graph.owners(task.repoPath, ruleFiles(map, stepFiles)).catch((): "failed" => "failed") : null;
+      ruleOwners = ownersStateOf(found);
+      if (ruleOwners.state === "not_checked") flagged.add(`outside approver not checked: ${ruleOwners.reason}`);
+    }
     const verdicts = { coverage: coverage.verdict, plan: planCheck.verdict, risk: riskJudged.verdict };
     for (const [name, verdict] of Object.entries(verdicts)) if (verdict === "flag" || verdict === "ask") flagged.add(name);
     if (map?.stale) flagged.add("map stale");
@@ -436,7 +443,8 @@ export function planStage(deps: PlanDeps): StageRunner {
         coverageReport: { score: report.score, bar: coverageBar, gaps: report.gaps, thin: report.thin, untestable: report.untestable, open: notes, per: report.per.map((p) => ({ id: p.criterion.id, text: p.criterion.text, scenarios: p.scenarios, types: p.types })) },
         risk,
         // Who may approve, from the repo's `plan.approvers` (the diagram's numbers when it says nothing) and the code map's owners, in the gate's words.
-        approvalRule: approvalRule(level, repoPlan?.approvers ?? FACTORY_DEFAULTS.plan.approvers, map?.owners ?? []),
+        approvalRule: approvalRule(level, repoPlan?.approvers ?? FACTORY_DEFAULTS.plan.approvers, ruleOwners),
+        ...(level === "high" ? { ruleOwners } : {}),
         verdicts,
         // The decisions' records, so the gate's outcome can be written onto them (decision-truth.ts).
         decisions: Object.fromEntries(([["coverage_check", coverage], ["plan_check", planCheck], ["risk_score", riskJudged]] as const).flatMap(([pack, judged]) => (judged.recordId ? [[pack, judged.recordId]] : []))),

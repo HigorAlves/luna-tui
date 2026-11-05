@@ -15,7 +15,8 @@ import { StubStages } from "./stages/stubs.ts";
 import { withTriageSignals } from "./stages/triage-signals.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, OutsideApproverRequiredError, Pipeline, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
+import { ApprovalEntity } from "../adapters/persistence/schemas.ts";
+import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
@@ -333,35 +334,91 @@ describe("approvers", () => {
   });
 
   describe("from outside the owning team", () => {
-    const withOwners = async (owners: string[], level: "high" | "low" = "high") => {
-      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", risk: { level, scores: {} }, map: { components: [], files: [{ path: "a.ts", role: "change" }], entry_points: [], owners, confidence: 0.8 } } });
-      const task = await newTask();
-      await pipeline.start(task.id);
+    /** A pipeline whose CODEOWNERS says who owns what; the code map's own `owners` is whatever the mapper wrote. */
+    const withCodeowners = (owners: string[] | null, codeowners = true, calls?: string[][]) =>
+      new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, owners: async (_repo, paths) => (calls?.push(paths), owners === null ? null : { owners: owners.length ? [{ path: paths[0] ?? "a.ts", owners }] : [], codeowners }) });
+    const atHigh = async (p: Pipeline, mapOwners: string[] = [], level: "high" | "low" = "high") => {
+      stubs.reset();
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", risk: { level, scores: {} }, map: { components: [], files: [{ path: "a.ts", role: "change" }, { path: "r.ts", role: "read" }], entry_points: [], owners: mapOwners, confidence: 0.8 } } });
+      const task = await p.createTask({ title: "Billing", repoPath: "/r/a" });
+      await p.start(task.id);
       return task.id;
     };
 
-    it("refuses a second approver when both are the code map's owners, and takes one from outside", async () => {
-      const id = await withOwners(["@ana", "@bo"]);
-      await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" });
-      await expect(pipeline.decide(id, "approved", undefined, undefined, { approver: "bo" })).rejects.toBeInstanceOf(OutsideApproverRequiredError);
-      expect((await pipeline.get(id)).state).toBe("awaiting_approval");
-      expect((await pipeline.approvals(id))[0]!.requested.approvers).toEqual(["ana"]);
-      expect((await pipeline.decide(id, "approved", undefined, undefined, { approver: "carla" })).state).toBe("awaiting_ship");
+    it("refuses a second approver when both are CODEOWNERS' owners, and takes one from outside", async () => {
+      const p = withCodeowners(["@ana", "@bo"]);
+      const id = await atHigh(p);
+      await p.decide(id, "approved", undefined, undefined, { approver: "ana" });
+      await expect(p.decide(id, "approved", undefined, undefined, { approver: "bo" })).rejects.toBeInstanceOf(OutsideApproverRequiredError);
+      expect((await p.get(id)).state).toBe("awaiting_approval");
+      expect((await p.approvals(id))[0]!.requested.approvers).toEqual(["ana"]);
+      expect((await p.decide(id, "approved", undefined, undefined, { approver: "carla" })).state).toBe("awaiting_ship");
+    });
+
+    it("reads no owner a model wrote: a mapper that answers no owners, or a stranger, changes nothing", async () => {
+      for (const mapOwners of [[], ["@nobody"]]) {
+        const p = withCodeowners(["@ana", "@bo"]);
+        const id = await atHigh(p, mapOwners);
+        await p.decide(id, "approved", undefined, undefined, { approver: "ana" });
+        await expect(p.decide(id, "approved", undefined, undefined, { approver: "bo" })).rejects.toBeInstanceOf(OutsideApproverRequiredError);
+      }
+    });
+
+    it("asks CODEOWNERS about the map's change and test files and the plan's step files, not the files it only reads", async () => {
+      const calls: string[][] = [];
+      const p = withCodeowners(["@ana"], true, calls);
+      const id = await atHigh(p);
+      await p.decide(id, "approved", undefined, undefined, { approver: "ana" });
+      expect(calls.at(-1)).toEqual(["a.ts"]);
     });
 
     it("lets an owner and a person from outside approve in either order", async () => {
-      const id = await withOwners(["@ana"]);
-      await pipeline.decide(id, "approved", undefined, undefined, { approver: "carla" });
-      expect((await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" })).state).toBe("awaiting_ship");
+      const p = withCodeowners(["@ana"]);
+      const id = await atHigh(p);
+      await p.decide(id, "approved", undefined, undefined, { approver: "carla" });
+      expect((await p.decide(id, "approved", undefined, undefined, { approver: "ana" })).state).toBe("awaiting_ship");
     });
 
-    it("skips the condition for a repo with no owners, and does not ask it of a plan that is not high", async () => {
-      const none = await withOwners([]);
-      await pipeline.decide(none, "approved", undefined, undefined, { approver: "ana" });
-      expect((await pipeline.decide(none, "approved", undefined, undefined, { approver: "bo" })).state).toBe("awaiting_ship");
-      const low = await withOwners(["@ana"], "low");
-      expect((await pipeline.decide(low, "approved", undefined, undefined, { approver: "ana" })).state).toBe("awaiting_ship");
+    it("skips the condition when the repo has no CODEOWNERS or no rule matches, and does not ask it of a plan that is not high", async () => {
+      for (const p of [withCodeowners([]), withCodeowners(["@ana"], false)]) {
+        const id = await atHigh(p);
+        await p.decide(id, "approved", undefined, undefined, { approver: "ana" });
+        expect((await p.decide(id, "approved", undefined, undefined, { approver: "bo" })).state).toBe("awaiting_ship");
+      }
+      const low = withCodeowners(["@ana"]);
+      const id = await atHigh(low, [], "low");
+      expect((await low.decide(id, "approved", undefined, undefined, { approver: "ana" })).state).toBe("awaiting_ship");
     });
+
+    it("does not enforce the condition when the owners could not be read (no port, a null answer, a throw): two names still close it", async () => {
+      const throwing = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, owners: async () => { throw new Error("boom"); } });
+      for (const p of [pipeline, withCodeowners(null), throwing]) {
+        const id = await atHigh(p, ["@ana"]);
+        await p.decide(id, "approved", undefined, undefined, { approver: "ana" });
+        expect((await p.decide(id, "approved", undefined, undefined, { approver: "bo" })).state).toBe("awaiting_ship");
+      }
+    });
+  });
+
+  it("reads the rule from the gate as it is when the approval closes it: an edit that raised the risk is seen, and a race cannot approve past it", async () => {
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [], risk: { level: "medium", scores: {} } } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    await pipeline.editPlan(task.id, { risk: { level: "high", reason: "billing" } });
+    await expect(pipeline.decide(task.id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
+    // Raced: whichever lands first, a task that reached the build had two names if the risk was high when it closed.
+    stubs.reset();
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [], risk: { level: "medium", scores: {} } } });
+    const racing = await newTask();
+    await pipeline.start(racing.id);
+    await Promise.allSettled([pipeline.decide(racing.id, "approved", undefined, undefined, { approver: "ana" }), pipeline.editPlan(racing.id, { risk: { level: "high", reason: "billing" } })]);
+    const after = await pipeline.get(racing.id);
+    const closed = (await pipeline.approvals(racing.id)).find((a) => a.decision === "approved");
+    if (after.state !== "awaiting_approval" && closed) {
+      const names = (closed.response as { approvers?: string[] } | null)?.approvers ?? [];
+      const wasHigh = (closed.requested.risk as { level?: string }).level === "high";
+      expect(!wasHigh || names.length >= 2).toBe(true);
+    }
   });
 
   it("counts two simultaneous different approvers once each, never losing one", async () => {
@@ -985,15 +1042,38 @@ describe("editing the plan before approving", () => {
       expect((await gate(id)).requested.risk).toMatchObject({ level: "medium", machine: "medium" });
     });
 
-    it("corrects the code map with a reason, recomputes who may approve from the new owners, and forgets the approvers so far", async () => {
-      const id = await atGate("high");
-      await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" });
-      await pipeline.editPlan(id, { map: { files: [{ path: "b.ts", role: "change" }], owners: ["@bo"], reason: "ownership moved" } });
-      const { requested } = await gate(id);
-      expect(requested.map).toMatchObject({ components: ["c"], files: [{ path: "b.ts", role: "change" }], owners: ["@bo"], confidence: 0.8 });
+    it("corrects the code map with a reason, recomputes who may approve from CODEOWNERS for the new files, and forgets the approvers so far", async () => {
+      const p = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, owners: async (_r, paths) => ({ owners: paths.includes("b.ts") ? [{ path: "b.ts", owners: ["@bo"] }] : [{ path: "a.ts", owners: ["@ana"] }], codeowners: true }) });
+      stubs.reset();
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [], slices, rollback: "revert", plan, map, risk: { level: "high", product: 6, scores: {} } } });
+      const task = await p.createTask({ title: "Login page", criteria: ["c1"], repoPath: "/r/a" });
+      await p.start(task.id);
+      await p.decide(task.id, "approved", undefined, undefined, { approver: "ana" });
+      await p.editPlan(task.id, { map: { files: [{ path: "b.ts", role: "change" }], owners: ["@somebody-the-person-typed"], reason: "ownership moved" } });
+      const { requested } = (await p.approvals(task.id)).find((a) => a.decision === null)!;
+      expect(requested.map).toMatchObject({ components: ["c"], files: [{ path: "b.ts", role: "change" }], confidence: 0.8 });
       expect(requested.overrides).toMatchObject({ map: { reason: "ownership moved" } });
       expect(requested.approvers).toEqual([]);
-      expect(requested.approvalRule).toMatchObject({ needed: 2, outside: "required" });
+      expect(requested.approvalRule).toMatchObject({ needed: 2, outside: "required", text: expect.stringMatching(/bo/) });
+      expect(requested.approvalRule).toMatchObject({ text: expect.not.stringContaining("somebody") });
+      expect(requested.ruleOwners).toMatchObject({ state: "ok", owners: ["@bo"] });
+    });
+
+    it("refuses steps, risk, map and rollback once the plan is approved (at the legacy test check), and still takes brief, criteria and assumptions", async () => {
+      const id = await atGate("high");
+      await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" });
+      await pipeline.decide(id, "approved", undefined, undefined, { approver: "bo" });
+      await db.query("delete from approvals where kind <> 'awaiting_approval'");
+      await new PgTaskStore(db).updateTask(id, { state: "awaiting_test_check" });
+      await db.manager.save(ApprovalEntity, db.manager.create(ApprovalEntity, { taskId: id, kind: "awaiting_test_check", requested: { cases: [] } }));
+      const approved = (await pipeline.approvals(id)).find((a) => a.kind === "awaiting_approval")!;
+      for (const patch of [{ steps: [{ description: "x", files: ["a.ts"], done_when: [], est_loc: 1 }] }, { risk: { level: "low" as const, reason: "r" } }, { map: { files: [], reason: "r" } }, { rollback: "none" }]) {
+        await expect(pipeline.editPlan(id, patch), JSON.stringify(Object.keys(patch))).rejects.toBeInstanceOf(PlanApprovedError);
+      }
+      const unchanged = (await pipeline.approvals(id)).find((a) => a.id === approved.id)!;
+      expect(unchanged.requested).toEqual(approved.requested);
+      await pipeline.editPlan(id, { brief: "wider", criteria: ["c9"], assumptions: ["a"] });
+      expect((await pipeline.approvals(id)).find((a) => a.id === approved.id)!.requested).toMatchObject({ brief: "wider", criteria: ["c9"] });
     });
 
     it("changes nothing and records nothing for an edit that matches what the gate has", async () => {
@@ -1923,6 +2003,20 @@ describe("timer-approved plans", () => {
       reason: "auto-approved after 10 min: low risk and every check proceeded",
     });
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toContain("plan.auto_approved");
+  });
+
+  it("never approves a re-planned gate or a gate with any flag, however confident its verdicts", async () => {
+    for (const over of [{ replan: { raised_by: "verifying", reason: "wrong" } }, { flagged: ["plan outside map"] }, { flagged: ["map stale"], replan: undefined }]) {
+      stubs.reset();
+      pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(10) });
+      stubs.plan("test_design", confident(over));
+      const task = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
+      await pipeline.start(task.id);
+      await db.query("update approvals set created_at = now() - interval '11 minutes'");
+      await pipeline.tick();
+      expect((await pipeline.get(task.id)).state, JSON.stringify(over)).toBe("awaiting_approval");
+      expect((await pipeline.events(task.id)).map((e) => e.kind)).not.toContain("plan.auto_approved");
+    }
   });
 
   it("never approves a reply or an archive gate, whatever else it carries", async () => {

@@ -2,14 +2,14 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
 import { questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
@@ -37,11 +37,11 @@ import type { Policy } from "../domain/policy.ts";
 import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 
 import { replanOf } from "../domain/replan.ts";
-import { applyRiskOverride, approvalRule, outsideSatisfied, sameName } from "../domain/approvers.ts";
+import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, outsideSatisfied, ownersStateOf, ruleFiles, sameName } from "../domain/approvers.ts";
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
+export { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -127,6 +127,8 @@ export interface PipelineOptions {
   diffStat?: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   /** What the close step needs once a task is approved for good. Without it, nothing is closed on the host. */
   closeDeps?: CloseDeps;
+  /** Who owns paths at the default branch, from CODEOWNERS (the code graph port's `owners`). The outside-approver rule reads only this, never a model's owners; absent, the rule is not enforced and says so. */
+  owners?: (repoPath: string, paths: string[]) => Promise<Exclude<OwnersFound, "failed">>;
   /** Keeps the approved plan and what changed before it (ground truth); answers where. A failure is logged and never blocks the approval. */
   groundTruth?: (task: TaskRow, approval: ApprovalRow) => Promise<string>;
   /** Writes onto a decision's record what a person's decision at a gate says about it (RFC 0005 wave 7). */
@@ -181,6 +183,8 @@ interface Extra {
   decision?: DecisionRecord;
   /** States the task must still be in, checked under its row lock: a decision made on a listed row. */
   onlyFrom?: ReadonlySet<TaskState>;
+  /** Checked under the row lock against the gate as it is now, before anything moves; throws to refuse. */
+  guard?: (open: ApprovalRow | null) => Promise<void>;
 }
 
 /** A stage run a restart found still running in its container: drive it from where it is. */
@@ -292,6 +296,7 @@ export class Pipeline {
   private readonly diffStat: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   private readonly closeDeps: CloseDeps | undefined;
   private readonly groundTruth: PipelineOptions["groundTruth"];
+  private readonly owners: PipelineOptions["owners"];
   private readonly truth: DecisionTruth | undefined;
   readonly budget: Required<Budget>;
   private readonly restartPolicy: RestartPolicy;
@@ -334,6 +339,7 @@ export class Pipeline {
     this.diffStat = options.diffStat ?? branchDiffStat;
     this.closeDeps = options.closeDeps;
     this.groundTruth = options.groundTruth;
+    this.owners = options.owners;
     this.truth = options.truth;
     this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
     this.restartPolicy = options.restartPolicy ?? "requeue";
@@ -568,7 +574,8 @@ export class Pipeline {
    *  fields given change; the rest (including slices) stay as triage wrote them. Each edit is
    *  kept as a revision on the approval and logged as `plan.edited`. */
   async editPlan(id: string, patch: EditPlanInput): Promise<TaskRow> {
-    const planPolicy = (await this.policyFor((await this.get(id)).repoPath)).factory.plan;
+    const taskRepo = (await this.get(id)).repoPath;
+    const planPolicy = (await this.policyFor(taskRepo)).factory.plan;
     const approvers = planPolicy.approvers;
     const { fields, gate } = await this.store.withTaskLock(id, async (task, tx) => {
       const open = await tx.findOpenApproval(id);
@@ -578,6 +585,8 @@ export class Pipeline {
         plan = (await tx.listApprovals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
       }
       if (!open || !plan) throw new NoPlanToEditError(id);
+      // What Build may touch is not edited once two names (or one) approved it: only the text beside it moves.
+      if (plan.decision === "approved" && (patch.steps !== undefined || patch.risk !== undefined || patch.map !== undefined || patch.rollback !== undefined)) throw new PlanApprovedError(id);
       const requested = plan.requested;
       const before: Record<string, unknown> = {};
       const after: Record<string, unknown> = {};
@@ -614,7 +623,8 @@ export class Pipeline {
         const flaggedNow = Array.isArray(requested.flagged) ? requested.flagged.map(String) : [];
         const flagged = covered ? [...flaggedNow.filter((f) => f !== "coverage"), ...(covered.open.length > 0 || covered.report.score < covered.bar ? ["coverage"] : [])] : flaggedNow;
         const level = (after.risk as PlanRisk | undefined)?.level ?? (objectOf(requested.risk)?.level as Risk | undefined) ?? "low";
-        const owners = ownersOf(after.map ?? requested.map);
+        const gateNow = { ...requested, ...after, plan: revised ?? requested.plan, slices: after.slices ?? requested.slices };
+        const ownersNow: OwnersState = level === "high" ? await this.ruleOwnersOf(taskRepo, gateNow) : { state: "skipped" };
         // A changed plan is a new plan: whoever approved the old one has not approved this one.
         await tx.updateApprovalRequested(plan, {
           ...requested,
@@ -622,7 +632,8 @@ export class Pipeline {
           ...(revised ? { plan: revised } : {}),
           ...(covered ? { coverageReport: covered.stored, flagged } : {}),
           ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
-          ...("risk" in after || "map" in after || requested.approvalRule !== undefined ? { approvalRule: approvalRule(level === "high" || level === "medium" ? level : "low", approvers, owners) } : {}),
+          ...("risk" in after || "map" in after || requested.approvalRule !== undefined ? { approvalRule: approvalRule(level === "high" || level === "medium" ? level : "low", approvers, ownersNow) } : {}),
+          ...(level === "high" && ("risk" in after || "map" in after || "slices" in after || requested.ruleOwners !== undefined) ? { ruleOwners: ownersNow } : {}),
           ...(Array.isArray(requested.approvers) ? { approvers: [] } : {}),
           revisions: [...revisions, { at: new Date().toISOString(), before, after }],
         });
@@ -790,31 +801,48 @@ export class Pipeline {
     const open = task.state === "awaiting_approval" ? (await this.approvals(id)).find((a) => a.kind === "awaiting_approval" && a.decision === null) : undefined;
     const outcome = open?.requested.outcome;
     // The plan needs as many distinct names as its level asks (the repo's `plan.approvers`: two for high by default), at least one from outside
-    // the code map's owners on a high-risk plan with known owners. The names so far are kept on the gate; the last one closes it. The level is
+    // the code owners on a high-risk plan whose owners CODEOWNERS names (never a model's word). The rule is computed under the task lock from
+    // the gate as it is now (an edit that raised the risk is seen); the names so far are kept on the gate and the last one closes it. The level is
     // `requested.risk.level`: the higher of the machine's and a person's, never lower than the machine's.
     let answered = response;
-    const riskLevel = (open?.requested.risk as { level?: unknown } | undefined)?.level;
-    const level = riskLevel === "high" || riskLevel === "medium" || riskLevel === "low" ? riskLevel : "low";
-    const rule = approvalRule(level, (await this.policyFor(task.repoPath)).factory.plan.approvers, ownersOf(open?.requested.map));
-    if (decision === "approved" && open && outcome === undefined && rule.needed > 1) {
+    let guard: Extra["guard"];
+    if (decision === "approved" && open && outcome === undefined) {
+      const configured = (await this.policyFor(task.repoPath)).factory.plan.approvers;
+      const ruleOf = async (requested: Record<string, unknown>) => {
+        const lv = (requested.risk as { level?: unknown } | undefined)?.level;
+        const level: Risk = lv === "high" || lv === "medium" ? lv : "low";
+        const owners: OwnersState = level === "high" ? await this.ruleOwnersOf(task.repoPath, requested) : { state: "skipped" };
+        return { rule: approvalRule(level, configured, owners), owners: owners.state === "ok" ? owners.owners : [] };
+      };
       const prior = await this.store.withTaskLock(id, async (_task, tx) => {
         const fresh = await tx.findOpenApproval(id);
-        if (!fresh || fresh.kind !== "awaiting_approval") return null;
+        if (!fresh || fresh.kind !== "awaiting_approval" || fresh.requested.outcome !== undefined) return null;
+        const { rule, owners } = await ruleOf(fresh.requested);
+        if (rule.needed <= 1) return { names: [] as string[], partial: false, needed: rule.needed };
         const names = Array.isArray(fresh.requested.approvers) ? fresh.requested.approvers.map(String) : [];
         if (!approver) throw new ApproverRequiredError(id, "plan", rule.needed);
         if (names.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver);
         if (names.length + 1 < rule.needed) {
           await tx.updateApprovalRequested(fresh, { ...fresh.requested, approvers: [...names, approver] });
-          return { names, partial: true };
+          return { names, partial: true, needed: rule.needed };
         }
-        if (rule.outside === "required" && !outsideSatisfied([...names, approver], ownersOf(fresh.requested.map))) throw new OutsideApproverRequiredError(id, approver);
-        return { names, partial: false };
+        if (rule.outside === "required" && !outsideSatisfied([...names, approver], owners)) throw new OutsideApproverRequiredError(id, approver);
+        return { names, partial: false, needed: rule.needed };
       });
       if (prior?.partial) {
-        await this.log(id, "approval.partial", { approver, needed: rule.needed, have: prior.names.length + 1 });
+        await this.log(id, "approval.partial", { approver, needed: prior.needed, have: prior.names.length + 1 });
         return this.get(id);
       }
-      if (prior) answered = { ...response, approvers: [...prior.names, approver] };
+      if (prior && prior.needed > 1) answered = { ...response, approvers: [...prior.names, approver!] };
+      // Checked once more under the lock that closes the gate: an edit that raised the risk since cannot be approved past.
+      guard = async (gate) => {
+        if (!gate || gate.kind !== "awaiting_approval" || gate.requested.outcome !== undefined) return;
+        const { rule, owners } = await ruleOf(gate.requested);
+        if (rule.needed <= 1) return;
+        const names = Array.isArray(answered?.approvers) ? answered.approvers.map(String) : approver ? [approver] : [];
+        if (names.length < rule.needed) throw new ApproverRequiredError(id, "plan", rule.needed);
+        if (rule.outside === "required" && !outsideSatisfied(names, owners)) throw new OutsideApproverRequiredError(id, names.at(-1) ?? "");
+      };
     }
     // A High-risk pack ships only after an approver who is none of the plan's: the name is an attestation the monitor reads.
     if (decision === "approved" && task.state === "awaiting_ship" && task.route !== "review" && task.evidence?.risk === "high") {
@@ -845,10 +873,21 @@ export class Pipeline {
     }
     // A gate that carries triage's outcome came from triage; any other open approval is the plan stage's.
     const event: PipelineEvent = decision === "approved" ? { type: "approved" } : { type: "sent_back", from: outcome === undefined ? "plan" : "triage" };
-    const moved = await this.dispatch(id, event, { decision: record });
+    const moved = await this.dispatch(id, event, { decision: record, ...(guard ? { guard } : {}) });
     if (decision === "approved" && open && outcome === undefined) await this.keepGroundTruth(moved, open.id);
     if (gate) await this.learnFromGate(id, gate, decision, response);
     return moved;
+  }
+
+  /** What the outside-approver rule reads for a gate: CODEOWNERS' owners for the map's change and test files and the plan's step files. Never a model's owners. */
+  private async ruleOwnersOf(repoPath: string | null, requested: Record<string, unknown>): Promise<OwnersState> {
+    if (!repoPath || !this.owners) return ownersStateOf(null);
+    const map = CodeMapAnswer.safeParse(requested.map);
+    const plan = Plan.safeParse(requested.plan);
+    const slices = Array.isArray(requested.slices) ? requested.slices : [];
+    const stepFiles = plan.success ? plan.data.steps.flatMap((st) => st.files ?? st.touchpoints) : slices.flatMap((sl) => (Array.isArray((sl as { touchpoints?: unknown }).touchpoints) ? ((sl as { touchpoints: unknown[] }).touchpoints.map(String)) : []));
+    const found = await this.owners(repoPath, ruleFiles(map.success ? map.data : null, stepFiles)).catch((): "failed" => "failed");
+    return ownersStateOf(found);
   }
 
   /** A rejection: the plan gate's alone (an open plan, not triage's outcome and not a later gate). The card is archived with reason `rejected`, the comment kept. */
@@ -1166,6 +1205,8 @@ export class Pipeline {
       // A reply or an archive waits for a person's tap, whatever else the gate carries: nothing outward is ever sent by a clock.
       if (open.requested.outcome === "conversation" || open.requested.outcome === "archive") continue;
       // Low risk, every check a clear yes, and nothing asked: the plan stage's own findings are the bar.
+      // A plan that came back with evidence, or that carries any flag, is a person's to read: the clock never approves it.
+      if (open.requested.replan !== undefined || (Array.isArray(open.requested.flagged) && open.requested.flagged.length > 0)) continue;
       const { risk, verdicts, questions } = open.requested as { risk?: { level?: unknown }; verdicts?: Record<string, unknown>; questions?: unknown };
       const checks = Object.values(verdicts ?? {});
       if (risk?.level !== "low" || checks.length === 0 || checks.some((verdict) => verdict !== "proceed") || (Array.isArray(questions) && questions.length > 0)) continue;
@@ -1670,6 +1711,7 @@ export class Pipeline {
       if (extra.onlyFrom && !extra.onlyFrom.has(task.state)) throw new TaskMovedError(id, task.state, extra.onlyFrom);
       const step = transition(task, event);
       const open = extra.decision ? await tx.findOpenApproval(id) : null;
+      await extra.guard?.(open);
       // Approving the plan adopts triage's criteria: the ticket's, refined and added to.
       const planned = task.state === "awaiting_approval" && event.type === "approved" ? open?.requested.criteria : undefined;
       const criteria = Array.isArray(planned) && planned.length > 0 ? planned.map(String) : undefined;

@@ -227,6 +227,14 @@ export class OutsideApproverRequiredError extends Error {
   }
 }
 
+/** An edit of what Build may touch (steps, risk, code map, rollback) after the plan was approved: a plan that must change goes back through the plan gate. */
+export class PlanApprovedError extends Error {
+  constructor(id: string) {
+    super(`task ${id}: the plan is approved; its steps, risk, code map and rollback change only by sending it back through the plan gate`);
+    this.name = "PlanApprovedError";
+  }
+}
+
 /** A rejection anywhere but the plan gate: only a plan is rejected, and only while it waits. */
 export class RejectNotAllowedError extends Error {
   constructor(id: string, state: string) {
