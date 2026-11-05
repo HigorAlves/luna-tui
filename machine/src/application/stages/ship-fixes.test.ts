@@ -16,11 +16,13 @@ const thread = { id: "T1", path: "src/export.ts", line: 12, comments: [{ author:
 const answer = (replies: Array<{ threadId: string; body: string; resolve: boolean }> = [{ threadId: "T1", body: "Renamed.", resolve: true }]) => ({ kind: "done", summary: "renamed", replies });
 
 /** A worktree whose head moves when the addressing pack "commits", and a git that records what it was asked. */
-function setup(over: { addressed?: StageResult; commit?: boolean; checks?: StageResult; verifying?: StageResult; valid?: string | Error; pushFails?: boolean; remote?: string; moveDuringChecks?: boolean; noSave?: boolean; branchRef?: string; symbolicRef?: string } = {}) {
+function setup(over: { addressed?: StageResult; commit?: boolean; checks?: StageResult; verifying?: StageResult; valid?: string | Error; pushFails?: boolean; remote?: string; moveDuringChecks?: boolean; noSave?: boolean; branchRef?: string; symbolicRef?: string; fresh?: { back?: { ok: boolean; reason?: string } } } = {}) {
   let head = B;
   const git: string[][] = [];
+  const gitIn: Array<[string, string]> = [];
   const exec: GitExec = async (_c, args) => {
     const a = args.slice(args.indexOf("-C") + 2);
+    gitIn.push([args[args.indexOf("-C") + 1]!, a[0]!]);
     git.push(a);
     if (a[0] === "symbolic-ref") return ok(over.symbolicRef ?? "refs/heads/hardness/t1");
     if (a[0] === "rev-parse" && String(a[1]).startsWith("refs/heads/")) return ok(over.branchRef ?? head);
@@ -61,9 +63,17 @@ function setup(over: { addressed?: StageResult; commit?: boolean; checks?: Stage
   });
   const saved: EvidencePack[] = [];
   const publish = vi.fn(async ({ pack: p }: { pack: EvidencePack }) => ({ pack: p, comment: "updated" as const, assets: 0 }));
+  const freshCalls = { made: [] as string[][], back: [] as string[][], removed: [] as string[] };
+  const fresh = over.fresh
+    ? {
+        make: async (path: string, branch: string, runId: string) => (freshCalls.made.push([path, branch, runId]), { path: "/wt.fix", commit: B }),
+        bringBack: async (path: string, freshPath: string, branch: string, from: string) => (freshCalls.back.push([path, freshPath, branch, from]), over.fresh!.back ?? { ok: true }),
+        remove: async (path: string) => void freshCalls.removed.push(path),
+      }
+    : undefined;
   const deps = {
     github,
-    loop: { decide, runPack, checks, exec },
+    loop: { decide, runPack, checks, exec, ...(fresh ? { fresh } : {}) },
     policies: { for: async () => ({ decisions: {} }) },
     evidence: over.noSave ? { load: async () => pack() } : { load: async () => pack(), save: async (_id: string, p: EvidencePack) => void saved.push(p), publish, store: { dirFor: (id: string, sha: string) => `/ev/${id}/${sha}` } },
   };
@@ -71,7 +81,7 @@ function setup(over: { addressed?: StageResult; commit?: boolean; checks?: Stage
   const input = (extra: Partial<FixInput> = {}): FixInput => ({ slug: "o/a", number: 3, threads: [thread], scope: "in_place", threadSummary: "rename x in the export", label: "1", postReplies: true, pack: pack(), ...extra });
   const pushed = () => git.filter((a) => a[0] === "push");
   const resets = () => git.filter((a) => a[0] === "reset").map((a) => a[3]);
-  return { atChecks, deps, context, input, runPack, checks, decide, github, saved, publish, pushed, resets, git, headNow: () => head };
+  return { gitIn, freshCalls, atChecks, deps, context, input, runPack, checks, decide, github, saved, publish, pushed, resets, git, headNow: () => head };
 }
 
 // Built at run time: a literal of this shape blocks the push.
@@ -223,5 +233,34 @@ describe("a fix round on the shipped PR", () => {
 
     const ci = setup({ commit: false });
     expect(await fixRound(ci.deps, ci.context, ci.input({ postReplies: false }))).toMatchObject({ ok: false, result: { detail: { reason: expect.stringContaining("no change") } } });
+  });
+});
+
+describe("a fix round on a fresh clone at the PR's head", () => {
+  it("runs the addressing pack, the checks and every git read on the fresh clone, and the push from the card's clone after the commits came back", async () => {
+    const s = setup({ fresh: {} });
+    const out = await fixRound(s.deps, s.context, s.input());
+    expect(out).toMatchObject({ ok: true, changed: true });
+    expect(s.freshCalls.made).toEqual([["/wt", "hardness/t1", "run1-fix-1"]]);
+    const paths = (pack: string) => (s.runPack.mock.calls.find((c) => c[0] === pack)![1] as StageContext).task.worktreePath;
+    expect(paths("addressing")).toBe("/wt.fix");
+    expect((s.checks.mock.calls[0]![0] as StageContext).task.worktreePath).toBe("/wt.fix");
+    expect(s.gitIn.filter(([, verb]) => verb === "reset").every(([path]) => path === "/wt.fix")).toBe(true);
+    expect(s.freshCalls.back).toEqual([["/wt", "/wt.fix", "hardness/t1", B]]);
+    expect(s.gitIn.filter(([, verb]) => verb === "push").map(([path]) => path)).toEqual(["/wt"]);
+    expect(s.freshCalls.removed).toEqual(["/wt.fix"]);
+  });
+
+  it("pushes nothing when the commits cannot come back as a fast-forward", async () => {
+    const s = setup({ fresh: { back: { ok: false, reason: "not a fast-forward" } } });
+    const out = await fixRound(s.deps, s.context, s.input());
+    expect(out).toMatchObject({ ok: false, result: { outcome: "escalated", detail: { reason: expect.stringContaining("not a fast-forward") } } });
+    expect(s.pushed()).toEqual([]);
+  });
+
+  it("stops with head_moved, before cloning, when the PR's head moved on the remote", async () => {
+    const s = setup({ fresh: {}, remote: "e".repeat(40) });
+    expect(await fixRound(s.deps, s.context, s.input())).toMatchObject({ ok: false, result: { detail: { escalation: "head_moved" } } });
+    expect(s.freshCalls.made).toEqual([]);
   });
 });

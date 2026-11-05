@@ -200,7 +200,7 @@ export function gitDirStamp(clonePath: string): string | null {
 /** The fresh clone Verify runs on, beside the card's clone as `<clone>.verify-<run>`: made at the card's head, brought back as a fast-forward, removed with the folder. */
 export const hostFreshWorkspace = {
   async make(cardPath: string, branch: string, runId: string): Promise<{ path: string; commit: string }> {
-    const path = `${cardPath}.verify-${runId.replace(/[^A-Za-z0-9]/g, "").slice(0, 12)}`;
+    const path = `${cardPath}.verify-${runId.replace(/[^A-Za-z0-9]/g, "").slice(0, 48)}`;
     rmSync(path, { recursive: true, force: true });
     const commit = await headCommit(cardPath);
     await freshClone(cardPath, commit, branch, path);

@@ -48,6 +48,12 @@ export interface ReviewLoop {
   runPack: (pack: LoopPack, context: StageContext, extra: LoopExtra) => Promise<StageResult>;
   /** The project's checks over what changed since `since` (a commit): a verifying run with no review pack. Absent, no fix is trusted. */
   checks?: (context: StageContext, since: string) => Promise<StageResult>;
+  /** A fresh clone of the card's clone at the PR's head, where a fix is made; absent, the fix runs in the card's own folder. */
+  fresh?: {
+    make: (cardPath: string, branch: string, runId: string) => Promise<{ path: string; commit: string }>;
+    bringBack: (cardPath: string, freshPath: string, branch: string, from: string) => Promise<{ ok: boolean; reason?: string }>;
+    remove: (path: string) => Promise<void>;
+  };
   /** Runs git (default: the real one); tests inject a recorder. */
   exec?: GitExec;
   /** Rebases the worktree onto the default branch (default: `rebaseOntoDefault`); tests inject a fake. */
@@ -170,12 +176,19 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
   const run = deps.loop.exec ?? realExec;
   const before = await headOfWorktree(run, wt);
   if (!before) return { ok: false, result: escalated("the worktree's head could not be read") };
-  const stop = async (result: StageResult): Promise<FixOutcome> => {
-    await resetTo(run, wt, before).catch(() => {});
-    return { ok: false, result };
-  };
   const remote = await deps.github.prHeadSha(input.slug, input.number).catch(() => null);
   if (remote && remote !== before) return { ok: false, result: escalated(`someone pushed to the PR (${remote.slice(0, 7)}); the fix would start from an old head`, "head_moved") };
+  // The fix is made on a fresh clone at the head the PR has, never in the folder Build or an earlier fix used.
+  const fresh = deps.loop.fresh ? await deps.loop.fresh.make(wt, branch, `${context.runId}-fix-${input.label}`) : null;
+  const work = fresh?.path ?? wt;
+  const ctxWork: StageContext = fresh ? { ...context, task: { ...task, worktreePath: fresh.path } } : context;
+  const finish = async (): Promise<void> => {
+    if (fresh) await deps.loop.fresh!.remove(fresh.path);
+  };
+  const stop = async (result: StageResult): Promise<FixOutcome> => {
+    await resetTo(run, work, before).catch(() => {});
+    return { ok: false, result };
+  };
 
   let pr;
   try {
@@ -183,14 +196,14 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
   } catch (error) {
     return { ok: false, result: escalated(`the PR could not be read: ${messageOf(error)}`) };
   }
-  const addressed = await deps.loop.runPack("addressing", subContext(context, `address-${input.label}`), { threads: { pr, threads: input.threads } });
+  const addressed = await deps.loop.runPack("addressing", subContext(ctxWork, `address-${input.label}`), { threads: { pr, threads: input.threads } });
   if (addressed.outcome !== "pass") return stop(escalated(`the fix could not be made: ${reasonOf(addressed)}`));
   const parsed = PrAddressAnswer.safeParse(addressed.detail?.answer);
   if (!parsed.success) return stop(escalated("the addressing pack gave no usable answer"));
   const answer = parsed.data;
   if (answer.kind === "escalated") return stop(escalated(postable(answer.reason || answer.summary || "the addressing pack asked for a person", 400), answer.escalation ?? "other"));
 
-  const after = await headOfWorktree(run, wt);
+  const after = await headOfWorktree(run, work);
   if (!after) return stop(escalated("the worktree's head could not be read after the fix"));
   // A reply or summary that needed redacting is not posted, pushed or published: a person answers.
   if (carriesSecret(answer.summary) || answer.replies.some((r) => carriesSecret(r.body))) return stop(escalated(SECRET_REASON));
@@ -202,37 +215,43 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
   if (after === before) {
     // Nothing committed: an explanation is all there is. A CI fix with no change is no fix.
     if (!input.postReplies) return stop(escalated("the addressing pack made no change for the failing check"));
-    await resetTo(run, wt, before).catch(() => {});
+    await resetTo(run, work, before).catch(() => {});
+    await finish();
     const posted = await followUp(deps.github, replies);
     return { ok: true, head: before, changed: false, replied: posted.replied, resolved: posted.resolved, repliedTo: replies.map((r) => r.threadId), resolvedTo: replies.filter((r) => r.resolve).map((r) => r.threadId), summary: answer.summary, ...(posted.ok ? {} : { note: posted.error }) };
   }
 
   // The checks run on exactly what will be pushed: the committed head, with whatever the pack left uncommitted gone.
-  await resetTo(run, wt, after);
-  const checked = deps.loop.checks ? await deps.loop.checks(subContext(context, `checks-${input.label}`), before) : null;
+  await resetTo(run, work, after);
+  const checked = deps.loop.checks ? await deps.loop.checks(subContext(ctxWork, `checks-${input.label}`), before) : null;
   if (!checked) return stop(escalated("no checks runner is wired to prove the fix"));
   if (checked.outcome !== "pass") {
     return stop(escalated(`the checks failed after the fix: ${reasonOf(checked)}`, "other", { findings: (checked.detail?.findings as Finding[] | undefined) ?? checked.findings ?? [] }));
   }
   if (input.scope === "re_verify_partial") {
-    const reviewed = await deps.loop.runPack("verifying", subContext(context, `verify-${input.label}`), { baseCommit: before });
+    const reviewed = await deps.loop.runPack("verifying", subContext(ctxWork, `verify-${input.label}`), { baseCommit: before });
     if (reviewed.outcome !== "pass") {
       return stop(escalated(`the review of the fix found a problem: ${reasonOf(reviewed)}`, "other", { findings: (reviewed.detail?.findings as Finding[] | undefined) ?? reviewed.findings ?? [] }));
     }
   }
 
   // The push is of what was checked: the head must still be the one the checks ran on, a descendant of the one we started from, with the PR's head where it was.
-  const now = await headOfWorktree(run, wt);
-  const descends = (await run("git", [...HOST_GIT, "-C", wt, "merge-base", "--is-ancestor", before, now ?? ""])).code === 0;
+  const now = await headOfWorktree(run, work);
+  const descends = (await run("git", [...HOST_GIT, "-C", work, "merge-base", "--is-ancestor", before, now ?? ""])).code === 0;
   if (now !== after || !descends) return stop(escalated("the branch changed while the fix was being checked; nothing was pushed"));
   // The push is of the branch's ref: it must be the checked commit, and HEAD must be that branch (refs are writable in the pack's container).
-  const onBranch = await run("git", [...HOST_GIT, "-C", wt, "symbolic-ref", "-q", "HEAD"]);
-  const tip = await run("git", [...HOST_GIT, "-C", wt, "rev-parse", `refs/heads/${branch}`]);
+  const onBranch = await run("git", [...HOST_GIT, "-C", work, "symbolic-ref", "-q", "HEAD"]);
+  const tip = await run("git", [...HOST_GIT, "-C", work, "rev-parse", `refs/heads/${branch}`]);
   if (onBranch.stdout.trim() !== `refs/heads/${branch}` || tip.stdout.trim() !== after) return stop(escalated("the branch ref is not the checked commit; nothing was pushed"));
   const remoteNow = await deps.github.prHeadSha(input.slug, input.number).catch(() => null);
   if (remoteNow && remoteNow !== before) return stop(escalated(`someone pushed to the PR (${remoteNow.slice(0, 7)}) while the fix was checked; nothing was pushed`, "head_moved"));
+  if (fresh) {
+    const back = await deps.loop.fresh!.bringBack(wt, fresh.path, branch, before);
+    if (!back.ok) return stop(escalated(`what the fix committed could not be brought back to the card: ${postable(back.reason ?? "unknown", 300)}; nothing was pushed`));
+  }
   const pushError = await pushBranch(run, branch, wt);
   if (pushError) return stop(escalated(pushError));
+  await finish();
 
   // From here the commit is on the PR: no reset, whatever else goes wrong.
   const posted = replies.length > 0 ? await followUp(deps.github, replies) : { ok: true as const, replied: 0, resolved: 0, skipped: [] as string[] };

@@ -33,6 +33,7 @@ import { loadCredential } from "../adapters/credentials/claude.ts";
 import { imageExists, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
+import { hostFreshWorkspace } from "../adapters/git/clone.ts";
 import { HOST_GIT, changedPaths, gitIdentity, commitAll, currentBranch, headCommit, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
@@ -290,6 +291,8 @@ export async function buildRealStages(
               return runAgent(deps, subContext, pack, { ...(more.threads ? { threads: more.threads } : {}), ...(more.baseCommit ? { baseCommit: more.baseCommit } : {}), ...(more.ci ? { ci: more.ci } : {}) });
             },
             checks: deltaChecks,
+            // A fix is made on a fresh clone at the PR's head and comes back as a fast-forward.
+            fresh: hostFreshWorkspace,
           },
           stateDir: config.stateDir,
           pollMs: config.shipPoll.intervalMs,
