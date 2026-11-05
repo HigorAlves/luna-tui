@@ -77,6 +77,12 @@ describe("mergeReadiness", () => {
     expect(out.reason).toContain(blocker);
   });
 
+  it("takes the stale limit from the repo's `ship.stale_days`", () => {
+    const old = { pr: pr({ headCommittedAt: "2026-10-20T10:00:00Z" }) };
+    expect(mergeReadiness(input({ ...old, staleDays: 20 })).blockers).toEqual([]);
+    expect(mergeReadiness(input({ ...old, staleDays: 10 })).blockers).toEqual(["the head is 15 days old (limit 10)"]);
+  });
+
   it("is never ready with no evidence pack, and never for a PR that changes CODEOWNERS", () => {
     expect(mergeReadiness(input({ packSha: null })).blockers).toEqual(["no evidence pack"]);
     expect(mergeReadiness(input({ changesCodeowners: true }))).toMatchObject({ ready: false, canAutoMerge: false, blockers: ["changes CODEOWNERS: a person merges"] });

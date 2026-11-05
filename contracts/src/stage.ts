@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import { EngineBudgets, EngineId } from "./engines.ts";
+import { EvidenceConfigV22, FactoryConfigInput } from "./config-v22.ts";
 import { Scenario } from "./plan.ts";
 import { ConfidencePolicySchema } from "./questions.ts";
 
@@ -401,6 +402,8 @@ export const SlaConfig = z.object({
 export type SlaConfig = z.infer<typeof SlaConfig>;
 
 export const LunaConfig = z.object({
+  // The v2.2 diagram's sections (config-v22.ts); `evidence` below carries its own keys.
+  ...FactoryConfigInput,
   policy: z
     .object({
       qa: z.enum(["web", "none"]).optional(),
@@ -440,7 +443,7 @@ export const LunaConfig = z.object({
   /** Monthly caps in USD on this repo's stage runs, by engine or credential (`openai:sol: 10`). */
   budget: z.object({ engines: EngineBudgets.optional() }).optional(),
   /** How long the machine keeps a task's local Evidence Pack and media; 0 never sweeps it, absent defers to MACHINE_RETENTION_DAYS. */
-  evidence: z.object({ retention_days: z.number().int().min(0).optional() }).optional(),
+  evidence: z.object({ retention_days: z.number().int().min(0).optional(), ...EvidenceConfigV22 }).optional(),
   /** Windows in which the machine merges nothing, whatever the policy says. */
   freeze: z
     .array(

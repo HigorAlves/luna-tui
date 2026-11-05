@@ -202,6 +202,22 @@ describe("planStage", () => {
     expect(capped.detail).toMatchObject({ verdicts: { plan: "flag" }, flagged: ["plan"], rounds: { plan: PLAN_ROUNDS + 1 } });
   });
 
+  it("takes the designer's rounds and the planner's re-runs from the repo's luna.yaml `plan` section", async () => {
+    const factory = (coverage_rounds: number, plan_check_retries: number) => ({ policies: { for: async () => ({ decisions: {}, factory: { plan: { coverage_rounds, plan_check_retries } } }) } });
+    const fewer = setup({ test_design: [cased("no panic")] }, factory(1, 0));
+    await fewer.run(context());
+    expect(fewer.calls.filter((c) => c.pack === "test_design")).toHaveLength(1);
+    const more = setup({ test_design: [cased("no panic")] }, factory(5, 2));
+    await more.run(context());
+    expect(more.calls.filter((c) => c.pack === "test_design")).toHaveLength(5);
+    const noRetry = setup({ answers: { plan_check: [bad] } }, factory(3, 0));
+    await noRetry.run(context());
+    expect(noRetry.calls.filter((c) => c.pack === "plan")).toHaveLength(1);
+    const four = setup({ answers: { plan_check: [bad] } }, factory(3, 4));
+    await four.run(context());
+    expect(four.calls.filter((c) => c.pack === "plan")).toHaveLength(5);
+  });
+
   it("scores the risk with riskLevelOf and judges each verdict by the pack's bars and the repo's overrides", async () => {
     const risky = { blast_radius: { score: 2, confidence: 0.9 }, reversibility: { score: 2, confidence: 0.4 }, data_sensitivity: { score: 1, confidence: 0.9 } };
     const { run } = setup({ answers: { risk_score: [risky] } }, { policies: { for: async () => ({ decisions: { risk_score: { reversibility: { flag: 0.3 } } } }) } });

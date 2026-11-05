@@ -1,7 +1,7 @@
 // A repo's own say over the pipeline. The policy shape is shared by `luna.yaml`
 // (luna-config.ts, the current file) and `PIPELINE.md` (parsed here, deprecated: its front
 // matter only ever set the knobs below). Pure: parsing only.
-import type { CheckSpec, DecisionOverrides, EngineBudgets, ServiceSpec, StageEngines } from "@hardness/contracts";
+import { type CheckSpec, type DecisionOverrides, type EngineBudgets, FACTORY_DEFAULTS, type FactoryConfig, type ServiceSpec, type StageEngines } from "@hardness/contracts";
 
 import type { SlaTargets } from "./sla.ts";
 
@@ -60,6 +60,8 @@ export interface Policy {
   autoMerge: "off" | "low" | "medium";
   /** Windows in which the machine merges nothing (luna.yaml `freeze`). */
   freeze: Freeze[];
+  /** The v2.2 diagram's sections over its defaults (luna.yaml `dedup`, `triage`, ... `ship`). Keys wave 8 reads are named in CONSUMED_FROM; the others are defined for the wave that reads them. */
+  factory: FactoryConfig;
 }
 
 /** A window in which nothing merges: ISO instants and why. */
@@ -97,6 +99,7 @@ export const DEFAULT_POLICY: Policy = {
   evidenceRetentionDays: null,
   autoMerge: "off",
   freeze: [],
+  factory: FACTORY_DEFAULTS,
 };
 
 export class PolicyParseError extends Error {
@@ -151,7 +154,7 @@ const qaTarget = (key: string, raw: string): QaTarget => {
 
 /** The policy a PIPELINE.md declares; unknown keys are ignored, a bad value throws. */
 export function parsePolicy(text: string): Policy {
-  const policy: Policy = { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {}, decisions: {}, freeze: [] };
+  const policy: Policy = { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {}, decisions: {}, freeze: [], factory: structuredClone(FACTORY_DEFAULTS) };
   for (const { key, value } of frontMatter(text)) {
     switch (key) {
       case "qa":

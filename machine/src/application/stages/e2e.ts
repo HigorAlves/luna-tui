@@ -20,7 +20,7 @@ export interface E2eDeps {
   /** Paths the task branch changed; null when the base is unknown (then the pack runs). */
   changedFiles?: (worktreePath: string, repoPath: string | null) => Promise<string[] | null>;
   /** The repo's config: `qa: none` means this repo never gets a browser run. */
-  policy?: (repoPath: string | null) => Promise<Pick<Policy, "qa">>;
+  policy?: (repoPath: string | null) => Promise<Pick<Policy, "qa"> & { factory?: { verify: { env_flake_retries: number } } }>;
   /** Runs e2e_failure_cause on a failed run; null (or absent) leaves a failure as it is. Read at call time. */
   decide?: Decide | null;
   /** The repo's per-pack decision bars. */
@@ -116,7 +116,10 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
   const roots = deps.webRoots ?? webRoots;
   return async (context) => {
     const worktree = context.task.worktreePath;
-    if (deps.policy && (await deps.policy(context.task.repoPath ?? null)).qa === "none") {
+    const repoPolicy = deps.policy ? await deps.policy(context.task.repoPath ?? null) : null;
+    // The repo's luna.yaml `verify.env_flake_retries`; the diagram's default is the one re-run this stage always made.
+    const flakeRetries = repoPolicy?.factory?.verify.env_flake_retries ?? 1;
+    if (repoPolicy?.qa === "none") {
       return { outcome: "pass", detail: { step: "e2e", skipped: true, reason: "the repo's config says qa: none" } };
     }
     if (!worktree || !(await detect(worktree))) {
@@ -176,11 +179,15 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     if (result.outcome !== "fail") return result;
     const cause = await causeOf(result);
     if (cause === null) return result;
-    if (cause !== "env_flake") return { ...result, detail: { ...result.detail, cause } };
+    if (cause !== "env_flake" || flakeRetries === 0) return { ...result, detail: { ...result.detail, cause } };
     // An environment flake: the scenario was never really tried, so once more before a person is asked.
     // The re-run writes into the same run folder: what the first attempt left there must not be read as its packet.
     if (deps.stateDir) await rm(join(deps.stateDir, "runs", context.runId, "out"), { recursive: true, force: true });
     result = settle(await deps.runPack(context));
+    for (let more = 1; more < flakeRetries && result.outcome === "fail"; more++) {
+      if (deps.stateDir) await rm(join(deps.stateDir, "runs", context.runId, "out"), { recursive: true, force: true });
+      result = settle(await deps.runPack(context));
+    }
     // The re-run is the fact: a pass says it was the environment, a second failure says it was not.
     if (causeRecord) await deps.truth?.learned({ pack: "e2e_failure_cause", recordId: causeRecord, label: e2eCauseTruth(result.outcome !== "fail"), source: "e2e_rerun", taskId: context.task.id });
     if (result.outcome !== "fail") return { ...result, detail: { ...result.detail, rerun: true, cause } };
@@ -193,7 +200,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
         cause,
         rerun: true,
         escalation: "flaky_tests",
-        reason: `e2e failed twice on what looks like an environment flake: ${summary}`,
+        reason: `e2e failed ${flakeRetries === 1 ? "twice" : `${flakeRetries + 1} times`} on what looks like an environment flake: ${summary}`,
         options: ["check the QA target or the dev server, then retry the task", "mark the scenario partial by hand"],
       },
     };

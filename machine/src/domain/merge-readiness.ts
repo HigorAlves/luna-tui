@@ -29,6 +29,8 @@ export interface MergeReadinessInput {
   fixApproval?: { approved: boolean } | null;
   /** How many `Depends on` numbers the body lists; more than MAX_DEPENDENCIES is a blocker (only that many are checked). */
   dependenciesListed?: number;
+  /** The repo's `ship.stale_days` (luna.yaml); absent means STALE_DAYS. */
+  staleDays?: number;
 }
 
 /** At most this many dependencies are read from a PR body. */
@@ -85,10 +87,11 @@ export function mergeReadiness(input: MergeReadinessInput): MergeReadiness {
   if (frozen) blockers.push(readableWindow(frozen) ? `freeze: ${frozen.reason} until ${frozen.to}` : "freeze window has an unreadable date");
   if ((input.dependenciesListed ?? 0) > MAX_DEPENDENCIES) blockers.push(`too many dependencies listed (${input.dependenciesListed})`);
   for (const d of dependencies) if (!d.merged && !d.closed) blockers.push(`blocked by #${d.number}`);
+  const staleDays = input.staleDays ?? STALE_DAYS;
   if (pr.headCommittedAt) {
     const committed = Date.parse(pr.headCommittedAt);
     const days = Math.floor((now.getTime() - committed) / DAY_MS);
-    if (!Number.isNaN(committed) && days > STALE_DAYS) blockers.push(`the head is ${days} days old (limit ${STALE_DAYS})`);
+    if (!Number.isNaN(committed) && days > staleDays) blockers.push(`the head is ${days} days old (limit ${staleDays})`);
   }
 
   const ready = blockers.length === 0;

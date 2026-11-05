@@ -41,7 +41,7 @@ export interface PlanDeps {
   /** Runs a decision pack on a plan context and answers its answer; null when no decision can run (agents off, no runtime). Read at call time: main.ts binds it late. */
   decide: ((pack: DecisionPackName, plan: PlanContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** Each repo's luna.yaml bars for the decisions. */
-  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean }> };
+  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { plan: { coverage_rounds: number; plan_check_retries: number } } }> };
   /** The machine's code graphs: a repo with one (and its luna.yaml `policy.graph` on) gets a code map before the plan. */
   graph?: { stampOf(repoPath: string): Promise<unknown | null> };
   log?: (line: string) => void;
@@ -102,6 +102,10 @@ export function planStage(deps: PlanDeps): StageRunner {
     const results: StageResult[] = [];
     let testRuns = 0;
     let planRuns = 0;
+    // The repo's luna.yaml `plan.coverage_rounds` and `plan.plan_check_retries`; the diagram's defaults equal the constants below.
+    const repoPlan = (await deps.policies.for(task.repoPath)).factory?.plan;
+    const coverageRounds = repoPlan?.coverage_rounds ?? COVERAGE_ROUNDS;
+    const planCheckRetries = repoPlan?.plan_check_retries ?? PLAN_ROUNDS;
 
     /** A sub-run's context: a derived run id, nothing that ties it to the stage's own container or engine. */
     const sub = (suffix: string): StageContext => ({ ...context, runId: `${context.runId}-${suffix}`, started: undefined, resume: undefined, engine: undefined });
@@ -201,7 +205,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         // The fast lane asks nothing of coverage_check and designs once: a criterion left unnamed is flagged below.
         if (lane === "fast") break;
         coverage = await judge("coverage_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}), ...mapPart });
-        if (gaps.length === 0 || roundsOnThisPlan >= COVERAGE_ROUNDS) break;
+        if (gaps.length === 0 || roundsOnThisPlan >= coverageRounds) break;
       }
       if (lane === "fast" && gaps.length > 0) flagged.add("coverage");
       if (gaps.length > 0 && coverage.verdict === "proceed") coverage = { ...coverage, verdict: "flag" };
@@ -215,7 +219,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         continue;
       }
       const wrong = planCheck.problems.length > 0 || planCheck.verdict === "ask";
-      if (!wrong || planRunsOnLane > PLAN_ROUNDS) break;
+      if (!wrong || planRunsOnLane > planCheckRetries) break;
       review = planCheck.problems.length ? planCheck.problems : ["the plan check could not tell whether the plan fits the record"];
     }
 

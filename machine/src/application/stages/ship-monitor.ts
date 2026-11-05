@@ -286,7 +286,8 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       const summary = plain(String(answer.summary ?? ""), 400);
       if (verdict === "green") return {};
       if (verdict === "flake") {
-        if (cursor.ciReruns >= MAX_CI_RERUNS) return { result: escalated(`CI is red again after one re-run: ${summary}`) };
+        const reruns = (await deps.policies.for(task.repoPath)).factory.verify.ci_flaky_reruns;
+        if (cursor.ciReruns >= reruns) return { result: escalated(`CI is red again after ${reruns === 1 ? "one re-run" : `${reruns} re-runs`}: ${summary}`) };
         cursor.ciReruns++;
         await saveCursor(deps.stateDir, task.id, cursor);
         try {
@@ -310,7 +311,8 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
     /** The base moved and the PR conflicts: rebase once, push with a lease, re-stamp the pack; a second time is a person's. */
     const watchConflict = async (head: string, pack: EvidencePack | null): Promise<Outcome> => {
       const stuck = (why: string): Outcome => ({ result: escalated(why, "other", { verdict: "conflict_unresolvable", options: ["rebase the branch by hand and approve", "merge the default branch into the branch and approve"] }) });
-      if (cursor.rebases >= MAX_REBASES) return stuck("the branch still conflicts with the default branch after one rebase");
+      const rebases = (await deps.policies.for(task.repoPath)).factory.verify.auto_rebase;
+      if (cursor.rebases >= rebases) return stuck(`the branch still conflicts with the default branch after ${rebases === 1 ? "one rebase" : `${rebases} rebases`}`);
       const wt = task.worktreePath;
       const branch = task.branch;
       if (!wt || !branch) return stuck("the task has no worktree to rebase");
@@ -396,6 +398,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
             changesCodeowners,
             dependenciesListed: listed.length,
             fixApproval,
+            staleDays: policy.factory.ship.stale_days,
           });
           // A checks run that left failure and came back is a new red even under the same run id.
           if (deps.loop && pr.checks.state !== "failure") cursor.ciCycled = true;

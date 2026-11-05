@@ -1,3 +1,4 @@
+import { FACTORY_DEFAULTS } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_POLICY, parsePolicy } from "./policy.ts";
@@ -28,6 +29,7 @@ describe("parsePolicy", () => {
       autoMerge: "off",
       freeze: [],
       decisions: {},
+      factory: FACTORY_DEFAULTS,
     });
   });
 
@@ -54,6 +56,7 @@ describe("parsePolicy", () => {
       autoMerge: "off",
       freeze: [],
       decisions: {},
+      factory: FACTORY_DEFAULTS,
     });
   });
 

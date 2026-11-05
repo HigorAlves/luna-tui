@@ -212,6 +212,21 @@ describe("e2e_failure_cause", () => {
     expect(check).toEqual({ kind: "e2e", e2e: { verdict: "fail", summary: "login broke", attempt: 2, criteria: [{ text: "login works", result: "fail" }] } });
   });
 
+  it("takes the number of environment-flake re-runs from the repo's luna.yaml `verify.env_flake_retries`", async () => {
+    const withRetries = (n: number, runPack: (context: StageContext) => Promise<StageResult>) =>
+      e2eRunner({ runPack, detectWeb: async () => true, decide: async () => cause("env_flake"), overrides: async () => ({}), policy: async () => ({ qa: "web", factory: { verify: { env_flake_retries: n } } }) })({ ...context(), attempt: 2 });
+    const none = vi.fn().mockResolvedValue(failing);
+    expect((await withRetries(0, none)).outcome).toBe("fail");
+    expect(none).toHaveBeenCalledTimes(1);
+    const three = vi.fn().mockResolvedValue(failing);
+    const spent = await withRetries(3, three);
+    expect(three).toHaveBeenCalledTimes(4);
+    expect(spent).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("failed 4 times") } });
+    const second = vi.fn().mockResolvedValueOnce(failing).mockResolvedValueOnce(failing).mockResolvedValueOnce(passing);
+    expect((await withRetries(2, second)).outcome).toBe("pass");
+    expect(second).toHaveBeenCalledTimes(3);
+  });
+
   it("clears the run's out/ folder before the re-run, so the first attempt's artifacts never reach Evidence", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "e2e-state-"));
     const ctx = { ...context(), attempt: 2 };

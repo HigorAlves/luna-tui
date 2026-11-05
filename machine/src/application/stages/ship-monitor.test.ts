@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import type { EvidencePack } from "@hardness/contracts";
+import { type EvidencePack, FACTORY_DEFAULTS } from "@hardness/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DEFAULT_POLICY, type Policy } from "../../domain/policy.ts";
@@ -629,6 +629,24 @@ describe("the review loop: CI and conflicts", () => {
     expect(await go()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("red again after one re-run") } });
     expect(calls(github, "rerunFailedJobs")).toEqual([["rerunFailedJobs", "o/a", "77"]]);
     expect((await loadCursor(stateDir, "t1"))!.ciReruns).toBe(1);
+  });
+
+  it("takes the number of flaky re-runs from the repo's luna.yaml `verify.ci_flaky_reruns`", async () => {
+    const world = ciWorld({ verdict: "flake", summary: "a timeout" });
+    let run = 90;
+    const { run: go, github } = review(world, redPr({ prChecks: async () => failedCheck(run++), prMerged: async () => open }), [], { policy: { factory: { ...FACTORY_DEFAULTS, verify: { ...FACTORY_DEFAULTS.verify, ci_flaky_reruns: 2 } } } });
+    expect(await go()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("red again after 2 re-runs") } });
+    expect(calls(github, "rerunFailedJobs")).toHaveLength(2);
+    const none = review(world, redPr({ prChecks: async () => failedCheck(run++), prMerged: async () => open }), [], { policy: { factory: { ...FACTORY_DEFAULTS, verify: { ...FACTORY_DEFAULTS.verify, ci_flaky_reruns: 0 } } } });
+    expect(await none.run()).toMatchObject({ outcome: "escalated" });
+    expect(calls(none.github, "rerunFailedJobs")).toEqual([]);
+  });
+
+  it("takes the number of rebases from `verify.auto_rebase`: none means a person at the first conflict", async () => {
+    const world = loopWorld();
+    const { run } = review(world, { prFacts: async () => node({ mergeable: "CONFLICTING" }), prMerged: async () => open }, [], { policy: { factory: { ...FACTORY_DEFAULTS, verify: { ...FACTORY_DEFAULTS.verify, auto_rebase: 0 } } } });
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { verdict: "conflict_unresolvable", reason: expect.stringContaining("after 0 rebases") } });
+    expect(world.rebase).not.toHaveBeenCalled();
   });
 
   it("asks a person for an infra red, with the pack's reason, and asks the pack once per red", async () => {

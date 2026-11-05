@@ -1,6 +1,6 @@
 // A repo's `luna.yaml`: everything the machine needs to run that repo, in one file. Pure:
 // parsing and validation only; the store (application/policy.ts) reads it from disk.
-import { type JiraConfig, LunaConfig, RUNNING, type SlaConfig, TaskState } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, type JiraConfig, LunaConfig, RUNNING, type SlaConfig, TaskState, factoryConfigOf } from "@hardness/contracts";
 import { parse as parseYaml, stringify as toYaml } from "yaml";
 
 import { stagesProblem } from "./engine-choice.ts";
@@ -30,7 +30,7 @@ export function validateLunaConfig(raw: unknown): LunaConfig {
 /** The file text for a config, sections in the order people read them, empty ones left out. */
 export function renderLunaConfig(config: LunaConfig): string {
   const ordered: Record<string, unknown> = {};
-  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "budget", "evidence", "freeze"] as const) {
+  for (const key of ["checks", "services", "toolchains", "policy", "qa_targets", "jira", "sla", "engines", "budget", "evidence", "freeze", "dedup", "triage", "scoring", "fast_lane", "plan", "size", "build", "sandbox", "verify", "ship"] as const) {
     const value = config[key];
     if (value === undefined) continue;
     if (Array.isArray(value) ? value.length === 0 : typeof value === "object" && Object.keys(value as object).length === 0) continue;
@@ -48,7 +48,7 @@ export function parseLunaConfig(text: string, warn: Warn = quiet): Policy {
   } catch (error) {
     throw new PolicyParseError(`not valid YAML: ${error instanceof Error ? error.message : String(error)}`);
   }
-  if (raw === null || raw === undefined) return { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {}, decisions: {}, freeze: [] };
+  if (raw === null || raw === undefined) return { ...DEFAULT_POLICY, qaTargets: [], services: {}, toolchains: {}, sla: {}, engines: {}, engineBudgets: {}, decisions: {}, freeze: [], factory: structuredClone(FACTORY_DEFAULTS) };
   if (typeof raw !== "object" || Array.isArray(raw)) throw new PolicyParseError("the file must be a YAML mapping");
   return policyOf(validateLunaConfig(raw), warn);
 }
@@ -139,5 +139,6 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     evidenceRetentionDays: evidence?.retention_days ?? null,
     autoMerge: policy.auto_merge ?? DEFAULT_POLICY.autoMerge,
     freeze: freeze.map((f) => ({ ...f })),
+    factory: factoryConfigOf({ dedup: config.dedup, triage: config.triage, scoring: config.scoring, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, ship: config.ship }),
   };
 }
