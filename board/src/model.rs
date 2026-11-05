@@ -724,6 +724,9 @@ pub struct TaskDetail {
     /// Build's progress, live; absent from a machine that predates it and for a card that has not begun to build.
     #[serde(default)]
     pub build_progress: Option<BuildProgress>,
+    /// The reports of the stages that have passed; absent from a machine that predates them.
+    #[serde(default)]
+    pub reports: Option<TaskReportsView>,
 }
 
 impl TaskDetail {
@@ -2369,6 +2372,74 @@ pub fn age_secs(secs: u64) -> String {
         3600..=86_399 => format!("{}h", secs / 3600),
         _ => format!("{}d", secs / 86_400),
     }
+}
+
+/// The reports as the board reads them: only what the detail shows of Verify.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct TaskReportsView {
+    #[serde(default)]
+    pub verify: Option<VerifyReportView>,
+}
+
+/// Verify's report: its findings (by level when shown) and the browser run by scenario.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct VerifyReportView {
+    #[serde(default)]
+    pub findings: Vec<ReportFinding>,
+    #[serde(default)]
+    pub e2e: Option<ReportE2e>,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ReportFinding {
+    #[serde(default)]
+    pub severity: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub line: i64,
+    /// The plan criterion the finding is about, when the reviewer named one.
+    #[serde(default)]
+    pub criterion_ref: Option<String>,
+    /// How it ended (fixed, kept, dismissed); open when absent.
+    #[serde(default)]
+    pub resolution: Option<serde_json::Value>,
+}
+
+impl ReportFinding {
+    /// The level of the finding: the machine's own table (`bug` and `security` block, `test`, `perf` and `question` should be fixed, `nit` and its kin are nits), an unknown word reads as should_fix.
+    pub fn level(&self) -> &'static str {
+        match self.severity.trim().to_lowercase().as_str() {
+            "bug" | "security" | "blocker" | "critical" | "high" | "major" | "error" => "blocker",
+            "nit" | "low" | "minor" | "style" | "info" | "nitpick" | "suggestion" => "nit",
+            _ => "should_fix",
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ReportE2e {
+    #[serde(default)]
+    pub verdict: Option<String>,
+    #[serde(default)]
+    pub rows: Vec<ReportRow>,
+}
+
+/// One approved scenario in the browser run: how it went, what was seen, which artifacts.
+#[derive(Deserialize, Clone, Debug, Default)]
+pub struct ReportRow {
+    #[serde(default)]
+    pub scenario: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub result: String,
+    #[serde(default)]
+    pub seen: String,
+    #[serde(default)]
+    pub artifacts: Vec<String>,
 }
 
 #[cfg(test)]

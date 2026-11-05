@@ -1103,6 +1103,57 @@ fn diff_head<'a>(task: &Task, diff: Option<&'a TaskDiff>, cursor: usize, width: 
     DiffHead { lines, cursor_row: Some(cursor_row), patch, tail }
 }
 
+/// Verify's report: the open findings by level, each with where it is and the plan criterion it is about, then the browser run by scenario.
+/// Every text is the reviewer's or a container's, so it goes through `plain`.
+fn verify_report_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
+    let Some(report) = detail.reports.as_ref().and_then(|r| r.verify.as_ref()) else { return Vec::new() };
+    let mut lines = Vec::new();
+    let open: Vec<_> = report.findings.iter().filter(|f| f.resolution.is_none()).collect();
+    if !open.is_empty() {
+        lines.push(Line::default());
+        lines.push(Line::from(Span::from("Verify findings").fg(c(ACCENT)).bold()));
+        for level in ["blocker", "should_fix", "nit"] {
+            let at: Vec<_> = open.iter().filter(|f| f.level() == level).collect();
+            if at.is_empty() {
+                continue;
+            }
+            let color = match level {
+                "blocker" => RED,
+                "should_fix" => YELLOW,
+                _ => SUBTEXT0,
+            };
+            lines.push(Line::from(vec![Span::from(format!("  {level}")).fg(c(color)).bold(), Span::from(format!("  {}", at.len())).fg(c(SUBTEXT0))]));
+            for f in at.iter().take(30) {
+                let place = if f.path.is_empty() { String::new() } else { format!("  {}:{}", truncate(&plain(&f.path), 60), f.line) };
+                let criterion = f.criterion_ref.as_deref().map(|r| format!("  {}", truncate(&plain(r), 20))).unwrap_or_default();
+                lines.push(Line::from(format!("    {}{place}{criterion}", truncate(&plain(&f.title), 100))));
+            }
+        }
+    }
+    if let Some(e2e) = report.e2e.as_ref().filter(|e| !e.rows.is_empty()) {
+        lines.push(Line::default());
+        lines.push(Line::from(vec![
+            Span::from("Browser run").fg(c(ACCENT)).bold(),
+            Span::from(format!("  {}", plain(e2e.verdict.as_deref().unwrap_or("no verdict")))).fg(c(SUBTEXT0)),
+        ]));
+        for row in e2e.rows.iter().take(40) {
+            let (glyph, color) = match row.result.as_str() {
+                "pass" => ("✓", GREEN),
+                "fail" => ("✗", RED),
+                "partial" => ("◐", YELLOW),
+                _ => ("○", SUBTEXT0),
+            };
+            let seen = if row.seen.is_empty() { String::new() } else { format!("  {}", truncate(&plain(&row.seen), 80)) };
+            let artifacts = if row.artifacts.is_empty() { String::new() } else { format!("  {}", truncate(&plain(&row.artifacts.join(", ")), 80)) };
+            lines.push(Line::from(vec![
+                Span::from(format!("  {glyph} ")).fg(c(color)),
+                Span::from(format!("{}  {}{seen}{artifacts}", truncate(&plain(&row.scenario), 12), truncate(&plain(&row.title), 80))),
+            ]));
+        }
+    }
+    lines
+}
+
 /// Evidence: the QA verdict from the ship gate and every artifact the stages produced. With
 /// the index of the selected row, so the pane can keep it in view.
 fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Line<'static>>, Option<usize>) {
@@ -1115,6 +1166,7 @@ fn evidence_section_lines(detail: Option<&TaskDetail>, cursor: usize) -> (Vec<Li
         lines.push(Line::default());
         lines.extend(verdict.iter().map(|l| Line::from(format!("  {l}"))));
     }
+    lines.extend(verify_report_lines(d));
     lines.push(Line::default());
     if d.artifacts.is_empty() {
         lines.push(muted("  nothing yet: E2E and Evidence write screenshots, a recording and the manifest here".into()));
@@ -1454,6 +1506,33 @@ mod tests {
         bare.artifacts.clear();
         let text = render(120, 30, &task, Some(&bare), Section::Evidence, 0).join("\n");
         assert!(text.contains("nothing yet"), "{text}");
+    }
+
+    #[test]
+    fn the_evidence_section_shows_verify_s_findings_by_level_with_their_criterion_and_the_browser_run_by_scenario() {
+        let (task, mut detail) = fixture();
+        detail.reports = Some(
+            serde_json::from_str(
+                r#"{"verify":{"findings":[
+                  {"severity":"bug","title":"off by one\u001b[31m","path":"a.ts","line":3,"criterion_ref":"C1"},
+                  {"severity":"nit","title":"naming","path":"b.ts","line":9},
+                  {"severity":"blocker","title":"already fixed","path":"c.ts","line":1,"resolution":{"status":"fixed","by":"build"}}],
+                 "e2e":{"verdict":"fail","rows":[
+                  {"scenario":"S1","title":"export downloads a file","result":"fail","seen":"got a 500","artifacts":["shot.png"]},
+                  {"scenario":"S2","title":"empty report","result":"not_run","seen":"","artifacts":[]}]}}}"#,
+            )
+            .unwrap(),
+        );
+        let text = render(120, 40, &task, Some(&detail), Section::Evidence, 0).join("\n");
+        assert!(text.contains("Verify findings"), "{text}");
+        assert!(text.contains("blocker  1"), "{text}");
+        assert!(text.contains("off by one [31m  a.ts:3  C1"), "the escape is a space: {text}");
+        assert!(!text.contains('\u{1b}'), "{text}");
+        assert!(text.contains("nit  1"), "{text}");
+        assert!(!text.contains("already fixed"), "{text}");
+        assert!(text.contains("Browser run  fail"), "{text}");
+        assert!(text.contains("✗ S1  export downloads a file  got a 500  shot.png"), "{text}");
+        assert!(text.contains("○ S2  empty report"), "{text}");
     }
 
     #[test]

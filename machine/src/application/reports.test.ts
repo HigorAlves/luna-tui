@@ -149,6 +149,23 @@ describe("verifyReportOf", () => {
     expect(VerifyReport.safeParse(report).success).toBe(true);
   });
 
+  it("is complete: who reviewed, the mutation score, the browser run by scenario, the CI class and the rounds used; a report from before still validates", () => {
+    const runs = [run("verifying", 1, { engine: "codex:sol" }), run("ci_watch", 1)];
+    const rows = [{ scenario: "S1", title: "s1", criterion: null, result: "fail", seen: "got a 500", artifacts: ["a.png"] }];
+    const events = [
+      finished("verifying", 1, "passed", { findings: [], mutation: { score: 0.4, min: 0.6 } }),
+      finished("e2e", 1, "failed", { verdict: "fail", criteria: [{ text: "s1", result: "fail" }], manifest: rows }),
+      finished("ci_watch", 1, "passed", { class: "flake" }),
+    ];
+    const withRetries = { ...task, retries: { verify: 2, e2e: 1, ci: 0, total: 4, stronger: 0 } } as unknown as TaskRow;
+    const report = verifyReportOf(withRetries, runs, events);
+    expect(report).toMatchObject({ review: { engine: "codex:sol", family: "codex" }, mutation: { score: 0.4, min: 0.6 }, ciClass: "flake", rounds: { verify: 2, e2e: 1, ci: 0 } });
+    expect(report?.e2e.rows).toEqual(rows);
+    expect(VerifyReport.safeParse(report).success).toBe(true);
+    const old = { prNumber: null, headSha: null, findings: [], tests: { passed: 0, total: 0 }, coverageDelta: null, e2e: { verdict: null, scenarios: [], artifacts: [] }, envReproduction: null, overrides: [], version: 2 };
+    expect(VerifyReport.safeParse(old).success).toBe(true);
+  });
+
   it("marks a finding the next verifying run no longer raises as fixed by the implementer that ran between", () => {
     const runs = [run("verifying", 1), run("implementing", 2, { outputCommit: "fixsha" }), run("verifying", 2, { outputCommit: "v2sha" })];
     const events = [

@@ -16,6 +16,7 @@ describe("stageFactRows", () => {
   it("reads the CI watch's settle from its checks", () => {
     const checks = [{ name: "a", state: "SUCCESS" }, { name: "b", state: "FAILURE" }, { name: "c", state: "SUCCESS" }];
     expect(stageFactRows("ci_watch", "failed", { detail: { checks } })).toEqual([{ kind: "ci.status", payload: { state: "red", total: 3, failed: 1 } }]);
+    expect(stageFactRows("ci_watch", "failed", { detail: { checks, class: "flake" } })).toEqual([{ kind: "ci.status", payload: { state: "red", total: 3, failed: 1, class: "flake" } }]);
     expect(stageFactRows("ci_watch", "passed", { detail: { checks: checks.slice(0, 1) } })).toEqual([{ kind: "ci.status", payload: { state: "green", total: 1, failed: 0 } }]);
     expect(stageFactRows("ci_watch", "failed", { detail: { error: "CI did not settle in 45m" } })).toEqual([]);
   });

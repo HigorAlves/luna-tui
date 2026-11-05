@@ -1,7 +1,7 @@
 // The v2.2 Build Report and Verify Report, assembled from what the stages already leave: the stage runs,
 // the `stage.finished` details, the task's counters. Pure; the caller reads the rows. Reads only the
 // machine's own events, never anything a model or a ticket wrote beyond what a stage detail already holds.
-import { type FactoryConfig, type BuildProgress, type BuildReport, CoverageSummary, DiffSummary, Finding, type VerifyReport, mergeDuplicateFindings, normaliseFinding } from "@hardness/contracts";
+import { type FactoryConfig, type BuildProgress, type BuildReport, CoverageSummary, DiffSummary, Finding, type VerifyReport, credentialOwner, mergeDuplicateFindings, normaliseFinding } from "@hardness/contracts";
 
 import { safe } from "../domain/evidence-markdown.ts";
 import { budgetRowsOf, buildBudget } from "../domain/build-budget.ts";
@@ -153,13 +153,34 @@ export function verifyReportOf(task: TaskRow, runs: readonly StageRunRow[], even
       }),
       // The browser run's files are Evidence's: the pack's media lists them.
       artifacts: [],
+      ...(manifestRowsOf(e2e?.detail.manifest) ? { rows: manifestRowsOf(e2e?.detail.manifest)! } : {}),
     },
     // What Verify's comparison of its environment with Build's said; a person's override of a verdict is from wave 12.
     envReproduction: typeof last?.detail.envReproduction === "string" ? last.detail.envReproduction : null,
     overrides: [],
     version: REPORT_VERSION,
+    review: { engine: lastRun.engine ?? null, family: lastRun.engine ? credentialOwner(lastRun.engine) : null },
+    mutation: mutationOf(last?.detail.mutation),
+    ciClass: typeof all.findLast((f) => f.stage === "ci_watch")?.detail.class === "string" ? (all.findLast((f) => f.stage === "ci_watch")!.detail.class as string) : null,
+    ...(task.retries ? { rounds: { verify: task.retries.verify, e2e: task.retries.e2e, ci: task.retries.ci } } : {}),
   };
 }
+
+const manifestRowsOf = (value: unknown): NonNullable<VerifyReport["e2e"]["rows"]> | null => {
+  if (!Array.isArray(value)) return null;
+  const rows = value.flatMap((v) => {
+    const r = objectOf(v);
+    return r && typeof r.scenario === "string" && typeof r.title === "string" && typeof r.result === "string" && typeof r.seen === "string" && Array.isArray(r.artifacts)
+      ? [{ scenario: r.scenario, title: r.title, criterion: typeof r.criterion === "string" ? r.criterion : null, result: r.result, seen: r.seen, artifacts: r.artifacts.filter((a): a is string => typeof a === "string") }]
+      : [];
+  });
+  return rows.length > 0 ? rows : null;
+};
+
+const mutationOf = (value: unknown): { score: number; min: number } | null => {
+  const m = objectOf(value);
+  return typeof m?.score === "number" && typeof m.min === "number" ? { score: m.score, min: m.min } : null;
+};
 
 const SCENE_ID = /^[A-Za-z0-9_-]{1,40}$/;
 
