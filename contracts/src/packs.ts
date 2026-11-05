@@ -130,6 +130,10 @@ export const PlanAnswer = z.object({
   slices: z.array(Slice).optional(),
   /** A paragraph a person can follow to undo the change. */
   rollback: z.string().optional(),
+  /** v2.2, optional until the plan prompts ask for them (wave 9). */
+  outOfScope: z.array(z.string()).optional(),
+  migration: z.string().optional(),
+  flags: z.array(z.string()).optional(),
   questions: z.array(Question).max(3).optional(),
 });
 export type PlanAnswer = z.infer<typeof PlanAnswer>;

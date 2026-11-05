@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import { EngineBudgets, EngineId } from "./engines.ts";
+import { Scenario } from "./plan.ts";
 import { ConfidencePolicySchema } from "./questions.ts";
 
 /** What a stage run decided. Lives here, not in api.ts, so the two files do not import each other in a loop. */
@@ -164,14 +165,10 @@ export const Slice = z.object({
 });
 export type Slice = z.infer<typeof Slice>;
 
-/** One behaviour test_design names: the plan criterion it proves, and how to prove it. */
-export const TestCase = z.object({
-  title: z.string(),
-  criterion: z.string().nullable(),
-  /** Free text: what to check, and the repo's own command when one applies. */
-  approach: z.string(),
-});
-export type TestCase = z.infer<typeof TestCase>;
+/** One behaviour test_design names: the plan criterion it proves, and how to prove it. The same schema as
+ *  the v2.2 `Scenario` (plan.ts), kept under its old name for existing call sites. */
+export const TestCase = Scenario;
+export type TestCase = Scenario;
 
 /** Schema 2's shape, read for runs recorded before the schema 3 rename. */
 const LegacyTestCase = z.object({
