@@ -139,6 +139,6 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     evidenceRetentionDays: evidence?.retention_days ?? null,
     autoMerge: policy.auto_merge ?? DEFAULT_POLICY.autoMerge,
     freeze: freeze.map((f) => ({ ...f })),
-    factory: factoryConfigOf({ dedup: config.dedup, triage: config.triage, scoring: config.scoring, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, ship: config.ship }),
+    factory: factoryConfigOf({ dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, ship: config.ship }),
   };
 }

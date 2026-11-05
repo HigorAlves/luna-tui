@@ -141,6 +141,30 @@ export async function isAncestor(repoPath: string, ancestor: string, descendant:
   return (await exec("git", [...HOST_GIT, "-C", repoPath, "merge-base", "--is-ancestor", ancestor, descendant])).code === 0;
 }
 
+/** The default branch as the repo last saw it (`origin/HEAD`, else HEAD); no fetch, so it is cheap to ask per card. */
+async function lastKnownDefault(repoPath: string): Promise<string> {
+  const head = await exec("git", [...HOST_GIT, "-C", repoPath, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
+  return head.code === 0 ? head.stdout.trim().replace(/^refs\/remotes\//, "") : "HEAD";
+}
+
+/** How many commits the default branch has that `commit` lacks; null when either is unknown. */
+export async function commitsBehind(repoPath: string, commit: string): Promise<number | null> {
+  if (!/^[0-9a-f]{7,40}$/.test(commit)) return null;
+  const out = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-list", "--count", `${commit}..${await lastKnownDefault(repoPath)}`]);
+  const n = Number.parseInt(out.stdout.trim(), 10);
+  return out.code === 0 && Number.isFinite(n) ? n : null;
+}
+
+/** The first of `paths` that exists at the default branch, as text; null when none does. Reads the object database, never the checkout. */
+export async function defaultBranchFile(repoPath: string, paths: string[], maxBytes = 262_144): Promise<string | null> {
+  const ref = await lastKnownDefault(repoPath);
+  for (const path of paths) {
+    const out = await exec("git", [...HOST_GIT, "-C", repoPath, "show", `${ref}:${path}`]);
+    if (out.code === 0 && out.stdout.length <= maxBytes) return out.stdout;
+  }
+  return null;
+}
+
 /**
  * A clean, detached checkout of the default branch at `path`, fresh for every run: created from
  * `origin/<default>` after a fetch (the repo's own HEAD without an origin) when missing, else

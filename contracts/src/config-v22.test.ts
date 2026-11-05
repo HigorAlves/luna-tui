@@ -59,6 +59,13 @@ describe("the sections in a luna.yaml", () => {
     expect(ok.success).toBe(true);
   });
 
+  it("take the graph's staleness bar and refuse a negative one", () => {
+    expect(FACTORY_DEFAULTS.graph.stale_commits).toBe(50);
+    expect(bad({ graph: { stale_commits: 10 } }).success).toBe(true);
+    expect(bad({ graph: { stale_commits: -1 } }).success).toBe(false);
+    expect(bad({ graph: { stale: 3 } }).success).toBe(false);
+  });
+
   it("refuse a confidence outside 0..1, a negative count, a minute that is not above zero and a count with no sane bound", () => {
     expect(bad({ dedup: { duplicate: 1.5 } }).success).toBe(false);
     expect(bad({ triage: { confidence: { risk: -0.1 } } }).success).toBe(false);

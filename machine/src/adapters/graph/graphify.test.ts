@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -167,5 +167,74 @@ describe("graphifyGraph.recordMisses", () => {
       { task: "t1", at: "2026-11-04T10:00:00Z", files: ["a.ts"] },
       { task: "t2", at: "2026-11-04T11:00:00Z", files: ["b.ts", "c.ts"] },
     ]);
+  });
+});
+
+describe("graphifyGraph.locate and impact", () => {
+  const coupon = { id: "coupon", label: "applyCoupon", source_file: "src/cart/coupon.ts", community: 1 };
+  const graphJson = {
+    nodes: [coupon, { id: "total", label: "cartTotal", source_file: "src/cart/total.ts", community: 1 }, { id: "couponTest", label: "couponTest", source_file: "src/cart/coupon.test.ts", community: 1 }],
+    links: [{ source: "total", target: "coupon" }, { source: "couponTest", target: "coupon" }],
+  };
+
+  async function built(options: { behind?: number | null; codeowners?: string | null; graph?: unknown } = {}) {
+    const ctx = setup();
+    const withGit = graphifyGraph({
+      stateDir: ctx.stateDir,
+      image: "img:1",
+      worktreesDir: join(ctx.stateDir, "wt"),
+      sandbox: async (run) => {
+        const out = run.mounts?.find((m) => m.container === "/graph")?.host ?? "";
+        mkdirSync(join(out, "graphify-out"), { recursive: true });
+        writeFileSync(join(out, "graphify-out", "graph.json"), JSON.stringify(options.graph ?? graphJson));
+        writeFileSync(join(out, "stamp.json"), JSON.stringify(stampFor(run.entrypoint?.at(-1) ?? "")));
+        return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: "" };
+      },
+      git: {
+        ensureCleanCheckout: async () => ctx.checkout,
+        headCommit: async () => "a".repeat(40),
+        commitsBehind: async () => options.behind ?? 0,
+        codeowners: async () => (options.codeowners === undefined ? "src/cart/ @acme/cart\n" : options.codeowners),
+      },
+    });
+    await withGit.build(ctx.repo);
+    return { ...ctx, graph: withGit };
+  }
+
+  it("ranks the file a text points at, with its owners and component", async () => {
+    const { graph, repo } = await built();
+    const found = await graph.locate(repo, "applyCoupon charges twice");
+    expect(found).toMatchObject({ files: ["src/cart/coupon.ts", "src/cart/coupon.test.ts"], symbols: ["applyCoupon", "couponTest"], components: ["1"], owners: [{ path: "src/cart/coupon.ts", owners: ["@acme/cart"] }, { path: "src/cart/coupon.test.ts", owners: ["@acme/cart"] }], stale: false, behind: 0 });
+    expect(found!.confidence).toBeGreaterThan(0);
+  });
+
+  it("is stale beyond 50 commits behind and not at 50, keeping the count; the repo's bar wins", async () => {
+    const at50 = await built({ behind: 50 });
+    expect(await at50.graph.locate(at50.repo, "applyCoupon")).toMatchObject({ stale: false, behind: 50 });
+    const at51 = await built({ behind: 51 });
+    expect(await at51.graph.locate(at51.repo, "applyCoupon")).toMatchObject({ stale: true, behind: 51 });
+    expect(await at51.graph.locate(at51.repo, "applyCoupon", { staleCommits: 100 })).toMatchObject({ stale: false, behind: 51 });
+  });
+
+  it("has no owners when the repo has no CODEOWNERS, and no answer when the repo has no graph", async () => {
+    const { graph, repo } = await built({ codeowners: null });
+    expect((await graph.locate(repo, "applyCoupon"))!.owners).toEqual([]);
+    const none = setup();
+    expect(await none.graph.locate(none.repo, "applyCoupon")).toBeNull();
+    expect(await none.graph.impact(none.repo, ["src/cart/coupon.ts"])).toBeNull();
+  });
+
+  it("answers impact from the current graph: importers and tests", async () => {
+    const { graph, repo } = await built();
+    expect(await graph.impact(repo, ["src/cart/coupon.ts"])).toEqual({ importers: ["src/cart/coupon.test.ts", "src/cart/total.ts"], dependents: [], tests: ["src/cart/coupon.test.ts"] });
+  });
+
+  it("reads nothing from a graph file that is a symlink out of its folder", async () => {
+    const { graph, repo, stateDir } = await built();
+    const dir = graph.currentDir(repo)!;
+    writeFileSync(join(stateDir, "elsewhere.json"), JSON.stringify(graphJson));
+    rmSync(join(dir, "graphify-out", "graph.json"));
+    symlinkSync(join(stateDir, "elsewhere.json"), join(dir, "graphify-out", "graph.json"));
+    expect(await graph.locate(repo, "applyCoupon")).toBeNull();
   });
 });

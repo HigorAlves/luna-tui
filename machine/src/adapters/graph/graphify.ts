@@ -4,12 +4,18 @@
 // entrypoint overridden to `/graph-tools/build.py`, over a clean checkout of the default branch
 // mounted read-only; no model, no credential.
 import { existsSync, readlinkSync, statSync } from "node:fs";
-import { appendFile, mkdir, readFile, readdir, rename, rm, symlink } from "node:fs/promises";
-import { join } from "node:path";
+import { appendFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, symlink } from "node:fs/promises";
+import { join, sep } from "node:path";
+
+import { FACTORY_DEFAULTS } from "@hardness/contracts";
 
 import { GraphBuildError, type Graph, type GraphStamp } from "../../application/graph.ts";
+import type { GraphJson } from "../../domain/blast-radius.ts";
+import { parseCodeowners, requiredOwners } from "../../domain/codeowners.ts";
+import { impact } from "../../domain/graph-impact.ts";
+import { type LocateGraph, locate } from "../../domain/graph-locate.ts";
 import type { SandboxResult, SandboxRun } from "../docker/docker.ts";
-import { ensureCleanCheckout, graphCheckoutPath, headCommit, isAncestor } from "../git/worktree.ts";
+import { commitsBehind, defaultBranchFile, ensureCleanCheckout, graphCheckoutPath, headCommit, isAncestor } from "../git/worktree.ts";
 import { repoSlug } from "./slug.ts";
 
 /** Where a repo's misses file is mounted in the build container. */
@@ -21,6 +27,28 @@ export const KEEP_GRAPHS = 3;
 export interface GraphGit {
   ensureCleanCheckout(repoPath: string, path: string): Promise<string>;
   headCommit(path: string): Promise<string>;
+  /** Commits the default branch has over `commit`; null when unknown. Default: the repo's last-known default branch. */
+  commitsBehind?(repoPath: string, commit: string): Promise<number | null>;
+  /** The repo's CODEOWNERS text at the default branch; null when it has none. */
+  codeowners?(repoPath: string): Promise<string | null>;
+}
+
+/** A graph file bigger than this is not read: it is the machine's own build output, but a corrupt one must not fill memory. */
+export const MAX_GRAPH_BYTES = 64 * 1024 * 1024;
+const CODEOWNERS_PATHS = [".github/CODEOWNERS", "CODEOWNERS", "docs/CODEOWNERS"];
+
+/** `graphify-out/graph.json` of a graph folder: a regular file inside it (no symlink out), at most `MAX_GRAPH_BYTES`; null otherwise. */
+async function readGraphJson(dir: string): Promise<(GraphJson & LocateGraph) | null> {
+  try {
+    const file = join(dir, "graphify-out", "graph.json");
+    const info = await lstat(file);
+    if (!info.isFile() || info.size > MAX_GRAPH_BYTES) return null;
+    const [root, real] = await Promise.all([realpath(dir), realpath(file)]);
+    if (!real.startsWith(root + sep)) return null;
+    return JSON.parse(await readFile(file, "utf8")) as GraphJson & LocateGraph;
+  } catch {
+    return null;
+  }
 }
 
 export interface GraphifyDeps {
@@ -32,7 +60,9 @@ export interface GraphifyDeps {
 }
 
 export function graphifyGraph(deps: GraphifyDeps): Graph {
-  const git = deps.git ?? { ensureCleanCheckout, headCommit };
+  const git: GraphGit = deps.git ?? { ensureCleanCheckout, headCommit };
+  const behindOf = git.commitsBehind ?? commitsBehind;
+  const ownersText = git.codeowners ?? ((repoPath: string) => defaultBranchFile(repoPath, CODEOWNERS_PATHS));
   const dirOf = (repoPath: string) => join(deps.stateDir, "graphs", repoSlug(repoPath));
 
   async function readStamp(dir: string): Promise<GraphStamp | null> {
@@ -128,6 +158,24 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       await point(repoDir, commit);
       await prune(repoDir);
       return stamp;
+    },
+
+    async locate(repoPath, text, options) {
+      const dir = current(repoPath);
+      const graph = dir ? await readGraphJson(dir) : null;
+      if (!dir || !graph) return null;
+      const found = locate(graph, text);
+      const stamp = await readStamp(dir);
+      const behind = stamp ? await behindOf(repoPath, stamp.commit).catch(() => null) : null;
+      const rules = found.files.length > 0 ? parseCodeowners((await ownersText(repoPath).catch(() => null)) ?? "") : [];
+      const bar = options?.staleCommits ?? FACTORY_DEFAULTS.graph.stale_commits;
+      return { ...found, owners: requiredOwners(found.files, rules), stale: behind !== null && behind > bar, behind };
+    },
+
+    async impact(repoPath, files) {
+      const dir = current(repoPath);
+      const graph = dir ? await readGraphJson(dir) : null;
+      return graph ? impact(graph, files) : null;
     },
 
     async recordMisses(repoPath, miss) {
