@@ -29,6 +29,12 @@ export interface VerifyDeps {
   runPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) => Promise<StageResult>) | null;
   stateDir: string;
   detect?: (worktreePath: string) => Promise<DetectedChecks>;
+  /** A fresh clone of the card's clone at its head commit, where the checks and the review run; absent, they run in the card's own folder. */
+  fresh?: {
+    make: (cardPath: string, branch: string, runId: string) => Promise<{ path: string; commit: string }>;
+    bringBack: (cardPath: string, freshPath: string, branch: string, from: string) => Promise<{ ok: boolean; reason?: string }>;
+    remove: (path: string) => Promise<void>;
+  };
   /** Who a check commits as: the identity git resolves for the repo. Null escalates. */
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
   /** The repo's luna.yaml: its own checks (null means detect them from the tree) and the
@@ -378,7 +384,22 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
   };
   return async (context) => {
     const state = { radius: [] as string[] };
-    const result = await verify(context, state);
+    const { task } = context;
+    const fresh = deps.fresh && task.worktreePath && task.branch ? await deps.fresh.make(task.worktreePath, task.branch, context.runId) : null;
+    // Whatever the stage reads and runs is the fresh clone's; the card's folder is only touched to take a fast-forward back.
+    const inFresh: StageContext = fresh ? { ...context, task: { ...task, worktreePath: fresh.path } } : context;
+    let result = await verify(inFresh, state);
+    if (fresh) {
+      // The fresh folder is never the task's workspace.
+      const { workspace: _fresh, ...rest } = result;
+      result = { ...rest, detail: { ...result.detail, freshClone: { commit: fresh.commit } } };
+      if (result.outcome === "pass") {
+        const back = await deps.fresh!.bringBack(task.worktreePath!, fresh.path, task.branch!, fresh.commit);
+        if (!back.ok) result = { ...result, outcome: "fail", detail: { ...result.detail, error: `what the verifying stage added could not be brought back: ${back.reason ?? "unknown"}` } };
+      }
+      // Kept on an escalation, for the person to look at (slice 7 sets how long); removed otherwise.
+      if (result.outcome !== "escalated") await deps.fresh!.remove(fresh.path);
+    }
     return state.radius.length > 0 ? { ...result, detail: { ...result.detail, blastRadius: state.radius } } : result;
   };
 }

@@ -1,5 +1,6 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
+import { hostFreshWorkspace } from "./adapters/git/clone.ts";
 import { type BudgetAlert, type EvidenceContext, Ledger, PrAction, type PullRequest, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
@@ -254,6 +255,8 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
 const realVerifyRunner = verifyRunner({
   exec: checksExec ?? exec,
   runPack: verifyPack,
+  // Verify runs on a fresh clone at the head commit, never in the folder Build used.
+  fresh: hostFreshWorkspace,
   graph,
   stateDir: config.stateDir,
   get decide() {

@@ -519,3 +519,64 @@ describe("verifying stage", () => {
     expect(s.runPack).not.toHaveBeenCalled();
   });
 });
+
+describe("verify on a fresh clone", () => {
+  const card = { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" };
+  const build = (outcome: "pass" | "fail" | "escalated", broughtBack: { ok: boolean; reason?: string } = { ok: true }) => {
+    const seen = { cwd: [] as (string | undefined)[], packPath: "", removed: [] as string[], back: [] as string[][], made: [] as string[][] };
+    const runner = verifyRunner({
+      exec: async (_c, _a, options) => (seen.cwd.push(options.cwd), { code: 0, stdout: "", stderr: "" }),
+      runPack: async (context) => {
+        seen.packPath = context.task.worktreePath!;
+        return { outcome, detail: outcome === "pass" ? { answer: { verdict: "pass", findings: [], results: [], summary: "ok" } } : { reason: "r" }, workspace: { branch: "task/x", worktreePath: context.task.worktreePath! } } as StageResult;
+      },
+      stateDir: "/tmp/state",
+      detect: async () => ({ test: ["pnpm", "test"] }) as never,
+      gitIdentity: async () => ({ name: "a", email: "a@b" }),
+      changedPaths: async () => null,
+      fresh: {
+        make: async (path, branch, runId) => (seen.made.push([path, branch, runId]), { path: "/card.verify", commit: "a".repeat(40) }),
+        bringBack: async (path, freshPath, branch, from) => (seen.back.push([path, freshPath, branch, from]), broughtBack),
+        remove: async (path) => void seen.removed.push(path),
+      },
+    });
+    const context = { task: card, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    return { runner, context, seen };
+  };
+
+  it("runs the checks and the review in the fresh clone, never in the card's folder, and names the commit it was made at", async () => {
+    const { runner, context, seen } = build("pass");
+    const result = await runner(context);
+    expect(seen.made).toEqual([["/card", "task/x", "run-1"]]);
+    expect(seen.cwd).toEqual(["/card.verify"]);
+    expect(seen.packPath).toBe("/card.verify");
+    expect(result.detail).toMatchObject({ freshClone: { commit: "a".repeat(40) } });
+    // The fresh folder is never the task's workspace.
+    expect(result.workspace).toBeUndefined();
+  });
+
+  it("brings the commits back after a pass, and removes the folder", async () => {
+    const { runner, context, seen } = build("pass");
+    expect((await runner(context)).outcome).toBe("pass");
+    expect(seen.back).toEqual([["/card", "/card.verify", "task/x", "a".repeat(40)]]);
+    expect(seen.removed).toEqual(["/card.verify"]);
+  });
+
+  it("fails the stage when what Verify left cannot come back as a fast-forward", async () => {
+    const { runner, context } = build("pass", { ok: false, reason: "not a fast-forward" });
+    const result = await runner(context);
+    expect(result.outcome).toBe("fail");
+    expect(JSON.stringify(result.detail)).toContain("not a fast-forward");
+  });
+
+  it("brings nothing back after a failure, and keeps the folder on an escalation", async () => {
+    const failed = build("fail");
+    await failed.runner(failed.context);
+    expect(failed.seen.back).toEqual([]);
+    expect(failed.seen.removed).toEqual(["/card.verify"]);
+    const escalated = build("escalated");
+    await escalated.runner(escalated.context);
+    expect(escalated.seen.back).toEqual([]);
+    expect(escalated.seen.removed).toEqual([]);
+  });
+});

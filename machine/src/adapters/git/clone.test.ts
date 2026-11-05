@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { copiedSettings, ensureClone, ensurePrClone, gitDirStamp, isClone, moveToClone, sealedPaths, unpushedCommits } from "./clone.ts";
+import { bringBack, copiedSettings, ensureClone, freshClone, ensurePrClone, gitDirStamp, isClone, moveToClone, sealedPaths, unpushedCommits } from "./clone.ts";
 import { branchBase, changedPaths, commitAll, ensureWorktree, removeWorktree, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
@@ -220,5 +220,64 @@ describe("removing a clone", () => {
     await removeWorktree(repo, workspace.path);
     expect(existsSync(workspace.path)).toBe(false);
     expect(git(repo, "for-each-ref")).not.toContain(workspace.branch);
+  });
+});
+
+describe("a fresh clone for Verify and fixes", () => {
+  const card = async () => {
+    const { repo, dir, root } = repository("fresh-");
+    const remote = join(root, "remote.git");
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
+    git(repo, "remote", "add", "origin", remote);
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    const sha = (await commitAll(workspace.path, "feat: b"))!;
+    return { repo, root, remote, workspace, sha };
+  };
+
+  it("is a new folder at exactly that commit, on the card's branch, with the card's remote and nothing shared", async () => {
+    const { root, remote, workspace, sha } = await card();
+    writeFileSync(join(workspace.path, "later.txt"), "x\n");
+    await commitAll(workspace.path, "feat: later");
+    const path = join(root, "verify-clone");
+    await freshClone(workspace.path, sha, workspace.branch, path);
+    expect(git(path, "rev-parse", "HEAD")).toBe(sha);
+    expect(git(path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(workspace.branch);
+    expect(git(path, "remote", "get-url", "origin")).toBe(remote);
+    expect(existsSync(join(path, ".git", "objects", "info", "alternates"))).toBe(false);
+    expect(existsSync(join(path, "later.txt"))).toBe(false);
+  });
+
+  it("refuses a revision that is not a full commit id", async () => {
+    const { root, workspace } = await card();
+    await expect(freshClone(workspace.path, "HEAD", workspace.branch, join(root, "v"))).rejects.toThrow(/commit/);
+  });
+
+  it("brings back what was committed there only as a fast-forward of the card's branch", async () => {
+    const { root, workspace, sha } = await card();
+    const path = join(root, "verify-clone");
+    await freshClone(workspace.path, sha, workspace.branch, path);
+    writeFileSync(join(path, "t.test.ts"), "t\n");
+    const added = (await commitAll(path, "test: more"))!;
+    expect(await bringBack(workspace.path, path, workspace.branch, sha)).toEqual({ ok: true, head: added });
+    expect(git(workspace.path, "rev-parse", "HEAD")).toBe(added);
+    expect(existsSync(join(workspace.path, "t.test.ts"))).toBe(true);
+  });
+
+  it("brings nothing back when the card moved on, or when the fresh clone's history was rewritten", async () => {
+    const { root, workspace, sha } = await card();
+    const path = join(root, "verify-clone");
+    await freshClone(workspace.path, sha, workspace.branch, path);
+    git(path, "reset", "-q", "--hard", "HEAD~1");
+    writeFileSync(join(path, "other.txt"), "o\n");
+    await commitAll(path, "rewrite");
+    const before = git(workspace.path, "rev-parse", "HEAD");
+    expect(await bringBack(workspace.path, path, workspace.branch, sha)).toMatchObject({ ok: false });
+    expect(git(workspace.path, "rev-parse", "HEAD")).toBe(before);
+    // Unchanged: nothing to bring.
+    const same = join(root, "same");
+    await freshClone(workspace.path, sha, workspace.branch, same);
+    expect(await bringBack(workspace.path, same, workspace.branch, sha)).toEqual({ ok: true, head: sha });
   });
 });

@@ -5,7 +5,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSyn
 import { dirname, join } from "node:path";
 
 import { exec, execOrThrow } from "../process/exec.ts";
-import { HOST_GIT, type Workspace, branchExists, clearStaleLock, isBranchName, startPoint } from "./worktree.ts";
+import { HOST_GIT, type Workspace, branchExists, clearStaleLock, headCommit, isBranchName, startPoint } from "./worktree.ts";
 
 const CLONE_TIMEOUT_MS = 300_000;
 
@@ -102,6 +102,40 @@ export async function moveToClone(repoPath: string, workspace: Workspace): Promi
   }
 }
 
+/** A new clone of the card's clone at exactly `sha`, on `branch`, in a new folder: where Verify and a fix run. Origin is the card's own origin. */
+export async function freshClone(cardClone: string, sha: string, branch: string, path: string): Promise<void> {
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`not a commit id: ${JSON.stringify(sha)}`);
+  if (!isBranchName(branch)) throw new Error(`not a usable branch name: ${JSON.stringify(branch)}`);
+  if (existsSync(path)) throw new Error(`${path} exists already`);
+  await cloneInto(cardClone, path, branch, sha);
+}
+
+/**
+ * Brings the commits made in a fresh clone back into the card's clone, only as a fast-forward of
+ * the card's branch from `from` (the commit the fresh clone was made at): the card's branch must
+ * still be at `from` and the fresh clone's branch must descend from it. Anything else is refused
+ * and nothing in the card's clone changes. Fetches by a ref the machine names, never by a name the fresh clone gives.
+ */
+export async function bringBack(cardClone: string, fresh: string, branch: string, from: string): Promise<{ ok: true; head: string } | { ok: false; reason: string }> {
+  if (!/^[0-9a-f]{40}$/.test(from) || !isBranchName(branch)) return { ok: false, reason: "not a commit id or a branch name" };
+  const head = await exec("git", [...HOST_GIT, "-C", fresh, "rev-parse", "--verify", `refs/heads/${branch}^{commit}`]);
+  if (head.code !== 0) return { ok: false, reason: `the fresh clone has no branch ${branch}` };
+  const tip = head.stdout.trim();
+  if (tip === from) return { ok: true, head: tip };
+  const current = await exec("git", [...HOST_GIT, "-C", cardClone, "rev-parse", "--verify", `refs/heads/${branch}^{commit}`]);
+  if (current.code !== 0 || current.stdout.trim() !== from) return { ok: false, reason: `the card's branch is no longer at ${from.slice(0, 7)}` };
+  const ref = "refs/luna/brought-back";
+  const fetched = await exec("git", [...HOST_GIT, "-C", cardClone, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", fresh, `+refs/heads/${branch}:${ref}`], { timeoutMs: CLONE_TIMEOUT_MS });
+  if (fetched.code !== 0) return { ok: false, reason: `fetch from the fresh clone failed: ${(fetched.stderr || fetched.stdout).trim()}` };
+  try {
+    if ((await exec("git", [...HOST_GIT, "-C", cardClone, "merge-base", "--is-ancestor", from, tip])).code !== 0) return { ok: false, reason: "the fresh clone's history does not descend from the commit it was made at" };
+    const merged = await exec("git", [...HOST_GIT, "-C", cardClone, "merge", "--ff-only", "--quiet", "--no-verify-signatures", tip]);
+    return merged.code === 0 ? { ok: true, head: tip } : { ok: false, reason: `not a fast-forward: ${(merged.stderr || merged.stdout).trim()}` };
+  } finally {
+    await exec("git", [...HOST_GIT, "-C", cardClone, "update-ref", "-d", ref]);
+  }
+}
+
 /** A PR task's clone at `path`: the PR's head branch fetched from the repository's remote, checked out and tracking `origin/<headRef>`, so a fix lands on the PR's own branch. An existing clone is reused. */
 export async function ensurePrClone(repoPath: string, headRef: string, path: string): Promise<void> {
   if (existsSync(join(path, ".git"))) {
@@ -162,3 +196,18 @@ export function gitDirStamp(clonePath: string): string | null {
     return null;
   }
 }
+
+/** The fresh clone Verify runs on, beside the card's clone as `<clone>.verify-<run>`: made at the card's head, brought back as a fast-forward, removed with the folder. */
+export const hostFreshWorkspace = {
+  async make(cardPath: string, branch: string, runId: string): Promise<{ path: string; commit: string }> {
+    const path = `${cardPath}.verify-${runId.replace(/[^A-Za-z0-9]/g, "").slice(0, 12)}`;
+    rmSync(path, { recursive: true, force: true });
+    const commit = await headCommit(cardPath);
+    await freshClone(cardPath, commit, branch, path);
+    return { path, commit };
+  },
+  bringBack: (cardPath: string, freshPath: string, branch: string, from: string) => bringBack(cardPath, freshPath, branch, from),
+  async remove(path: string): Promise<void> {
+    rmSync(path, { recursive: true, force: true });
+  },
+};
