@@ -10,7 +10,8 @@ export const REPLY_CAP = 1500;
 export const postable = (text: string, cap = REPLY_CAP): string => safe(flattenLinks(text)).slice(0, cap).trim();
 
 /** A Markdown image is dropped and a link keeps its address in the open (`[label](url)` becomes `label (url)`): GitHub would render
- *  both, and a model's or a stranger's text does not get a clickable label that hides where it goes. Bounded, so no run backtracks. */
+ *  both, and a model's or a stranger's text does not get a clickable label that hides where it goes. Bounded, so no run backtracks.
+ *  This is the tidy reading of the common shapes; `safe()` breaks whatever link syntax is left (a label over two lines, nested brackets). */
 export function flattenLinks(text: string): string {
   return text.replace(/!\[[^\]\n]{0,300}\]\([^)\n]{0,2000}\)/g, "").replace(/\[([^\]\n]{0,300})\]\(([^)\n]{0,2000})\)/g, "$1 ($2)");
 }

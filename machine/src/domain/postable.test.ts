@@ -15,6 +15,20 @@ describe("postable", () => {
     expect(postable(`key ${["ghp", "a".repeat(36)].join("_")}`)).toBe("key [redacted]");
   });
 
+  it("leaves no live link or image, however the label is written", () => {
+    // A label over two lines: the lines are joined after the links were read, so the link must be broken afterwards too.
+    expect(postable("[click\nhere](https://evil.example/a)")).not.toContain("](");
+    expect(postable("![pixel\nalt](https://evil.example/p.png?d=1)")).not.toContain("](");
+    // Brackets inside the label, an escaped bracket, a label past the rewrite's bound.
+    expect(postable("[a [b] c](https://evil.example/b)")).not.toContain("](");
+    expect(postable("[a\\]b](https://evil.example/c)")).not.toContain("](");
+    expect(postable(`[${"x".repeat(400)}](https://evil.example/d)`)).not.toContain("](");
+    // A reference definition, which would arm a later `[a]`.
+    expect(postable("[a]: https://evil.example/e")).not.toMatch(/\]:/);
+    // The address stays readable.
+    expect(postable("[click\nhere](https://evil.example/a)")).toContain("https://evil.example/a");
+  });
+
   it("does not backtrack on a long run of brackets", () => {
     const started = Date.now();
     postable("[".repeat(50_000) + "](" + "(".repeat(50_000));

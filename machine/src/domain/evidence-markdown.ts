@@ -24,7 +24,8 @@ export function redact(text: string): string {
   return SECRET_SHAPES.reduce((out, shape) => out.replace(shape, "[redacted]"), text);
 }
 
-/** A line of someone else's text made safe to print: one line, no HTML at all (a tag can fold the rest of the page away), no mention, no issue reference, no table break. */
+/** A line of someone else's text made safe to print: one line, no HTML at all (a tag can fold the rest of the page away), no mention, no issue reference,
+ *  no link or image of its own, no table break. */
 export function safe(text: string, table = false): string {
   const flat = redact(text)
     .replace(/</g, "&lt;")
@@ -33,6 +34,9 @@ export function safe(text: string, table = false): string {
     .replace(/@(?=[A-Za-z0-9])/g, "@\u200b")
     // `Closes #12` in a PR body closes issue 12 on merge: a model's text never gets that power.
     .replace(/#(?=\d)/g, "#\u200b")
+    // A link or an image needs its `(` right after the `]`, a reference definition its `:`. A space there leaves the address readable and
+    // nothing to click under another name, and no image for the page to fetch. However the label was written: this is the guarantee.
+    .replace(/\]([(:])/g, "] $1")
     .trim();
   return table ? flat.replace(/\|/g, "\\|") : flat;
 }

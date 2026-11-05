@@ -151,7 +151,7 @@ sla:                                      # ticket clocks; the machine's env def
     implementing: 4h
     verifying: 1h
   cycle: 3d                               # created → closed (MACHINE_SLA_CYCLE)
-  archive: 5d                             # auto-archive a ticket left at Intake or Triage (setup, questions) this long (reason `no_setup` or `no_answer`); five days when this key is missing, `off` keeps it waiting; an answer restarts the clock. A gate past its clock gets one reminder per visit (a `sla.reminder` event, a Jira comment with `comments: gates`, a line in the task's thread)
+  archive: 5d                             # auto-archive a ticket left at Intake or Triage (setup, questions) this long (reason `no_setup` or `no_answer`); five days when this key is missing, `off` keeps it waiting; an answer restarts the clock, and a card is never archived before a reminder at least a day old, so `gate: off` keeps it waiting too. A gate past its clock gets one reminder per visit (a `sla.reminder` event, a Jira comment with `comments: gates`, a line in the task's thread)
 engines:                                  # the engine a pack runs on in this repo, over its default
   triage: claude:opus                     # must be one of the pack's engines.allowed (GET /packs)
 budget:

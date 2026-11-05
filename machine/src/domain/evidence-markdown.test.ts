@@ -162,6 +162,20 @@ describe("redacting secret-shaped tokens", () => {
   });
 });
 
+describe("a foreign text never draws a link or an image", () => {
+  it("breaks an inline link, an image and a reference definition, and keeps the address readable", () => {
+    expect(safe("see [the docs](https://evil.example/login)")).toBe("see [the docs] (https://evil.example/login)");
+    expect(safe("![p](https://evil.example/p.png?d=1)")).toBe("![p] (https://evil.example/p.png?d=1)");
+    // A definition on its own line would turn a later `[a]` or `![a]` into a link or a fetched image.
+    expect(safe("[a]: https://evil.example/x")).toBe("[a] : https://evil.example/x");
+  });
+
+  it("leaves the machine's own media link intact in the section", () => {
+    const section = renderEvidenceSection(pack({ media: [{ kind: "screenshot", label: "home [x](https://evil.example)", url: "https://cdn.example/a.png" }] }));
+    expect(section).toContain("[home [x] (https://evil.example)](https://cdn.example/a.png)");
+  });
+});
+
 describe("the v2 pack fields stay off the published text", () => {
   it("never carries a media localPath, the results or the findings detail into the section or the comment", () => {
     const v2 = pack({
