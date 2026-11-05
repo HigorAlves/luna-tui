@@ -2,7 +2,9 @@
 // run and each return from awaiting_answers) with the answers so far in the issue it reads. The reading replaces
 // the card's classification; a classifier that is absent, fails or answers nothing leaves the previous one and
 // says so, and triage goes on.
-import { type ClassifyOptions, type FactoryConfig, type IssueContext, RecordDraft, type TaskClassification, TriageRecord } from "@hardness/contracts";
+import { type ClassifyOptions, type DecisionOverrides, FACTORY_DEFAULTS, type FactoryConfig, type IssueContext, RecordDraft, type TaskClassification, TriageRecord } from "@hardness/contracts";
+
+import { askedQuestions, triageVerdicts } from "../../domain/triage-policy.ts";
 
 import type { TaskRow } from "../../domain/task.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
@@ -10,8 +12,8 @@ import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 export interface TriageSignalDeps {
   /** The classifier, once it exists (late-bound in main.ts); null when there is no Jev or fallback credential or agents are off. */
   classify: ((issue: IssueContext, repoPath: string | null, options?: ClassifyOptions) => Promise<TaskClassification | null>) | null;
-  /** The repo's policy: its scoring weights and bands turn the sub-scores into a priority. Absent: the diagram's. */
-  policy?: (repoPath: string) => Promise<{ factory: FactoryConfig }>;
+  /** The repo's policy: its scoring weights and bands turn the sub-scores into a priority, its confidence bars decide what is asked. Absent: the diagram's. */
+  policy?: (repoPath: string) => Promise<{ factory: FactoryConfig; decisions?: Record<string, DecisionOverrides> }>;
   save: (id: string, patch: Partial<TaskRow>) => Promise<void>;
   log?: (line: string) => void;
 }
@@ -62,10 +64,11 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
   return async (context) => {
     const { task } = context;
     let classification: TaskClassification | null = null;
+    let repo: Awaited<ReturnType<NonNullable<TriageSignalDeps["policy"]>>> | null = null;
     if (deps.classify) {
       const kept = task.classification ? "the previous reading is kept" : "going on without one";
       try {
-        const repo = task.repoPath ? await deps.policy?.(task.repoPath).catch(() => null) : null;
+        repo = (task.repoPath ? await deps.policy?.(task.repoPath).catch(() => null) : null) ?? null;
         const options: ClassifyOptions = repo ? { weights: repo.factory.scoring.weights, bands: repo.factory.scoring.bands } : {};
         classification = await deps.classify(issueOf(task, answersOf(context.approvals)), task.repoPath, options);
         if (classification) await deps.save(task.id, { classification });
@@ -78,6 +81,19 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
       }
     }
     const enriched = classification ? { ...context, task: { ...task, classification } } : context;
+    // A field under its flag bar is the person's to settle, not the agent's: the stage stops and asks, and the signals
+    // are read again with the answers. Only a reading taken this time can ask.
+    if (classification) {
+      const verdicts = triageVerdicts(classification, (repo?.factory ?? FACTORY_DEFAULTS).triage, { ...(repo?.decisions?.triage_signals ? { overrides: repo.decisions.triage_signals } : {}) });
+      const asked = askedQuestions(verdicts);
+      if (asked.length > 0) {
+        return {
+          outcome: "needs_input",
+          needsInput: asked.map(({ question, recommended }) => ({ question, recommended })),
+          detail: { summary: `${asked.length} signal${asked.length === 1 ? " is" : "s are"} under the confidence bar: ${asked.map((a) => a.field).join(", ")}`, asked: asked.map(({ field, guess, confidence }) => ({ field, guess, confidence })) },
+        };
+      }
+    }
     const result = await triage(enriched);
     if (result.outcome === "pass") {
       const record = recordOf(enriched, result, enriched.task);

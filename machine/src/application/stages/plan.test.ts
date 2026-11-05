@@ -327,4 +327,10 @@ describe("planStage", () => {
       expect(calls.map((c) => c.pack)).toEqual(["plan", "test_design"]);
     });
   });
+
+  it("lists the triage signals that went through under their bar as triage.<field> on the gate", async () => {
+    const classification = { kind: "bug", ready: true, size: 1, sizeBucket: "S", priority: "P2", riskPrelim: "low", confidence: 0.9, at: "", model: "m", signals: { kind: { answer: "bug", confidence: 0.7 }, size: { answer: "S", confidence: 0.9 }, risk_prelim: { answer: "low", confidence: 0.9 } } };
+    const flagged = await setup({}).run(context({ task: { ...task, classification } as never }));
+    expect(flagged.detail).toMatchObject({ flagged: ["triage.kind"] });
+  });
 });

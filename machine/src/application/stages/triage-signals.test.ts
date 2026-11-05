@@ -118,3 +118,46 @@ describe("withTriageSignals", () => {
     expect(notes).toEqual([expect.stringContaining("boom"), expect.stringContaining("kept")]);
   });
 });
+
+describe("withTriageSignals and the confidence policy", () => {
+  const sub = { answer: 1, confidence: 0.9 };
+  const read = (signals: NonNullable<TaskRow["classification"]>["signals"]) => ({
+    ...classification, kind: "bug", kindConfidence: 0.9, sizeBucket: "S" as const, priority: "P2" as const, riskPrelim: "low" as const, confidence: 0.5,
+    signals: { kind: { answer: "bug", confidence: 0.9 }, size: { answer: "S", confidence: 0.8 }, who: sub, what: sub, impact: sub, time: sub, demand: sub, risk_prelim: { answer: "low", confidence: 0.9 }, archive: { answer: false, confidence: 0.95 }, ...signals },
+  });
+
+  it("stops at the person's questions, one per field under its flag bar with the guess and its confidence, and does not run the agent", async () => {
+    let ran = 0;
+    const runner = withTriageSignals(async () => (ran++, { outcome: "pass" }), { classify: async () => read({ kind: { answer: "bug", confidence: 0.62 }, risk_prelim: { answer: "low", confidence: 0.4 } }), save: async () => {} });
+    const result = await runner(context());
+    expect(ran).toBe(0);
+    expect(result.outcome).toBe("needs_input");
+    expect(result.needsInput).toEqual([
+      { question: "Is this a bug or a feature? The model read it as a bug, 0.62", recommended: "bug" },
+      { question: "How risky is the change: low, medium or high? The model read it as low, 0.40", recommended: "low" },
+    ]);
+    expect(result.detail).toMatchObject({ asked: [{ field: "kind", guess: "bug", confidence: 0.62 }, { field: "risk", guess: "low", confidence: 0.4 }] });
+  });
+
+  it("goes on to the agent for a field in the flag band, which the plan gate will show", async () => {
+    let ran = 0;
+    const runner = withTriageSignals(async () => (ran++, { outcome: "pass" }), { classify: async () => read({ size: { answer: "S", confidence: 0.5 } }), save: async () => {} });
+    expect((await runner(context())).outcome).toBe("pass");
+    expect(ran).toBe(1);
+  });
+
+  it("takes the repo's bars: its luna.yaml confidence config and its policy.decisions per question", async () => {
+    const low = read({ kind: { answer: "bug", confidence: 0.5 } });
+    const factory = { ...FACTORY_DEFAULTS, triage: { ...FACTORY_DEFAULTS.triage, confidence: { ...FACTORY_DEFAULTS.triage.confidence, kind: 0.5 } } };
+    const withBars = (policy: { factory: typeof factory; decisions?: Record<string, Record<string, { proceed?: number; flag?: number }>> }) =>
+      withTriageSignals(async () => ({ outcome: "pass" }), { classify: async () => low, policy: async () => policy, save: async () => {} });
+    expect((await withBars({ factory })(context())).outcome).toBe("pass");
+    expect((await withBars({ factory: FACTORY_DEFAULTS })(context())).outcome).toBe("needs_input");
+    expect((await withBars({ factory: FACTORY_DEFAULTS, decisions: { triage_signals: { kind: { proceed: 0.4 } } } })(context())).outcome).toBe("pass");
+  });
+
+  it("does not ask on a reading it did not get this time", async () => {
+    const runner = withTriageSignals(async () => ({ outcome: "pass" }), { classify: async () => null, save: async () => {} });
+    expect((await runner(context({ task: task({ classification: read({ kind: { answer: "bug", confidence: 0.1 } }) }) }))).outcome).toBe("pass");
+  });
+});

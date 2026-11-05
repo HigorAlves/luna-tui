@@ -452,7 +452,8 @@ function signalsLine(signals: TaskClassification["signals"] | undefined): string
     const signal = signals[name];
     if (!signal) continue;
     const confidence = signal.confidence;
-    const flagged = confidence >= proceed ? "" : ", flagged";
+    // Under the bar but in the band the person sees it flagged at the plan gate; under the band the person was asked.
+    const flagged = confidence >= proceed ? "" : confidence >= proceed - 0.15 ? ", flagged" : ", asked";
     const fixed = confidence.toFixed(2);
     if (type === "yesno") {
       const yes = signal.answer === true;

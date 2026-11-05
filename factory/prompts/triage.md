@@ -14,7 +14,7 @@ Ticket criteria:
 ## Signals
 {{task.classification}}
 
-These are a small model's guesses with its confidence; a flagged one is yours to settle.
+These are a small model's guesses with its confidence. A signal marked `flagged` is shown to the person at the plan gate: use it as given, and do not settle it yourself. One marked `asked` was put to the person, and their answer is in the decisions below. You never re-judge a signal; you write the summary, the goal sentence, the decision and its reason.
 
 ## Answers and decisions so far
 {{decisions}}

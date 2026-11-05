@@ -311,6 +311,8 @@ describe("renderPrompt", () => {
     };
     const classification = { kind: "bug", ready: true, size: 1, confidence: 0.5, at: "2026-11-03T12:00:00.000Z", model: "m", signals };
     const text = renderPrompt({ pack: PACKS.triage, input: { ...input, pack: "triage", stage: "triage", task: { ...input.task, classification: classification as never } }, template: "signals: {{task.classification}}" });
+    const asked = renderPrompt({ pack: PACKS.triage, input: { ...input, pack: "triage", stage: "triage", task: { ...input.task, classification: { ...classification, signals: { size: { answer: "S", confidence: 0.3 } } } as never } }, template: "signals: {{task.classification}}" });
+    expect(asked).toContain("signals: size S (0.30, asked)");
     expect(text).toContain("signals: kind bug (0.90) · type_of_work backend (0.80) · size S (0.50, flagged) · who everyone (0.75) · time whenever (0.60, flagged) · risk_prelim low (0.90)");
   });
 

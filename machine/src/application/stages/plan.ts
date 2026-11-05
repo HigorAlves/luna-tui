@@ -14,6 +14,8 @@
 import {
   CodeMapAnswer,
   type DecisionOverrides,
+  FACTORY_DEFAULTS,
+  type FactoryConfig,
   PACKS,
   type PlanContext,
   type Risk,
@@ -25,6 +27,7 @@ import {
   riskLevelOf,
 } from "@hardness/contracts";
 
+import { triageVerdicts } from "../../domain/triage-policy.ts";
 import { recordIdOf } from "../decision-truth.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
@@ -41,7 +44,7 @@ export interface PlanDeps {
   /** Runs a decision pack on a plan context and answers its answer; null when no decision can run (agents off, no runtime). Read at call time: main.ts binds it late. */
   decide: ((pack: DecisionPackName, plan: PlanContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** Each repo's luna.yaml bars for the decisions. */
-  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { plan: { coverage_rounds: number; plan_check_retries: number } } }> };
+  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { plan: { coverage_rounds: number; plan_check_retries: number }; triage?: FactoryConfig["triage"] } }> };
   /** The machine's code graphs: a repo with one (and its luna.yaml `policy.graph` on) gets a code map before the plan. */
   graph?: { stampOf(repoPath: string): Promise<unknown | null> };
   log?: (line: string) => void;
@@ -232,6 +235,12 @@ export function planStage(deps: PlanDeps): StageRunner {
 
     const verdicts = { coverage: coverage.verdict, plan: planCheck.verdict, risk: riskJudged.verdict };
     for (const [name, verdict] of Object.entries(verdicts)) if (verdict === "flag" || verdict === "ask") flagged.add(name);
+    // The triage signals the person did not settle and the machine let through: shown at this gate as `triage.<field>`.
+    if (task.classification) {
+      const repo = await deps.policies.for(task.repoPath);
+      const triage = triageVerdicts(task.classification, repo.factory?.triage ?? FACTORY_DEFAULTS.triage, { ...(repo.decisions.triage_signals ? { overrides: repo.decisions.triage_signals } : {}) });
+      for (const v of Object.values(triage)) if (v.verdict !== "proceed") flagged.add(`triage.${v.field}`);
+    }
 
     return {
       outcome: "pass",
