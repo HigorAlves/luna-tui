@@ -9,7 +9,8 @@ import { safe } from "../../domain/evidence-markdown.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 
 export type DecidedReason = Exclude<EscalationReason, "head_moved">;
-const DECIDED: readonly string[] = ["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"];
+export const DECIDED_REASONS = ["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"] as const;
+const DECIDED: readonly string[] = DECIDED_REASONS;
 const isDecided = (value: unknown): value is DecidedReason => typeof value === "string" && DECIDED.includes(value);
 
 export const TEXT_CAP = 500;
@@ -46,6 +47,8 @@ export interface DecidedEscalation {
   source: "fact" | "decision" | "agent";
   /** The agent's own word, kept beside the decided one. */
   agentReason: EscalationReason | null;
+  /** The decision record, for a person's correction to label. */
+  recordId?: string;
   summary: string;
   outputTail: string;
   facts: string[];
@@ -67,7 +70,7 @@ export async function decideEscalation(input: EscalationInput): Promise<DecidedE
   if (input.facts.scopeTwice) return { reason: "undeclared_scope", confidence: 1, source: "fact", ...kept };
   if (input.facts.envBroken) return { reason: "env_broken", confidence: 1, source: "fact", ...kept };
   const word = flat(input.agent?.text);
-  const { verdict, answer } = await judgeCheck(
+  const { verdict, answer, recordId } = await judgeCheck(
     input.decide,
     "escalation_reason",
     { kind: "escalation", escalation: { stage: input.stage, summary, ...(agentReason ? { agentReason } : {}), ...(word ? { agentWord: word } : {}), output: outputTail, facts } },
@@ -77,7 +80,7 @@ export async function decideEscalation(input: EscalationInput): Promise<DecidedE
   const picked = (answer?.reason as { choice?: unknown; confidence?: unknown } | undefined) ?? undefined;
   if (answer && isDecided(picked?.choice)) {
     const confidence = typeof picked.confidence === "number" ? picked.confidence : null;
-    return { reason: verdict === "proceed" ? picked.choice : "other", confidence, source: "decision", ...kept };
+    return { reason: verdict === "proceed" ? picked.choice : "other", confidence, source: "decision", ...(recordId ? { recordId } : {}), ...kept };
   }
   return { reason: isDecided(agentReason) ? agentReason : "other", confidence: null, source: "agent", ...kept };
 }

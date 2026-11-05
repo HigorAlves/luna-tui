@@ -103,6 +103,7 @@ and a test fails when they drift from the registry.
 | `X` | abort the running stage (asks first) |
 | `w` | kill its worktree (asks first) |
 | `Z` | archive, with a reason |
+| `C` | correct the escalation reason |
 | `d` | delete (asks first) |
 | `f` | open or focus the agent's watch tab |
 | `J` | link a Jira issue (search or create); unlink the Jira issue (asks first) |
@@ -241,6 +242,7 @@ link is the board's `J`):
 | `X` | abort the running stage (asks first) |
 | `w` | kill its worktree (asks first) |
 | `Z` | archive, with a reason |
+| `C` | correct the escalation reason |
 | `d` | delete (asks first) |
 | `f` | open or focus the agent's watch tab |
 | `R` | set the repo (search) |
@@ -544,6 +546,7 @@ What the ticket shows:
 | `X` | abort the running stage (asks first) |
 | `w` | kill its worktree (asks first) |
 | `Z` | archive, with a reason |
+| `C` | correct the escalation reason |
 | `d` | delete (asks first) |
 | `f` | open or focus the agent's watch tab |
 | `J` | link a Jira issue (search or create); unlink the Jira issue (asks first) |

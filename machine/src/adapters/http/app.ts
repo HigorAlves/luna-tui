@@ -6,6 +6,7 @@ import {
   CloneInput,
   ArchiveInput,
   DecisionInput,
+  EscalationReasonInput,
   EngineId,
   type PrAction,
   PrActionInput,
@@ -56,7 +57,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -178,6 +179,8 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof QuestionsCarrySecretError) return fail(c, 409, "secret", error.message);
     if (error instanceof RecordNotEditableError) return fail(c, 409, "record_locked", error.message);
     if (error instanceof NoCasesToEditError) return fail(c, 409, "no_cases", error.message);
+    if (error instanceof NoEscalationToCorrectError) return fail(c, 409, "no_escalation", error.message);
+    if (error instanceof InvalidEscalationReasonError) return fail(c, 400, "invalid_reason", error.message);
     if (error instanceof ApproverRequiredError) return fail(c, 400, "approver_required", error.message);
     if (error instanceof SameApproverError) return fail(c, 409, "same_approver", error.message);
     if (error instanceof OutsideApproverRequiredError) return fail(c, 409, "outside_approver_required", error.message);
@@ -301,7 +304,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
 
   app.get("/tasks/:id", async (c) => {
     const id = taskId(c);
-    const [task, stageRuns, approvals, events, artifacts, usage, reports] = await Promise.all([
+    const [task, stageRuns, approvals, events, artifacts, usage, reports, buildProgress] = await Promise.all([
       pipeline.get(id),
       pipeline.stageRuns(id),
       pipeline.approvals(id),
@@ -309,6 +312,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
       pipeline.artifacts(id),
       pipeline.taskUsage(id),
       pipeline.reports(id),
+      pipeline.buildProgress(id),
     ]);
     return c.json({
       task: await serialize(task, usage),
@@ -317,6 +321,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
       events: events.slice(-RECENT_EVENTS).map(toEvent),
       artifacts: artifacts.map(toArtifact),
       reports,
+      buildProgress,
     });
   });
 
@@ -407,6 +412,13 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     const { decision, reason, comment, applyRules, approver } = await body(c, DecisionInput);
     const response = applyRules === undefined ? undefined : { applyRules };
     return c.json(await serialize(await pipeline.decide(id, decision, reason ?? comment ?? undefined, response, approver ? { approver } : {})));
+  });
+
+  /** Corrects the reason an escalation was decided with (the enum only); the card stays at its escalated gate. */
+  app.post("/tasks/:id/escalation-reason", async (c) => {
+    const id = taskId(c);
+    const { reason } = await body(c, EscalationReasonInput);
+    return c.json(await serialize(await pipeline.correctEscalationReason(id, reason)));
   });
 
   /** Ends the task as archived with a reason (duplicate, sla_expired, rejected, not_for_agent, pr_closed). */

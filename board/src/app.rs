@@ -269,6 +269,8 @@ pub enum Mode {
     Reject { id: String, text: String },
     /// `Z` on a ticket: pick why it is archived; enter archives it.
     ArchiveReason { id: String, cursor: usize },
+    /// `E` on an escalated ticket: pick the reason the escalation really had; enter sends the correction.
+    EscalationReason { id: String, cursor: usize },
     /// `T`: correct the Triage Record. `field` is the row, `picks` the value index of each `RECORD_FIELDS` row.
     RecordEdit { id: String, field: usize, picks: [usize; 5] },
     ConfirmDelete(String),
@@ -1691,6 +1693,13 @@ impl App {
                     self.mode = Mode::ArchiveReason { id: id.to_string(), cursor: 0 };
                 }
             }
+            'C' => {
+                if task.state == "escalated" {
+                    self.mode = Mode::EscalationReason { id: id.to_string(), cursor: 0 };
+                } else {
+                    self.notify("this ticket is not escalated", false);
+                }
+            }
             'p' => {
                 if task.state == "awaiting_answers" {
                     self.act(|m| m.post_questions(id), "questions posted where the ticket came from");
@@ -1895,6 +1904,7 @@ impl App {
                 self.handle_confirm(key, &id)
             }
             Mode::ArchiveReason { .. } => self.handle_archive_reason(key),
+            Mode::EscalationReason { .. } => self.handle_escalation_reason(key),
             Mode::RecordEdit { .. } => self.handle_record_edit(key),
             Mode::ConfirmApproveAll(_) => self.handle_confirm_approve_all(key),
             Mode::ConfirmMany { .. } => self.handle_confirm_many(key),
@@ -2113,7 +2123,7 @@ impl App {
     /// own: the split's approval, not the memory review).
     #[cfg(test)]
     pub(crate) const HANDLED_INBOX: &[&str] =
-        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "N", "X", "w", "Z", "d", "f", "o", "J", "T", "p"];
+        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p"];
 
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
     fn handle_inbox(&mut self, key: KeyEvent) -> Outcome {
@@ -2878,7 +2888,7 @@ impl App {
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
         "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "S", "v", "V", "?", ":",
-        "esc", "enter", "R", "a", "A", "e", "r", "N", "X", "w", "Z", "d", "f", "o", "J", "T", "p",
+        "esc", "enter", "R", "a", "A", "e", "r", "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p",
     ];
 
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
@@ -3097,7 +3107,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "d", "f", "T", "p"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "C", "d", "f", "T", "p"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -3687,6 +3697,29 @@ impl App {
         Outcome::Continue
     }
 
+    /// `E`'s picker: j/k or 1-6 move, enter sends the highlighted reason, esc cancels. Only the six reasons can be sent.
+    fn handle_escalation_reason(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::EscalationReason { id, cursor } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        let mut chosen = None;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(crate::model::ESCALATION_REASONS.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+            KeyCode::Enter => chosen = Some(*cursor),
+            KeyCode::Char(d @ '1'..='6') => chosen = Some((d as usize) - ('1' as usize)),
+            KeyCode::Esc | KeyCode::Char('q') => self.mode = Mode::Normal,
+            _ => {}
+        }
+        if let Some(pick) = chosen {
+            self.mode = Mode::Normal;
+            let reason = crate::model::ESCALATION_REASONS[pick].0;
+            self.act(|m| m.correct_escalation_reason(&id, reason), &format!("reason corrected: {reason}"));
+        }
+        Outcome::Continue
+    }
+
     fn handle_confirm(&mut self, key: KeyEvent, id: &str) -> Outcome {
         match key.code {
             KeyCode::Char('y') => {
@@ -4200,6 +4233,27 @@ mod tests {
         press(&mut app, KeyCode::Esc);
         press(&mut app, KeyCode::Esc);
         assert!(app.marked.is_empty(), "esc clears the marks");
+    }
+
+    #[test]
+    fn c_opens_the_escalation_reason_picker_on_an_escalated_ticket_moves_and_esc_cancels_and_any_other_refuses() {
+        let mut app = App::new(Machine::from_env());
+        app.tasks.push(ticket("aaaaaaaa0000", "escalated", true, false));
+        app.tasks.push(ticket("bbbbbbbb0000", "implementing", false, true));
+        app.focus = app.tasks[0].column_index();
+        let press = |app: &mut App, code: KeyCode| { app.handle_key(KeyEvent::from(code)); };
+        press(&mut app, KeyCode::Char('C'));
+        assert!(matches!(&app.mode, Mode::EscalationReason { id, cursor: 0 } if id == "aaaaaaaa0000"));
+        press(&mut app, KeyCode::Char('j'));
+        press(&mut app, KeyCode::Char('j'));
+        assert!(matches!(app.mode, Mode::EscalationReason { cursor: 2, .. }));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Normal));
+        assert_eq!(crate::model::ESCALATION_REASONS.map(|(name, _)| name), ["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"]);
+        app.focus = app.tasks[1].column_index();
+        app.select("bbbbbbbb0000", true);
+        press(&mut app, KeyCode::Char('C'));
+        assert!(matches!(app.mode, Mode::Normal), "a ticket that is not escalated has no reason to correct");
     }
 
     #[test]

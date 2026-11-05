@@ -2,14 +2,14 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
 import { questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
@@ -26,7 +26,7 @@ import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import { EMITTABLE, type StageResult, type StageRunner } from "./ports.ts";
 import { shippedEvent } from "./ship-loop.ts";
-import { buildReportOf, verifyReportOf } from "./reports.ts";
+import { buildProgressOf, buildReportOf, verifyReportOf } from "./reports.ts";
 import { stageFactRows } from "./stage-facts.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -36,8 +36,9 @@ import { basename, join } from "node:path";
 import type { Policy } from "../domain/policy.ts";
 import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 
-import { buildBudget, rateLimitWaitMs } from "../domain/build-budget.ts";
-import { type DecidedEscalation, decideEscalation } from "./stages/escalation.ts";
+import type { CommitFact } from "./ground-truth.ts";
+import { budgetRowsOf, buildBudget, rateLimitWaitMs } from "../domain/build-budget.ts";
+import { DECIDED_REASONS, type DecidedEscalation, decideEscalation } from "./stages/escalation.ts";
 import { type Decide } from "./stages/check-decide.ts";
 import { buildEntryOf } from "../domain/build-entry.ts";
 import { replanOf } from "../domain/replan.ts";
@@ -45,7 +46,7 @@ import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, ou
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
+export { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -109,6 +110,10 @@ export interface PipelineOptions {
   onEvent?: (event: EventRow) => void;
   /** The Jira site (`https://acme.atlassian.net`): with it, a `PLAT-123` in a new ticket's text links the issue. Null: no detection. */
   jiraSite?: string | null;
+  /** Writes what a person did after an escalation (the commits made on the branch since, names and counts) once they resume the card; answers the file's path. */
+  escalationTruth?: (task: TaskRow, approval: ApprovalRow, commits: CommitFact[], corrected: string | null) => Promise<string>;
+  /** The commits made on the branch after a time, with each file's name and line counts (no content). */
+  commitsSince?: (worktreePath: string, sinceIso: string) => Promise<CommitFact[]>;
   /** Runs the `escalation_reason` decision on a Build escalation; its `decide` is bound late and read at call time (null: the agent's own word stands). */
   escalationDecide?: { decide: Decide | null };
   /** Whether the repo already has a luna.yaml; a task on one without runs setup first. Tests pass a fake. */
@@ -286,6 +291,8 @@ export class Pipeline {
   private readonly onEvent: (event: EventRow) => void;
   private readonly hasConfig: (repoPath: string) => boolean;
   private readonly escalationDecide: { decide: Decide | null };
+  private readonly escalationTruth: NonNullable<PipelineOptions["escalationTruth"]> | undefined;
+  private readonly commitsSince: NonNullable<PipelineOptions["commitsSince"]> | undefined;
   private readonly writeConfig: (repoPath: string, text: string) => Promise<void>;
   private readonly inline: boolean;
   private maxConcurrentTasks: number;
@@ -335,6 +342,8 @@ export class Pipeline {
     this.store = new PgTaskStore(db);
     this.onEvent = options.onEvent ?? (() => {});
     this.escalationDecide = options.escalationDecide ?? { decide: null };
+    this.escalationTruth = options.escalationTruth;
+    this.commitsSince = options.commitsSince;
     this.hasConfig = options.hasConfig ?? ((repoPath) => existsSync(join(repoPath, CONFIG_FILE)));
     this.writeConfig = options.writeConfig ?? ((repoPath, text) => writeFile(join(repoPath, CONFIG_FILE), text));
     this.inline = options.inline ?? false;
@@ -800,6 +809,21 @@ export class Pipeline {
     response?: Record<string, unknown>,
     options: { approver?: string; auto?: boolean } = {},
   ): Promise<TaskRow> {
+    // A person resuming an escalated card: what they do on the branch from here is ground truth for the reason that was decided.
+    const before = await this.get(id);
+    const escalated = before.state === "escalated" && !options.auto ? (await this.approvals(id)).find((a) => a.kind === "escalated" && a.decision === null) : undefined;
+    const moved = await this.decideNow(id, wanted, reason, response, options);
+    if (escalated) await this.keepEscalationTruth(moved, escalated.id);
+    return moved;
+  }
+
+  private async decideNow(
+    id: string,
+    wanted: "approved" | "changes_requested" | "rejected" | "sent_back",
+    reason?: string,
+    response?: Record<string, unknown>,
+    options: { approver?: string; auto?: boolean } = {},
+  ): Promise<TaskRow> {
     const { approver } = options;
     const decision: "approved" | "sent_back" | "rejected" = wanted === "changes_requested" ? "sent_back" : wanted;
     const task = await this.get(id);
@@ -970,6 +994,32 @@ export class Pipeline {
     } catch (error) {
       await this.log(task.id, "ground_truth.failed", { error: error instanceof Error ? error.message : String(error) }).catch(() => {});
     }
+  }
+
+  /** Records what a person did on the branch after an escalation (commits since, names and line counts) beside the decision, with the reason they corrected it to. */
+  private async keepEscalationTruth(task: TaskRow, approvalId: string): Promise<void> {
+    if (!this.escalationTruth) return;
+    try {
+      const approval = (await this.approvals(task.id)).find((a) => a.id === approvalId);
+      if (!approval) return;
+      const corrected = (await this.events(task.id)).findLast((e) => e.kind === "escalation.corrected" && e.payload.approval === approvalId)?.payload.to;
+      const commits = task.worktreePath && this.commitsSince ? await this.commitsSince(task.worktreePath, approval.createdAt.toISOString()).catch((): CommitFact[] => []) : [];
+      await this.log(task.id, "ground_truth.written", { path: await this.escalationTruth(task, approval, commits, typeof corrected === "string" ? corrected : null) });
+    } catch (error) {
+      await this.log(task.id, "ground_truth.failed", { error: error instanceof Error ? error.message : String(error) }).catch(() => {});
+    }
+  }
+
+  /** A person corrects the reason Build's escalation was decided with (the enum only). The correction labels the `escalation_reason` record; it never moves a card that already waits for a person. */
+  async correctEscalationReason(id: string, reason: string): Promise<TaskRow> {
+    const task = await this.get(id);
+    const gate = task.state === "escalated" ? (await this.approvals(id)).find((a) => a.kind === "escalated" && a.decision === null) : undefined;
+    if (!gate) throw new NoEscalationToCorrectError(id);
+    if (!(DECIDED_REASONS as readonly string[]).includes(reason)) throw new InvalidEscalationReasonError();
+    const decided = objectOf(gate.requested.escalationDecision);
+    await this.log(id, "escalation.corrected", { from: typeof decided?.reason === "string" ? decided.reason : null, to: reason, approval: gate.id });
+    if (this.truth && typeof decided?.recordId === "string") await this.truth.learned({ pack: "escalation_reason", recordId: decided.recordId, label: { reason: { choice: reason } }, source: "escalation_correction", taskId: id });
+    return task;
   }
 
   /** Stops the running (or merely queued) stage and waits for you. */
@@ -1620,7 +1670,7 @@ export class Pipeline {
           result.needsInput?.length || result.requested?.length || decided
             ? {
                 ...result.detail,
-                ...(decided ? { escalationDecision: { reason: decided.decision.reason, confidence: decided.decision.confidence, source: decided.decision.source, agentReason: decided.decision.agentReason }, summary: decided.decision.summary, outputTail: decided.decision.outputTail } : {}),
+                ...(decided ? { escalationDecision: { reason: decided.decision.reason, confidence: decided.decision.confidence, source: decided.decision.source, agentReason: decided.decision.agentReason, ...(decided.decision.recordId ? { recordId: decided.decision.recordId } : {}) }, summary: decided.decision.summary, outputTail: decided.decision.outputTail } : {}),
                 ...(result.needsInput?.length ? { questions: result.needsInput } : {}),
                 ...(result.requested?.length ? { actions: result.requested } : {}),
               }
@@ -1966,10 +2016,7 @@ export class Pipeline {
   /** The rows Build's budget counts: all of them, or only those after the last `build.budget_reset` (the stronger model's one run starts a fresh budget, counted from its own start). */
   private async budgetRows(id: string): Promise<{ runs: StageRunRow[]; events: EventRow[] }> {
     const [runs, events] = await Promise.all([this.stageRuns(id), this.events(id)]);
-    const at = events.findLastIndex((e) => e.kind === "build.budget_reset");
-    if (at < 0) return { runs, events };
-    const since = events[at]!.at;
-    return { runs: runs.filter((r) => r.startedAt >= since), events: events.slice(at + 1) };
+    return budgetRowsOf(runs, events);
   }
 
   /** The result of a Build whose budget is spent (a person decides; no run is made), or null while there is budget. Logs the numbers as a `build.budget` row. */
@@ -2147,6 +2194,14 @@ export class Pipeline {
     // This run's finish is not logged yet: it is the newest row.
     const current: EventRow = { id: "0", taskId: id, stageRunId: null, kind: "stage.finished", payload: finishing, at: new Date() };
     return stage === "implementing" ? buildReportOf(task, runs, [...events, current], (await this.policyFor(task.repoPath)).factory.build) : verifyReportOf(task, runs, [...events, current]);
+  }
+
+  /** Build's progress while it runs (for the board's detail): null for a card that has not begun to build. Counts from the last fresh budget. */
+  async buildProgress(id: string): Promise<BuildProgress | null> {
+    const task = await this.get(id);
+    if (task.route !== "feature") return null;
+    const [runs, events] = await Promise.all([this.stageRuns(id), this.events(id)]);
+    return buildProgressOf(runs, events, (await this.policyFor(task.repoPath)).factory.build);
   }
 
   /** The task's Build and Verify Reports, each null until its stage has passed; `GET /tasks/:id` shows them. */

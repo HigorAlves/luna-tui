@@ -7,7 +7,7 @@ import { type EngineId, type TaskState, TriageRecord } from "@hardness/contracts
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { DecisionTruth } from "./decision-truth.ts";
+import { DecisionTruth, tagged } from "./decision-truth.ts";
 import { NO_RETRIES, TransitionError } from "../domain/transition.ts";
 import type { StageContext, StageResult, StageRunner } from "./ports.ts";
 import { loadConfig } from "../config.ts";
@@ -349,6 +349,60 @@ describe("why Build escalated is a typed decision", () => {
     const id = await approvedCard(p);
     expect(asked).toEqual([]);
     expect(await lastMove(p, id)).toMatchObject({ escalation: "env_broken" });
+  });
+});
+
+describe("what a person does after an escalation", () => {
+  const stop = { outcome: "escalated" as const, detail: { escalation: "other", reason: "stuck", summary: "stopped", error: "boom" } };
+  const learned: Array<Record<string, unknown>> = [];
+  const written: Array<{ corrected: string | null; commits: unknown }> = [];
+  const make = (decide: unknown = async () => tagged({ answer: { reason: { choice: "flaky_tests", confidence: 0.9 } }, recordId: "rec-9" })) =>
+    new Pipeline(db, (stage) => (stage === "implementing" ? async () => stop : stubs.runnerFor(stage)), {
+      inline: true,
+      hasConfig: () => true,
+      escalationDecide: { decide: decide as never },
+      truth: { learned: async (fact: Record<string, unknown>) => (learned.push(fact), true) } as never,
+      escalationTruth: async (_task, _approval, commits, corrected) => (written.push({ corrected, commits }), "/gt/escalation.json"),
+      commitsSince: async () => [{ sha: "a".repeat(40), files: [{ path: "src/a.ts", added: 2, removed: 1 }] }],
+    });
+  const escalatedCard = async (p: Pipeline) => {
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    return task.id;
+  };
+
+  it("labels the decision record with the reason a person corrects it to, and does not move a card that already waits for a person", async () => {
+    learned.length = 0;
+    const p = make();
+    const id = await escalatedCard(p);
+    expect((await p.get(id)).state).toBe("escalated");
+    const gate = (await p.approvals(id)).find((a) => a.kind === "escalated")!;
+    expect(gate.requested).toMatchObject({ escalationDecision: { reason: "flaky_tests", recordId: "rec-9" } });
+    const after = await p.correctEscalationReason(id, "env_broken");
+    expect(after.state).toBe("escalated");
+    expect(learned).toEqual([expect.objectContaining({ pack: "escalation_reason", recordId: "rec-9", label: { reason: { choice: "env_broken" } }, source: "escalation_correction", taskId: id })]);
+    expect((await p.events(id)).filter((e) => e.kind === "escalation.corrected")).toEqual([expect.objectContaining({ payload: expect.objectContaining({ from: "flaky_tests", to: "env_broken" }) })]);
+  });
+
+  it("takes the enum only, and only at an escalated gate", async () => {
+    const p = make();
+    const id = await escalatedCard(p);
+    await expect(p.correctEscalationReason(id, "head_moved")).rejects.toThrow(/reason/);
+    await expect(p.correctEscalationReason(id, "because I said so")).rejects.toThrow(/reason/);
+    const other = await p.createTask({ title: "Other" });
+    await expect(p.correctEscalationReason(other.id, "env_broken")).rejects.toThrow(/escalat/i);
+  });
+
+  it("records, when a person resumes the card, the commits made since the escalation as ground truth (names and counts) beside the decision, with the corrected reason", async () => {
+    written.length = 0;
+    const p = make();
+    const id = await escalatedCard(p);
+    await new PgTaskStore(db).updateTask(id, { worktreePath: "/work/t" });
+    await p.correctEscalationReason(id, "env_broken");
+    await p.decide(id, "approved", "fixed it");
+    expect(written).toEqual([{ corrected: "env_broken", commits: [{ sha: "a".repeat(40), files: [{ path: "src/a.ts", added: 2, removed: 1 }] }] }]);
+    expect((await p.events(id)).some((e) => e.kind === "ground_truth.written" && e.payload.path === "/gt/escalation.json")).toBe(true);
   });
 });
 

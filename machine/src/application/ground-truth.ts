@@ -69,3 +69,45 @@ export function groundTruthWriter(stateDir: string): (task: TaskRow, approval: A
     return path;
   };
 }
+
+export interface CommitFact {
+  sha: string;
+  files: Array<{ path: string; added: number; removed: number }>;
+}
+
+/** What a person did after an escalation, kept beside the decision that labelled it: file names and counts, never content. */
+export interface EscalationTruth {
+  schema: 1;
+  task: { id: string; title: string };
+  decided: { reason: unknown; confidence: unknown; source: unknown; agentReason: unknown; recordId: unknown } | null;
+  /** The reason a person corrected the decided one to (the enum only), or null. */
+  corrected: string | null;
+  commits: CommitFact[];
+  escalatedAt: string;
+  resumedAt: string | null;
+}
+
+/** The record of one escalated gate a person resumed. Pure. */
+export function escalationTruthOf(task: TaskRow, approval: ApprovalRow, commits: readonly CommitFact[], corrected: string | null): EscalationTruth {
+  const decision = (approval.requested.escalationDecision ?? null) as Record<string, unknown> | null;
+  return {
+    schema: 1,
+    task: { id: task.id, title: task.title },
+    decided: decision ? { reason: decision.reason ?? null, confidence: decision.confidence ?? null, source: decision.source ?? null, agentReason: decision.agentReason ?? null, recordId: decision.recordId ?? null } : null,
+    corrected,
+    commits: commits.map((c) => ({ sha: c.sha, files: c.files.map((f) => ({ path: f.path, added: f.added, removed: f.removed })) })),
+    escalatedAt: approval.createdAt.toISOString(),
+    resumedAt: approval.decidedAt ? approval.decidedAt.toISOString() : null,
+  };
+}
+
+/** Writes `<stateDir>/ground-truth/escalation/<taskId>-<approvalId>.json` and answers its path. */
+export function escalationTruthWriter(stateDir: string): (task: TaskRow, approval: ApprovalRow, commits: readonly CommitFact[], corrected: string | null) => Promise<string> {
+  return async (task, approval, commits, corrected) => {
+    const dir = join(stateDir, "ground-truth", "escalation");
+    await mkdir(dir, { recursive: true });
+    const path = join(dir, `${task.id}-${approval.id}.json`);
+    await writeFile(path, `${JSON.stringify(escalationTruthOf(task, approval, commits, corrected), null, 2)}\n`);
+    return path;
+  };
+}

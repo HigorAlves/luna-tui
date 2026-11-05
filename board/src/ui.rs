@@ -239,6 +239,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 render_archive_reason(frame, task, *cursor);
             }
         }
+        Mode::EscalationReason { id, cursor } => {
+            if let Some(task) = app.task(id) {
+                render_escalation_reason(frame, task, *cursor);
+            }
+        }
         Mode::RecordEdit { id, field, picks } => {
             if let Some(task) = app.task(id) {
                 render_record_edit(frame, task, *field, picks);
@@ -488,6 +493,7 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::JiraLink { .. } => hint(&[("type", "search from 3 chars"), ("↑/↓", "move"), ("enter", "link (row 0 creates)"), ("ctrl+n", "create"), ("esc", "cancel")]),
         Mode::RecordEdit { .. } => hint(&[("j/k", "field"), ("h/l", "value"), ("enter", "send what changed"), ("esc", "cancel")]),
         Mode::ArchiveReason { .. } => hint(&[("j/k 1-5", "pick"), ("enter", "archive"), ("esc", "cancel")]),
+        Mode::EscalationReason { .. } => hint(&[("j/k 1-6", "pick"), ("enter", "correct the reason"), ("esc", "cancel")]),
         Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
         Mode::EnginePicker { .. } => hint(&[("j/k", "move"), ("enter", "set"), ("esc", "back")]),
         Mode::ClonePrompt { .. } => hint(&[("type", "filter folders"), ("↑/↓", "move"), ("enter", "clone here"), ("esc", "stay read-only")]),
@@ -1835,6 +1841,32 @@ fn render_archive_reason(frame: &mut Frame, task: &Task, cursor: usize) {
                 Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
                 Span::from(format!("{}  ", i + 1)).fg(c(SUBTEXT0)),
                 Span::from(format!("{name:<14}")).style(style),
+                Span::from(*means).fg(c(SUBTEXT0)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `E`: the reason the escalation really had, one of the six, one per line.
+fn render_escalation_reason(frame: &mut Frame, task: &Task, cursor: usize) {
+    let area = centered(frame.area(), 64, crate::model::ESCALATION_REASONS.len() as u16 + 4);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" escalation #{}: why, really? ", task.short_id())).bold());
+    let lines: Vec<Line> = crate::model::ESCALATION_REASONS
+        .iter()
+        .enumerate()
+        .map(|(i, (name, means))| {
+            let selected = i == cursor;
+            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            Line::from(vec![
+                Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+                Span::from(format!("{}  ", i + 1)).fg(c(SUBTEXT0)),
+                Span::from(format!("{name:<17}")).style(style),
                 Span::from(*means).fg(c(SUBTEXT0)),
             ])
         })

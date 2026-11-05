@@ -721,6 +721,9 @@ pub struct TaskDetail {
     pub events: Vec<TaskEvent>,
     #[serde(default)]
     pub artifacts: Vec<Artifact>,
+    /// Build's progress, live; absent from a machine that predates it and for a card that has not begun to build.
+    #[serde(default)]
+    pub build_progress: Option<BuildProgress>,
 }
 
 impl TaskDetail {
@@ -1864,6 +1867,58 @@ pub const ARCHIVE_REASONS: [(&str, &str); 7] = [
     ("no_answer", "nobody answered the questions in time"),
 ];
 
+/// The reasons a Build escalation is decided with, in the order the correction picker lists them: the machine's six.
+pub const ESCALATION_REASONS: [(&str, &str); 6] = [
+    ("plan_wrong", "the plan cannot be built as written"),
+    ("env_broken", "a service, tool or the container is at fault"),
+    ("flaky_tests", "a test flips on unchanged code"),
+    ("too_complex", "bigger than the plan allowed for"),
+    ("undeclared_scope", "needs files the plan does not name"),
+    ("other", "none of these, or it does not say"),
+];
+
+/// One scenario's state while Build runs.
+#[derive(Deserialize, Clone, Debug)]
+pub struct ScenarioState {
+    pub id: String,
+    pub state: String,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct BuildLimits {
+    pub max_iterations: u64,
+    pub max_tokens: u64,
+    pub max_minutes: f64,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct BuildBudget {
+    pub iterations: u64,
+    #[serde(default)]
+    pub tokens: Option<u64>,
+    pub minutes: f64,
+    pub limits: BuildLimits,
+}
+
+#[derive(Deserialize, Clone, Debug)]
+pub struct BuildCheckpoint {
+    pub sha: String,
+    pub follows: String,
+    #[serde(default)]
+    pub at: String,
+}
+
+/// What Build shows while it runs: each scenario red or green, the budget against its limits, the last checkpoint.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildProgress {
+    #[serde(default)]
+    pub scenarios: Vec<ScenarioState>,
+    pub budget: BuildBudget,
+    #[serde(default)]
+    pub last_checkpoint: Option<BuildCheckpoint>,
+}
+
 /// The first 8 characters of a task id: what cards and watch-tab labels show.
 pub fn short_id(id: &str) -> &str {
     &id[..id.len().min(8)]
@@ -2897,6 +2952,15 @@ mod detail_tests {
         "waitingOnYou":false,"running":true,"queued":false,
         "retries":{"verify":1,"e2e":0,"ci":0,"total":2},"resumeTo":null,"reason":null,
         "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}"#;
+
+    #[test]
+    fn a_task_detail_reads_the_build_progress_and_an_older_machine_has_none() {
+        let with: TaskDetail = serde_json::from_str(&r#"{"task":TASKJSON,"stageRuns":[],"approvals":[],"events":[],"buildProgress":{"scenarios":[{"id":"S1","state":"red"}],"budget":{"iterations":1,"tokens":null,"minutes":2.0,"limits":{"max_iterations":15,"max_tokens":2000000,"max_minutes":90}},"lastCheckpoint":null}}"#.replace("TASKJSON", TASK)).unwrap();
+        assert_eq!(with.build_progress.unwrap().scenarios[0].id, "S1");
+        let without: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{TASK},"stageRuns":[],"approvals":[],"events":[]}}"#)).unwrap();
+        assert!(without.build_progress.is_none());
+    }
+
 
     fn detail() -> TaskDetail {
         serde_json::from_str(&format!(

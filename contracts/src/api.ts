@@ -169,6 +169,10 @@ export const DecisionInput = z.object({
 });
 export type DecisionInput = z.infer<typeof DecisionInput>;
 
+/** `POST /tasks/:id/escalation-reason`: a person corrects the reason Build's escalation was decided with. The six reasons only; the correction labels the decision record and moves nothing. */
+export const EscalationReasonInput = z.object({ reason: z.enum(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"]) });
+export type EscalationReasonInput = z.infer<typeof EscalationReasonInput>;
+
 export const AnswersInput = z.object({
   answers: z.record(z.string(), z.string()),
 });
@@ -370,6 +374,13 @@ export interface PackInfo {
   states: TaskState[];
 }
 
+/** What Build shows while it runs: each scenario red or green, the budget used against its limits and the last checkpoint pushed. */
+export interface BuildProgress {
+  scenarios: Array<{ id: string; state: "red" | "green" }>;
+  budget: { iterations: number; tokens: number | null; minutes: number; limits: { max_iterations: number; max_tokens: number; max_minutes: number } };
+  lastCheckpoint: { sha: string; follows: "red" | "green"; at: string } | null;
+}
+
 /** `GET /tasks/:id` */
 export interface TaskDetail {
   task: Task;
@@ -379,6 +390,8 @@ export interface TaskDetail {
   artifacts: Artifact[];
   /** The v2.2 Build and Verify Reports, assembled from the task's runs and events; each null until its stage passed. */
   reports?: TaskReports;
+  /** Build's progress, live; null for a card that has not begun to build. */
+  buildProgress?: BuildProgress | null;
 }
 
 /**

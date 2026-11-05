@@ -1,8 +1,9 @@
 // The v2.2 Build Report and Verify Report, assembled from what the stages already leave: the stage runs,
 // the `stage.finished` details, the task's counters. Pure; the caller reads the rows. Reads only the
 // machine's own events, never anything a model or a ticket wrote beyond what a stage detail already holds.
-import { type BuildReport, CoverageSummary, DiffSummary, Finding, type VerifyReport, mergeDuplicateFindings, normaliseFinding } from "@hardness/contracts";
+import { type FactoryConfig, type BuildProgress, type BuildReport, CoverageSummary, DiffSummary, Finding, type VerifyReport, mergeDuplicateFindings, normaliseFinding } from "@hardness/contracts";
 
+import { budgetRowsOf, buildBudget } from "../domain/build-budget.ts";
 import type { EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 
 const REPORT_VERSION = 2;
@@ -28,7 +29,7 @@ function finishes(events: readonly EventRow[]): Finish[] {
 const durationOf = (r: StageRunRow): number | null => (r.endedAt ? r.endedAt.getTime() - r.startedAt.getTime() : null);
 
 /** What Build hands to Verify; null until an implementing run has passed. */
-type BuildLimits = { max_iterations: number; max_tokens: number; max_minutes: number };
+type BuildLimits = FactoryConfig["build"];
 
 /** The iteration log: each red or green the ledger reported (a commit fills the sha of its slice's green) and each failed sweep, in order. */
 function iterationsOf(events: readonly EventRow[]): NonNullable<BuildReport["iterations"]> {
@@ -154,5 +155,25 @@ export function verifyReportOf(task: TaskRow, runs: readonly StageRunRow[], even
     envReproduction: null,
     overrides: [],
     version: REPORT_VERSION,
+  };
+}
+
+const SCENE_ID = /^[A-Za-z0-9_-]{1,40}$/;
+
+/** Build while it runs: each scenario red or green (from the `scenario.red` and `scenario.green` rows), the budget used against its limits, the last checkpoint pushed. Null for a card that has not begun to build. */
+export function buildProgressOf(runs: readonly StageRunRow[], events: readonly EventRow[], limits: BuildLimits, now: Date = new Date()): BuildProgress | null {
+  if (!runs.some((r) => r.stage === "implementing")) return null;
+  const state = new Map<string, "red" | "green">();
+  for (const { kind, payload } of events) {
+    const id = payload.scenario;
+    if ((kind === "scenario.red" || kind === "scenario.green") && typeof id === "string" && SCENE_ID.test(id)) state.set(id, kind === "scenario.green" ? "green" : state.get(id) === "green" ? "green" : "red");
+  }
+  const counted = budgetRowsOf(runs, events);
+  const budget = buildBudget(counted.runs, counted.events, limits, now);
+  const checkpoint = events.findLast((e) => e.kind === "build.checkpoint" && typeof e.payload.sha === "string" && /^[0-9a-f]{7,64}$/.test(e.payload.sha) && (e.payload.follows === "red" || e.payload.follows === "green"));
+  return {
+    scenarios: [...state].map(([id, s]) => ({ id, state: s })),
+    budget: { iterations: budget.iterations, tokens: budget.tokens, minutes: budget.minutes, limits: { max_iterations: limits.max_iterations, max_tokens: limits.max_tokens, max_minutes: limits.max_minutes } },
+    lastCheckpoint: checkpoint ? { sha: checkpoint.payload.sha as string, follows: checkpoint.payload.follows as "red" | "green", at: checkpoint.at.toISOString() } : null,
   };
 }

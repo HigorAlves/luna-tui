@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { dirtyFiles, stagePending, discardPending, findCommitBySubject, branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
+import { commitsSince, dirtyFiles, stagePending, discardPending, findCommitBySubject, branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -287,5 +287,23 @@ describe("the tests step's git", () => {
     const found = await findCommitBySubject(root, "test(abc): scenarios");
     expect(found).toMatchObject({ sha, nameStatus: "A\tcart.test.ts" });
     expect(found!.diff).toContain("+t");
+  });
+});
+
+describe("commitsSince", () => {
+  it("lists the commits made after a time with each file's name and added and removed counts, and no content", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "since-")));
+    git(root, "init", "-q", "-b", "main");
+    writeFileSync(join(root, "a.txt"), "one\n");
+    git(root, "add", "-A");
+    execFileSync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "old", "--date=2020-01-01T00:00:00Z"], { env: { ...process.env, GIT_COMMITTER_DATE: "2020-01-01T00:00:00Z" } });
+    writeFileSync(join(root, "a.txt"), "one\ntwo\nthree\n");
+    writeFileSync(join(root, "b.txt"), "secret content\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "fix: the person's change");
+    const commits = await commitsSince(root, "2024-01-01T00:00:00Z");
+    expect(commits).toEqual([{ sha: expect.stringMatching(/^[0-9a-f]{40}$/), files: expect.arrayContaining([{ path: "a.txt", added: 2, removed: 0 }, { path: "b.txt", added: 1, removed: 0 }]) }]);
+    expect(JSON.stringify(commits)).not.toContain("secret content");
+    expect(await commitsSince(root, new Date(Date.now() + 86_400_000).toISOString())).toEqual([]);
   });
 });

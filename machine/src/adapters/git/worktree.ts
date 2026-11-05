@@ -347,6 +347,22 @@ export async function findCommitBySubject(path: string, subject: string): Promis
   return { sha, nameStatus, diff };
 }
 
+/** The commits made on the checked-out branch after `sinceIso`, newest first, each with its files' names and added and removed line counts (`--numstat`); never a diff. */
+export async function commitsSince(path: string, sinceIso: string): Promise<Array<{ sha: string; files: Array<{ path: string; added: number; removed: number }> }>> {
+  const out = await execOrThrow("git", [...HOST_GIT, "-C", path, "log", `--since=${sinceIso}`, "-n", "100", "--numstat", "--format=commit %H"]);
+  const commits: Array<{ sha: string; files: Array<{ path: string; added: number; removed: number }> }> = [];
+  for (const line of out.split("\n")) {
+    if (line.startsWith("commit ")) {
+      commits.push({ sha: line.slice(7).trim(), files: [] });
+    } else if (line.trim() && commits.length > 0) {
+      const [added, removed, ...name] = line.split("\t");
+      // A binary file counts "-": no line numbers to give.
+      commits.at(-1)!.files.push({ path: name.join("\t"), added: Number(added) || 0, removed: Number(removed) || 0 });
+    }
+  }
+  return commits;
+}
+
 /** What the worktree has uncommitted or untracked, one `git status --porcelain` line each. */
 export async function dirtyFiles(path: string): Promise<string[]> {
   const status = await execOrThrow("git", [...HOST_GIT, "-C", path, "status", "--porcelain"]);

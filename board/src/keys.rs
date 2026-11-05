@@ -432,6 +432,14 @@ const SHARED: &[Binding] = &[
         },
         43,
     ),
+    b(
+        "C",
+        "correct the escalation reason",
+        Group::Ticket,
+        Scope::Board,
+        |app| with_task(app, |t| if t.state == "escalated" { Avail::On } else { Avail::Off("not escalated") }),
+        44,
+    ),
     b("d", "delete (asks first)", Group::Ticket, Scope::Board, |app| with_task(app, |_| Avail::On), 42),
     b("f", "open or focus the agent's watch tab", Group::Ticket, Scope::Board, |app| with_task(app, |_| Avail::On), 41),
     cmd(
@@ -1201,6 +1209,14 @@ mod tests {
         let archived = app_with(vec![task("t1", "archived", true, false, false)]);
         let a = bindings_for(&archived, Scope::Board).into_iter().find(|(b, _)| b.keys == "a").unwrap();
         assert_eq!(a.1, Avail::Off("archived"));
+    }
+
+    #[test]
+    fn c_corrects_the_escalation_reason_only_on_an_escalated_ticket() {
+        let find = |app: &App| bindings_for(app, Scope::Board).into_iter().find(|(b, _)| b.keys == "C").map(|(_, a)| a).unwrap();
+        assert_eq!(find(&app_with(vec![task("t1", "escalated", true, false, false)])), Avail::On);
+        assert_eq!(find(&app_with(vec![task("t1", "implementing", true, true, true)])), Avail::Off("not escalated"));
+        assert_eq!(find(&app_with(Vec::new())), Avail::Off("no ticket selected"));
     }
 
     #[test]

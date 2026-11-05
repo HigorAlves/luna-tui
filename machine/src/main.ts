@@ -21,7 +21,8 @@ import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns
 import type { EventRow } from "./domain/task.ts";
 import { DecisionLog } from "./application/decision-log.ts";
 import { DecisionTruth, tagged } from "./application/decision-truth.ts";
-import { groundTruthWriter } from "./application/ground-truth.ts";
+import { escalationTruthWriter, groundTruthWriter } from "./application/ground-truth.ts";
+import { commitsSince } from "./adapters/git/worktree.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
 import { retroFactsOf } from "./application/stages/memory.ts";
@@ -339,7 +340,7 @@ pipeline = new Pipeline(db, runnerFor, {
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
   closeDeps: { exec, worktreeRemove: false, watcher, github },
-  ...(config.groundTruth ? { groundTruth: groundTruthWriter(config.stateDir) } : {}),
+  ...(config.groundTruth ? { groundTruth: groundTruthWriter(config.stateDir), escalationTruth: escalationTruthWriter(config.stateDir), commitsSince } : {}),
   truth: decisionTruth,
   escalationDecide: buildDecisions,
   policies,

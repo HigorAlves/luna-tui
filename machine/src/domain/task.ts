@@ -263,6 +263,22 @@ export class NoCasesToEditError extends Error {
   }
 }
 
+/** No open escalated gate, so there is no reason to correct (409 `no_escalation`). */
+export class NoEscalationToCorrectError extends Error {
+  constructor(id: string) {
+    super(`task ${id} is not waiting on an escalation`);
+    this.name = "NoEscalationToCorrectError";
+  }
+}
+
+/** The corrected reason is not one of the six (400 `invalid_reason`). */
+export class InvalidEscalationReasonError extends Error {
+  constructor() {
+    super("reason must be one of plan_wrong, env_broken, flaky_tests, too_complex, undeclared_scope, other");
+    this.name = "InvalidEscalationReasonError";
+  }
+}
+
 /** `PATCH /tasks/:id` naming another source: where a task came from never changes (400 `source_immutable`). */
 export class SourceImmutableError extends Error {
   constructor(id: string) {

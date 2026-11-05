@@ -62,3 +62,11 @@ export function rateLimitWaitMs(resetsAtSeconds: number | null, limits: BuildLim
   const wanted = resetsAtSeconds === null ? 0 : resetsAtSeconds * 1000 - now;
   return Math.min(high * 60_000, Math.max(low * 60_000, wanted));
 }
+
+/** The rows Build's budget counts: all of them, or only those after the last `build.budget_reset` (the stronger model's one run starts a fresh budget, counted from its own start). */
+export function budgetRowsOf<R extends { startedAt: Date }, E extends { kind: string; at: Date }>(runs: readonly R[], events: readonly E[]): { runs: R[]; events: E[] } {
+  const at = events.findLastIndex((e) => e.kind === "build.budget_reset");
+  if (at < 0) return { runs: [...runs], events: [...events] };
+  const since = events[at]!.at;
+  return { runs: runs.filter((r) => r.startedAt >= since), events: events.slice(at + 1) };
+}

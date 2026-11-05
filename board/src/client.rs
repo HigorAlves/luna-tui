@@ -309,6 +309,11 @@ impl Machine {
         self.post(&format!("/tasks/{id}/archive"), json!({ "reason": reason }))
     }
 
+    /// Corrects the reason an escalation was decided with, to one of `ESCALATION_REASONS`; the card stays where it is.
+    pub fn correct_escalation_reason(&self, id: &str, reason: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/escalation-reason"), json!({ "reason": reason }))
+    }
+
     pub fn resume(&self, id: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/resume"), json!({}))
     }

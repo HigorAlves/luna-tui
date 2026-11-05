@@ -2,7 +2,7 @@ import { BuildReport, VerifyReport, findingId } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { buildReportOf, verifyReportOf } from "./reports.ts";
+import { buildProgressOf, buildReportOf, verifyReportOf } from "./reports.ts";
 
 const task = { branch: "luna/x", diffAdded: 12, diffRemoved: 3, testsPassed: 4, testsTotal: 5 } as unknown as TaskRow;
 
@@ -162,5 +162,31 @@ describe("verifyReportOf", () => {
   it("reads only what the machine logged: a malformed detail is ignored", () => {
     const events = [finished("verifying", 1, "passed", { findings: "nope", coverage: 5, results: 3 })];
     expect(verifyReportOf(task, [run("verifying", 1)], events)).toMatchObject({ findings: [], coverageDelta: null });
+  });
+});
+
+describe("buildProgressOf", () => {
+  const limits = { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90, backoff_minutes: [1, 30] as [number, number], regression_full_suite_minutes: 10 };
+
+  it("is null for a card that has not begun to build", () => {
+    expect(buildProgressOf([], [], limits)).toBeNull();
+    expect(buildProgressOf([run("triage", 1)], [event("scenario.red", { scenario: "S1" })], limits)).toBeNull();
+  });
+
+  it("shows each scenario red or green, the budget used against its limits and the last checkpoint, while Build runs", () => {
+    const events = [
+      event("scenario.red", { scenario: "S1" }),
+      event("scenario.red", { scenario: "S2" }),
+      event("build.checkpoint", { sha: "a".repeat(40), follows: "red" }),
+      event("stage.slice.red", { id: 1 }),
+      event("stage.slice.green", { id: 1 }),
+      event("build.checkpoint", { sha: "b".repeat(40), follows: "green" }),
+      event("scenario.green", { scenario: "S1" }),
+      finished("implementing", 1, "failed", {}, { tokens: { input: 900, output: 100 } }),
+    ];
+    const progress = buildProgressOf([run("implementing", 1, { status: "running", endedAt: null as never })], events, limits, new Date("2026-11-01T10:05:00Z"))!;
+    expect(progress.scenarios).toEqual([{ id: "S1", state: "green" }, { id: "S2", state: "red" }]);
+    expect(progress.budget).toMatchObject({ iterations: 2, tokens: 1000, minutes: 5, limits: { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90 } });
+    expect(progress.lastCheckpoint).toMatchObject({ sha: "b".repeat(40), follows: "green" });
   });
 });

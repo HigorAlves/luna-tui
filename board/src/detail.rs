@@ -629,6 +629,10 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
         lines.push(muted(source.detail_line()));
     }
     lines.extend(jira_lines(task, now));
+    if let Some(d) = detail {
+        lines.extend(build_progress_lines(d));
+        lines.extend(escalation_lines(d));
+    }
     if let Some(stage) = &task.resume_to {
         lines.push(muted(format!("Continues  {}", continues_line(&task.state, stage).trim_start_matches("Continues at: "))));
     }
@@ -733,6 +737,63 @@ fn jira_lines(task: &Task, now: u64) -> Vec<Line<'static>> {
 }
 
 /// Plan: the latest triage plan, decided or not, then what happened to it.
+/// Text from a run or a model, made safe for a terminal: every control character (an escape sequence included) becomes a space.
+fn plain(text: &str) -> String {
+    text.chars().map(|ch| if ch.is_control() && ch != '\n' { ' ' } else { ch }).collect()
+}
+
+/// Build while it runs: each scenario red or green, the budget used against its limits and the last checkpoint pushed. Empty without progress.
+fn build_progress_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
+    let Some(p) = &detail.build_progress else { return Vec::new() };
+    let mut lines = vec![Line::default(), heading("Build")];
+    for s in &p.scenarios {
+        let (glyph, color) = if s.state == "green" { ("●", GREEN) } else { ("○", RED) };
+        lines.push(Line::from(vec![Span::from(format!("  {glyph} ")).fg(c(color)), Span::from(format!("{:<8}", truncate(&plain(&s.id), 8))), Span::from(plain(&s.state)).fg(c(color))]));
+    }
+    let b = &p.budget;
+    let tokens = match b.tokens {
+        Some(t) => format!("{t} of {} tokens", b.limits.max_tokens),
+        None => "tokens not counted".to_string(),
+    };
+    lines.push(muted(format!("  budget  {} of {} iterations · {tokens} · {} of {} minutes", b.iterations, b.limits.max_iterations, b.minutes, b.limits.max_minutes)));
+    if let Some(cp) = &p.last_checkpoint {
+        lines.push(muted(format!("  checkpoint  {} after a {}", plain(&cp.sha).chars().take(7).collect::<String>(), plain(&cp.follows))));
+    }
+    lines
+}
+
+/// An escalated ticket: the reason the machine decided, with its confidence and source, the agent's own word, a person's correction, the summary and the output's tail.
+fn escalation_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
+    let Some(gate) = detail.approvals.iter().rev().find(|a| a.kind_or_guess() == "escalated" && a.decision.is_none()) else { return Vec::new() };
+    let decision = &gate.requested["escalationDecision"];
+    let Some(reason) = decision["reason"].as_str() else { return Vec::new() };
+    let mut head = format!("  {}", plain(reason));
+    if let Some(conf) = decision["confidence"].as_f64() {
+        head.push_str(&format!(" · confidence {conf:.2}"));
+    }
+    if let Some(source) = decision["source"].as_str() {
+        head.push_str(&format!(" · by {}", plain(source)));
+    }
+    let mut lines = vec![Line::default(), heading("Why it escalated"), Line::from(head).fg(c(PEACH))];
+    if let Some(agent) = decision["agentReason"].as_str() {
+        lines.push(muted(format!("  the agent said: {}", plain(agent))));
+    }
+    if let Some(to) = detail.events.iter().rev().find(|e| e.kind == "escalation.corrected").and_then(|e| e.payload["to"].as_str()) {
+        lines.push(Line::from(format!("  corrected to {}", plain(to))).fg(c(GREEN)));
+    }
+    if let Some(summary) = gate.requested["summary"].as_str().filter(|s| !s.trim().is_empty()) {
+        lines.push(Line::from(format!("  {}", plain(summary))));
+    }
+    if let Some(tail) = gate.requested["outputTail"].as_str().filter(|s| !s.trim().is_empty()) {
+        lines.push(muted("  last failing output:".into()));
+        let rows: Vec<&str> = tail.lines().collect();
+        for row in rows.iter().skip(rows.len().saturating_sub(12)) {
+            lines.push(muted(format!("    {}", truncate(&plain(row), 200))));
+        }
+    }
+    lines
+}
+
 fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'static>> {
     let approval = detail.and_then(|d| d.latest_approval("awaiting_approval"));
     // A gate that carries triage's outcome came from triage; the plan stage's has a lane or a risk.
@@ -1775,5 +1836,53 @@ mod tests {
         assert!(text.contains("implementing on codex:sol"), "the header names the running stage's engine: {text}");
         let text = render_engines(&task, &detail, &Err("not found".into()));
         assert!(text.contains("this machine does not offer engines"), "{text}");
+    }
+
+    fn lines_text(lines: &[Line<'static>]) -> String {
+        lines.iter().map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>()).collect::<Vec<_>>().join("\n")
+    }
+
+    #[test]
+    fn build_progress_shows_each_scenario_red_or_green_the_budget_against_its_limits_and_the_last_checkpoint() {
+        let mut detail: TaskDetail = serde_json::from_str(&detail_json(TASK)).unwrap();
+        detail.build_progress = Some(serde_json::from_str(r#"{"scenarios":[{"id":"S1","state":"green"},{"id":"S2","state":"red"}],
+            "budget":{"iterations":4,"tokens":175000,"minutes":12.5,"limits":{"max_iterations":15,"max_tokens":2000000,"max_minutes":90}},
+            "lastCheckpoint":{"sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","follows":"green","at":"2026-10-22T10:12:00Z"}}"#).unwrap());
+        let text = lines_text(&build_progress_lines(&detail));
+        assert!(text.contains("S1") && text.contains("green"), "{text}");
+        assert!(text.contains("S2") && text.contains("red"), "{text}");
+        assert!(text.contains("4 of 15 iterations"), "{text}");
+        assert!(text.contains("175000 of 2000000 tokens"), "{text}");
+        assert!(text.contains("12.5 of 90 minutes"), "{text}");
+        assert!(text.contains("bbbbbbb") && text.contains("after a green"), "{text}");
+    }
+
+    #[test]
+    fn build_progress_says_tokens_are_not_counted_and_is_silent_without_progress() {
+        let mut detail: TaskDetail = serde_json::from_str(&detail_json(TASK)).unwrap();
+        assert!(build_progress_lines(&detail).is_empty());
+        detail.build_progress = Some(serde_json::from_str(r#"{"scenarios":[],"budget":{"iterations":1,"tokens":null,"minutes":1.0,"limits":{"max_iterations":15,"max_tokens":2000000,"max_minutes":90}},"lastCheckpoint":null}"#).unwrap());
+        assert!(lines_text(&build_progress_lines(&detail)).contains("tokens not counted"));
+    }
+
+    #[test]
+    fn an_escalated_gate_shows_the_reason_its_confidence_the_summary_and_the_outputs_tail_with_control_characters_taken_out() {
+        let task = TASK.replace("\"state\":\"implementing\"", "\"state\":\"escalated\"");
+        let mut detail: TaskDetail = serde_json::from_str(&detail_json(&task)).unwrap();
+        detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalation":"flaky_tests","escalationDecision":{"reason":"flaky_tests","confidence":0.82,"source":"decision","agentReason":"other"},"summary":"stopped at slice 2","outputTail":"FAIL a.test.ts\u001b[31m red \u001b]0;title\u0007\nexpected 3"},"decision":null}"#).unwrap());
+        let text = lines_text(&escalation_lines(&detail));
+        assert!(text.contains("flaky_tests") && text.contains("0.82") && text.contains("decision"), "{text}");
+        assert!(text.contains("agent said: other"), "{text}");
+        assert!(text.contains("stopped at slice 2") && text.contains("expected 3"), "{text}");
+        assert!(!text.contains('\u{1b}') && !text.contains('\u{7}'), "no control character reaches the terminal");
+    }
+
+    #[test]
+    fn a_corrected_reason_is_shown_beside_the_decided_one() {
+        let task = TASK.replace("\"state\":\"implementing\"", "\"state\":\"escalated\"");
+        let mut detail: TaskDetail = serde_json::from_str(&detail_json(&task)).unwrap();
+        detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalationDecision":{"reason":"flaky_tests","confidence":0.8,"source":"decision","agentReason":null},"summary":"s","outputTail":"x"},"decision":null}"#).unwrap());
+        detail.events.push(serde_json::from_str(r#"{"taskId":"abcdef123456","kind":"escalation.corrected","payload":{"from":"flaky_tests","to":"env_broken"},"at":"2026-10-22T10:20:00Z"}"#).unwrap());
+        assert!(lines_text(&escalation_lines(&detail)).contains("corrected to env_broken"));
     }
 }
