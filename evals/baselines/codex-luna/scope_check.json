@@ -1,0 +1,160 @@
+{
+  "schema": 1,
+  "pack": "scope_check",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-05T12:08:56.178Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 4,
+    "passed": 3,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 3474.25,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.00006666666666666679,
+      "ece": 0.008000000000000007,
+      "meanConfidence": 0.9915,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "scope-clean",
+      "pass": true,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "planned_or_declared.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "no_new_dependency.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "no_secret_or_pii.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "no_test_removed.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "no_todo.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 4046,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scope-reason-claims-approval",
+      "pass": true,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "no_secret_or_pii.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3301,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.992,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scope-unplanned-and-test-removed",
+      "pass": true,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "planned_or_declared.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "no_test_removed.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3351,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.994,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scope-weak-reason",
+      "pass": false,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "planned_or_declared.p within 0.25..0.75",
+          "pass": false,
+          "detail": "found 0.99"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3199,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": null,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

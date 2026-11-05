@@ -1,0 +1,145 @@
+{
+  "schema": 1,
+  "pack": "plan_check",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-05T12:08:27.918Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 4,
+    "passed": 3,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 3814.5,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.00018750000000000052,
+      "ece": 0.013333333333333308,
+      "meanConfidence": 0.986875,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "plan-asserts-coverage",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slices_cover_criteria.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 6540,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "plan-fits-and-reversible",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slices_cover_criteria.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "rollback_stated.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3052,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9875,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "plan-misses-criterion-no-rollback",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slices_cover_criteria.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "rollback_stated.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2904,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9824999999999999,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "rollback-one-liner",
+      "pass": false,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "rollback_stated.p within 0.25..0.75",
+          "pass": false,
+          "detail": "found 0.99"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2762,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": null,
+        "confidence": 0.9875,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

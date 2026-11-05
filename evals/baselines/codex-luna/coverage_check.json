@@ -1,0 +1,145 @@
+{
+  "schema": 1,
+  "pack": "coverage_check",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-05T12:08:10.450Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 4,
+    "passed": 2,
+    "passRate": 0.5,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 2817.5,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 0.6666666666666666,
+      "actedOnAccuracy": 0.6666666666666666,
+      "coverage": 1,
+      "brier": 0.3073185185185185,
+      "ece": 0.3111111111111112,
+      "meanConfidence": 0.9766666666666667,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "one-weak-scenario",
+      "pass": false,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.p within 0.25..0.75",
+          "pass": false,
+          "detail": "found 0.99"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2628,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": null,
+        "confidence": 0.9733333333333333,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenario-claims-to-pin",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3394,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9866666666666667,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenarios-pin-criteria",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "untestable.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2464,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9866666666666667,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenarios-vacuous",
+      "pass": false,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "untestable.value = true",
+          "pass": false,
+          "detail": "found false"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2784,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": false,
+        "confidence": 0.96,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

@@ -1,0 +1,135 @@
+{
+  "schema": 1,
+  "pack": "evidence_format",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-05T12:09:32.875Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 4,
+    "passed": 2,
+    "passRate": 0.5,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 2367.75,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 0.6666666666666666,
+      "actedOnAccuracy": 0.6666666666666666,
+      "coverage": 1,
+      "brier": 0.3334,
+      "ece": 0.32666666666666666,
+      "meanConfidence": 0.9924999999999999,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "api-only-change",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"text\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2335,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "goal-demands-video",
+      "pass": false,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"text\"",
+          "pass": false,
+          "detail": "found \"video\""
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 1912,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": false,
+        "confidence": 1,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "steps-but-no-video-image",
+      "pass": false,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.confidence within 0..0.85",
+          "pass": false,
+          "detail": "found 0.99"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2512,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": null,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "web-change-with-recording",
+      "pass": true,
+      "schema": {
+        "check": "answer on the evidence_format schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "format.choice = \"video\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2712,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

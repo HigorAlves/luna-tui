@@ -2,18 +2,29 @@
   "schema": 1,
   "pack": "triage_signals",
   "engine": "jev",
-  "judge": "claude:opus",
-  "at": "2026-11-04T12:41:36.782Z",
+  "judge": null,
+  "at": "2026-11-05T12:07:17.385Z",
   "model": "typesafe-ai/jev",
   "summary": {
-    "cases": 3,
-    "passed": 3,
+    "cases": 5,
+    "passed": 5,
     "passRate": 1,
-    "meanJudgeScore": 0.8399999999999999,
+    "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 590.6666666666666,
-    "costUsd": 0.00013415,
-    "judgeCostUsd": 0.091313
+    "meanDurationMs": 437.2,
+    "costUsd": 0.0002189,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 5,
+      "labelled": 1,
+      "accuracy": 1,
+      "actedOnAccuracy": null,
+      "coverage": 0,
+      "brier": 0.08776406249999995,
+      "ece": 0.2962499999999999,
+      "meanConfidence": 0.7380000000000001,
+      "overconfident": 0
+    }
   },
   "cases": [
     {
@@ -66,23 +77,42 @@
           "detail": null
         }
       ],
-      "judge": {
-        "score": 0.85,
-        "pass": true,
-        "reasons": [
-          "urgency.score 1.32 (confidence 0.47) is at the low end of normal. The rubric asks for normal to high for a crash someone hits, so this undersells it slightly.",
-          "size.score 0.92: small fits the one-function fix with its test, but it is near the top of the allowed band.",
-          "risk.score 1.11 is low, which fits an isolated Rust change with a test.",
-          "kind bug and area board, both at confidence 1, match the issue text, its board label and the pr_view.rs path. High confidence is warranted here.",
-          "ready true (p 0.92) is correct because the issue gives steps, actual and expected behaviour.",
-          "archive false (p 0.09) with reason none is correct: this is real work, not a duplicate and not stale."
-        ],
-        "costUsd": 0.0437293
-      },
+      "judge": null,
       "turns": 1,
-      "durationMs": 913,
+      "durationMs": 632,
       "costUsd": 0.0000454,
-      "model": "typesafe-ai/jev"
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": null,
+        "confidence": 0.89125,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "issue-orders-the-labels",
+      "pass": true,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "archive.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 418,
+      "costUsd": 0.00004292,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.7037500000000001,
+        "verdict": "ask"
+      }
     },
     {
       "id": "judge-engine-question",
@@ -124,23 +154,47 @@
           "detail": null
         }
       ],
-      "judge": {
-        "score": 0.72,
-        "pass": true,
-        "reasons": [
-          "risk.score 1.44 only just passes the 0–1.5 check and doesn't match the rubric's 'none or low' for a question that changes no code. The low confidence (0.22) shows the model was unsure.",
-          "area.choice 'machine' is neither of the rubric's two plausible areas (factory or contracts). The low confidence (0.27) is honest, but the pick itself is off.",
-          "urgency.score 1.15 is high-ish for an issue nothing is waiting on, but the rubric still counts it as low urgency.",
-          "kind 'question' at confidence 1 is correct: the issue asks for a decision and explicitly asks for no code change.",
-          "ready=false (p 0.19) is correct: there are no acceptance criteria an agent could verify.",
-          "archive=false with archive_reason 'none' is correct: this is a real, current question, not a duplicate and not stale."
-        ],
-        "costUsd": 0.025817899999999998
-      },
+      "judge": null,
       "turns": 1,
-      "durationMs": 407,
+      "durationMs": 374,
       "costUsd": 0.00004343,
-      "model": "typesafe-ai/jev"
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": null,
+        "confidence": 0.64375,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "vague-slowness",
+      "pass": true,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "kind.confidence within 0..0.85",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "ready.p within 0..0.4",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 366,
+      "costUsd": 0.00004183,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": null,
+        "confidence": 0.5650000000000001,
+        "verdict": "ask"
+      }
     },
     {
       "id": "zod-upgrade-contracts",
@@ -192,22 +246,16 @@
           "detail": null
         }
       ],
-      "judge": {
-        "score": 0.95,
-        "pass": true,
-        "reasons": [
-          "risk.score 1.37 sits at the low end of the medium band; the low confidence (0.64) fits, but shared types every package imports could justify a slightly higher score",
-          "kind chore / area contracts are correct: it is a dependency bump with call-site switches and no behaviour change, in contracts/src",
-          "ready true (p 0.94) is right: the issue names its done condition (contracts test and typecheck pass with no deprecation warnings)",
-          "size 1.96 fits a small-to-medium change: one package.json bump plus a handful of schemas in stage.ts and api.ts",
-          "urgency 0.64 is right for a deprecation with no breakage; archive false with reason none is right for real, current work"
-        ],
-        "costUsd": 0.021765800000000002
-      },
+      "judge": null,
       "turns": 1,
-      "durationMs": 452,
+      "durationMs": 396,
       "costUsd": 0.00004532,
-      "model": "typesafe-ai/jev"
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": null,
+        "confidence": 0.88625,
+        "verdict": "flag"
+      }
     }
   ]
 }

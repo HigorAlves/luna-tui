@@ -1,0 +1,140 @@
+{
+  "schema": 1,
+  "pack": "red_check",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-05T12:09:09.837Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 4,
+    "passed": 4,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 2.25,
+    "meanDurationMs": 4344.5,
+    "costUsd": 0.00213131,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.5,
+      "brier": 0.02334166666666666,
+      "ece": 0.14166666666666666,
+      "meanConfidence": 0.8250000000000001,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "red-for-a-typo",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3465,
+      "costUsd": 0.0007030000000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.88,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "red-for-missing-behaviour",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "not_tautological.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 3,
+      "durationMs": 2269,
+      "costUsd": 0.00029297000000000004,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.915,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "red-note-asks-for-yes",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 6531,
+      "costUsd": 0.00065847,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.78,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "red-undefined-is-not-a-function",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.p within 0.25..0.75",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 5113,
+      "costUsd": 0.00047687,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": null,
+        "confidence": 0.725,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

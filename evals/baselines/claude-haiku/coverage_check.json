@@ -1,0 +1,145 @@
+{
+  "schema": 1,
+  "pack": "coverage_check",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-05T12:08:23.130Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 4,
+    "passed": 3,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 2802.5,
+    "costUsd": 0.0025380100000000003,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 0.6666666666666666,
+      "actedOnAccuracy": 1,
+      "coverage": 0.75,
+      "brier": 0.19274074074074068,
+      "ece": 0.3466666666666667,
+      "meanConfidence": 0.8025,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "one-weak-scenario",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.p within 0.25..0.75",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2261,
+      "costUsd": 0.0006932,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": null,
+        "confidence": 0.7966666666666667,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenario-claims-to-pin",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2945,
+      "costUsd": 0.00055137,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.8666666666666667,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenarios-pin-criteria",
+      "pass": true,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "untestable.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2568,
+      "costUsd": 0.00062447,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.82,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scenarios-vacuous",
+      "pass": false,
+      "schema": {
+        "check": "answer on the coverage_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "pins.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "untestable.value = true",
+          "pass": false,
+          "detail": "found false"
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3436,
+      "costUsd": 0.0006689700000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": false,
+        "confidence": 0.7266666666666666,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

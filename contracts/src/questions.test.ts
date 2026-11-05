@@ -1,5 +1,6 @@
 // Decision packs: the questions are data, the answer schema is derived from them, and
 // triage_signals asks what intake needs to label and route an issue.
+import { decisionEngines } from "./decision-defaults.ts";
 import { describe, expect, it } from "vitest";
 
 import { ENGINES, PACKS, PACK_LIMITS, PlanContext, StageInput, answerSchema, applyPolicy, classificationLine, classificationOf, coverageGaps, riskLevelOf } from "./index.ts";
@@ -53,7 +54,7 @@ describe("the triage_signals pack", () => {
   });
 
   it("runs on Jev by default and on a small Claude or Codex model when Jev is absent", () => {
-    expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
+    expect(pack.engines).toEqual({ ...decisionEngines(pack.id), allowed: ["jev", "claude:haiku", "codex:luna"] });
   });
 
   it("asks the kind, the area, whether it is ready and its size, and answers in the schema derived from them", () => {
@@ -105,7 +106,7 @@ describe("the plan stage's decision packs", () => {
     expect(Object.keys(PACKS.scope_check.questions)).toEqual(["planned_or_declared", "no_new_dependency", "no_secret_or_pii", "no_test_removed", "no_todo"]);
     for (const q of Object.values(PACKS.scope_check.questions)) expect(q.type).toBe("yesno");
     for (const pack of [PACKS.red_check, PACKS.scope_check]) {
-      expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
+      expect(pack.engines).toEqual({ ...decisionEngines(pack.id), allowed: ["jev", "claude:haiku", "codex:luna"] });
       expect(Object.keys(pack.policy).sort()).toEqual(Object.keys(pack.questions).sort());
       expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: 1, timeoutMs: pack.timeoutMs, writable: false });
     }
@@ -120,7 +121,7 @@ describe("the plan stage's decision packs", () => {
     expect(cause.questions.cause).toMatchObject({ type: "choice", criteria: { product_bug: expect.any(String), test_bug: expect.any(String), env_flake: expect.any(String) } });
     for (const pack of [classify, cause]) {
       expect(pack.kind).toBe("decision");
-      expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
+      expect(pack.engines).toEqual({ ...decisionEngines(pack.id), allowed: ["jev", "claude:haiku", "codex:luna"] });
       expect(Object.keys(pack.policy).sort()).toEqual(Object.keys(pack.questions).sort());
       expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: 1, timeoutMs: pack.timeoutMs, writable: false });
     }
@@ -131,7 +132,7 @@ describe("the plan stage's decision packs", () => {
     expect(pack.kind).toBe("decision");
     expect(Object.keys(pack.questions)).toEqual(["format"]);
     expect(pack.questions.format).toMatchObject({ type: "choice", criteria: { video: expect.stringContaining("recording"), captures: expect.any(String), text: expect.stringContaining("API") } });
-    expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
+    expect(pack.engines).toEqual({ ...decisionEngines(pack.id), allowed: ["jev", "claude:haiku", "codex:luna"] });
     expect(Object.keys(pack.policy)).toEqual(["format"]);
     expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: 1, timeoutMs: pack.timeoutMs, writable: false });
   });
@@ -152,7 +153,7 @@ describe("the plan stage's decision packs", () => {
       const q = pack.questions[question]!;
       expect(q.type).toBe("choice");
       expect(Object.keys((q as { criteria: Record<string, string> }).criteria)).toEqual(labels);
-      expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
+      expect(pack.engines).toEqual({ ...decisionEngines(pack.id), allowed: ["jev", "claude:haiku", "codex:luna"] });
       expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: 1, timeoutMs: pack.timeoutMs, writable: false });
     }
     expect(packs).toHaveProperty("worth_learning");
@@ -163,7 +164,7 @@ describe("the plan stage's decision packs", () => {
 
   it("all three run on Jev by default and a small Claude or Codex model when it is absent, with a bar per question", () => {
     for (const pack of [PACKS.risk_score, PACKS.coverage_check, PACKS.plan_check]) {
-      expect(pack.engines).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
+      expect(pack.engines).toEqual({ ...decisionEngines(pack.id), allowed: ["jev", "claude:haiku", "codex:luna"] });
       expect(Object.keys(pack.policy).sort()).toEqual(Object.keys(pack.questions).sort());
       expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: 1, timeoutMs: pack.timeoutMs, writable: false });
     }

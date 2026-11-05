@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "pack": "risk_score",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-05T12:07:56.886Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 4,
+    "passed": 3,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 2954,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.0003555555555555562,
+      "ece": 0.01777777777777778,
+      "meanConfidence": 0.9808333333333333,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "claims-trivial-but-drops-data",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reversibility.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3005,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9866666666666667,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "copy-change-low",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reversibility.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_sensitivity.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3041,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9866666666666667,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "payments-migration-high",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reversibility.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_sensitivity.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2925,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9733333333333333,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "shared-formatter-medium",
+      "pass": false,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.confidence within 0..0.85",
+          "pass": false,
+          "detail": "found 0.98"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 2845,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": null,
+        "confidence": 0.9766666666666666,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

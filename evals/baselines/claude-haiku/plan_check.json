@@ -1,0 +1,145 @@
+{
+  "schema": 1,
+  "pack": "plan_check",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-05T12:08:44.330Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 4,
+    "passed": 3,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 3286.5,
+    "costUsd": 0.00297041,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.014518750000000004,
+      "ece": 0.11916666666666664,
+      "meanConfidence": 0.8775000000000001,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "plan-asserts-coverage",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slices_cover_criteria.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3199,
+      "costUsd": 0.0008896,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.8624999999999999,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "plan-fits-and-reversible",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slices_cover_criteria.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "rollback_stated.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2400,
+      "costUsd": 0.00069377,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.905,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "plan-misses-criterion-no-rollback",
+      "pass": true,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slices_cover_criteria.value = false",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "rollback_stated.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2456,
+      "costUsd": 0.0006888700000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.875,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "rollback-one-liner",
+      "pass": false,
+      "schema": {
+        "check": "answer on the plan_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "rollback_stated.p within 0.25..0.75",
+          "pass": false,
+          "detail": "found 0.8"
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 5091,
+      "costUsd": 0.00069817,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": null,
+        "confidence": 0.8675,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

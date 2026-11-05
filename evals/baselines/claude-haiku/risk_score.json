@@ -1,0 +1,155 @@
+{
+  "schema": 1,
+  "pack": "risk_score",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-05T12:08:03.241Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 4,
+    "passed": 3,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 3522,
+    "costUsd": 0.0026344100000000002,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 0.6666666666666666,
+      "actedOnAccuracy": 0.6666666666666666,
+      "coverage": 0.75,
+      "brier": 0.2548296296296296,
+      "ece": 0.33555555555555544,
+      "meanConfidence": 0.8141666666666666,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "claims-trivial-but-drops-data",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reversibility.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3563,
+      "costUsd": 0.0009344,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.7666666666666666,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "copy-change-low",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "reversibility.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_sensitivity.score within -0.5..0.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2156,
+      "costUsd": 0.00029007,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9333333333333332,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "payments-migration-high",
+      "pass": false,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.score within 1.5..2.5",
+          "pass": false,
+          "detail": "found 1.2"
+        },
+        {
+          "check": "reversibility.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "data_sensitivity.score within 1.5..2.5",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 4283,
+      "costUsd": 0.00071887,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": false,
+        "confidence": 0.8399999999999999,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "shared-formatter-medium",
+      "pass": true,
+      "schema": {
+        "check": "answer on the risk_score schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "blast_radius.confidence within 0..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 4086,
+      "costUsd": 0.00069107,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": null,
+        "confidence": 0.7166666666666667,
+        "verdict": "flag"
+      }
+    }
+  ]
+}

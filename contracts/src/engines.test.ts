@@ -1,6 +1,7 @@
 // The catalog and the engines checked against the packs: every engine a pack may run on exists,
 // names a catalog model that can serve the pack and the pack's effort, and is not retired; and
 // no source file outside the catalog names a provider's model ID.
+import { decisionEngines } from "./decision-defaults.ts";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -149,7 +150,9 @@ describe("the engines each pack may run on", () => {
 
   it("keeps today's models as the defaults", () => {
     const defaults = Object.fromEntries(Object.values(PACKS).map((p) => [p.id, p.engines.default]));
-    expect(defaults).toMatchObject({ setup: "claude:opus", triage: "claude:opus", implementing: "claude:sonnet", verifying: "claude:opus", slack_triage: "claude:haiku", jira_intake: "claude:sonnet", triage_signals: "jev", risk_score: "jev", coverage_check: "jev", plan_check: "jev", finding_classify: "jev", e2e_failure_cause: "jev", evidence_format: "jev", event_class: "jev", comment_intent: "jev", fix_scope: "jev", evidence_valid: "jev", worth_learning: "jev", pr_reply: "claude:haiku", code_map: "claude:haiku" });
+    // A decision pack's default is measured (contracts/src/decision-defaults.json, written by `pnpm eval defaults`), not pinned here.
+    const measured = Object.fromEntries(["triage_signals", "risk_score", "coverage_check", "plan_check", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning"].map((id) => [id, decisionEngines(id).default]));
+    expect(defaults).toMatchObject({ setup: "claude:opus", triage: "claude:opus", implementing: "claude:sonnet", verifying: "claude:opus", slack_triage: "claude:haiku", jira_intake: "claude:sonnet", ...measured, pr_reply: "claude:haiku", code_map: "claude:haiku" });
   });
 });
 

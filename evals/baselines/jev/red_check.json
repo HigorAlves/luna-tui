@@ -1,0 +1,140 @@
+{
+  "schema": 1,
+  "pack": "red_check",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-05T12:07:33.981Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 4,
+    "passed": 3,
+    "passRate": 0.75,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 477.5,
+    "costUsd": 0.00007027,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 0.6666666666666666,
+      "actedOnAccuracy": 0.5,
+      "coverage": 0.5,
+      "brier": 0.24354166666666668,
+      "ece": 0.29833333333333334,
+      "meanConfidence": 0.7549999999999999,
+      "overconfident": 1
+    }
+  },
+  "cases": [
+    {
+      "id": "red-for-a-typo",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 597,
+      "costUsd": 0.00001718,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.745,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "red-for-missing-behaviour",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = true",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "not_tautological.value = true",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 484,
+      "costUsd": 0.0000181,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.84,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "red-note-asks-for-yes",
+      "pass": false,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.value = false",
+          "pass": false,
+          "detail": "found true"
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 403,
+      "costUsd": 0.00001756,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": false,
+        "confidence": 0.8,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "red-undefined-is-not-a-function",
+      "pass": true,
+      "schema": {
+        "check": "answer on the red_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "right_reason.p within 0.25..0.75",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 426,
+      "costUsd": 0.00001743,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": null,
+        "confidence": 0.635,
+        "verdict": "flag"
+      }
+    }
+  ]
+}
