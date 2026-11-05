@@ -90,6 +90,16 @@ export const Finding = z.object({
   body: z.string(),
   suggestion_code: z.string().nullable().optional(),
   confidence: z.number().min(0).max(1),
+  // v2.2, all optional: a finding written before the wave has none of them (see finding.ts).
+  id: z.string().optional(),
+  category: z.enum(["correctness", "missing_criterion", "security", "error_handling", "convention", "performance"]).optional(),
+  criterion_ref: z.string().nullable().optional(),
+  suggested_fix: z.string().nullable().optional(),
+  description: z.string().optional(),
+  /** How the finding ended: fixed in a commit, kept by the author, or dismissed by a person. */
+  resolution: z.object({ status: z.enum(["fixed", "kept", "dismissed"]), by: z.string(), commit: z.string().optional() }).optional(),
+  /** Ids of the duplicates folded into this finding by `mergeDuplicateFindings`. */
+  merged: z.array(z.string()).optional(),
 });
 export type Finding = z.infer<typeof Finding>;
 
