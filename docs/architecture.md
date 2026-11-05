@@ -31,15 +31,15 @@ The machine is one service for every repo you point a task at, not one per repo:
 | Column | Task states |
 |---|---|
 | Intake | `draft`, `setup`, `awaiting_setup` |
-| Triage | `triage`, `awaiting_answers`, `awaiting_approval` |
-| Approved | `test_design`, `awaiting_test_check` |
-| Build | `implementing`, `escalated`, `paused_rate_limit` |
+| Triage | `triage`, `awaiting_answers` |
+| Plan | `test_design`, `awaiting_test_check`, `awaiting_approval` |
+| Build | `implementing`, `paused_rate_limit`, `escalated` |
 | Verify | `verifying`, `e2e`, `delivering`, `ci_watch` |
 | Evidence | `evidence` |
 | Ship | `awaiting_ship`, `shipping`, `reviewing_memory` |
 | Done | `closed`, `archived` |
 
-The Plan stage runs in `test_design`, so a task shows in Approved while it plans; its one gate is `awaiting_approval` (Triage). `awaiting_test_check` stays a valid state (older tasks sit there) but a feature task no longer reaches it: the scenarios ride on `awaiting_approval`'s `requested.cases`, where `PATCH /tasks/:id/cases` edits them too.
+The Plan stage runs in `test_design`, so a task shows in Plan while it plans, and its one gate, `awaiting_approval`, is in the same column (the columns are the diagram's seven stages; a card waiting on its triage questions stays in Triage). PR tasks keep their place: `reviewing` under Verify, `addressing` under Build. `awaiting_test_check` stays a valid state (older tasks sit there) but a feature task no longer reaches it: the scenarios ride on `awaiting_approval`'s `requested.cases`, where `PATCH /tasks/:id/cases` edits them too.
 
 A task on a repo with no `luna.yaml` runs the `setup` stage first: the setup pack reads the checkout read-only and proposes the file, the machine proves every proposed check once with the proposed services beside it, and the `awaiting_setup` gate shows you the file and the proof. Approving writes `luna.yaml` into the checkout and the task goes on to triage; a `:setup <repo>` task (route `setup`) closes instead. Sending it back with a note re-runs setup with the note as guidance. See [configuration](configuration.md).
 
@@ -117,9 +117,9 @@ stateDiagram-v2
   draft: draft · Intake
   triage: triage · Triage · claude:opus ⇄ codex:sol
   awaiting_answers: awaiting_answers · Triage · you answer
-  awaiting_approval: awaiting_approval · Triage · you approve the plan (two names on High risk), or confirm a reply or an archive
-  test_design: test_design · Approved · the plan stage: planner claude:opus, test design claude:sonnet, three decisions
-  awaiting_test_check: awaiting_test_check · Approved · legacy gate, not reached on the feature route
+  awaiting_approval: awaiting_approval · Plan · you approve the plan (two names on High risk), or confirm a reply or an archive
+  test_design: test_design · Plan · the plan stage: planner claude:opus, test design claude:sonnet, three decisions
+  awaiting_test_check: awaiting_test_check · Plan · legacy gate, not reached on the feature route
   implementing: implementing · Build · claude:sonnet
   verifying: verifying · Verify · claude:opus + second opinion on codex:sol
   e2e: e2e · Verify · claude:sonnet

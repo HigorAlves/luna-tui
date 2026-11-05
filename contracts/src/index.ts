@@ -24,11 +24,11 @@ export * from "./github.ts";
 export * from "./slack.ts";
 export * from "./jira.ts";
 
-/** Board columns, named after the harness stages. Same order as the Rust board. */
+/** Board columns: the diagram's seven stages, then Done. Same order as the Rust board, which reads the column of each task from `COLUMN_OF` through the API. */
 export const COLUMNS = [
   "Intake",
   "Triage",
-  "Approved",
+  "Plan",
   "Build",
   "Verify",
   "Evidence",
@@ -67,16 +67,16 @@ export const TaskState = z.enum([
 ]);
 export type TaskState = z.infer<typeof TaskState>;
 
-/** The board column each task state is shown in. */
+/** The board column each task state is shown in: the one table; the board and the docs follow it. PR-task states keep their place. */
 export const COLUMN_OF: Record<TaskState, Column> = {
   draft: "Intake",
   setup: "Intake",
   awaiting_setup: "Intake",
   triage: "Triage",
   awaiting_answers: "Triage",
-  awaiting_approval: "Triage",
-  test_design: "Approved",
-  awaiting_test_check: "Approved",
+  awaiting_approval: "Plan",
+  test_design: "Plan",
+  awaiting_test_check: "Plan",
   implementing: "Build",
   escalated: "Build",
   paused_rate_limit: "Build",

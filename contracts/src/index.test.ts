@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { DecisionInput, EditCasesInput, EditPlanInput } from "./api.ts";
+import { readFileSync } from "node:fs";
 import { COLUMNS, COLUMN_OF, RUNNING, TERMINAL, TaskState, WAITING_ON_USER, isTerminal } from "./index.ts";
 
 describe("task states", () => {
@@ -15,6 +16,32 @@ describe("task states", () => {
     for (const state of TaskState.options) {
       expect(COLUMNS).toContain(COLUMN_OF[state]);
     }
+  });
+
+  it("draws the columns as the diagram's seven stages, then Done", () => {
+    expect([...COLUMNS]).toEqual(["Intake", "Triage", "Plan", "Build", "Verify", "Evidence", "Ship", "Done"]);
+    const states = (column: string) => TaskState.options.filter((s) => COLUMN_OF[s] === column);
+    expect(states("Intake")).toEqual(["draft", "setup", "awaiting_setup"]);
+    expect(states("Triage")).toEqual(["triage", "awaiting_answers"]);
+    expect(states("Plan")).toEqual(["awaiting_approval", "test_design", "awaiting_test_check"].sort((a, b) => TaskState.options.indexOf(a as never) - TaskState.options.indexOf(b as never)));
+    expect(states("Build")).toEqual(expect.arrayContaining(["implementing", "paused_rate_limit", "escalated"]));
+    expect(states("Verify")).toEqual(expect.arrayContaining(["verifying", "e2e", "delivering", "ci_watch"]));
+    expect(states("Evidence")).toEqual(["evidence"]);
+    expect(states("Ship")).toEqual(expect.arrayContaining(["awaiting_ship", "shipping", "reviewing_memory"]));
+    expect(states("Done")).toEqual(["closed", "archived"]);
+  });
+
+  it("keeps the PR tasks where they were: reviewing under Verify, addressing under Build", () => {
+    expect(COLUMN_OF.reviewing).toBe("Verify");
+    expect(COLUMN_OF.addressing).toBe("Build");
+  });
+
+  it("is the one table the board reads: the Rust board names the same columns in the same order", () => {
+    const board = readFileSync(new URL("../../board/src/model.rs", import.meta.url), "utf8");
+    const named = /pub const COLUMNS: \[&str; (\d+)\] =\s*\[([^\]]*)\]/.exec(board);
+    expect(named).not.toBeNull();
+    expect(Number(named![1])).toBe(COLUMNS.length);
+    expect([...named![2]!.matchAll(/"([^"]+)"/g)].map((m) => m[1])).toEqual([...COLUMNS]);
   });
 
   it("keeps every board column reachable", () => {

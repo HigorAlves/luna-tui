@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 use serde_json::Value;
 
-/// Board columns, named after the pipeline stages. Same order as the machine's contracts.
+/// Board columns: the diagram's seven stages, then Done. Same order as the machine's contracts (`COLUMNS`; a task's column is `COLUMN_OF[state]` there).
 pub const COLUMNS: [&str; 8] =
-    ["Intake", "Triage", "Approved", "Build", "Verify", "Evidence", "Ship", "Done"];
+    ["Intake", "Triage", "Plan", "Build", "Verify", "Evidence", "Ship", "Done"];
 
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq)]
 pub struct Diff {
@@ -2356,6 +2356,7 @@ pub(crate) mod tests {
     #[test]
     fn there_is_no_backlog_column_and_a_new_ticket_sits_in_intake() {
         assert_eq!(COLUMNS.len(), 8);
+        assert_eq!(COLUMNS, ["Intake", "Triage", "Plan", "Build", "Verify", "Evidence", "Ship", "Done"], "the diagram's seven stages, then Done");
         assert_eq!(COLUMNS[0], "Intake");
         let task: Task = serde_json::from_str(&task_json("")).unwrap();
         assert_eq!(task.column_index(), 0);
