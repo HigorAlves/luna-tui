@@ -30,7 +30,7 @@ const cased = (...criteria: Array<string | null>): StageResult => ({
 });
 
 const good = {
-  risk_score: { blast_radius: { score: 0, confidence: 0.9 }, reversibility: { score: 0, confidence: 0.9 }, data_sensitivity: { score: 0, confidence: 0.9 } },
+  risk_score: { blast_radius: { score: 0, confidence: 0.9 }, reversibility: { score: 0, confidence: 0.9 }, data_sensitivity: { score: 0, confidence: 0.9 }, complexity: { choice: "S", confidence: 0.9 } },
   coverage_check: { pins: { value: true, p: 0.95 }, redundancy: { score: 0, confidence: 0.9 }, untestable: { value: false, p: 0.05 } },
   plan_check: { fits_record: { score: 2, confidence: 0.9 }, slices_cover_criteria: { value: true, p: 0.95 }, rollback_stated: { value: true, p: 0.95 }, touchpoints_in_map: { value: true, p: 0.95 } },
 };
@@ -96,7 +96,7 @@ describe("planStage's code map", () => {
       const { run, calls, decided } = setup({}, over);
       const result = await run(context());
       expect(calls.map((c) => c.pack)).toEqual(["plan", "test_design"]);
-      expect(calls[0]!.plan).toBeUndefined();
+      expect(calls[0]!.plan?.map ?? null).toBeNull();
       for (const d of decided) expect(d.plan.map ?? null).toBeNull();
       expect(result.detail).toMatchObject({ map: null });
     }
@@ -139,7 +139,7 @@ describe("planStage", () => {
     const { run, calls, decided } = setup();
     const result = await run(context());
     expect(calls.map((c) => c.pack)).toEqual(["plan", "test_design"]);
-    expect(decided.map((d) => d.pack)).toEqual(["coverage_check", "plan_check", "risk_score"]);
+    expect(decided.map((d) => d.pack)).toEqual(["risk_score", "coverage_check", "plan_check"]);
     expect(result.outcome).toBe("pass");
     expect(result.detail).toMatchObject({
       brief: "Guard the empty list", criteria: ["no panic", "stays selected"], assumptions: ["board only"], slices, rollback: "revert the commit",
@@ -166,8 +166,29 @@ describe("planStage", () => {
     await run(context());
     expect(calls[1]!.plan).toMatchObject({ record, brief: "Guard the empty list", criteria: ["no panic", "stays selected"], slices, rollback: "revert the commit", round: 1 });
     expect(calls[1]!.plan).not.toHaveProperty("gaps");
-    for (const d of decided) expect(d.plan).toMatchObject({ record, brief: "Guard the empty list", slices, cases: [{ title: "case 0" }, { title: "case 1" }] });
+    for (const d of decided.filter((k) => k.pack !== "risk_score")) expect(d.plan).toMatchObject({ record, brief: "Guard the empty list", slices, cases: [{ title: "case 0" }, { title: "case 1" }] });
     expect(decided[0]!.repo).toBe("/repo");
+  });
+
+  it("scores the risk before the plan, from the record and the code map alone, and writes the plan knowing it", async () => {
+    const answer = { blast_radius: { score: 2, confidence: 0.9 }, reversibility: { score: 2, confidence: 0.9 }, data_sensitivity: { score: 0, confidence: 0.9 }, complexity: { choice: "L", confidence: 0.8 } };
+    const { run, calls, decided } = setup({ answers: { risk_score: [answer] } }, withGraph);
+    const result = await run(context());
+    // The order is the code map, risk_score, the plan, the scenarios; risk_score needs no plan.
+    expect(calls.map((c) => c.pack)).toEqual(["code_map", "plan", "test_design"]);
+    expect(decided[0]).toMatchObject({ pack: "risk_score", plan: { record, map: theMap, slices: [], brief: "" } });
+    const risk = { level: "medium", product: 9, scores: { blast_radius: 2, reversibility: 2, data_sensitivity: 0 }, complexity: "L" };
+    expect(calls[1]!.plan).toMatchObject({ record, risk });
+    expect(calls[2]!.plan).toMatchObject({ risk });
+    expect(result.detail).toMatchObject({ risk });
+  });
+
+  it("keeps the risk on the planner's re-runs and hands it to the plan check", async () => {
+    const { run, calls, decided } = setup({ answers: { plan_check: [bad, good.plan_check] } });
+    await run(context());
+    for (const c of calls.filter((k) => k.pack === "plan")) expect(c.plan).toMatchObject({ risk: { level: "medium", product: 1 } });
+    for (const d of decided.filter((k) => k.pack !== "risk_score")) expect(d.plan).toMatchObject({ risk: { level: "medium" } });
+    expect(decided.filter((d) => d.pack === "risk_score")).toHaveLength(1);
   });
 
   it("re-runs the test designer with the criteria no case names, until they are all covered", async () => {
@@ -219,14 +240,18 @@ describe("planStage", () => {
   });
 
   it("scores the risk with riskLevelOf and judges each verdict by the pack's bars and the repo's overrides", async () => {
-    const risky = { blast_radius: { score: 2, confidence: 0.9 }, reversibility: { score: 2, confidence: 0.4 }, data_sensitivity: { score: 1, confidence: 0.9 } };
+    const risky = { blast_radius: { score: 2, confidence: 0.9 }, reversibility: { score: 2, confidence: 0.4 }, data_sensitivity: { score: 1, confidence: 0.9 }, complexity: { choice: "M", confidence: 0.9 } };
     const { run } = setup({ answers: { risk_score: [risky] } }, { policies: { for: async () => ({ decisions: { risk_score: { reversibility: { flag: 0.3 } } } }) } });
     const result = await run(context());
-    expect(result.detail).toMatchObject({ risk: { level: "high", scores: { blast_radius: 2, reversibility: 2, data_sensitivity: 1 } }, verdicts: { risk: "flag" }, flagged: ["risk"] });
+    expect(result.detail).toMatchObject({ risk: { level: "high", product: 18, scores: { blast_radius: 2, reversibility: 2, data_sensitivity: 1 } }, verdicts: { risk: "flag" }, flagged: ["risk"] });
+    // The product, not the sum: 3 x 3 x 1 is medium though the three levels add to 7.
+    const wide = { blast_radius: { score: 2, confidence: 0.9 }, reversibility: { score: 2, confidence: 0.9 }, data_sensitivity: { score: 0, confidence: 0.9 }, complexity: { choice: "M", confidence: 0.9 } };
+    const { run: runWide } = setup({ answers: { risk_score: [wide] } });
+    expect((await runWide(context())).detail).toMatchObject({ risk: { level: "medium", product: 9 } });
   });
 
   it("never rates the risk below triage's grade: a decision can raise it, not lower it", async () => {
-    const mild = { blast_radius: { score: 0, confidence: 0.9 }, reversibility: { score: 0, confidence: 0.9 }, data_sensitivity: { score: 0, confidence: 0.9 } };
+    const mild = good.risk_score;
     const { run } = setup({ answers: { risk_score: [mild] } });
     const graded = { ...task, record: { ...(task.record ?? {}), risk: "high" } as TaskRow["record"] };
     const result = await run(context({ task: graded }));
@@ -240,7 +265,8 @@ describe("planStage", () => {
     expect(first.calls.map((c) => c.pack)).toEqual(["plan"]);
     const second = setup({ test_design: [ask] });
     expect(await second.run(context())).toMatchObject({ outcome: "needs_input" });
-    expect(second.decided).toEqual([]);
+    // Risk is scored before the planner; nothing else is decided after the designer asks.
+    expect(second.decided.map((d) => d.pack)).toEqual(["risk_score"]);
   });
 
   it("ends the stage with a sub-run's failure or usage limit as it is, with the events so far", async () => {
@@ -285,7 +311,7 @@ describe("planStage", () => {
       const { run, calls, decided } = fast();
       const result = await run(ctx());
       expect(calls.map((c) => [c.pack, c.runId])).toEqual([["plan_fast", "r1-plan"], ["test_design_fast", "r1-tests-1"]]);
-      expect(decided.map((d) => d.pack)).toEqual(["plan_check", "risk_score"]);
+      expect(decided.map((d) => d.pack)).toEqual(["risk_score", "plan_check"]);
       expect(result.detail).toMatchObject({ lane: "fast", verdicts: { coverage: "skipped", plan: "proceed", risk: "proceed" }, rounds: { tests: 1, plan: 1 }, flagged: [] });
       expect(result.detail).not.toHaveProperty("laneNote");
     });
@@ -308,7 +334,7 @@ describe("planStage", () => {
       const { run, calls, decided } = fast({ plan_fast: [needsFull] });
       const result = await run(ctx());
       expect(calls.map((c) => [c.pack, c.runId])).toEqual([["plan_fast", "r1-plan"], ["plan", "r1-plan-2"], ["test_design", "r1-tests-1"]]);
-      expect(decided.map((d) => d.pack)).toEqual(["coverage_check", "plan_check", "risk_score"]);
+      expect(decided.map((d) => d.pack)).toEqual(["risk_score", "coverage_check", "plan_check"]);
       expect(result.detail).toMatchObject({ lane: "full", laneNote: expect.stringMatching(/fast planner.*a second component appears/i), rounds: { plan: 2, tests: 1 } });
       expect(result.events).toContainEqual({ at: "t", kind: "stage.note", payload: { from: "fast" } });
     });

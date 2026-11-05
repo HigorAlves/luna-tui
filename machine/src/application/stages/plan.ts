@@ -1,7 +1,7 @@
 // The plan stage, which runs in the test_design state: the planner writes the plan from triage's
 // record, the test designer writes the scenarios, the machine lists the criteria no scenario names
 // (never asked of a model), and three decision packs judge the result: coverage_check, plan_check
-// and risk_score. Everything lands in one detail, which opens the one approval.
+// and risk_score, which runs first. Everything lands in one detail, which opens the one approval.
 //
 // A ticket triage sent to the fast lane (`record.decision === "fast_lane"`) runs the same stage on
 // the fast packs: one designer round, no coverage_check, one plan_check, and the planner's right
@@ -18,13 +18,14 @@ import {
   type FactoryConfig,
   PACKS,
   type PlanContext,
+  type PlanRisk,
   type Risk,
   type TestCase,
   type Verdict,
   applyPolicy,
   coverageGaps,
   maxRisk,
-  riskLevelOf,
+  riskOf,
 } from "@hardness/contracts";
 
 import { triageVerdicts } from "../../domain/triage-policy.ts";
@@ -141,6 +142,18 @@ export function planStage(deps: PlanDeps): StageRunner {
     }
     const mapPart = map ? { map } : {};
 
+    // risk_score runs before the plan, on the record and the code map: the planner writes for the risk it is given.
+    const riskJudged = await judge("risk_score", { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], ...mapPart });
+    const answer = riskJudged.answer;
+    const scores = answer ? { blast_radius: score(answer, "blast_radius"), reversibility: score(answer, "reversibility"), data_sensitivity: score(answer, "data_sensitivity") } : {};
+    const complexity = (answer?.complexity as { choice?: string } | undefined)?.choice;
+    // The decision may raise the risk above triage's grade, never lower it: one small-model call must not drop the second approver.
+    const graded: Risk = task.record?.risk ?? "medium";
+    const scored = answer ? riskOf(answer as Parameters<typeof riskOf>[0]) : null;
+    const level: Risk = scored ? maxRisk(scored.level, graded) : graded;
+    const risk: PlanRisk = { level, ...(scored ? { product: scored.product, scores } : { scores }), ...(complexity === "S" || complexity === "M" || complexity === "L" || complexity === "XL" ? { complexity } : {}) };
+    const riskPart = { risk };
+
     let lane: "fast" | "full" = task.record?.decision === "fast_lane" ? "fast" : "full";
     let laneNote: string | undefined;
     /** Planner runs on the current lane: the re-run cap counts from the last switch. */
@@ -169,10 +182,8 @@ export function planStage(deps: PlanDeps): StageRunner {
       planRunsOnLane += 1;
       const planned = await deps.runPack(lane === "fast" ? "plan_fast" : "plan", sub(planRuns === 1 ? "plan" : `plan-${planRuns}`), {
         ...(plan
-          ? { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, ...(review ? { review } : {}), ...mapPart } }
-          : map
-            ? { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], map } }
-            : {}),
+          ? { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, ...(review ? { review } : {}), ...mapPart, ...riskPart } }
+          : { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], ...mapPart, ...riskPart } }),
       });
       if (planned.outcome !== "pass") return ended(planned);
       results.push(planned);
@@ -199,7 +210,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         roundsOnThisPlan += 1;
         testRuns += 1;
         const designed = await deps.runPack(lane === "fast" ? "test_design_fast" : "test_design", sub(`tests-${testRuns}`), {
-          plan: { record: task.record ?? null, ...plan, ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), round: roundsOnThisPlan, ...mapPart },
+          plan: { record: task.record ?? null, ...plan, ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), round: roundsOnThisPlan, ...mapPart, ...riskPart },
         });
         if (designed.outcome !== "pass") return ended(designed);
         results.push(designed);
@@ -207,14 +218,14 @@ export function planStage(deps: PlanDeps): StageRunner {
         gaps = coverageGaps(plan.criteria, cases);
         // The fast lane asks nothing of coverage_check and designs once: a criterion left unnamed is flagged below.
         if (lane === "fast") break;
-        coverage = await judge("coverage_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}), ...mapPart });
+        coverage = await judge("coverage_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}), ...mapPart, ...riskPart });
         if (gaps.length === 0 || roundsOnThisPlan >= coverageRounds) break;
       }
       if (lane === "fast" && gaps.length > 0) flagged.add("coverage");
       if (gaps.length > 0 && coverage.verdict === "proceed") coverage = { ...coverage, verdict: "flag" };
 
       // The plan against the record: a finding sends the planner back, within the cap.
-      planCheck = await judge("plan_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}), ...mapPart });
+      planCheck = await judge("plan_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}), ...mapPart, ...riskPart });
       if (lane === "fast") {
         // One plan check, no re-run: unsure whether the plan fits means the ticket needs the full path.
         if (planCheck.verdict !== "ask") break;
@@ -225,13 +236,6 @@ export function planStage(deps: PlanDeps): StageRunner {
       if (!wrong || planRunsOnLane > planCheckRetries) break;
       review = planCheck.problems.length ? planCheck.problems : ["the plan check could not tell whether the plan fits the record"];
     }
-
-    const riskJudged = await judge("risk_score", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}), ...mapPart });
-    const answer = riskJudged.answer;
-    const scores = answer ? { blast_radius: score(answer, "blast_radius"), reversibility: score(answer, "reversibility"), data_sensitivity: score(answer, "data_sensitivity") } : {};
-    // The decision may raise the risk above triage's grade, never lower it: one small-model call must not drop the second approver.
-    const graded: Risk = task.record?.risk ?? "medium";
-    const level: Risk = answer ? maxRisk(riskLevelOf(answer as Parameters<typeof riskLevelOf>[0]), graded) : graded;
 
     const verdicts = { coverage: coverage.verdict, plan: planCheck.verdict, risk: riskJudged.verdict };
     for (const [name, verdict] of Object.entries(verdicts)) if (verdict === "flag" || verdict === "ask") flagged.add(name);
@@ -255,7 +259,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         slices: plan!.slices,
         ...(plan!.rollback !== undefined ? { rollback: plan!.rollback } : {}),
         cases,
-        risk: { level, scores },
+        risk,
         verdicts,
         // The decisions' records, so the gate's outcome can be written onto them (decision-truth.ts).
         decisions: Object.fromEntries(([["coverage_check", coverage], ["plan_check", planCheck], ["risk_score", riskJudged]] as const).flatMap(([pack, judged]) => (judged.recordId ? [[pack, judged.recordId]] : []))),

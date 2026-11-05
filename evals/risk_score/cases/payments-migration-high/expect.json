@@ -18,9 +18,17 @@
       "path": "data_sensitivity.score",
       "min": 1.5,
       "max": 2.5
+    },
+    {
+      "kind": "oneOf",
+      "path": "complexity.choice",
+      "values": [
+        "L",
+        "XL"
+      ]
     }
   ],
-  "rubric": "A payments data migration that drops a column: wide, not undone by a revert, and the data is card tokens (all three at the top level).",
+  "rubric": "A payments data migration that drops a column: wide, not undone by a revert, and the data is card tokens (all three at the top level). Risk is scored before the plan, from the record and the code map alone; complexity is how hard the change is to get right.",
   "label": {
     "blast_radius": {
       "score": 2
@@ -30,6 +38,9 @@
     },
     "data_sensitivity": {
       "score": 2
+    },
+    "complexity": {
+      "choice": "L"
     }
   }
 }

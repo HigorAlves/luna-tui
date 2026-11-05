@@ -202,6 +202,17 @@ describe("renderPrompt", () => {
     expect(render({ ...plan, map: null })).toContain("(none)");
   });
 
+  it("renders the plan's risk for the planner and for Build: the level, the three scores, the product and the complexity", () => {
+    const risk = { level: "medium", product: 9, scores: { blast_radius: 2, reversibility: 2, data_sensitivity: 0 }, complexity: "L" };
+    const plan = { record: null, brief: "b", criteria: [], assumptions: [], slices: [], risk };
+    const line = "Risk: medium (product 9 = blast radius 3 x reversibility 3 x data sensitivity 1) · complexity L";
+    const planner = renderPrompt({ pack: PACKS.plan, input: { ...input, context: { ...input.context, plan } } as never, template: "{{context.plan.risk}}" });
+    expect(planner).toContain(line);
+    const build = renderPrompt({ pack: PACKS.implementing, input: { ...input, plan: { brief: "b", criteria: [], assumptions: [], risk } } as never, template: "{{plan.risk}}" });
+    expect(build).toContain(line);
+    expect(renderPrompt({ pack: PACKS.plan, input: { ...input, plan: null, context: { ...input.context, plan: { ...plan, risk: undefined } } } as never, template: "{{context.plan.risk}}" })).toContain("(none)");
+  });
+
   it("lists the repo's checks for the packs that run them, as the line to type and where", () => {
     const template = "checks:\n{{context.checks}}";
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }, { name: "lint", run: "pnpm lint" }];

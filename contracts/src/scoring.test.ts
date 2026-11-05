@@ -110,9 +110,9 @@ describe("riskProduct", () => {
     expect(level(3, 3, 3)).toMatchObject({ product: 27, level: "high" });
   });
 
-  it("leaves riskLevelOf as it is: it still adds the three scores", () => {
-    // scores 0, 0, 0 -> each rounds to level 1 -> sum 3 -> low; 2, 2, 2 -> 3 + 3 + 3 = 9 -> high
+  it("riskLevelOf multiplies the three levels like riskProduct does (a score runs 0 to 2: level = round + 1)", () => {
     expect(riskLevelOf({ blast_radius: { score: 0 }, reversibility: { score: 0 }, data_sensitivity: { score: 0 } })).toBe("low");
     expect(riskLevelOf({ blast_radius: { score: 2 }, reversibility: { score: 2 }, data_sensitivity: { score: 2 } })).toBe("high");
+    expect(riskLevelOf({ blast_radius: { score: 0 }, reversibility: { score: 0 }, data_sensitivity: { score: 2 } })).toBe("low");
   });
 });

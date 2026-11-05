@@ -21,7 +21,7 @@
       "record": {
         "source": "example-tracker:EX-1",
         "kind": "feature",
-        "goal": "Move card tokens to the new vault",
+        "goal": "Migrate stored card tokens to the new vault and delete the old column.",
         "size": "large",
         "urgency": "normal",
         "risk": "high",
@@ -37,36 +37,10 @@
         "at": "2026-11-01T09:00:00.000Z",
         "model": "fixture"
       },
-      "brief": "Migrate stored card tokens to the new vault and delete the old column.",
-      "criteria": [
-        "Every token is readable from the vault",
-        "The old tokens column is dropped"
-      ],
+      "brief": "",
+      "criteria": [],
       "assumptions": [],
-      "slices": [
-        {
-          "title": "Backfill tokens to the vault",
-          "est_loc": 220,
-          "touchpoints": [
-            "db/migrations/0042_tokens.sql",
-            "src/payments/vault.ts"
-          ],
-          "acceptance": [
-            "All tokens exist in the vault"
-          ]
-        },
-        {
-          "title": "Drop the old column",
-          "est_loc": 20,
-          "touchpoints": [
-            "db/migrations/0043_drop_tokens.sql"
-          ],
-          "acceptance": [
-            "The tokens column no longer exists"
-          ]
-        }
-      ],
-      "rollback": "Restore from the nightly snapshot.",
+      "slices": [],
       "cases": []
     }
   },

@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, CodeMapAnswer, type CheckContext, type CheckSpec, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type ChatTriageContext, CodeMapAnswer, PlanRisk, type CheckContext, type CheckSpec, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -53,6 +53,7 @@ export function approvedPlan(approvals: ApprovalRow[]): StageInput["plan"] {
   if (!approval) return null;
   const requested = approval.requested;
   const map = CodeMapAnswer.safeParse(requested.map);
+  const risk = PlanRisk.safeParse(requested.risk);
   return {
     brief: typeof requested.brief === "string" ? requested.brief : "",
     criteria: strings(requested.criteria),
@@ -60,6 +61,7 @@ export function approvedPlan(approvals: ApprovalRow[]): StageInput["plan"] {
     ...(Array.isArray(requested.slices) ? { slices: requested.slices } : {}),
     ...(typeof requested.rollback === "string" ? { rollback: requested.rollback } : {}),
     ...(map.success ? { map: map.data } : {}),
+    ...(risk.success ? { risk: risk.data } : {}),
   };
 }
 

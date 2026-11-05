@@ -21,7 +21,7 @@
       "record": {
         "source": "example-tracker:EX-1",
         "kind": "feature",
-        "goal": "Round prices to the shop's currency",
+        "goal": "Change the shared price formatter to round to the currency's minor unit; the cart, the invoice PDF and the emails use it.",
         "size": "small",
         "urgency": "normal",
         "risk": "low",
@@ -37,25 +37,10 @@
         "at": "2026-11-01T09:00:00.000Z",
         "model": "fixture"
       },
-      "brief": "Change the shared price formatter to round to the currency's minor unit; the cart, the invoice PDF and the emails use it.",
-      "criteria": [
-        "Prices round to the currency's minor unit everywhere"
-      ],
+      "brief": "",
+      "criteria": [],
       "assumptions": [],
-      "slices": [
-        {
-          "title": "Round in formatPrice",
-          "est_loc": 40,
-          "touchpoints": [
-            "src/shared/formatPrice.ts",
-            "src/shared/formatPrice.test.ts"
-          ],
-          "acceptance": [
-            "formatPrice(1.005, 'USD') is '$1.01'"
-          ]
-        }
-      ],
-      "rollback": "Revert; no data changes.",
+      "slices": [],
       "cases": []
     }
   },

@@ -6,7 +6,15 @@
       "path": "blast_radius.confidence",
       "min": 0,
       "max": 0.85
+    },
+    {
+      "kind": "oneOf",
+      "path": "complexity.choice",
+      "values": [
+        "S",
+        "M"
+      ]
     }
   ],
-  "rubric": "A shared helper with a small diff: how far it reaches is a judgement call (one module or several), so the model should not be near-certain about the blast radius."
+  "rubric": "A shared helper with a small diff: how far it reaches is a judgement call (one module or several), so the model should not be near-certain about the blast radius. Risk is scored before the plan, from the record and the code map alone; complexity is how hard the change is to get right."
 }

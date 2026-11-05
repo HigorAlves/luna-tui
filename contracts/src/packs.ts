@@ -11,7 +11,7 @@ import { type Access, type LunaTool, NO_ACCESS, access, readOnly } from "./acces
 import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
-import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, scorePriority } from "./scoring.ts";
+import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
 import { CodeMapAnswer, EscalationReason, Finding, LunaConfig, PackId, Risk, Slice, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
 
@@ -466,22 +466,28 @@ function triagePolicy(config: typeof FACTORY_DEFAULTS.triage): DecisionPolicy {
   };
 }
 
-/** What risk_score asks about a plan: three scores that riskLevelOf adds up. */
+/** What risk_score asks, before the plan, of the record and the code map: three scores that riskLevelOf multiplies, and the change's complexity. */
 const RISK_QUESTIONS: QuestionSet = {
   blast_radius: { type: "score", instructions: "How much of the system does the change touch?", rubric: { one: "One module, its tests", some: "Several modules or a shared one", wide: "A subsystem, a contract others implement, or infrastructure" } },
   reversibility: { type: "score", instructions: "How easily is it undone?", rubric: { revert: "A revert restores everything", steps: "A revert plus a manual step", hard: "Data or external state changes that a revert does not undo" } },
   data_sensitivity: { type: "score", instructions: "What data does it handle?", rubric: { none: "No user or secret data", internal: "Internal records", sensitive: "Credentials, payments, personal data" } },
+  complexity: { type: "choice", instructions: "How hard is the change to get right, apart from how far it reaches?", criteria: { S: "A few lines in one place", M: "A feature in one module", L: "Several modules, or a new mechanism", XL: "A redesign, or a change that needs a staged rollout" } },
 };
 
-/** The plan's risk from the three scores: each rounds to a level 1 to 3; a sum of 4 or less is low, 5 to 6 medium, 7 to 9 high. */
+/** The plan's risk from the three scores: each rounds to a level 1 to 3, and their product (riskProduct) is low up to 4, medium to 11, high from 12. */
 const RISK_ORDER: Risk[] = ["none", "low", "medium", "high"];
 /** The most severe of several risk grades: a decision may raise triage's grade, never lower it. */
 export const maxRisk = (...levels: Risk[]): Risk => levels.reduce<Risk>((worst, level) => (RISK_ORDER.indexOf(level) > RISK_ORDER.indexOf(worst) ? level : worst), "none");
 
-export function riskLevelOf(a: { blast_radius: { score: number }; reversibility: { score: number }; data_sensitivity: { score: number } }): Risk {
-  const sum = [a.blast_radius, a.reversibility, a.data_sensitivity].reduce((total, answer) => total + Math.round(answer.score) + 1, 0);
-  return sum <= 4 ? "low" : sum <= 6 ? "medium" : "high";
+type RiskScores = { blast_radius: { score: number }; reversibility: { score: number }; data_sensitivity: { score: number } };
+const levelOfScore = (answer: { score: number }): number => Math.round(answer.score) + 1;
+
+/** The three scores of a risk_score answer as the diagram's levels and their product. */
+export function riskOf(a: RiskScores): { product: number; level: Risk } {
+  return riskProduct({ blastRadius: levelOfScore(a.blast_radius), reversibility: levelOfScore(a.reversibility), dataSensitivity: levelOfScore(a.data_sensitivity) });
 }
+
+export const riskLevelOf = (a: RiskScores): Risk => riskOf(a).level;
 
 /** What coverage_check asks about the scenarios. The per-criterion gap list is not asked: coverageGaps computes it. */
 const COVERAGE_QUESTIONS: QuestionSet = {

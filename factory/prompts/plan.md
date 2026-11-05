@@ -11,6 +11,11 @@ Branch: {{task.branch}}
 ## Record
 {{task.record}}
 
+## Risk
+{{context.plan.risk}}
+
+The machine scored this before you started (risk is the product of blast radius, reversibility and data sensitivity, each 1 to 3). Write the plan for it: a high risk needs small slices, a rollback that names what a revert does not undo, and a migration or flag strategy when data or shared contracts change. Do not argue with the level.
+
 ## Ticket criteria
 {{task.criteria}}
 

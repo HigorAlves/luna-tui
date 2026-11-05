@@ -21,7 +21,7 @@
       "record": {
         "source": "example-tracker:EX-1",
         "kind": "feature",
-        "goal": "Fix a typo in the empty-cart message",
+        "goal": "Correct 'Your cart is emtpy' to 'Your cart is empty' in the cart page copy.",
         "size": "tiny",
         "urgency": "normal",
         "risk": "none",
@@ -37,24 +37,10 @@
         "at": "2026-11-01T09:00:00.000Z",
         "model": "fixture"
       },
-      "brief": "Correct 'Your cart is emtpy' to 'Your cart is empty' in the cart page copy.",
-      "criteria": [
-        "The empty-cart message reads correctly"
-      ],
+      "brief": "",
+      "criteria": [],
       "assumptions": [],
-      "slices": [
-        {
-          "title": "Fix the typo",
-          "est_loc": 2,
-          "touchpoints": [
-            "src/cart/messages.ts"
-          ],
-          "acceptance": [
-            "The message reads 'Your cart is empty'"
-          ]
-        }
-      ],
-      "rollback": "Revert the one-line change.",
+      "slices": [],
       "cases": []
     }
   },

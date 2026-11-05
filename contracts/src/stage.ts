@@ -574,6 +574,15 @@ export const CodeMapAnswer = z.object({
 });
 export type CodeMapAnswer = z.infer<typeof CodeMapAnswer>;
 
+/** The risk a plan is written for and approved at: the level, and when risk_score ran the three scores (blast radius, reversibility, data sensitivity, each 0 to 2 on the wire), their product and the change's complexity. */
+export const PlanRisk = z.object({
+  level: Risk,
+  product: z.number().optional(),
+  scores: z.object({ blast_radius: z.number(), reversibility: z.number(), data_sensitivity: z.number() }).partial().optional(),
+  complexity: z.enum(["S", "M", "L", "XL"]).optional(),
+});
+export type PlanRisk = z.infer<typeof PlanRisk>;
+
 export const PlanContext = z.object({
   record: TriageRecord.nullable(),
   brief: z.string(),
@@ -588,6 +597,8 @@ export const PlanContext = z.object({
   review: z.array(z.string()).optional(),
   /** The code map the plan stage opened with, for the planner and the decisions; null when the repo has no graph. */
   map: CodeMapAnswer.nullable().optional(),
+  /** The risk scored before the plan, which the planner writes for. */
+  risk: PlanRisk.optional(),
 });
 export type PlanContext = z.infer<typeof PlanContext>;
 
@@ -871,6 +882,8 @@ export const StageInput = z.object({
       rollback: z.string().optional(),
       /** The code map the plan stage opened with; its files count as planned. */
       map: CodeMapAnswer.nullable().optional(),
+      /** The risk the plan was approved at. */
+      risk: PlanRisk.optional(),
     })
     .nullable(),
   decisions: z.array(

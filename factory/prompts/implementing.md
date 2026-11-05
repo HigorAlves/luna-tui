@@ -12,6 +12,9 @@ Ticket criteria:
 
 Brief: {{plan.brief}}
 
+Approved risk: {{plan.risk}}
+A higher risk means smaller steps, no change beyond the slice, and a stop to ask when the plan looks wrong.
+
 Criteria:
 {{plan.criteria}}
 

@@ -11,6 +11,11 @@ Branch: {{task.branch}}
 ## Record
 {{task.record}}
 
+## Risk
+{{context.plan.risk}}
+
+If the risk is above low, or the change is wider than one or two files, say `needs_full_plan`.
+
 ## Ticket criteria
 {{task.criteria}}
 

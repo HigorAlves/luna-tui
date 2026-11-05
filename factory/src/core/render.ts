@@ -205,6 +205,15 @@ function mapText(map: NonNullable<StageInput["context"]["plan"]>["map"]): string
   ].join("\n");
 }
 
+/** The risk a plan is written for and approved at: the level, and the three scores, product and complexity when risk_score ran. */
+function riskText(risk: { level: string; product?: number; scores?: { blast_radius?: number; reversibility?: number; data_sensitivity?: number }; complexity?: string } | undefined): string {
+  if (!risk) return NONE;
+  const s = risk.scores ?? {};
+  const level = (n: number | undefined) => (typeof n === "number" ? Math.round(n) + 1 : "?");
+  const parts = typeof risk.product === "number" ? ` (product ${risk.product} = blast radius ${level(s.blast_radius)} x reversibility ${level(s.reversibility)} x data sensitivity ${level(s.data_sensitivity)})` : "";
+  return `Risk: ${risk.level}${parts}${risk.complexity ? ` · complexity ${risk.complexity}` : ""}`;
+}
+
 /** The line that says where the code graph is, and how far to trust it. */
 /** Line numbers as ranges: 12, 14-17. */
 function ranges(lines: number[]): string {
@@ -330,6 +339,8 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{task.classification}}": classificationLines(input.task.classification),
     "{{task.record}}": recordText(input.task.record),
     "{{context.plan.map}}": mapText(input.context.plan?.map),
+    "{{context.plan.risk}}": riskText(input.context.plan?.risk),
+    "{{plan.risk}}": riskText(input.plan?.risk),
     "{{context.plan.gaps}}": bullets(input.context.plan?.gaps),
     "{{context.plan.review}}": bullets(input.context.plan?.review),
     "{{context.plan.cases}}": bullets((input.context.plan?.cases ?? []).map((c) => `${c.title}${c.criterion ? ` (criterion: ${c.criterion})` : ""}: ${c.approach}`)),

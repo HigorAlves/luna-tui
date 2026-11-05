@@ -94,8 +94,8 @@ describe("the plan stage's decision packs", () => {
   it("risk_score asks blast radius, reversibility and data sensitivity as three-level scores", () => {
     const pack = PACKS.risk_score;
     expect(pack).toMatchObject({ kind: "decision", writable: false, maxTurns: 1 });
-    expect(Object.keys(pack.questions)).toEqual(["blast_radius", "reversibility", "data_sensitivity"]);
-    for (const q of Object.values(pack.questions)) expect(q).toMatchObject({ type: "score" });
+    expect(Object.keys(pack.questions)).toEqual(["blast_radius", "reversibility", "data_sensitivity", "complexity"]);
+    for (const [name, q] of Object.entries(pack.questions)) expect(q).toMatchObject({ type: name === "complexity" ? "choice" : "score" });
     expect(Object.keys((pack.questions.blast_radius as { rubric: object }).rubric)).toEqual(["one", "some", "wide"]);
   });
 
@@ -184,16 +184,24 @@ describe("the plan stage's decision packs", () => {
     }
   });
 
-  it("riskLevelOf adds the three levels (a score rounds to one, plus 1): 3 to 4 low, 5 to 6 medium, 7 to 9 high", () => {
+  it("riskLevelOf multiplies the three levels (a score rounds to one, plus 1): up to 4 low, 5 to 11 medium, 12 and over high", () => {
     const at = (a: number, b: number, c: number) => riskLevelOf({ blast_radius: { score: a }, reversibility: { score: b }, data_sensitivity: { score: c } });
-    expect(at(0, 0, 0)).toBe("low");
-    expect(at(1, 0, 0)).toBe("low"); // sum 4
-    expect(at(1, 1, 0)).toBe("medium"); // 5
-    expect(at(1, 1, 1)).toBe("medium"); // 6
-    expect(at(2, 1, 1)).toBe("high"); // 7
-    expect(at(2, 2, 2)).toBe("high"); // 9
+    expect(at(0, 0, 0)).toBe("low"); // 1
+    expect(at(1, 0, 0)).toBe("low"); // 2
+    expect(at(1, 1, 0)).toBe("low"); // 4
+    expect(at(2, 1, 0)).toBe("medium"); // 3 x 2 x 1 = 6
+    expect(at(2, 2, 0)).toBe("medium"); // 9
+    expect(at(1, 1, 2)).toBe("high"); // 12
+    expect(at(2, 2, 2)).toBe("high"); // 27
     expect(at(0.4, 0.4, 0.4)).toBe("low"); // rounds down
-    expect(at(1.5, 1.5, 1.5)).toBe("high"); // rounds up to 2 each
+    expect(at(1.5, 1.5, 1.5)).toBe("high"); // rounds up to 3 each
+  });
+
+  it("risk_score also asks for the change's complexity: S, M, L or XL", () => {
+    const question = PACKS.risk_score.questions.complexity;
+    expect(question).toMatchObject({ type: "choice" });
+    expect(Object.keys((question as { criteria: Record<string, string> }).criteria)).toEqual(["S", "M", "L", "XL"]);
+    expect(PACKS.risk_score.policy.complexity).toBeDefined();
   });
 
   it("coverageGaps lists the criteria no case names, matched after trimming", () => {

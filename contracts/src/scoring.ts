@@ -1,7 +1,7 @@
 // The v2.2 diagram's scoring model, as pure functions: priority from five weighted sub-scores,
 // knock-outs, the backlog's cost of delay over cost of doing, and risk as a product. Every number comes
-// from SCORING_DEFAULTS, which luna.yaml's `scoring` section overrides (config-v22.ts). Nothing here is
-// read by the pipeline before wave 9 (triage and plan), 14 (the backlog) and 15 (size).
+// from SCORING_DEFAULTS, which luna.yaml's `scoring` section overrides (config-v22.ts). Risk is read by the plan stage (wave 9b); the
+// rest by the backlog (14) and size (15).
 
 export const SCORING_DEFAULTS = {
   /** The neutral score a doubtful one is pulled toward. */
@@ -58,7 +58,7 @@ export function wsjf(p: { costOfDelay: number; costOfDoing: number }): number {
   return p.costOfDelay / p.costOfDoing;
 }
 
-/** The diagram's risk: the product of the three scores (blast radius, reversibility, data sensitivity). `riskLevelOf` (packs.ts) adds them instead and stays until wave 9. */
+/** The diagram's risk: the product of the three scores (blast radius, reversibility, data sensitivity). `riskLevelOf` (packs.ts) delegates to it, so the plan stage's level is this product. */
 export function riskProduct(p: { blastRadius: number; reversibility: number; dataSensitivity: number }): { product: number; level: "low" | "medium" | "high" } {
   const product = p.blastRadius * p.reversibility * p.dataSensitivity;
   return { product, level: product <= SCORING_DEFAULTS.risk.lowMax ? "low" : product >= SCORING_DEFAULTS.risk.highMin ? "high" : "medium" };

@@ -264,6 +264,15 @@ describe("the code_map pack", () => {
     expect(PlanContext.parse({ ...plan, map: null }).map).toBeNull();
     expect(PlanContext.parse(plan).map).toBeUndefined();
   });
+
+  it("carries the risk the plan was written for: level, the three scores, the product and the complexity; a context without it still parses", () => {
+    const plan = { record: null, brief: "b", criteria: [], assumptions: [], slices: [] };
+    const risk = { level: "medium", product: 9, scores: { blast_radius: 2, reversibility: 2, data_sensitivity: 0 }, complexity: "L" };
+    expect(PlanContext.parse({ ...plan, risk })).toEqual({ ...plan, risk });
+    expect(PlanContext.safeParse({ ...plan, risk: { ...risk, complexity: undefined } }).success).toBe(true);
+    expect(PlanContext.safeParse({ ...plan, risk: { ...risk, level: "huge" } }).success).toBe(false);
+    expect(PlanContext.parse(plan).risk).toBeUndefined();
+  });
 });
 
 describe("eval_judge", () => {

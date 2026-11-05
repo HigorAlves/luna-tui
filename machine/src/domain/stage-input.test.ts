@@ -78,6 +78,14 @@ describe("buildStageInput's pack and plan", () => {
     expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: mapped, priorFindings: [] }).plan).toMatchObject({ map });
     const broken = [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices, map: { files: 3 } } })];
     expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: broken, priorFindings: [] }).plan).not.toHaveProperty("map");
+    // The risk the plan was approved at rides along to Build; a malformed one is dropped.
+    const risk = { level: "high", product: 12, scores: { blast_radius: 2, reversibility: 2, data_sensitivity: 1 }, complexity: "L" };
+    const scored = [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices, risk } })];
+    const built = buildStageInput({ task, stage: "implementing", attempt: 1, approvals: scored, priorFindings: [] });
+    expect(built.plan).toMatchObject({ risk });
+    expect(StageInput.safeParse(built).success).toBe(true);
+    const odd = [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices, risk: { level: "huge" } } })];
+    expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: odd, priorFindings: [] }).plan).not.toHaveProperty("risk");
     // A legacy test check, when one exists, still wins.
     const legacy = [...approvals, approval({ kind: "awaiting_test_check", requested: { cases: [{ title: "legacy", criterion: null, approach: "x" }] } })];
     expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: legacy, priorFindings: [] }).context.testCases).toEqual([{ title: "legacy", criterion: null, approach: "x" }]);
