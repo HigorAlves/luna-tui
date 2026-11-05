@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "red_check",
+  "pack": "red_check",
+  "attempt": 1,
+  "task": {
+    "id": "red-check",
+    "title": "Red check",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "red",
+      "scenario": {
+        "id": "S2",
+        "title": "an expired coupon is refused",
+        "given": "a coupon that expired yesterday",
+        "when": "it is applied to a cart",
+        "then": "the cart shows the expiry error"
+      },
+      "exists": true,
+      "output": "FAIL src/cart/coupon.test.ts > an expired coupon is refused @scenario:S2\nTypeError: applyCoupon is not a function"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

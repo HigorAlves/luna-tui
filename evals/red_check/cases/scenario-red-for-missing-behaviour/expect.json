@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "right_reason.value",
+      "value": true
+    }
+  ],
+  "rubric": "The function the scenario is about does not exist yet: the right reason.",
+  "label": {
+    "right_reason": {
+      "value": true
+    }
+  }
+}

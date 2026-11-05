@@ -131,6 +131,15 @@ describe("a check context", () => {
     expect(renderCheck(check as never)).toBe(state.description);
   });
 
+  it("renders a scenario's red: the scenario in given/when/then, the fact that its test exists, and the failing output", () => {
+    const check = { kind: "red", scenario: { id: "S2", title: "refuses an expired coupon", given: "an expired coupon", when: "it is applied", then: "the error is shown" }, exists: true, output: "TypeError: applyCoupon is not a function" };
+    const state = stateOf({ ...base, context: { projectContext: null, check } } as never);
+    expect(state.title).toBe("Red check: scenario S2, refuses an expired coupon");
+    expect(state.description).toContain("Scenario S2: given an expired coupon, when it is applied, then the error is shown");
+    expect(state.description).toContain("The tagged test exists in the diff: yes");
+    expect(state.description).toContain("TypeError: applyCoupon is not a function");
+  });
+
   it("renders a scope's planned, changed, undeclared, declared, removed, dependency, TODO and secret facts", () => {
     const check = { kind: "scope", planned: ["a.ts"], changed: ["a.ts", "b.ts"], undeclared: ["b.ts"], declared: [{ path: "c.ts", reason: "shared helper" }], removedTests: ["a.test.ts"], newDependencies: ["left-pad"], todos: ["a.ts: TODO fix"], secrets: [".env"], diffSummary: "two files" };
     const text = stateOf({ ...base, context: { projectContext: null, check } } as never).description;

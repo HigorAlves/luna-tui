@@ -45,6 +45,9 @@ const bullets = (title: string, items: string[] | undefined): string[] => (items
 export function renderCheck(check: CheckContext): string {
   if (check.kind === "red") {
     return [
+      ...(check.scenario
+        ? [`Scenario ${check.scenario.id}: ${check.scenario.given && check.scenario.when && check.scenario.then ? `given ${check.scenario.given}, when ${check.scenario.when}, then ${check.scenario.then}` : (check.scenario.approach ?? check.scenario.title)}`, `The tagged test exists in the diff: ${check.exists ? "yes" : "no"}`]
+        : []),
       ...(check.slice ? [`Slice ${check.slice.id}: ${check.slice.title}`, ...bullets("Acceptance", check.slice.acceptance)] : []),
       `Failing output:\n${check.output ?? "(none)"}`,
     ].join("\n");
@@ -144,7 +147,7 @@ function shipTitle(ship: ShipContext, fallback: string): string {
 function checkTitle(check: CheckContext): string {
   switch (check.kind) {
     case "red":
-      return `Red check: slice ${check.slice?.id ?? "?"}, ${check.slice?.title ?? "?"}`;
+      return check.scenario ? `Red check: scenario ${check.scenario.id}, ${check.scenario.title}` : `Red check: slice ${check.slice?.id ?? "?"}, ${check.slice?.title ?? "?"}`;
     case "finding":
       return `Finding: ${check.finding?.title ?? "?"}`;
     case "e2e":

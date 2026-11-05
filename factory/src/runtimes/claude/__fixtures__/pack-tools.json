@@ -821,7 +821,8 @@
       "Bash(cargo:*)",
       "Bash(pip:*)",
       "Bash(pytest:*)",
-      "Bash(make:*)"
+      "Bash(make:*)",
+      "mcp__luna__scenario_red"
     ],
     "tools": [
       "Read",
@@ -832,7 +833,8 @@
       "Bash",
       "Write",
       "Edit",
-      "mcp__luna__decision_get"
+      "mcp__luna__decision_get",
+      "mcp__luna__scenario_red"
     ]
   }
 }

@@ -1,6 +1,6 @@
 // Build's tests step: before the implementer runs, a test writer makes one failing test per approved scenario, tagged `@scenario:<id>`.
 // The machine checks the diff by script (`scenarioTags`), makes the commit itself, and only then runs the implementer. The feature route only.
-import { Plan, type PlanContext } from "@hardness/contracts";
+import { type CheckContext, Plan, type PlanContext } from "@hardness/contracts";
 
 import { approvedScenarios } from "../../domain/stage-input.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
@@ -19,6 +19,8 @@ export interface BuildTestsDeps {
   implement: (context: StageContext, extra: { scenarioTests?: { scenario: string; file: string }[] }) => Promise<StageResult>;
   /** The test writer, as a sub-run; a second round carries what the first left out as `plan.review`. */
   runWriter: (context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
+  /** The red_check decision for one scenario's test; `skipped` when it did not answer in time (it never blocks). `problems` are what a confident no said is wrong. */
+  judgeRed: (check: CheckContext, repoPath: string | null) => Promise<{ verdict: string; problems: string[] }>;
   /** The repo's `holdout_cases`: the implementer must not see the scenarios, so no test is written for it to read. */
   holdout: (repoPath: string) => Promise<boolean>;
   git: {
@@ -67,25 +69,53 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
 
     const approved = context.approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
     const plan = Plan.safeParse(approved?.requested.plan);
+    const escalate = async (where: string, problems: string[]): Promise<StageResult> => {
+      await deps.git.discard(where);
+      return { outcome: "escalated", detail: { escalation: "other", reason: `the tests step could not make a tagged test that fails for the right reason for every scenario: ${problems.join("; ")}`, testsStep: { status: "failed", problems } } };
+    };
+    // A missing tag is sent back once; a red that is missing or wrong, twice.
+    let tagMisses = 0;
+    let redMisses = 0;
     let review: string[] | undefined;
-    for (let round = 1; round <= 2; round++) {
+    for (;;) {
       const written = await deps.runWriter(context, review ? { plan: reviewContext(review) } : {});
       if (written.outcome !== "pass") return written;
       const where = written.workspace?.worktreePath ?? worktree;
       if (!where) return { outcome: "fail", detail: { error: "the tests step has no worktree to read" } };
       const pending = await deps.git.pending(where);
       const facts = scenarioTags({ ...pending, scenarios });
-      if (facts.ok) {
-        const sha = await deps.git.commit(where, subject, `plan version ${plan.success ? plan.data.version : 2}`);
-        const result = await deps.implement(context, { scenarioTests: testsOf(facts) });
-        return withStep(result, { status: "committed", commit: sha, tests: Object.keys(facts.tagged).length });
+      if (!facts.ok) {
+        review = problemsOf(facts);
+        if (tagMisses >= 1) return escalate(where, review);
+        tagMisses += 1;
+        continue;
       }
-      review = problemsOf(facts);
-      if (round === 2) {
-        await deps.git.discard(where);
-        return { outcome: "escalated", detail: { escalation: "other", reason: `the tests step could not make a tagged failing test for every scenario: ${review.join("; ")}`, testsStep: { status: "failed", problems: review } } };
+      const reds = redsOf(written.detail?.scenarioReds);
+      const judged = await Promise.all(
+        scenarios.map(async (s) => {
+          const id = s.id!;
+          const output = reds[id];
+          if (output === undefined) return { id, verdict: "missing", problems: [`${id}: no red reported; run its test and report the failing output with scenario_red`] };
+          const check: CheckContext = { kind: "red", scenario: { id, title: s.title, given: s.given ?? null, when: s.when ?? null, then: s.then ?? null, approach: s.approach }, exists: id in facts.tagged, output };
+          const answer = await deps.judgeRed(check, task.repoPath);
+          return { id, verdict: answer.verdict, problems: answer.problems.map((p) => `${id}: ${safe(p).slice(0, 200)}`) };
+        }),
+      );
+      const problems = judged.flatMap((j) => j.problems);
+      if (problems.length > 0) {
+        review = problems;
+        if (redMisses >= 2) return escalate(where, problems);
+        redMisses += 1;
+        continue;
       }
+      for (const j of judged) await context.emit?.("scenario.red", { scenario: j.id });
+      const sha = await deps.git.commit(where, subject, `plan version ${plan.success ? plan.data.version : 2}`);
+      const result = await deps.implement(context, { scenarioTests: testsOf(facts) });
+      const skipped = judged.some((j) => j.verdict === "skipped");
+      return withStep(result, { status: "committed", commit: sha, tests: Object.keys(facts.tagged).length, ...(skipped ? { redCheck: "skipped" } : {}) });
     }
-    return { outcome: "fail", detail: { error: "unreachable" } };
   };
 }
+
+const redsOf = (value: unknown): Record<string, string> =>
+  value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).filter((e): e is [string, string] => typeof e[1] === "string")) : {};

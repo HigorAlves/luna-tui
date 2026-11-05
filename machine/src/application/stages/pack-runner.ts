@@ -31,6 +31,7 @@ import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-file
 import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
 import { pushCheckpoint } from "./deliver.ts";
+import { readScenarioReds } from "./scenario-reds.ts";
 
 /** A checkpoint push that takes longer than this is given up (the final Deliver push is authoritative). */
 const PUSH_TIMEOUT_MS = 60_000;
@@ -475,6 +476,10 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   }
 
   // outcome pass
+  if (pack === "build_tests") {
+    // The writer's own per-scenario red reports (scenario_red), as data: the step judges them, the writer's word decides nothing.
+    return merged({ ...mapped, detail: { ...mapped.detail, scenarioReds: await readScenarioReds(join(runDir, "out")) } });
+  }
   if (pack === "implementing" || pack === "verifying") {
     // Both commit inside the container; anything left over is not part of the answer.
     const left = await dirtyFiles(workspace.path);

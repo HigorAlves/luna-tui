@@ -795,7 +795,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     helpers: [],
     skills: ["tdd", "code-discovery"],
     // The implementer's tools without the commit: the machine checks the diff and makes the commit itself.
-    access: access(READ_ONLY, { write: true, luna: ["decision_get"], commands: ["git add", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
+    access: access(READ_ONLY, { write: true, luna: ["decision_get", "scenario_red"], commands: ["git add", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
     writable: true,
     maxTurns: 40,
     timeoutMs: 15 * MINUTE,

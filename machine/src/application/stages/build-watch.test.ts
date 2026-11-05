@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { CheckContext } from "@hardness/contracts";
 
 import { type Learned, tagged } from "../decision-truth.ts";
-import { type Decide, MAX_CARD_SEARCHES, MAX_MAILBOX_BYTES, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers, readMailbox, writeMailbox } from "./build-watch.ts";
+import { type Decide, MAX_CARD_SEARCHES, MAX_MAILBOX_BYTES, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers, judgeRedCheck, readMailbox, writeMailbox } from "./build-watch.ts";
 
 const ledger = (slices: Array<{ id: number; status: string; commit?: string | null }>) =>
   JSON.stringify({ schema: 1, slices: slices.map((s) => ({ id: s.id, title: `slice ${s.id}`, status: s.status, commit: s.commit ?? null })) });
@@ -59,6 +59,24 @@ function checks(out: string, decide: Decide | null, over: Partial<Parameters<typ
     ...over,
   });
 }
+
+describe("a scenario's red check", () => {
+  const scenarioCheck: CheckContext = { kind: "red", scenario: { id: "S1", title: "t" }, exists: true, output: "TypeError: x is not a function" };
+
+  it("judges with the same questions as a slice's red: a confident no is a problem, whatever the verdict", async () => {
+    const seen: unknown[] = [];
+    const decide: Decide = async (pack, check, repo) => (seen.push([pack, check, repo]), { right_reason: no(), not_tautological: yes() });
+    const answer = await judgeRedCheck(decide, scenarioCheck, "/repo", {});
+    expect(seen).toEqual([["red_check", scenarioCheck, "/repo"]]);
+    expect(answer.verdict).not.toBe("proceed");
+    expect(answer.problems).toEqual([expect.stringContaining("reason other than the missing behaviour")]);
+  });
+
+  it("is skipped, with no problem, when no decision can run or it throws", async () => {
+    expect(await judgeRedCheck(null, scenarioCheck, "/repo", {})).toEqual({ verdict: "skipped", problems: [] });
+    expect(await judgeRedCheck((async () => { throw new Error("down"); }) as Decide, scenarioCheck, "/repo", {})).toEqual({ verdict: "skipped", problems: [] });
+  });
+});
 
 describe("build checks", () => {
   it("answers a red slice in checks/red-<id>.json: the judged verdict, and a flag when an answer says no", async () => {

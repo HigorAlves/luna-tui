@@ -18,7 +18,8 @@ const context = (approvals: ApprovalRow[], over: Record<string, unknown> = {}): 
 const tagged = (...ids: string[]) => ({ nameStatus: "A\tweb/cart.test.ts", diff: ["diff --git a/web/cart.test.ts b/web/cart.test.ts", "--- /dev/null", "+++ b/web/cart.test.ts", "@@ -0,0 +1 @@", ...ids.map((id) => `+it("x @scenario:${id}", () => {})`)].join("\n") });
 
 /** Fakes: the writer leaves the next queued working tree; the git calls and the implementer are recorded in order. */
-function fakes(trees: Array<{ nameStatus: string; diff: string }>, over: Partial<BuildTestsDeps> = {}) {
+const allRed = { S1: "FAIL: cart.export is not a function", S2: "FAIL: cart.total is not a function" };
+function fakes(trees: Array<{ nameStatus: string; diff: string }>, over: Partial<BuildTestsDeps> = {}, reds: Array<Record<string, string>> = [allRed]) {
   const calls: string[] = [];
   const reviews: Array<string[] | undefined> = [];
   const implemented: Array<{ scenarioTests?: { scenario: string; file: string }[] }> = [];
@@ -34,8 +35,9 @@ function fakes(trees: Array<{ nameStatus: string; diff: string }>, over: Partial
       calls.push("writer");
       reviews.push(extra.plan?.review);
       tree = trees[Math.min(reviews.length - 1, trees.length - 1)]!;
-      return { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/w" } };
+      return { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/w" }, detail: { scenarioReds: reds[Math.min(reviews.length - 1, reds.length - 1)] } };
     },
+    judgeRed: async () => ({ verdict: "proceed", problems: [] }),
     holdout: async () => false,
     git: {
       pending: async () => tree,
@@ -51,6 +53,49 @@ function fakes(trees: Array<{ nameStatus: string; diff: string }>, over: Partial
   };
   return { deps, calls, reviews, implemented, commit: () => commit };
 }
+
+describe("the red check, per scenario", () => {
+  const emitted = () => {
+    const rows: Array<[string, Record<string, unknown>]> = [];
+    return { rows, emit: async (kind: string, payload: Record<string, unknown>) => void rows.push([kind, payload]) };
+  };
+
+  it("asks red_check about each scenario with the fact that its tagged test exists and the writer's failing output, and puts a scenario.red row with the id on the stream", async () => {
+    const asked: unknown[] = [];
+    const f = fakes([tagged("S1", "S2")], { judgeRed: async (check) => (asked.push(check), { verdict: "proceed", problems: [] }) });
+    const e = emitted();
+    await buildTestsStep(f.deps)(context([v1], { emit: e.emit }));
+    expect(asked).toMatchObject([
+      { kind: "red", scenario: { id: "S1" }, exists: true, output: allRed.S1 },
+      { kind: "red", scenario: { id: "S2" }, exists: true, output: allRed.S2 },
+    ]);
+    expect(e.rows).toEqual([["scenario.red", { scenario: "S1" }], ["scenario.red", { scenario: "S2" }]]);
+    expect(f.calls).toEqual(["writer", "commit", "implement"]);
+  });
+
+  it("sends the writer back with the problems of a scenario whose test fails for the wrong reason", async () => {
+    let n = 0;
+    const f = fakes([tagged("S1", "S2")], { judgeRed: async (c) => (c.scenario?.id === "S2" && n++ === 0 ? { verdict: "flag", problems: ["the test fails on an import"] } : { verdict: "proceed", problems: [] }) });
+    await buildTestsStep(f.deps)(context([v1]));
+    expect(f.calls).toEqual(["writer", "writer", "commit", "implement"]);
+    expect(f.reviews[1]!.join(" ")).toMatch(/S2.*import/);
+  });
+
+  it("sends the writer back for a scenario with no red reported, twice at most, and escalates the third time", async () => {
+    const f = fakes([tagged("S1", "S2")], {}, [{ S1: "FAIL" }]);
+    const result = await buildTestsStep(f.deps)(context([v1]));
+    expect(f.calls).toEqual(["writer", "writer", "writer", "discard"]);
+    expect(f.reviews[1]!.join(" ")).toMatch(/S2.*red/);
+    expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "other", reason: expect.stringMatching(/S2/) } });
+  });
+
+  it("does not block on a check that did not answer: skipped is flagged on the step", async () => {
+    const f = fakes([tagged("S1")], { judgeRed: async () => ({ verdict: "skipped", problems: [] }) });
+    const result = await buildTestsStep(f.deps)(context([v2]));
+    expect(f.calls).toEqual(["writer", "commit", "implement"]);
+    expect(result.detail).toMatchObject({ testsStep: { status: "committed", redCheck: "skipped" } });
+  });
+});
 
 describe("Build's tests step", () => {
   it("runs the test writer, commits its tests with the plan's version, then runs the implementer with the tests listed by scenario", async () => {

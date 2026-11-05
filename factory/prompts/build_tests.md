@@ -1,6 +1,6 @@
 # {{agent}}, attempt {{attempt}}
 
-You are `{{agent}}`. The worktree is `/work`, on the task branch `{{task.branch}}`. Write one failing test per approved scenario below, before any production code exists. Do not commit: the machine checks the diff and commits.
+You are `{{agent}}`. The worktree is `/work`, on the task branch `{{task.branch}}`. Write one failing test per approved scenario below, before any production code exists. Run each test and report its failure with `mcp__luna__scenario_red`, once per scenario. Do not commit: the machine checks the diff and the reds, and commits.
 
 ## Task
 {{task.title}}

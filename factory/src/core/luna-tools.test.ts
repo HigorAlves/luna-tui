@@ -21,7 +21,24 @@ describe("lunaHandlers", () => {
   });
 
   it("describes the six tools for any runtime to serve", () => {
-    expect(Object.keys(LUNA_TOOLS).sort()).toEqual(["card_search", "decision_get", "scope_check", "slice_init", "slice_list", "slice_set", "step"]);
+    expect(Object.keys(LUNA_TOOLS).sort()).toEqual(["card_search", "decision_get", "scenario_red", "scope_check", "slice_init", "slice_list", "slice_set", "step"]);
+  });
+});
+
+describe("scenario_red", () => {
+  it("records each scenario's failing output in the checks folder, the latest report of a scenario winning", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "luna-reds-"));
+    const luna = lunaHandlers({ ledgerPath: join(dir, "ledger.json"), decisions: [], emit: () => {}, checksDir: join(dir, "checks") });
+    expect(await luna.call("scenario_red", { scenario: "S1", output: "FAIL: cart.export is not a function" })).toMatchObject({ recorded: true });
+    await luna.call("scenario_red", { scenario: "S2", output: "FAIL two" });
+    await luna.call("scenario_red", { scenario: "S1", output: "FAIL: again" });
+    expect(JSON.parse(readFileSync(join(dir, "checks", "scenario-reds.json"), "utf8"))).toEqual({ S1: "FAIL: again", S2: "FAIL two" });
+  });
+
+  it("asks for a scenario id and an output", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "luna-reds-"));
+    const luna = lunaHandlers({ ledgerPath: join(dir, "ledger.json"), decisions: [], emit: () => {} });
+    expect(await luna.call("scenario_red", { scenario: "S1" })).toMatchObject({ error: expect.stringContaining("output") });
   });
 });
 

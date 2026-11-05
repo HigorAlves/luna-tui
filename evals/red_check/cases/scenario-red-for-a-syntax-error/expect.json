@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "right_reason.value",
+      "value": false
+    }
+  ],
+  "rubric": "The file does not parse: the scenario's behaviour was never exercised.",
+  "label": {
+    "right_reason": {
+      "value": false
+    }
+  }
+}

@@ -255,6 +255,14 @@ function problemsOf(pack: "red_check" | "scope_check", answer: Record<string, un
   ];
 }
 
+/** red_check over one check context (a slice's red, or a scenario's in Build's tests step): the verdict, and what a no says is wrong whatever the confidence. */
+export async function judgeRedCheck(decide: Decide | null, check: CheckContext, repoPath: string | null, overrides: Record<string, DecisionOverrides>, log: (line: string) => void = () => {}): Promise<CheckAnswer & { recordId?: string }> {
+  const { verdict, answer, recordId } = await judgeCheck(decide, "red_check", check, repoPath, overrides, log);
+  if (!answer) return { verdict: "skipped", problems: [] };
+  const problems = problemsOf("red_check", answer);
+  return { verdict: verdict === "proceed" && problems.length > 0 ? "flag" : verdict, problems, ...(recordId ? { recordId } : {}) };
+}
+
 /** The machine's side of the mailbox: judges a red slice and a scope request, answers in files the
  *  luna tools wait on, and computes the facts once more over the final diff. */
 export function buildChecks(deps: BuildChecksDeps) {

@@ -49,6 +49,11 @@ export const LUNA_TOOLS = {
       "Search the titles of this repository's cards (open ones and those closed in the last 90 days) for a topic, so you can say \"related to card X\". Read-only: returns at most 10 of { id, title, state }, only cards that came from the same source as this one (a GitHub card sees GitHub cards), and nothing from another repository; never a summary or a description. An empty list or a verdict of skipped means nothing matched or no one answered; go on.",
     input: { query: z.string().min(1).max(300) },
   },
+  scenario_red: {
+    description:
+      "Report that the test you wrote for one scenario fails, with the failing output's last lines: { scenario: 'S1', output: '...' }. Call it once per scenario after running its test. The machine judges each report; a scenario with no report, or whose test fails for the wrong reason, comes back to you.",
+    input: { scenario: z.string().min(1).max(40), output: z.string() },
+  },
   slice_list: { description: "The slice ledger as it stands.", input: {} },
   decision_get: {
     description: "A decision already settled for this task (by key, e.g. 'driver'), from the stage input's decisions; empty when nothing was settled.",
@@ -159,6 +164,20 @@ export function lunaHandlers(options: LunaToolsOptions) {
       clear("card-search.json");
       writeFileSync(join(options.checksDir, "card-search-request.json"), JSON.stringify({ query }) + "\n");
       return answerOf("card-search.json");
+    },
+    scenario_red: ({ scenario, output }) => {
+      if (!options.checksDir) return { recorded: false };
+      mkdirSync(options.checksDir, { recursive: true });
+      const file = join(options.checksDir, "scenario-reds.json");
+      let reds: Record<string, string> = {};
+      try {
+        reds = JSON.parse(readFileSync(file, "utf8")) as Record<string, string>;
+      } catch {
+        // the first report, or a half-written file: start again
+      }
+      reds[scenario] = output;
+      writeFileSync(file, JSON.stringify(reds, null, 2) + "\n");
+      return { recorded: true };
     },
     slice_list: () => state.ledger,
     decision_get: ({ key }) => {

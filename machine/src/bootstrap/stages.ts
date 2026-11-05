@@ -34,6 +34,7 @@ import { imageExists, removeLeftoverContainers, runSandbox, sandboxExecutor } fr
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
 import { HOST_GIT, commitAll, discardPending, findCommitBySubject, headCommit, stagePending } from "../adapters/git/worktree.ts";
+import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { buildTestsStep } from "../application/stages/build-tests.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { type GitHub, noTokenGitHub } from "../application/github.ts";
@@ -165,6 +166,10 @@ export async function buildRealStages(
     implementing: buildTestsStep({
       implement: (context, extra) => runAgent(deps, context, "implementing", extra),
       runWriter: (context, extra) => runAgent(deps, context, "build_tests", extra.plan ? { plan: extra.plan } : {}),
+      judgeRed: async (check, repoPath) => {
+        const policy = repoPath ? await policies.for(repoPath) : null;
+        return judgeRedCheck(buildDecisions?.decide ?? null, check, repoPath, policy?.decisions ?? {});
+      },
       holdout: async (repoPath) => (await policies.for(repoPath)).holdoutCases,
       git: {
         pending: stagePending,

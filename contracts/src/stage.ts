@@ -636,6 +636,9 @@ export type PlanContext = z.infer<typeof PlanContext>;
 export const CheckContext = z.object({
   kind: z.enum(["red", "scope", "finding", "e2e"]),
   slice: z.object({ id: z.number().int(), title: z.string(), acceptance: z.array(z.string()) }).optional(),
+  /** red, for a scenario's test (Build's tests step): the scenario, and the machine's fact that its tagged test is in the diff. */
+  scenario: z.object({ id: z.string(), title: z.string(), given: z.string().nullable().optional(), when: z.string().nullable().optional(), then: z.string().nullable().optional(), approach: z.string().optional() }).optional(),
+  exists: z.boolean().optional(),
   /** red: the failing output's tail. */
   output: z.string().optional(),
   planned: z.array(z.string()).optional(),
