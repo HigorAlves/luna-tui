@@ -1904,8 +1904,6 @@ pub struct BuildBudget {
 pub struct BuildCheckpoint {
     pub sha: String,
     pub follows: String,
-    #[serde(default)]
-    pub at: String,
 }
 
 /// What Build shows while it runs: each scenario red or green, the budget against its limits, the last checkpoint.
