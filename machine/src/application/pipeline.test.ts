@@ -406,6 +406,25 @@ describe("what a person does after an escalation", () => {
   });
 });
 
+describe("the tests commit a later run of the card may trust", () => {
+  it("hands a run the sha the machine itself recorded on an earlier finish row, and nothing for a sha that is not a sha", async () => {
+    const seen: Array<string | undefined> = [];
+    const results = [
+      { outcome: "fail" as const, detail: { testsStep: { status: "committed", commit: "abc1234def" } } },
+      { outcome: "fail" as const, detail: { testsStep: { status: "committed", commit: "not a sha; rm -rf" } } },
+      { outcome: "fail" as const },
+    ];
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async (context) => (seen.push(context.testsCommit), results[Math.min(seen.length - 1, results.length - 1)]!) : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(seen[0]).toBeUndefined();
+    expect(seen[1]).toBe("abc1234def");
+    // The newest finish row with a sha wins; a malformed one is ignored.
+    expect(seen[2]).toBe("abc1234def");
+  });
+});
+
 describe("a scope problem gets one fix pass, then a person", () => {
   const red = { outcome: "fail" as const, detail: { scopeRed: true, error: "scope check failed" }, findings: [{ path: "x.ts", line: 0, start_line: null, severity: "scope", title: "file outside the plan, not declared", body: "revert it", suggestion_code: null, confidence: 1 }] };
 

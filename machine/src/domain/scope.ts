@@ -40,39 +40,55 @@ const TOKEN = /xox[abposr]-|gh[oprsu]_|github_pat_|\bsk-[A-Za-z0-9_-]{20,}|\b[sr
 const SECRET_FILE = /(^|\/)(\.env(\..*)?|\.envrc|\.npmrc|id_(rsa|ecdsa|ed25519)|[^/]+\.(pem|key|p12|pfx))$/;
 /** A match is named by its first four characters: the fact is that one exists, never its value. */
 
-/** The added lines of a unified diff (`git diff <from> <to>`). */
+/** Whether a diff line belongs to a file's header block: git writes it after `diff --git` and before the first hunk. A content line is never a header, whatever it starts with. */
+const HEADER_LINE = /^(diff |index |old mode|new mode|deleted file mode|new file mode|similarity index|dissimilarity index|rename from|rename to|copy from|copy to|Binary files|--- |\+\+\+ )/;
+
+/** The added lines of a unified diff (`git diff <from> <to>`). A file header is read only inside the header block after a `diff --git` line. */
 export function addedLinesOf(diff: string): AddedLine[] {
   const added: AddedLine[] = [];
   let path = "";
   let section: string | undefined;
+  let header = false;
   for (const raw of diff.split("\n")) {
-    if (raw.startsWith("+++ ")) {
+    if (raw.startsWith("diff --git ")) {
+      header = true;
+      path = "";
+      section = undefined;
+    } else if (header && raw.startsWith("+++ ")) {
       path = raw.slice(4).replace(/^b\//, "");
-      section = undefined;
-    } else if (raw.startsWith("--- ") || raw.startsWith("diff ") || raw.startsWith("index ")) {
-      continue;
     } else if (raw.startsWith("@@")) {
+      header = false;
       section = undefined;
+    } else if (header && HEADER_LINE.test(raw)) {
+      continue;
     } else if (path && (raw.startsWith("+") || raw.startsWith(" "))) {
+      header = false;
       const line = raw.slice(1);
-      const header = TOML.test(path) ? HEADER.exec(line.trim()) : null;
-      if (header) section = header[1];
+      const found = TOML.test(path) ? HEADER.exec(line.trim()) : null;
+      if (found) section = found[1];
       if (raw.startsWith("+")) added.push({ path, line, ...(section && TOML.test(path) ? { section } : {}) });
     }
   }
   return added;
 }
 
-/** The removed lines of a unified diff, with their file. */
+/** The removed lines of a unified diff, with their file (the header block is read as in `addedLinesOf`). */
 export function removedLinesOf(diff: string): AddedLine[] {
   const removed: AddedLine[] = [];
   let path = "";
+  let header = false;
   for (const raw of diff.split("\n")) {
-    if (raw.startsWith("--- ")) {
+    if (raw.startsWith("diff --git ")) {
+      header = true;
+      path = "";
+    } else if (header && raw.startsWith("--- ")) {
       path = raw.slice(4).replace(/^a\//, "");
-    } else if (raw.startsWith("+++ ") || raw.startsWith("diff ") || raw.startsWith("index ")) {
+    } else if (raw.startsWith("@@")) {
+      header = false;
+    } else if (header && HEADER_LINE.test(raw)) {
       continue;
     } else if (path && raw.startsWith("-")) {
+      header = false;
       removed.push({ path, line: raw.slice(1) });
     }
   }

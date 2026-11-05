@@ -35,6 +35,19 @@ describe("scenario_red", () => {
     expect(JSON.parse(readFileSync(join(dir, "checks", "scenario-reds.json"), "utf8"))).toEqual({ S1: "FAIL: again", S2: "FAIL two" });
   });
 
+  it("keeps the tail of a long output, and stops taking reports once the file would pass what the machine reads", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "luna-reds-"));
+    const luna = lunaHandlers({ ledgerPath: join(dir, "ledger.json"), decisions: [], emit: () => {}, checksDir: join(dir, "checks") });
+    await luna.call("scenario_red", { scenario: "S1", output: `${"x".repeat(9000)}THE TAIL` });
+    const reds = JSON.parse(readFileSync(join(dir, "checks", "scenario-reds.json"), "utf8"));
+    expect(reds.S1.length).toBeLessThanOrEqual(2000);
+    expect(reds.S1.endsWith("THE TAIL")).toBe(true);
+    let refused = false;
+    for (let i = 2; i < 60 && !refused; i++) refused = JSON.stringify(await luna.call("scenario_red", { scenario: `S${i}`, output: "y".repeat(2000) })).includes("too many");
+    expect(refused).toBe(true);
+    expect(readFileSync(join(dir, "checks", "scenario-reds.json")).length).toBeLessThan(64 * 1024);
+  });
+
   it("asks for a scenario id and an output", async () => {
     const dir = mkdtempSync(join(tmpdir(), "luna-reds-"));
     const luna = lunaHandlers({ ledgerPath: join(dir, "ledger.json"), decisions: [], emit: () => {} });

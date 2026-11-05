@@ -55,7 +55,7 @@ function checks(out: string, decide: Decide | null, over: Partial<Parameters<typ
     planned: ["src/a.ts"],
     decide,
     overrides: {},
-    git: { nameStatus: async () => "M\tsrc/a.ts\nA\tsrc/extra.ts", diff: async () => "+++ b/src/a.ts\n@@ -1 +1 @@\n+// TODO later" },
+    git: { nameStatus: async () => "M\tsrc/a.ts\nA\tsrc/extra.ts", diff: async () => "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n+// TODO later" },
     ...over,
   });
 }
@@ -217,7 +217,7 @@ describe("bounds a run's checks", () => {
           : { planned_or_declared: { value: true, p: 0.9 }, no_new_dependency: { value: true, p: 0.9 }, no_secret_or_pii: { value: true, p: 0.9 }, no_test_removed: { value: true, p: 0.9 }, no_todo: { value: false, p: 0.1 }, unrelated_refactors: { value: true, p: 0.9 } };
       },
       overrides: {},
-      git: { nameStatus: async () => "M\ta.ts", diff: async () => "+++ b/a.ts\n+// TODO later\n" },
+      git: { nameStatus: async () => "M\ta.ts", diff: async () => "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n+// TODO later\n" },
     });
     await checks.onRed({ id: 1, title: "s1", status: "red", commit: null, note: "x".repeat(10_000) });
     expect(seen[0]!.output!.length).toBeLessThanOrEqual(NOTE_TAIL);

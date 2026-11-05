@@ -319,32 +319,37 @@ export async function commitAll(path: string, message: string): Promise<string |
   return headCommit(path);
 }
 
-/** Stages everything a stage left in the worktree (new files too) and reads what that adds to HEAD: the name-status and the unified diff. */
-export async function stagePending(path: string): Promise<{ nameStatus: string; diff: string }> {
+/** The new mode of each path in `git diff --raw` output (`:100644 120000 abc def A\tpath`), keyed by the new path. */
+function modesOf(raw: string): Record<string, string> {
+  const modes: Record<string, string> = {};
+  for (const line of raw.split("\n")) {
+    const m = /^:\d+ (\d+) \S+ \S+ [A-Z]\d*\t(?:[^\t]+\t)?(.+)$/.exec(line);
+    if (m) modes[m[2]!] = m[1]!;
+  }
+  return modes;
+}
+
+/** Stages everything a stage left in the worktree (new files too) and reads what that adds to `base`, the commit the run started from: the name-status, the unified diff and each path's new mode. */
+export async function stagePending(path: string, base: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string> }> {
   await execOrThrow("git", [...HOST_GIT, "-C", path, "add", "-A"]);
-  const [nameStatus, diff] = await Promise.all([
-    execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--name-status", "HEAD"]),
-    execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--no-color", "--no-ext-diff", "HEAD"]),
+  const [nameStatus, diff, raw] = await Promise.all([
+    execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--name-status", base]),
+    execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--no-color", "--no-ext-diff", base]),
+    execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--raw", base]),
   ]);
-  return { nameStatus, diff };
+  return { nameStatus, diff, modes: modesOf(raw) };
 }
 
-/** Drops everything uncommitted and untracked in the worktree (a stage's work the machine refused). */
-export async function discardPending(path: string): Promise<void> {
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "reset", "-q", "--hard", "HEAD"]);
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "clean", "-q", "-fd"]);
-}
-
-/** The newest of the last 200 commits on the checked-out branch whose subject is exactly `subject`, with what it changed; null when none. */
-export async function findCommitBySubject(path: string, subject: string): Promise<{ sha: string; nameStatus: string; diff: string } | null> {
-  const log = await execOrThrow("git", [...HOST_GIT, "-C", path, "log", "-n", "200", "--format=%H%x09%s"]);
-  const sha = log.split("\n").map((l) => l.split("\t")).find(([, s]) => s === subject)?.[0];
-  if (!sha) return null;
-  const [nameStatus, diff] = await Promise.all([
+/** What the commit `sha` changed, only when it is an ancestor of HEAD (the machine's own tests commit, never one found by its subject); null otherwise. */
+export async function readCommitDiff(path: string, sha: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string> } | null> {
+  if (!/^[0-9a-f]{7,64}$/.test(sha)) return null;
+  if (!(await isAncestor(path, sha, "HEAD"))) return null;
+  const [nameStatus, diff, raw] = await Promise.all([
     execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--name-status", "--format=", sha]),
     execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--no-color", "--no-ext-diff", "--format=", sha]),
+    execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--raw", "--format=", sha]),
   ]);
-  return { sha, nameStatus, diff };
+  return { nameStatus, diff, modes: modesOf(raw) };
 }
 
 /** The commits made on the checked-out branch after `sinceIso`, newest first, each with its files' names and added and removed line counts (`--numstat`); never a diff. */

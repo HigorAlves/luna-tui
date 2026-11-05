@@ -152,6 +152,21 @@ describe("weakened scenario tests", () => {
   });
 });
 
+describe("file headers in a diff", () => {
+  const diffOf = (...lines: string[]) => ["diff --git a/db/t.sql b/db/t.sql", "index 1..2 100644", "--- a/db/t.sql", "+++ b/db/t.sql", "@@ -1,2 +1,2 @@", ...lines].join("\n");
+
+  it("reads a header only right after the diff line: a content line that looks like one is content", () => {
+    const diff = diffOf("--- @scenario:S1 the old tag comment", "+++ b/src/prod.ts", "+-- @scenario:S2 the new one", " kept");
+    expect(removedLinesOf(diff)).toEqual([{ path: "db/t.sql", line: "-- @scenario:S1 the old tag comment" }]);
+    expect(addedLinesOf(diff)).toEqual([{ path: "db/t.sql", line: "++ b/src/prod.ts" }, { path: "db/t.sql", line: "-- @scenario:S2 the new one" }]);
+  });
+
+  it("follows each file's own header in a diff of several files", () => {
+    const diff = [diffOf("+one"), "diff --git a/b.ts b/b.ts", "new file mode 100644", "index 0..3", "--- /dev/null", "+++ b/b.ts", "@@ -0,0 +1 @@", "+two"].join("\n");
+    expect(addedLinesOf(diff)).toEqual([{ path: "db/t.sql", line: "one" }, { path: "b.ts", line: "two" }]);
+  });
+});
+
 describe("removedLinesOf", () => {
   it("lists each removed line with its file", () => {
     const diff = ["diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts", "@@ -1,2 +1 @@", "-gone", " kept"].join("\n");

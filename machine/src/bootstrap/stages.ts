@@ -33,7 +33,7 @@ import { loadCredential } from "../adapters/credentials/claude.ts";
 import { imageExists, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
-import { HOST_GIT, changedPaths, gitIdentity, commitAll, discardPending, findCommitBySubject, headCommit, stagePending } from "../adapters/git/worktree.ts";
+import { HOST_GIT, changedPaths, gitIdentity, commitAll, headCommit, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { runSweep } from "../application/stages/sweep.ts";
@@ -199,14 +199,15 @@ export async function buildRealStages(
       },
       holdout: async (repoPath) => (await policies.for(repoPath)).holdoutCases,
       git: {
+        head: headCommit,
         pending: stagePending,
         commit: async (path, subject, body) => {
           const sha = await commitAll(path, `${subject}\n\n${body}`);
           if (!sha) throw new Error("the tests step has nothing to commit");
           return sha;
         },
-        discard: discardPending,
-        findTestsCommit: findCommitBySubject,
+        reset: resetWorktree,
+        readCommit: readCommitDiff,
       },
     }),
     ...(triageSignals && agents.triage ? { triage: withTriageSignals(agents.triage, triageSignals) } : {}),

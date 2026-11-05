@@ -23,6 +23,9 @@ const allRed = { S1: "FAIL: cart.export is not a function", S2: "FAIL: cart.tota
 const sweeps: SweepOutcome[] = [];
 function fakes(trees: Array<{ nameStatus: string; diff: string }>, over: Partial<BuildTestsDeps> = {}, reds: Array<Record<string, string>> = [allRed]) {
   const calls: string[] = [];
+  const bases: Array<string> = [];
+  let headValue = "base0";
+  const headNow = () => headValue;
   const reviews: Array<string[] | undefined> = [];
   const implemented: Array<{ scenarioTests?: { scenario: string; file: string }[] }> = [];
   let tree = trees[0]!;
@@ -41,24 +44,25 @@ function fakes(trees: Array<{ nameStatus: string; diff: string }>, over: Partial
       calls.push("writer");
       reviews.push(extra.plan?.review);
       tree = trees[Math.min(reviews.length - 1, trees.length - 1)]!;
-      return { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/w" }, detail: { scenarioReds: reds[Math.min(reviews.length - 1, reds.length - 1)] } };
+      return { outcome: "pass", workspace: { branch: "task/x", worktreePath: "/w" }, run: { inputCommit: "base0" }, detail: { scenarioReds: reds[Math.min(reviews.length - 1, reds.length - 1)] } };
     },
     judgeRed: async () => ({ verdict: "proceed", problems: [] }),
     checkpoint: async (_c, _where, follows) => void calls.push(`checkpoint:${follows}`),
     holdout: async () => false,
     git: {
-      pending: async () => tree,
+      head: async () => headNow(),
+      pending: async (_w, base) => (bases.push(base), tree),
       commit: async (_p, subject, body) => {
         calls.push("commit");
         commit = { subject, body };
         return "abc1234";
       },
-      discard: async () => void calls.push("discard"),
-      findTestsCommit: async () => null,
+      reset: async () => void calls.push("discard"),
+      readCommit: async () => null,
     },
     ...over,
   };
-  return { deps, calls, reviews, implemented, commit: () => commit };
+  return { deps, calls, reviews, implemented, bases, moveHead: (sha: string) => void (headValue = sha), commit: () => commit };
 }
 
 describe("the red check, per scenario", () => {
@@ -230,7 +234,7 @@ describe("Build's tests step", () => {
 
   it("adds the writer's usage to the run's, so the budget counts the tests step's tokens and turns", async () => {
     const f = fakes([tagged("S1")], {
-      runWriter: async () => ({ outcome: "pass", detail: { scenarioReds: { S1: "FAIL" } }, usage: { turns: 4, costUsd: 0.25, tokens: { input: 100, output: 20 } } }) as StageResult,
+      runWriter: async () => ({ outcome: "pass", run: { inputCommit: "base0" }, detail: { scenarioReds: { S1: "FAIL" } }, usage: { turns: 4, costUsd: 0.25, tokens: { input: 100, output: 20 } } }) as StageResult,
       implement: async () => ({ outcome: "pass", usage: { turns: 10, costUsd: 1, tokens: { input: 1000, output: 200 } } }) as StageResult,
     });
     const result = await buildTestsStep(f.deps)(context([v2]));
@@ -245,10 +249,47 @@ describe("Build's tests step", () => {
   });
 
   it("does not write the tests twice: a card whose tests commit exists goes straight to the implementer, with the tests listed from that commit", async () => {
-    const f = fakes([tagged("S1")], { git: { ...fakes([]).deps.git, findTestsCommit: async () => ({ sha: "def5678", ...tagged("S1") }) } });
-    await buildTestsStep(f.deps)(context([v2]));
+    const reads: string[] = [];
+    const f = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async (_w, sha) => (reads.push(sha), tagged("S1")) } });
+    await buildTestsStep(f.deps)(context([v2], { testsCommit: "def5678" }));
     expect(f.calls).toEqual(["implement", "sweep"]);
+    expect(reads).toEqual(["def5678"]);
     expect(f.implemented[0]!.scenarioTests).toEqual([{ scenario: "S1", file: "web/cart.test.ts" }]);
+  });
+
+  it("accepts as the tests commit only the sha the machine itself made: a commit with the right subject that the container forged is not looked for, and a recorded sha that is not on the branch runs the step again", async () => {
+    const f = fakes([tagged("S1")]);
+    await buildTestsStep(f.deps)(context([v2]));
+    expect(f.calls[0]).toBe("writer");
+    const g = fakes([tagged("S1")], { git: { ...fakes([tagged("S1")]).deps.git, readCommit: async () => null } });
+    await buildTestsStep(g.deps)(context([v2], { testsCommit: "def5678" }));
+    expect(g.calls[0]).toBe("writer");
+  });
+
+  it("reads the writer's changes against the base it started from, and refuses a HEAD the container moved: the tree goes back to the base and the writer is sent back once, then a person", async () => {
+    const f = fakes([tagged("S1")]);
+    f.moveHead("forged1");
+    const result = await buildTestsStep(f.deps)(context([v2]));
+    expect(f.calls).toEqual(["writer", "discard", "writer", "discard"]);
+    expect(f.reviews[1]!.join(" ")).toMatch(/commit/);
+    expect(result).toMatchObject({ outcome: "escalated" });
+    const ok = fakes([tagged("S1")]);
+    await buildTestsStep(ok.deps)(context([v2]));
+    expect(ok.bases).toEqual(["base0"]);
+  });
+
+  it("fails closed when the run does not say what it started from", async () => {
+    const f = fakes([tagged("S1")], { runWriter: async () => ({ outcome: "pass", detail: { scenarioReds: { S1: "x" } } }) as StageResult });
+    expect(await buildTestsStep(f.deps)(context([v2]))).toMatchObject({ outcome: "fail" });
+    expect(f.calls).toEqual([]);
+  });
+
+  it("sends back a test line that carries several scenario ids", async () => {
+    const one = { nameStatus: "A\tweb/cart.test.ts", diff: ["diff --git a/web/cart.test.ts b/web/cart.test.ts", "--- /dev/null", "+++ b/web/cart.test.ts", "@@ -0,0 +1 @@", '+it("x @scenario:S1 @scenario:S2", () => {})'].join("\n") };
+    const f = fakes([one]);
+    const result = await buildTestsStep(f.deps)(context([v1]));
+    expect(f.reviews[1]!.join(" ")).toMatch(/several/);
+    expect(result).toMatchObject({ outcome: "escalated" });
   });
 
   it("passes a writer's failure or usage limit straight up", async () => {

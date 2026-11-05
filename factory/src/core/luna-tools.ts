@@ -175,8 +175,11 @@ export function lunaHandlers(options: LunaToolsOptions) {
       } catch {
         // the first report, or a half-written file: start again
       }
-      reds[scenario] = output;
-      writeFileSync(file, JSON.stringify(reds, null, 2) + "\n");
+      // The machine reads this file bounded (64 KB): an output is kept by its tail, and a report that would pass the bound is refused.
+      const next = { ...reds, [scenario]: output.slice(-2000) };
+      const text = JSON.stringify(next, null, 2) + "\n";
+      if (Buffer.byteLength(text) > 60_000) return { recorded: false, error: "too many reports: the file would be too big for the machine to read" };
+      writeFileSync(file, text);
       return { recorded: true };
     },
     slice_list: () => state.ledger,

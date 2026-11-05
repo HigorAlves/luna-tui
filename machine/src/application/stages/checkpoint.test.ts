@@ -51,4 +51,12 @@ describe("checkpointPush", () => {
     await checkpointPush({ ...s.deps, branch: "task/x", cwd: "/w", follows: "green", alreadyPushed: sha });
     expect(s.pushes).toHaveLength(0);
   });
+
+  it("puts the push's stderr through safe() before it is a note: a token in it is redacted", async () => {
+    const token = ["ghp", "a".repeat(36)].join("_");
+    const s = setup([{ code: 1, stdout: "", stderr: `remote: https://x-access-token:${token}@github.com denied` }]);
+    await checkpointPush({ ...s.deps, branch: "task/x", cwd: "/w", follows: "green" });
+    expect(s.notes[0]).toMatch(/checkpoint not pushed/);
+    expect(s.notes[0]).not.toContain(token);
+  });
 });

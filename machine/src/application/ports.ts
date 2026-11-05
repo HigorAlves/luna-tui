@@ -27,6 +27,8 @@ export interface StageContext {
   approvals: ApprovalRow[];
   /** For the plan stage after a plan was found wrong in Build, Verify or review: who raised it and the evidence (data, flattened and capped). */
   replan?: NonNullable<PlanContext["replan"]>;
+  /** For implementing: the sha of the tests commit the machine itself made on an earlier run of this card (kept on that run's finish row); the tests step trusts no other. */
+  testsCommit?: string;
   /** For implementing: the minutes Build's budget has left; a run's time limit is the smaller of its own and this. */
   budgetMinutes?: number;
   /** Findings from the latest verifying run, fed to the next implementing attempt. */

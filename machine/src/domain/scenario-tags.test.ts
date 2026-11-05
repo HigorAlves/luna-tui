@@ -19,7 +19,7 @@ describe("scenarioTags", () => {
   });
 
   it("refuses a production file in the diff and a removed test, allowing fixtures beside the tests", () => {
-    const text = diff("web/cart.test.ts", `it("a @scenario:S1 @scenario:S2", () => {`);
+    const text = diff("web/cart.test.ts", `it("a @scenario:S1", () => {`, `it("b @scenario:S2", () => {`);
     const facts = scenarioTags({ nameStatus: "A\tweb/cart.test.ts\nA\tweb/__fixtures__/cart.json\nA\tsrc/prod.ts\nD\tweb/old.test.ts", diff: text, scenarios });
     expect(facts.nonTest).toEqual(["src/prod.ts"]);
     expect(facts.removed).toEqual(["web/old.test.ts"]);
@@ -27,7 +27,37 @@ describe("scenarioTags", () => {
   });
 
   it("takes the map's test files as test files", () => {
-    const text = diff("checks/cart.check.ts", `it("a @scenario:S1 @scenario:S2", () => {`);
+    const text = diff("checks/cart.check.ts", `it("a @scenario:S1", () => {`, `it("b @scenario:S2", () => {`);
     expect(scenarioTags({ nameStatus: "A\tchecks/cart.check.ts", diff: text, scenarios, testFiles: ["checks/cart.check.ts"] }).ok).toBe(true);
+  });
+
+  it("counts a deleted or renamed-away file that is not a test or a fixture as a change to production code", () => {
+    const text = diff("web/cart.test.ts", `it("a @scenario:S1", () => {`, `it("b @scenario:S2", () => {`);
+    expect(scenarioTags({ nameStatus: "A\tweb/cart.test.ts\nD\tsrc/auth/guard.ts\nD\t.github/workflows/ci.yml", diff: text, scenarios }).nonTest).toEqual(["src/auth/guard.ts", ".github/workflows/ci.yml"]);
+    expect(scenarioTags({ nameStatus: "A\tweb/cart.test.ts\nR100\tsrc/payments.ts\tweb/payments.test.ts", diff: text, scenarios }).nonTest).toEqual(["src/payments.ts"]);
+  });
+
+  it("never takes a control-plane path for a test file or a fixture, whatever its name", () => {
+    const text = diff("web/cart.test.ts", `it("a @scenario:S1", () => {`, `it("b @scenario:S2", () => {`);
+    for (const path of [".github/workflows/test.yml", "scripts/test.sh", "Dockerfile.test", "docker-compose.test.yml", ".github/CODEOWNERS", "tests/__fixtures__/.github/workflows/x.yml"]) {
+      expect(scenarioTags({ nameStatus: `A\tweb/cart.test.ts\nA\t${path}`, diff: text, scenarios }).nonTest, path).toEqual([path]);
+    }
+  });
+
+  it("takes a file under a test folder only with a source extension, or inside a fixture folder", () => {
+    const text = diff("tests/a.test.ts", `it("a @scenario:S1", () => {`, `it("b @scenario:S2", () => {`);
+    expect(scenarioTags({ nameStatus: "A\ttests/a.test.ts\nA\ttests/run.sh\nA\ttests/fixtures/data.json", diff: text, scenarios }).nonTest).toEqual(["tests/run.sh"]);
+  });
+
+  it("refuses a symlink or a nested repository the writer added, and a tag on a symlink does not count", () => {
+    const text = diff("web/cart.test.ts", `it("a @scenario:S1", () => {`);
+    const facts = scenarioTags({ nameStatus: "A\tweb/cart.test.ts\nA\ttests/link.test.ts\nA\ttests/vendor", diff: text, scenarios, modes: { "tests/link.test.ts": "120000", "tests/vendor": "160000", "web/cart.test.ts": "100644" } });
+    expect(facts.nonTest).toEqual(["tests/link.test.ts", "tests/vendor"]);
+  });
+
+  it("sends back a line that carries several scenario ids instead of crediting each", () => {
+    const text = diff("web/cart.test.ts", `it("a @scenario:S1 @scenario:S2", () => {`);
+    const facts = scenarioTags({ nameStatus: "A\tweb/cart.test.ts", diff: text, scenarios });
+    expect(facts).toMatchObject({ ok: false, ambiguous: ["web/cart.test.ts"], missing: ["S1", "S2"] });
   });
 });

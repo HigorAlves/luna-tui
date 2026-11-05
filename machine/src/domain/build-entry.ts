@@ -11,11 +11,14 @@ export function buildEntryOf(approvals: readonly ApprovalRow[], record: unknown)
   if (!approval) return entryContract({ plan: null, scenarios: [], untestable: [], map: null, mapNote: null, risk: null, record });
   const requested = approval.requested;
   const parsedPlan = Plan.safeParse(requested.plan);
-  const legacy = !parsedPlan.success;
+  // The lighter v1 contract is for a gate written before the v2.2 Plan: one with no `plan` at all. A plan that is there but invalid is a missing plan.
+  const legacy = requested.plan === undefined;
   const plan: Plan | null = parsedPlan.success
     ? parsedPlan.data
-    : planOf({ brief: typeof requested.brief === "string" ? requested.brief : "", criteria: strings(requested.criteria), slices: Array.isArray(requested.slices) ? requested.slices : [] });
-  const criteria = plan.acceptance_criteria.length ? plan.acceptance_criteria : criteriaOf(strings(requested.criteria));
+    : !legacy
+      ? null
+      : planOf({ brief: typeof requested.brief === "string" ? requested.brief : "", criteria: strings(requested.criteria), slices: Array.isArray(requested.slices) ? requested.slices : [] });
+  const criteria = plan && plan.acceptance_criteria.length ? plan.acceptance_criteria : criteriaOf(strings(requested.criteria));
   const scenarios = (Array.isArray(requested.cases) ? requested.cases : []).flatMap((c, i) => {
     const parsed = Scenario.safeParse(c);
     return parsed.success ? [scenarioOf(parsed.data, i, criteria)] : [];

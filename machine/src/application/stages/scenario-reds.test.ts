@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -24,5 +24,16 @@ describe("readScenarioReds", () => {
   it("is empty when the writer reported nothing or the file is not JSON", async () => {
     expect(await readScenarioReds(outWith(null))).toEqual({});
     expect(await readScenarioReds(outWith("{half"))).toEqual({});
+  });
+
+  it("does not follow a symlink the container planted in place of the file, and refuses one that is too big", async () => {
+    const out = mkdtempSync(join(tmpdir(), "reds-"));
+    mkdirSync(join(out, "checks"));
+    const target = join(out, "secret.json");
+    writeFileSync(target, JSON.stringify({ S1: "from a host file" }));
+    symlinkSync(target, join(out, "checks", "scenario-reds.json"));
+    expect(await readScenarioReds(out)).toEqual({});
+    const big = outWith(JSON.stringify({ S1: "x".repeat(70_000) }));
+    expect(await readScenarioReds(big)).toEqual({});
   });
 });

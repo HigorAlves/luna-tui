@@ -2006,6 +2006,16 @@ export class Pipeline {
     return (await this.store.findFinishedEvents(id)).filter((e) => e.payload.stage === "implementing" && objectOf(e.payload.detail)?.scopeRed === true).length;
   }
 
+  /** The sha of the tests commit the machine itself made, from the newest implementing finish row that kept one (a sha, nothing else); undefined when there is none. */
+  private async testsCommitOf(id: string): Promise<string | undefined> {
+    for (const finished of await this.store.findFinishedEvents(id)) {
+      if (finished.payload.stage !== "implementing") continue;
+      const commit = objectOf(objectOf(finished.payload.detail)?.testsStep)?.commit;
+      if (typeof commit === "string" && /^[0-9a-f]{7,64}$/.test(commit)) return commit;
+    }
+    return undefined;
+  }
+
   /** The minutes of Build's budget the card has left. */
   private async buildMinutesLeft(id: string, repoPath: string | null): Promise<number> {
     const limits = (await this.policyFor(repoPath)).factory.build;
@@ -2074,6 +2084,7 @@ export class Pipeline {
       ]);
       repo = task.repoPath;
       const budgetMinutes = stage === "implementing" && task.route === "feature" ? await this.buildMinutesLeft(id, task.repoPath) : undefined;
+      const testsCommit = stage === "implementing" && task.route === "feature" ? await this.testsCommitOf(id) : undefined;
       // The entry contract of Build: the feature route builds only from what Plan hands over; what is missing goes back to the planner (once per card), then to a person.
       const entry = stage === "implementing" && task.route === "feature" && !resume ? buildEntryOf(approvals, task.record) : null;
       if (entry && !entry.ok) {
@@ -2089,6 +2100,7 @@ export class Pipeline {
         priorFindings,
         ...(replan ? { replan } : {}),
         ...(budgetMinutes !== undefined ? { budgetMinutes } : {}),
+        ...(testsCommit ? { testsCommit } : {}),
         signal,
         ...(resume ? { resume: { container: resume.container, inputCommit: resume.inputCommit, engine: resume.engine } } : {}),
         ...(fallback ? { engine: fallback.engine } : {}),

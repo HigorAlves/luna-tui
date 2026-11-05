@@ -22,6 +22,8 @@ export interface EntryContractResult {
   readAs: "v1" | "v2";
 }
 
+const PLAIN_ID = /^[A-Za-z0-9_-]{1,40}$/;
+
 export function entryContract(input: EntryContractInput): EntryContractResult {
   const { plan, scenarios } = input;
   const missing: string[] = [];
@@ -35,7 +37,8 @@ export function entryContract(input: EntryContractInput): EntryContractResult {
     const excused = new Set(input.untestable);
     const proved = new Set(scenarios.map((s) => s.criterion_ref ?? null));
     for (const c of plan.acceptance_criteria) {
-      if (!excused.has(c.id) && !proved.has(c.id)) missing.push(`a scenario for criterion ${c.id}`);
+      // A planner wrote the id: it is named only when it is a plain id, so it never reaches the stream or a reason as free text.
+      if (!excused.has(c.id) && !proved.has(c.id)) missing.push(PLAIN_ID.test(c.id) ? `a scenario for criterion ${c.id}` : "a scenario for (an unnamed criterion)");
     }
     const planned = plan.steps.some((s) => (s.files ?? s.touchpoints).length > 0);
     if (!planned) missing.push("at least one planned file");

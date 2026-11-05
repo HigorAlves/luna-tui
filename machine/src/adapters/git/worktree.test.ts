@@ -1,11 +1,11 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { commitsSince, dirtyFiles, stagePending, discardPending, findCommitBySubject, branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
+import { commitsSince, dirtyFiles, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -258,35 +258,51 @@ describe("the tests step's git", () => {
     writeFileSync(join(root, "a.txt"), "a\n");
     git(root, "add", "-A");
     git(root, "commit", "-q", "-m", "init");
-    return root;
+    return { root, base: git(root, "rev-parse", "HEAD") };
   };
 
-  it("stages what the writer left, new files included, and reads it as a name-status and a diff", async () => {
-    const root = repoWith();
+  it("stages what the writer left, new files included, and reads it against the base as a name-status, a diff and each path's new mode", async () => {
+    const { root, base } = repoWith();
     writeFileSync(join(root, "cart.test.ts"), "it('x @scenario:S1', () => {})\n");
-    const pending = await stagePending(root);
+    const pending = await stagePending(root, base);
     expect(pending.nameStatus).toBe("A\tcart.test.ts");
     expect(pending.diff).toContain("+it('x @scenario:S1'");
+    expect(pending.modes).toEqual({ "cart.test.ts": "100644" });
   });
 
-  it("discards everything the writer left: edits and new files", async () => {
-    const root = repoWith();
-    writeFileSync(join(root, "a.txt"), "changed\n");
-    writeFileSync(join(root, "new.test.ts"), "x\n");
-    await stagePending(root);
-    await discardPending(root);
-    expect(await dirtyFiles(root)).toEqual([]);
-    expect(existsSync(join(root, "new.test.ts"))).toBe(false);
+  it("reports a symlink as mode 120000 and a nested repository as 160000", async () => {
+    const { root, base } = repoWith();
+    mkdirSync(join(root, "tests"));
+    symlinkSync("../a.txt", join(root, "tests", "link.test.ts"));
+    mkdirSync(join(root, "tests", "vendor"));
+    git(join(root, "tests", "vendor"), "init", "-q", "-b", "main");
+    writeFileSync(join(root, "tests", "vendor", "f"), "x");
+    git(join(root, "tests", "vendor"), "add", "-A");
+    git(join(root, "tests", "vendor"), "commit", "-q", "-m", "n");
+    const pending = await stagePending(root, base);
+    expect(pending.modes?.["tests/link.test.ts"]).toBe("120000");
+    expect(pending.modes?.["tests/vendor"]).toBe("160000");
   });
 
-  it("finds the commit with a subject, with what it changed, and null when there is none", async () => {
-    const root = repoWith();
-    expect(await findCommitBySubject(root, "test(abc): scenarios")).toBeNull();
+  it("reads against the base even when the container committed in between", async () => {
+    const { root, base } = repoWith();
+    writeFileSync(join(root, "src.ts"), "production\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "test(abc): scenarios");
+    const pending = await stagePending(root, base);
+    expect(pending.nameStatus).toBe("A\tsrc.ts");
+  });
+
+  it("reads what one commit changed, only when it is an ancestor of HEAD", async () => {
+    const { root } = repoWith();
     writeFileSync(join(root, "cart.test.ts"), "t\n");
     const sha = await commitAll(root, "test(abc): scenarios\n\nplan version 2");
-    const found = await findCommitBySubject(root, "test(abc): scenarios");
-    expect(found).toMatchObject({ sha, nameStatus: "A\tcart.test.ts" });
-    expect(found!.diff).toContain("+t");
+    const read = await readCommitDiff(root, sha!);
+    expect(read).toMatchObject({ nameStatus: "A\tcart.test.ts", modes: { "cart.test.ts": "100644" } });
+    expect(read!.diff).toContain("+t");
+    git(root, "checkout", "-q", "-b", "other", "HEAD~1");
+    expect(await readCommitDiff(root, sha!)).toBeNull();
+    expect(await readCommitDiff(root, "nonsense")).toBeNull();
   });
 });
 

@@ -41,4 +41,12 @@ describe("the entry contract read from the approved gate", () => {
   it("names no approved plan when there is no approval", () => {
     expect(buildEntryOf([], record).missing.join(" ")).toMatch(/plan/);
   });
+
+  it("reads a gate as v1 only when it has no plan at all: a plan that is present but invalid is a missing plan", () => {
+    const gate = approval({ plan: { goal: "g", steps: "not an array" }, brief: "b", criteria: ["c"], slices: [{ title: "s", est_loc: 1, touchpoints: ["a.ts"], acceptance: ["x"] }], cases: [{ title: "t", criterion: "c", approach: "a" }] });
+    const result = buildEntryOf([gate], null);
+    expect(result.ok).toBe(false);
+    expect(result.readAs).toBe("v2");
+    expect(result.missing.join(" ")).toMatch(/plan/);
+  });
 });

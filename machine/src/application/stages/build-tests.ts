@@ -13,6 +13,8 @@ import type { SweepOutcome } from "./sweep.ts";
 export interface TestsDiff {
   nameStatus: string;
   diff: string;
+  /** The new mode of each path (`git diff --raw`): a symlink (120000) or a gitlink (160000) is never a test. */
+  modes?: Record<string, string>;
 }
 
 export interface BuildTestsDeps {
@@ -31,14 +33,16 @@ export interface BuildTestsDeps {
   /** The repo's `holdout_cases`: the implementer must not see the scenarios, so no test is written for it to read. */
   holdout: (repoPath: string) => Promise<boolean>;
   git: {
-    /** Stages everything the writer left in the worktree and says what that adds to HEAD. */
-    pending: (worktree: string) => Promise<TestsDiff>;
+    /** The worktree's HEAD now. */
+    head: (worktree: string) => Promise<string>;
+    /** Stages everything the writer left in the worktree and says what that adds to `base`, the commit the run started from. */
+    pending: (worktree: string, base: string) => Promise<TestsDiff>;
     /** Commits what is staged; the sha. */
     commit: (worktree: string, subject: string, body: string) => Promise<string>;
-    /** Drops everything the writer left. */
-    discard: (worktree: string) => Promise<void>;
-    /** The commit an earlier run of this step made on the card's branch, with what it changed. */
-    findTestsCommit: (worktree: string, subject: string) => Promise<({ sha: string } & TestsDiff) | null>;
+    /** Puts the worktree back on `base`: whatever the writer left or committed is gone. */
+    reset: (worktree: string, base: string) => Promise<void>;
+    /** What the commit `sha` changed, when it is an ancestor of HEAD; null otherwise. The sha is the one the machine itself recorded, never one found by its subject. */
+    readCommit: (worktree: string, sha: string) => Promise<TestsDiff | null>;
   };
 }
 
@@ -62,6 +66,7 @@ function problemsOf(facts: ScenarioTagFacts): string[] {
   const path = (p: string) => (isPlainRepoPath(p) ? safe(p).slice(0, 120) : "(a path that is not a plain repository path)");
   return [
     ...(facts.missing.length ? [`no test tagged @scenario:<id> for ${facts.missing.slice(0, MAX_NAMED).join(", ")}`] : []),
+    ...(facts.ambiguous.length ? [`a test line carries several scenario ids; one @scenario:<id> per line: ${facts.ambiguous.slice(0, MAX_NAMED).map(path).join(", ")}`] : []),
     ...(facts.nonTest.length ? [`only test files and fixtures beside them may change; not ${facts.nonTest.slice(0, MAX_NAMED).map(path).join(", ")}`] : []),
     ...(facts.removed.length ? [`a test file was removed: ${facts.removed.slice(0, MAX_NAMED).map(path).join(", ")}`] : []),
   ];
@@ -112,16 +117,17 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     const subject = `test(${task.id.slice(0, 8)}): scenarios`;
     const testsOf = (facts: ScenarioTagFacts) => Object.entries(facts.tagged).map(([scenario, file]) => ({ scenario, file }));
     const worktree = task.worktreePath;
-    const earlier = worktree ? await deps.git.findTestsCommit(worktree, subject) : null;
+    // Only the sha the machine itself committed (kept on the stage's finish row) is the tests commit, and only while it is on the branch.
+    const earlier = worktree && context.testsCommit ? await deps.git.readCommit(worktree, context.testsCommit) : null;
     if (earlier) {
       const facts = scenarioTags({ ...earlier, scenarios });
-      return withStep(await implementSwept({ scenarioTests: testsOf(facts) }), { status: "committed", commit: earlier.sha, resumed: true, scenarioTests: testsOf(facts) });
+      return withStep(await implementSwept({ scenarioTests: testsOf(facts) }), { status: "committed", commit: context.testsCommit!, resumed: true, scenarioTests: testsOf(facts) });
     }
 
     const approved = context.approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
     const plan = Plan.safeParse(approved?.requested.plan);
-    const escalate = async (where: string, problems: string[]): Promise<StageResult> => {
-      await deps.git.discard(where);
+    const escalate = async (where: string, base: string, problems: string[]): Promise<StageResult> => {
+      await deps.git.reset(where, base);
       return { outcome: "escalated", ...(writerUsage ? { usage: writerUsage } : {}), detail: { escalation: "other", reason: `the tests step could not make a tagged test that fails for the right reason for every scenario: ${problems.join("; ")}`, testsStep: { status: "failed", problems } } };
     };
     // A missing tag is sent back once; a red that is missing or wrong, twice.
@@ -134,11 +140,21 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       if (written.outcome !== "pass") return withUsage(written, writerUsage);
       const where = written.workspace?.worktreePath ?? worktree;
       if (!where) return { outcome: "fail", detail: { error: "the tests step has no worktree to read" } };
-      const pending = await deps.git.pending(where);
+      // The commit the run started from, read by the host before the container ran: the writer's changes are read against it, and a HEAD the container moved is refused.
+      const base = written.run?.inputCommit;
+      if (!base) return { outcome: "fail", detail: { error: "the tests step does not know the commit the writer started from" } };
+      if ((await deps.git.head(where)) !== base) {
+        review = ["the writer made a commit: it writes files only, the machine makes the commit"];
+        if (tagMisses >= 1) return escalate(where, base, review);
+        await deps.git.reset(where, base);
+        tagMisses += 1;
+        continue;
+      }
+      const pending = await deps.git.pending(where, base);
       const facts = scenarioTags({ ...pending, scenarios });
       if (!facts.ok) {
         review = problemsOf(facts);
-        if (tagMisses >= 1) return escalate(where, review);
+        if (tagMisses >= 1) return escalate(where, base, review);
         tagMisses += 1;
         continue;
       }
@@ -156,7 +172,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       const problems = judged.flatMap((j) => j.problems);
       if (problems.length > 0) {
         review = problems;
-        if (redMisses >= 2) return escalate(where, problems);
+        if (redMisses >= 2) return escalate(where, base, problems);
         redMisses += 1;
         continue;
       }
