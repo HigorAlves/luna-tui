@@ -353,3 +353,39 @@ describe("PackRuns", () => {
     expect(seen).toHaveLength(2);
   });
 });
+
+describe("decision records", () => {
+  const retro = { kind: "retro", retro: { predicted: { size: "small", risk: "low", estLoc: 120 }, actual: { added: 640, removed: 90, retries: { verify: 2, e2e: 1, ci: 1, total: 5 }, escalations: 1, format: "captures", durationMin: 310 }, runs: 14 } };
+  const answered = output({ answer: { worth: { value: true, p: 0.93 } } });
+
+  it("appends one record per decision pack call: the context, the validated answer, its verdicts, the engine, the model and the span's trace id", async () => {
+    const appended: Record<string, unknown>[] = [];
+    const { telemetry } = recordingTelemetry();
+    const r = runs(fakeSandbox(answered), { telemetry, decisions: { append: async (record: Record<string, unknown>) => void appended.push(record) } } as never);
+    await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "ship");
+    expect(appended).toHaveLength(1);
+    expect(appended[0]).toMatchObject({
+      schema: 1,
+      pack: "worth_learning",
+      engine: "claude:haiku",
+      model: "gpt-6-luna",
+      client: "ship",
+      at: NOW.toISOString(),
+      context: { ship: retro },
+      answer: { worth: { value: true, p: 0.93 } },
+      verdicts: { worth: "proceed" },
+      overall: "proceed",
+      traceId: "t",
+    });
+    expect(typeof appended[0]!.id).toBe("string");
+  });
+
+  it("appends nothing for an agent pack, and nothing for a decision run that gave no valid answer", async () => {
+    const appended: unknown[] = [];
+    const decisions = { append: async (record: unknown) => void appended.push(record) };
+    await runs(fakeSandbox(output()), { decisions } as never).run({ pack: "chat_triage", context: { chat } }, "notch");
+    await expect(runs(fakeSandbox(output({ answer: { worth: { value: "yes" } } })), { decisions } as never).run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "ship")).rejects.toThrow(RunFailedError);
+    expect(appended).toEqual([]);
+  });
+});
+
