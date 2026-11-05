@@ -341,6 +341,7 @@ pipeline = new Pipeline(db, runnerFor, {
   closeDeps: { exec, worktreeRemove: false, watcher, github },
   ...(config.groundTruth ? { groundTruth: groundTruthWriter(config.stateDir) } : {}),
   truth: decisionTruth,
+  escalationDecide: buildDecisions,
   policies,
   // The queue's usage windows go by the engine each stage really runs on, credential fallback included.
   ...(agentDeps ? { credentials: agentDeps.credentials } : {}),

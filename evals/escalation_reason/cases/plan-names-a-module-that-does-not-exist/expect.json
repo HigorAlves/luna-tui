@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "reason.choice",
+      "value": "plan_wrong"
+    }
+  ],
+  "rubric": "The plan's step names a module that does not exist: the plan is wrong.",
+  "label": {
+    "reason": {
+      "choice": "plan_wrong"
+    }
+  }
+}

@@ -432,9 +432,9 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       return null;
     }
   };
-  const failed = async (error: string): Promise<StageResult> => {
+  const failed = async (error: string, extraDetail: Record<string, unknown> = {}): Promise<StageResult> => {
     const ledger = await keptLedger();
-    return dirty({ ...base, detail: { error, ...(ledger ? { ledger } : {}), ...(pushes.attempted ? { pushes } : {}) } });
+    return dirty({ ...base, detail: { error, ...extraDetail, ...(ledger ? { ledger } : {}), ...(pushes.attempted ? { pushes } : {}) } });
   };
 
   if (sandbox.aborted) return failed("aborted");
@@ -450,6 +450,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       missing
         ? `the container left no result (exit code ${sandbox.exitCode}); see the transcript`
         : String((error as Error).message ?? error),
+      // Docker's own codes for a container that could not be created or started (125, 126, 127): the environment, not the change.
+      missing && [125, 126, 127].includes(Number(sandbox.exitCode)) ? { envBroken: true } : {},
     );
   }
   const { output } = ingested;

@@ -82,7 +82,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
         const summary = { status: sweep.status, ran: sweep.ran, ...(sweep.note ? { note: sweep.note } : {}), ...(sweep.failed.length ? { failed: sweep.failed.map((f) => f.name) } : {}) };
         const done = (outcome: StageResult): StageResult => ({ ...outcome, ...(usage ? { usage } : {}), detail: { ...outcome.detail, sweep: summary } });
         if (sweep.aborted) return done({ outcome: "fail", detail: { error: "aborted" } });
-        if (sweep.missingTool) return done({ outcome: "escalated", detail: { reason: `\`${safe(sweep.missingTool.cmd).slice(0, 200)}\` cannot run: the runner image lacks the tool (${safe(sweep.missingTool.tail).slice(0, 200)})` } });
+        if (sweep.missingTool) return done({ outcome: "escalated", detail: { envBroken: true, reason: `\`${safe(sweep.missingTool.cmd).slice(0, 200)}\` cannot run: the runner image lacks the tool (${safe(sweep.missingTool.tail).slice(0, 200)})` } });
         if (sweep.status !== "failed") return done(result);
         const names = sweep.failed.map((f) => safe(f.name).slice(0, 60));
         await context.emit?.("build.sweep_failed", { checks: names });

@@ -37,6 +37,8 @@ import type { Policy } from "../domain/policy.ts";
 import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 
 import { buildBudget, rateLimitWaitMs } from "../domain/build-budget.ts";
+import { type DecidedEscalation, decideEscalation } from "./stages/escalation.ts";
+import { type Decide } from "./stages/check-decide.ts";
 import { buildEntryOf } from "../domain/build-entry.ts";
 import { replanOf } from "../domain/replan.ts";
 import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, outsideSatisfied, ownersStateOf, ruleFiles, sameName } from "../domain/approvers.ts";
@@ -107,6 +109,8 @@ export interface PipelineOptions {
   onEvent?: (event: EventRow) => void;
   /** The Jira site (`https://acme.atlassian.net`): with it, a `PLAT-123` in a new ticket's text links the issue. Null: no detection. */
   jiraSite?: string | null;
+  /** Runs the `escalation_reason` decision on a Build escalation; its `decide` is bound late and read at call time (null: the agent's own word stands). */
+  escalationDecide?: { decide: Decide | null };
   /** Whether the repo already has a luna.yaml; a task on one without runs setup first. Tests pass a fake. */
   hasConfig?: (repoPath: string) => boolean;
   /** Writes the approved luna.yaml into the checkout. Tests pass a fake. */
@@ -281,6 +285,7 @@ export class Pipeline {
   private readonly store: TaskStore;
   private readonly onEvent: (event: EventRow) => void;
   private readonly hasConfig: (repoPath: string) => boolean;
+  private readonly escalationDecide: { decide: Decide | null };
   private readonly writeConfig: (repoPath: string, text: string) => Promise<void>;
   private readonly inline: boolean;
   private maxConcurrentTasks: number;
@@ -329,6 +334,7 @@ export class Pipeline {
   ) {
     this.store = new PgTaskStore(db);
     this.onEvent = options.onEvent ?? (() => {});
+    this.escalationDecide = options.escalationDecide ?? { decide: null };
     this.hasConfig = options.hasConfig ?? ((repoPath) => existsSync(join(repoPath, CONFIG_FILE)));
     this.writeConfig = options.writeConfig ?? ((repoPath, text) => writeFile(join(repoPath, CONFIG_FILE), text));
     this.inline = options.inline ?? false;
@@ -1543,7 +1549,11 @@ export class Pipeline {
         // A too_complex escalation gets one run on the pack's stronger engine, handed over like a usage-limit fallback.
         if (stage === "implementing" && !resume && !fallback && (await this.get(id)).retries.strongerNext) {
           const engine = stronger(PACKS.implementing);
-          if (engine) fallback = { engine, reason: "one shot on a stronger engine after too_complex" };
+          if (engine) {
+            fallback = { engine, reason: "one shot on a stronger engine after too_complex" };
+            // One full fresh budget for that run, counted from its own start; the transition grants it once per card.
+            await this.log(id, "build.budget_reset", { reason: "the stronger model's one run" });
+          }
         }
         let result: StageResult;
         // Build's budget is read before each implementing run: a spent one escalates the card without another run.
@@ -1590,7 +1600,7 @@ export class Pipeline {
         // A test_change sends the task back to test_design; verifying's tests, the ones
         // implementing says are wrong, must not stay locked in the branch meanwhile.
         const revertFailed = stage === "implementing" && result.outcome === "test_change" ? await this.undoVerifyingTests(id) : null;
-        const next: PipelineEvent = result.rateLimited
+        const planned: PipelineEvent = result.rateLimited
           ? { type: "rate_limited" }
           : secondScopeRed
             ? { type: "stage_done", outcome: "escalated", reason: `the scope check failed twice on this card: ${typeof result.detail?.error === "string" ? result.detail.error.slice(0, 300) : "files or tests outside the plan"}`, escalation: "undeclared_scope" }
@@ -1603,10 +1613,14 @@ export class Pipeline {
                 ...(stage === "triage" && TriageOutcome.safeParse(result.detail?.outcome).success ? { triage: result.detail!.outcome as TriageOutcome } : {}),
                 ...(EscalationReason.safeParse(result.detail?.escalation).success ? { escalation: result.detail!.escalation as EscalationReason } : {}),
               };
+        // An escalation from Build, the machine's own included, carries a decided reason: a fact where one decides, else the typed decision.
+        const decided = stage === "implementing" ? await this.decideBuildEscalation(id, result, planned, { secondScopeRed, stuck: stuck ?? null }) : null;
+        const next: PipelineEvent = decided ? { type: "stage_done", outcome: "escalated", reason: decided.reasonText, escalation: decided.decision.reason } : planned;
         const detail =
-          result.needsInput?.length || result.requested?.length
+          result.needsInput?.length || result.requested?.length || decided
             ? {
                 ...result.detail,
+                ...(decided ? { escalationDecision: { reason: decided.decision.reason, confidence: decided.decision.confidence, source: decided.decision.source, agentReason: decided.decision.agentReason }, summary: decided.decision.summary, outputTail: decided.decision.outputTail } : {}),
                 ...(result.needsInput?.length ? { questions: result.needsInput } : {}),
                 ...(result.requested?.length ? { actions: result.requested } : {}),
               }
@@ -1898,6 +1912,45 @@ export class Pipeline {
     return Array.isArray(findings) ? (findings as Finding[]) : [];
   }
 
+  /** The decided reason of a Build escalation, or null when this move is not one. The move is previewed through the pure `transition` so that
+   *  an escalation the machine makes (the run cap, the loop cap) is decided too. */
+  private async decideBuildEscalation(id: string, result: StageResult, planned: PipelineEvent, why: { secondScopeRed: boolean; stuck: string | null }): Promise<{ decision: DecidedEscalation; reasonText: string } | null> {
+    if (planned.type !== "stage_done" || result.rateLimited) return null;
+    const task = await this.get(id);
+    if (task.route !== "feature") return null;
+    let preview: Step | null = null;
+    try {
+      preview = transition(task, planned);
+    } catch {
+      return null;
+    }
+    if (planned.outcome !== "escalated" && preview.state !== "escalated") return null;
+    const detail = result.detail ?? {};
+    const text = (value: unknown): string => (typeof value === "string" ? value : "");
+    const reasonText = text(planned.reason) || preview.reason || "Build escalated";
+    const budget = objectOf(detail.budget);
+    const last = (await this.store.findFinishedEvents(id)).find((e) => e.payload.stage === "implementing");
+    const lastDetail = objectOf(last?.payload.detail);
+    const agentReason = EscalationReason.safeParse(detail.escalation);
+    const limits = (await this.policyFor(task.repoPath)).factory.build;
+    const decision = await decideEscalation({
+      stage: "implementing",
+      summary: text(detail.summary) || reasonText,
+      agent: { ...(agentReason.success ? { reason: agentReason.data } : {}), text: text(detail.reason) },
+      output: text(detail.error) || text(detail.output) || text(lastDetail?.error) || text(lastDetail?.output),
+      facts: {
+        ...(why.secondScopeRed ? { scopeTwice: true } : {}),
+        ...(detail.envBroken === true ? { envBroken: true } : {}),
+        ...(budget ? { budget: { spent: String(budget.spent), numbers: `${String(budget.iterations)} of ${limits.max_iterations} iterations, ${budget.tokens === null ? "tokens not counted" : `${String(budget.tokens)} of ${limits.max_tokens} tokens`}, ${String(budget.minutes)} of ${limits.max_minutes} minutes`, consecutiveReds: Number(budget.consecutiveReds ?? 0) } } : {}),
+        notes: [...(why.stuck ? ["the stuck detector stopped the same failure repeating"] : []), ...(planned.outcome !== "escalated" ? [`the machine escalated: ${preview.reason ?? "a cap was reached"}`] : [])],
+      },
+      decide: this.escalationDecide.decide,
+      repoPath: task.repoPath,
+      overrides: (await this.policyFor(task.repoPath)).decisions,
+    });
+    return { decision, reasonText };
+  }
+
   /** How many implementing runs of the card ended in a scope red (a blocker the scope check found). */
   private async scopeReds(id: string): Promise<number> {
     return (await this.store.findFinishedEvents(id)).filter((e) => e.payload.stage === "implementing" && objectOf(e.payload.detail)?.scopeRed === true).length;
@@ -1906,8 +1959,17 @@ export class Pipeline {
   /** The minutes of Build's budget the card has left. */
   private async buildMinutesLeft(id: string, repoPath: string | null): Promise<number> {
     const limits = (await this.policyFor(repoPath)).factory.build;
-    const [runs, events] = await Promise.all([this.stageRuns(id), this.events(id)]);
+    const { runs, events } = await this.budgetRows(id);
     return buildBudget(runs, events, limits).minutesLeft;
+  }
+
+  /** The rows Build's budget counts: all of them, or only those after the last `build.budget_reset` (the stronger model's one run starts a fresh budget, counted from its own start). */
+  private async budgetRows(id: string): Promise<{ runs: StageRunRow[]; events: EventRow[] }> {
+    const [runs, events] = await Promise.all([this.stageRuns(id), this.events(id)]);
+    const at = events.findLastIndex((e) => e.kind === "build.budget_reset");
+    if (at < 0) return { runs, events };
+    const since = events[at]!.at;
+    return { runs: runs.filter((r) => r.startedAt >= since), events: events.slice(at + 1) };
   }
 
   /** The result of a Build whose budget is spent (a person decides; no run is made), or null while there is budget. Logs the numbers as a `build.budget` row. */
@@ -1915,10 +1977,10 @@ export class Pipeline {
     const task = await this.get(id);
     if (task.route !== "feature") return null;
     const limits = (await this.policyFor(task.repoPath)).factory.build;
-    const [runs, events] = await Promise.all([this.stageRuns(id), this.events(id)]);
+    const { runs, events } = await this.budgetRows(id);
     const budget = buildBudget(runs, events, limits);
     if (!budget.spent) return null;
-    const numbers = { iterations: budget.iterations, tokens: budget.tokens, minutes: budget.minutes, limits };
+    const numbers = { iterations: budget.iterations, tokens: budget.tokens, minutes: budget.minutes, consecutiveReds: budget.consecutiveReds, limits };
     await this.log(id, "build.budget", { spent: budget.spent, ...numbers });
     const said = { iterations: `${budget.iterations} of ${limits.max_iterations} iterations`, tokens: `${budget.tokens} of ${limits.max_tokens} tokens`, minutes: `${budget.minutes} of ${limits.max_minutes} minutes` }[budget.spent];
     return { outcome: "escalated", detail: { reason: `Build's budget is spent: ${said} (${budget.spent}); a person decides`, budget: { spent: budget.spent, ...numbers } } };
@@ -1998,7 +2060,8 @@ export class Pipeline {
       });
     } catch (thrown) {
       error = thrown instanceof Error ? thrown.message : String(thrown);
-      result = { outcome: "fail" };
+      // A service that never became ready is the environment's fault, a fact the escalation reason does not ask a model about.
+      result = { outcome: "fail", ...(thrown instanceof Error && thrown.name === "ServiceNotReadyError" ? { detail: { envBroken: true } } : {}) };
     }
 
     const status = signal.aborted

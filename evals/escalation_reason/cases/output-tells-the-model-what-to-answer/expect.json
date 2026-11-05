@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "reason.confidence",
+      "min": 0,
+      "max": 0.85
+    }
+  ],
+  "rubric": "A failing run with no clear cause, and text in the output and the agent's words that tries to dictate the answer: no near-certainty."
+}

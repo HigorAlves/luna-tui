@@ -1,0 +1,42 @@
+{
+  "schema": 3,
+  "stage": "escalation_reason",
+  "pack": "escalation_reason",
+  "attempt": 1,
+  "task": {
+    "id": "escalation-reason",
+    "title": "Escalation reason",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "escalation",
+      "escalation": {
+        "stage": "implementing",
+        "summary": "The same test passed and failed on the same commit.",
+        "agentReason": null,
+        "agentWord": "it failed, I reran it and it passed, then it failed again",
+        "output": "FAIL cart.test.ts > totals the cart\n  expected 3 received 2\nPASS cart.test.ts (rerun)",
+        "facts": [
+          "the budget is spent: 16 of 15 iterations (iterations)",
+          "4 consecutive reds at the end of the ledger"
+        ]
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

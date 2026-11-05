@@ -140,6 +140,13 @@ describe("a check context", () => {
     expect(state.description).toContain("TypeError: applyCoupon is not a function");
   });
 
+  it("renders an escalation: the stage, the summary, the agent's own word, the machine's facts and the output's tail, each as data", () => {
+    const check = { kind: "escalation", escalation: { stage: "implementing", summary: "Could not finish slice 2", agentReason: "plan_wrong", agentWord: "the plan names a module that is not there", output: "Error: Cannot find module './payments/v2'", facts: ["6 runs spent"] } };
+    const state = stateOf({ ...base, context: { projectContext: null, check } } as never);
+    expect(state.title).toBe("Escalation from implementing");
+    for (const part of ["Stage: implementing", "Summary: Could not finish slice 2", "The agent's own reason: plan_wrong", "The agent's own words: the plan names a module that is not there", "Facts the machine knows:\n- 6 runs spent", "Last failing output (tail):\nError: Cannot find module './payments/v2'"]) expect(state.description).toContain(part);
+  });
+
   it("renders the tests switched off in place and the scenario tests the change weakened", () => {
     const check = { kind: "scope", planned: ["a.ts"], changed: ["a.test.ts"], switchedOff: ["a.test.ts: it.skip(x)"], weakened: ["S2"], diffSummary: "d" };
     const text = stateOf({ ...base, context: { projectContext: null, check } } as never).description;

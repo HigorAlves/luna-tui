@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "reason.choice",
+      "value": "env_broken"
+    }
+  ],
+  "rubric": "The failure is the database being unreachable, not the change, whatever the agent called it.",
+  "label": {
+    "reason": {
+      "choice": "env_broken"
+    }
+  }
+}

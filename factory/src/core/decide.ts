@@ -52,6 +52,19 @@ export function renderCheck(check: CheckContext): string {
       `Failing output:\n${check.output ?? "(none)"}`,
     ].join("\n");
   }
+  if (check.kind === "escalation") {
+    const e = check.escalation;
+    return e
+      ? [
+          `Stage: ${e.stage}`,
+          `Summary: ${e.summary}`,
+          ...(e.agentReason ? [`The agent's own reason: ${e.agentReason}`] : []),
+          ...(e.agentWord ? [`The agent's own words: ${e.agentWord}`] : []),
+          ...bullets("Facts the machine knows", e.facts),
+          `Last failing output (tail):\n${e.output ?? "(none)"}`,
+        ].join("\n")
+      : "Escalation: (none)";
+  }
   if (check.kind === "finding") {
     const f = check.finding;
     return [
@@ -152,6 +165,8 @@ function checkTitle(check: CheckContext): string {
       return check.scenario ? `Red check: scenario ${check.scenario.id}, ${check.scenario.title}` : `Red check: slice ${check.slice?.id ?? "?"}, ${check.slice?.title ?? "?"}`;
     case "finding":
       return `Finding: ${check.finding?.title ?? "?"}`;
+    case "escalation":
+      return `Escalation from ${check.escalation?.stage ?? "?"}`;
     case "e2e":
       return `E2E failure: attempt ${check.e2e?.attempt ?? "?"}`;
     default:

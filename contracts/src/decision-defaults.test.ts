@@ -2,11 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 
 import { DECISION_ALLOWED, DECISION_DEFAULTS, DecisionDefault, DecisionDefaults, PACKS, decisionEngines } from "./index.ts";
 
-const decisionPacks = Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => p.id);
+const allDecisionPacks = Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => p.id);
+/** Decision packs the host has not measured yet: they run on the built-in engines (`decisionEngines`) and have no entry until a scorecard writes one. */
+const UNMEASURED: string[] = ["escalation_reason"];
+const decisionPacks = allDecisionPacks.filter((id) => !UNMEASURED.includes(id));
 
 describe("decision-defaults.json", () => {
   it("has an entry for every decision pack and none for anything else", () => {
     expect(Object.keys(DECISION_DEFAULTS).sort()).toEqual([...decisionPacks].sort());
+  });
+
+  it("gives a pack that has no entry yet the built-in engines", () => {
+    for (const id of UNMEASURED) {
+      expect(DECISION_DEFAULTS[id]).toBeUndefined();
+      expect(decisionEngines(id).default).toBe("jev");
+    }
   });
 
   it("is valid: each default and fallback is an allowed engine, each entry has a reason and a date", () => {

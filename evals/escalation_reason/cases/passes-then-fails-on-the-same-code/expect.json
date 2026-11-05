@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "reason.choice",
+      "value": "flaky_tests"
+    }
+  ],
+  "rubric": "A test that flips on unchanged code: flaky.",
+  "label": {
+    "reason": {
+      "choice": "flaky_tests"
+    }
+  }
+}

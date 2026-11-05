@@ -158,7 +158,7 @@ describe("the regression sweep in Build", () => {
     sweeps.push({ status: "failed", ran: ["lint"], failed: [{ name: "lint", tail: "x" }], missingTool: { cmd: "eslint .", tail: "eslint: not found" } });
     const f = fakes([tagged("S1")]);
     const result = await buildTestsStep(f.deps)(context([v2]));
-    expect(result).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringMatching(/cannot run.*eslint/) } });
+    expect(result).toMatchObject({ outcome: "escalated", detail: { envBroken: true, reason: expect.stringMatching(/cannot run.*eslint/) } });
     expect(f.calls.filter((c) => c === "implement")).toHaveLength(1);
   });
 });

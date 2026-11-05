@@ -16,7 +16,7 @@ const MINUTE = 60_000;
 function checkTitle(check: CheckContext): string {
   if (check.kind === "finding") return `Finding: ${check.finding?.title ?? "?"}`;
   if (check.kind === "e2e") return `E2E failure: attempt ${check.e2e?.attempt ?? "?"}`;
-  return check.kind === "red" ? "Red check" : "Scope check";
+  return check.kind === "red" ? "Red check" : check.kind === "escalation" ? "Escalation reason" : "Scope check";
 }
 
 /** The synthetic task's title for an evidence context sent to evidence_format. */

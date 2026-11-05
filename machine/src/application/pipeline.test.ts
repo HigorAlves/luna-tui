@@ -278,6 +278,80 @@ describe("a plan found wrong comes back to the planner with its evidence", () =>
   });
 });
 
+describe("why Build escalated is a typed decision", () => {
+  const choice = (label: string, confidence: number) => ({ reason: { choice: label, confidence } });
+  const agentStop = (word: string) => ({ outcome: "escalated" as const, detail: { escalation: word, reason: "I cannot go on", summary: "stopped at slice 2", error: "Error: boom at a.ts:3" } });
+  const build = (decide: ((pack: string, check: unknown) => Promise<Record<string, unknown>>) | null, implementing: StageRunner) =>
+    new Pipeline(db, (stage) => (stage === "implementing" ? implementing : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true, escalationDecide: { decide: decide as never } });
+  const approvedCard = async (p: Pipeline) => {
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    return task.id;
+  };
+  const lastMove = async (p: Pipeline, id: string) => (await p.events(id)).findLast((e) => e.kind === "transition" && e.payload.to === "escalated")?.payload;
+
+  it("takes the decision's reason over the agent's word, routes by it, and keeps the agent's word beside it on the gate with the confidence, the summary and the output's tail", async () => {
+    const asked: unknown[] = [];
+    const p = build(async (pack, check) => (asked.push([pack, check]), choice("env_broken", 0.9)), async () => agentStop("plan_wrong"));
+    const id = await approvedCard(p);
+    expect(asked).toHaveLength(1);
+    expect(await lastMove(p, id)).toMatchObject({ escalation: "env_broken" });
+    const gate = (await p.approvals(id)).find((a) => a.kind === "escalated")!;
+    expect(gate.requested).toMatchObject({ escalationDecision: { reason: "env_broken", confidence: 0.9, source: "decision", agentReason: "plan_wrong" }, summary: "stopped at slice 2", outputTail: expect.stringContaining("boom at a.ts:3") });
+  });
+
+  it("sends a decided plan_wrong back to the planner, once", async () => {
+    const seen: string[] = [];
+    const p = build(async () => choice("plan_wrong", 0.95), async () => (seen.push("run"), agentStop("other")));
+    await approvedCard(p);
+    expect(seen.length).toBe(1);
+    expect((await p.events((await p.list())[0]!.id)).some((e) => e.kind === "transition" && e.payload.to === "test_design" && e.payload.escalation === "plan_wrong")).toBe(true);
+  });
+
+  it("is `other` for a person under the bar, and leaves the agent's word when no decision can run", async () => {
+    const low = build(async () => choice("plan_wrong", 0.3), async () => agentStop("flaky_tests"));
+    expect(await lastMove(low, await approvedCard(low))).toMatchObject({ escalation: "other" });
+    const none = build(null, async () => agentStop("flaky_tests"));
+    expect(await lastMove(none, await approvedCard(none))).toMatchObject({ escalation: "flaky_tests" });
+  });
+
+  it("gives a spent budget to the decision, not to too_complex by default: flaky tests end at a person with no more runs", async () => {
+    const ran: number[] = [];
+    const events = Array.from({ length: 16 }, (_, i) => ({ at: new Date(i).toISOString(), kind: i % 2 ? "slice.green" : "slice.red", payload: { id: 1 } }));
+    const p = build(async () => choice("flaky_tests", 0.9), async () => (ran.push(1), { outcome: "fail" as const, events, detail: { error: "FAIL a.test.ts" } }));
+    const id = await approvedCard(p);
+    expect(ran).toHaveLength(1);
+    expect(await lastMove(p, id)).toMatchObject({ escalation: "flaky_tests" });
+  });
+
+  it("gives a decided too_complex the stronger model once with one fresh full budget counted from its own start, then a person, and never twice", async () => {
+    const ran: number[] = [];
+    const events = Array.from({ length: 16 }, (_, i) => ({ at: new Date(i).toISOString(), kind: i % 2 ? "slice.green" : "slice.red", payload: { id: 1 } }));
+    const p = build(async () => choice("too_complex", 0.9), async () => (ran.push(1), { outcome: "fail" as const, events }));
+    const id = await approvedCard(p);
+    expect(ran).toHaveLength(2);
+    expect((await p.events(id)).filter((e) => e.kind === "build.budget_reset")).toHaveLength(1);
+    expect(await lastMove(p, id)).toMatchObject({ escalation: "too_complex" });
+    expect((await p.get(id)).state).toBe("escalated");
+  });
+
+  it("gives an escalation the machine made, the run cap, a reason too", async () => {
+    const p = build(null, async () => ({ outcome: "fail" as const, detail: { error: `a different failure ${Math.random()}` } }));
+    const id = await approvedCard(p);
+    expect((await p.get(id)).state).toBe("escalated");
+    expect(await lastMove(p, id)).toMatchObject({ escalation: "other", reason: expect.stringMatching(/implementer used all|failed/) });
+  });
+
+  it("decides a service or container that never started by fact: env_broken, no model asked", async () => {
+    const asked: unknown[] = [];
+    const p = build(async (...a) => (asked.push(a), choice("flaky_tests", 0.9)), async () => ({ outcome: "fail" as const, detail: { error: "service db not ready", envBroken: true } }));
+    const id = await approvedCard(p);
+    expect(asked).toEqual([]);
+    expect(await lastMove(p, id)).toMatchObject({ escalation: "env_broken" });
+  });
+});
+
 describe("a scope problem gets one fix pass, then a person", () => {
   const red = { outcome: "fail" as const, detail: { scopeRed: true, error: "scope check failed" }, findings: [{ path: "x.ts", line: 0, start_line: null, severity: "scope", title: "file outside the plan, not declared", body: "revert it", suggestion_code: null, confidence: 1 }] };
 

@@ -137,6 +137,8 @@ export const PackId = z.enum([
   // Decisions on the Build stage's own work (a check context, run on demand by the build watch): is a red right, is a change in scope.
   "red_check",
   "scope_check",
+  // A decision on why a Build escalated (an escalation context, run on demand): the reason, with a confidence.
+  "escalation_reason",
   // Decisions on Verify's own work (a check context, run on demand): how severe a review finding is, why a browser run failed.
   "finding_classify",
   "e2e_failure_cause",
@@ -636,8 +638,22 @@ export type PlanContext = z.infer<typeof PlanContext>;
 
 /** What the checks (red_check, scope_check, finding_classify, e2e_failure_cause) judge: a red slice's failing output, the facts of a change's scope, a review finding, or a failed browser run. */
 export const CheckContext = z.object({
-  kind: z.enum(["red", "scope", "finding", "e2e"]),
+  kind: z.enum(["red", "scope", "finding", "e2e", "escalation"]),
   slice: z.object({ id: z.number().int(), title: z.string(), acceptance: z.array(z.string()) }).optional(),
+  /** escalation: why Build stopped, as data for escalation_reason: all text flattened and capped before it gets here. */
+  escalation: z
+    .object({
+      stage: z.string(),
+      summary: z.string(),
+      /** What the agent itself said the reason was, when it said one. */
+      agentReason: EscalationReason.nullable().optional(),
+      agentWord: z.string().optional(),
+      /** The tail of the last failing output. */
+      output: z.string().optional(),
+      /** What the machine knows: which limit was hit, how many runs. */
+      facts: z.array(z.string()).optional(),
+    })
+    .optional(),
   /** red, for a scenario's test (Build's tests step): the scenario, and the machine's fact that its tagged test is in the diff. */
   scenario: z.object({ id: z.string(), title: z.string(), given: z.string().nullable().optional(), when: z.string().nullable().optional(), then: z.string().nullable().optional(), approach: z.string().optional() }).optional(),
   exists: z.boolean().optional(),

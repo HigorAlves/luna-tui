@@ -115,6 +115,16 @@ describe("the plan stage's decision packs", () => {
     expect(Object.keys(pack.policy).sort()).toEqual(["fits_record", "risk_appropriate"]);
   });
 
+  it("escalation_reason asks one choice among the six reasons, on the built-in engines until the host measures it", () => {
+    expect(Object.keys(PACKS.escalation_reason.questions)).toEqual(["reason"]);
+    const q = PACKS.escalation_reason.questions.reason!;
+    expect(q.type).toBe("choice");
+    expect(q.type === "choice" && Object.keys(q.criteria)).toEqual(["plan_wrong", "env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"]);
+    expect(Object.keys(PACKS.escalation_reason.policy)).toEqual(["reason"]);
+    expect(PACKS.escalation_reason.policy.reason).toMatchObject({ proceed: 0.7 });
+    expect(PACKS.escalation_reason.engines).toEqual({ ...decisionEngines("escalation_reason"), allowed: ["jev", "claude:haiku", "codex:luna"] });
+  });
+
   it("red_check asks whether the red is for the right reason and the test asserts the behaviour; scope_check asks six yes/no questions over the facts", () => {
     expect(Object.keys(PACKS.red_check.questions)).toEqual(["right_reason", "not_tautological"]);
     expect(PACKS.red_check.questions.right_reason).toMatchObject({ type: "yesno", instructions: expect.stringContaining("missing import") });
