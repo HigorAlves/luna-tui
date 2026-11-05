@@ -181,16 +181,18 @@ Each `services` entry runs as its own container beside every stage that runs the
 |---|---|---|
 | `dedup` | `duplicate: 0.90`, `related: 0.70`, `ask_below: 0.7`, `lookback_days: 90` | 14 |
 | `triage` | `confidence {kind 0.80, size 0.60, urgency 0.70, risk 0.85, archive 0.90}`, `flag_band: 0.15`, `hint_weight: 0.5`, `max_questions: 3`, `max_rounds: 2`, `sla {reminder_days 2, archive_days 5}` | 9 |
-| `graph` | `stale_commits: 50` | 9 |
+| `graph` | `stale_commits: 50` | 9 (read by triage, and by the plan stage for the code map's stale flag) |
 | `scoring` | `weights {who 3, what 3, impact 2, time 2, demand 1}`, `bands {P0 28, P1 22, P2 16}` | 9 |
 | `fast_lane` | `max_risk: low`, `max_size: S`, `excluded_types: [infra, data]`, `cross_team: false` | 9 |
-| `plan` | `coverage_score_min: 0.85`, `coverage_rounds: 3`, `plan_check_retries: 2`, `approvers {low 1, medium 1, high 2, outside_owning_team true}`, `sla {reminder_days 2, escalate_days 5}` | `coverage_rounds` and `plan_check_retries` 8, the rest 9 |
+| `plan` | `coverage_score_min: 0.85`, `coverage_rounds: 3`, `plan_check_retries: 2`, `approvers {low 1, medium 1, high 2, outside_owning_team true}`, `sla {reminder_days 2, escalate_days 5}` | all read by wave 9b (`coverage_rounds` and `plan_check_retries` since 8) |
 | `size` | `target_loc: [1000, 2000]`, `hard_limit_loc: 2500`, `max_children: 8`, `max_rounds: 3`, `depth: 2` | 15 |
 | `build` | `max_iterations: 15`, `max_tokens: 2000000`, `max_minutes: 90`, `backoff_minutes: [1, 30]`, `regression_full_suite_minutes: 10` | 10 |
 | `sandbox` | `cpu: 4`, `memory_gb: 8`, `egress: [registries, github]` | 11 |
 | `verify` | `coverage_drop_max: 0.5`, `mutation {command null, min_score 0.6}`, `build_rounds: 1`, `env_flake_retries: 1`, `ci_flaky_reruns: 1`, `auto_rebase: 1`, `e2e {deploy {command null}, start {command null}}` | `env_flake_retries`, `ci_flaky_reruns` and `auto_rebase` 8, the rest 12 |
 | `evidence` | `video_budget_s: 240`, `regenerate: 1`, `tts {voice null, language null}`, `storage: release_asset`, `retention_days: 180` | `retention_days` keeps its meaning (a repo's value, else `MACHINE_RETENTION_DAYS`); the rest 12 |
 | `ship` | `preview: off`, `auto_merge: medium_when_review_required`, `merge {method squash, queue true, delete_branch true, commit_template null}`, `release_owners: []`, `stale_days: 14`, `sla {reminder_days 2, escalate_days 5}`, `poll_minutes: 5` | `stale_days` 8, the rest 13 |
+
+Wave 9b reads the whole `plan` section: `plan.coverage_score_min` (the bar the scenarios' coverage score must reach before the designer stops), `plan.approvers` (names needed per risk level and whether one must come from outside the code map's owners on a high-risk plan), `plan.sla.reminder_days` (the plan gate's reminder; a repo's `sla.gate` wins) and `plan.sla.escalate_days` (escalation to a person, once, after a reminder; `0` turns it off), and from `graph` the `stale_commits` bar for the code map's stale flag; the fast lane's `fast_lane.cross_team` is read again when the fast plan's own files are checked for owning teams. The plan gate's columns follow the diagram: a card waiting at `awaiting_approval` shows in Plan.
 
 Wave 8 reads `plan.coverage_rounds` (the test designer's rounds), `plan.plan_check_retries` (the planner's re-runs after a plan check), `verify.env_flake_retries` (browser re-runs on an environment flake), `verify.ci_flaky_reruns` and `verify.auto_rebase` (the ship monitor's CI re-runs and rebases) and `ship.stale_days` (how old a PR head may be before it blocks a merge). `evidence.video_budget_s` stays 240 in the film prompts and is wired in wave 12. `ship.auto_merge` is not read: today's `policy.auto_merge` (default `off`) decides what the machine merges. `verify.mutation.command`, `verify.e2e.deploy.command`, `verify.e2e.start.command` and `ship.merge.commit_template` are stored as written and are never run or rendered by this wave.
 
