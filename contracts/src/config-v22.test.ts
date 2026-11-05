@@ -44,6 +44,20 @@ describe("the sandbox's size and keep", () => {
   });
 });
 
+describe("the base image a repository names", () => {
+  it("is none by default, read from wave 11 (11b), and a repository's value wins", () => {
+    expect(FACTORY_DEFAULTS.sandbox.image).toEqual({ base: null });
+    expect(CONSUMED_FROM["sandbox.image.base"]).toBe(11);
+    expect(factoryConfigOf({ sandbox: { image: { base: "python:3.13-slim" } } }).sandbox.image.base).toBe("python:3.13-slim");
+  });
+
+  it("is accepted in a luna.yaml as text, and an unknown key under image is refused", () => {
+    expect(LunaConfig.safeParse({ sandbox: { image: { base: "debian:12" } } }).success).toBe(true);
+    expect(LunaConfig.safeParse({ sandbox: { image: { dockerfile: "x" } } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ sandbox: { image: { base: 7 } } }).success).toBe(false);
+  });
+});
+
 describe("factoryConfigOf", () => {
   it("is the defaults for no sections, and merges a section key by key", () => {
     expect(factoryConfigOf({})).toEqual(FACTORY_DEFAULTS);

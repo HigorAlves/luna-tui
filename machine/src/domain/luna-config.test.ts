@@ -344,3 +344,10 @@ describe("the v2.2 diagram's sections", () => {
     expect(planned).toEqual(["plan.approvers.high", "plan.approvers.low", "plan.approvers.medium", "plan.approvers.outside_owning_team", "plan.coverage_score_min", "plan.sla.escalate_days", "plan.sla.reminder_days"]);
   });
 });
+
+describe("a repository's base image in luna.yaml", () => {
+  it("reaches the policy's sandbox section, and is none when absent", () => {
+    expect(parseLunaConfig("sandbox:\n  image:\n    base: python:3.13-slim\n").factory.sandbox.image).toEqual({ base: "python:3.13-slim" });
+    expect(parseLunaConfig("").factory.sandbox.image).toEqual({ base: null });
+  });
+});
