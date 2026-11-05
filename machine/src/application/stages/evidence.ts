@@ -3,6 +3,7 @@
 // (the prelude, `evidenceRunner`); `evidenceStage` then picks a format for the change (a decision, with
 // a mechanical veto), assembles the Evidence Pack, keeps a local copy of its media and saves the pack
 // on the task. The pack and its files show up in the ship approval's `requested`, the gate Ship publishes from.
+import { type TruthSink, evidenceFormatTruth, recordIdOf } from "../decision-truth.ts";
 import { type ArtifactKind, type EvidenceContext, EvidencePack, Finding, PACKS, Risk, type TaskState, applyPolicy } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 import { readFile, readdir, stat } from "node:fs/promises";
@@ -188,6 +189,8 @@ export interface EvidenceStageDeps extends EvidenceDeps {
   decideFormat: ((context: EvidenceContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** The repo's decision bars and its QA targets: how-to-verify names a target's URL from here, never from the manifest. */
   policies: { for: (repoPath: string | null) => Promise<Pick<Policy, "decisions" | "qaTargets">> };
+  /** Told the format the pack finally shipped with, after the vetoes and the video degrade (RFC 0005 wave 7). */
+  truth?: TruthSink | null;
   /** The worktree's HEAD: the commit the pack shows. */
   headCommit: (worktreePath: string) => Promise<string>;
   /** Whether the video image is built on this machine. */
@@ -258,6 +261,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
     const fallback: Format = hasManifest ? "captures" : "text";
     let format: Format;
     let formatKept = false;
+    let formatRecord: string | undefined;
     if (task.evidence) {
       format = task.evidence.format;
       formatKept = true;
@@ -267,6 +271,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       if (decide && (facts.verdict !== "skipped" || !skipped)) {
         try {
           const answer = await decide(evidenceContext, task.repoPath);
+          formatRecord = recordIdOf(answer);
           const overrides = (await deps.policies.for(task.repoPath)).decisions.evidence_format;
           const verdict = applyPolicy(PACKS.evidence_format, answer, overrides).overall;
           const choice = objectOf(answer.format)?.choice;
@@ -307,6 +312,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       addNote("there is no browser run to capture");
       format = "text";
     }
+    if (formatRecord) await deps.truth?.learned({ pack: "evidence_format", recordId: formatRecord, label: evidenceFormatTruth(format), source: "evidence_shipped", taskId: task.id });
 
     // 2. The commit the pack shows.
     let commitSha: string;
@@ -404,6 +410,8 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       ...(video !== undefined ? { video } : {}),
       now: now(),
     });
+    const classified = (await deps.latestFinish(task.id, "verifying").catch(() => null))?.detail?.classified;
+    const findingRecords = (Array.isArray(classified) ? classified : []).flatMap((row) => (typeof row?.recordId === "string" ? [row.recordId as string] : []));
     await store.writePack(task.id, commitSha, pack);
     await deps.save(task.id, { evidence: pack });
 
@@ -415,6 +423,8 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
         ...result.detail,
         format,
         ...(formatKept ? { formatKept: true } : {}),
+        // The verifier's finding_classify records the pack's findings were judged by: a person shipping with them is the truth.
+        ...(findingRecords.length > 0 ? { decisions: { finding_classify: findingRecords } } : {}),
         pack,
         evidence: {
           ...evidence,

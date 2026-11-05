@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CheckContext } from "@hardness/contracts";
 
+import { type Learned, tagged } from "../decision-truth.ts";
 import { type Decide, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch } from "./build-watch.ts";
 
 const ledger = (slices: Array<{ id: number; status: string; commit?: string | null }>) =>
@@ -90,6 +91,23 @@ describe("build checks", () => {
     await settle(40);
     await watch.stop();
     expect(reds).toEqual([1, 1]);
+  });
+
+  it("tells the truth of each judged red once the slice commits: a red the test was rewritten after was wrong, the last one was a true red", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    const told: Learned[] = [];
+    let n = 0;
+    const decide: Decide = async () => tagged({ answer: { right_reason: yes(), not_tautological: yes() }, recordId: `red-${++n}` });
+    const c = checks(out, decide, { truth: { learned: async (fact) => (told.push(fact), true) }, taskId: "task-4" });
+    const slice = { id: 1, title: "Export", status: "red", commit: null, note: "AssertionError: first failure" } as never;
+    await c.onRed(slice);
+    await c.onRed({ ...(slice as object), note: "AssertionError: after the rewrite" } as never);
+    await c.onGreen({ id: 1, title: "Export", status: "committed", commit: "abc" } as never);
+    await c.onGreen({ id: 1, title: "Export", status: "committed", commit: "abc" } as never);
+    expect(told).toEqual([
+      { pack: "red_check", recordId: "red-1", label: { right_reason: { value: false } }, source: "slice_green", taskId: "task-4" },
+      { pack: "red_check", recordId: "red-2", label: { right_reason: { value: true } }, source: "slice_green", taskId: "task-4" },
+    ]);
   });
 
   it("answers a scope request with the facts and the judged verdict", async () => {

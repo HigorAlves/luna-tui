@@ -4,6 +4,7 @@
 // folded into the Evidence Pack. Every red resets the worktree to the head it started from.
 // Reviewer text is data: it reaches a model inside `ThreadsContext`/`ShipContext` and nothing else,
 // never a shell or git argument; what goes back to GitHub is the model's text, flattened.
+import { recordIdOf } from "../decision-truth.ts";
 import {
   type CiContext,
   type DecisionOverrides,
@@ -81,7 +82,7 @@ export async function judgeShip(
   pack: ShipDecisionPack,
   ship: ShipContext,
   repoPath: string | null,
-): Promise<{ ok: true; choice: string } | { ok: false; reason: string }> {
+): Promise<{ ok: true; choice: string; recordId?: string } | { ok: false; reason: string }> {
   const decide = deps.loop.decide;
   if (!decide) return { ok: false, reason: `no model is available for ${pack}` };
   try {
@@ -89,7 +90,8 @@ export async function judgeShip(
     const overrides = (await deps.policies.for(repoPath)).decisions[pack];
     const overall = applyPolicy(PACKS[pack], answer, overrides).overall;
     const choice = (answer[KEY[pack]] as { choice?: unknown } | undefined)?.choice;
-    if ((overall === "proceed" || overall === "flag") && typeof choice === "string") return { ok: true, choice };
+    const recordId = recordIdOf(answer);
+    if ((overall === "proceed" || overall === "flag") && typeof choice === "string") return { ok: true, choice, ...(recordId ? { recordId } : {}) };
     return { ok: false, reason: `${pack} was not sure enough (${overall})` };
   } catch (error) {
     return { ok: false, reason: `${pack} failed: ${messageOf(error)}` };

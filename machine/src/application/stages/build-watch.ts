@@ -5,6 +5,7 @@ import { type CheckContext, type DecisionOverrides, type LedgerSlice, Ledger, Sl
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { type TruthSink, redCheckTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import { type AddedLine, type ScopeFacts, addedLinesOf, scopeFacts } from "../../domain/scope.ts";
 
@@ -148,6 +149,9 @@ export interface BuildChecksDeps {
   /** Null when no decision can run: every check is skipped. Read at call time. */
   decide: Decide | null;
   overrides: Record<string, DecisionOverrides>;
+  /** Told, once a slice commits, whether each judged red was a right-reason red (RFC 0005 wave 7). */
+  truth?: TruthSink | null;
+  taskId?: string;
   git: { nameStatus(from: string, to: string): Promise<string>; diff(from: string, to: string): Promise<string> };
   log?: (line: string) => void;
 }
@@ -186,8 +190,12 @@ export function buildChecks(deps: BuildChecksDeps) {
     await writeFile(tmp, JSON.stringify(answer));
     await rename(tmp, join(checksDir, file));
   };
+  /** The records of each slice's judged reds, in order: when the slice commits, they say whether the test was rewritten. */
+  const redRecords = new Map<number, string[]>();
+  let lastRecord: string | undefined;
   const judge = async (pack: "red_check" | "scope_check", check: CheckContext): Promise<CheckAnswer> => {
-    const { verdict, answer } = await judgeCheck(deps.decide, pack, check, deps.repoPath, deps.overrides, log);
+    const { verdict, answer, recordId } = await judgeCheck(deps.decide, pack, check, deps.repoPath, deps.overrides, log);
+    lastRecord = recordId;
     if (!answer) return { verdict: "skipped", problems: [] };
     const problems = problemsOf(pack, answer);
     return { verdict: verdict === "proceed" && problems.length > 0 ? "flag" : verdict, problems };
@@ -206,7 +214,16 @@ export function buildChecks(deps: BuildChecksDeps) {
     async onRed(slice: LedgerSlice): Promise<void> {
       const planned = Slice.safeParse(deps.slices[slice.id - 1]);
       const answer = await judge("red_check", { kind: "red", slice: { id: slice.id, title: slice.title, acceptance: planned.success ? planned.data.acceptance : [] }, output: (slice.note ?? "").slice(-NOTE_TAIL) });
+      if (lastRecord) redRecords.set(slice.id, [...(redRecords.get(slice.id) ?? []), lastRecord]);
       await write(`red-${slice.id}.json`, answer);
+    },
+    /** The slice went green: a red the agent got past by rewriting the test (a later red followed it) was not a right-reason red; the last one was. */
+    async onGreen(slice: LedgerSlice): Promise<void> {
+      const records = redRecords.get(slice.id) ?? [];
+      redRecords.delete(slice.id);
+      for (const [at, recordId] of records.entries()) {
+        await deps.truth?.learned({ pack: "red_check", recordId, label: redCheckTruth(at < records.length - 1), source: "slice_green", ...(deps.taskId ? { taskId: deps.taskId } : {}) });
+      }
     },
     async onScopeRequest(request: ScopeRequest): Promise<void> {
       let facts: ScopeFacts | null = null;

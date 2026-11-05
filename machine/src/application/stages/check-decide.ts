@@ -1,5 +1,6 @@
 // The shared judge of a decision pack on a check context (red_check, scope_check, finding_classify,
 // e2e_failure_cause): ask, apply the pack's policy and the repo's overrides, never throw.
+import { recordIdOf } from "../decision-truth.ts";
 import { type CheckContext, type DecisionOverrides, PACKS, type Verdict, applyPolicy } from "@hardness/contracts";
 
 export type CheckPack = "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause";
@@ -15,11 +16,12 @@ export async function judgeCheck(
   repoPath: string | null,
   overrides: Record<string, DecisionOverrides>,
   log: (line: string) => void = () => {},
-): Promise<{ verdict: Verdict | "skipped"; answer: Record<string, unknown> | null }> {
+): Promise<{ verdict: Verdict | "skipped"; answer: Record<string, unknown> | null; recordId?: string }> {
   if (!decide) return { verdict: "skipped", answer: null };
   try {
     const answer = await decide(pack, check, repoPath);
-    return { verdict: applyPolicy(PACKS[pack], answer, overrides[pack]).overall, answer };
+    const recordId = recordIdOf(answer);
+    return { verdict: applyPolicy(PACKS[pack], answer, overrides[pack]).overall, answer, ...(recordId ? { recordId } : {}) };
   } catch (error) {
     log(`check decision: ${pack} skipped: ${error instanceof Error ? error.message : String(error)}`);
     return { verdict: "skipped", answer: null };

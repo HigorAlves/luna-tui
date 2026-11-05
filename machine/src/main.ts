@@ -20,6 +20,7 @@ import { sweepEvidenceStore } from "./application/evidence-store.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
 import { DecisionLog } from "./application/decision-log.ts";
+import { DecisionTruth, tagged } from "./application/decision-truth.ts";
 import { groundTruthWriter } from "./application/ground-truth.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
@@ -86,6 +87,8 @@ const policies = new PolicyStore();
 const telemetry = await buildTelemetry(config.traces);
 /** What each decision pack call leaves (context, answer, verdicts), for evals; off with MACHINE_DECISIONS=off. */
 const decisionLog = new DecisionLog({ stateDir: config.stateDir, enabled: config.decisions.enabled });
+/** What later facts say a decision should have been, written onto its record; each is a `decision.truth` event on the task. */
+const decisionTruth = new DecisionTruth(decisionLog, { told: async (e) => void (e.taskId && (await pipeline.logDecisionTruth(e.taskId, e))) });
 if (config.traces.mode !== "off") {
   console.log(`traces ${telemetry.mode === "off" ? "off (backend unavailable)" : telemetry.mode} · Laminar at ${config.traces.laminar.baseUrl}:${config.traces.laminar.httpPort}`);
 }
@@ -239,6 +242,7 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
     const ledger = Ledger.safeParse(finish?.detail?.ledger);
     return retroFactsOf({ task, ledger: ledger.success ? ledger.data : null, events, runs: runs.length });
   },
+  decisionTruth,
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
@@ -331,6 +335,7 @@ pipeline = new Pipeline(db, runnerFor, {
   restartPolicy: config.restartPolicy,
   closeDeps: { exec, worktreeRemove: false, watcher, github },
   ...(config.groundTruth ? { groundTruth: groundTruthWriter(config.stateDir) } : {}),
+  truth: decisionTruth,
   policies,
   // The queue's usage windows go by the engine each stage really runs on, credential fallback included.
   ...(agentDeps ? { credentials: agentDeps.credentials } : {}),
@@ -409,11 +414,11 @@ await packRuns?.clearLeftovers();
  *  as the `intake` client. Without a Jev credential it answers nothing and intake runs as before. */
 const classifier = packRuns ? createIssueClassifier({ runs: packRuns }) : null;
 if (classifier) triageSignals.classify = (issue) => classifier.classify(issue);
-if (packRuns) planDecisions.decide = async (pack, plan) => (await packRuns.run({ pack, context: { plan }, stage: "plan" }, "plan")).answer;
-if (packRuns) verifyDecisions.decide = async (pack, check) => (await packRuns.run({ pack, context: { check }, stage: "verify" }, "verify")).answer;
-if (packRuns) evidenceDecisions.decide = async (evidence) => (await packRuns.run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence")).answer;
-if (packRuns) shipDecisions.decide = async (pack, ship) => (await packRuns.run({ pack, context: { ship }, stage: "ship" }, "ship")).answer;
-if (packRuns) buildDecisions.decide = async (pack, check) => (await packRuns.run({ pack, context: { check }, stage: "build" }, "build")).answer;
+if (packRuns) planDecisions.decide = async (pack, plan) => tagged(await packRuns.run({ pack, context: { plan }, stage: "plan" }, "plan"));
+if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "verify" }, "verify"));
+if (packRuns) evidenceDecisions.decide = async (evidence) => tagged(await packRuns.run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence"));
+if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await packRuns.run({ pack, context: { ship }, stage: "ship" }, "ship"));
+if (packRuns) buildDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "build" }, "build"));
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 const app = createApp({
   db,

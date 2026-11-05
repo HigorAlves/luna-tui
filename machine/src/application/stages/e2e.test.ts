@@ -4,6 +4,8 @@ import { join } from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { Learned } from "../decision-truth.ts";
+import { tagged } from "../decision-truth.ts";
 import type { Decide } from "./check-decide.ts";
 import { detectWeb, e2eRunner, missingQaImageRunner, touchesRenderedSurface, webRoots } from "./e2e.ts";
 import type { StageContext, StageResult } from "../ports.ts";
@@ -254,6 +256,19 @@ describe("e2e_failure_cause", () => {
     const result = await run(runPack, async () => cause("env_flake", 0.3));
     expect(runPack).toHaveBeenCalledTimes(1);
     expect(result.detail).toMatchObject({ cause: "product_bug" });
+  });
+
+  it("writes the truth onto the cause's record once the re-run settles it: env_flake when it passed, not env_flake when it failed again", async () => {
+    const told: Learned[] = [];
+    const truth = { learned: async (fact: Learned) => (told.push(fact), true) };
+    const decide: Decide = async () => tagged({ answer: cause("env_flake"), recordId: "rec-1" });
+    const go = (runPack: (context: StageContext) => Promise<StageResult>) => e2eRunner({ runPack, detectWeb: async () => true, decide, overrides: async () => ({}), truth })({ ...context(), task: { id: "task-1", worktreePath: dir } as never });
+    await go(vi.fn().mockResolvedValueOnce(failing).mockResolvedValueOnce(passing));
+    await go(vi.fn().mockResolvedValue(failing));
+    expect(told).toEqual([
+      { pack: "e2e_failure_cause", recordId: "rec-1", label: { cause: { choice: "env_flake" } }, source: "e2e_rerun", taskId: "task-1" },
+      { pack: "e2e_failure_cause", recordId: "rec-1", label: { cause: { choice: ["product_bug", "test_bug"] } }, source: "e2e_rerun", taskId: "task-1" },
+    ]);
   });
 
   it("behaves as before without a decide, and on a pass", async () => {

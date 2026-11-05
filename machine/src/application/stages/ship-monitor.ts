@@ -18,6 +18,7 @@ import type { StageContext, StageResult } from "../ports.ts";
 import { type ShipCursor, SEEN_CAP, emptyCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
 import { ciContextOf, ciRunIdOf, failedChecks } from "./ci.ts";
 import { pushBranch } from "./deliver.ts";
+import { type TruthSink, commentIntentTruth, eventClassTruth } from "../decision-truth.ts";
 import { type EvidenceHandle, type FixDeps, type ReviewLoop, SECRET_REASON, carriesSecret, escalated, fixRound, headOfWorktree, judgeShip, postable, resetTo, restampPack, subContext } from "./ship-fixes.ts";
 
 const DAY_MS = 86_400_000;
@@ -44,6 +45,8 @@ export interface ShipMonitorDeps {
   evidence: EvidenceHandle;
   /** The review loop (slice 5): decisions, sub-run packs and the project's checks. Read at call time, so `decide` can be bound late. Absent, the monitor only notes activity. */
   loop?: ReviewLoop;
+  /** Told, when the PR merges, what its outcome says about event_class and comment_intent decisions (RFC 0005 wave 7). */
+  truth?: TruthSink | null;
   stateDir: string;
   pollMs: number;
   /** The longest the monitor waits for a merge before asking a person (default 14 days). */
@@ -126,6 +129,18 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
     type Facts = ReturnType<typeof fromGraphQl>;
     let me: string | null = null;
     const login = async () => (me ??= (await deps.github.viewer()).login.toLowerCase());
+    /** The PR merged: the decisions it was waiting on are settled by what happened to their threads. */
+    const settleDecisions = async (): Promise<void> => {
+      const pending = cursor.decisions ?? [];
+      if (!deps.truth || pending.length === 0) return;
+      const open = await deps.github.prThreads(slug, number).catch(() => null);
+      for (const d of pending) {
+        if (d.pack === "event_class") await deps.truth.learned({ pack: "event_class", recordId: d.recordId, label: eventClassTruth(d.further === true), source: "pr_merged", taskId: task.id });
+        else if (open && d.threadId && !open.some((t) => t.id === d.threadId)) await deps.truth.learned({ pack: "comment_intent", recordId: d.recordId, label: commentIntentTruth(d.choice as "question" | "change_request"), source: "thread_resolved", taskId: task.id });
+      }
+      cursor.decisions = [];
+      await saveCursor(deps.stateDir, task.id, cursor);
+    };
     const fixDeps = (): FixDeps => ({ github: deps.github, loop: deps.loop!, policies: deps.policies, evidence: deps.evidence });
     const runOf = () => deps.loop?.exec ?? realExec;
     const plain = (text: string, cap: number) => postable(text, cap);
@@ -179,6 +194,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
           return { result: escalated(`the answer could not be posted: ${messageOf(error)}`) };
         }
         await bump(thread.id, { replies: 1 });
+        if (intent.recordId) cursor.decisions = [...(cursor.decisions ?? []), { pack: "comment_intent", recordId: intent.recordId, choice: "question", threadId: thread.id }];
         await note(`answered ${a.actor ?? "ghost"}'s question from the pack`);
         return {};
       }
@@ -193,7 +209,9 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       } else if (intent.choice !== "nit") {
         return { result: escalated(`a review comment needs a person: ${quoted(thread)}`) };
       }
-      return fix({ id: thread.id, threads: [found], scope, summary: `${thread.path ?? "the PR"}: ${plain(a.body, 120)}`, postReplies: !topLevel, quote: quoted(thread), topLevel }, pack);
+      const fixed = await fix({ id: thread.id, threads: [found], scope, summary: `${thread.path ?? "the PR"}: ${plain(a.body, 120)}`, postReplies: !topLevel, quote: quoted(thread), topLevel }, pack);
+      if (fixed.moved && intent.choice === "change_request" && intent.recordId) cursor.decisions = [...(cursor.decisions ?? []), { pack: "comment_intent", recordId: intent.recordId, choice: "change_request", threadId: thread.id }];
+      return fixed;
     };
 
     /** One bounded fix round; the counters are spent before it runs, so a crash cannot loop. */
@@ -226,7 +244,10 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       const body = a.body.slice(0, 2000);
       const event: ShipContext = { kind: "event", event: { actor: a.actor ?? "ghost", isBot: a.isBot, isMe: false, kind: a.kind === "review" ? "review" : "comment", state: a.state, body, url: a.url } };
       const label = `${a.actor ?? "ghost"} ${a.kind}: ${plain(body, 80)}`;
+      // A person's word on the PR after an earlier event means that event drew activity.
+      if (!a.isBot) for (const d of cursor.decisions ?? []) if (d.pack === "event_class") d.further = true;
       const cls = await judgeShip(fixDeps(), "event_class", event, task.repoPath);
+      if (cls.ok && cls.recordId && (cls.choice === "noise" || cls.choice === "comment")) cursor.decisions = [...(cursor.decisions ?? []), { pack: "event_class", recordId: cls.recordId, choice: cls.choice }];
       if (!cls.ok) return { result: escalated(`a review event needs a person (${cls.reason}): ${label}`) };
       switch (cls.choice) {
         case "noise":
@@ -322,6 +343,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       try {
         const state = await deps.github.prMerged(slug, number);
         if (state.merged) {
+          await settleDecisions().catch(() => {});
           return { outcome: "pass", detail: { merged: { sha: state.mergedSha, at: state.mergedAt, by: cursor.mergeRequested || cursor.queued ? "machine" : "person" }, prUrl: url, number } };
         }
         if (state.state === "closed") {
@@ -428,7 +450,10 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
                 cursor.queued = true;
                 await note("the PR is in the merge queue");
               }
-              else return { outcome: "pass", detail: { merged: { sha: head, at: now().toISOString(), by: "machine" }, prUrl: url, number } };
+              else {
+                await settleDecisions().catch(() => {});
+                return { outcome: "pass", detail: { merged: { sha: head, at: now().toISOString(), by: "machine" }, prUrl: url, number } };
+              }
             } catch (error) {
               cursor.mergeRequested = false;
               mergeErrors++;

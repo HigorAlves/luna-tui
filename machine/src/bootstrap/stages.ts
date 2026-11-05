@@ -11,6 +11,7 @@ import { EvidenceStore } from "../application/evidence-store.ts";
 import { publishEvidence } from "../application/evidence-publish.ts";
 import type { Graph } from "../application/graph.ts";
 import type { Watcher } from "../application/ports.ts";
+import type { TruthSink } from "../application/decision-truth.ts";
 import type { Decide } from "../application/stages/check-decide.ts";
 import { type AgentExtra, agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
@@ -82,6 +83,8 @@ export async function buildRealStages(
   shipDecisions: { decide: ShipDecide | null } = { decide: null },
   /** The retro's predicted-against-actual facts for a task, computed by the machine; absent, the retro runs without them and without worth_learning. */
   retroFacts?: (taskId: string) => Promise<RetroFacts | null>,
+  /** Told what the stages learn about a decision after the fact (RFC 0005 wave 7); absent keeps nothing. */
+  truth?: TruthSink,
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -126,6 +129,7 @@ export async function buildRealStages(
     get decide() {
       return buildDecisions?.decide ?? null;
     },
+    truth: truth ?? null,
     policies,
     history,
     ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure } : {}),
@@ -176,6 +180,7 @@ export async function buildRealStages(
             return verifyDecisions?.decide ?? null;
           },
           overrides: (repoPath) => policies.for(repoPath).then((p) => p.decisions),
+          truth: truth ?? null,
           stateDir: config.stateDir,
         })
       : missingQaImageRunner(),
@@ -185,6 +190,7 @@ export async function buildRealStages(
       latestE2e,
       latestFinish: evidenceDeps.latestFinish,
       save: evidenceDeps.save,
+      truth: truth ?? null,
       get decideFormat() {
         return evidenceDeps.decisions.decide;
       },
@@ -215,6 +221,7 @@ export async function buildRealStages(
         stateDir: config.stateDir,
         monitor: shipMonitor({
           github,
+          truth: truth ?? null,
           policies,
           evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishEvidence, store: evidenceStore },
           // The review loop: the decisions bind late; the sub-runs are the same packs the stages run, on the task's own worktree.

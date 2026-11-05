@@ -8,6 +8,7 @@ import type { DecisionOverrides } from "@hardness/contracts";
 
 import type { Policy } from "../../domain/policy.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
+import { type TruthSink, e2eCauseTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 
 export interface E2eDeps {
@@ -24,6 +25,8 @@ export interface E2eDeps {
   decide?: Decide | null;
   /** The repo's per-pack decision bars. */
   overrides?: (repoPath: string | null) => Promise<Record<string, DecisionOverrides>>;
+  /** Told when the re-run settles whether an `env_flake` was one (RFC 0005 wave 7). */
+  truth?: TruthSink | null;
   /** The machine's state dir: a re-run starts from an empty `runs/<runId>/out`, so the first attempt's packet never reaches Evidence. */
   stateDir?: string;
 }
@@ -146,6 +149,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
       };
     };
     /** Why a browser run failed, from the decision pack: an `env_flake` only when it is confident, else the app's fault. */
+    let causeRecord: string | undefined;
     const causeOf = async (result: StageResult): Promise<Cause | null> => {
       const decide = deps.decide ?? null;
       const detail = result.detail as { verdict?: string; summary?: string; criteria?: unknown[] };
@@ -156,13 +160,14 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
         const row = c as { text?: unknown; result?: unknown } | null;
         return row && typeof row === "object" && typeof row.text === "string" && (row.result === "fail" || row.result === "partial") ? [{ text: row.text, result: row.result }] : [];
       });
-      const { verdict, answer } = await judgeCheck(
+      const { verdict, answer, recordId } = await judgeCheck(
         decide,
         "e2e_failure_cause",
         { kind: "e2e", e2e: { verdict: detail.verdict, summary: detail.summary ?? "", criteria: rows, attempt: context.attempt } },
         repoPath,
         (await deps.overrides?.(repoPath)) ?? {},
       );
+      causeRecord = recordId;
       const choice = (answer?.cause as { choice?: unknown } | undefined)?.choice;
       return (verdict === "proceed" || verdict === "flag") && (choice === "env_flake" || choice === "test_bug") ? choice : verdict === "skipped" ? null : "product_bug";
     };
@@ -176,6 +181,8 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     // The re-run writes into the same run folder: what the first attempt left there must not be read as its packet.
     if (deps.stateDir) await rm(join(deps.stateDir, "runs", context.runId, "out"), { recursive: true, force: true });
     result = settle(await deps.runPack(context));
+    // The re-run is the fact: a pass says it was the environment, a second failure says it was not.
+    if (causeRecord) await deps.truth?.learned({ pack: "e2e_failure_cause", recordId: causeRecord, label: e2eCauseTruth(result.outcome !== "fail"), source: "e2e_rerun", taskId: context.task.id });
     if (result.outcome !== "fail") return { ...result, detail: { ...result.detail, rerun: true, cause } };
     const summary = String(result.detail?.summary ?? "");
     return {

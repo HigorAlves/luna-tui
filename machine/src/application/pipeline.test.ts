@@ -7,6 +7,7 @@ import { type EngineId, type TaskState, TriageRecord } from "@hardness/contracts
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DecisionTruth } from "./decision-truth.ts";
 import { NO_RETRIES, TransitionError } from "../domain/transition.ts";
 import type { StageContext, StageResult, StageRunner } from "./ports.ts";
 import { loadConfig } from "../config.ts";
@@ -307,6 +308,66 @@ describe("the ship approver", () => {
     const id = await atShip("high");
     await pipeline.decide(id, "sent_back", "redo");
     expect((await pipeline.stageRuns(id)).filter((r) => r.stage === "evidence")).toHaveLength(2);
+  });
+});
+
+describe("decision truth at the plan gate", () => {
+  const ids = { coverage_check: "rc", plan_check: "rp", risk_score: "rr" };
+  const answers: Record<string, Record<string, unknown>> = {
+    rc: { pins: { value: true, p: 0.9 }, redundancy: { score: 0, confidence: 0.8 }, untestable: { value: false, p: 0.1 } },
+    rp: { fits_record: { score: 2, confidence: 0.9 }, slices_cover_criteria: { value: true, p: 0.9 }, rollback_stated: { value: true, p: 0.9 }, touchpoints_in_map: { value: true, p: 0.9 } },
+    rr: { blast_radius: { score: 0, confidence: 0.9 }, reversibility: { score: 0, confidence: 0.9 }, data_sensitivity: { score: 0, confidence: 0.9 } },
+  };
+  const setup = async (act: (p: Pipeline, id: string) => Promise<unknown>) => {
+    const learned: Array<{ pack: string; recordId: string; label: unknown; source: string; taskId?: string }> = [];
+    const truth = new DecisionTruth({ setTruth: async (pack, recordId, t) => (learned.push({ pack, recordId, label: t.label, source: t.source }), true), read: async (_pack, id) => ({ answer: answers[id]! }) as never }, { told: async () => {} });
+    const p = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, truth });
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], cases: [{ title: "t", criterion: "c1", approach: "x" }], decisions: ids } });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await act(p, task.id);
+    return { learned, p, id: task.id };
+  };
+
+  it("confirms the three checks when the plan is approved untouched", async () => {
+    const { learned } = await setup((p, id) => p.decide(id, "approved", undefined, undefined, { approver: "ana" }));
+    expect(learned.map((l) => [l.pack, l.source]).sort()).toEqual([["coverage_check", "plan_approved"], ["plan_check", "plan_approved"], ["risk_score", "plan_approved"]]);
+    expect(learned.find((l) => l.pack === "coverage_check")!.label).toEqual({ pins: { value: true }, redundancy: { score: 0 }, untestable: { value: false } });
+  });
+
+  it("contradicts coverage_check when the cases were edited, and the plan checks on a send-back", async () => {
+    const edited = await setup(async (p, id) => {
+      await p.editCases(id, [{ title: "t2", criterion: "c1", approach: "y" }] as never);
+      await p.decide(id, "approved", undefined, undefined, { approver: "ana" });
+    });
+    expect(edited.learned.find((l) => l.pack === "coverage_check")).toMatchObject({ source: "plan_edited", label: { pins: { value: false }, untestable: { value: true } } });
+    expect(edited.learned.find((l) => l.pack === "plan_check")).toMatchObject({ source: "plan_approved" });
+    const sent = await setup((p, id) => p.decide(id, "sent_back", "again"));
+    expect(sent.learned.map((l) => l.source)).toEqual(["plan_sent_back", "plan_sent_back"]);
+  });
+
+  it("says a finding a person shipped with was not a blocker: the ship gate's finding_classify records get that truth, a send-back none", async () => {
+    for (const decision of ["approved", "sent_back"] as const) {
+      const { learned, p, id } = await setup(async (pl, taskId) => {
+        stubs.plan("evidence", { outcome: "pass", detail: { evidence: { risk: "low" }, decisions: { finding_classify: ["f1", "f2"] } } });
+        await pl.decide(taskId, "approved", undefined, undefined, { approver: "ana" });
+      });
+      learned.length = 0;
+      if ((await p.get(id)).state === "awaiting_ship") await p.decide(id, decision, "r");
+      if (decision === "approved") expect(learned.map((l) => [l.pack, l.recordId, l.label, l.source])).toEqual([["finding_classify", "f1", { severity: { choice: ["should_fix", "nit"] } }, "ship_approved"], ["finding_classify", "f2", { severity: { choice: ["should_fix", "nit"] } }, "ship_approved"]]);
+      else expect(learned).toEqual([]);
+    }
+  });
+
+  it("logs decision.truth on the task: ids and source, no payload", async () => {
+    const { p, id } = await setup(async () => {});
+    await p.logDecisionTruth(id, { pack: "worth_learning", recordId: "r1", source: "retro_approved" });
+    expect((await p.events(id)).filter((e) => e.kind === "decision.truth").map((e) => e.payload)).toEqual([{ pack: "worth_learning", recordId: "r1", source: "retro_approved" }]);
+  });
+
+  it("learns nothing from an auto-approval", async () => {
+    const { learned } = await setup((p, id) => p.decide(id, "approved", "auto", undefined, { auto: true }));
+    expect(learned).toEqual([]);
   });
 });
 

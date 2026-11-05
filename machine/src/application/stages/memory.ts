@@ -6,6 +6,7 @@ import { readFile } from "node:fs/promises";
 
 import { type DecisionOverrides, type Ledger, PACKS, type ShipContext, applyPolicy } from "@hardness/contracts";
 
+import { recordIdOf } from "../decision-truth.ts";
 import type { EventRow, TaskRow } from "../../domain/task.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
@@ -40,11 +41,12 @@ const factsLine = (facts: RetroFacts): string =>
   `${facts.actual.retries.total} retries, ${facts.actual.escalations} escalations, ${facts.actual.added + facts.actual.removed} lines changed against ${facts.predicted.estLoc ?? "an unknown number of"} planned`;
 
 /** True only for a confident "no": a failed, unsure or missing decision never skips the retro. */
-async function notWorthLearning(deps: MemoryDeps, ship: ShipContext, repoPath: string | null): Promise<boolean> {
+async function notWorthLearning(deps: MemoryDeps, ship: ShipContext, repoPath: string | null, record: { id?: string }): Promise<boolean> {
   const decide = deps.decide;
   if (!decide) return false;
   try {
     const answer = await decide("worth_learning", ship, repoPath);
+    record.id = recordIdOf(answer);
     const overall = applyPolicy(PACKS.worth_learning, answer, await deps.overrides?.(repoPath)).overall;
     const worth = (answer.worth ?? {}) as { value?: unknown };
     return overall === "proceed" && worth.value === false;
@@ -58,7 +60,8 @@ export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
     const facts = deps.facts ? await deps.facts(context.task.id).catch(() => null) : null;
     const ship: ShipContext | undefined = facts ? { kind: "retro", retro: facts } : undefined;
     // A task with nothing surprising in it teaches nothing: the question comes before the expensive pack.
-    if (facts && ship && (await notWorthLearning(deps, ship, context.task.repoPath ?? null))) {
+    const worth: { id?: string } = {};
+    if (facts && ship && (await notWorthLearning(deps, ship, context.task.repoPath ?? null, worth))) {
       return { outcome: "pass", detail: { rules: null, note: `no retro: ${factsLine(facts)}` } };
     }
     const result = await deps.runPack(context, ship);
@@ -90,6 +93,7 @@ export function memoryReviewRunner(deps: MemoryDeps): StageRunner {
       ...result,
       detail: {
         ...result.detail,
+        ...(worth.id ? { decisions: { worth_learning: worth.id } } : {}),
         rules: {
           markdown,
           proposedRules: Array.isArray(answer.proposedRules) ? answer.proposedRules : [],
@@ -123,7 +127,7 @@ export function withMemoryReview(ship: StageRunner, memory: StageRunner): StageR
     const note = review.outcome === "pass" ? review.detail?.note : `memory review failed: ${String(review.detail?.error ?? "unknown")}`;
     return {
       ...shipped,
-      detail: { ...shipped.detail, rules: review.outcome === "pass" ? rules : null, ...(note ? { note } : {}) },
+      detail: { ...shipped.detail, rules: review.outcome === "pass" ? rules : null, ...(review.outcome === "pass" && review.detail?.decisions ? { decisions: review.detail.decisions } : {}), ...(note ? { note } : {}) },
       artifacts: [...(shipped.artifacts ?? []), ...(review.artifacts ?? [])],
       events: [...(shipped.events ?? []), ...(review.events ?? [])],
     };

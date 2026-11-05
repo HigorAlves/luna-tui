@@ -33,6 +33,7 @@ import { pushCheckpoint } from "./deliver.ts";
 
 /** A checkpoint push that takes longer than this is given up (the final Deliver push is authoritative). */
 const PUSH_TIMEOUT_MS = 60_000;
+import type { TruthSink } from "../decision-truth.ts";
 import { type Decide, buildChecks, buildWatch } from "./build-watch.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
@@ -76,6 +77,8 @@ export interface AgentDeps {
   hostExec?: (command: string, args: string[], options?: { cwd?: string; signal?: AbortSignal; timeoutMs?: number }) => Promise<ExecResult>;
   /** Runs a decision pack on a check context (red_check, scope_check) for the build watch; null runs Build without the checks. Read at call time: main.ts binds it late. */
   decide?: Decide | null;
+  /** Told what the stages learn about a decision after the fact (RFC 0005 wave 7); absent keeps nothing. */
+  truth?: TruthSink | null;
   /** How often the build watch looks at the run's ledger, in ms. */
   watchEvery?: number;
 }
@@ -279,6 +282,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
             return deps.decide ?? null;
           },
           overrides: policy.decisions,
+          truth: deps.truth ?? null,
+          taskId: task.id,
           git: { nameStatus: (from, to) => diffNameStatus(workspace.path, from, to), diff: (from, to) => diffText(workspace.path, from, to) },
           log: (line) => void context.note?.(line).catch(() => {}),
         })
@@ -293,6 +298,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       onRed: checks.onRed,
       onScopeRequest: checks.onScopeRequest,
       onCommitted: async (slice) => {
+        await checks.onGreen(slice).catch((error: Error) => void context.note?.(`red_check truth: ${error.message}`).catch(() => {}));
         if (!hostExec) return;
         pushing = pushing.then(async () => {
           // One push per tip: two slices committed on the same HEAD need one checkpoint, and a tip

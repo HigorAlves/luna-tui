@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { type EvidenceStageDeps, evidenceRunner, evidenceStage } from "./evidence.ts";
+import { type Learned, tagged } from "../decision-truth.ts";
 import type { VideoInput, VideoOutcome } from "./video.ts";
 import type { StageContext } from "../ports.ts";
 
@@ -298,6 +299,15 @@ describe("evidenceStage", () => {
     expect(pack.format).toBe("captures");
     expect(pack.note).toMatch(/video image/);
     expect(result.detail?.evidence).toMatchObject({ format: "captures", note: expect.stringMatching(/video image/) });
+  });
+
+  it("writes the format the pack shipped with onto the decision's record, after the video degrade", async () => {
+    browserRun();
+    const told: Learned[] = [];
+    const truth = { learned: async (fact: Learned) => (told.push(fact), true) };
+    const { run } = stage({ decideFormat: async () => tagged({ answer: { format: { choice: "video", confidence: 0.95 } }, recordId: "rec-9" }), videoImage: async () => false, truth });
+    await run(taskContext());
+    expect(told).toEqual([{ pack: "evidence_format", recordId: "rec-9", label: { format: { choice: "captures" } }, source: "evidence_shipped", taskId: expect.any(String) }]);
   });
 
   it("degrades video to captures when the image exists but the browser run left neither a recording nor steps", async () => {

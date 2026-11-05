@@ -30,6 +30,10 @@ const ShipCursorSchema = z.object({
   ciCycled: z.boolean().optional(),
   /** The red CI the loop last handled (`<head>:<run ids>`): the same red is not asked about twice. */
   ciKey: z.string().optional(),
+  /** Decisions awaiting the PR's outcome (RFC 0005 wave 7): what was asked, the record, and what has happened since. */
+  decisions: z
+    .array(z.object({ pack: z.enum(["event_class", "comment_intent"]), recordId: z.string(), choice: z.string(), threadId: z.string().optional(), further: z.boolean().optional() }))
+    .optional(),
   /** The blockers last noted, so a poll that finds the same ones says nothing. */
   lastBlockers: z.string().optional(),
 });

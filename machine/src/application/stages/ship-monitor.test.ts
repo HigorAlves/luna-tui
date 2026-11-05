@@ -12,6 +12,7 @@ import type { GitHub } from "../github.ts";
 import type { GitExec } from "../../adapters/git/worktree.ts";
 import type { StageContext } from "../ports.ts";
 import { emptyCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
+import { type Learned, tagged } from "../decision-truth.ts";
 import type { ReviewLoop } from "./ship-fixes.ts";
 import { type ShipMonitorDeps, shipMonitor } from "./ship-monitor.ts";
 
@@ -53,7 +54,7 @@ afterEach(() => rm(stateDir, { recursive: true, force: true }));
 
 function setup(
   answers: Partial<GitHub> = {},
-  over: { policy?: Partial<Policy>; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean } = {},
+  over: { policy?: Partial<Policy>; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean } = {},
 ) {
   const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => {}, ...answers });
   let clock = START.getTime();
@@ -74,6 +75,7 @@ function setup(
     readCodeowners: async () => over.codeowners ?? null,
     // The review loop's decisions and sub-runs (slice 5); absent, the monitor only notes activity.
     ...(over.loop ? { loop: over.loop } : {}),
+    ...(over.truth ? { truth: over.truth } : {}),
   };
   const context = {
     task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1" },
@@ -334,6 +336,52 @@ describe("the review loop", () => {
     expect(runPack.mock.calls[0]![2]).toMatchObject({ kind: "comment", comment: { thread, pack: { summary: "s", howToVerify: "h" }, myReplies: 0 } });
     expect(calls(github, "replyToThread")).toEqual([["replyToThread", "T1", reply]]);
     expect(calls(github, "resolveThread")).toEqual([]);
+  });
+});
+
+describe("decision truth at the merge", () => {
+  const at = "2026-11-04T12:01:00Z";
+  const question = "Does the export handle an empty cart?";
+  const thread = { id: "T1", path: "src/export.ts", line: 12, comments: [{ author: "bo", body: question, at }] };
+  const activity = (id: string, actor: string, isBot: boolean, body: string, when: string) => ({ id, kind: "review_comment" as const, association: "MEMBER", actor, isBot, body, state: null, at: when, url: null });
+  const decide = async (pack: string) => tagged({ answer: pack === "event_class" ? { event: { choice: "comment", confidence: 0.95 } } : { intent: { choice: "question", confidence: 0.9 } }, recordId: `rec-${pack}` });
+  const runPack = async () => ({ outcome: "pass" as const, detail: { answer: { reply: "Yes.", resolves: false, confidence: 0.9 } } });
+
+  it("writes question onto comment_intent once the PR merges with the reviewer's thread resolved, and nothing while it is open", async () => {
+    for (const resolved of [true, false]) {
+      const told: Learned[] = [];
+      let polls = 0;
+      let threads = 0;
+      const { run } = setup(
+        {
+          prMerged: async () => (++polls < 3 ? open : merged),
+          prActivity: async (_s, _n, since) => (since === null ? [activity("review_comment:1", "bo", false, question, at)] : []),
+          prThreads: async () => (++threads === 1 || !resolved ? [thread] : []),
+          replyToThread: async () => {},
+        },
+        { loop: { decide, runPack } as never, truth: { learned: async (fact: Learned) => (told.push(fact), true) } },
+      );
+      await run();
+      const comment = told.filter((t) => t.pack === "comment_intent");
+      if (resolved) expect(comment).toEqual([{ pack: "comment_intent", recordId: "rec-comment_intent", label: { intent: { choice: "question" } }, source: "thread_resolved", taskId: "t1" }]);
+      else expect(comment).toEqual([]);
+    }
+  });
+
+  it.each([true, false])("writes %s-activity truth onto event_class at the merge: comment when a person spoke after the event, noise when nobody did", async (later) => {
+    const noise = async (pack: string) => tagged({ answer: { event: { choice: "noise", confidence: 0.95 } }, recordId: `rec-${pack}` });
+    const told: Learned[] = [];
+    let polls = 0;
+    const { run } = setup(
+      {
+        prMerged: async () => (++polls < 4 ? open : merged),
+        prActivity: async (_s, _n, since) => (since === null ? [activity("comment:1", "ci-bot", false, "build ok", at), ...(later ? [activity("comment:2", "bo", false, "also please rename x", "2026-11-04T12:02:00Z")] : [])] : []),
+        prThreads: async () => [],
+      },
+      { loop: { decide: noise, runPack } as never, truth: { learned: async (fact: Learned) => (told.push(fact), true) } },
+    );
+    await run();
+    expect(told.find((t) => t.pack === "event_class")).toMatchObject({ label: { event: { choice: later ? "comment" : "noise" } }, source: "pr_merged" });
   });
 });
 

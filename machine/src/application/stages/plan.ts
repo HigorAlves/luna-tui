@@ -25,6 +25,7 @@ import {
   riskLevelOf,
 } from "@hardness/contracts";
 
+import { recordIdOf } from "../decision-truth.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
 /** Test designer runs per plan: the first, and two more with the criteria it missed. */
@@ -46,7 +47,7 @@ export interface PlanDeps {
   log?: (line: string) => void;
 }
 
-type Judged = { verdict: Verdict | "skipped"; problems: string[]; answer: Record<string, unknown> | null };
+type Judged = { verdict: Verdict | "skipped"; problems: string[]; answer: Record<string, unknown> | null; recordId?: string };
 
 const score = (answer: Record<string, unknown>, question: string): number => Number((answer[question] as { score?: number } | undefined)?.score ?? 0);
 const flag = (answer: Record<string, unknown>, question: string): boolean | null => {
@@ -114,7 +115,8 @@ export function planStage(deps: PlanDeps): StageRunner {
         const overrides = (await deps.policies.for(task.repoPath)).decisions[pack];
         const { overall } = applyPolicy(PACKS[pack], answer, overrides);
         const problems = problemsOf(pack, answer, Boolean(plan.map));
-        return { verdict: overall === "proceed" && problems.length > 0 ? "flag" : overall, problems, answer };
+        const recordId = recordIdOf(answer);
+        return { verdict: overall === "proceed" && problems.length > 0 ? "flag" : overall, problems, answer, ...(recordId ? { recordId } : {}) };
       } catch (error) {
         log(`plan stage: ${pack} skipped for task ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
         return { verdict: "skipped", problems: [], answer: null };
@@ -240,6 +242,8 @@ export function planStage(deps: PlanDeps): StageRunner {
         cases,
         risk: { level, scores },
         verdicts,
+        // The decisions' records, so the gate's outcome can be written onto them (decision-truth.ts).
+        decisions: Object.fromEntries(([["coverage_check", coverage], ["plan_check", planCheck], ["risk_score", riskJudged]] as const).flatMap(([pack, judged]) => (judged.recordId ? [[pack, judged.recordId]] : []))),
         rounds: { tests: testRuns, plan: planRuns },
         flagged: [...flagged],
         map,

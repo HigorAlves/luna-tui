@@ -299,7 +299,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       const classified = await Promise.all(
         top.map(async (finding) => {
           const excerpt = await excerptOf(cwd, finding);
-          const { verdict, answer } = await judgeCheck(decide, "finding_classify", { kind: "finding", finding, excerpt }, task.repoPath ?? null, decisions);
+          const { verdict, answer, recordId } = await judgeCheck(decide, "finding_classify", { kind: "finding", finding, excerpt }, task.repoPath ?? null, decisions);
           const severity = (answer?.severity ?? null) as { choice?: unknown; confidence?: unknown } | null;
           const usable = (verdict === "proceed" || verdict === "flag") && typeof severity?.choice === "string";
           return {
@@ -310,6 +310,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
             classified: usable ? (severity!.choice as "blocker" | "should_fix" | "nit") : null,
             confidence: typeof severity?.confidence === "number" ? severity.confidence : null,
             verdict,
+            ...(recordId ? { recordId } : {}),
           };
         }),
       );

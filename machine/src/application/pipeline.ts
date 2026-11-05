@@ -16,6 +16,7 @@ import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } 
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { Credentials } from "../adapters/credentials/index.ts";
 import { type RunSpan, type Telemetry, noTelemetry } from "./telemetry.ts";
+import { type DecisionTruth, findingTruth, planTruth, worthLearningTruth } from "./decision-truth.ts";
 import { fallbackCandidates } from "../domain/engine-choice.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { pickEngine } from "./engine.ts";
@@ -122,6 +123,8 @@ export interface PipelineOptions {
   closeDeps?: CloseDeps;
   /** Keeps the approved plan and what changed before it (ground truth); answers where. A failure is logged and never blocks the approval. */
   groundTruth?: (task: TaskRow, approval: ApprovalRow) => Promise<string>;
+  /** Writes onto a decision's record what a person's decision at a gate says about it (RFC 0005 wave 7). */
+  truth?: DecisionTruth;
   /** Spend ceilings in USD; either unset means no ceiling of that kind. */
   budget?: Budget;
   /** On shutdown: `requeue` (default) parks running tasks for the next boot; `escalate` waits for you. */
@@ -232,6 +235,7 @@ export class Pipeline {
   private readonly diffStat: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   private readonly closeDeps: CloseDeps | undefined;
   private readonly groundTruth: PipelineOptions["groundTruth"];
+  private readonly truth: DecisionTruth | undefined;
   readonly budget: Required<Budget>;
   private readonly restartPolicy: RestartPolicy;
   private readonly policies: Pick<PolicyStore, "for">;
@@ -273,6 +277,7 @@ export class Pipeline {
     this.diffStat = options.diffStat ?? branchDiffStat;
     this.closeDeps = options.closeDeps;
     this.groundTruth = options.groundTruth;
+    this.truth = options.truth;
     this.budget = { taskUsd: options.budget?.taskUsd ?? null, dailyUsd: options.budget?.dailyUsd ?? null };
     this.restartPolicy = options.restartPolicy ?? "requeue";
     this.policies = options.policies ?? new PolicyStore();
@@ -640,10 +645,12 @@ export class Pipeline {
     decision: "approved" | "sent_back",
     reason?: string,
     response?: Record<string, unknown>,
-    options: { approver?: string } = {},
+    options: { approver?: string; auto?: boolean } = {},
   ): Promise<TaskRow> {
     const { approver } = options;
     const task = await this.get(id);
+    // The gate this decision closes, read before it moves: what a decision pack said about it is judged by what the person does here.
+    const gate = this.truth && !options.auto ? (await this.approvals(id)).find((a) => a.decision === null) : undefined;
     const open = task.state === "awaiting_approval" ? (await this.approvals(id)).find((a) => a.kind === "awaiting_approval" && a.decision === null) : undefined;
     const outcome = open?.requested.outcome;
     // A plan of High risk needs two distinct names: the first is kept on the gate, the second closes it.
@@ -690,7 +697,44 @@ export class Pipeline {
     const event: PipelineEvent = decision === "approved" ? { type: "approved" } : { type: "sent_back", from: outcome === undefined ? "plan" : "triage" };
     const moved = await this.dispatch(id, event, { decision: record });
     if (decision === "approved" && open && outcome === undefined) await this.keepGroundTruth(moved, open.id);
+    if (gate) await this.learnFromGate(id, gate, decision, response);
     return moved;
+  }
+
+  /** `decision.truth` on the task's activity: which decision record a later fact settled, and by what (ids only). */
+  async logDecisionTruth(taskId: string, fact: { pack: PackId; recordId: string; source: string }): Promise<void> {
+    await this.log(taskId, "decision.truth", fact);
+  }
+
+  /** What a person's decision at a gate says about the decisions the gate carried: the plan's three checks (an
+   *  approval untouched confirms them, an edit of their subject or a send-back contradicts), the findings a
+   *  shipped pack still held, the retro's worth. Never throws: a truth is a bonus, not part of the decision. */
+  private async learnFromGate(taskId: string, gate: ApprovalRow, decision: "approved" | "sent_back", response?: Record<string, unknown>): Promise<void> {
+    const truth = this.truth;
+    if (!truth) return;
+    try {
+      const requested = gate.requested as { decisions?: Record<string, unknown>; outcome?: unknown; revisions?: unknown; rules?: unknown };
+      const ids = requested.decisions ?? {};
+      if (gate.kind === "awaiting_approval" && requested.outcome === undefined) {
+        const touched = new Set((Array.isArray(requested.revisions) ? requested.revisions : []).flatMap((r) => Object.keys((r as { after?: object }).after ?? {})));
+        const subject: Record<string, string[]> = { coverage_check: ["cases"], plan_check: ["brief", "criteria", "assumptions", "slices", "rollback"], risk_score: ["risk"] };
+        for (const [pack, keys] of Object.entries(subject)) {
+          const recordId = ids[pack];
+          if (typeof recordId !== "string") continue;
+          const answer = await truth.answerOf(pack as PackId, recordId);
+          const contradicted = decision === "sent_back" || keys.some((key) => touched.has(key));
+          const label = answer ? planTruth(PACKS[pack as "coverage_check" | "plan_check" | "risk_score"], answer, contradicted ? "contradicted" : "confirmed") : null;
+          if (label) await truth.learned({ pack: pack as PackId, recordId, label, source: decision === "sent_back" ? "plan_sent_back" : contradicted ? "plan_edited" : "plan_approved", taskId });
+        }
+      } else if (gate.kind === "awaiting_ship" && decision === "approved" && Array.isArray(ids.finding_classify)) {
+        for (const recordId of ids.finding_classify) if (typeof recordId === "string") await truth.learned({ pack: "finding_classify", recordId, label: findingTruth(), source: "ship_approved", taskId });
+      } else if (gate.kind === "reviewing_memory" && typeof ids.worth_learning === "string" && requested.rules && typeof requested.rules === "object") {
+        const kept = decision === "approved" && response?.applyRules !== false;
+        await truth.learned({ pack: "worth_learning", recordId: ids.worth_learning, label: worthLearningTruth(kept), source: kept ? "retro_approved" : "retro_closed", taskId });
+      }
+    } catch (error) {
+      console.warn(`decision truth: gate ${gate.kind} of task ${taskId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   /** Writes the plan gate that was just approved as ground truth; whatever goes wrong is an event, never an error. */
@@ -954,7 +998,7 @@ export class Pipeline {
       if (Date.now() - open.createdAt.getTime() < minutes * 60_000) continue;
       const reason = `auto-approved after ${minutes} min: low risk and every check proceeded`;
       await this.log(task.id, "plan.auto_approved", { reason });
-      await this.decide(task.id, "approved", reason).catch((error: unknown) =>
+      await this.decide(task.id, "approved", reason, undefined, { auto: true }).catch((error: unknown) =>
         console.error(`could not auto-approve the plan of task ${task.id}`, error),
       );
     }

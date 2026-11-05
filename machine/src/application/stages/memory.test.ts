@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { TaskRow } from "../../domain/task.ts";
+import { tagged } from "../decision-truth.ts";
 import { memoryReviewRunner, withMemoryReview } from "./memory.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 
@@ -120,6 +121,19 @@ describe("the retro's worth_learning question", () => {
     const none = wire({ value: false, p: 0.01 }, undefined, false);
     expect((await none.run(rich)).detail?.rules).not.toBeNull();
     expect(none.calls[0]![1]).toBeUndefined();
+  });
+
+  it("keeps the worth_learning record's id on the detail, so the gate's outcome can be written onto it", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "memory-"));
+    const path = join(stateDir, "rules.md");
+    writeFileSync(path, "- r\n");
+    const run = memoryReviewRunner({
+      runPack: async () => ({ outcome: "pass", detail: { answer: { incidents: [], patterns: [] } }, artifacts: [{ kind: "rules", path, label: "rules.md", sha256: "x" }] }),
+      stateDir,
+      decide: async () => tagged({ answer: { worth: { value: true, p: 0.9 } }, recordId: "rec-w" }),
+      facts: async () => facts,
+    });
+    expect((await run(rich)).detail).toMatchObject({ decisions: { worth_learning: "rec-w" } });
   });
 
   it("puts the recalibration, the graph misses and the prompt updates the pack answered into the rules", async () => {
