@@ -7,6 +7,7 @@ import type { TaskRow } from "../../domain/task.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import { mkdirSync, writeFileSync } from "node:fs";
+import { findingId } from "@hardness/contracts";
 import type { Decide } from "./check-decide.ts";
 import { verifyRunner } from "./verify.ts";
 
@@ -70,6 +71,31 @@ function setup(opts: {
 }
 
 describe("verifying stage", () => {
+  describe("findings as the diagram draws them", () => {
+    const answer = (findings: unknown[]): StageResult => ({ outcome: "pass", detail: { answer: { summary: "s", findings } } });
+
+    it("gives each finding an id and merges duplicates, the highest level winning; an old-shape finding still reads", async () => {
+      const old = finding({ severity: "nit", confidence: 0.4 });
+      const again = finding({ severity: "blocker", confidence: 0.9 });
+      const other = finding({ line: 40, title: "other", severity: "should_fix", criterion_ref: "C2", category: "missing_criterion" });
+      const { run, context } = setup({ pack: answer([old, again, other]) });
+      const result = await run(context);
+      const found = result.findings as Array<{ id: string; severity: string; title: string; criterion_ref?: string }>;
+      expect(found).toHaveLength(2);
+      expect(found[0]).toMatchObject({ id: findingId(old as never), severity: "blocker", title: "off by one" });
+      expect(found[1]).toMatchObject({ id: findingId(other as never), criterion_ref: "C2" });
+    });
+
+    it("fails only on a blocker; should_fix and nit ride on the report", async () => {
+      const soft = setup({ pack: answer([finding({ severity: "should_fix", confidence: 1 }), finding({ line: 9, title: "n", severity: "nit", confidence: 1 })]) });
+      const passed = await soft.run(soft.context);
+      expect(passed.outcome).toBe("pass");
+      expect(passed.findings).toHaveLength(2);
+      const hard = setup({ pack: answer([finding({ severity: "blocker", confidence: 0.9 })]) });
+      expect((await hard.run(hard.context)).outcome).toBe("fail");
+    });
+  });
+
   it("reviews first: a blocker in the review ends the stage before any check runs", async () => {
     const { run, context, runPack, exec } = setup({ pack: { outcome: "pass", detail: { answer: { verdict: "fail", summary: "broken", findings: [finding()] } } } });
     const result = await run(context);
@@ -295,20 +321,21 @@ describe("verifying stage", () => {
       expect(first[1].excerpt).not.toContain("line 19");
       const detail = result.detail as { classified: Array<Record<string, unknown>>; calibration: unknown };
       expect(detail.classified).toEqual([
-        { title: "first", path: "src/a.ts", line: 10, severity: "bug", classified: "blocker", confidence: 0.9, verdict: "proceed" },
-        { title: "second", path: "src/a.ts", line: 20, severity: "nit", classified: "should_fix", confidence: 0.9, verdict: "proceed" },
+        { id: findingId(findings[0] as never), title: "first", path: "src/a.ts", line: 10, severity: "bug", classified: "blocker", confidence: 0.9, verdict: "proceed" },
+        { id: findingId(findings[1] as never), title: "second", path: "src/a.ts", line: 20, severity: "nit", classified: "should_fix", confidence: 0.9, verdict: "proceed" },
       ]);
       expect(detail.calibration).toEqual({ agree: 1, disagree: 1, skipped: 0 });
     });
 
-    it("classifies at most the six most confident findings", async () => {
-      const findings = Array.from({ length: 7 }, (_, i) => finding({ path: "src/a.ts", line: i + 1, title: `f${i}`, severity: "nit", confidence: 0.5 + i / 20 }));
+    it("classifies every merged finding, twenty at most, the most severe first, each row by its id", async () => {
+      const findings = Array.from({ length: 22 }, (_, i) => finding({ path: "src/a.ts", line: i * 10 + 1, title: `f${i}`, severity: i === 21 ? "blocker" : "nit", confidence: 0.5 }));
       const decide = vi.fn<Decide>(async () => choose("nit"));
       const { run, context } = setup({ worktree: worktree(), pack: review(findings), decide });
       const result = await run(context);
-      expect(decide).toHaveBeenCalledTimes(6);
-      const titles = (result.detail as { classified: Array<{ title: string }> }).classified.map((c) => c.title);
-      expect(titles).not.toContain("f0");
+      expect(decide).toHaveBeenCalledTimes(20);
+      const rows = (result.detail as { classified: Array<{ title: string; id: string }> }).classified;
+      expect(rows[0]).toMatchObject({ title: "f21", id: findingId(findings[21] as never) });
+      expect(rows.map((c) => c.title)).not.toContain("f20");
     });
 
     it("keeps the excerpt inside the worktree: a path that climbs out gets none", async () => {
@@ -375,8 +402,8 @@ describe("verifying stage", () => {
     const result = await run(context);
     expect(runPack).toHaveBeenCalledOnce();
     expect(result.outcome).toBe("fail");
-    expect(result.findings).toEqual([f]);
-    expect(result.detail).toMatchObject({ step: "review", verdict: "fail", summary: "bug", findings: [f] });
+    expect(result.findings).toEqual([expect.objectContaining({ ...f, id: findingId(f as never) })]);
+    expect(result.detail).toMatchObject({ step: "review", verdict: "fail", summary: "bug", findings: [expect.objectContaining({ title: f.title })] });
     expect(result.detail).not.toHaveProperty("checks");
   });
 
@@ -389,7 +416,7 @@ describe("verifying stage", () => {
 
   it("computes the verdict mechanically when the answer has none", async () => {
     const low = finding({ confidence: 0.5 });
-    const nit = finding({ severity: "nit" });
+    const nit = finding({ severity: "nit", line: 50, title: "naming" });
     const mk = (findings: unknown[]) => ({ outcome: "pass" as const, detail: { answer: { findings } }, findings: [] });
     expect((await setup({ pack: mk([low, nit]) }).run(setup({}).context)).outcome).toBe("pass");
     const s = setup({ pack: mk([finding({ severity: "security" })]) });
@@ -401,7 +428,7 @@ describe("verifying stage", () => {
     const s = setup({ pack: { outcome: "pass", detail: {}, findings: [f] } });
     const result = await s.run(s.context);
     expect(result.outcome).toBe("fail");
-    expect(result.findings).toEqual([f]);
+    expect(result.findings).toEqual([expect.objectContaining({ ...f, id: findingId(f as never) })]);
   });
 
   it("skips the checks with a note when no test command is detected, and still runs the pack", async () => {

@@ -1,7 +1,7 @@
 // The verifying stage, in the diagram's order: the review pack reads the change first, and only when no
 // blocker stands do the project's own checks run in the task worktree. A blocker fails the stage with the
 // findings and no suite run; a red check fails it with its output as a finding of category `tests`.
-import type { CheckSpec, CoverageSummary, DecisionOverrides, Finding, ServiceSpec } from "@hardness/contracts";
+import { type CheckSpec, type CoverageSummary, type DecisionOverrides, type Finding, type ServiceSpec, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
@@ -71,8 +71,9 @@ interface CheckReport {
 }
 
 const COVERAGE_BODY_LINES = 20;
-/** How many findings finding_classify sees, the most confident first, and how much code it gets around each. */
-const CLASSIFY_MAX = 6;
+/** How many findings finding_classify sees, the most severe first, and how much code it gets around each. */
+const CLASSIFY_MAX = 20;
+const LEVEL_RANK = { blocker: 2, should_fix: 1, nit: 0 } as const;
 const EXCERPT_RADIUS = 8;
 const EXCERPT_CAP = 2000;
 /** The host reads nothing but a regular file of a sane size from the worktree: a FIFO or a huge file a stage left would stall the machine. */
@@ -85,10 +86,6 @@ async function readBounded(path: string, maxBytes: number): Promise<string | nul
   if (!info?.isFile() || info.size > maxBytes) return null;
   return readFile(path, "utf8").catch(() => null);
 }
-
-/** The verifier's severity on the classifier's scale. */
-const scaleOf = (severity: string): "blocker" | "should_fix" | "nit" =>
-  severity === "bug" || severity === "security" ? "blocker" : severity === "test" || severity === "perf" || severity === "question" ? "should_fix" : "nit";
 
 /** The default diff: the branch's changes since it forked from the repo's HEAD. */
 async function branchDiff(worktreePath: string, repoPath: string): Promise<string | null> {
@@ -110,9 +107,9 @@ async function pathUnder(worktree: string, relative: string): Promise<string | n
 
 const tailOf = (text: string): string => text.trimEnd().split("\n").slice(-TAIL_LINES).join("\n");
 
-/** The mechanical fail rule: a confident bug or security finding. */
+/** The mechanical fail rule: a confident finding at the blocker level (`blocker`, or the older `bug` and `security`). Only a blocker fails the stage. */
 export const verdictOf = (findings: Finding[]): "pass" | "fail" =>
-  findings.some((f) => f.confidence >= 0.8 && (f.severity === "bug" || f.severity === "security")) ? "fail" : "pass";
+  findings.some((f) => f.confidence >= 0.8 && severityOf(f.severity) === "blocker") ? "fail" : "pass";
 
 const answerOf = (detail: Record<string, unknown> | undefined): Record<string, unknown> | undefined => {
   const answer = detail?.answer;
@@ -237,7 +234,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     const classify = async (reviewed: Finding[]): Promise<Record<string, unknown>> => {
       const decide = deps.decide ?? null;
       if (!decide || reviewed.length === 0) return {};
-      const top = [...reviewed].sort((a, b) => b.confidence - a.confidence).slice(0, CLASSIFY_MAX);
+      const top = [...reviewed].sort((a, b) => LEVEL_RANK[severityOf(b.severity)] - LEVEL_RANK[severityOf(a.severity)] || b.confidence - a.confidence).slice(0, CLASSIFY_MAX);
       const classified = await Promise.all(
         top.map(async (finding) => {
           const excerpt = await excerptOf(cwd, finding);
@@ -245,6 +242,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
           const severity = (answer?.severity ?? null) as { choice?: unknown; confidence?: unknown } | null;
           const usable = (verdict === "proceed" || verdict === "flag") && typeof severity?.choice === "string";
           return {
+            id: finding.id ?? "",
             title: finding.title,
             path: finding.path,
             line: finding.line,
@@ -259,7 +257,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       const calibration = { agree: 0, disagree: 0, skipped: 0 };
       for (const row of classified) {
         if (row.classified === null) calibration.skipped++;
-        else if (row.classified === scaleOf(row.severity)) calibration.agree++;
+        else if (row.classified === severityOf(row.severity)) calibration.agree++;
         else calibration.disagree++;
       }
       return { classified, calibration };
@@ -275,7 +273,8 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       // A deliberate escalation is the pack's own answer, verbatim: it has no findings to compute a verdict from.
       if (pack.outcome === "escalated") return { ...pack, detail: { ...pack.detail, step: "review" } };
       const answer = answerOf(pack.detail);
-      reviewed = (Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[];
+      // Each finding gets its id; the same finding raised twice is one, at the highest level it was raised at. A finding from before v2.2 reads the same.
+      reviewed = mergeDuplicateFindings(((Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[]).map(normaliseFinding));
       classification = await classify(reviewed);
       if (pack.outcome === "fail") return { ...pack, detail: { ...pack.detail, step: "review", ...classification } };
       const standing = assemble(pack, reviewed, classification);
