@@ -316,8 +316,8 @@ describe("decision truth at the plan gate", () => {
   const ids = { coverage_check: "rc", plan_check: "rp", risk_score: "rr" };
   const answers: Record<string, Record<string, unknown>> = {
     rc: { pins: { value: true, p: 0.9 }, redundancy: { score: 0, confidence: 0.8 }, untestable: { value: false, p: 0.1 } },
-    rp: { fits_record: { score: 2, confidence: 0.9 }, slices_cover_criteria: { value: true, p: 0.9 }, rollback_stated: { value: true, p: 0.9 }, touchpoints_in_map: { value: true, p: 0.9 } },
-    rr: { blast_radius: { score: 0, confidence: 0.9 }, reversibility: { score: 0, confidence: 0.9 }, data_sensitivity: { score: 0, confidence: 0.9 } },
+    rp: { fits_record: { score: 2, confidence: 0.9 }, risk_appropriate: { value: true, p: 0.9 } },
+    rr: { blast_radius: { score: 0, confidence: 0.9 }, reversibility: { score: 0, confidence: 0.9 }, data_sensitivity: { score: 0, confidence: 0.9 }, complexity: { choice: "S", confidence: 0.9 } },
   };
   const setup = async (act: (p: Pipeline, id: string) => Promise<unknown>) => {
     const learned: Array<{ pack: string; recordId: string; label: unknown; source: string; taskId?: string }> = [];

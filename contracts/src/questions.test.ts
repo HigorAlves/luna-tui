@@ -107,11 +107,12 @@ describe("the plan stage's decision packs", () => {
     expect(pack.questions.untestable).toMatchObject({ type: "yesno" });
   });
 
-  it("plan_check asks whether the plan fits the record, its slices cover the criteria, its rollback can be followed and its slices stay inside the code map", () => {
+  it("plan_check asks only what a script cannot: whether the plan fits the record, and whether it suits its risk", () => {
     const pack = PACKS.plan_check;
-    expect(Object.keys(pack.questions)).toEqual(["fits_record", "slices_cover_criteria", "rollback_stated", "touchpoints_in_map"]);
-    expect(pack.questions.touchpoints_in_map).toMatchObject({ type: "yesno", instructions: expect.stringContaining("code map") });
+    expect(Object.keys(pack.questions)).toEqual(["fits_record", "risk_appropriate"]);
     expect(pack.questions.fits_record).toMatchObject({ type: "score", rubric: { no: expect.any(String), partly: expect.any(String), yes: expect.any(String) } });
+    expect(pack.questions.risk_appropriate).toMatchObject({ type: "yesno", instructions: expect.stringContaining("migration") });
+    expect(Object.keys(pack.policy).sort()).toEqual(["fits_record", "risk_appropriate"]);
   });
 
   it("red_check asks whether the red is for the right reason and the test asserts the behaviour; scope_check asks five yes/no questions over the facts", () => {

@@ -40,9 +40,9 @@ const notPinned = { pins: { value: false, p: 0.05 }, redundancy: { score: 0, con
 const good = {
   risk_score: { blast_radius: { score: 0, confidence: 0.9 }, reversibility: { score: 0, confidence: 0.9 }, data_sensitivity: { score: 0, confidence: 0.9 }, complexity: { choice: "S", confidence: 0.9 } },
   coverage_check: { pins: { value: true, p: 0.95 }, redundancy: { score: 0, confidence: 0.9 }, untestable: { value: false, p: 0.05 } },
-  plan_check: { fits_record: { score: 2, confidence: 0.9 }, slices_cover_criteria: { value: true, p: 0.95 }, rollback_stated: { value: true, p: 0.95 }, touchpoints_in_map: { value: true, p: 0.95 } },
+  plan_check: { fits_record: { score: 2, confidence: 0.9 }, risk_appropriate: { value: true, p: 0.95 } },
 };
-const bad = { ...good.plan_check, rollback_stated: { value: false, p: 0.05 } };
+const bad = { ...good.plan_check, risk_appropriate: { value: false, p: 0.05 } };
 const mapped = (over: Record<string, unknown> = {}): StageResult => ({
   outcome: "pass",
   detail: { summary: "mapped", map: { components: ["board keys"], files: ["board/src/keys.rs"], owners: ["@marta"], confidence: 0.8 }, ...over },
@@ -168,18 +168,62 @@ describe("planStage's code map", () => {
     expect(replans[1]!.plan).toMatchObject({ map: theMap, round: 2 });
   });
 
-  it("makes a slice outside the map a plan_check finding only when a map exists", async () => {
-    const outside = { ...good.plan_check, touchpoints_in_map: { value: false, p: 0.05 } };
-    const withMap = setup({ answers: { plan_check: [outside] } }, withGraph);
-    const flagged = await withMap.run(context());
-    expect(withMap.calls.filter((c) => c.pack === "plan").length).toBeGreaterThan(1);
-    expect(withMap.calls.filter((c) => c.pack === "plan")[1]!.plan).toMatchObject({ review: ["a slice touches files outside the code map"] });
-    expect(flagged.detail).toMatchObject({ verdicts: { plan: "flag" } });
-    const noMap = setup({ answers: { plan_check: [outside] } });
-    const clean = await noMap.run(context());
-    expect(noMap.calls.filter((c) => c.pack === "plan")).toHaveLength(1);
-    expect(clean.detail).toMatchObject({ verdicts: { plan: "proceed" }, flagged: [] });
+  describe("the plan check's facts, by script", () => {
+    const outside = planned({ slices: [{ title: "guard j", est_loc: 12, touchpoints: ["board/src/other.rs"], acceptance: ["no panic", "stays selected"] }] });
+
+    it("sends the planner back with a step's file the map does not name, only when a map exists", async () => {
+      const withMap = setup({ plan: [outside] }, withGraph);
+      const result = await withMap.run(context());
+      const replans = withMap.calls.filter((c) => c.pack === "plan");
+      expect(replans.length).toBeGreaterThan(1);
+      expect(replans[1]!.plan?.review).toEqual([expect.stringMatching(/P1 touches board\/src\/other\.rs.*code map/)]);
+      expect(result.detail).toMatchObject({ verdicts: { plan: "flag" }, planIssues: [expect.stringMatching(/other\.rs/)] });
+      const noMap = setup({ plan: [outside] });
+      const clean = await noMap.run(context());
+      expect(noMap.calls.filter((c) => c.pack === "plan")).toHaveLength(1);
+      expect(clean.detail).toMatchObject({ verdicts: { plan: "proceed" }, flagged: [], planIssues: [] });
+    });
+
+    it("lets a step declare a new file instead", async () => {
+      const declared = planned({ steps: [{ title: "guard j", description: "guard j", est_loc: 12, files: ["board/src/other.rs"], new_files: ["board/src/other.rs"], done_when: ["no panic", "stays selected"], touchpoints: ["board/src/other.rs"], acceptance: ["no panic", "stays selected"] }] });
+      const { run, calls } = setup({ plan: [declared] }, withGraph);
+      const result = await run(context());
+      expect(calls.filter((c) => c.pack === "plan")).toHaveLength(1);
+      expect(result.detail).toMatchObject({ planIssues: [], verdicts: { plan: "proceed" } });
+    });
+
+    it("sends the planner back for a missing rollback and for a criterion no step's done_when names, without asking a model", async () => {
+      const lines: string[] = [];
+      const { run, calls } = setup({ plan: [planned({ rollback: "" , slices: [{ title: "g", est_loc: 1, touchpoints: ["board/src/keys.rs"], acceptance: ["no panic"] }] })] }, { decide: null, log: (l) => lines.push(l) });
+      const result = await run(context());
+      expect(calls.filter((c) => c.pack === "plan").length).toBe(PLAN_ROUNDS + 1);
+      expect(calls.filter((c) => c.pack === "plan")[1]!.plan?.review).toEqual(["C2 appears in no step's done_when: stays selected", "the plan has no rollback"]);
+      expect(result.detail?.planIssues).toEqual(["C2 appears in no step's done_when: stays selected", "the plan has no rollback"]);
+    });
+
+    it("adds the script's issues to the decision's: either sends the planner back, and a decision that proceeds does not clear the script", async () => {
+      const { run, calls } = setup({ plan: [outside, planned()], answers: { plan_check: [bad] } }, withGraph);
+      await run(context());
+      expect(calls.filter((c) => c.pack === "plan")[1]!.plan?.review).toEqual([expect.stringMatching(/other\.rs/), expect.stringMatching(/appropriate to its risk/)]);
+    });
   });
+
+  it("gives plan_check the record, the scenarios, the map, the risk and the steps, without the plan's brief, assumptions or rollback", async () => {
+    const { run, decided } = setup({}, withGraph);
+    await run(context());
+    const input = decided.find((d) => d.pack === "plan_check")!.plan;
+    expect(input).toMatchObject({ record, brief: "", assumptions: [], slices, cases: [{ title: "case 0" }, { title: "case 1" }], map: theMap, risk: { level: "medium" } });
+    expect(input).not.toHaveProperty("rollback");
+    expect(input.criteria).toEqual(["no panic", "stays selected"]);
+  });
+
+  it("reads a plan_check answer written before risk_appropriate: it is judged on the questions it has", async () => {
+    const v1 = { fits_record: { score: 2, confidence: 0.9 }, slices_cover_criteria: { value: true, p: 0.95 }, rollback_stated: { value: true, p: 0.95 }, touchpoints_in_map: { value: true, p: 0.95 } };
+    const { run } = setup({ answers: { plan_check: [v1] } });
+    const result = await run(context());
+    expect(result.detail).toMatchObject({ verdicts: { plan: "proceed" }, flagged: [] });
+  });
+
 });
 
 describe("planStage", () => {
@@ -252,7 +296,7 @@ describe("planStage", () => {
     await run(context());
     // The designer is handed the criteria and the record's goal, never the steps, the brief, the assumptions, the map or the risk.
     expect(calls[1]!.plan).toEqual({ record, brief: "", criteria: ["no panic", "stays selected"], assumptions: [], slices: [], round: 1 });
-    for (const d of decided.filter((k) => k.pack === "plan_check")) expect(d.plan).toMatchObject({ record, brief: "Guard the empty list", slices, cases: [{ title: "case 0" }, { title: "case 1" }] });
+    for (const d of decided.filter((k) => k.pack === "plan_check")) expect(d.plan).toMatchObject({ record, brief: "", slices, cases: [{ title: "case 0" }, { title: "case 1" }] });
     expect(decided[0]!.repo).toBe("/repo");
   });
 
@@ -301,7 +345,7 @@ describe("planStage", () => {
   });
 
   describe("coverage by id", () => {
-    const limited = planned({ criteria: ["no panic", "locks after five failures"] });
+    const limited = planned({ criteria: ["no panic", "locks after five failures"], slices: [{ title: "guard j", est_loc: 12, touchpoints: ["board/src/keys.rs"], acceptance: ["no panic", "locks after five failures"] }] });
 
     it("sends the designer back when a criterion that names a limit or an error has no edge or failure scenario, with what is missing", async () => {
       const { run, calls } = setup({ plan: [limited], test_design: [scenes(["C1"], ["C2"]), scenes(["C1"], ["C2"], ["C2", "failure"])] });
@@ -384,7 +428,7 @@ describe("planStage", () => {
     const { run, calls, decided } = setup({ answers: { plan_check: [bad, good.plan_check] } });
     const result = await run(context());
     expect(calls.map((c) => [c.pack, c.runId])).toEqual([["plan", "r1-plan"], ["test_design", "r1-tests-1"], ["plan", "r1-plan-2"], ["test_design", "r1-tests-2"]]);
-    expect(calls[2]!.plan).toMatchObject({ round: 2, review: [expect.stringMatching(/rollback/i)], brief: "Guard the empty list" });
+    expect(calls[2]!.plan).toMatchObject({ round: 2, review: [expect.stringMatching(/risk/i)], brief: "Guard the empty list" });
     expect(decided.filter((d) => d.pack === "plan_check")).toHaveLength(2);
     expect(result.detail).toMatchObject({ rounds: { tests: 2, plan: 2 }, verdicts: { plan: "proceed" }, flagged: [] });
 

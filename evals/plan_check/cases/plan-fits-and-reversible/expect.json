@@ -2,22 +2,23 @@
   "schema": 1,
   "checks": [
     {
-      "kind": "equals",
-      "path": "slices_cover_criteria.value",
-      "value": true
+      "kind": "between",
+      "path": "fits_record.score",
+      "min": 1.5,
+      "max": 2
     },
     {
       "kind": "equals",
-      "path": "rollback_stated.value",
+      "path": "risk_appropriate.value",
       "value": true
     }
   ],
-  "rubric": "Both criteria appear in a slice's acceptance and the rollback is followable.",
+  "rubric": "Two small steps build the CSV export the goal asks for, on a low-risk change that needs no migration or flag.",
   "label": {
-    "slices_cover_criteria": {
-      "value": true
+    "fits_record": {
+      "score": 2
     },
-    "rollback_stated": {
+    "risk_appropriate": {
       "value": true
     }
   }

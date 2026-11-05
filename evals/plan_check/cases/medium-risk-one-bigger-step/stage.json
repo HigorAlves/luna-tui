@@ -21,10 +21,10 @@
       "record": {
         "source": "example-tracker:EX-1",
         "kind": "feature",
-        "goal": "Let people export their cart as CSV",
+        "goal": "Round prices to the currency's minor unit",
         "size": "small",
         "urgency": "normal",
-        "risk": "low",
+        "risk": "medium",
         "signals": {
           "kind": {
             "answer": "feature",
@@ -37,7 +37,7 @@
         "at": "2026-11-01T09:00:00.000Z",
         "model": "fixture"
       },
-      "brief": "Add a CSV export button to the cart page.",
+      "brief": "",
       "criteria": [
         "The cart page has an Export button",
         "The file lists each line with its price"
@@ -45,28 +45,40 @@
       "assumptions": [],
       "slices": [
         {
-          "title": "Endpoint",
-          "est_loc": 50,
+          "title": "Round prices in the shared formatter",
+          "est_loc": 180,
           "touchpoints": [
-            "src/cart/export.ts"
+            "src/format/price.ts"
           ],
           "acceptance": [
             "The file lists each line with its price"
           ]
-        },
-        {
-          "title": "Button",
-          "est_loc": 30,
-          "touchpoints": [
-            "src/cart/CartPage.tsx"
-          ],
-          "acceptance": [
-            "The cart page has an Export button"
-          ]
         }
       ],
-      "rollback": "Revert the PR.",
-      "cases": []
+      "cases": [
+        {
+          "id": "S2",
+          "title": "the file has one row per line with its price",
+          "criterion": "The file lists each line with its price",
+          "criterion_ref": "C2",
+          "type": "happy",
+          "approach": "a",
+          "given": "a cart with two lines",
+          "when": "the user exports",
+          "then": "the file has one row per line with its price",
+          "layer": "integration"
+        }
+      ],
+      "risk": {
+        "level": "medium",
+        "product": 6,
+        "scores": {
+          "blast_radius": 0,
+          "reversibility": 0,
+          "data_sensitivity": 0
+        },
+        "complexity": "M"
+      }
     }
   },
   "limits": {

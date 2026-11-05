@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "risk_appropriate.value",
+      "value": false
+    }
+  ],
+  "rubric": "A 900-line data migration on payments, in one step, with no migration order and no flag: a high-risk plan must name one and keep steps small.",
+  "label": {
+    "risk_appropriate": {
+      "value": false
+    }
+  }
+}

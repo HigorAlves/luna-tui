@@ -26,6 +26,7 @@ import {
   applyPolicy,
   type Coverage,
   coverageOf,
+  planFacts,
   criteriaOf,
   maxRisk,
   planOf,
@@ -41,6 +42,9 @@ import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 export const COVERAGE_ROUNDS = 3;
 /** Planner re-runs after plan_check found something wrong. */
 export const PLAN_ROUNDS = 2;
+
+/** Questions an answer may leave out (an answer stored before they existed, or an engine that skipped one): the rest is still judged. */
+const OPTIONAL_QUESTIONS: Partial<Record<DecisionPackName, string[]>> = { risk_score: ["complexity"], plan_check: ["risk_appropriate"] };
 
 type DecisionPackName = "risk_score" | "coverage_check" | "plan_check";
 
@@ -69,7 +73,7 @@ const flag = (answer: Record<string, unknown>, question: string): boolean | null
 };
 
 /** What a decision's answer says is wrong, whatever its confidence: a confident "no" is a finding too. */
-function problemsOf(pack: DecisionPackName, answer: Record<string, unknown>, hasMap: boolean): string[] {
+function problemsOf(pack: DecisionPackName, answer: Record<string, unknown>): string[] {
   if (pack === "coverage_check") {
     return [
       ...(flag(answer, "pins") === false ? ["the scenarios do not each pin the criterion they name"] : []),
@@ -80,10 +84,7 @@ function problemsOf(pack: DecisionPackName, answer: Record<string, unknown>, has
   if (pack === "plan_check") {
     return [
       ...(score(answer, "fits_record") < 1.5 ? ["the plan does not build what the record's goal asks, no more and no less"] : []),
-      ...(flag(answer, "slices_cover_criteria") === false ? ["a criterion appears in no slice's acceptance"] : []),
-      ...(flag(answer, "rollback_stated") === false ? ["the rollback paragraph could not be followed at 2 a.m."] : []),
-      // Asked of every plan, a finding only when there is a map to stay inside.
-      ...(hasMap && flag(answer, "touchpoints_in_map") === false ? ["a slice touches files outside the code map"] : []),
+      ...(flag(answer, "risk_appropriate") === false ? ["the plan is not appropriate to its risk level: a high-risk plan names a migration or a flag strategy and keeps its steps small"] : []),
     ];
   }
   return [];
@@ -134,9 +135,10 @@ export function planStage(deps: PlanDeps): StageRunner {
         // An answer stored before a question existed, or from an engine that left an optional one out, is judged on what it has:
         // risk_score's complexity is advice, and its absence must not cost the card its risk score.
         const asked = PACKS[pack];
-        const questions = pack === "risk_score" && answer.complexity === undefined ? Object.fromEntries(Object.entries(asked.questions).filter(([name]) => name !== "complexity")) : asked.questions;
+        const optional = OPTIONAL_QUESTIONS[pack] ?? [];
+        const questions = Object.fromEntries(Object.entries(asked.questions).filter(([name]) => !optional.includes(name) || answer[name] !== undefined));
         const { overall, verdicts } = applyPolicy({ questions, policy: asked.policy }, answer, overrides);
-        const problems = problemsOf(pack, answer, Boolean(plan.map));
+        const problems = problemsOf(pack, answer);
         const recordId = recordIdOf(answer);
         return { verdict: overall === "proceed" && problems.length > 0 ? "flag" : overall, problems, answer, verdicts, ...(recordId ? { recordId } : {}) };
       } catch (error) {
@@ -207,6 +209,8 @@ export function planStage(deps: PlanDeps): StageRunner {
     let gaps: string[] = [];
     /** What coverage found wrong with the last scenarios, told to the designer's next round and shown at the gate when rounds ran out. */
     let notes: string[] = [];
+    let planIssues: string[] = [];
+    let finalPlan: ReturnType<typeof planOf> | undefined;
     let report: Coverage = coverageOf([], []);
     let coverage: Judged = { verdict: "skipped", problems: [], answer: null };
     let planCheck: Judged = { verdict: "skipped", problems: [], answer: null };
@@ -286,7 +290,15 @@ export function planStage(deps: PlanDeps): StageRunner {
       if ((gaps.length > 0 || notes.length > 0 || underBar) && coverage.verdict === "proceed") coverage = { ...coverage, verdict: "flag" };
 
       // The plan against the record: a finding sends the planner back, within the cap.
-      planCheck = await judge("plan_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}), ...mapPart, ...riskPart });
+      // The facts by script, then the two things a script cannot judge, asked of the record, the scenarios, the map, the risk and the steps:
+      // never the plan's own brief, assumptions or rollback.
+      const planDoc = planOf({ brief: plan.brief, criteria: plan.criteria, assumptions: plan.assumptions, slices: extras.steps ?? plan.slices, rollback: plan.rollback, outOfScope: extras.outOfScope, version: planRuns, ...(extras.migration !== undefined ? { migration: extras.migration } : {}), ...(extras.flags !== undefined ? { flags: extras.flags } : {}) });
+      const facts = planFacts(planDoc, cases, map);
+      const judgedCheck = await judge("plan_check", { record: task.record ?? null, brief: "", criteria: plan.criteria, assumptions: [], slices: plan.slices, cases, ...mapPart, ...riskPart });
+      const problems = [...facts.issues, ...judgedCheck.problems];
+      planCheck = { ...judgedCheck, problems, verdict: judgedCheck.verdict === "proceed" && facts.issues.length > 0 ? "flag" : judgedCheck.verdict };
+      planIssues = facts.issues;
+      finalPlan = planDoc;
       if (lane === "fast") {
         // One plan check, no re-run: unsure whether the plan fits means the ticket needs the full path.
         if (planCheck.verdict !== "ask") break;
@@ -321,7 +333,9 @@ export function planStage(deps: PlanDeps): StageRunner {
         slices: plan!.slices,
         ...(plan!.rollback !== undefined ? { rollback: plan!.rollback } : {}),
         // The v2.2 Plan, beside the keys an open gate from before this wave carries. Its version is the planner's run count.
-        plan: planOf({ brief: plan!.brief, criteria: plan!.criteria, assumptions: plan!.assumptions, slices: extras.steps ?? plan!.slices, rollback: plan!.rollback, outOfScope: extras.outOfScope, version: planRuns, ...(extras.migration !== undefined ? { migration: extras.migration } : {}), ...(extras.flags !== undefined ? { flags: extras.flags } : {}) }),
+        plan: finalPlan!,
+        // What the plan check's script found wrong with the plan, still open when the planner's re-runs ran out.
+        planIssues,
         cases,
         // Coverage by criterion id: what each criterion's scenarios are, the score against the repo's bar, and what is still open.
         coverageReport: { score: report.score, bar: coverageBar, gaps: report.gaps, thin: report.thin, untestable: report.untestable, open: notes, per: report.per.map((p) => ({ id: p.criterion.id, text: p.criterion.text, scenarios: p.scenarios, types: p.types })) },

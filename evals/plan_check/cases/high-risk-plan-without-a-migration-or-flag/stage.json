@@ -21,10 +21,10 @@
       "record": {
         "source": "example-tracker:EX-1",
         "kind": "feature",
-        "goal": "Let people export their cart as CSV",
+        "goal": "Move card tokens to the new vault and drop the old column",
         "size": "small",
         "urgency": "normal",
-        "risk": "low",
+        "risk": "high",
         "signals": {
           "kind": {
             "answer": "feature",
@@ -37,26 +37,36 @@
         "at": "2026-11-01T09:00:00.000Z",
         "model": "fixture"
       },
-      "brief": "Add a CSV export button to the cart page.",
+      "brief": "",
       "criteria": [
-        "The cart page has an Export button",
-        "The file lists each line with its price"
+        "Every token is readable from the vault"
       ],
       "assumptions": [],
       "slices": [
         {
-          "title": "Endpoint",
-          "est_loc": 50,
+          "title": "Drop the old tokens column and backfill in one change",
+          "est_loc": 900,
           "touchpoints": [
-            "src/cart/export.ts"
+            "db/migrations/0042_tokens.sql",
+            "src/payments/vault.ts",
+            "src/payments/charge.ts"
           ],
           "acceptance": [
-            "The file lists each line with its price"
+            "Every token is readable from the vault"
           ]
         }
       ],
-      "rollback": "",
-      "cases": []
+      "cases": [],
+      "risk": {
+        "level": "high",
+        "product": 18,
+        "scores": {
+          "blast_radius": 0,
+          "reversibility": 0,
+          "data_sensitivity": 0
+        },
+        "complexity": "XL"
+      }
     }
   },
   "limits": {

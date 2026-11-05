@@ -505,12 +505,10 @@ const COVERAGE_QUESTIONS: QuestionSet = {
 /** The criteria no scenario names (exact match after trimming): what the test designer's next round is told to cover. */
 export const coverageGaps = (criteria: string[], cases: { criterion: string | null }[]): string[] => criteria.filter((c) => !cases.some((k) => (k.criterion ?? "").trim() === c.trim()));
 
-/** What plan_check asks about the plan against triage's record. */
+/** What plan_check asks of the plan: only what a script cannot. That every criterion has a step, every file is mapped or new and a rollback exists is `planFacts`'s. */
 const PLAN_CHECK_QUESTIONS: QuestionSet = {
   fits_record: { type: "score", instructions: "Does the plan build what the record's goal asks, no more, no less?", rubric: { no: "It builds something else or far more", partly: "It misses part of the goal or adds unasked work", yes: "It builds the goal" } },
-  slices_cover_criteria: { type: "yesno", instructions: "Does every criterion appear in some slice's acceptance?" },
-  rollback_stated: { type: "yesno", instructions: "Could a person follow the rollback paragraph at 2 a.m.?" },
-  touchpoints_in_map: { type: "yesno", instructions: "Does every slice touch only files the code map names, or files it declares and explains? Answer yes when the plan has no code map." },
+  risk_appropriate: { type: "yesno", instructions: "Is the plan appropriate to its risk level (given with the plan)? A high-risk plan names a migration or a flag strategy and keeps its steps small enough to review; a low-risk plan does not need either." },
 };
 
 /** What red_check asks of a slice's failing test. */

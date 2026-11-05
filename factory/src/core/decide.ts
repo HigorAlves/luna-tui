@@ -25,7 +25,8 @@ export function renderPlan(plan: PlanContext): string {
   }
   return [
     ...(r ? [`Goal: ${r.goal}`, `Record: ${r.kind} / size ${r.size} / urgency ${r.urgency} / risk ${r.risk}: ${r.reason}`] : []),
-    `Brief: ${plan.brief}`,
+    ...(plan.risk ? [`Risk: ${plan.risk.level}${plan.risk.product !== undefined ? ` (product ${plan.risk.product})` : ""}${plan.risk.complexity ? ` · complexity ${plan.risk.complexity}` : ""}`] : []),
+    ...(plan.brief ? [`Brief: ${plan.brief}`] : []),
     `Criteria:\n${list(plan.criteria)}`,
     ...(plan.assumptions.length ? [`Assumptions:\n${list(plan.assumptions)}`] : []),
     `Slices:\n${plan.slices.map((s, i) => `${i + 1}. ${s.title} (~${s.est_loc} LOC; touches ${s.touchpoints.join(", ") || "?"}): ${s.acceptance.join("; ") || "(no acceptance)"}`).join("\n")}`,

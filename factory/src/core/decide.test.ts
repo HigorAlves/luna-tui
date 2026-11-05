@@ -54,6 +54,18 @@ describe("coverage_check's state", () => {
   });
 });
 
+describe("renderPlan for the plan check", () => {
+  const base = { record: null, brief: "", criteria: ["c1"], assumptions: [], slices: [{ title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["c1 holds"] }] };
+
+  it("shows the risk level with its product, and leaves out a brief or assumptions it was not given", () => {
+    const text = renderPlan({ ...base, risk: { level: "high", product: 12, scores: { blast_radius: 1, reversibility: 1, data_sensitivity: 2 }, complexity: "L" } } as never);
+    expect(text).toContain("Risk: high (product 12) · complexity L");
+    expect(text).not.toMatch(/Brief:|Assumptions:|Rollback:/);
+    expect(renderPlan(base as never)).not.toContain("Risk:");
+    expect(renderPlan({ ...base, brief: "B", assumptions: ["a"], rollback: "revert" } as never)).toMatch(/Brief: B[\s\S]*Assumptions:\n- a[\s\S]*Rollback: revert/);
+  });
+});
+
 describe("stateOf", () => {
   it("prefers context.issue and falls back to the task's title and description", () => {
     const base = { task: { title: "T", description: "D" }, context: {} } as unknown as StageInput;

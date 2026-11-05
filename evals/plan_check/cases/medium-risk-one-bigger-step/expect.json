@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "risk_appropriate.p",
+      "min": 0.25,
+      "max": 0.75
+    }
+  ],
+  "rubric": "A medium-risk change to a shared formatter in one 180-line step with no flag: whether that suits the risk is a judgement call, so p should stay near the middle."
+}
