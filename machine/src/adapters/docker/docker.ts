@@ -407,3 +407,10 @@ export async function removeContainer(name: string): Promise<void> {
 export async function imageExists(image: string): Promise<boolean> {
   return (await exec("docker", ["image", "inspect", image])).code === 0;
 }
+
+/** The id of a local image (`sha256:...`), the part of the environment a tag cannot pin; the tag itself when docker cannot say. */
+export async function imageId(image: string): Promise<string> {
+  const out = await exec("docker", ["image", "inspect", "--format", "{{.Id}}", image]);
+  const id = out.stdout.trim();
+  return out.code === 0 && id ? id : image;
+}

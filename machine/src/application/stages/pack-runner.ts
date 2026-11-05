@@ -24,6 +24,7 @@ import {
 } from "../../adapters/git/worktree.ts";
 import { CredentialWaitError, type CredentialMount, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
+import { envOf, lockfileHashes } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
@@ -47,6 +48,8 @@ import { PolicyStore } from "../policy.ts";
 import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
 
 export interface AgentDeps {
+  /** The id of a local image, for the environment hash; absent, no environment is recorded. */
+  imageId?: (image: string) => Promise<string>;
   /** The base stage image. */
   image: string;
   /** The image with browsers, used by the e2e pack. */
@@ -179,6 +182,20 @@ const SCOPE_ADVICE: Partial<Record<ScopeIssue["kind"], string>> = {
 const OutOfMap = z.array(z.object({ path: z.string(), reason: z.string() }));
 
 export async function runAgent(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}): Promise<StageResult> {
+  const result = await runAgentIn(deps, context, pack, extra);
+  // The environment a passing Build ran in: the run's own record, and the Build Report's `envHash`.
+  const path = result.workspace?.worktreePath;
+  if (pack !== "implementing" || result.outcome !== "pass" || !path || !deps.imageId) return result;
+  try {
+    const commit = await headCommit(path);
+    return { ...result, detail: { ...result.detail, env: envOf({ image: await deps.imageId(deps.image), lockfiles: lockfileHashes(path), commit }) } };
+  } catch (error) {
+    console.warn(`could not record the Build's environment: ${(error as Error).message}`);
+    return result;
+  }
+}
+
+async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, extra: AgentExtra = {}): Promise<StageResult> {
   const { task } = context;
   if (!task.repoPath) {
     throw new Error("the task has no repoPath; create it with a repo to run real stages");

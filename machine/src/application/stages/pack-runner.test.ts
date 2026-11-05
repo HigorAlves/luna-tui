@@ -7,6 +7,7 @@ import { StageInput, type StageOutput } from "@hardness/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CredentialWaitError, type Credentials, NoCredentialError, fixedCredentials } from "../../adapters/credentials/index.ts";
+import { envHash } from "../../domain/env-hash.ts";
 import { HOST_GIT } from "../../adapters/git/worktree.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
@@ -506,6 +507,29 @@ describe("agent stages through packs", () => {
     expect(result.outcome).toBe("pass");
     expect(result.run?.outputCommit).toBe(made);
     expect(git(seen!.worktree, "log", "--format=%s")).toBe("slice 1\ninit");
+  });
+
+  it("records the environment a passing Build ran in: the image id, the lockfiles at the head, the head, and their hash", async () => {
+    let made = "";
+    const d = { ...deps(fakeSandbox(() => output({ commit: made }), (r) => {
+      writeFileSync(join(r.worktree, "pnpm-lock.yaml"), "lock\n");
+      git(r.worktree, "add", "-A");
+      git(r.worktree, "commit", "-q", "-m", "slice 1");
+      made = git(r.worktree, "rev-parse", "HEAD");
+    })), imageId: async (image: string) => `sha256:id-of-${image}` };
+    const result = await agentRunners(d).implementing!(context("implementing"));
+    expect(result.outcome).toBe("pass");
+    const env = result.detail?.env as { hash: string; image: string; commit: string; lockfiles: Record<string, string> };
+    expect(env).toMatchObject({ image: "sha256:id-of-img", commit: made });
+    expect(Object.keys(env.lockfiles)).toEqual(["pnpm-lock.yaml"]);
+    expect(env.hash).toBe(envHash(env));
+  });
+
+  it("records no environment for a Build that did not pass", async () => {
+    const d = { ...deps(fakeSandbox(output({ outcome: "fail", ok: false } as never))), imageId: async () => "sha256:x" };
+    const result = await agentRunners(d).implementing!(context("implementing"));
+    expect(result.outcome).not.toBe("pass");
+    expect(result.detail).not.toHaveProperty("env");
   });
 
   it("hands the latest verifying findings to implementing, keeping only confident ones", async () => {

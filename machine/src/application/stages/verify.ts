@@ -10,6 +10,7 @@ import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type GraphJson, blastRadius } from "../../domain/blast-radius.ts";
 import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.ts";
 import { addedLineNumbers, parseLcov, patchCoverage } from "../../domain/coverage.ts";
+import { type EnvRecord, compareEnv } from "../../domain/env-hash.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
@@ -35,6 +36,10 @@ export interface VerifyDeps {
     bringBack: (cardPath: string, freshPath: string, branch: string, from: string) => Promise<{ ok: boolean; reason?: string }>;
     remove: (path: string) => Promise<void>;
   };
+  /** The environment Build recorded for the task (its passing run's `env`); null when none. */
+  buildEnv?: (taskId: string) => Promise<EnvRecord | null>;
+  /** The environment as it is in `path` at `commit`: the image id and the lockfiles. */
+  envOf?: (path: string, commit: string) => Promise<EnvRecord>;
   /** Who a check commits as: the identity git resolves for the repo. Null escalates. */
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
   /** The repo's luna.yaml: its own checks (null means detect them from the tree) and the
@@ -388,11 +393,26 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     const fresh = deps.fresh && task.worktreePath && task.branch ? await deps.fresh.make(task.worktreePath, task.branch, context.runId) : null;
     // Whatever the stage reads and runs is the fresh clone's; the card's folder is only touched to take a fast-forward back.
     const inFresh: StageContext = fresh ? { ...context, task: { ...task, worktreePath: fresh.path } } : context;
-    let result = await verify(inFresh, state);
+    // The environment Verify has, against the one Build recorded: a different image, or a lockfile that differs at the same commit, is a blocker.
+    let envReproduction: string | null = null;
+    let envFinding: Finding | null = null;
+    if (fresh && deps.buildEnv && deps.envOf) {
+      const recorded = await deps.buildEnv(task.id);
+      if (recorded) {
+        const compared = compareEnv(recorded, await deps.envOf(fresh.path, fresh.commit));
+        envReproduction = compared.matched ? "matched" : compared.differences.join("; ");
+        if (!compared.matched) {
+          envFinding = { path: "", line: 0, start_line: null, severity: "blocker", category: "env", title: "the environment Verify has is not the one Build ran in", body: compared.differences.join("\n"), suggestion_code: null, confidence: 1 };
+        }
+      }
+    }
+    let result = envFinding
+      ? ({ outcome: "fail", detail: { step: "env", error: envFinding.body, summary: envFinding.title, findings: [envFinding] }, findings: [envFinding] } as StageResult)
+      : await verify(inFresh, state);
     if (fresh) {
       // The fresh folder is never the task's workspace.
       const { workspace: _fresh, ...rest } = result;
-      result = { ...rest, detail: { ...result.detail, freshClone: { commit: fresh.commit } } };
+      result = { ...rest, detail: { ...result.detail, freshClone: { commit: fresh.commit }, ...(envReproduction ? { envReproduction } : {}) } };
       if (result.outcome === "pass") {
         const back = await deps.fresh!.bringBack(task.worktreePath!, fresh.path, task.branch!, fresh.commit);
         if (!back.ok) result = { ...result, outcome: "fail", detail: { ...result.detail, error: `what the verifying stage added could not be brought back: ${back.reason ?? "unknown"}` } };

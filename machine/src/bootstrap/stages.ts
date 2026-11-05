@@ -30,7 +30,7 @@ import { type ShipDecide } from "../application/stages/ship-fixes.ts";
 import { shipMonitor } from "../application/stages/ship-monitor.ts";
 import { verifyRunner } from "../application/stages/verify.ts";
 import { loadCredential } from "../adapters/credentials/claude.ts";
-import { imageExists, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
+import { imageExists, imageId, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
 import { hostFreshWorkspace } from "../adapters/git/clone.ts";
@@ -125,6 +125,7 @@ export async function buildRealStages(
   const credentials = engineCredentials;
   const deps = {
     image: config.runnerImage,
+    imageId,
     qaImage: config.runnerQaImage,
     ...(videoImage ? { videoImage: config.runnerVideoImage } : {}),
     credentials,

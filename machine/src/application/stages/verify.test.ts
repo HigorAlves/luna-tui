@@ -579,4 +579,53 @@ describe("verify on a fresh clone", () => {
     expect(escalated.seen.back).toEqual([]);
     expect(escalated.seen.removed).toEqual([]);
   });
+
+  describe("the environment comparison", () => {
+    const recorded = { hash: "h", image: "sha256:build", commit: "a".repeat(40), lockfiles: { "Cargo.lock": "h2" } };
+    const runnerFor = (current: { image: string; lockfiles: Record<string, string> }, built: typeof recorded | null = recorded) => {
+      const pack = vi.fn(async () => ({ outcome: "pass", detail: { answer: { verdict: "pass", findings: [], results: [], summary: "ok" } } }) as StageResult);
+      const runner = verifyRunner({
+        exec: async () => ({ code: 0, stdout: "", stderr: "" }),
+        runPack: pack,
+        stateDir: "/tmp/state",
+        detect: async () => ({ test: ["t"] }) as never,
+        gitIdentity: async () => ({ name: "a", email: "a@b" }),
+        changedPaths: async () => null,
+        fresh: { make: async () => ({ path: "/card.verify", commit: recorded.commit }), bringBack: async () => ({ ok: true }), remove: async () => {} },
+        buildEnv: async () => built,
+        envOf: async (_path, commit) => ({ ...current, commit, hash: "x" }),
+      });
+      const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+      return { runner, context, pack };
+    };
+
+    it("says matched when the image and the lockfiles are the ones Build recorded", async () => {
+      const { runner, context } = runnerFor({ image: "sha256:build", lockfiles: { "Cargo.lock": "h2" } });
+      const result = await runner(context);
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).toMatchObject({ envReproduction: "matched" });
+    });
+
+    it("fails with a blocker finding, category env, naming both images, before the review runs", async () => {
+      const { runner, context, pack } = runnerFor({ image: "sha256:other", lockfiles: { "Cargo.lock": "h2" } });
+      const result = await runner(context);
+      expect(result.outcome).toBe("fail");
+      expect(pack).not.toHaveBeenCalled();
+      expect(result.findings).toMatchObject([{ severity: "blocker", category: "env", body: expect.stringContaining("sha256:build") }]);
+      expect(result.findings![0]!.body).toContain("sha256:other");
+      expect(result.detail).toMatchObject({ envReproduction: expect.stringContaining("the runner image differs") });
+    });
+
+    it("fails on a lockfile that differs at the same commit", async () => {
+      const { runner, context } = runnerFor({ image: "sha256:build", lockfiles: { "Cargo.lock": "h9" } });
+      expect(await runner(context)).toMatchObject({ outcome: "fail", findings: [{ category: "env" }] });
+    });
+
+    it("compares nothing when Build recorded nothing", async () => {
+      const { runner, context } = runnerFor({ image: "sha256:other", lockfiles: {} }, null);
+      const result = await runner(context);
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).not.toHaveProperty("envReproduction");
+    });
+  });
 });

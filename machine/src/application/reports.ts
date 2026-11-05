@@ -86,8 +86,8 @@ export function buildReportOf(task: TaskRow, runs: readonly StageRunRow[], event
     branch: task.branch,
     base: typeof finish?.detail.base === "string" ? finish.detail.base : null,
     headSha: passed.outputCommit,
-    // The sandbox's environment hash exists from wave 11.
-    envHash: null,
+    // The hash of the environment the passing Build recorded (image, lockfiles, commit).
+    envHash: typeof objectOf(finish?.detail.env)?.hash === "string" ? (objectOf(finish?.detail.env)!.hash as string) : null,
     diffSummary: { added: task.diffAdded, removed: task.diffRemoved, files: stringsOf(facts?.changed).slice(0, 200).map((p) => safe(p).slice(0, 300)) },
     declaredFiles,
     tests: planned.map((t) => ({ scenario: t.scenario, file: t.file, before: reds.has(t.scenario) ? ("fail" as const) : null, after: greens.has(t.scenario) ? ("pass" as const) : null })),
@@ -154,8 +154,8 @@ export function verifyReportOf(task: TaskRow, runs: readonly StageRunRow[], even
       // The browser run's files are Evidence's: the pack's media lists them.
       artifacts: [],
     },
-    // The sandbox's reproduction of a failure exists from wave 11; a person's override of a verdict from wave 12.
-    envReproduction: null,
+    // What Verify's comparison of its environment with Build's said; a person's override of a verdict is from wave 12.
+    envReproduction: typeof last?.detail.envReproduction === "string" ? last.detail.envReproduction : null,
     overrides: [],
     version: REPORT_VERSION,
   };

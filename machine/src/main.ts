@@ -56,7 +56,8 @@ import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
 import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
-import { runSandbox } from "./adapters/docker/docker.ts";
+import { imageId, runSandbox } from "./adapters/docker/docker.ts";
+import { type EnvRecord, envOf, lockfileHashes } from "./domain/env-hash.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
 import { PgTaskStore } from "./adapters/persistence/task-store.ts";
@@ -257,6 +258,12 @@ const realVerifyRunner = verifyRunner({
   runPack: verifyPack,
   // Verify runs on a fresh clone at the head commit, never in the folder Build used.
   fresh: hostFreshWorkspace,
+  // The environment Build recorded, and the one Verify's fresh clone has.
+  buildEnv: async (taskId) => {
+    const env = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.env as EnvRecord | undefined;
+    return env && typeof env.hash === "string" ? env : null;
+  },
+  envOf: async (path, commit) => envOf({ image: await imageId(config.runnerImage), lockfiles: lockfileHashes(path), commit }),
   graph,
   stateDir: config.stateDir,
   get decide() {

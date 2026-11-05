@@ -206,3 +206,20 @@ describe("buildProgressOf", () => {
     expect(progress.lastCheckpoint).toMatchObject({ sha: "b".repeat(40), follows: "green" });
   });
 });
+
+describe("the environment in the reports", () => {
+  it("puts the hash Build recorded in the Build Report, and null when none was", () => {
+    const runs = [run("implementing", 1, { outputCommit: "abc" })];
+    const env = { hash: "f".repeat(64), image: "sha256:i", commit: "abc", lockfiles: {} };
+    expect(buildReportOf(task, runs, [finished("implementing", 1, "passed", { env })])?.envHash).toBe("f".repeat(64));
+    expect(buildReportOf(task, runs, [finished("implementing", 1, "passed", {})])?.envHash).toBeNull();
+    expect(buildReportOf(task, runs, [finished("implementing", 1, "passed", { env: { hash: 7 } })])?.envHash).toBeNull();
+  });
+
+  it("puts what Verify's comparison said in the Verify Report, as matched or what differed", () => {
+    const runs = [run("verifying", 1)];
+    expect(verifyReportOf(task, runs, [finished("verifying", 1, "passed", { envReproduction: "matched" })])?.envReproduction).toBe("matched");
+    expect(verifyReportOf(task, runs, [finished("verifying", 1, "failed", { envReproduction: "the runner image differs" })])?.envReproduction).toBe("the runner image differs");
+    expect(verifyReportOf(task, runs, [finished("verifying", 1, "passed", {})])?.envReproduction).toBeNull();
+  });
+});

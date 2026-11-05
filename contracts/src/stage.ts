@@ -93,7 +93,7 @@ export const Finding = z.object({
   confidence: z.number().min(0).max(1),
   // v2.2, all optional: a finding written before the wave has none of them (see finding.ts).
   id: z.string().optional(),
-  category: z.enum(["correctness", "missing_criterion", "security", "error_handling", "convention", "performance"]).optional(),
+  category: z.enum(["correctness", "missing_criterion", "security", "error_handling", "convention", "performance", "env"]).optional(),
   criterion_ref: z.string().nullable().optional(),
   suggested_fix: z.string().nullable().optional(),
   description: z.string().optional(),
