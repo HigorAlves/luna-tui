@@ -13,7 +13,7 @@ import type { Graph } from "../application/graph.ts";
 import type { Watcher } from "../application/ports.ts";
 import type { TruthSink } from "../application/decision-truth.ts";
 import type { Decide } from "../application/stages/check-decide.ts";
-import { type AgentExtra, agentRunners, runAgent } from "../application/stages/pack-runner.ts";
+import { type AgentDeps, type AgentExtra, agentRunners, runAgent } from "../application/stages/pack-runner.ts";
 import { ciWatchRunner } from "../application/stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
 import { type EvidenceDeps, type EvidenceStageDeps, evidenceStage } from "../application/stages/evidence.ts";
@@ -85,6 +85,8 @@ export async function buildRealStages(
   retroFacts?: (taskId: string) => Promise<RetroFacts | null>,
   /** Told what the stages learn about a decision after the fact (RFC 0005 wave 7); absent keeps nothing. */
   truth?: TruthSink,
+  /** The board search triage's agent may ask for; absent, `card_search` answers nothing. */
+  cards?: AgentDeps["cards"],
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -130,6 +132,7 @@ export async function buildRealStages(
       return buildDecisions?.decide ?? null;
     },
     truth: truth ?? null,
+    ...(cards ? { cards } : {}),
     policies,
     history,
     ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure } : {}),

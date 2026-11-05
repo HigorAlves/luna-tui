@@ -236,7 +236,7 @@ describe("factory main (dry run)", () => {
       agent: expect.stringMatching(/\.eve-agents\/triage$/),
       model: "chatgpt(gpt-5.6-terra)",
       reasoning: "high",
-      tools: ["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "delegate"],
+      tools: ["bash", "read_file", "glob", "grep", "web_fetch", "step", "decision_get", "card_search", "delegate"],
       guard: { writable: false, commands: expect.arrayContaining(["gh issue view"]), roots: { scratch: expect.stringMatching(/luna-scratch-/), read: [expect.stringMatching(/\/in$/), "/graph"] } },
     });
     expect(result).toMatchObject({ ok: true, summary: "dry-run" });

@@ -34,7 +34,8 @@ import { pushCheckpoint } from "./deliver.ts";
 /** A checkpoint push that takes longer than this is given up (the final Deliver push is authoritative). */
 const PUSH_TIMEOUT_MS = 60_000;
 import type { TruthSink } from "../decision-truth.ts";
-import { type Decide, buildChecks, buildWatch } from "./build-watch.ts";
+import { type Decide, buildChecks, buildWatch, cardSearchAnswers } from "./build-watch.ts";
+import type { CardHit } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
@@ -81,6 +82,8 @@ export interface AgentDeps {
   truth?: TruthSink | null;
   /** How often the build watch looks at the run's ledger, in ms. */
   watchEvery?: number;
+  /** The board search triage's agent asks for (`card_search`): read-only, the task's own repository only. Absent: the tool answers nothing. */
+  cards?: { search(request: { repoPath: string | null; selfId: string; query: string }): Promise<CardHit[]> };
 }
 
 /** Every branch the pipeline writes starts with this; see `workspaceFor`. */
@@ -288,16 +291,22 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           log: (line) => void context.note?.(line).catch(() => {}),
         })
       : null;
+  // Triage's board search: the same mailbox, answered over this task's own repository only.
+  const cardSearch =
+    pack === "triage" && deps.cards
+      ? cardSearchAnswers({ outDir: join(runDir, "out"), search: (query) => deps.cards!.search({ repoPath: task.repoPath, selfId: task.id, query }) })
+      : null;
   const startWatch = (): void => {
-    if (!checks || watch) return;
+    if ((!checks && !cardSearch) || watch) return;
     const hostExec = deps.hostExec;
     watch = buildWatch({
       outDir: join(runDir, "out"),
       every: deps.watchEvery ?? 2000,
       log: (line) => void context.note?.(line).catch(() => {}),
-      onRed: checks.onRed,
-      onScopeRequest: checks.onScopeRequest,
+      ...(checks ? { onRed: checks.onRed, onScopeRequest: checks.onScopeRequest } : {}),
+      ...(cardSearch ? { onCardSearch: cardSearch.onCardSearch } : {}),
       onCommitted: async (slice) => {
+        if (!checks) return;
         await checks.onGreen(slice).catch((error: Error) => void context.note?.(`red_check truth: ${error.message}`).catch(() => {}));
         if (!hostExec) return;
         pushing = pushing.then(async () => {

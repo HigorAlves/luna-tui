@@ -126,17 +126,17 @@ describe("withTriageSignals and the confidence policy", () => {
     signals: { kind: { answer: "bug", confidence: 0.9 }, size: { answer: "S", confidence: 0.8 }, who: sub, what: sub, impact: sub, time: sub, demand: sub, risk_prelim: { answer: "low", confidence: 0.9 }, archive: { answer: false, confidence: 0.95 }, ...signals },
   });
 
-  it("stops at the person's questions, one per field under its flag bar with the guess and its confidence, and does not run the agent", async () => {
+  it("stops at the person's questions, one per field under its flag bar, the least sure first, with the guess and its confidence, and does not run the agent", async () => {
     let ran = 0;
     const runner = withTriageSignals(async () => (ran++, { outcome: "pass" }), { classify: async () => read({ kind: { answer: "bug", confidence: 0.62 }, risk_prelim: { answer: "low", confidence: 0.4 } }), save: async () => {} });
     const result = await runner(context());
     expect(ran).toBe(0);
     expect(result.outcome).toBe("needs_input");
     expect(result.needsInput).toEqual([
-      { question: "Is this a bug or a feature? The model read it as a bug, 0.62", recommended: "bug" },
       { question: "How risky is the change: low, medium or high? The model read it as low, 0.40", recommended: "low" },
+      { question: "Is this a bug or a feature? The model read it as a bug, 0.62", recommended: "bug" },
     ]);
-    expect(result.detail).toMatchObject({ asked: [{ field: "kind", guess: "bug", confidence: 0.62 }, { field: "risk", guess: "low", confidence: 0.4 }] });
+    expect(result.detail).toMatchObject({ asked: [{ field: "risk", guess: "low", confidence: 0.4 }, { field: "kind", guess: "bug", confidence: 0.62 }] });
   });
 
   it("goes on to the agent for a field in the flag band, which the plan gate will show", async () => {
@@ -159,5 +159,54 @@ describe("withTriageSignals and the confidence policy", () => {
   it("does not ask on a reading it did not get this time", async () => {
     const runner = withTriageSignals(async () => ({ outcome: "pass" }), { classify: async () => null, save: async () => {} });
     expect((await runner(context({ task: task({ classification: read({ kind: { answer: "bug", confidence: 0.1 } }) }) }))).outcome).toBe("pass");
+  });
+});
+
+describe("withTriageSignals and the bounds on asking", () => {
+  const sub = { answer: 1, confidence: 0.9 };
+  const lowAll = {
+    ...classification, kind: "bug", kindConfidence: 0.3, sizeBucket: "S" as const, priority: "P2" as const, riskPrelim: "low" as const, confidence: 0.3,
+    signals: { kind: { answer: "bug", confidence: 0.3 }, size: { answer: "S", confidence: 0.2 }, who: { answer: 1, confidence: 0.4 }, what: sub, impact: sub, time: sub, demand: sub, risk_prelim: { answer: "low", confidence: 0.5 }, archive: { answer: true, confidence: 0.6 } },
+  };
+  const round = (n: number) => Array.from({ length: n }, () => ({ kind: "awaiting_answers", decision: "answered", response: { answers: { q: "a" } }, requested: { askedBy: "triage" } })) as never;
+
+  it("asks at most three questions a round, the least sure first, and marks them as triage's", async () => {
+    const result = await withTriageSignals(async () => ({ outcome: "pass" }), { classify: async () => lowAll, save: async () => {} })(context());
+    expect(result.outcome).toBe("needs_input");
+    expect(result.needsInput).toHaveLength(3);
+    expect((result.detail?.asked as Array<{ field: string }>).map((a) => a.field)).toEqual(["size", "kind", "urgency"]);
+    expect(result.detail).toMatchObject({ askedBy: "triage" });
+  });
+
+  it("escalates to a person, listing the open questions, instead of a third round", async () => {
+    const result = await withTriageSignals(async () => ({ outcome: "pass" }), { classify: async () => lowAll, save: async () => {} })(context({ approvals: round(2) }));
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail?.reason).toMatch(/after 2 rounds/);
+    expect(result.detail?.reason).toContain("How big is the change");
+    expect(result.detail?.reason).toContain("Is this a bug or a feature?");
+    expect(result.detail?.reason).toContain("How risky");
+  });
+
+  it("counts only triage's rounds, and takes the repo's caps", async () => {
+    const other = [{ kind: "awaiting_answers", decision: "answered", response: null, requested: {} }] as never;
+    const run = (approvals: never, max_rounds: number, max_questions = 3) =>
+      withTriageSignals(async () => ({ outcome: "pass" }), {
+        classify: async () => lowAll,
+        policy: async () => ({ factory: { ...FACTORY_DEFAULTS, triage: { ...FACTORY_DEFAULTS.triage, max_rounds, max_questions } } }),
+        save: async () => {},
+      })(context({ approvals }));
+    expect((await run(other, 2)).outcome).toBe("needs_input");
+    expect((await run(round(1), 1)).outcome).toBe("escalated");
+    expect((await run(round(2), 3)).outcome).toBe("needs_input");
+    expect((await run([] as never, 2, 1)).needsInput).toHaveLength(1);
+  });
+
+  it("holds the agent's own questions to the same bounds", async () => {
+    const asks = async () => ({ outcome: "needs_input" as const, needsInput: [1, 2, 3, 4].map((n) => ({ question: `q${n}`, recommended: null })), detail: { summary: "s" } });
+    const first = await withTriageSignals(asks, { classify: null, save: async () => {} })(context());
+    expect(first.needsInput).toHaveLength(3);
+    expect(first.detail).toMatchObject({ askedBy: "triage" });
+    const third = await withTriageSignals(asks, { classify: null, save: async () => {} })(context({ approvals: round(2) }));
+    expect(third).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("q1") } });
   });
 });

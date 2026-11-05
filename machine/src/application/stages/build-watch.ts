@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import { type TruthSink, redCheckTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
+import type { CardHit } from "../../domain/card-search.ts";
 import { type AddedLine, type ScopeFacts, addedLinesOf, scopeFacts } from "../../domain/scope.ts";
 
 export interface BuildWatchOptions {
@@ -20,6 +21,8 @@ export interface BuildWatchOptions {
   onRed?: (slice: LedgerSlice) => Promise<void>;
   /** Called once per `checks/scope-request.json` the implementer writes (a rewritten request is a new one). */
   onScopeRequest?: (request: ScopeRequest) => Promise<void>;
+  /** Called once per `checks/card-search-request.json` the triage agent writes (a rewritten request is a new one). */
+  onCardSearch?: (query: string) => Promise<void>;
   log?: (line: string) => void;
 }
 
@@ -40,6 +43,8 @@ export interface BuildWatch {
 export const MAX_REDS_PER_SLICE = 2;
 /** Scope requests judged per run: the first and two fix passes. */
 export const MAX_SCOPE_REQUESTS = 3;
+/** Board searches answered per run: a triage agent that keeps asking is not helped by more. */
+export const MAX_CARD_SEARCHES = 5;
 /** The tail of a red note a decision sees: the failing lines are at the end, and a note is agent-written. */
 export const NOTE_TAIL = 4096;
 
@@ -49,6 +54,8 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
   const redsPerSlice = new Map<number, number>();
   let scopeRequests = 0;
   let lastRequest = "";
+  let lastSearch = "";
+  let cardSearches = 0;
   let stopped = false;
   let tick: Promise<void> = Promise.resolve();
 
@@ -111,8 +118,35 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
     }
   };
 
+  const searches = async (): Promise<void> => {
+    if (!options.onCardSearch) return;
+    let text: string;
+    try {
+      text = await readFile(join(options.outDir, "checks", "card-search-request.json"), "utf8");
+    } catch {
+      return;
+    }
+    if (text === lastSearch) return;
+    let query: string;
+    try {
+      const parsed = JSON.parse(text) as { query?: unknown };
+      if (typeof parsed.query !== "string") return;
+      query = parsed.query;
+    } catch {
+      return; // half-written: the next tick retries
+    }
+    lastSearch = text;
+    if (cardSearches >= MAX_CARD_SEARCHES) return;
+    cardSearches += 1;
+    try {
+      await options.onCardSearch(query);
+    } catch (error) {
+      options.log?.(`build watch: card search: ${(error as Error).message}`);
+    }
+  };
+
   const timer = setInterval(() => {
-    tick = tick.then(() => (stopped ? undefined : poll().then(requests)));
+    tick = tick.then(() => (stopped ? undefined : poll().then(requests).then(searches)));
   }, options.every);
 
   return {
@@ -123,6 +157,7 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
       // One last look: a slice committed just before the container exited is still pushed.
       await poll();
       await requests();
+      await searches();
       stopped = true;
     },
   };
@@ -243,6 +278,21 @@ export function buildChecks(deps: BuildChecksDeps) {
     /** The verdict the last scope_check came to, or "skipped" when the implementer never asked. */
     async lastVerdict(): Promise<string> {
       return verdict;
+    },
+  };
+}
+
+/** The machine's side of `card_search`: runs the search over the board and answers in the mailbox. The container can ask
+ *  only for its own repository's cards: the repo comes from the task, never from the request. */
+export function cardSearchAnswers(deps: { outDir: string; search: (query: string) => Promise<CardHit[]> }) {
+  return {
+    async onCardSearch(query: string): Promise<void> {
+      const cards = await deps.search(query);
+      const dir = join(deps.outDir, "checks");
+      await mkdir(dir, { recursive: true });
+      const tmp = join(dir, ".card-search.json.tmp");
+      await writeFile(tmp, JSON.stringify({ verdict: "ok", problems: [], cards }));
+      await rename(tmp, join(dir, "card-search.json"));
     },
   };
 }

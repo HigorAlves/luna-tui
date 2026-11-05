@@ -653,10 +653,11 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     agent: "triage-planner",
     helpers: [{ role: "reply-drafter", engine: "claude:haiku" }],
     skills: ["code-discovery"],
-    access: access(READ_ONLY, { agent: true, web: true, commands: ["gh issue view"], luna: ["decision_get"] }),
+    access: access(READ_ONLY, { agent: true, web: true, commands: ["gh issue view"], luna: ["decision_get", "card_search"] }),
     writable: false,
-    maxTurns: 30,
-    timeoutMs: 10 * MINUTE,
+    // One triage needs a record and an outcome, not a tour of the repo: the signals are read before it runs.
+    maxTurns: 12,
+    timeoutMs: 5 * MINUTE,
     // Codex is a candidate here; the machine keeps the Claude default until evals move it. A usage
     // limit on either moves the stage to the other.
     engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"], fallback: ["codex:sol", "claude:opus"] },

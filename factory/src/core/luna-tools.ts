@@ -44,6 +44,11 @@ export const LUNA_TOOLS = {
       "Ask the machine to judge the scope of your change before you answer done: a summary of the diff and every file you changed outside the plan's touchpoints, each with its reason. Waits for the verdict; fix what it flags (one pass). A verdict of skipped means no one answered; go on.",
     input: { diffSummary: z.string(), outOfMap: z.array(z.object({ path: z.string(), reason: z.string() })) },
   },
+  card_search: {
+    description:
+      "Search the cards of this repository (open ones and those closed in the last 90 days) for a topic, so you can say \"related to card X\". Read-only: returns at most 10 of { id, title, state, summary } and nothing from another repository. An empty list or a verdict of skipped means nothing matched or no one answered; go on.",
+    input: { query: z.string().min(1).max(300) },
+  },
   slice_list: { description: "The slice ledger as it stands.", input: {} },
   decision_get: {
     description: "A decision already settled for this task (by key, e.g. 'driver'), from the stage input's decisions; empty when nothing was settled.",
@@ -147,6 +152,13 @@ export function lunaHandlers(options: LunaToolsOptions) {
         writeFileSync(join(options.checksDir, "scope-request.json"), JSON.stringify({ diffSummary, outOfMap }, null, 2) + "\n");
       }
       return answerOf("scope.json");
+    },
+    card_search: async ({ query }) => {
+      if (!options.checksDir) return SKIPPED;
+      mkdirSync(options.checksDir, { recursive: true });
+      clear("card-search.json");
+      writeFileSync(join(options.checksDir, "card-search-request.json"), JSON.stringify({ query }) + "\n");
+      return answerOf("card-search.json");
     },
     slice_list: () => state.ledger,
     decision_get: ({ key }) => {

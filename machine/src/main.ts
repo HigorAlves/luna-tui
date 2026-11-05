@@ -29,6 +29,7 @@ import { shippedStream } from "./application/ship-loop.ts";
 import type { ShipDecide } from "./application/stages/ship-fixes.ts";
 import type { TriageSignalDeps } from "./application/stages/triage-signals.ts";
 import { createIssueClassifier } from "./application/classify.ts";
+import { searchCards } from "./domain/card-search.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { GitHubPulls } from "./application/pulls.ts";
 import { SlackInbox } from "./application/slack-inbox.ts";
@@ -243,6 +244,8 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
     return retroFactsOf({ task, ledger: ledger.success ? ledger.data : null, events, runs: runs.length });
   },
   decisionTruth,
+  // Triage's card_search: the task's own repository's cards, from the board the pipeline keeps.
+  { search: async ({ repoPath, selfId, query }) => searchCards(await pipeline.list(), query, { repoPath, selfId, now: new Date() }) },
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review

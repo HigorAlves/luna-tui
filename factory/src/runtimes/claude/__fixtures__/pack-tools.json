@@ -73,7 +73,8 @@
       "Bash(graphify god-nodes:*)",
       "WebFetch",
       "Bash(gh issue view:*)",
-      "mcp__luna__decision_get"
+      "mcp__luna__decision_get",
+      "mcp__luna__card_search"
     ],
     "tools": [
       "Read",
@@ -84,7 +85,8 @@
       "Agent",
       "Bash",
       "WebFetch",
-      "mcp__luna__decision_get"
+      "mcp__luna__decision_get",
+      "mcp__luna__card_search"
     ]
   },
   "test_design": {

@@ -129,7 +129,7 @@ describe("agent stages through packs", () => {
     const result = await run.triage!(context("triage"));
     expect(StageInput.safeParse(seen?.input).success).toBe(true);
     expect(seen?.writable).toBe(false);
-    expect(seen?.timeoutMs).toBe(600_000);
+    expect(seen?.timeoutMs).toBe(300_000);
     expect(result.outcome).toBe("pass");
     expect(result.usage).toEqual({ turns: 7, costUsd: 0.5 });
     expect(result.events?.map((e) => e.kind)).toEqual(["slice_committed"]);

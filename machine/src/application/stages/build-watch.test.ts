@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { CheckContext } from "@hardness/contracts";
 
 import { type Learned, tagged } from "../decision-truth.ts";
-import { type Decide, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch } from "./build-watch.ts";
+import { type Decide, MAX_CARD_SEARCHES, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers } from "./build-watch.ts";
 
 const ledger = (slices: Array<{ id: number; status: string; commit?: string | null }>) =>
   JSON.stringify({ schema: 1, slices: slices.map((s) => ({ id: s.id, title: `slice ${s.id}`, status: s.status, commit: s.commit ?? null })) });
@@ -194,5 +194,36 @@ describe("bounds a run's checks", () => {
     expect(await checks.lastVerdict()).toBe("flag");
     writeFileSync(join(out, "checks", "scope.json"), JSON.stringify({ verdict: "proceed", problems: [] }));
     expect(await checks.lastVerdict()).toBe("flag");
+  });
+});
+
+describe("the board search mailbox", () => {
+  it("answers each query the triage agent writes with the cards of the task's own repository, as ids and titles only", async () => {
+    const out = mkdtempSync(join(tmpdir(), "card-search-"));
+    const asked: string[] = [];
+    const answers = cardSearchAnswers({ outDir: out, search: async (query) => (asked.push(query), [{ id: "c1", title: "Export CSV", state: "triage", summary: "export" }]) });
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onCardSearch: answers.onCardSearch });
+    mkdirSync(join(out, "checks"), { recursive: true });
+    writeFileSync(join(out, "checks", "card-search-request.json"), JSON.stringify({ query: "csv export", repoPath: "/some/other/repo" }));
+    const answer = await waitFor(join(out, "checks", "card-search.json"));
+    await watch.stop();
+    expect(asked).toEqual(["csv export"]);
+    expect(answer).toEqual({ verdict: "ok", problems: [], cards: [{ id: "c1", title: "Export CSV", state: "triage", summary: "export" }] });
+  });
+
+  it("answers at most MAX_CARD_SEARCHES queries per run and ignores a request with no text query", async () => {
+    const out = mkdtempSync(join(tmpdir(), "card-search-caps-"));
+    mkdirSync(join(out, "checks"), { recursive: true });
+    const queries: string[] = [];
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onCardSearch: async (q) => void queries.push(q) });
+    writeFileSync(join(out, "checks", "card-search-request.json"), JSON.stringify({ query: 5 }));
+    await settle(30);
+    for (let n = 1; n <= MAX_CARD_SEARCHES + 2; n++) {
+      writeFileSync(join(out, "checks", "card-search-request.json"), JSON.stringify({ query: `q${n}` }));
+      await settle(30);
+    }
+    await watch.stop();
+    expect(queries).toHaveLength(MAX_CARD_SEARCHES);
+    expect(queries[0]).toBe("q1");
   });
 });

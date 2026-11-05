@@ -40,7 +40,8 @@ When it is fresh, follow the `code-discovery` skill: query it with `graphify <ve
        - `fast_lane` when risk is none or low and size is tiny or small.
        - `plan` otherwise (the default).
    - `kind: "questions"`: only when no reasonable default exists. At most 3 items `{question, recommended}`; `recommended` is mandatory.
-3. Earlier answers in the decisions above are binding. Never re-ask them. `mcp__luna__decision_get` returns a settled decision by key.
+3. `mcp__luna__card_search` finds cards of this repository that look related (ids, titles, states, one-line summaries); when one is, say "related to card X" in the `reason`. You have 12 turns: the signals are already read, so spend them on the record, not on a tour of the repo.
+4. Earlier answers in the decisions above are binding. Never re-ask them. `mcp__luna__decision_get` returns a settled decision by key.
 
 ## Rules
 - Questions end the stage: put them in `questions[]`, each with its `recommended` answer, and only when no reasonable default exists.

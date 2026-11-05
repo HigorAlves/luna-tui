@@ -1,8 +1,8 @@
 // What a pack's agent may touch, in no runtime's words: each runtime maps it to its own tool
 // names (the Claude runtime in factory/src/runtimes/claude/access.ts). See RFC 0002.
 
-/** The luna tools: progress, the slice ledger and the settled decisions. */
-export type LunaTool = "step" | "slice_init" | "slice_set" | "slice_list" | "decision_get" | "scope_check";
+/** The luna tools: progress, the slice ledger, the settled decisions, the scope check and the board search (read-only). */
+export type LunaTool = "step" | "slice_init" | "slice_set" | "slice_list" | "decision_get" | "scope_check" | "card_search";
 
 export interface Access {
   /** Read files and search the tree. */

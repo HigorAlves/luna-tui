@@ -2,7 +2,7 @@
 // run and each return from awaiting_answers) with the answers so far in the issue it reads. The reading replaces
 // the card's classification; a classifier that is absent, fails or answers nothing leaves the previous one and
 // says so, and triage goes on.
-import { type ClassifyOptions, type DecisionOverrides, FACTORY_DEFAULTS, type FactoryConfig, type IssueContext, RecordDraft, type TaskClassification, TriageRecord } from "@hardness/contracts";
+import { type ClassifyOptions, type DecisionOverrides, FACTORY_DEFAULTS, type FactoryConfig, type IssueContext, type NeedsInputItem, RecordDraft, type TaskClassification, TriageRecord } from "@hardness/contracts";
 
 import { askedQuestions, triageVerdicts } from "../../domain/triage-policy.ts";
 
@@ -19,6 +19,9 @@ export interface TriageSignalDeps {
 }
 
 const MAX_ANSWERS = 20;
+
+/** How many rounds of questions triage has put to the person so far: its own gates, not test design's. */
+const roundsOf = (approvals: StageContext["approvals"]): number => approvals.filter((a) => a.kind === "awaiting_answers" && (a.requested as { askedBy?: unknown } | undefined)?.askedBy === "triage").length;
 const MAX_ANSWER_CHARS = 2000;
 
 const issueOf = (task: TaskRow, answers: NonNullable<IssueContext["answers"]>): IssueContext => {
@@ -63,12 +66,12 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
   const log = deps.log ?? ((line: string) => console.warn(line));
   return async (context) => {
     const { task } = context;
+    const rounds = roundsOf(context.approvals);
     let classification: TaskClassification | null = null;
-    let repo: Awaited<ReturnType<NonNullable<TriageSignalDeps["policy"]>>> | null = null;
+    const repo = (task.repoPath ? await deps.policy?.(task.repoPath).catch(() => null) : null) ?? null;
     if (deps.classify) {
       const kept = task.classification ? "the previous reading is kept" : "going on without one";
       try {
-        repo = (task.repoPath ? await deps.policy?.(task.repoPath).catch(() => null) : null) ?? null;
         const options: ClassifyOptions = repo ? { weights: repo.factory.scoring.weights, bands: repo.factory.scoring.bands } : {};
         classification = await deps.classify(issueOf(task, answersOf(context.approvals)), task.repoPath, options);
         if (classification) await deps.save(task.id, { classification });
@@ -80,21 +83,32 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
         classification = null;
       }
     }
+    const caps = (repo?.factory ?? FACTORY_DEFAULTS).triage;
+    /** Questions for the person: at most `max_questions` a round, and past `max_rounds` a person is asked to take over instead. */
+    const ask = (questions: NeedsInputItem[], asked?: Array<{ field: string; guess: string; confidence: number }>, from?: StageResult): StageResult => {
+      if (rounds >= caps.max_rounds) {
+        const open = questions.map((q) => q.question).join("; ");
+        return { ...(from ?? {}), outcome: "escalated", needsInput: undefined, detail: { ...from?.detail, reason: `triage still needs answers after ${rounds} rounds of questions: ${open}`, escalation: "other" } };
+      }
+      const kept = questions.slice(0, caps.max_questions);
+      return {
+        ...(from ?? {}),
+        outcome: "needs_input",
+        needsInput: kept,
+        detail: { ...(from?.detail ?? { summary: `${questions.length} signal${questions.length === 1 ? " is" : "s are"} under the confidence bar: ${asked?.map((a) => a.field).join(", ")}` }), askedBy: "triage", ...(asked ? { asked: asked.slice(0, caps.max_questions) } : {}) },
+      };
+    };
     const enriched = classification ? { ...context, task: { ...task, classification } } : context;
     // A field under its flag bar is the person's to settle, not the agent's: the stage stops and asks, and the signals
     // are read again with the answers. Only a reading taken this time can ask.
     if (classification) {
       const verdicts = triageVerdicts(classification, (repo?.factory ?? FACTORY_DEFAULTS).triage, { ...(repo?.decisions?.triage_signals ? { overrides: repo.decisions.triage_signals } : {}) });
-      const asked = askedQuestions(verdicts);
-      if (asked.length > 0) {
-        return {
-          outcome: "needs_input",
-          needsInput: asked.map(({ question, recommended }) => ({ question, recommended })),
-          detail: { summary: `${asked.length} signal${asked.length === 1 ? " is" : "s are"} under the confidence bar: ${asked.map((a) => a.field).join(", ")}`, asked: asked.map(({ field, guess, confidence }) => ({ field, guess, confidence })) },
-        };
-      }
+      const asked = askedQuestions(verdicts).sort((x, y) => x.confidence - y.confidence);
+      if (asked.length > 0) return ask(asked.map(({ question, recommended }) => ({ question, recommended })), asked.map(({ field, guess, confidence }) => ({ field, guess, confidence })));
     }
-    const result = await triage(enriched);
+    const agent = await triage(enriched);
+    // The agent's own questions are held to the same bounds.
+    const result = agent.outcome === "needs_input" && agent.needsInput?.length ? ask(agent.needsInput, undefined, agent) : agent;
     if (result.outcome === "pass") {
       const record = recordOf(enriched, result, enriched.task);
       if (record) {
