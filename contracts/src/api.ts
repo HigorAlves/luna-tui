@@ -146,6 +146,14 @@ export interface TaskDiffFile {
   removed: number;
 }
 
+/** `POST /tasks/:id/context`: what a person gives Intake's context gate. Any one of the three; the card is checked again. */
+export const ContextInput = z.object({
+  repoPath: z.string().trim().min(1).max(1000).optional(),
+  project: z.string().trim().min(1).max(120).optional(),
+  text: z.string().trim().min(1).max(20_000).optional(),
+});
+export type ContextInput = z.infer<typeof ContextInput>;
+
 export const ArchiveInput = z.object({ reason: ArchiveReason });
 export type ArchiveInput = z.infer<typeof ArchiveInput>;
 

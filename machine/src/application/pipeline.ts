@@ -10,9 +10,10 @@ import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { type ContextMissing, contextComplete } from "@hardness/contracts";
 import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
 import { type CardFieldsInput, appendSource, cardFieldsOf, cardOf } from "../domain/card-fields.ts";
-import { questionsComment } from "../domain/notices.ts";
+import { contextAsk, questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
@@ -89,6 +90,14 @@ export function orderHash(order: NewTask & Record<string, unknown>): string {
 
 /** What a task snapshot says about its last stage run and its gate. */
 export type TaskGlance = Pick<Task, "lastRun" | "gate">;
+
+/** The card is not waiting at Intake's context gate, so there is nothing to give it. */
+export class NoContextGateError extends Error {
+  constructor(id: string, state: string) {
+    super(`task ${id} is ${state}: it is not waiting for context`);
+    this.name = "NoContextGateError";
+  }
+}
 
 export interface NewTask extends Omit<CardFieldsInput, "source"> {
   title: string;
@@ -839,10 +848,58 @@ export class Pipeline {
     await this.log(id, "context.resolved", { repoFrom: out.repoFrom, project: out.project, owners: out.owners.length, history: out.history.length });
   }
 
+  private contextCheck(task: TaskRow) {
+    const card = cardOf(task);
+    return contextComplete({ repoPath: task.repoPath, title: task.title, description: task.description, reporter: card.reporter, attachments: card.attachments.length });
+  }
+
+  /** The card waits at Intake's context gate; its reporter is asked once for this visit, in fixed words. */
+  private async holdForContext(id: string, missing: ContextMissing[]): Promise<TaskRow> {
+    const held = await this.dispatch(id, { type: "needs_context" }, { detail: { kind: "context", missing } });
+    const ask = contextAsk(missing);
+    await this.log(id, "task.questions", { body: ask.body, secret: ask.secret, hash: ask.hash, by: "machine", kind: "context" });
+    return held;
+  }
+
+  /** What a person gives the context gate: a repository, a project or more text. The card goes back through the check; complete, it goes on as a start would. */
+  async provideContext(id: string, given: { repoPath?: string; project?: string; text?: string }): Promise<TaskRow> {
+    const task = await this.get(id);
+    const open = (await this.approvals(id)).find((a) => a.kind === "awaiting_setup" && a.decision === null && a.requested.kind === "context");
+    if (task.state !== "awaiting_setup" || !open) throw new NoContextGateError(id, task.state);
+    const text = given.text?.trim().slice(0, 20_000);
+    const card = cardOf(task);
+    const project = given.project?.trim().slice(0, 120) || card.project;
+    await this.store.updateTask(id, {
+      ...(given.repoPath ? { repoPath: given.repoPath } : {}),
+      ...(text ? { description: task.description ? `${task.description}\n\n${text}` : text } : {}),
+      card: { ...card, project },
+    });
+    const resolved = card.resolved;
+    if (resolved) {
+      const corrections = correctionsOf(resolved, { repoPath: given.repoPath ?? task.repoPath, project: project ?? null });
+      if (corrections.length > 0) await this.log(id, "context.corrected", { corrections });
+    }
+    const check = this.contextCheck(await this.get(id));
+    if (!check.complete) {
+      await this.store.withTaskLock(id, async (_task, tx) => {
+        const now = await tx.findOpenApproval(id);
+        if (now) await tx.updateApprovalRequested(now, { ...now.requested, missing: check.missing });
+      });
+      return this.get(id);
+    }
+    const after = await this.get(id);
+    const setup = after.repoPath !== null && !this.hasConfig(after.repoPath);
+    return this.dispatch(id, { type: "context_given", setup }, { decision: { decision: "answered", response: { ...(given.repoPath ? { repoPath: given.repoPath } : {}), ...(given.project ? { project: given.project } : {}), text: Boolean(text) } } });
+  }
+
   /** Starts the pipeline; a repo with no luna.yaml yet gets the setup gate before triage. */
   async start(id: string): Promise<TaskRow> {
     await this.resolveContext(id);
     const task = await this.get(id);
+    if (this.contextDeps && task.route === "feature" && task.state === "draft") {
+      const check = this.contextCheck(task);
+      if (!check.complete) return this.holdForContext(id, check.missing);
+    }
     const setup = task.route === "setup" || (task.repoPath !== null && !this.hasConfig(task.repoPath));
     return this.dispatch(id, { type: "start", setup });
   }
@@ -1483,6 +1540,8 @@ export class Pipeline {
   /** Applies an event and, if it starts a stage, runs it now or queues it for a free slot. */
   private async dispatch(id: string, event: PipelineEvent, extra: Extra = {}): Promise<TaskRow> {
     const before = await this.get(id);
+    // Approving the context gate gives it nothing: the card is checked again, and goes on only when it is complete.
+    if (before.state === "awaiting_setup" && event.type === "approved" && (await this.approvals(id)).some((a) => a.decision === null && a.requested.kind === "context")) return this.provideContext(id, {});
     // Approving the setup gate writes the file first: if that fails the task stays at the gate.
     if (before.state === "awaiting_setup" && event.type === "approved") await this.writeApprovedConfig(before);
     const step = await this.apply(id, event, extra);

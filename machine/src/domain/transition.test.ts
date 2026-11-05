@@ -530,3 +530,15 @@ describe("PR task routes", () => {
     expect(() => transition(at("awaiting_approval", { route: "ci_fix" }), approved)).toThrow(TransitionError);
   });
 });
+
+describe("the Intake context gate", () => {
+  it("a draft that lacks context waits at awaiting_setup, running nothing", () => {
+    expect(transition(at("draft"), { type: "needs_context" })).toMatchObject({ state: "awaiting_setup", effect: { kind: "wait", gate: "awaiting_setup" } });
+    expect(() => transition(at("triage"), { type: "needs_context" })).toThrow(TransitionError);
+  });
+  it("context given goes through the entry, or through setup when the repo has no config", () => {
+    expect(transition(at("awaiting_setup"), { type: "context_given" })).toMatchObject({ effect: { kind: "run", stage: "triage" } });
+    expect(transition(at("awaiting_setup"), { type: "context_given", setup: true })).toMatchObject({ effect: { kind: "run", stage: "setup" } });
+    expect(() => transition(at("triage"), { type: "context_given" })).toThrow(TransitionError);
+  });
+});

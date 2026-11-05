@@ -23,6 +23,7 @@ import {
   type TaskSla,
   CARD_EVENT_NAMES,
   CardEventName,
+  ContextInput,
   NewTaskInput,
   PACKS,
   PackId,
@@ -57,7 +58,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -174,6 +175,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof TransitionError) return fail(c, 409, "invalid_transition", error.message);
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
+    if (error instanceof NoContextGateError) return fail(c, 409, "no_context_gate", error.message);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
     if (error instanceof NoQuestionsToPostError) return fail(c, 409, "no_questions", error.message);
     if (error instanceof QuestionsCarrySecretError) return fail(c, 409, "secret", error.message);
@@ -426,6 +428,14 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     const id = taskId(c);
     const { reason } = await body(c, ArchiveInput);
     const task = await serialize(await pipeline.archive(id, reason));
+    bus.publish({ type: "task.updated", task, seq: task.seq });
+    return c.json(task);
+  });
+
+  /** Intake's context gate: a person picks the repository or project, or adds text; the card goes back through the check. */
+  app.post("/tasks/:id/context", async (c) => {
+    const id = taskId(c);
+    const task = await serialize(await pipeline.provideContext(id, await body(c, ContextInput)));
     bus.publish({ type: "task.updated", task, seq: task.seq });
     return c.json(task);
   });

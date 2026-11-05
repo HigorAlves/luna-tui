@@ -18,3 +18,12 @@ export function questionsComment(questions: Array<{ question: string; recommende
   const hash = createHash("sha256").update(JSON.stringify(questions.map((q) => [q.question, q.recommended]))).digest("hex").slice(0, 16);
   return { body: postable(`Luna needs your answers to go on: ${list.join(" ")}`), secret, hash };
 }
+
+const MISSING_WORDS = { repository: "which repository it is for", reporter: "a way to reach you", text: "more detail on what is wrong" } as const;
+
+/** What the reporter is asked at a card's source when Intake cannot start it: fixed words built from what is missing, never the card's own text. */
+export function contextAsk(missing: Array<keyof typeof MISSING_WORDS>): { body: string; secret: false; hash: string } {
+  const list = missing.map((m) => MISSING_WORDS[m]).join(", ");
+  const body = postable(`Luna needs a little more to start this card: ${list}. Reply here with them.`);
+  return { body, secret: false, hash: createHash("sha256").update(missing.join(",")).digest("hex").slice(0, 16) };
+}

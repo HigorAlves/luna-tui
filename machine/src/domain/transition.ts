@@ -40,6 +40,10 @@ export type StageOutcome = "pass" | "fail" | "needs_input" | "test_change" | "es
 export type PipelineEvent =
   /** `setup` when the repo has no luna.yaml yet: the setup gate runs before triage. */
   | { type: "start"; setup?: boolean }
+  /** Intake found the card short of a repository, a reachable reporter or text: it waits at `awaiting_setup` (context gate), no stage runs. */
+  | { type: "needs_context" }
+  /** The context gate has what it asked for: the card goes on as a start would (through setup when the repo has no luna.yaml). */
+  | { type: "context_given"; setup?: boolean }
   /** `triage` is the outcome triage picked; absent means `plan`. */
   | { type: "stage_done"; outcome: StageOutcome; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
@@ -187,6 +191,12 @@ function next(task: Snapshot, event: PipelineEvent): Move {
     case "start":
       // A feature on a repo with no luna.yaml yet runs the setup gate before its own entry.
       if (state === "draft") return run(task.route === "feature" && event.setup ? "setup" : ENTRY[task.route], retries);
+      break;
+    case "needs_context":
+      if (state === "draft" && task.route === "feature") return wait("awaiting_setup", retries);
+      break;
+    case "context_given":
+      if (state === "awaiting_setup" && task.route === "feature") return run(event.setup ? "setup" : ENTRY[task.route], retries);
       break;
     case "answered":
       if (state === "awaiting_answers") return run(task.resumeTo ?? "triage", retries);

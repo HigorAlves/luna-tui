@@ -25,6 +25,7 @@ beforeEach(async () => {
 });
 
 const app = () => createApp({ db, pipeline, bus: new Bus() });
+const postContext = (id: string, body: unknown) => app().request(`/tasks/${id}/context`, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } });
 const post = async (body: unknown) => {
   const response = await app().request("/tasks", { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } });
   return { status: response.status, body: (await response.json()) as Record<string, any> };
@@ -78,5 +79,14 @@ describe("a card keeps what create_card carries", () => {
     const task = await get(row.id);
     expect(task.sources).toEqual([first, second, { kind: "github", repo: "o/b", number: 9, url: "u" }]);
     expect(task.source).toEqual(first);
+  });
+});
+
+describe("POST /tasks/:id/context", () => {
+  it("is 400 for an empty or oversized body and 409 for a card that is not waiting for context", async () => {
+    const row = await pipeline.createTask({ title: "T" });
+    expect((await postContext(row.id, { repoPath: "" })).status).toBe(400);
+    expect((await postContext(row.id, { text: "x".repeat(20_001) })).status).toBe(400);
+    expect((await postContext(row.id, { repoPath: "/r" })).status).toBe(409);
   });
 });
