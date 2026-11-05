@@ -37,10 +37,10 @@ describe("the diagram's config defaults", () => {
 });
 
 describe("the sandbox's size and keep", () => {
-  it("defaults to four CPUs, eight gigabytes and a day, all read from wave 11, a repository's section winning", () => {
-    expect(FACTORY_DEFAULTS.sandbox).toMatchObject({ cpu: 4, memory_gb: 8, keep_hours: 24 });
+  it("defaults to two CPUs, four gigabytes and a day, all read from wave 11, a repository's section winning", () => {
+    expect(FACTORY_DEFAULTS.sandbox).toMatchObject({ cpu: 2, memory_gb: 4, keep_hours: 24 });
     for (const key of ["sandbox.cpu", "sandbox.memory_gb", "sandbox.keep_hours"]) expect(CONSUMED_FROM[key], key).toBe(11);
-    expect(factoryConfigOf({ sandbox: { cpu: 2, keep_hours: 1 } }).sandbox).toMatchObject({ cpu: 2, memory_gb: 8, keep_hours: 1 });
+    expect(factoryConfigOf({ sandbox: { cpu: 6, keep_hours: 1 } }).sandbox).toMatchObject({ cpu: 6, memory_gb: 4, keep_hours: 1 });
   });
 });
 

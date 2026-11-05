@@ -54,6 +54,17 @@ describe("importing what a run committed", () => {
     expect(await dirtyFiles(workspace.path)).toEqual([]);
   });
 
+  it("tells the caller each time the branch moved, and only then", async () => {
+    const { workspace, agentCommit, out } = await card();
+    const heads: string[] = [];
+    const imp = bundleImporter({ path: workspace.path, branch: workspace.branch, runId: "run-1", dir: out, onAccepted: async (head) => void heads.push(head) });
+    await imp.sync();
+    const first = agentCommit("b.txt");
+    await imp.sync();
+    await imp.sync();
+    expect(heads).toEqual([first.tip]);
+  });
+
   it("reads the newest bundle, imports each only once, and says nothing changed when there is no bundle", async () => {
     const { agentCommit, importer, start } = await card();
     const imp = importer();

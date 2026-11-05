@@ -16,12 +16,12 @@ import { type ExecResult, exec, execOrThrow } from "../process/exec.ts";
 /** Label on every stage container, so leftovers can be found and removed. */
 export const CONTAINER_LABEL = "dev.hardness.stage";
 /** What one stage may take of the machine: one runaway build or fork bomb stays one slot's problem. */
-/** What a container may use: `sandbox.cpu` and `sandbox.memory_gb` of luna.yaml (the factory defaults are 4 and 8); the process limit is fixed. */
+/** What a container may use: `sandbox.cpu` and `sandbox.memory_gb` of luna.yaml (the defaults are 2 and 4, below the diagram's 4 and 8 by the user's decision); the process limit is fixed. */
 export interface SandboxSize {
   cpu: number;
   memoryGb: number;
 }
-export const DEFAULT_SANDBOX_SIZE: SandboxSize = { cpu: 4, memoryGb: 8 };
+export const DEFAULT_SANDBOX_SIZE: SandboxSize = { cpu: 2, memoryGb: 4 };
 export const sandboxLimits = (size: SandboxSize = DEFAULT_SANDBOX_SIZE): string[] => ["--memory", `${size.memoryGb}g`, "--cpus", `${size.cpu}`, "--pids-limit", "1024"];
 export const SANDBOX_LIMITS = sandboxLimits();
 /** `docker wait` gets this long past the stage's own timeout before the container is forced down. */
@@ -70,7 +70,7 @@ export interface SandboxRun {
    * `config`, so a stage cannot plant a hook (or point `core.hooksPath` at one) that the
    * host would then run as you. */
   gitReadOnly?: string[];
-  /** The container's CPUs and memory; absent, the defaults (4 CPUs, 8 GB). */
+  /** The container's CPUs and memory; absent, the defaults (2 CPUs, 4 GB). */
   limits?: SandboxSize;
   /** Who a writable stage commits as. The container has no gitconfig of its own. */
   gitIdentity?: { name: string; email: string } | null;

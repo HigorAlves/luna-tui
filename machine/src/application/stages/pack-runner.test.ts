@@ -241,9 +241,9 @@ describe("agent stages through packs", () => {
     expect(existsSync(join(seen!.worktree, "half.txt"))).toBe(false);
   });
 
-  it("sizes the container from the repository's sandbox section, four CPUs and eight gigabytes without one", async () => {
+  it("sizes the container from the repository's sandbox section, two CPUs and four gigabytes without one", async () => {
     await runners(fakeSandbox(output())).triage!(context("triage"));
-    expect(seen!.limits).toEqual({ cpu: 4, memoryGb: 8 });
+    expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 4 });
     const small = { ...deps(fakeSandbox(output())), policies: { for: async () => ({ ...DEFAULT_POLICY, factory: { ...FACTORY_DEFAULTS, sandbox: { ...FACTORY_DEFAULTS.sandbox, cpu: 2, memory_gb: 3 } } }) } as never };
     await agentRunners(small).triage!(context("triage"));
     expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 3 });
@@ -570,6 +570,8 @@ describe("agent stages through packs", () => {
     expect(result.outcome).toBe("pass");
     expect(result.run?.outputCommit).toBe(made);
     expect(git(seen!.worktree, "rev-parse", "refs/heads/" + result.workspace!.branch)).toBe(made);
+    // And the branch shows in the user's repository, written by the machine.
+    expect(execFileSync("git", ["-C", repo, "rev-parse", result.workspace!.branch], { encoding: "utf8" }).trim()).toBe(made);
   });
 
   it("escalates head_moved, and takes nothing in, when the run's commits do not descend from the card's branch", async () => {

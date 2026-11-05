@@ -34,7 +34,7 @@ import { imageExists, imageId, removeLeftoverContainers, runSandbox, sandboxExec
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
 import { keepFolder } from "../application/kept-sandboxes.ts";
-import { hostFreshWorkspace } from "../adapters/git/clone.ts";
+import { hostFreshWorkspace, publishBranch } from "../adapters/git/clone.ts";
 import { at } from "../adapters/git/machine-repo.ts";
 import { HOST_GIT, changedPaths, gitIdentity, commitAll, currentBranch, headCommit, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
@@ -201,6 +201,11 @@ export async function buildRealStages(
       checkpoint: async (context, worktree, follows) => {
         if (!context.task.branch) return;
         await checkpointPush({ exec, branch: context.task.branch, cwd: worktree, follows, signal: context.signal, tip: () => headCommit(worktree), ...(context.emit ? { emit: context.emit } : {}), ...(context.note ? { note: context.note } : {}) });
+        // The machine's own commit (the tests step) shows in the user's repository like the agent's.
+        if (context.task.repoPath) {
+          const shown = await publishBranch(context.task.repoPath, worktree, context.task.branch);
+          if (!shown.ok) await context.note?.(shown.note).catch(() => {});
+        }
       },
       holdout: async (repoPath) => (await policies.for(repoPath)).holdoutCases,
       git: {

@@ -7,7 +7,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
 import { bundleImporter } from "../../adapters/git/bundles.ts";
-import { ensureClone, isClone, moveToClone, refreshScratch } from "../../adapters/git/clone.ts";
+import { ensureClone, isClone, moveToClone, publishBranch, refreshScratch } from "../../adapters/git/clone.ts";
 import {
   type Workspace,
   branchBase,
@@ -325,7 +325,19 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     return { outcome: "fail", detail: { error: error.message }, ...(engineEvents.length ? { events: engineEvents } : {}) };
   }
   // What the run commits comes back as bundles in /out/bundles, read like a fetch from an untrusted server: the host never reads the agent's own repository.
-  const importer = extra.checkout ? null : bundleImporter({ path: workspace.path, branch: workspace.branch, runId: context.runId, dir: join(runDir, "out", "bundles") });
+  const importer = extra.checkout
+    ? null
+    : bundleImporter({
+        path: workspace.path,
+        branch: workspace.branch,
+        runId: context.runId,
+        dir: join(runDir, "out", "bundles"),
+        // The card's branch shows in the user's repository too, written by the machine; a refusal is a note.
+        onAccepted: async () => {
+          const shown = await publishBranch(task.repoPath!, workspace.path, workspace.branch);
+          if (!shown.ok) await context.note?.(shown.note).catch(() => {});
+        },
+      });
   // Implementing: every slice that turns committed is pushed as it lands, one push at a time.
   const pushes = { attempted: 0, ok: 0 };
   let lastPushed: string | null = null;

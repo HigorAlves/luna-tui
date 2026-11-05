@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { bringBack, copiedSettings, ensureClone, ensurePrClone, freshClone, isClone, moveToClone, removeClone, unpushedCommits } from "./clone.ts";
+import { bringBack, copiedSettings, ensureClone, ensurePrClone, freshClone, isClone, moveToClone, publishBranch, removeClone, unpushedCommits } from "./clone.ts";
 import { machineGitDir } from "./machine-repo.ts";
 import { branchBase, changedPaths, commitAll, ensureWorktree, removeWorktree, workspaceFor } from "./worktree.ts";
 
@@ -291,5 +291,48 @@ describe("a fresh workspace for Verify and fixes", () => {
     writeFileSync(join(workspace.path, "moved.txt"), "m\n");
     await commitAll(workspace.path, "card moved");
     expect(await bringBack(workspace.path, path, workspace.branch, sha)).toMatchObject({ ok: false, reason: expect.stringContaining("no longer") });
+  });
+});
+
+describe("the card's branch in the user's repository", () => {
+  it("shows up there as the same branch, written by the machine, and follows each commit", async () => {
+    const { repo, dir } = repository("publish-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    expect(git(repo, "branch", "--list", workspace.branch)).toBe("");
+    expect(await publishBranch(repo, workspace.path, workspace.branch)).toEqual({ ok: true });
+    expect(git(repo, "rev-parse", workspace.branch)).toBe(wgit(workspace.path, "rev-parse", "HEAD"));
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    const sha = await commitAll(workspace.path, "feat: b");
+    expect(await publishBranch(repo, workspace.path, workspace.branch)).toEqual({ ok: true });
+    expect(git(repo, "rev-parse", workspace.branch)).toBe(sha);
+    expect(git(repo, "show", `${workspace.branch}:b.txt`)).toBe("b");
+  });
+
+  it("is a note, never a failure, when git refuses: the branch is checked out there, or has moved on without the card's commits", async () => {
+    const { repo, dir } = repository("publish-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    await commitAll(workspace.path, "feat: b");
+    git(repo, "checkout", "-q", "-b", workspace.branch);
+    const checkedOut = await publishBranch(repo, workspace.path, workspace.branch);
+    expect(checkedOut).toMatchObject({ ok: false, note: expect.stringContaining(workspace.branch) });
+    git(repo, "checkout", "-q", "main");
+    writeFileSync(join(repo, "c.txt"), "c\n");
+    git(repo, "checkout", "-q", workspace.branch);
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "a person's own commit on the same branch");
+    git(repo, "checkout", "-q", "main");
+    const mine = git(repo, "rev-parse", workspace.branch);
+    expect(await publishBranch(repo, workspace.path, workspace.branch)).toMatchObject({ ok: false });
+    expect(git(repo, "rev-parse", workspace.branch)).toBe(mine);
+  });
+
+  it("refuses a name shaped like an option", async () => {
+    const { repo, dir } = repository("publish-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    expect(await publishBranch(repo, workspace.path, "--upload-pack=x")).toMatchObject({ ok: false });
   });
 });

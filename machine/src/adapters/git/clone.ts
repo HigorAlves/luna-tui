@@ -166,6 +166,17 @@ export async function refreshScratch(path: string, branch: string): Promise<void
   rmSync(staging, { recursive: true, force: true });
 }
 
+/**
+ * Shows the card's branch in the user's repository as the same branch name, as a worktree's branch always was, but written by the
+ * machine: the user's repository fetches it from the card's. Fast-forward only, so a person's own commits on the same name are
+ * never overwritten; whatever git refuses (the branch is checked out there, say) is a note for the caller, never a failure.
+ */
+export async function publishBranch(repoPath: string, workspacePath: string, branch: string): Promise<{ ok: true } | { ok: false; note: string }> {
+  if (!isBranchName(branch)) return { ok: false, note: `not a usable branch name: ${JSON.stringify(branch)}` };
+  const fetched = await exec("git", [...HOST_GIT, "-C", repoPath, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", machineGitDir(workspacePath), `refs/heads/${branch}:refs/heads/${branch}`], { timeoutMs: CLONE_TIMEOUT_MS });
+  return fetched.code === 0 ? { ok: true } : { ok: false, note: `the branch ${branch} was not updated in the repository: ${(fetched.stderr || fetched.stdout).trim().split("\n")[0] ?? "git refused"}` };
+}
+
 /** The commits in a workspace's repository that the machine has not pushed (nothing under `refs/luna/pushed/*` holds them), newest first. */
 export async function unpushedCommits(path: string): Promise<string[]> {
   const out = await exec("git", [...HOST_GIT, ...at(path), "log", "HEAD", "--not", "--glob=refs/luna/pushed/*", "--format=%H"]);

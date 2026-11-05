@@ -109,7 +109,7 @@ export const FACTORY_DEFAULTS: FactoryConfig = {
   plan: { coverage_score_min: 0.85, coverage_rounds: 3, plan_check_retries: 2, approvers: { low: 1, medium: 1, high: 2, outside_owning_team: true }, sla: { reminder_days: 2, escalate_days: 5 } },
   size: { target_loc: [1000, 2000], hard_limit_loc: 2500, max_children: 8, max_rounds: 3, depth: 2 },
   build: { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90, backoff_minutes: [1, 30], regression_full_suite_minutes: 10 },
-  sandbox: { cpu: 4, memory_gb: 8, keep_hours: 24, egress: ["registries", "github"] },
+  sandbox: { cpu: 2, memory_gb: 4, keep_hours: 24, egress: ["registries", "github"] },
   verify: { coverage_drop_max: 0.5, mutation: { command: null, min_score: 0.6 }, build_rounds: 1, env_flake_retries: 1, ci_flaky_reruns: 1, auto_rebase: 1, e2e: { deploy: { command: null }, start: { command: null } } },
   evidence: { video_budget_s: 240, regenerate: 1, tts: { voice: null, language: null }, storage: "release_asset", retention_days: 180 },
   ship: { preview: "off", auto_merge: "medium_when_review_required", merge: { method: "squash", queue: true, delete_branch: true, commit_template: null }, release_owners: [], stale_days: 14, sla: { reminder_days: 2, escalate_days: 5 }, poll_minutes: 5 },

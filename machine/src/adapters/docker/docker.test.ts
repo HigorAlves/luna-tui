@@ -46,8 +46,8 @@ describe("sandboxArgs", () => {
 
   it("caps memory, cpu and process count, so a runaway stage cannot take the machine down", () => {
     const args = sandboxArgs(run(), "/i", "/o").join(" ");
-    expect(args).toContain("--memory 8g");
-    expect(args).toContain("--cpus 4");
+    expect(args).toContain("--memory 4g");
+    expect(args).toContain("--cpus 2");
     expect(args).toContain("--pids-limit 1024");
   });
 
@@ -86,9 +86,9 @@ describe("sandboxArgs", () => {
     expect(mounts).toContain("/g/.git/config:/g/.git/config:ro");
   });
 
-  it("sizes the container from the run's limits, four CPUs and eight gigabytes by default, keeping the process limit", () => {
+  it("sizes the container from the run's limits, two CPUs and four gigabytes by default, keeping the process limit", () => {
     const flags = (args: string[]) => args.join(" ");
-    expect(flags(sandboxArgs(run(), "/i", "/o"))).toContain("--memory 8g --cpus 4 --pids-limit 1024");
+    expect(flags(sandboxArgs(run(), "/i", "/o"))).toContain("--memory 4g --cpus 2 --pids-limit 1024");
     expect(flags(sandboxArgs(run({ limits: { cpu: 2, memoryGb: 3 } }), "/i", "/o"))).toContain("--memory 3g --cpus 2 --pids-limit 1024");
     expect(flags(sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["x"], limits: { cpu: 6, memoryGb: 12 } }))).toContain("--memory 12g --cpus 6 --pids-limit 1024");
   });
@@ -156,7 +156,7 @@ describe("sandboxExecArgs", () => {
   });
 
   it("is hardened like a stage: read-only root, exec tmpfs, no new privileges, the limits, HOME on the tmpfs", () => {
-    expect(args).toEqual(expect.arrayContaining(["--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", "-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", "--memory", "8g"]));
+    expect(args).toEqual(expect.arrayContaining(["--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", "-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", "--memory", "4g"]));
   });
 
   it("mounts the same cache volume for a check run, so verify's install is warm too", () => {

@@ -53,7 +53,7 @@ function copyBounded(from: string, to: string, max: number): string | null {
  * Imports the bundles a run leaves in `dir` into the card's repository, newest first-come: `sync()` reads the highest-numbered
  * `<n>.bundle` not read before. Each bundle holds everything the run committed since it started, so the newest is enough.
  */
-export function bundleImporter(options: { path: string; branch: string; runId: string; dir: string; maxBytes?: number }) {
+export function bundleImporter(options: { path: string; branch: string; runId: string; dir: string; maxBytes?: number; /** Called with the new tip each time the card's branch moved. */ onAccepted?: (head: string) => Promise<void> }) {
   let lastRead = 0;
   const max = options.maxBytes ?? BUNDLE_CAP_BYTES;
   return {
@@ -100,6 +100,7 @@ export function bundleImporter(options: { path: string; branch: string; runId: s
         if (moved.code !== 0) return { ok: false, kind: "head_moved", reason: "the card's branch moved while the bundle was read" };
         // The index follows the branch (the folder is not touched): a folder that equals the tip then shows no change.
         await git("read-tree", tip);
+        await options.onAccepted?.(tip);
         return { ok: true, head: tip, changed: true };
       } finally {
         rmSync(copy, { force: true });
