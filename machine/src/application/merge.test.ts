@@ -29,14 +29,14 @@ beforeEach(async () => {
 
 const gh = { kind: "github", repo: "o/a", number: 1, url: "https://github.com/o/a/issues/1" } as const;
 const slack = { kind: "slack", channel: "C1", ts: "1.2", permalink: "https://example.slack.com/archives/C1/p12" } as const;
-const pair = async () => {
-  const kept = await pipeline.createTask({ title: "Secret roadmap item", source: gh, reporter: { id: "alice", channel: "github" } });
-  const dup = await pipeline.createTask({ title: "Checkout broken", description: "it fails", source: slack, reporter: { id: "U2", channel: "slack" } });
+const pair = async (dupRepo = "/r/a") => {
+  const kept = await pipeline.createTask({ title: "Secret roadmap item", source: gh, repoPath: "/r/a", reporter: { id: "alice", channel: "github" } });
+  const dup = await pipeline.createTask({ title: "Checkout broken", description: "it fails", source: slack, repoPath: dupRepo, reporter: { id: "U2", channel: "slack" } });
   return { kept, dup };
 };
 
 describe("merging a duplicate", () => {
-  it("adds its source, follows its reporter, raises the demand, and archives the duplicate as a duplicate of the kept card", async () => {
+  it("adds its source, follows its reporter, raises the demand, and closes the duplicate as merged into the kept card", async () => {
     const { kept, dup } = await pair();
     await pipeline.merge(dup.id, kept.id);
     const card = cardOf(await pipeline.get(kept.id));
@@ -45,7 +45,9 @@ describe("merging a duplicate", () => {
     expect(card.demand).toBe(2);
     expect(card.merged).toEqual([{ id: dup.id }]);
     const after = await pipeline.get(dup.id);
-    expect(after).toMatchObject({ state: "archived", archiveReason: "duplicate" });
+    expect(after).toMatchObject({ state: "closed", archiveReason: null });
+    expect(cardOf(after).mergedInto).toBe(kept.id);
+    expect(await pipeline.stageRuns(dup.id)).toEqual([]);
     const events = await pipeline.events(dup.id);
     expect(events.find((e) => e.kind === "card.merged")?.payload).toEqual({ into: kept.id });
     expect((await pipeline.events(kept.id)).some((e) => e.kind === "card.merged")).toBe(true);
@@ -60,6 +62,15 @@ describe("merging a duplicate", () => {
     expect(body).toContain(`http://127.0.0.1:7777/tasks/${kept.id}`);
     expect(body).not.toContain("Secret roadmap");
     expect(body).not.toContain("Checkout broken");
+  });
+
+  it("says only that the report is tracked when its reporter could not see the kept card: another repository", async () => {
+    const { kept, dup } = await pair("/r/other");
+    await pipeline.merge(dup.id, kept.id);
+    const body = String((await pipeline.events(dup.id)).find((e) => e.kind === "task.reply")?.payload.body);
+    expect(body).toContain("tracked");
+    expect(body).not.toContain(kept.id.slice(0, 8));
+    expect(body).not.toContain("127.0.0.1");
   });
 
   it("recomputes the priority when the card was triaged", async () => {
@@ -81,13 +92,24 @@ describe("merging a duplicate", () => {
 
   it("keeps the decision's ground truth: a merge confirms the same, an undo says different", async () => {
     const { kept, dup } = await pair();
-    await db.query("update tasks set card = $2 where id = $1", [dup.id, JSON.stringify({ ...cardOf(dup), dedup: { recordId: "rec-1", slot: 2 } })]);
+    const dedup = { at: "2026-11-05T00:00:00Z", recordId: "rec-1", candidates: [{ id: kept.id, kind: "open", score: 0.8, slot: 2 }], answer: null, outcome: "ask" };
+    await db.query("update tasks set card = $2 where id = $1", [dup.id, JSON.stringify({ ...cardOf(dup), dedup })]);
     await pipeline.merge(dup.id, kept.id);
     await pipeline.unmerge(dup.id);
     expect(learned).toEqual([
       expect.objectContaining({ pack: "intake_dedup", recordId: "rec-1", label: { slot2: { choice: "same" } }, source: "merge_confirmed" }),
       expect.objectContaining({ pack: "intake_dedup", recordId: "rec-1", label: { slot2: { choice: "different" } }, source: "merge_undone" }),
     ]);
+  });
+});
+
+describe("a merge the machine made alone", () => {
+  it("is no person's word, so it teaches the decision nothing", async () => {
+    const { kept, dup } = await pair();
+    const dedup = { at: "2026-11-05T00:00:00Z", recordId: "rec-1", candidates: [{ id: kept.id, kind: "open", score: 0.8, slot: 1 }], answer: null, outcome: "duplicate" };
+    await db.query("update tasks set card = $2 where id = $1", [dup.id, JSON.stringify({ ...cardOf(dup), dedup })]);
+    await pipeline.merge(dup.id, kept.id, "machine");
+    expect(learned).toEqual([]);
   });
 });
 

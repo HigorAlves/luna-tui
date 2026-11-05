@@ -65,6 +65,8 @@ import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { uniqueRepoForProject } from "./application/context-setup.ts";
 import { Backlog } from "./application/backlog.ts";
+import { INTAKE_CLIENT } from "./application/classify.ts";
+import type { DedupAnswer } from "./application/intake-dedup.ts";
 import { PgBacklogStore } from "./adapters/persistence/backlog-store.ts";
 import { Pipeline } from "./application/pipeline.ts";
 import { PolicyStore } from "./application/policy.ts";
@@ -339,6 +341,18 @@ pipeline = new Pipeline(db, runnerFor, {
   owners: (repoPath, paths) => graph.owners(repoPath, paths),
   // Context setup: by script, through the ports. The history ports and the map are read at call time (they are built below).
   boardUrl: `http://${config.host}:${config.port}`,
+  // Intake's duplicate check: one `intake_dedup` call through the packs-on-demand runner, and the backlog as it is at that moment (both read at call time: they are built below).
+  dedup: {
+    decide: async (context) => {
+      if (!packRuns) throw new Error("agents are off: no duplicate check");
+      const { answer, recordId } = await packRuns.run({ pack: "intake_dedup", context: { dedup: context } }, INTAKE_CLIENT);
+      return { answer: answer as DedupAnswer, ...(recordId ? { recordId } : {}) };
+    },
+    backlog: {
+      list: async () => (await backlog.list()).map((e) => ({ id: e.id, title: e.title, text: e.text, repo: e.repo })),
+      bump: async (id) => void (await backlog.bump(id)),
+    },
+  },
   contextSetup: {
     resolveRepo: (slug) => repoMap.resolve(slug),
     channelRepo: () => null,
@@ -450,11 +464,13 @@ if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await packRuns
 buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
 if (packRuns) buildDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "build" }, "build"));
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
+/** The shared backlog; the duplicate check reads and bumps it through the pipeline's `dedup` port. */
+const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days });
 const app = createApp({
   db,
   pipeline,
   bus,
-  backlog: new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days }),
+  backlog,
   watcher,
   stubs,
   pulls,

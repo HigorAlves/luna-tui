@@ -158,6 +158,10 @@ export type ContextInput = z.infer<typeof ContextInput>;
 export const MergeCardInput = z.object({ into: z.string().uuid() });
 export type MergeCardInput = z.infer<typeof MergeCardInput>;
 
+/** `POST /tasks/:id/dedup`: a person's answer at the dedup gate. `of` names listed candidates only. */
+export const DedupAnswerInput = z.object({ choice: z.enum(["duplicate", "related", "neither"]), of: z.array(z.string().uuid()).max(5).optional() });
+export type DedupAnswerInput = z.infer<typeof DedupAnswerInput>;
+
 export const ArchiveInput = z.object({ reason: ArchiveReason });
 export type ArchiveInput = z.infer<typeof ArchiveInput>;
 

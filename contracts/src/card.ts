@@ -75,7 +75,19 @@ export interface CardFields {
   demand?: number;
   /** The duplicates merged into this card (their cards are archived), newest last. */
   merged?: { id: string }[];
-  /** The `intake_dedup` decision that judged this card and the slot it was in, for the ground truth of a merge or an undo. */
-  dedup?: { recordId: string; slot: number };
+  /** What Intake's duplicate check found: the shortlist (by slot, as the decision saw it), the answers, the outcome and the decision record's id (ground truth names it). */
+  dedup?: {
+    at: string;
+    recordId: string | null;
+    candidates: { id: string; kind: "open" | "closed" | "backlog"; score: number; slot: number }[];
+    answer: Record<string, { choice: string; confidence: number }> | null;
+    outcome: "duplicate" | "related" | "ask" | "none" | "skipped";
+    /** What a person chose at the gate. */
+    chosen?: "duplicate" | "related" | "neither";
+  };
+  /** Cards linked as related to this one (ids). */
+  related?: string[];
+  /** The card this one was merged into (a card, or a backlog item); the card is `closed`. */
+  mergedInto?: string;
   resolved?: { repoPath: string | null; project: string | null; at: string };
 }

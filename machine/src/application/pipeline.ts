@@ -10,10 +10,12 @@ import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
-import { type ContextMissing, contextComplete } from "@hardness/contracts";
+import { type CardFields, type ContextMissing, type DedupContext, contextComplete } from "@hardness/contracts";
 import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
+import { type DedupAnswer, checkDuplicates } from "./intake-dedup.ts";
+import type { Candidate } from "../domain/similarity.ts";
 import { type CardFieldsInput, appendSource, cardFieldsOf, cardOf, mergeFields, unmergeFields, withDemand } from "../domain/card-fields.ts";
-import { contextAsk, mergedNotice, questionsComment } from "../domain/notices.ts";
+import { canSeeKept, contextAsk, mergedNotice, questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
@@ -99,6 +101,20 @@ export class NoContextGateError extends Error {
   }
 }
 
+/** What the duplicate check needs from outside: the one decision call, and the backlog (to list its items and to bump one). */
+export interface DedupPort {
+  decide(context: DedupContext): Promise<{ answer: DedupAnswer; recordId?: string }>;
+  backlog?: { list(): Promise<Array<{ id: string; title: string; text: string; repo: string | null }>>; bump(id: string): Promise<void> };
+}
+
+/** A person's answer at the dedup gate named no listed candidate, or the wrong number of them. */
+export class DedupAnswerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "DedupAnswerError";
+  }
+}
+
 /** A merge or an undo the card's state does not allow. */
 export class MergeError extends Error {
   constructor(message: string) {
@@ -146,6 +162,8 @@ export interface PipelineOptions {
   hasConfig?: (repoPath: string) => boolean;
   /** Resolves a card's repository, project, owners and history by script when it starts; absent, a card starts as it is. */
   contextSetup?: ContextDeps;
+  /** Intake's duplicate check; absent, no card is checked. */
+  dedup?: DedupPort;
   /** The board's address, for the link a merged duplicate's source is given. */
   boardUrl?: string;
   /** Writes the approved luna.yaml into the checkout. Tests pass a fake. */
@@ -321,6 +339,7 @@ export class Pipeline {
   private readonly onEvent: (event: EventRow) => void;
   private readonly hasConfig: (repoPath: string) => boolean;
   private readonly contextDeps: ContextDeps | null;
+  private readonly dedupDeps: DedupPort | null;
   private readonly boardUrl: string | null;
   private readonly escalationDecide: { decide: Decide | null };
   private readonly escalationTruth: NonNullable<PipelineOptions["escalationTruth"]> | undefined;
@@ -379,6 +398,7 @@ export class Pipeline {
     this.commitsSince = options.commitsSince;
     this.headOf = options.headOf;
     this.contextDeps = options.contextSetup ?? null;
+    this.dedupDeps = options.dedup ?? null;
     this.boardUrl = options.boardUrl ?? null;
     this.hasConfig = options.hasConfig ?? ((repoPath) => existsSync(join(repoPath, CONFIG_FILE)));
     this.writeConfig = options.writeConfig ?? ((repoPath, text) => writeFile(join(repoPath, CONFIG_FILE), text));
@@ -485,26 +505,30 @@ export class Pipeline {
   }
 
   /** The decision's ground truth for a merge or its undo, when the card was judged by `intake_dedup`. Never throws. */
-  private async dedupTruth(task: TaskRow, choice: "same" | "different", source: string): Promise<void> {
+  private async dedupTruth(task: TaskRow, keptId: string, choice: "same" | "different", source: string): Promise<void> {
     const dedup = cardOf(task).dedup;
-    if (!dedup || !this.truth) return;
-    await this.truth.learned({ pack: "intake_dedup", recordId: dedup.recordId, label: { [`slot${dedup.slot}`]: { choice } }, source, taskId: task.id }).catch(() => false);
+    const slot = dedup?.candidates.find((c) => c.id === keptId)?.slot;
+    if (!dedup?.recordId || slot === undefined || !this.truth) return;
+    await this.truth.learned({ pack: "intake_dedup", recordId: dedup.recordId, label: { [`slot${slot}`]: { choice } }, source, taskId: task.id }).catch(() => false);
   }
 
   /** `dupId` is a report of `keptId`: its source joins the kept card, its reporter follows it, the demand goes up and the priority is scored again.
    *  The duplicate is archived as a duplicate, and its source is told, in fixed words, which card tracks it. */
-  async merge(dupId: string, keptId: string): Promise<TaskRow> {
+  async merge(dupId: string, keptId: string, by: "person" | "machine" = "person", decision?: DecisionRecord): Promise<TaskRow> {
     if (dupId === keptId) throw new MergeError("a card cannot be merged into itself");
     const dup = await this.get(dupId);
     const kept = await this.get(keptId);
     if (TERMINAL.has(dup.state)) throw new MergeError(`card ${dupId} has ended: nothing to merge`);
     if (TERMINAL.has(kept.state)) throw new MergeError(`card ${keptId} has ended: nothing to merge into`);
-    await this.store.updateTask(keptId, { card: mergeFields(cardOf(kept), cardOf(dup), dupId), record: withDemand(kept.record ?? null, 1) });
+    const scoring = (await this.policyFor(kept.repoPath)).factory.scoring;
+    await this.store.updateTask(keptId, { card: mergeFields(cardOf(kept), cardOf(dup), dupId), record: withDemand(kept.record ?? null, 1, scoring) });
     await this.log(keptId, "card.merged", { from: dupId });
     await this.log(dupId, "card.merged", { into: keptId });
-    await this.log(dupId, "task.reply", { body: mergedNotice(keptId, this.boardUrl ? `${this.boardUrl}/tasks/${keptId}` : null), secret: false, by: "machine", kind: "merged" });
-    await this.dedupTruth(dup, "same", "merge_confirmed");
-    return this.archive(dupId, "duplicate");
+    const dupView = { repoPath: dup.repoPath, sources: cardOf(dup).sources };
+    const seen = canSeeKept(dupView, { repoPath: kept.repoPath, sources: cardOf(kept).sources });
+    await this.log(dupId, "task.reply", { body: mergedNotice(seen ? keptId : null, seen && this.boardUrl ? `${this.boardUrl}/tasks/${keptId}` : null), secret: false, by: "machine", kind: "merged" });
+    if (by === "person") await this.dedupTruth(dup, keptId, "same", "merge_confirmed");
+    return this.closeAsMerged(dupId, keptId, decision);
   }
 
   /** Undoes a merge: the kept card gives back the source, the followers and the demand, and the duplicate becomes a new card. */
@@ -517,7 +541,7 @@ export class Pipeline {
     const keptId = String(merged.payload.into);
     const kept = await this.store.getTask(keptId);
     const card = cardOf(dup);
-    if (kept) await this.store.updateTask(keptId, { card: unmergeFields(cardOf(kept), card, dupId), record: withDemand(kept.record ?? null, -1) });
+    if (kept) await this.store.updateTask(keptId, { card: unmergeFields(cardOf(kept), card, dupId), record: withDemand(kept.record ?? null, -1, (await this.policyFor(kept.repoPath)).factory.scoring) });
     const restored = await this.createTask({
       title: dup.title,
       description: dup.description,
@@ -535,7 +559,7 @@ export class Pipeline {
     });
     if (kept) await this.log(keptId, "card.unmerged", { restored: restored.id, from: dupId });
     await this.log(dupId, "card.unmerged", { restored: restored.id });
-    await this.dedupTruth(dup, "different", "merge_undone");
+    await this.dedupTruth(dup, keptId, "different", "merge_undone");
     return restored;
   }
 
@@ -954,9 +978,13 @@ export class Pipeline {
       });
       return this.get(id);
     }
-    const after = await this.get(id);
-    const setup = after.repoPath !== null && !this.hasConfig(after.repoPath);
-    return this.dispatch(id, { type: "context_given", setup }, { decision: { decision: "answered", response: { ...(given.repoPath ? { repoPath: given.repoPath } : {}), ...(given.project ? { project: given.project } : {}), text: Boolean(text) } } });
+    const decision: DecisionRecord = { decision: "answered", response: { ...(given.repoPath ? { repoPath: given.repoPath } : {}), ...(given.project ? { project: given.project } : {}), text: Boolean(text) } };
+    // The card is whole: now it is checked for a duplicate, as a card that was whole at start is.
+    if (this.dedupDeps && !cardOf(await this.get(id)).dedup) {
+      const checked = await this.dedupCheck(id, decision);
+      if (checked) return checked;
+    }
+    return this.continueFromGate(id, decision);
   }
 
   /** Starts the pipeline; a repo with no luna.yaml yet gets the setup gate before triage. */
@@ -967,8 +995,134 @@ export class Pipeline {
       const check = this.contextCheck(task);
       if (!check.complete) return this.holdForContext(id, check.missing);
     }
+    if (this.dedupDeps && task.route === "feature" && task.state === "draft") {
+      const checked = await this.dedupCheck(id);
+      if (checked) return checked;
+    }
     const setup = task.route === "setup" || (task.repoPath !== null && !this.hasConfig(task.repoPath));
     return this.dispatch(id, { type: "start", setup });
+  }
+
+  /** A card at an Intake gate goes on as a start would: through setup when its repo has no luna.yaml, else to its entry. */
+  private async continueFromGate(id: string, decision: DecisionRecord): Promise<TaskRow> {
+    const after = await this.get(id);
+    const setup = after.repoPath !== null && !this.hasConfig(after.repoPath);
+    return this.dispatch(id, { type: "context_given", setup }, { decision });
+  }
+
+  /** The cards a new card could be a report of: those of the same repository only, open ones, closed ones (not merged duplicates) and the backlog's items. */
+  private async dedupCandidates(task: TaskRow): Promise<Candidate[]> {
+    if (!task.repoPath) return [];
+    const cards = (await this.store.listTasks())
+      .filter((r) => r.id !== task.id && r.repoPath === task.repoPath && r.state !== "archived" && !cardOf(r).mergedInto)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, 500)
+      .map((r): Candidate => ({ id: r.id, kind: r.state === "closed" ? "closed" : "open", title: r.title, text: r.description, repo: r.repoPath, closedAt: r.state === "closed" ? (r.stateSince ?? r.updatedAt) : null }));
+    const slugs = cardOf(task).sources.flatMap((s) => ("kind" in s && (s.kind === "github" || s.kind === "github_pr") ? [s.repo] : []));
+    const items = ((await this.dedupDeps?.backlog?.list().catch(() => [])) ?? []).filter((i) => i.repo !== null && (i.repo === task.repoPath || slugs.includes(i.repo)));
+    return [...cards, ...items.map((i): Candidate => ({ id: i.id, kind: "backlog", title: i.title, text: i.text, repo: task.repoPath, closedAt: null }))];
+  }
+
+  /** Intake's duplicate check. A merged card, or one held at the dedup gate, is returned; null means the card goes on. */
+  private async dedupCheck(id: string, decision?: DecisionRecord): Promise<TaskRow | null> {
+    const deps = this.dedupDeps!;
+    const task = await this.get(id);
+    const policy = (await this.policyFor(task.repoPath)).factory;
+    let recordId: string | null = null;
+    const found = await checkDuplicates(
+      { decide: async (ctx) => { const r = await deps.decide(ctx); recordId = r.recordId ?? null; return r.answer; } },
+      { title: task.title, text: task.description, repo: task.repoPath },
+      await this.dedupCandidates(task),
+      { now: new Date(), dedup: policy.dedup },
+    );
+    const { outcome } = found;
+    const kept = outcome.duplicate && outcome.duplicate.kind !== "backlog" ? await this.store.getTask(outcome.duplicate.id) : null;
+    const mergeable = outcome.duplicate !== null && (outcome.duplicate.kind === "backlog" || (kept !== null && !TERMINAL.has(kept.state)));
+    const label: NonNullable<CardFields["dedup"]>["outcome"] = found.shortlist.length === 0 ? "none" : found.failed ? "skipped" : outcome.duplicate && mergeable ? "duplicate" : outcome.duplicate || outcome.ask.length > 0 ? "ask" : outcome.related.length > 0 ? "related" : "none";
+    const record = {
+      at: new Date().toISOString(),
+      recordId,
+      candidates: found.shortlist.map((n, i) => ({ id: n.id, kind: n.kind, score: n.score, slot: i + 1 })),
+      answer: found.answer as Record<string, { choice: string; confidence: number }> | null,
+      outcome: label,
+    };
+    await this.store.updateTask(id, { card: { ...cardOf(task), dedup: record } });
+    if (label === "skipped") await this.log(id, "intake.dedup_skipped", { reason: "the decision failed" });
+    if (label === "duplicate" && outcome.duplicate) {
+      if (outcome.duplicate.kind === "backlog") return this.mergeIntoBacklog(id, outcome.duplicate.id, decision);
+      return this.merge(id, outcome.duplicate.id, "machine", decision);
+    }
+    if (label === "ask") {
+      const ask = found.shortlist.filter((n) => n.id === outcome.duplicate?.id || outcome.ask.some((a) => a.id === n.id));
+      const shown = await Promise.all(
+        ask.map(async (n) => {
+          const row = n.kind === "backlog" ? null : await this.store.getTask(n.id);
+          const title = row?.title ?? (await deps.backlog?.list().catch(() => []))?.find((i) => i.id === n.id)?.title ?? "";
+          return { id: n.id, kind: n.kind, title: title.replace(/\s+/g, " ").slice(0, 200), state: row?.state ?? null, score: n.score, slot: found.shortlist.indexOf(n) + 1 };
+        }),
+      );
+      return this.dispatch(id, { type: "needs_context" }, { detail: { kind: "dedup", candidates: shown }, ...(decision ? { decision } : {}) });
+    }
+    if (label === "related") await this.linkRelated(id, outcome.related.map((n) => n.id));
+    return null;
+  }
+
+  /** Links `id` and each of `ids` that is a card as related to one another. */
+  private async linkRelated(id: string, ids: string[]): Promise<void> {
+    for (const other of ids) {
+      const row = await this.store.getTask(other);
+      if (!row) continue;
+      const mine = cardOf(await this.get(id));
+      await this.store.updateTask(id, { card: { ...mine, related: [...new Set([...(mine.related ?? []), other])].slice(0, 20) } });
+      const theirs = cardOf(row);
+      await this.store.updateTask(other, { card: { ...theirs, related: [...new Set([...(theirs.related ?? []), id])].slice(0, 20) } });
+      await this.log(id, "intake.related", { with: other });
+    }
+  }
+
+  /** A duplicate of a backlog item: the item is bumped (one more report) and the card closes as merged into it. */
+  private async mergeIntoBacklog(id: string, itemId: string, decision?: DecisionRecord): Promise<TaskRow> {
+    await this.dedupDeps?.backlog?.bump(itemId);
+    await this.log(id, "card.merged", { into: itemId, backlog: true });
+    return this.closeAsMerged(id, itemId, decision);
+  }
+
+  /** The answer to the dedup gate: the duplicate of one listed candidate, related to some of them, or neither. Ids come from the listed candidates only;
+   *  the answer is ground truth on the `intake_dedup` record, for every slot. */
+  async answerDedup(id: string, answer: { choice: "duplicate" | "related" | "neither"; of?: string[] }): Promise<TaskRow> {
+    const task = await this.get(id);
+    const open = (await this.approvals(id)).find((a) => a.kind === "awaiting_setup" && a.decision === null && a.requested.kind === "dedup");
+    if (task.state !== "awaiting_setup" || !open) throw new NoContextGateError(id, task.state);
+    const listed = (Array.isArray(open.requested.candidates) ? open.requested.candidates : []) as Array<{ id: string; kind: "open" | "closed" | "backlog"; slot: number }>;
+    const of = answer.choice === "neither" ? [] : [...new Set(answer.of ?? [])];
+    if (of.some((x) => !listed.some((c) => c.id === x))) throw new DedupAnswerError("name only the candidates the gate lists");
+    if (answer.choice === "duplicate" && of.length !== 1) throw new DedupAnswerError("name exactly one candidate as the original");
+    if (answer.choice === "related" && of.length === 0) throw new DedupAnswerError("name the candidates it is related to");
+    const record = cardOf(task).dedup;
+    if (record?.recordId && this.truth) {
+      const label = Object.fromEntries(listed.map((c) => [`slot${c.slot}`, { choice: !of.includes(c.id) ? "different" : answer.choice === "duplicate" ? "same" : "related" }]));
+      await this.truth.learned({ pack: "intake_dedup", recordId: record.recordId, label, source: "dedup_answer", taskId: id }).catch(() => false);
+    }
+    if (record) await this.store.updateTask(id, { card: { ...cardOf(task), dedup: { ...record, chosen: answer.choice } } });
+    const decision: DecisionRecord = { decision: "answered", response: { choice: answer.choice, of } };
+    if (answer.choice === "duplicate") {
+      const original = listed.find((c) => c.id === of[0])!;
+      return original.kind === "backlog" ? this.mergeIntoBacklog(id, original.id, decision) : this.merge(id, original.id, "machine", decision);
+    }
+    if (answer.choice === "related") await this.linkRelated(id, of);
+    return this.continueFromGate(id, decision);
+  }
+
+  /** Closes a card as merged: nothing runs, no host close step (it has no workspace or PR worth cleaning), and it remembers where it went. */
+  private async closeAsMerged(id: string, intoId: string, decision?: DecisionRecord): Promise<TaskRow> {
+    await this.apply(id, { type: "merged" }, decision ? { decision } : {});
+    this.loops.get(id)?.abort();
+    const row = await this.get(id);
+    await this.store.updateTask(id, { queued: false, card: { ...cardOf(row), mergedInto: intoId } });
+    clearTimeout(this.resumeTimers.get(id));
+    this.resumeTimers.delete(id);
+    await this.untilLoopEnds(id, ABORT_WIND_DOWN_MS);
+    return this.get(id);
   }
 
   answer(id: string, answers: Record<string, string>): Promise<TaskRow> {
@@ -1609,6 +1763,8 @@ export class Pipeline {
     const before = await this.get(id);
     // Approving the context gate gives it nothing: the card is checked again, and goes on only when it is complete.
     if (before.state === "awaiting_setup" && event.type === "approved" && (await this.approvals(id)).some((a) => a.decision === null && a.requested.kind === "context")) return this.provideContext(id, {});
+    // Approving the dedup gate is "neither": the card is not a duplicate and goes on.
+    if (before.state === "awaiting_setup" && event.type === "approved" && (await this.approvals(id)).some((a) => a.decision === null && a.requested.kind === "dedup")) return this.answerDedup(id, { choice: "neither" });
     // Approving the setup gate writes the file first: if that fails the task stays at the gate.
     if (before.state === "awaiting_setup" && event.type === "approved") await this.writeApprovedConfig(before);
     const step = await this.apply(id, event, extra);

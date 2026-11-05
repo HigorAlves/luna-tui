@@ -10,8 +10,8 @@ const DOING: Record<BacklogSize, { complexity: number; blastRadius: number; regr
   L: { complexity: 3, blastRadius: 3, regression: 2 },
   XL: { complexity: 3, blastRadius: 3, regression: 3 },
 };
-/** Each report beyond the first adds this to the cost of delay. */
-const PER_EXTRA_REPORT = 0.25;
+/** The demand sub-score tops out here, as every score does. */
+const SCORE_MAX = 3;
 
 export interface Item {
   id: string;
@@ -26,10 +26,12 @@ export interface Item {
 
 const round3 = (n: number): number => Math.round(n * 1000) / 1000;
 
-/** Urgency is the time score; compounding is the mean of who, what and impact; each extra report adds a quarter. */
+/** Wave 8's cost of delay: urgency is the `time` score; compounding is the mean of `who`, `what`, `impact` and the demand score, which rises by one
+ *  for each report beyond the first and stops at the top level. */
 export function costOfDelayOf(item: Pick<Item, "scores" | "demand">): number {
   const { who, what, impact, time } = item.scores;
-  return round3(costOfDelay({ urgency: time, compounding: (who + what + impact) / 3 }) + PER_EXTRA_REPORT * Math.max(0, item.demand - 1));
+  const demand = Math.min(SCORE_MAX, item.scores.demand + Math.max(0, item.demand - 1));
+  return round3(costOfDelay({ urgency: time, compounding: (who + what + impact + demand) / 4 }));
 }
 
 export const costOfDoingOf = (item: Pick<Item, "size">): number => costOfDoing(DOING[item.size]);

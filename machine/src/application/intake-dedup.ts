@@ -49,16 +49,24 @@ export function outcomeOf(shortlist: Near[], answer: DedupAnswer, t: Thresholds)
 
 const SUMMARY = 300;
 
+export interface DedupFindings {
+  outcome: DedupOutcome;
+  shortlist: Near[];
+  /** What the decision answered; null when no call was made or it failed. */
+  answer: DedupAnswer | null;
+  failed: boolean;
+}
+
 /** The shortlist of `candidates`, judged in one call. No similar card means no call; a failed call means no outcome, so a card is never held up by it. */
-export async function intakeDedup(
+export async function checkDuplicates(
   deps: DedupDeps,
   card: { title: string; text: string; repo: string | null },
   candidates: Candidate[],
   options: { now: Date; dedup?: { duplicate: number; related: number; ask_below: number; lookback_days: number } },
-): Promise<DedupOutcome> {
+): Promise<DedupFindings> {
   const dedup = options.dedup ?? FACTORY_DEFAULTS.dedup;
   const shortlist = similar(card, candidates, { now: options.now, lookbackDays: dedup.lookback_days });
-  if (shortlist.length === 0) return NO_OUTCOME;
+  if (shortlist.length === 0) return { outcome: NO_OUTCOME, shortlist, answer: null, failed: false };
   const byId = new Map(candidates.map((c) => [c.id, c]));
   const context: DedupContext = {
     title: safe(card.title).slice(0, 500),
@@ -69,9 +77,20 @@ export async function intakeDedup(
     }),
   };
   try {
-    return outcomeOf(shortlist, await deps.decide(context), thresholdsOf(dedup));
+    const answer = await deps.decide(context);
+    return { outcome: outcomeOf(shortlist, answer, thresholdsOf(dedup)), shortlist, answer, failed: false };
   } catch (error) {
     console.warn(`intake dedup: the decision failed: ${error instanceof Error ? error.message : String(error)}`);
-    return NO_OUTCOME;
+    return { outcome: NO_OUTCOME, shortlist, answer: null, failed: true };
   }
+}
+
+/** The outcome alone: see `checkDuplicates`. */
+export async function intakeDedup(
+  deps: DedupDeps,
+  card: { title: string; text: string; repo: string | null },
+  candidates: Candidate[],
+  options: { now: Date; dedup?: { duplicate: number; related: number; ask_below: number; lookback_days: number } },
+): Promise<DedupOutcome> {
+  return (await checkDuplicates(deps, card, candidates, options)).outcome;
 }

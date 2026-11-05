@@ -68,3 +68,13 @@ describe("the demand sub-score", () => {
     expect(withDemand(null, 1)).toBeNull();
   });
 });
+
+describe("the demand score with a repository's own weights and bands", () => {
+  it("scores the priority by them", async () => {
+    const { withDemand } = await import("./card-fields.ts");
+    const record = { urgencyDetail: { priority: "P3", subScores: { who: 2, what: 2, impact: 2, time: 2, demand: 1 } } } as never;
+    // Defaults: 21 is P2. With every weight 1 and the bars 7 and 9, 2+2+2+2+2 = 10 is P0 after the bump.
+    expect((withDemand(record, 1, { weights: { who: 1, what: 1, impact: 1, time: 1, demand: 1 }, bands: { P0: 10, P1: 9, P2: 7 } }) as { urgencyDetail: { priority: string } }).urgencyDetail.priority).toBe("P0");
+    expect((withDemand(record, 1) as { urgencyDetail: { priority: string } }).urgencyDetail.priority).toBe("P1");
+  });
+});

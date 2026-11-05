@@ -542,3 +542,13 @@ describe("the Intake context gate", () => {
     expect(() => transition(at("triage"), { type: "context_given" })).toThrow(TransitionError);
   });
 });
+
+describe("a card merged into another", () => {
+  const nonTerminal = TaskState.options.filter((s) => !TERMINAL.has(s));
+  it.each(nonTerminal)("%s closes as merged, with nothing left to run", (state) => {
+    expect(transition(at(state, { route: routeOf(state) }), { type: "merged" })).toMatchObject({ state: "closed", effect: { kind: "done" } });
+  });
+  it.each([...TERMINAL])("%s cannot be merged", (state) => {
+    expect(() => transition(at(state), { type: "merged" })).toThrow(TransitionError);
+  });
+});

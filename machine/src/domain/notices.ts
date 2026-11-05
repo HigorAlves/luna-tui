@@ -28,7 +28,34 @@ export function contextAsk(missing: Array<keyof typeof MISSING_WORDS>): { body: 
   return { body, secret: false, hash: createHash("sha256").update(missing.join(",")).digest("hex").slice(0, 16) };
 }
 
-/** What a duplicate's source is told: which card tracks it. Fixed words, the kept card's id and a link, never its title or text. */
-export function mergedNotice(keptId: string, link: string | null): string {
+interface CardView {
+  repoPath: string | null;
+  /** The card's sources, in the machine's shape (`kind`) or the diagram's (`type`). */
+  sources: ReadonlyArray<object>;
+}
+
+interface Src {
+  kind?: string;
+  repo?: string;
+  channel?: string;
+  key?: string;
+}
+const srcs = (card: CardView): Src[] => card.sources as Src[];
+const githubRepos = (card: CardView): string[] => srcs(card).filter((s) => s.kind === "github" || s.kind === "github_pr").map((s) => String(s.repo));
+const projectOf = (key: string | undefined): string | null => /^([A-Z][A-Z0-9_]+)-\d+$/.exec(key ?? "")?.[1] ?? null;
+
+/** Whether the reporter of `dup` could already see the card it is merged into: the same repository and, for a private Slack or Jira source, the same channel or project. */
+export function canSeeKept(dup: CardView, kept: CardView): boolean {
+  const sameRepo = (dup.repoPath !== null && dup.repoPath === kept.repoPath) || githubRepos(dup).some((r) => githubRepos(kept).includes(r));
+  if (!sameRepo) return false;
+  const first = srcs(kept)[0];
+  if (first?.kind === "slack") return srcs(dup).some((s) => s.kind === "slack" && s.channel === first.channel);
+  if (first?.kind === "jira") return srcs(dup).some((s) => s.kind === "jira" && projectOf(s.key) !== null && projectOf(s.key) === projectOf(first.key));
+  return true;
+}
+
+/** What a duplicate's source is told: which card tracks it (fixed words, the card's id and a link, never its title or text) when its reporter could see that card, else only that the report is tracked. */
+export function mergedNotice(keptId: string | null, link: string | null): string {
+  if (!keptId) return postable("This report is already tracked on another card.", 200);
   return postable(`This report was merged into card ${keptId.slice(0, 8)}${link ? `: ${link}` : ""}. Follow it there.`, 400);
 }

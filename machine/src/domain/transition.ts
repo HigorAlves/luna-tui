@@ -44,6 +44,8 @@ export type PipelineEvent =
   | { type: "needs_context" }
   /** The context gate has what it asked for: the card goes on as a start would (through setup when the repo has no luna.yaml). */
   | { type: "context_given"; setup?: boolean }
+  /** The card is a report of another card (or of a backlog item): it closes, with nothing left to run. */
+  | { type: "merged" }
   /** `triage` is the outcome triage picked; absent means `plan`. */
   | { type: "stage_done"; outcome: StageOutcome; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
@@ -192,8 +194,11 @@ function next(task: Snapshot, event: PipelineEvent): Move {
       // A feature on a repo with no luna.yaml yet runs the setup gate before its own entry.
       if (state === "draft") return run(task.route === "feature" && event.setup ? "setup" : ENTRY[task.route], retries);
       break;
+    case "merged":
+      if (TERMINAL.has(state)) break;
+      return done(retries);
     case "needs_context":
-      if (state === "draft" && task.route === "feature") return wait("awaiting_setup", retries);
+      if ((state === "draft" || state === "awaiting_setup") && task.route === "feature") return wait("awaiting_setup", retries);
       break;
     case "context_given":
       if (state === "awaiting_setup" && task.route === "feature") return run(event.setup ? "setup" : ENTRY[task.route], retries);

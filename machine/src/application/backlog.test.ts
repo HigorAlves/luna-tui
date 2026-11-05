@@ -44,7 +44,7 @@ describe("the backlog routes", () => {
     const quick = await add("Quick win", { size: "XS", sources: [{ kind: "github", repo: "o/a", number: 3, url: "https://github.com/o/a/issues/3" }] });
     expect(slow.status).toBe(201);
     const listed = await call("GET", "/backlog");
-    expect(listed.body.map((e: any) => [e.title, e.score, e.stale])).toEqual([["Quick win", 2, false], ["Slow and big", 0.667, false]]);
+    expect(listed.body.map((e: any) => [e.title, e.score, e.stale])).toEqual([["Quick win", 1.833, false], ["Slow and big", 0.611, false]]);
     expect(listed.body[0]).toMatchObject({ id: quick.body.id, demand: 1, size: "XS", dependsOn: [] });
     await db.query("update backlog_items set assessed_at = now() - interval '15 days' where id = $1", [slow.body.id]);
     expect((await call("GET", "/backlog")).body.find((e: any) => e.id === slow.body.id).stale).toBe(true);
@@ -60,7 +60,7 @@ describe("the backlog routes", () => {
     await db.query("update backlog_items set assessed_at = now() - interval '30 days' where id = $1", [a.body.id]);
     const bumped = await call("POST", `/backlog/${a.body.id}/bump`);
     expect(bumped.body).toMatchObject({ demand: 2, stale: false });
-    expect(bumped.body.score).toBe(1.042);
+    expect(bumped.body.score).toBe(0.958);
   });
 
   it("promote makes a card with the item's scores as hints and removes the item", async () => {

@@ -25,6 +25,7 @@ import {
   CardEventName,
   BacklogAddInput,
   ContextInput,
+  DedupAnswerInput,
   MergeCardInput,
   NewTaskInput,
   PACKS,
@@ -61,7 +62,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, DedupAnswerError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -181,6 +182,7 @@ export function createApp({ db, pipeline, bus, backlog, watcher, stubs, pulls, p
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
     if (error instanceof BacklogItemNotFoundError) return fail(c, 404, "not_found", error.message);
+    if (error instanceof DedupAnswerError) return fail(c, 400, "invalid_candidate", error.message);
     if (error instanceof MergeError) return fail(c, 409, "cannot_merge", error.message);
     if (error instanceof NoContextGateError) return fail(c, 409, "no_context_gate", error.message);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
@@ -467,6 +469,14 @@ export function createApp({ db, pipeline, bus, backlog, watcher, stubs, pulls, p
       return c.json({ id });
     });
   }
+
+  /** Intake's dedup gate: "duplicate of one", "related to some" or "neither". */
+  app.post("/tasks/:id/dedup", async (c) => {
+    const id = taskId(c);
+    const task = await serialize(await pipeline.answerDedup(id, await body(c, DedupAnswerInput)));
+    bus.publish({ type: "task.updated", task, seq: task.seq });
+    return c.json(task);
+  });
 
   /** A person marks the task as a duplicate of another card: its report merges into it. */
   app.post("/tasks/:id/merge", async (c) => {

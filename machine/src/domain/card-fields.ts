@@ -1,6 +1,6 @@
 // What a card keeps of the entry contract (`create_card`): pure, so every intake and the HTTP route store the same shape.
 // Every text is a stranger's: flattened and capped, every list bounded, an attachment a reference with a web address.
-import { SCORING_DEFAULTS, scorePriority, type TriageRecord } from "@hardness/contracts";
+import { type Bands, SCORING_DEFAULTS, type Weights, scorePriority, type TriageRecord } from "@hardness/contracts";
 import type { CardAttachment, CardFields, CardHints, CardSource, OriginMachine, Reporter, TaskSource } from "@hardness/contracts";
 
 import { safe } from "./evidence-markdown.ts";
@@ -135,11 +135,11 @@ export function unmergeFields(kept: CardFields, dup: CardFields, dupId: string):
   };
 }
 
-/** A triage record with its demand sub-score moved by `delta` (0 to 4) and the priority scored again; the record as it was when it has no sub-scores. Pure. */
-export function withDemand(record: TriageRecord | null, delta: number): TriageRecord | null {
+/** A triage record with its demand sub-score moved by `delta` (0 to 3) and the priority scored again; the record as it was when it has no sub-scores. Pure. */
+export function withDemand(record: TriageRecord | null, delta: number, scoring: { weights: Weights; bands: Bands } = { weights: SCORING_DEFAULTS.weights, bands: SCORING_DEFAULTS.bands }): TriageRecord | null {
   const detail = record?.urgencyDetail;
   if (!record || !detail) return record;
   const demand = Math.min(DEMAND_MAX, Math.max(0, detail.subScores.demand + delta));
   const subScores = { ...detail.subScores, demand };
-  return { ...record, urgencyDetail: { priority: scorePriority(subScores, { weights: SCORING_DEFAULTS.weights, bands: SCORING_DEFAULTS.bands }).priority, subScores } };
+  return { ...record, urgencyDetail: { priority: scorePriority(subScores, scoring).priority, subScores } };
 }
