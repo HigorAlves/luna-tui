@@ -92,14 +92,17 @@ export type JiraIntakeAnswer = z.infer<typeof JiraIntakeAnswer>;
 export const TriageOutcome = z.enum(["plan", "fast_lane", "conversation", "archive"]);
 export type TriageOutcome = z.infer<typeof TriageOutcome>;
 
-/** What triage writes of the ticket; the machine adds source, signals, questions asked, when and the model. */
+/** What triage writes of the ticket: the goal in one sentence and why it decided as it did, with an optional summary (at most
+ *  120 words). The machine composes the rest of the record from its own facts. A draft written before wave 9 also carries the
+ *  four grades; they still parse and are ignored. */
 export const RecordDraft = z.object({
-  kind: z.string(),
   goal: z.string(),
-  size: z.enum(["tiny", "small", "medium", "large"]),
-  urgency: z.enum(["low", "normal", "high", "urgent"]),
-  risk: Risk,
   reason: z.string(),
+  summary: z.string().optional(),
+  kind: z.string().optional(),
+  size: z.string().optional(),
+  urgency: z.string().optional(),
+  risk: z.string().optional(),
 });
 export type RecordDraft = z.infer<typeof RecordDraft>;
 

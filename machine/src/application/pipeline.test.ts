@@ -122,14 +122,15 @@ describe("creating and starting", () => {
 
 describe("triage's record", () => {
   it("keeps the TriageRecord the triage runner assembled, on the task", async () => {
-    const record = { kind: "bug", goal: "Stop the panic", size: "small", urgency: "high", risk: "low", reason: "one function" };
-    stubs.plan("triage", { outcome: "pass", detail: { outcome: "plan", record, criteria: ["c1"] } });
+    const record = { goal: "Stop the panic", reason: "one function" };
+    const classification = { kind: "bug", ready: true, size: 1, sizeBucket: "S" as const, typeOfWork: "backend" as const, priority: "P1" as const, riskPrelim: "low" as const, subScores: { who: 2, what: 2, impact: 2, time: 1, demand: 1 }, confidence: 0.9, at: "2026-11-05T00:00:00.000Z", model: "m" };
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "plan", summary: "A panic on j.", record, criteria: ["c1"] } });
     const saving = (stage: TaskState) =>
       stage === "triage" ? withTriageSignals(stubs.runnerFor(stage), { classify: null, save: (id, patch) => new PgTaskStore(db).updateTask(id, patch) }) : stubs.runnerFor(stage);
     const p = new Pipeline(db, saving, { inline: true, hasConfig: () => true });
-    const task = await p.createTask({ title: "Login page" });
+    const task = await p.createTask({ title: "Login page", classification });
     await p.start(task.id);
-    expect(TriageRecord.parse((await p.get(task.id)).record)).toMatchObject({ ...record, source: "manual", decision: "plan", signals: {}, qa: [] });
+    expect(TriageRecord.parse((await p.get(task.id)).record)).toMatchObject({ ...record, summary: "A panic on j.", kind: "bug", typeOfWork: "backend", size: "S", riskPrelim: "low", source: "manual", decision: "plan", signals: {}, qa: [], decisionBy: "machine", version: 1, goalRef: "none" });
   });
 });
 

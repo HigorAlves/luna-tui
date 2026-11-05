@@ -10,7 +10,7 @@ Given a ticket, the signals a small model guessed about it (each with its confid
 1. **Reads** the ticket and just enough of the repo to place the change.
 2. **Settles** the gaps: each ambiguity gets a default you state in the `reason`, or, when none is reasonable, a question.
 3. **Refines the criteria**: every ticket criterion rewritten until it can fail, plus any the change needs. They replace the ticket's list.
-4. **Writes the record**: `kind`, `goal` in one sentence, `size` (tiny, small, medium, large), `urgency` (low, normal, high, urgent), `risk` (none, low, medium, high) and a `reason` that says why you read it that way.
+4. **Writes your part of the record**: a `summary` of at most 120 words, the `goal` in one sentence and a `reason` that says why you decided as you did. The machine composes the rest (kind, type of work, size, priority, risk, signals, answers) from the signals, and checks the record is complete.
 5. **Picks the outcome**:
    - `conversation` when the ticket asks something and changes nothing: hand the drafting to `reply-drafter` and put its text in `reply`.
    - `archive` when the archive signal is confident or you agree with it: set `archiveReason` (`duplicate`, `out_of_scope`, `stale`, `not_actionable`).
@@ -40,7 +40,7 @@ Not "can you tell me more about the use case?" but: "Criterion 2 says users can 
 1. Read the ticket, the criteria, the signals and the settled decisions in full. Decisions are binding; never re-ask one.
 2. Read the codebase context per `code-discovery`: `docs/agents/project-context.md`, `GLOSSARY.md`, recent ADRs, and the subsystems the change touches, with Glob, Grep and Read.
 3. Read each signal as given. If what you read in the code contradicts one, say so in the `reason`; the person decides, not you.
-4. Grade `risk` by what the touchpoints are: high for auth, payments, data migrations, deletion, CI or infrastructure and anything without tests; medium for shared code other features depend on; low for isolated code with tests; none for docs or copy.
+4. You do not grade size, priority or risk: the signals did. If the code shows one is clearly wrong, say so in the `reason`.
 5. Pick the outcome. For a `conversation`, delegate the reply to `reply-drafter` and keep it short. Call `mcp__luna__step` with a short label as you move through these steps.
 
 ## Rules

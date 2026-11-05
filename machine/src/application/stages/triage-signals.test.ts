@@ -2,44 +2,92 @@ import { FACTORY_DEFAULTS, TriageRecord } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { TaskRow } from "../../domain/task.ts";
-import type { StageContext, StageRunner } from "../ports.ts";
+import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { withTriageSignals } from "./triage-signals.ts";
 
 const task = (over: Partial<TaskRow> = {}): TaskRow => ({ id: "t1", title: "Which Postgres?", description: "Is 14 fine?", criteria: [], repoPath: "/repo", source: { kind: "github", repo: "o/n", number: 7, url: "https://github.com/o/n/issues/7" }, classification: null, ...over }) as unknown as TaskRow;
 const context = (over: Partial<StageContext> = {}): StageContext => ({ task: task(), stage: "triage", attempt: 1, runId: "r1", approvals: [], signal: new AbortController().signal, ...over });
-const classification = { kind: "bug", area: "board", ready: true, size: 1, urgency: 2, risk: 1, archive: false, archiveReason: "none", confidence: 0.8, at: "2026-11-04T00:00:00.000Z", model: "m", signals: {} };
+const classification = {
+  kind: "bug", ready: true, size: 1, sizeBucket: "S", typeOfWork: "backend", priority: "P2", riskPrelim: "low", subScores: { who: 2, what: 2, impact: 2, time: 1, demand: 1 },
+  archive: false, archiveReason: "none", confidence: 0.8, at: "2026-11-04T00:00:00.000Z", model: "m", signals: {},
+} as NonNullable<TaskRow["classification"]>;
+const draft = { goal: "Stop the board panicking on resize", reason: "one function, tests exist" };
+/** What triage's agent hands back when it wrote its part: a summary, the goal sentence and the reason. */
+const agentPass = (over: Record<string, unknown> = {}): StageResult => ({ outcome: "pass", detail: { summary: "The board panics on resize.", outcome: "plan", record: draft, ...over } });
 
 describe("withTriageSignals's record", () => {
-  const draft = { kind: "bug", goal: "Stop the board panicking on resize", size: "small", urgency: "high", risk: "low", reason: "one function, tests exist" };
-  const signals = { kind: { answer: "bug", confidence: 0.9 }, size: { answer: 1, confidence: 0.8 } };
+  const signals = { kind: { answer: "bug", confidence: 0.9 }, size: { answer: "S", confidence: 0.8 } };
+  const answered = [
+    { kind: "triage", decision: "answered", response: { answers: { "Which OS?": "macOS" } }, requested: {} },
+    { kind: "awaiting_approval", decision: "approved", response: null, requested: {} },
+  ] as never;
 
-  it("assembles the TriageRecord from the draft, the signals and the answered questions, and saves it", async () => {
+  it("composes the record: the agent's words around the machine's facts, decided by the machine, at version 1", async () => {
     const saved: unknown[] = [];
-    const inner: StageRunner = async () => ({ outcome: "pass", detail: { outcome: "fast_lane", record: draft }, run: { info: { modelId: "claude-opus" } as never } });
-    const approvals = [
-      { kind: "triage", decision: "answered", response: { answers: { "Which OS?": "macOS" } }, requested: {} },
-      { kind: "awaiting_approval", decision: "approved", response: null, requested: {} },
-    ] as never;
+    const inner: StageRunner = async () => ({ ...agentPass(), run: { info: { modelId: "claude-opus" } as never } });
     const runner = withTriageSignals(inner, { classify: null, save: async (id, patch) => void saved.push([id, patch]) });
-    const result = await runner(context({ task: task({ classification: { ...classification, signals } }), approvals }));
+    const result = await runner(context({ task: task({ classification: { ...classification, signals } }), approvals: answered }));
     expect(result.outcome).toBe("pass");
     const [[id, patch]] = saved as [[string, { record: unknown }]];
     expect(id).toBe("t1");
     const record = TriageRecord.parse(patch.record);
-    expect(record).toMatchObject({ ...draft, source: "github", decision: "fast_lane", signals, qa: [{ question: "Which OS?", answer: "macOS" }], model: "claude-opus" });
+    expect(record).toMatchObject({
+      goal: draft.goal, reason: draft.reason, summary: "The board panics on resize.", source: "github", decision: "plan", signals, qa: [{ question: "Which OS?", answer: "macOS" }], model: "claude-opus",
+      kind: "bug", typeOfWork: "backend", size: "S", urgencyDetail: { priority: "P2", subScores: { who: 2, what: 2, impact: 2, time: 1, demand: 1 } }, riskPrelim: "low", goalRef: "none", hintsUsed: [], decisionBy: "machine", version: 1,
+    });
     expect(Number.isNaN(Date.parse(record.at))).toBe(false);
   });
 
-  it("saves no record when triage did not pass or sent no draft; a manual ticket's source is manual", async () => {
+  it("raises the version on a re-triage and puts only the previous version's number on the finished run", async () => {
+    const previous = TriageRecord.parse({ ...composeFixture(), version: 2 });
+    const result = await withTriageSignals(async () => agentPass(), { classify: null, save: async (_id, patch) => void expect((patch.record as { version: number }).version).toBe(3) })(context({ task: task({ classification, record: previous }) }));
+    expect(result.detail).toMatchObject({ previousVersion: 2 });
+    expect(JSON.stringify(result.detail)).not.toContain(previous.goal);
+  });
+
+  it("finds an epic or OKR id in the text for the goal reference", async () => {
+    const saved: Array<{ record: { goalRef: string } }> = [];
+    await withTriageSignals(async () => agentPass(), { classify: null, save: async (_id, patch) => void saved.push(patch as never) })(context({ task: task({ classification, description: "Part of EPIC-42" }) }));
+    expect(saved[0]!.record.goalRef).toBe("EPIC-42");
+  });
+
+  it("saves no record when triage did not pass; a manual ticket's source is manual", async () => {
     const saved: unknown[] = [];
     const save = async (id: string, patch: unknown) => void saved.push([id, patch]);
-    await withTriageSignals(async () => ({ outcome: "needs_input", detail: { record: draft } }), { classify: null, save })(context());
-    await withTriageSignals(async () => ({ outcome: "pass", detail: { outcome: "plan" } }), { classify: null, save })(context());
+    await withTriageSignals(async () => ({ outcome: "needs_input", detail: { record: draft } }), { classify: null, save })(context({ task: task({ classification }) }));
     expect(saved).toEqual([]);
-    await withTriageSignals(async () => ({ outcome: "pass", detail: { outcome: "plan", record: draft } }), { classify: null, save })(context({ task: task({ source: null }) }));
-    expect((saved[0] as [string, { record: { source: string; model: string } }])[1].record).toMatchObject({ source: "manual", decision: "plan", model: "unknown", signals: {} });
+    await withTriageSignals(async () => agentPass(), { classify: null, save })(context({ task: task({ source: null, classification }) }));
+    expect((saved[0] as [string, { record: { source: string; model: string } }])[1].record).toMatchObject({ source: "manual", decision: "plan", model: "unknown" });
+  });
+
+  it("sends the agent round once with what is missing, then escalates: a card never leaves triage with an incomplete record", async () => {
+    const seen: string[] = [];
+    let runs = 0;
+    const inner: StageRunner = async (c) => {
+      runs++;
+      seen.push(c.approvals.map((a) => a.reason ?? "").join("|"));
+      return agentPass({ record: { goal: "", reason: "r" } });
+    };
+    const saved: unknown[] = [];
+    const result = await withTriageSignals(inner, { classify: null, save: async (...a) => void saved.push(a) })(context({ task: task({ classification }) }));
+    expect(runs).toBe(2);
+    expect(seen[1]).toContain("goal");
+    expect(result).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("goal") } });
+    expect(saved).toEqual([]);
+  });
+
+  it("accepts the second try, and escalates a pass with no draft at all or no classification to compose from", async () => {
+    let n = 0;
+    const second = await withTriageSignals(async () => agentPass(n++ === 0 ? { record: undefined } : {}), { classify: null, save: async () => {} })(context({ task: task({ classification }) }));
+    expect(second.outcome).toBe("pass");
+    expect((await withTriageSignals(async () => agentPass({ record: undefined }), { classify: null, save: async () => {} })(context({ task: task({ classification }) }))).outcome).toBe("escalated");
+    expect((await withTriageSignals(async () => agentPass(), { classify: null, save: async () => {} })(context())).outcome).toBe("escalated");
   });
 });
+
+function composeFixture() {
+  return { source: "github", kind: "bug", goal: "An older goal", size: "S", urgency: "P2", risk: "low", signals: {}, qa: [], decision: "plan", reason: "r", at: "2026-11-04T00:00:00.000Z", model: "m" };
+}
 
 describe("withTriageSignals", () => {
   it("classifies a ticket that arrived without signals, saves them and hands them to triage", async () => {
@@ -47,7 +95,7 @@ describe("withTriageSignals", () => {
     let seen: TaskRow | undefined;
     const inner: StageRunner = async (c) => {
       seen = c.task;
-      return { outcome: "pass" };
+      return agentPass();
     };
     const asked: unknown[] = [];
     const runner = withTriageSignals(inner, {
@@ -61,7 +109,7 @@ describe("withTriageSignals", () => {
     });
     await runner(context());
     expect(asked).toEqual([[{ title: "Which Postgres?", description: "Is 14 fine?", labels: [], source: "https://github.com/o/n/issues/7" }, "/repo"]]);
-    expect(saved).toEqual([["t1", { classification }]]);
+    expect(saved.filter((p) => "classification" in (p as [string, object])[1])).toEqual([["t1", { classification }]]);
     expect(seen?.classification).toEqual(classification);
   });
 
@@ -70,7 +118,7 @@ describe("withTriageSignals", () => {
     const seen: Array<TaskRow["classification"]> = [];
     const inner: StageRunner = async (c) => {
       seen.push(c.task.classification);
-      return { outcome: "pass" };
+      return agentPass();
     };
     const fresh = { ...classification, kind: "feature", confidence: 0.95 };
     let calls = 0;
@@ -78,7 +126,7 @@ describe("withTriageSignals", () => {
     await runner(context({ task: task({ classification }) }));
     expect(calls).toBe(1);
     expect(seen).toEqual([fresh]);
-    expect(saved).toEqual([["t1", { classification: fresh }]]);
+    expect(saved.filter((p) => "classification" in (p as [string, object])[1])).toEqual([["t1", { classification: fresh }]]);
   });
 
   it("puts the answers so far in the issue the signals read, oldest first, and the repo's scoring in the options", async () => {
@@ -88,7 +136,7 @@ describe("withTriageSignals", () => {
     ] as never;
     const asked: Array<[unknown, unknown]> = [];
     const factory = { ...FACTORY_DEFAULTS, scoring: { weights: { who: 1, what: 1, impact: 1, time: 1, demand: 1 }, bands: { P0: 14, P1: 10, P2: 6 } } };
-    const runner = withTriageSignals(async () => ({ outcome: "pass" }), {
+    const runner = withTriageSignals(async () => agentPass(), {
       classify: async (issue, _repo, options) => (asked.push([issue, options]), classification),
       policy: async () => ({ factory }),
       save: async () => {},
@@ -101,7 +149,7 @@ describe("withTriageSignals", () => {
     const seen: Array<TaskRow["classification"]> = [];
     const inner: StageRunner = async (c) => {
       seen.push(c.task.classification);
-      return { outcome: "pass" };
+      return agentPass();
     };
     const saved: unknown[] = [];
     const save = async (id: string, patch: unknown) => void saved.push([id, patch]);
@@ -112,8 +160,9 @@ describe("withTriageSignals", () => {
     await withTriageSignals(inner, { classify: async () => Promise.reject(new Error("boom")), save, log: (l) => lines.push(l) })(context({ task: old, note }));
     await withTriageSignals(inner, { classify: async () => null, save })(context({ task: old, note }));
     await withTriageSignals(inner, { classify: null, save })(context());
-    expect(seen).toEqual([classification, classification, null]);
-    expect(saved).toEqual([]);
+    // The last card has no reading to compose a record from, so the agent is sent round once more before triage gives up on it.
+    expect(seen).toEqual([classification, classification, null, null]);
+    expect(saved.filter((p) => "classification" in (p as [string, object])[1])).toEqual([]);
     expect(lines).toEqual([expect.stringContaining("boom")]);
     expect(notes).toEqual([expect.stringContaining("boom"), expect.stringContaining("kept")]);
   });
@@ -128,7 +177,7 @@ describe("withTriageSignals and the confidence policy", () => {
 
   it("stops at the person's questions, one per field under its flag bar, the least sure first, with the guess and its confidence, and does not run the agent", async () => {
     let ran = 0;
-    const runner = withTriageSignals(async () => (ran++, { outcome: "pass" }), { classify: async () => read({ kind: { answer: "bug", confidence: 0.62 }, risk_prelim: { answer: "low", confidence: 0.4 } }), save: async () => {} });
+    const runner = withTriageSignals(async () => (ran++, agentPass()), { classify: async () => read({ kind: { answer: "bug", confidence: 0.62 }, risk_prelim: { answer: "low", confidence: 0.4 } }), save: async () => {} });
     const result = await runner(context());
     expect(ran).toBe(0);
     expect(result.outcome).toBe("needs_input");
@@ -141,7 +190,7 @@ describe("withTriageSignals and the confidence policy", () => {
 
   it("goes on to the agent for a field in the flag band, which the plan gate will show", async () => {
     let ran = 0;
-    const runner = withTriageSignals(async () => (ran++, { outcome: "pass" }), { classify: async () => read({ size: { answer: "S", confidence: 0.5 } }), save: async () => {} });
+    const runner = withTriageSignals(async () => (ran++, agentPass()), { classify: async () => read({ size: { answer: "S", confidence: 0.5 } }), save: async () => {} });
     expect((await runner(context())).outcome).toBe("pass");
     expect(ran).toBe(1);
   });
@@ -150,14 +199,14 @@ describe("withTriageSignals and the confidence policy", () => {
     const low = read({ kind: { answer: "bug", confidence: 0.5 } });
     const factory = { ...FACTORY_DEFAULTS, triage: { ...FACTORY_DEFAULTS.triage, confidence: { ...FACTORY_DEFAULTS.triage.confidence, kind: 0.5 } } };
     const withBars = (policy: { factory: typeof factory; decisions?: Record<string, Record<string, { proceed?: number; flag?: number }>> }) =>
-      withTriageSignals(async () => ({ outcome: "pass" }), { classify: async () => low, policy: async () => policy, save: async () => {} });
+      withTriageSignals(async () => agentPass(), { classify: async () => low, policy: async () => policy, save: async () => {} });
     expect((await withBars({ factory })(context())).outcome).toBe("pass");
     expect((await withBars({ factory: FACTORY_DEFAULTS })(context())).outcome).toBe("needs_input");
     expect((await withBars({ factory: FACTORY_DEFAULTS, decisions: { triage_signals: { kind: { proceed: 0.4 } } } })(context())).outcome).toBe("pass");
   });
 
   it("does not ask on a reading it did not get this time", async () => {
-    const runner = withTriageSignals(async () => ({ outcome: "pass" }), { classify: async () => null, save: async () => {} });
+    const runner = withTriageSignals(async () => agentPass(), { classify: async () => null, save: async () => {} });
     expect((await runner(context({ task: task({ classification: read({ kind: { answer: "bug", confidence: 0.1 } }) }) }))).outcome).toBe("pass");
   });
 });
@@ -171,7 +220,7 @@ describe("withTriageSignals and the bounds on asking", () => {
   const round = (n: number) => Array.from({ length: n }, () => ({ kind: "awaiting_answers", decision: "answered", response: { answers: { q: "a" } }, requested: { askedBy: "triage" } })) as never;
 
   it("asks at most three questions a round, the least sure first, and marks them as triage's", async () => {
-    const result = await withTriageSignals(async () => ({ outcome: "pass" }), { classify: async () => lowAll, save: async () => {} })(context());
+    const result = await withTriageSignals(async () => agentPass(), { classify: async () => lowAll, save: async () => {} })(context());
     expect(result.outcome).toBe("needs_input");
     expect(result.needsInput).toHaveLength(3);
     expect((result.detail?.asked as Array<{ field: string }>).map((a) => a.field)).toEqual(["size", "kind", "urgency"]);
@@ -179,7 +228,7 @@ describe("withTriageSignals and the bounds on asking", () => {
   });
 
   it("escalates to a person, listing the open questions, instead of a third round", async () => {
-    const result = await withTriageSignals(async () => ({ outcome: "pass" }), { classify: async () => lowAll, save: async () => {} })(context({ approvals: round(2) }));
+    const result = await withTriageSignals(async () => agentPass(), { classify: async () => lowAll, save: async () => {} })(context({ approvals: round(2) }));
     expect(result.outcome).toBe("escalated");
     expect(result.detail?.reason).toMatch(/after 2 rounds/);
     expect(result.detail?.reason).toContain("How big is the change");
@@ -190,7 +239,7 @@ describe("withTriageSignals and the bounds on asking", () => {
   it("counts only triage's rounds, and takes the repo's caps", async () => {
     const other = [{ kind: "awaiting_answers", decision: "answered", response: null, requested: {} }] as never;
     const run = (approvals: never, max_rounds: number, max_questions = 3) =>
-      withTriageSignals(async () => ({ outcome: "pass" }), {
+      withTriageSignals(async () => agentPass(), {
         classify: async () => lowAll,
         policy: async () => ({ factory: { ...FACTORY_DEFAULTS, triage: { ...FACTORY_DEFAULTS.triage, max_rounds, max_questions } } }),
         save: async () => {},

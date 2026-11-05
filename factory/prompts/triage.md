@@ -31,8 +31,8 @@ When it is fresh, follow the `code-discovery` skill: query it with `graphify <ve
 1. Read just enough of `/work` (Glob, Grep, Read) to place the change and learn how it is tested.
 2. Pick one answer:
    - `kind: "brief"` (preferred): the record and where the ticket goes.
-     - `summary`: one or two sentences on what the ticket asks and what you decided.
-     - `record`: `{kind, goal, size, urgency, risk, reason}`. `goal` is one sentence; `size` is tiny, small, medium or large; `urgency` is low, normal, high or urgent; `risk` is none, low, medium or high (high for auth, payments, data migrations, deletion, CI or infrastructure, anything without tests; medium for shared code other features depend on; low for isolated code with tests; none for docs or copy); `reason` says why you read it that way and which defaults you took.
+     - `summary`: what the ticket asks and what you decided, in at most 120 words.
+     - `record`: `{goal, reason}`. `goal` is one sentence (or `none` when the ticket serves no goal); `reason` says why you decided as you did and which defaults you took. The machine fills the kind, type of work, size, priority, risk, signals and answers from the signals above: do not write them, and do not argue with them.
      - `criteria[]`: every ticket criterion, refined until testable, plus any the change needs. It replaces the ticket's list.
      - `outcome`:
        - `conversation` when the ticket asks something and changes nothing: delegate the drafting to `reply-drafter` (ticket reply) and put its text in `reply`.
