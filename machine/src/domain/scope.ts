@@ -104,13 +104,15 @@ function dependencyOf({ path, line, section }: AddedLine): string | null {
   return null;
 }
 
-export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[]; planned: string[]; declared: { path: string; reason?: string }[] }): ScopeFacts {
+export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[]; planned: string[]; declared: { path: string; reason?: string }[];
+  /** An approved plan exists: an empty planned list then switches nothing off (every changed file is undeclared). */
+  planPresent?: boolean }): ScopeFacts {
   const changed = changedOf(input.nameStatus);
   const declared = new Set(input.declared.map((d) => d.path));
   const deleted = new Set(input.nameStatus.split("\n").filter((l) => l.startsWith("D\t")).map((l) => l.slice(2)));
   return {
     changed,
-    undeclared: input.planned.length === 0 ? [] : changed.filter((p) => !isPlanned(p, input.planned) && !declared.has(p)),
+    undeclared: input.planned.length === 0 && input.planPresent !== true ? [] : changed.filter((p) => !isPlanned(p, input.planned) && !declared.has(p)),
     removedTests: lockedFilesRemoved(input.nameStatus),
     newDependencies: input.addedLines.flatMap((l) => dependencyOf(l) ?? []),
     todos: input.addedLines.filter((l) => /\b(TODO|FIXME|XXX)\b/.test(l.line)).map((l) => `${l.path}: ${l.line.trim()}`),

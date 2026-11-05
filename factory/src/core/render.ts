@@ -377,6 +377,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{context.plan.gaps}}": bullets(input.context.plan?.gaps),
     "{{context.plan.review}}": bullets(input.context.plan?.review),
     "{{context.plan.cases}}": bullets((input.context.plan?.cases ?? []).map(scenarioLine)),
+    "{{plan.fallback}}": input.plan ? "" : "No plan (a PR task fixing CI or a review thread): the ticket and the prior findings are the plan. Seed the ledger with one slice per prior finding, in order, and stay on the current branch, which is the PR's own.",
     "{{plan.brief}}": txt(input.plan?.brief),
     "{{plan.criteria}}": bullets(input.plan?.criteria),
     "{{plan.criteria.ids}}": input.plan?.criteria?.length ? criteriaOf(input.plan.criteria).map((c) => `${c.id}: ${c.text}`).join("\n") : NONE,

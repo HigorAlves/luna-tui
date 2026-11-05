@@ -11,14 +11,14 @@ const TRIAGE_DETAIL = {
   record: { kind: "feature", goal: "Do what the ticket asks", size: "small", urgency: "normal", risk: "low", reason: "stub triage" },
 };
 
-/** What a passing plan stage stub says: a plan with no slices, a low risk, and every check skipped. */
+/** What a passing plan stage stub says: a plan with no slices, one case, a low risk, and every check skipped. */
 const planDetail = (criteria: string[]) => ({
   brief: "stub plan",
   criteria,
   assumptions: [],
   slices: [],
   rollback: "revert the commit",
-  cases: [],
+  cases: [{ title: "stub case", criterion: null, approach: "the stub passes" }],
   risk: { level: "low", scores: {} },
   verdicts: { coverage: "skipped", plan: "skipped", risk: "skipped" },
   rounds: { tests: 1, plan: 1 },

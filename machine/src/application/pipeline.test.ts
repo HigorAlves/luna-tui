@@ -230,6 +230,44 @@ describe("a plan found wrong comes back to the planner with its evidence", () =>
     expect((await p.get(task.id)).state).toBe("escalated");
   });
 
+  const thin = {
+    outcome: "pass" as const,
+    detail: {
+      brief: "b",
+      criteria: ["c1"],
+      assumptions: [],
+      slices: [{ title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }],
+      cases: [],
+      plan: { goal: "g", steps: [{ id: "P1", title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"], files: ["a.ts"] }], acceptance_criteria: [{ id: "C1", text: "c1" }], out_of_scope: [], assumptions: [], rollback: "revert", version: 2 },
+      risk: { level: "low", scores: {} },
+    },
+  };
+
+  it("the entry contract: a v2.2 gate missing a scenario and a map goes back to the planner with the list, once, and a row on the stream", async () => {
+    seen.length = 0;
+    const p = new Pipeline(db, capturing, { inline: true, hasConfig: () => true });
+    stubs.plan("test_design", thin, thin);
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await new PgTaskStore(db).updateTask(task.id, { record: { goal: "g" } as never });
+    await p.decide(task.id, "approved");
+    expect(seen.length).toBe(2);
+    expect(seen[1]).toMatchObject({ raised_by: "entry_contract", reason: expect.stringMatching(/scenario for criterion C1.*code map/) });
+    expect((await p.events(task.id)).filter((e) => e.kind === "build.entry_contract")).toHaveLength(1);
+    expect((await p.get(task.id)).state).toBe("awaiting_approval");
+    await p.decide(task.id, "approved");
+    expect((await p.get(task.id)).state).toBe("escalated");
+  });
+
+  it("the entry contract: a gate approved before v2.2 (brief, slices, a case, no plan object) still builds", async () => {
+    const ran: TaskState[] = [];
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(stage), { outcome: "fail" as const }) : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(ran).toContain("implementing");
+  });
+
   it("a plan stage that runs for any other reason carries no replan", async () => {
     seen.length = 0;
     const p = new Pipeline(db, capturing, { inline: true, hasConfig: () => true });
@@ -1002,8 +1040,10 @@ describe("editing the plan before approving", () => {
     const plan = { goal: "g", steps: [{ id: "P1", title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }], acceptance_criteria: [{ id: "C1", text: "c1" }], out_of_scope: [], assumptions: [], rollback: "revert", version: 2 };
     const map = { components: ["c"], files: [{ path: "a.ts", role: "change" }], entry_points: [], owners: ["@ana"], confidence: 0.8 };
     const atGate = async (level: "low" | "medium" | "high" = "medium") => {
-      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [], slices, rollback: "revert", plan, map, risk: { level, product: 6, scores: {} } } });
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [], slices, rollback: "revert", plan, map, cases: [{ id: "S1", title: "t", criterion: "c1", criterion_ref: "C1", approach: "x" }], risk: { level, product: 6, scores: {} } } });
       const task = await newTask();
+      // The v2.2 plan is built from, so Build's entry contract wants the Triage record the real triage run saves.
+      await new PgTaskStore(db).updateTask(task.id, { record: { goal: "g" } as never });
       await pipeline.start(task.id);
       return task.id;
     };
@@ -1138,7 +1178,7 @@ describe("editing the plan before approving", () => {
       await pipeline.editPlan(id, { criteria: ["a", "b2"] });
       expect((await gate(id)).coverageReport).toMatchObject({ gaps: ["C2"], score: 0.5 });
       stubs.reset();
-      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["a"], assumptions: [] } });
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["a"], assumptions: [], cases: [] } });
       const bare = await newTask();
       await pipeline.start(bare.id);
       await pipeline.editPlan(bare.id, { criteria: ["a", "z"] });

@@ -220,6 +220,8 @@ export interface BuildChecksDeps {
   /** The plan's slices (the planner's objects, as the approved plan carries them) and the files they and the code map name. */
   slices: unknown[];
   planned: string[];
+  /** An approved plan exists (the feature route): an empty planned list does not switch the scope check off. */
+  planPresent?: boolean;
   /** Null when no decision can run: every check is skipped. Read at call time. */
   decide: Decide | null;
   overrides: Record<string, DecisionOverrides>;
@@ -272,7 +274,7 @@ export function buildChecks(deps: BuildChecksDeps) {
   const factsFor = async (declared: { path: string }[]): Promise<ScopeFacts> => {
     const [nameStatus, diff] = await Promise.all([deps.git.nameStatus(deps.inputCommit, "HEAD"), deps.git.diff(deps.inputCommit, "HEAD")]);
     const addedLines: AddedLine[] = addedLinesOf(diff);
-    return scopeFacts({ nameStatus, addedLines, planned: deps.planned, declared });
+    return scopeFacts({ nameStatus, addedLines, planned: deps.planned, declared, planPresent: deps.planPresent === true });
   };
 
   /** The verdict the last scope_check came to, kept here: the answer file lives under /out, which the container can rewrite. */

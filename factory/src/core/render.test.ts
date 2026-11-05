@@ -21,6 +21,17 @@ const input: StageInput = {
   env: { LUNA_FACTORY: "1" },
 };
 
+describe("the implementing prompt's plan fallback", () => {
+  const template = readFileSync(new URL("../../prompts/implementing.md", import.meta.url), "utf8");
+  it("is not offered on a card that has an approved plan: the plan is the plan", () => {
+    expect(renderPrompt({ pack: PACKS.implementing, input, template, projectContext: null })).not.toMatch(/ticket and the prior findings are the plan/);
+  });
+  it("stays for a PR task, which has no plan", () => {
+    const pr = { ...input, plan: null } as StageInput;
+    expect(renderPrompt({ pack: PACKS.implementing, input: pr, template, projectContext: null })).toMatch(/ticket and the prior findings are the plan/);
+  });
+});
+
 describe("renderPrompt", () => {
   const template = [
     "# {{agent}} attempt {{attempt}} on {{task.branch}}",

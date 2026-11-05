@@ -36,6 +36,7 @@ import { basename, join } from "node:path";
 import type { Policy } from "../domain/policy.ts";
 import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 
+import { buildEntryOf } from "../domain/build-entry.ts";
 import { replanOf } from "../domain/replan.ts";
 import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, outsideSatisfied, ownersStateOf, ruleFiles, sameName } from "../domain/approvers.ts";
 import { bareLink } from "../domain/jira-link.ts";
@@ -1883,8 +1884,9 @@ export class Pipeline {
     const from = entry.payload.from;
     const finished = (await this.store.findFinishedEvents(id)).find((e) => e.payload.stage === from);
     const detail = finished?.payload.detail;
+    const missing = objectOf(detail)?.entryContract;
     return replanOf({
-      raisedBy: from,
+      raisedBy: Array.isArray(missing) ? "entry_contract" : from,
       reason: typeof entry.payload.reason === "string" ? entry.payload.reason : "the plan was found wrong",
       finished: finished ? { detail: objectOf(detail) ?? null, findings: finished.payload.findings ?? objectOf(detail)?.findings } : null,
     });
@@ -1914,7 +1916,13 @@ export class Pipeline {
         stage === "test_design" ? this.replanEvidence(id) : Promise.resolve(null),
       ]);
       repo = task.repoPath;
-      result = await this.runnerFor(stage)({
+      // The entry contract of Build: the feature route builds only from what Plan hands over; what is missing goes back to the planner (once per card), then to a person.
+      const entry = stage === "implementing" && task.route === "feature" && !resume ? buildEntryOf(approvals, task.record) : null;
+      if (entry && !entry.ok) {
+        await this.log(id, "build.entry_contract", { ok: false, missing: entry.missing, readAs: entry.readAs }, runId);
+        const reason = `Build cannot start: missing ${entry.missing.join("; ")}`;
+        result = { outcome: "escalated", detail: { escalation: "plan_wrong", reason, entryContract: entry.missing } };
+      } else result = await this.runnerFor(stage)({
         task,
         stage,
         attempt,

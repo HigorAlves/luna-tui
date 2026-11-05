@@ -40,6 +40,8 @@ describe("scopeFacts", () => {
     expect(facts.changed).toEqual(["src/a.ts", "src/b.ts", "src/new.ts", "src/helpers/x.ts", "docs/n.md"]);
     expect(facts.undeclared).toEqual([]);
     expect(scopeFacts({ ...none, nameStatus: status("M\tsrc/a.ts", "A\tother.ts"), planned: ["src/a.ts"] }).undeclared).toEqual(["other.ts"]);
+    // With a plan present an empty planned list switches nothing off: every changed file is undeclared.
+    expect(scopeFacts({ ...none, nameStatus: status("M\tsrc/a.ts"), planned: [], planPresent: true }).undeclared).toEqual(["src/a.ts"]);
   });
 
   it("reads a planned path literally: brackets and parentheses are part of a real path, and name that file only, or a directory's whole subtree", () => {

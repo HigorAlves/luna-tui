@@ -282,6 +282,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           inputCommit,
           slices: input.plan?.slices ?? [],
           planned: plannedFiles(input.plan),
+          planPresent: input.plan != null,
           get decide() {
             return deps.decide ?? null;
           },
