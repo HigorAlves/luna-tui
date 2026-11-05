@@ -41,7 +41,20 @@ describe("what a card keeps of the entry contract", () => {
     });
     expect(fields.reporter!.id).not.toContain("\n");
     expect(fields.reporter!.id.length).toBeLessThanOrEqual(120);
-    expect(fields.project).toBe("PAY # heading");
+    expect(fields.project).toBe("PAYheading");
     expect(fields.owners.length).toBeLessThanOrEqual(20);
+  });
+
+  it("stores an identifier only from letters, digits and @ / . _ -, so it cannot carry markup or control characters", () => {
+    const fields = cardFieldsOf({
+      reporter: { id: "<img src=x onerror=1>U1\u0000\u202e", channel: "sl`ack" },
+      project: "PAY[1](x)",
+      owners: ["@team-a/core.x_y", "<b>@evil</b>", "\u0007"],
+      followers: ["U2\n[link](http://x)"],
+    });
+    expect(fields.reporter).toEqual({ id: "imgsrcxonerror1U1", channel: "slack" });
+    expect(fields.project).toBe("PAY1x");
+    expect(fields.owners).toEqual(["@team-a/core.x_y", "b@evil/b"]);
+    expect(fields.followers).toEqual(["U2linkhttp//x"]);
   });
 });

@@ -2,7 +2,7 @@
 // Every text is a stranger's: flattened and capped, every list bounded, an attachment a reference with a web address.
 import type { CardAttachment, CardFields, CardHints, CardSource, OriginMachine, Reporter, TaskSource } from "@hardness/contracts";
 
-import { redact, safe } from "./evidence-markdown.ts";
+import { safe } from "./evidence-markdown.ts";
 
 export const MAX_SOURCES = 20;
 export const MAX_ATTACHMENTS = 20;
@@ -30,8 +30,8 @@ export interface CardFieldsInput {
 /** Text a stranger wrote: no markup, one line, capped. */
 const text = (value: string, max = TEXT): string => safe(value).slice(0, max).trim();
 const web = (url: string): boolean => /^https?:\/\//i.test(url.trim());
-/** An identifier (a login, a team, a project): one line and capped, no token, but not escaped, so `@team` still matches. Output escapes it. */
-const ident = (value: string, max = TEXT): string => redact(value).replace(/\s+/g, " ").trim().slice(0, max);
+/** An identifier (a login, a team, a project key): only letters, digits and `@ / . _ -` survive, capped, so it cannot carry markup, a link or a control character. `@team` still matches; output escapes it again. */
+const ident = (value: string, max = TEXT): string => value.replace(/[^\p{L}\p{N}@/._-]/gu, "").slice(0, max);
 const list = (values: string[] | undefined, max: number): string[] =>
   [...new Set((values ?? []).map((v) => ident(v)).filter(Boolean))].slice(0, max);
 

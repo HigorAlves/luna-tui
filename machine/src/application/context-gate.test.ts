@@ -21,7 +21,7 @@ beforeEach(async () => {
   stubs.reset();
 });
 
-const none: ContextDeps = { resolveRepo: async () => null, channelRepo: () => null, projectRepo: () => null, configProject: async () => null, owners: async () => [], history: async () => [] };
+const none: ContextDeps = { resolveRepo: async () => null, channelRepo: () => null, projectRepo: async () => null, configProject: async () => null, owners: async () => [], history: async () => [] };
 const make = (deps: ContextDeps = none) => new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, contextSetup: deps });
 const slack = { kind: "slack", channel: "C1", ts: "1.2", permalink: "https://example.slack.com/archives/C1/p12" } as const;
 const longText = Array.from({ length: 25 }, (_, i) => `word${i}`).join(" ");

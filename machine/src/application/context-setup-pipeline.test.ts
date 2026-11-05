@@ -25,7 +25,7 @@ beforeEach(async () => {
 const context: ContextDeps = {
   resolveRepo: async (slug) => (slug === "o/a" ? "/repos/a" : null),
   channelRepo: () => null,
-  projectRepo: () => null,
+  projectRepo: async () => null,
   configProject: async () => null,
   owners: async () => ["@team-a"],
   history: async () => [{ author: "u", text: "it breaks\nevery time" }],

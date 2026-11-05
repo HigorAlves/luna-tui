@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
+import { type ContextDeps, contextSetup, correctionsOf, uniqueRepoForProject } from "./context-setup.ts";
 
 const card = (over: Record<string, unknown> = {}) => ({
   title: "Checkout fails",
@@ -14,7 +14,7 @@ const card = (over: Record<string, unknown> = {}) => ({
 const deps = (over: Partial<ContextDeps> = {}): ContextDeps => ({
   resolveRepo: async (slug) => (slug === "o/a" ? "/repos/a" : null),
   channelRepo: () => null,
-  projectRepo: () => null,
+  projectRepo: async () => null,
   configProject: async () => null,
   owners: async () => [],
   history: async () => [],
@@ -32,7 +32,7 @@ describe("context setup is a script", () => {
     const github = { kind: "github", repo: "o/a", number: 1, url: "u" };
     const slack = { kind: "slack", channel: "C1", ts: "1", permalink: "https://x/1" };
     const jira = { kind: "jira", key: "PAY-3", url: "https://x/PAY-3", issueType: null };
-    const d = deps({ channelRepo: (c) => (c === "C1" ? "/by-channel" : null), projectRepo: (p) => (p === "PAY" ? "/by-project" : null) });
+    const d = deps({ channelRepo: (c) => (c === "C1" ? "/by-channel" : null), projectRepo: async (p) => (p === "PAY" ? "/by-project" : null) });
     expect(await contextSetup(d, card({ card: { links: { repo: "o/a" }, sources: [slack] } as any, source: slack }))).toMatchObject({ repoPath: "/repos/a", repoFrom: "hint" });
     expect(await contextSetup(d, card({ source: slack }))).toMatchObject({ repoPath: "/by-channel", repoFrom: "config" });
     expect(await contextSetup(d, card({ source: jira }))).toMatchObject({ repoPath: "/by-project", repoFrom: "config" });
@@ -66,6 +66,18 @@ describe("context setup is a script", () => {
     const out = await contextSetup(d, card({ source: a, card: { sources: [a, b] } as any }));
     expect(out.history).toHaveLength(50);
     expect(out.history[0]!.text).not.toContain("\n");
+  });
+});
+
+describe("the repository a Jira project names", () => {
+  const projectOf = async (repo: string) => ({ "/a": "PAY", "/b": "OPS", "/c": "PAY", "/d": null })[repo] ?? null;
+  it("is the one known repository whose luna.yaml names the project", async () => {
+    expect(await uniqueRepoForProject("OPS", ["/a", "/b", "/d"], projectOf)).toBe("/b");
+  });
+  it("is none when two repositories name it, or none does", async () => {
+    expect(await uniqueRepoForProject("PAY", ["/a", "/b", "/c"], projectOf)).toBeNull();
+    expect(await uniqueRepoForProject("NOPE", ["/a"], projectOf)).toBeNull();
+    expect(await uniqueRepoForProject("PAY", ["/a", "/a"], projectOf)).toBe("/a");
   });
 });
 

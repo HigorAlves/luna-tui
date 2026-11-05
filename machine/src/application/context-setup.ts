@@ -15,7 +15,7 @@ export interface ContextDeps {
   resolveRepo(slug: string): Promise<string | null>;
   /** The repository configured for a Slack channel id, or for a Jira project key. */
   channelRepo(channel: string): string | null;
-  projectRepo(project: string): string | null;
+  projectRepo(project: string): Promise<string | null>;
   /** The Jira project `luna.yaml` of the repository names, if any. */
   configProject(repoPath: string): Promise<string | null>;
   /** CODEOWNERS at the default branch, through the graph port, for the files the card's text points at. */
@@ -65,7 +65,8 @@ export async function contextSetup(deps: ContextDeps, row: CardInput): Promise<R
   if (!repoPath) {
     for (const source of sources) {
       const channel = source.kind === "slack" ? source.channel : null;
-      repoPath = (channel ? deps.channelRepo(channel) : null) ?? (jiraProject(source) ? deps.projectRepo(jiraProject(source)!) : null);
+      const key = jiraProject(source);
+      repoPath = (channel ? deps.channelRepo(channel) : null) ?? (key ? await deps.projectRepo(key).catch(() => null) : null);
       if (repoPath) break;
     }
     if (repoPath) repoFrom = "config";
@@ -100,4 +101,11 @@ export function correctionsOf(resolved: { repoPath: string | null; project: stri
   return (["repoPath", "project"] as const)
     .filter((field) => resolved[field] !== chosen[field])
     .map((field) => ({ field, resolved: resolved[field], chosen: chosen[field] }));
+}
+
+/** The one repository among `repos` whose luna.yaml names Jira project `project`; two or none give null (a person picks). */
+export async function uniqueRepoForProject(project: string, repos: string[], projectOf: (repoPath: string) => Promise<string | null>): Promise<string | null> {
+  const matches: string[] = [];
+  for (const repo of new Set(repos)) if ((await projectOf(repo).catch(() => null)) === project) matches.push(repo);
+  return matches.length === 1 ? matches[0]! : null;
 }

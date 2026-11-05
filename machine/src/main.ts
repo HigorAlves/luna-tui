@@ -63,6 +63,7 @@ import { machineCredentials } from "./adapters/credentials/index.ts";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { uniqueRepoForProject } from "./application/context-setup.ts";
 import { Pipeline } from "./application/pipeline.ts";
 import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
@@ -338,8 +339,9 @@ pipeline = new Pipeline(db, runnerFor, {
   contextSetup: {
     resolveRepo: (slug) => repoMap.resolve(slug),
     channelRepo: () => null,
-    projectRepo: () => null,
-    configProject: async () => null,
+    // The project's repository is the one known checkout whose own luna.yaml names it; a channel has no such source and stays unresolved.
+    projectRepo: async (project) => uniqueRepoForProject(project, [...Object.values(config.repoMap), ...(await repoMap.remembered())], async (repoPath) => (await policies.for(repoPath)).jira?.project ?? null),
+    configProject: async (repoPath) => (await policies.for(repoPath)).jira?.project ?? null,
     owners: async (repoPath, text) => {
       const located = await graph.locate(repoPath, text);
       return [...new Set((located?.owners ?? []).flatMap((entry) => entry.owners))];
