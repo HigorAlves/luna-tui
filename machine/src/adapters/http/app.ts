@@ -24,6 +24,7 @@ import {
   CARD_EVENT_NAMES,
   CardEventName,
   ContextInput,
+  MergeCardInput,
   NewTaskInput,
   PACKS,
   PackId,
@@ -58,7 +59,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, MergeError, NoCasesToEditError, NoContextGateError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -175,6 +176,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof TransitionError) return fail(c, 409, "invalid_transition", error.message);
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
+    if (error instanceof MergeError) return fail(c, 409, "cannot_merge", error.message);
     if (error instanceof NoContextGateError) return fail(c, 409, "no_context_gate", error.message);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
     if (error instanceof NoQuestionsToPostError) return fail(c, 409, "no_questions", error.message);
@@ -436,6 +438,22 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   app.post("/tasks/:id/context", async (c) => {
     const id = taskId(c);
     const task = await serialize(await pipeline.provideContext(id, await body(c, ContextInput)));
+    bus.publish({ type: "task.updated", task, seq: task.seq });
+    return c.json(task);
+  });
+
+  /** A person marks the task as a duplicate of another card: its report merges into it. */
+  app.post("/tasks/:id/merge", async (c) => {
+    const id = taskId(c);
+    const { into } = await body(c, MergeCardInput);
+    const task = await serialize(await pipeline.merge(id, into));
+    bus.publish({ type: "task.updated", task, seq: task.seq });
+    return c.json(task);
+  });
+
+  /** A person undoes a merge: the duplicate comes back as a new card. */
+  app.post("/tasks/:id/unmerge", async (c) => {
+    const task = await serialize(await pipeline.unmerge(taskId(c)));
     bus.publish({ type: "task.updated", task, seq: task.seq });
     return c.json(task);
   });

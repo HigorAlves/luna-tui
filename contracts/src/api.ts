@@ -154,6 +154,10 @@ export const ContextInput = z.object({
 });
 export type ContextInput = z.infer<typeof ContextInput>;
 
+/** `POST /tasks/:id/merge`: the task is a duplicate of `into`. */
+export const MergeCardInput = z.object({ into: z.string().uuid() });
+export type MergeCardInput = z.infer<typeof MergeCardInput>;
+
 export const ArchiveInput = z.object({ reason: ArchiveReason });
 export type ArchiveInput = z.infer<typeof ArchiveInput>;
 

@@ -9,6 +9,7 @@ const finished = (stage: string, status: string, detail: Record<string, unknown>
 
 /** One fixture per fact the machine logs today, and the names the diagram gives it. */
 const FIXTURES: Array<[string, ReturnType<typeof row>, CardEventName[]]> = [
+  ["a duplicate merged", row("card.merged", { into: "kept" }), ["card.merged"]],
   ["a task made", row("task.created", { title: "t" }), ["card.created"]],
   ["setup asked", moved("setup", "awaiting_setup"), ["card.setup_needed"]],
   ["setup confirmed", row("transition", { event: "approved", from: "awaiting_setup", to: "triage" }), ["card.setup_done"]],
@@ -85,6 +86,6 @@ describe("namesOf", () => {
     const missing = CARD_EVENT_NAMES.filter((n) => !produced.has(n));
     expect(missing).toEqual(Object.keys(PENDING_EVENTS));
     for (const name of Object.keys(PENDING_EVENTS)) expect(produced.has(name as CardEventName)).toBe(false);
-    expect(PENDING_EVENTS["card.merged"]).toBe(14);
+    expect(PENDING_EVENTS).toEqual({});
   });
 });

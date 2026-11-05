@@ -336,6 +336,7 @@ pipeline = new Pipeline(db, runnerFor, {
   // The outside-approver rule reads CODEOWNERS through the code graph port and nothing a model wrote.
   owners: (repoPath, paths) => graph.owners(repoPath, paths),
   // Context setup: by script, through the ports. The history ports and the map are read at call time (they are built below).
+  boardUrl: `http://${config.host}:${config.port}`,
   contextSetup: {
     resolveRepo: (slug) => repoMap.resolve(slug),
     channelRepo: () => null,

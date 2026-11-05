@@ -71,5 +71,11 @@ export interface CardFields {
   /** The thread or ticket history Intake fetched, flat and capped; absent before a card started. */
   history?: { author: string | null; text: string; at: string | null }[];
   /** What context setup resolved, kept to compare with what a person later changes. */
+  /** How many reports the card stands for: 1, and one more for each duplicate merged into it. */
+  demand?: number;
+  /** The duplicates merged into this card (their cards are archived), newest last. */
+  merged?: { id: string }[];
+  /** The `intake_dedup` decision that judged this card and the slot it was in, for the ground truth of a merge or an undo. */
+  dedup?: { recordId: string; slot: number };
   resolved?: { repoPath: string | null; project: string | null; at: string };
 }

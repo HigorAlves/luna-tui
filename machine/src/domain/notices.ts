@@ -27,3 +27,8 @@ export function contextAsk(missing: Array<keyof typeof MISSING_WORDS>): { body: 
   const body = postable(`Luna needs a little more to start this card: ${list}. Reply here with them.`);
   return { body, secret: false, hash: createHash("sha256").update(missing.join(",")).digest("hex").slice(0, 16) };
 }
+
+/** What a duplicate's source is told: which card tracks it. Fixed words, the kept card's id and a link, never its title or text. */
+export function mergedNotice(keptId: string, link: string | null): string {
+  return postable(`This report was merged into card ${keptId.slice(0, 8)}${link ? `: ${link}` : ""}. Follow it there.`, 400);
+}

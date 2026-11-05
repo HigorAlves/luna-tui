@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, TERMINAL, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -12,8 +12,8 @@ import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../d
 import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
 import { type ContextMissing, contextComplete } from "@hardness/contracts";
 import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
-import { type CardFieldsInput, appendSource, cardFieldsOf, cardOf } from "../domain/card-fields.ts";
-import { contextAsk, questionsComment } from "../domain/notices.ts";
+import { type CardFieldsInput, appendSource, cardFieldsOf, cardOf, mergeFields, unmergeFields, withDemand } from "../domain/card-fields.ts";
+import { contextAsk, mergedNotice, questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
@@ -99,6 +99,14 @@ export class NoContextGateError extends Error {
   }
 }
 
+/** A merge or an undo the card's state does not allow. */
+export class MergeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MergeError";
+  }
+}
+
 export interface NewTask extends Omit<CardFieldsInput, "source"> {
   title: string;
   description?: string;
@@ -138,6 +146,8 @@ export interface PipelineOptions {
   hasConfig?: (repoPath: string) => boolean;
   /** Resolves a card's repository, project, owners and history by script when it starts; absent, a card starts as it is. */
   contextSetup?: ContextDeps;
+  /** The board's address, for the link a merged duplicate's source is given. */
+  boardUrl?: string;
   /** Writes the approved luna.yaml into the checkout. Tests pass a fake. */
   writeConfig?: (repoPath: string, text: string) => Promise<void>;
   /** Run stages inside the request instead of in the background. Tests use this. */
@@ -311,6 +321,7 @@ export class Pipeline {
   private readonly onEvent: (event: EventRow) => void;
   private readonly hasConfig: (repoPath: string) => boolean;
   private readonly contextDeps: ContextDeps | null;
+  private readonly boardUrl: string | null;
   private readonly escalationDecide: { decide: Decide | null };
   private readonly escalationTruth: NonNullable<PipelineOptions["escalationTruth"]> | undefined;
   private readonly commitsSince: NonNullable<PipelineOptions["commitsSince"]> | undefined;
@@ -368,6 +379,7 @@ export class Pipeline {
     this.commitsSince = options.commitsSince;
     this.headOf = options.headOf;
     this.contextDeps = options.contextSetup ?? null;
+    this.boardUrl = options.boardUrl ?? null;
     this.hasConfig = options.hasConfig ?? ((repoPath) => existsSync(join(repoPath, CONFIG_FILE)));
     this.writeConfig = options.writeConfig ?? ((repoPath, text) => writeFile(join(repoPath, CONFIG_FILE), text));
     this.inline = options.inline ?? false;
@@ -470,6 +482,61 @@ export class Pipeline {
     if (!this.jiraSite || source?.kind === "notch") return null;
     const key = findJiraKey(title) ?? findJiraKey(description);
     return key ? bareLink(key, issueUrl(this.jiraSite, key)) : null;
+  }
+
+  /** The decision's ground truth for a merge or its undo, when the card was judged by `intake_dedup`. Never throws. */
+  private async dedupTruth(task: TaskRow, choice: "same" | "different", source: string): Promise<void> {
+    const dedup = cardOf(task).dedup;
+    if (!dedup || !this.truth) return;
+    await this.truth.learned({ pack: "intake_dedup", recordId: dedup.recordId, label: { [`slot${dedup.slot}`]: { choice } }, source, taskId: task.id }).catch(() => false);
+  }
+
+  /** `dupId` is a report of `keptId`: its source joins the kept card, its reporter follows it, the demand goes up and the priority is scored again.
+   *  The duplicate is archived as a duplicate, and its source is told, in fixed words, which card tracks it. */
+  async merge(dupId: string, keptId: string): Promise<TaskRow> {
+    if (dupId === keptId) throw new MergeError("a card cannot be merged into itself");
+    const dup = await this.get(dupId);
+    const kept = await this.get(keptId);
+    if (TERMINAL.has(dup.state)) throw new MergeError(`card ${dupId} has ended: nothing to merge`);
+    if (TERMINAL.has(kept.state)) throw new MergeError(`card ${keptId} has ended: nothing to merge into`);
+    await this.store.updateTask(keptId, { card: mergeFields(cardOf(kept), cardOf(dup), dupId), record: withDemand(kept.record ?? null, 1) });
+    await this.log(keptId, "card.merged", { from: dupId });
+    await this.log(dupId, "card.merged", { into: keptId });
+    await this.log(dupId, "task.reply", { body: mergedNotice(keptId, this.boardUrl ? `${this.boardUrl}/tasks/${keptId}` : null), secret: false, by: "machine", kind: "merged" });
+    await this.dedupTruth(dup, "same", "merge_confirmed");
+    return this.archive(dupId, "duplicate");
+  }
+
+  /** Undoes a merge: the kept card gives back the source, the followers and the demand, and the duplicate becomes a new card. */
+  async unmerge(dupId: string): Promise<TaskRow> {
+    const dup = await this.get(dupId);
+    const events = await this.events(dupId);
+    const merged = events.findLast((e) => e.kind === "card.merged" && typeof e.payload.into === "string");
+    const undone = events.findLast((e) => e.kind === "card.unmerged");
+    if (!merged || (undone && Number(undone.id) > Number(merged.id))) throw new MergeError(`card ${dupId} is not a merged duplicate`);
+    const keptId = String(merged.payload.into);
+    const kept = await this.store.getTask(keptId);
+    const card = cardOf(dup);
+    if (kept) await this.store.updateTask(keptId, { card: unmergeFields(cardOf(kept), card, dupId), record: withDemand(kept.record ?? null, -1) });
+    const restored = await this.createTask({
+      title: dup.title,
+      description: dup.description,
+      criteria: dup.criteria,
+      repoPath: dup.repoPath,
+      source: dup.source,
+      sources: card.sources,
+      ...(card.reporter ? { reporter: card.reporter } : {}),
+      ...(card.hints ? { hints: card.hints } : {}),
+      attachments: card.attachments,
+      ...(card.project ? { project: card.project } : {}),
+      owners: card.owners,
+      followers: card.followers,
+      links: card.links,
+    });
+    if (kept) await this.log(keptId, "card.unmerged", { restored: restored.id, from: dupId });
+    await this.log(dupId, "card.unmerged", { restored: restored.id });
+    await this.dedupTruth(dup, "different", "merge_undone");
+    return restored;
   }
 
   /** Adds a report of the same card (a merged duplicate) after its sources. The first source never changes. */

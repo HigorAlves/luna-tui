@@ -1,5 +1,6 @@
 // What a card keeps of the entry contract (`create_card`): pure, so every intake and the HTTP route store the same shape.
 // Every text is a stranger's: flattened and capped, every list bounded, an attachment a reference with a web address.
+import { SCORING_DEFAULTS, scorePriority, type TriageRecord } from "@hardness/contracts";
 import type { CardAttachment, CardFields, CardHints, CardSource, OriginMachine, Reporter, TaskSource } from "@hardness/contracts";
 
 import { safe } from "./evidence-markdown.ts";
@@ -100,4 +101,45 @@ export function cardFieldsOf(input: CardFieldsInput): CardFields {
     followers: list(input.followers, MAX_FOLLOWERS),
     links,
   };
+}
+
+const MAX_MERGED = 50;
+const DEMAND_MAX = 4;
+
+/** The kept card with a duplicate's report merged in: its sources after the kept ones, its reporter and followers following, the demand up by one. Pure. */
+export function mergeFields(kept: CardFields, dup: CardFields, dupId: string): CardFields {
+  let sources = kept.sources;
+  for (const source of dup.sources) sources = appendSource(sources, source);
+  const who = [dup.reporter?.id ?? "", ...dup.followers].map((v) => ident(v)).filter(Boolean);
+  return {
+    ...kept,
+    sources,
+    followers: [...new Set([...kept.followers, ...who])].slice(0, MAX_FOLLOWERS),
+    demand: (kept.demand ?? 1) + 1,
+    merged: [...(kept.merged ?? []), { id: dupId }].slice(-MAX_MERGED),
+  };
+}
+
+/** The kept card without what a merge added: the duplicate's sources (never the first), its followers (but not the kept card's own reporter), one demand. Pure. */
+export function unmergeFields(kept: CardFields, dup: CardFields, dupId: string): CardFields {
+  const gone = new Set((dup.sources ?? []).map((s) => JSON.stringify(Object.entries(s).sort(([a], [b]) => (a < b ? -1 : 1)))));
+  const first = kept.sources[0];
+  const own = new Set([kept.reporter?.id ?? ""]);
+  const leaving = new Set([dup.reporter?.id ?? "", ...dup.followers].map((v) => ident(v)));
+  return {
+    ...kept,
+    sources: kept.sources.filter((s, i) => i === 0 || s === first || !gone.has(JSON.stringify(Object.entries(s).sort(([a], [b]) => (a < b ? -1 : 1))))),
+    followers: kept.followers.filter((v) => own.has(v) || !leaving.has(v)),
+    demand: Math.max(1, (kept.demand ?? 1) - 1),
+    merged: (kept.merged ?? []).filter((m) => m.id !== dupId),
+  };
+}
+
+/** A triage record with its demand sub-score moved by `delta` (0 to 4) and the priority scored again; the record as it was when it has no sub-scores. Pure. */
+export function withDemand(record: TriageRecord | null, delta: number): TriageRecord | null {
+  const detail = record?.urgencyDetail;
+  if (!record || !detail) return record;
+  const demand = Math.min(DEMAND_MAX, Math.max(0, detail.subScores.demand + delta));
+  const subScores = { ...detail.subScores, demand };
+  return { ...record, urgencyDetail: { priority: scorePriority(subScores, { weights: SCORING_DEFAULTS.weights, bands: SCORING_DEFAULTS.bands }).priority, subScores } };
 }

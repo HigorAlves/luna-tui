@@ -4,10 +4,7 @@
 import { CARD_EVENT_NAMES, type CardEventName } from "@hardness/contracts";
 
 /** Names the diagram has and the machine cannot produce yet, with the wave that will. */
-export const PENDING_EVENTS: Readonly<Partial<Record<CardEventName, number>>> = {
-  // `card.merged` is a card merged into another by dedup: nothing merges cards before wave 14.
-  "card.merged": 14,
-};
+export const PENDING_EVENTS: Readonly<Partial<Record<CardEventName, number>>> = {};
 
 const KNOWN: ReadonlySet<string> = new Set(CARD_EVENT_NAMES);
 
