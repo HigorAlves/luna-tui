@@ -5415,8 +5415,14 @@ mod slack_tests {
         press(&mut app, KeyCode::Char('S'));
         assert!(app.slack_catalog_pending, "the fetch started when the view opened");
         assert!(app.slack_catalog_loading(), "and has not landed yet");
-        let landed = app.stream.recv_timeout(std::time::Duration::from_secs(5)).expect("the catalogue arrives on the stream");
-        assert!(matches!(landed, Incoming::SlackCatalog { .. }));
+        // The fake machine's own event stream shares this channel: on a slow runner one of its messages can land first, so wait for the catalogue itself.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let landed = loop {
+            let message = app.stream.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())).expect("the catalogue arrives on the stream");
+            if matches!(message, Incoming::SlackCatalog { .. }) {
+                break message;
+            }
+        };
         app.tx.send(landed).unwrap();
         app.pump();
         assert!(!app.slack_catalog_loading() && !app.slack_catalog_pending);
