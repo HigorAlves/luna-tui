@@ -609,6 +609,8 @@ export const PlanContext = z.object({
   rollback: z.string().optional(),
   cases: z.array(TestCase).optional(),
   gaps: z.array(z.string()).optional(),
+  /** What coverage found wrong with the last scenarios (criteria with no edge or failure scenario, a "does not pin"), for the designer's next round. */
+  coverage_notes: z.array(z.string()).optional(),
   round: z.number().int().optional(),
   /** What plan_check found wrong with the last plan, for the planner's next round. */
   review: z.array(z.string()).optional(),

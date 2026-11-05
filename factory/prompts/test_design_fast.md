@@ -13,6 +13,9 @@ Goal: {{task.goal}}
 ## Criteria no scenario names yet
 {{context.plan.gaps}}
 
+What coverage found wrong with the last scenarios (a criterion with no scenario, one that names a limit or an error and has no edge or failure scenario, scenarios that do not pin their criterion):
+{{context.plan.coverageNotes}}
+
 If this lists criteria, an earlier round of scenarios missed them: write scenarios for each, keeping the ones that already hold. These were the earlier scenarios:
 {{context.plan.cases}}
 

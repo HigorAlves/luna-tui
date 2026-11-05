@@ -22,6 +22,38 @@ describe("renderDecision", () => {
   });
 });
 
+describe("coverage_check's state", () => {
+  const plan = {
+    record: null, brief: "", assumptions: [], slices: [],
+    criteria: ["A coupon applies once", "An expired coupon is refused", "The page has a title"],
+    cases: [
+      { id: "S1", title: "once", criterion: "A coupon applies once", criterion_ref: "C1", type: "happy", given: "a cart", when: "applied twice", then: "it counts once", approach: "x" },
+      { title: "v1 case", criterion: "An expired coupon is refused", approach: "apply an expired coupon and read the error" },
+    ],
+    // What the planner and the code map said never reaches it, even when a caller sends it.
+    map: { components: ["SECRET MAP"], files: [], entry_points: [], owners: [], confidence: 0.5 },
+  };
+  const state = (over: Record<string, unknown> = {}) => stateOf({ pack: "coverage_check", task: { title: "T", description: "D" }, context: { plan: { ...plan, ...over } } } as unknown as StageInput);
+
+  it("lists the criteria with their ids and each scenario with the criterion it names, as given/when/then (a v1 case by its approach)", () => {
+    const { description } = state();
+    expect(description).toContain("Criteria:\nC1: A coupon applies once\nC2: An expired coupon is refused\nC3: The page has a title");
+    expect(description).toContain("S1 [happy] -> C1: given a cart, when applied twice, then it counts once");
+    expect(description).toContain("(no id) [happy] -> C2: apply an expired coupon and read the error");
+    expect(description).not.toMatch(/SECRET MAP|Code map|Slices|Brief/);
+  });
+
+  it("says nothing names a criterion by its id, and the scenarios when there are none", () => {
+    expect(state().description).toContain("No scenario names: C3");
+    expect(state({ cases: [] }).description).toContain("Scenarios:\n(none)");
+  });
+
+  it("leaves every other pack's state as it was", () => {
+    const other = stateOf({ pack: "plan_check", task: { title: "T", description: "D" }, context: { plan: { ...plan, brief: "B" } } } as unknown as StageInput);
+    expect(other.description).toContain("Brief: B");
+  });
+});
+
 describe("stateOf", () => {
   it("prefers context.issue and falls back to the task's title and description", () => {
     const base = { task: { title: "T", description: "D" }, context: {} } as unknown as StageInput;

@@ -24,7 +24,9 @@ import {
   type TestCase,
   type Verdict,
   applyPolicy,
-  coverageGaps,
+  type Coverage,
+  coverageOf,
+  criteriaOf,
   maxRisk,
   planOf,
   riskOf,
@@ -48,7 +50,7 @@ export interface PlanDeps {
   /** Runs a decision pack on a plan context and answers its answer; null when no decision can run (agents off, no runtime). Read at call time: main.ts binds it late. */
   decide: ((pack: DecisionPackName, plan: PlanContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** Each repo's luna.yaml bars for the decisions. */
-  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { plan: { coverage_rounds: number; plan_check_retries: number }; triage?: FactoryConfig["triage"]; graph?: FactoryConfig["graph"] } }> };
+  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { plan: { coverage_rounds: number; plan_check_retries: number; coverage_score_min?: number }; triage?: FactoryConfig["triage"]; graph?: FactoryConfig["graph"] } }> };
   /** The machine's code graphs: a repo with one (and its luna.yaml `policy.graph` on) gets a code map before the plan. */
   graph?: {
     stampOf(repoPath: string): Promise<unknown | null>;
@@ -58,7 +60,7 @@ export interface PlanDeps {
   log?: (line: string) => void;
 }
 
-type Judged = { verdict: Verdict | "skipped"; problems: string[]; answer: Record<string, unknown> | null; recordId?: string };
+type Judged = { verdict: Verdict | "skipped"; problems: string[]; answer: Record<string, unknown> | null; recordId?: string; verdicts?: Record<string, Verdict> };
 
 const score = (answer: Record<string, unknown>, question: string): number => Number((answer[question] as { score?: number } | undefined)?.score ?? 0);
 const flag = (answer: Record<string, unknown>, question: string): boolean | null => {
@@ -116,6 +118,7 @@ export function planStage(deps: PlanDeps): StageRunner {
     // The repo's luna.yaml `plan.coverage_rounds` and `plan.plan_check_retries`; the diagram's defaults equal the constants below.
     const repoPlan = (await deps.policies.for(task.repoPath)).factory?.plan;
     const coverageRounds = repoPlan?.coverage_rounds ?? COVERAGE_ROUNDS;
+    const coverageBar = repoPlan?.coverage_score_min ?? FACTORY_DEFAULTS.plan.coverage_score_min;
     const planCheckRetries = repoPlan?.plan_check_retries ?? PLAN_ROUNDS;
 
     /** A sub-run's context: a derived run id, nothing that ties it to the stage's own container or engine. */
@@ -132,10 +135,10 @@ export function planStage(deps: PlanDeps): StageRunner {
         // risk_score's complexity is advice, and its absence must not cost the card its risk score.
         const asked = PACKS[pack];
         const questions = pack === "risk_score" && answer.complexity === undefined ? Object.fromEntries(Object.entries(asked.questions).filter(([name]) => name !== "complexity")) : asked.questions;
-        const { overall } = applyPolicy({ questions, policy: asked.policy }, answer, overrides);
+        const { overall, verdicts } = applyPolicy({ questions, policy: asked.policy }, answer, overrides);
         const problems = problemsOf(pack, answer, Boolean(plan.map));
         const recordId = recordIdOf(answer);
-        return { verdict: overall === "proceed" && problems.length > 0 ? "flag" : overall, problems, answer, ...(recordId ? { recordId } : {}) };
+        return { verdict: overall === "proceed" && problems.length > 0 ? "flag" : overall, problems, answer, verdicts, ...(recordId ? { recordId } : {}) };
       } catch (error) {
         log(`plan stage: ${pack} skipped for task ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
         return { verdict: "skipped", problems: [], answer: null };
@@ -202,6 +205,9 @@ export function planStage(deps: PlanDeps): StageRunner {
     let extras: { steps?: PlanStep[]; outOfScope: string[]; migration?: string; flags?: string[] } = { outOfScope: [] };
     let cases: TestCase[] = [];
     let gaps: string[] = [];
+    /** What coverage found wrong with the last scenarios, told to the designer's next round and shown at the gate when rounds ran out. */
+    let notes: string[] = [];
+    let report: Coverage = coverageOf([], []);
     let coverage: Judged = { verdict: "skipped", problems: [], answer: null };
     let planCheck: Judged = { verdict: "skipped", problems: [], answer: null };
     const flagged = new Set<string>();
@@ -240,26 +246,44 @@ export function planStage(deps: PlanDeps): StageRunner {
       // The test designer, told the criteria it missed until none is left or the rounds run out.
       let roundsOnThisPlan = 0;
       gaps = [];
+      notes = [];
       cases = [];
       coverage = { verdict: "skipped", problems: [], answer: null };
+      const criteria = criteriaOf(plan.criteria);
+      const textOf = (ids: string[]) => ids.map((id) => criteria.find((c) => c.id === id)?.text ?? id);
       for (;;) {
         roundsOnThisPlan += 1;
         testRuns += 1;
         const designed = await deps.runPack(lane === "fast" ? "test_design_fast" : "test_design", sub(`tests-${testRuns}`), {
           // The designer reads the criteria and the goal only: no steps, brief, assumptions, map or risk.
-          plan: { record: task.record ?? null, brief: "", criteria: plan.criteria, assumptions: [], slices: [], ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), round: roundsOnThisPlan },
+          plan: { record: task.record ?? null, brief: "", criteria: plan.criteria, assumptions: [], slices: [], ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), ...(notes.length ? { coverage_notes: notes } : {}), round: roundsOnThisPlan },
         });
         if (designed.outcome !== "pass") return ended(designed);
         results.push(designed);
         cases = ((designed.detail?.cases as TestCase[] | undefined) ?? []).filter((c) => c && typeof c === "object");
-        gaps = coverageGaps(plan.criteria, cases);
+        report = coverageOf(criteria, cases);
+        gaps = textOf(report.gaps);
+        notes = [];
         // The fast lane asks nothing of coverage_check and designs once: a criterion left unnamed is flagged below.
         if (lane === "fast") break;
-        coverage = await judge("coverage_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}), ...mapPart, ...riskPart });
-        if (gaps.length === 0 || roundsOnThisPlan >= coverageRounds) break;
+        // coverage_check reads ids only: the criteria with their ids and the scenarios, no steps, brief, map, risk or record.
+        coverage = await judge("coverage_check", { record: null, brief: "", criteria: plan.criteria, assumptions: [], slices: [], cases });
+        // A typed decision cannot name a criterion: a confident "untestable" leaves the criteria with no scenario out of the score and the loop.
+        const untestable = coverage.answer && flag(coverage.answer, "untestable") === true && coverage.verdicts?.untestable === "proceed" ? report.gaps : [];
+        report = coverageOf(criteria, cases, { untestable });
+        const open = report.gaps.filter((id) => !untestable.includes(id));
+        gaps = textOf(open);
+        const notPinned = coverage.answer && flag(coverage.answer, "pins") === false && coverage.verdicts?.pins === "proceed";
+        notes = [
+          ...open.map((id) => `${id} has no scenario: ${textOf([id])[0]}`),
+          ...report.thin.map((id) => `${id} names a limit or an error and has no edge or failure scenario: ${textOf([id])[0]}`),
+          ...(notPinned ? ["the scenarios do not each pin the criterion they name: make each fail if its criterion were not met"] : []),
+        ];
+        if ((notes.length === 0 && report.score >= coverageBar) || roundsOnThisPlan >= coverageRounds) break;
       }
-      if (lane === "fast" && gaps.length > 0) flagged.add("coverage");
-      if (gaps.length > 0 && coverage.verdict === "proceed") coverage = { ...coverage, verdict: "flag" };
+      const underBar = report.score < coverageBar;
+      if (lane === "fast" && report.gaps.length > 0) flagged.add("coverage");
+      if ((gaps.length > 0 || notes.length > 0 || underBar) && coverage.verdict === "proceed") coverage = { ...coverage, verdict: "flag" };
 
       // The plan against the record: a finding sends the planner back, within the cap.
       planCheck = await judge("plan_check", { record: task.record ?? null, ...plan, cases, ...(gaps.length ? { gaps } : {}), ...mapPart, ...riskPart });
@@ -299,6 +323,8 @@ export function planStage(deps: PlanDeps): StageRunner {
         // The v2.2 Plan, beside the keys an open gate from before this wave carries. Its version is the planner's run count.
         plan: planOf({ brief: plan!.brief, criteria: plan!.criteria, assumptions: plan!.assumptions, slices: extras.steps ?? plan!.slices, rollback: plan!.rollback, outOfScope: extras.outOfScope, version: planRuns, ...(extras.migration !== undefined ? { migration: extras.migration } : {}), ...(extras.flags !== undefined ? { flags: extras.flags } : {}) }),
         cases,
+        // Coverage by criterion id: what each criterion's scenarios are, the score against the repo's bar, and what is still open.
+        coverageReport: { score: report.score, bar: coverageBar, gaps: report.gaps, thin: report.thin, untestable: report.untestable, open: notes, per: report.per.map((p) => ({ id: p.criterion.id, text: p.criterion.text, scenarios: p.scenarios, types: p.types })) },
         risk,
         verdicts,
         // The decisions' records, so the gate's outcome can be written onto them (decision-truth.ts).

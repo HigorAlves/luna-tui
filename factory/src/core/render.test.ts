@@ -222,6 +222,12 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.plan, input: { ...input, plan: null, context: { ...input.context, plan: { ...plan, risk: undefined } } } as never, template: "{{context.plan.risk}}" })).toContain("(none)");
   });
 
+  it("tells the designer what coverage found wrong with its last scenarios, or none", () => {
+    const render = (notes?: string[]) => renderPrompt({ pack: PACKS.test_design, input: { ...input, context: { ...input.context, plan: { record: null, brief: "", criteria: [], assumptions: [], slices: [], ...(notes ? { coverage_notes: notes } : {}) } } } as never, template: "{{context.plan.coverageNotes}}" });
+    expect(render(["C2 has no scenario: x", "the scenarios do not each pin the criterion they name"])).toContain("- C2 has no scenario: x\n- the scenarios do not each pin the criterion they name");
+    expect(render()).toContain("(none)");
+  });
+
   it("renders the designer's input: the goal and the criteria with their ids, and none of the plan's steps, brief or assumptions", () => {
     const record = { source: "manual", kind: "bug", goal: "Stop the panic", size: "S", urgency: "high", risk: "medium", signals: {}, qa: [], decision: "plan", reason: "r", at: "t", model: "m" };
     const designer = { ...input, stage: "test_design", pack: "test_design", task: { ...input.task, record }, plan: { brief: "THE BRIEF", criteria: ["no panic", "stays selected"], assumptions: ["AN ASSUMPTION"], slices: [{ title: "A STEP", est_loc: 5, touchpoints: ["a.rs"], acceptance: ["ok"] }] } };

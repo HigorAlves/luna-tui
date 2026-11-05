@@ -360,6 +360,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{context.plan.shortlist}}": shortlistText(input.context.plan?.shortlist),
     "{{context.plan.risk}}": riskText(input.context.plan?.risk),
     "{{plan.risk}}": riskText(input.plan?.risk),
+    "{{context.plan.coverageNotes}}": bullets(input.context.plan?.coverage_notes),
     "{{context.plan.gaps}}": bullets(input.context.plan?.gaps),
     "{{context.plan.review}}": bullets(input.context.plan?.review),
     "{{context.plan.cases}}": bullets((input.context.plan?.cases ?? []).map(scenarioLine)),

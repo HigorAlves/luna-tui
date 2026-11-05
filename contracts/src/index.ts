@@ -3,6 +3,7 @@ import { z } from "zod";
 
 export * from "./api.ts";
 export * from "./stage.ts";
+export * from "./coverage.ts";
 export * from "./plan.ts";
 export * from "./card.ts";
 export * from "./finding.ts";

@@ -18,59 +18,32 @@
   "context": {
     "projectContext": null,
     "plan": {
-      "record": {
-        "source": "example-tracker:EX-1",
-        "kind": "feature",
-        "goal": "Let people export their cart as CSV",
-        "size": "small",
-        "urgency": "normal",
-        "risk": "low",
-        "signals": {
-          "kind": {
-            "answer": "feature",
-            "confidence": 0.9
-          }
-        },
-        "qa": [],
-        "decision": "plan",
-        "reason": "ready",
-        "at": "2026-11-01T09:00:00.000Z",
-        "model": "fixture"
-      },
-      "brief": "Add a CSV export button to the cart page.",
+      "record": null,
+      "brief": "",
       "criteria": [
         "Exports are fast",
         "The file lists each line with its price"
       ],
       "assumptions": [],
-      "slices": [
-        {
-          "title": "Export endpoint and button",
-          "est_loc": 60,
-          "touchpoints": [
-            "src/cart/export.ts",
-            "src/cart/CartPage.tsx"
-          ],
-          "acceptance": [
-            "GET /cart/export.csv returns one row per line",
-            "The button downloads it"
-          ]
-        }
-      ],
-      "rollback": "Revert the PR; nothing is stored.",
+      "slices": [],
       "cases": [
         {
           "title": "Looks fine",
           "criterion": "Exports are fast",
-          "approach": "Open the app and check that it looks fast and fine."
+          "approach": "Open the app and check that it looks fast and fine.",
+          "id": "S1",
+          "criterion_ref": "C1",
+          "type": "happy"
         },
         {
           "title": "Works",
           "criterion": "The file lists each line with its price",
-          "approach": "Click Export and make sure it works."
+          "approach": "Click Export and make sure it works.",
+          "id": "S2",
+          "criterion_ref": "C2",
+          "type": "happy"
         }
-      ],
-      "gaps": []
+      ]
     }
   },
   "limits": {

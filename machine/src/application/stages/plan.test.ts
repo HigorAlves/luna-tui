@@ -29,6 +29,14 @@ const cased = (...criteria: Array<string | null>): StageResult => ({
   run: { containerId: "tests-container", transcriptPath: "/runs/r1-tests/transcript.log" },
 });
 
+/** v2 scenarios by criterion id: `S1`... in order, each `[ref, type]` (type happy when left out). */
+const scenes = (...rows: Array<[string] | [string, string]>): StageResult => ({
+  outcome: "pass",
+  detail: { summary: "designed", cases: rows.map(([ref, type], i) => ({ id: `S${i + 1}`, title: `s${i + 1}`, criterion: null, criterion_ref: ref, type: type ?? "happy", approach: "a" })) },
+  events: [{ at: "t", kind: "stage.note", payload: { from: "tests" } }],
+});
+const notPinned = { pins: { value: false, p: 0.05 }, redundancy: { score: 0, confidence: 0.9 }, untestable: { value: false, p: 0.05 } };
+
 const good = {
   risk_score: { blast_radius: { score: 0, confidence: 0.9 }, reversibility: { score: 0, confidence: 0.9 }, data_sensitivity: { score: 0, confidence: 0.9 }, complexity: { choice: "S", confidence: 0.9 } },
   coverage_check: { pins: { value: true, p: 0.95 }, redundancy: { score: 0, confidence: 0.9 }, untestable: { value: false, p: 0.05 } },
@@ -87,7 +95,7 @@ describe("planStage's code map", () => {
     const result = await run(context());
     expect(calls.map((c) => [c.pack, c.runId])).toEqual([["code_map", "r1-map"], ["plan", "r1-plan"], ["test_design", "r1-tests-1"]]);
     expect(calls[1]!.plan).toMatchObject({ record, map: theMap });
-    for (const d of decided) expect(d.plan).toMatchObject({ map: theMap });
+    for (const d of decided.filter((k) => k.pack !== "coverage_check")) expect(d.plan).toMatchObject({ map: theMap });
     expect(result.detail).toMatchObject({ map: theMap });
     expect(result.events).toContainEqual({ at: "t", kind: "stage.note", payload: { from: "map" } });
     expect(result.usage?.turns).toBe(6);
@@ -244,7 +252,7 @@ describe("planStage", () => {
     await run(context());
     // The designer is handed the criteria and the record's goal, never the steps, the brief, the assumptions, the map or the risk.
     expect(calls[1]!.plan).toEqual({ record, brief: "", criteria: ["no panic", "stays selected"], assumptions: [], slices: [], round: 1 });
-    for (const d of decided.filter((k) => k.pack !== "risk_score")) expect(d.plan).toMatchObject({ record, brief: "Guard the empty list", slices, cases: [{ title: "case 0" }, { title: "case 1" }] });
+    for (const d of decided.filter((k) => k.pack === "plan_check")) expect(d.plan).toMatchObject({ record, brief: "Guard the empty list", slices, cases: [{ title: "case 0" }, { title: "case 1" }] });
     expect(decided[0]!.repo).toBe("/repo");
   });
 
@@ -253,7 +261,7 @@ describe("planStage", () => {
     await run(context());
     const rounds = calls.filter((c) => c.pack === "test_design");
     expect(rounds).toHaveLength(2);
-    expect(rounds[1]!.plan).toEqual({ record, brief: "", criteria: ["no panic", "stays selected"], assumptions: [], slices: [], cases: [{ title: "case 0", criterion: "no panic", approach: "run it" }], gaps: ["stays selected"], round: 2 });
+    expect(rounds[1]!.plan).toEqual({ record, brief: "", criteria: ["no panic", "stays selected"], assumptions: [], slices: [], cases: [{ title: "case 0", criterion: "no panic", approach: "run it" }], gaps: ["stays selected"], coverage_notes: ["C2 has no scenario: stays selected"], round: 2 });
     const fast = setup({}, withGraph);
     await fast.run(context({ task: fastTask }));
     expect(fast.calls.find((c) => c.pack === "test_design_fast")!.plan).toEqual({ record: fastTask.record, brief: "", criteria: ["no panic", "stays selected"], assumptions: [], slices: [], round: 1 });
@@ -277,7 +285,7 @@ describe("planStage", () => {
     const { run, calls, decided } = setup({ answers: { plan_check: [bad, good.plan_check] } });
     await run(context());
     for (const c of calls.filter((k) => k.pack === "plan")) expect(c.plan).toMatchObject({ risk: { level: "medium", product: 1 } });
-    for (const d of decided.filter((k) => k.pack !== "risk_score")) expect(d.plan).toMatchObject({ risk: { level: "medium" } });
+    for (const d of decided.filter((k) => k.pack === "plan_check")) expect(d.plan).toMatchObject({ risk: { level: "medium" } });
     expect(decided.filter((d) => d.pack === "risk_score")).toHaveLength(1);
   });
 
@@ -287,8 +295,81 @@ describe("planStage", () => {
     expect(calls.map((c) => [c.pack, c.runId])).toEqual([["plan", "r1-plan"], ["test_design", "r1-tests-1"], ["test_design", "r1-tests-2"]]);
     expect(calls[2]!.plan).toMatchObject({ gaps: ["stays selected"], round: 2, cases: [{ criterion: "no panic" }] });
     expect(decided.filter((d) => d.pack === "coverage_check")).toHaveLength(2);
-    expect(decided.find((d) => d.pack === "coverage_check")!.plan.gaps).toEqual(["stays selected"]);
+    // coverage_check is told no gap: it reads the criteria and the scenarios and the machine counts the rest.
+    expect(decided.find((d) => d.pack === "coverage_check")!.plan).toMatchObject({ criteria: ["no panic", "stays selected"], cases: [{ criterion: "no panic" }] });
     expect(result.detail).toMatchObject({ rounds: { tests: 2, plan: 1 }, flagged: [], cases: [{ criterion: "no panic" }, { criterion: "stays selected" }] });
+  });
+
+  describe("coverage by id", () => {
+    const limited = planned({ criteria: ["no panic", "locks after five failures"] });
+
+    it("sends the designer back when a criterion that names a limit or an error has no edge or failure scenario, with what is missing", async () => {
+      const { run, calls } = setup({ plan: [limited], test_design: [scenes(["C1"], ["C2"]), scenes(["C1"], ["C2"], ["C2", "failure"])] });
+      const result = await run(context());
+      expect(calls.filter((c) => c.pack === "test_design")).toHaveLength(2);
+      expect(calls[2]!.plan?.coverage_notes).toEqual([expect.stringMatching(/C2.*edge or failure/)]);
+      expect(calls[2]!.plan).toMatchObject({ round: 2, cases: [{ id: "S1" }, { id: "S2" }] });
+      expect(result.detail).toMatchObject({ rounds: { tests: 2 }, coverageReport: { score: 1, gaps: [], thin: [] }, flagged: [] });
+    });
+
+    it("sends the designer back when coverage_check confidently says a scenario does not pin its criterion", async () => {
+      const { run, calls, decided } = setup({ test_design: [scenes(["C1"], ["C2"])], answers: { coverage_check: [notPinned, good.coverage_check] } });
+      const result = await run(context());
+      expect(calls.filter((c) => c.pack === "test_design")).toHaveLength(2);
+      expect(calls[2]!.plan?.coverage_notes).toEqual([expect.stringMatching(/do not each pin/)]);
+      expect(decided.filter((d) => d.pack === "coverage_check")).toHaveLength(2);
+      expect(result.detail).toMatchObject({ verdicts: { coverage: "proceed" }, flagged: [] });
+    });
+
+    it("does not send the designer back for an unsure 'does not pin': that one is flagged for a person", async () => {
+      const unsure = { ...notPinned, pins: { value: false, p: 0.4 } };
+      const { run, calls } = setup({ test_design: [scenes(["C1"], ["C2"])], answers: { coverage_check: [unsure] } });
+      const result = await run(context());
+      expect(calls.filter((c) => c.pack === "test_design")).toHaveLength(1);
+      expect(result.detail).toMatchObject({ flagged: ["coverage"] });
+    });
+
+    it(`stops after ${COVERAGE_ROUNDS} rounds and the gate shows what is still open`, async () => {
+      const { run, calls } = setup({ test_design: [scenes(["C1"])] });
+      const result = await run(context());
+      expect(calls.filter((c) => c.pack === "test_design")).toHaveLength(COVERAGE_ROUNDS);
+      expect(result.detail).toMatchObject({ flagged: ["coverage"], coverageReport: { score: 0.5, gaps: ["C2"], open: [expect.stringMatching(/stays selected/)] } });
+    });
+
+    it("carries the per-criterion coverage, the score and the repo's bar on the gate", async () => {
+      const repo = { policies: { for: async () => ({ decisions: {}, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2, coverage_score_min: 0.6 } } }) } };
+      const { run } = setup({ test_design: [scenes(["C1"], ["C2"], ["C2", "edge"])] }, repo);
+      const result = await run(context());
+      expect(result.detail?.coverageReport).toEqual({
+        score: 1, bar: 0.6, gaps: [], thin: [], untestable: [], open: [],
+        per: [{ id: "C1", text: "no panic", scenarios: ["S1"], types: ["happy"] }, { id: "C2", text: "stays selected", scenarios: ["S2", "S3"], types: ["happy", "edge"] }],
+      });
+      const defaults = await setup({ test_design: [scenes(["C1"], ["C2"])] }).run(context());
+      expect(defaults.detail?.coverageReport).toMatchObject({ bar: 0.85 });
+    });
+
+    it("flags the gate when the score is under the bar even after the last round", async () => {
+      const repo = { policies: { for: async () => ({ decisions: {}, factory: { plan: { coverage_rounds: 1, plan_check_retries: 2, coverage_score_min: 0.9 } } }) } };
+      const result = await setup({ test_design: [scenes(["C1"])] }, repo).run(context());
+      expect(result.detail).toMatchObject({ flagged: ["coverage"], coverageReport: { score: 0.5, bar: 0.9 } });
+    });
+
+    it("leaves a criterion coverage_check confidently calls untestable out of the score and the loop", async () => {
+      const untestable = { ...good.coverage_check, untestable: { value: true, p: 0.95 } };
+      const { run, calls } = setup({ test_design: [scenes(["C1"])], answers: { coverage_check: [untestable] } });
+      const result = await run(context());
+      expect(calls.filter((c) => c.pack === "test_design")).toHaveLength(1);
+      expect(result.detail).toMatchObject({ coverageReport: { score: 1, gaps: ["C2"], untestable: ["C2"] }, flagged: ["coverage"] });
+    });
+
+    it("hands coverage_check the criteria with their ids and the scenarios, and no steps, brief, map, risk or record", async () => {
+      const { run, decided } = setup({ test_design: [scenes(["C1"], ["C2"])] }, withGraph);
+      await run(context());
+      const input = decided.find((d) => d.pack === "coverage_check")!.plan;
+      expect(input).toMatchObject({ record: null, brief: "", criteria: ["no panic", "stays selected"], assumptions: [], slices: [], cases: [{ id: "S1", criterion_ref: "C1" }, { id: "S2", criterion_ref: "C2" }] });
+      expect(input).not.toHaveProperty("map");
+      expect(input).not.toHaveProperty("risk");
+    });
   });
 
   it(`stops after ${COVERAGE_ROUNDS} designer rounds and goes on, flagging coverage`, async () => {

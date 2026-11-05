@@ -2,7 +2,7 @@
 // in plain words, then the rule that the answer is the JSON the schema asks for, with a confidence
 // per question. Jev gets the questions on its own wire (runtimes/jev/questions.ts); every other
 // runtime renders this text and asks for structured output on `answerJsonSchema(pack)`.
-import { type CheckContext, type EvidenceContext, type PlanContext, type Question, type QuestionSet, type ShipContext, type StageInput, scenarioText } from "@hardness/contracts";
+import { type CheckContext, type EvidenceContext, type PlanContext, type Question, type QuestionSet, type ShipContext, type StageInput, criteriaOf, scenarioText } from "@hardness/contracts";
 
 /** What a decision reads: the issue as intake sent it. */
 export type DecisionState = {
@@ -153,6 +153,20 @@ function checkTitle(check: CheckContext): string {
   }
 }
 
+/** What coverage_check reads: the criteria with their ids and the scenarios with the criterion each names, by id: no steps, brief, map or record. */
+export function renderCoverage(plan: PlanContext): string {
+  const criteria = criteriaOf(plan.criteria);
+  const idOf = (c: { criterion_ref?: string | null; criterion: string | null }) => c.criterion_ref ?? criteria.find((k) => k.text === c.criterion)?.id ?? "?";
+  const scenarios = (plan.cases ?? []).map((c) => `${c.id ?? "(no id)"} [${c.type ?? "happy"}] -> ${idOf(c)}: ${scenarioText(c)}`);
+  const named = new Set((plan.cases ?? []).map(idOf));
+  const unnamed = criteria.filter((c) => !named.has(c.id)).map((c) => c.id);
+  return [
+    `Criteria:\n${criteria.length ? criteria.map((c) => `${c.id}: ${c.text}`).join("\n") : "(none)"}`,
+    `Scenarios:\n${scenarios.length ? scenarios.join("\n") : "(none)"}`,
+    ...(unnamed.length ? [`No scenario names: ${unnamed.join(", ")}`] : []),
+  ].join("\n");
+}
+
 /** The issue intake sent, else a plan context rendered, else the task's own title and description. */
 export function stateOf(input: StageInput): DecisionState {
   const plan = input.context.plan;
@@ -162,6 +176,7 @@ export function stateOf(input: StageInput): DecisionState {
   if (ship) return { title: shipTitle(ship, input.task.title), description: renderShip(ship) };
   if (evidence) return { title: evidence.record ? `Evidence format: ${evidence.record.goal}` : "Evidence format", description: renderEvidence(evidence) };
   if (check) return { title: checkTitle(check), description: renderCheck(check) };
+  if (plan && input.pack === "coverage_check") return { title: "Coverage of the scenarios", description: renderCoverage(plan) };
   if (plan) return { title: plan.brief.split("\n")[0]!, description: renderPlan(plan) };
   const { title, description, labels, source, answers } = input.context.issue ?? { title: input.task.title, description: input.task.description };
   // What the person has answered so far reads as part of the ticket: the signals are read again with it.
