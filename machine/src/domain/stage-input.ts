@@ -1,5 +1,5 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, CodeMapAnswer, PlanRisk, type CheckContext, type CheckSpec, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type ChatTriageContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
@@ -81,6 +81,14 @@ export function approvedCases(approvals: ApprovalRow[]): TestCase[] {
   });
 }
 
+/** The approved cases as scenarios with ids: a case without one (a gate approved before v2.2) takes its position, `S1`... */
+export function approvedScenarios(approvals: ApprovalRow[]): Scenario[] {
+  const approved = approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
+  const criteria = criteriaOf(strings(approved?.requested.criteria));
+  const plan = Plan.safeParse(approved?.requested.plan);
+  return approvedCases(approvals).map((c, i) => scenarioOf(c, i, plan.success ? plan.data.acceptance_criteria : criteria));
+}
+
 export function buildStageInput(opts: {
   task: TaskRow;
   stage: TaskState;
@@ -101,6 +109,8 @@ export function buildStageInput(opts: {
   /** The repo's PIPELINE.md holds test_design's cases out of implementing's input, so the
    *  implementer cannot overfit to them; verifying still judges by them. */
   holdoutCases?: boolean;
+  /** For implementing: the tests Build's tests step wrote, one entry per scenario. */
+  scenarioTests?: { scenario: string; file: string }[];
   /** For e2e: the repo's QA targets from luna.yaml. */
   qaTargets?: QaTarget[];
   /** For implementing and verifying: the repo's checks from luna.yaml. */
@@ -167,7 +177,10 @@ export function buildStageInput(opts: {
       testCases:
         pack === "verifying" || pack === "e2e" || pack === "video_script" || pack === "video_fix" || pack === "recording" || (pack === "implementing" && !opts.holdoutCases)
           ? approvedCases(approvals)
-          : [],
+          : pack === "build_tests"
+            ? approvedScenarios(approvals)
+            : [],
+      ...(pack === "implementing" && opts.scenarioTests?.length ? { scenarioTests: opts.scenarioTests } : {}),
       baseCommit: opts.baseCommit ?? null,
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,

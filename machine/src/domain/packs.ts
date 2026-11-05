@@ -12,6 +12,8 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   // The plan stage opens with the code map, read from the repo's graph.
   code_map: ["test_design"],
   test_design_fast: ["test_design"],
+  // Build's tests step runs inside the implementing stage, before the implementer.
+  build_tests: ["implementing"],
   // The inboxes' packs and the decision pack callers run on demand: no task, so no task state.
   slack_triage: [],
   jira_intake: [],

@@ -319,6 +319,34 @@ export async function commitAll(path: string, message: string): Promise<string |
   return headCommit(path);
 }
 
+/** Stages everything a stage left in the worktree (new files too) and reads what that adds to HEAD: the name-status and the unified diff. */
+export async function stagePending(path: string): Promise<{ nameStatus: string; diff: string }> {
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "add", "-A"]);
+  const [nameStatus, diff] = await Promise.all([
+    execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--name-status", "HEAD"]),
+    execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--no-color", "--no-ext-diff", "HEAD"]),
+  ]);
+  return { nameStatus, diff };
+}
+
+/** Drops everything uncommitted and untracked in the worktree (a stage's work the machine refused). */
+export async function discardPending(path: string): Promise<void> {
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "reset", "-q", "--hard", "HEAD"]);
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "clean", "-q", "-fd"]);
+}
+
+/** The newest of the last 200 commits on the checked-out branch whose subject is exactly `subject`, with what it changed; null when none. */
+export async function findCommitBySubject(path: string, subject: string): Promise<{ sha: string; nameStatus: string; diff: string } | null> {
+  const log = await execOrThrow("git", [...HOST_GIT, "-C", path, "log", "-n", "200", "--format=%H%x09%s"]);
+  const sha = log.split("\n").map((l) => l.split("\t")).find(([, s]) => s === subject)?.[0];
+  if (!sha) return null;
+  const [nameStatus, diff] = await Promise.all([
+    execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--name-status", "--format=", sha]),
+    execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--no-color", "--no-ext-diff", "--format=", sha]),
+  ]);
+  return { sha, nameStatus, diff };
+}
+
 /** What the worktree has uncommitted or untracked, one `git status --porcelain` line each. */
 export async function dirtyFiles(path: string): Promise<string[]> {
   const status = await execOrThrow("git", [...HOST_GIT, "-C", path, "status", "--porcelain"]);

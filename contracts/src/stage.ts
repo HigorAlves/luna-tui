@@ -115,6 +115,8 @@ export const PackId = z.enum([
   "plan_fast",
   "test_design_fast",
   "implementing",
+  // Build's tests step: one failing test per scenario, written before the implementer runs; it runs in the implementing state.
+  "build_tests",
   "verifying",
   "e2e",
   "evidence",
@@ -927,6 +929,8 @@ export const StageInput = z.object({
     projectContext: z.string().nullable(),
     /** The cases approved at the test check, for implementing and verifying. */
     testCases: z.array(z.union([TestCase, LegacyTestCase])).optional(),
+    /** Build's tests step: the test each scenario got (its id and the test file), for the implementer to build against and never weaken. */
+    scenarioTests: z.array(z.object({ scenario: z.string(), file: z.string() })).optional(),
     /** Where the task branch forked from the repo; verifying diffs against it. */
     baseCommit: z.string().nullable().optional(),
     /** For ci_watch: what the host fetched, since the sandbox has no gh credential. */

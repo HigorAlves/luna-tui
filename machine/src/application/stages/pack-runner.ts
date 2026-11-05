@@ -132,6 +132,8 @@ export interface AgentExtra {
   baseCommit?: string;
   /** pr_reply: the thread and the pack, built by the host; a reviewer's text only ever rides here. */
   ship?: ShipContext;
+  /** implementing: the tests Build's tests step made, one per scenario. */
+  scenarioTests?: { scenario: string; file: string }[];
   /** Extra mounts for the container, after the worktree's own (the critic's /evidence, read-only). */
   mounts?: CredentialMount[];
 }
@@ -235,6 +237,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     ...(extra.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}),
     ...(extra.coverage ? { coverage: extra.coverage } : {}),
     holdoutCases: policy.holdoutCases,
+    ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
     // The recorder drives the one target the film is recorded against; the e2e pack picks from the repo's list.
     qaTargets: pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : policy.qaTargets,
     ...(extra.video ? { video: extra.video } : {}),

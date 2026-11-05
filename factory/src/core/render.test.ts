@@ -26,6 +26,13 @@ describe("the implementing prompt's plan fallback", () => {
   it("is not offered on a card that has an approved plan: the plan is the plan", () => {
     expect(renderPrompt({ pack: PACKS.implementing, input, template, projectContext: null })).not.toMatch(/ticket and the prior findings are the plan/);
   });
+  it("lists the tests the tests step wrote by scenario, and says they must not be weakened", () => {
+    const withTests = { ...input, context: { ...input.context, scenarioTests: [{ scenario: "S1", file: "web/cart.test.ts" }] } } as StageInput;
+    const prompt = renderPrompt({ pack: PACKS.implementing, input: withTests, template, projectContext: null });
+    expect(prompt).toMatch(/S1: web\/cart\.test\.ts/);
+    expect(prompt).toMatch(/must not weaken/i);
+    expect(renderPrompt({ pack: PACKS.implementing, input, template, projectContext: null })).not.toMatch(/must not weaken/i);
+  });
   it("stays for a PR task, which has no plan", () => {
     const pr = { ...input, plan: null } as StageInput;
     expect(renderPrompt({ pack: PACKS.implementing, input: pr, template, projectContext: null })).toMatch(/ticket and the prior findings are the plan/);

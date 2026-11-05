@@ -78,6 +78,15 @@ describe("buildStageInput's pack and plan", () => {
     expect(buildStageInput({ task, stage: "test_design", pack: "plan", attempt: 1, approvals: [], priorFindings: [], plan: planContext }).context.plan).toEqual(planContext);
   });
 
+  it("hands the test writer the scenarios with ids (a v1 gate's cases by position), and the implementer the tests the writer made", () => {
+    const cases = [{ title: "t", criterion: "c1", approach: "run a.test.ts" }, { title: "u", criterion: "c1", approach: "run b.test.ts" }];
+    const approvals = [approval({ requested: { brief: "b", criteria: ["c1"], assumptions: [], slices, cases } })];
+    const writer = buildStageInput({ task, stage: "implementing", pack: "build_tests", attempt: 1, approvals, priorFindings: [] });
+    expect(writer.context.testCases).toMatchObject([{ id: "S1", criterion_ref: "C1" }, { id: "S2", criterion_ref: "C1" }]);
+    const scenarioTests = [{ scenario: "S1", file: "a.test.ts" }];
+    expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals, priorFindings: [], scenarioTests }).context.scenarioTests).toEqual(scenarioTests);
+  });
+
   it("reads rollback and the cases from the approved plan, and the cases reach implementing without a test check", () => {
     const cases = [{ title: "t", criterion: "c1", approach: "run a.test.ts" }];
     const approvals = [approval({ requested: { brief: "b", criteria: ["c1"], assumptions: [], slices, rollback: "revert it", cases } })];
@@ -219,9 +228,9 @@ describe("buildStageInput", () => {
     const input = buildStageInput({ task, stage: "triage", attempt: 1, approvals: [], priorFindings: [] });
     expect(input.plan).toBeNull();
     expect(Object.keys(PACK_LIMITS).sort()).toEqual(
-      ["addressing", "chat_triage", "ci_watch", "code_map", "coverage_check", "e2e", "e2e_failure_cause", "eval_judge", "evidence", "evidence_format", "finding_classify", "implementing", "jira_intake", "plan", "plan_check", "plan_fast", "red_check", "reviewing", "reviewing_memory", "risk_score", "scope_check", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying", "video_fix", "video_qa", "video_script", "recording", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "pr_reply"].sort(),
+      ["addressing", "build_tests", "chat_triage", "ci_watch", "code_map", "coverage_check", "e2e", "e2e_failure_cause", "eval_judge", "evidence", "evidence_format", "finding_classify", "implementing", "jira_intake", "plan", "plan_check", "plan_fast", "red_check", "reviewing", "reviewing_memory", "risk_score", "scope_check", "setup", "slack_triage", "test_design", "test_design_fast", "triage", "triage_signals", "verifying", "video_fix", "video_qa", "video_script", "recording", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "pr_reply"].sort(),
     );
-    expect(Object.keys(PACK_LIMITS)).toHaveLength(38);
+    expect(Object.keys(PACK_LIMITS)).toHaveLength(39);
   });
 
   it("builds slack_triage's input around a synthetic task: the batch in context.slack, no plan, no branch, the pack's limits", () => {
@@ -303,7 +312,7 @@ describe("buildStageInput", () => {
 
   it("hands implementing and verifying the repo's checks from luna.yaml, and no other pack", () => {
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }];
-    const build = (stage: Exclude<PackId, "plan" | "code_map" | "plan_fast" | "test_design_fast" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "evidence_format" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning" | "pr_reply" | "video_script" | "recording" | "video_qa" | "video_fix" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
+    const build = (stage: Exclude<PackId, "build_tests" | "plan" | "code_map" | "plan_fast" | "test_design_fast" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "evidence_format" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning" | "pr_reply" | "video_script" | "recording" | "video_qa" | "video_fix" | "slack_triage" | "jira_intake" | "triage_signals" | "eval_judge" | "chat_triage">) => buildStageInput({ task, stage, attempt: 1, approvals: [], priorFindings: [], checks });
     expect(build("implementing").context.checks).toEqual(checks);
     expect(build("verifying").context.checks).toEqual(checks);
     expect(build("triage").context.checks).toBeUndefined();

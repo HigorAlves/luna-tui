@@ -33,7 +33,8 @@ import { loadCredential } from "../adapters/credentials/claude.ts";
 import { imageExists, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
-import { HOST_GIT, headCommit } from "../adapters/git/worktree.ts";
+import { HOST_GIT, commitAll, discardPending, findCommitBySubject, headCommit, stagePending } from "../adapters/git/worktree.ts";
+import { buildTestsStep } from "../application/stages/build-tests.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { type GitHub, noTokenGitHub } from "../application/github.ts";
 
@@ -160,6 +161,22 @@ export async function buildRealStages(
     })(context);
   const real: Partial<Record<TaskState, StageRunner>> = {
     ...agents,
+    // Build: a tests step (one failing, tagged test per scenario, committed by the machine) runs before the implementer.
+    implementing: buildTestsStep({
+      implement: (context, extra) => runAgent(deps, context, "implementing", extra),
+      runWriter: (context, extra) => runAgent(deps, context, "build_tests", extra.plan ? { plan: extra.plan } : {}),
+      holdout: async (repoPath) => (await policies.for(repoPath)).holdoutCases,
+      git: {
+        pending: stagePending,
+        commit: async (path, subject, body) => {
+          const sha = await commitAll(path, `${subject}\n\n${body}`);
+          if (!sha) throw new Error("the tests step has nothing to commit");
+          return sha;
+        },
+        discard: discardPending,
+        findTestsCommit: findCommitBySubject,
+      },
+    }),
     ...(triageSignals && agents.triage ? { triage: withTriageSignals(agents.triage, triageSignals) } : {}),
     // The plan stage runs in test_design: the planner, the test designer, then three decisions, each pack a sub-run.
     test_design: planStage({

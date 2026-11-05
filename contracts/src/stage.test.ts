@@ -204,15 +204,25 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "pr_reply"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "pr_reply"].sort(),
     );
     const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "red_check", "scope_check", "finding_classify", "e2e_failure_cause", "evidence_format", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning"];
     // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
-    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "code_map", "video_script", "recording", "video_qa", "video_fix", "pr_reply"];
+    const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "build_tests", "code_map", "video_script", "recording", "video_qa", "video_fix", "pr_reply"];
     for (const pack of PackId.options) {
       if (onDemand.includes(pack) || runsInAnotherState.includes(pack)) expect(TaskState.options).not.toContain(pack);
       else expect(TaskState.options).toContain(pack);
     }
+  });
+});
+
+describe("the build_tests pack", () => {
+  it("is the test writer on sonnet: writes tests in the worktree with the implementer's tools, no commit, never production code", () => {
+    expect(PACKS.build_tests).toMatchObject({ kind: "agent", agent: "test-writer", helpers: [], writable: true, template: "build_tests.md", engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
+    const impl = PACKS.implementing.kind === "agent" ? PACKS.implementing.access : null;
+    const writer = PACKS.build_tests.kind === "agent" ? PACKS.build_tests.access : null;
+    expect(writer).toMatchObject({ read: true, write: true });
+    expect(writer!.commands).toEqual(expect.arrayContaining(impl!.commands.filter((c) => !c.startsWith("git commit"))));
   });
 });
 

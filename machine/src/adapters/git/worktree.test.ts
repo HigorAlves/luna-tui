@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
+import { dirtyFiles, stagePending, discardPending, findCommitBySubject, branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -248,5 +248,44 @@ describe("graph helpers", () => {
     expect(await isAncestor(root, one, two)).toBe(true);
     expect(await isAncestor(root, two, one)).toBe(false);
     expect(await isAncestor(root, "c".repeat(40), two)).toBe(false);
+  });
+});
+
+describe("the tests step's git", () => {
+  const repoWith = () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "tests-step-")));
+    git(root, "init", "-q", "-b", "main");
+    writeFileSync(join(root, "a.txt"), "a\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-q", "-m", "init");
+    return root;
+  };
+
+  it("stages what the writer left, new files included, and reads it as a name-status and a diff", async () => {
+    const root = repoWith();
+    writeFileSync(join(root, "cart.test.ts"), "it('x @scenario:S1', () => {})\n");
+    const pending = await stagePending(root);
+    expect(pending.nameStatus).toBe("A\tcart.test.ts");
+    expect(pending.diff).toContain("+it('x @scenario:S1'");
+  });
+
+  it("discards everything the writer left: edits and new files", async () => {
+    const root = repoWith();
+    writeFileSync(join(root, "a.txt"), "changed\n");
+    writeFileSync(join(root, "new.test.ts"), "x\n");
+    await stagePending(root);
+    await discardPending(root);
+    expect(await dirtyFiles(root)).toEqual([]);
+    expect(existsSync(join(root, "new.test.ts"))).toBe(false);
+  });
+
+  it("finds the commit with a subject, with what it changed, and null when there is none", async () => {
+    const root = repoWith();
+    expect(await findCommitBySubject(root, "test(abc): scenarios")).toBeNull();
+    writeFileSync(join(root, "cart.test.ts"), "t\n");
+    const sha = await commitAll(root, "test(abc): scenarios\n\nplan version 2");
+    const found = await findCommitBySubject(root, "test(abc): scenarios");
+    expect(found).toMatchObject({ sha, nameStatus: "A\tcart.test.ts" });
+    expect(found!.diff).toContain("+t");
   });
 });

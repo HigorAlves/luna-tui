@@ -23,6 +23,7 @@ export const AgentRole = z.enum([
   "planner",
   "fast-planner",
   "test-designer",
+  "test-writer",
   // Opens the plan stage: maps the goal onto the code graph.
   "code-mapper",
   "implementer",
@@ -160,6 +161,16 @@ export const TestDesignAnswer = z.object({
   /** v2.2: scenarios from the criteria and the goal, in given/when/then, each tied to its criterion by id. */
   scenarios: z.array(AnswerScenario).optional(),
 });
+
+/** build_tests: the test writer's answer. The machine checks the diff itself (every scenario's tag, only test files); `tests` is the writer's own list, for the board. */
+export const BuildTestsAnswer = z.object({
+  kind: z.enum(["done", "escalated"]),
+  summary: z.string(),
+  tests: z.array(z.object({ scenario: z.string(), file: z.string() })).optional(),
+  escalation: EscalationReason.optional(),
+  reason: z.string().optional(),
+});
+export type BuildTestsAnswer = z.infer<typeof BuildTestsAnswer>;
 
 export const ImplementingAnswer = z.object({
   kind: z.enum(["done", "test_change", "escalated"]),
@@ -776,6 +787,22 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     effort: "medium",
     answer: ImplementingAnswer,
     template: "implementing.md",
+  },
+  build_tests: {
+    id: "build_tests",
+    kind: "agent",
+    agent: "test-writer",
+    helpers: [],
+    skills: ["tdd", "code-discovery"],
+    // The implementer's tools without the commit: the machine checks the diff and makes the commit itself.
+    access: access(READ_ONLY, { write: true, luna: ["decision_get"], commands: ["git add", "git diff", "git status", "git log", ...CHECK_COMMANDS] }),
+    writable: true,
+    maxTurns: 40,
+    timeoutMs: 15 * MINUTE,
+    engines: only("claude:sonnet"),
+    effort: "medium",
+    answer: BuildTestsAnswer,
+    template: "build_tests.md",
   },
   verifying: {
     id: "verifying",
