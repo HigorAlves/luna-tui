@@ -113,6 +113,24 @@ describe("importing what a run committed", () => {
     expect(await viaLink.sync()).toMatchObject({ ok: false, kind: "bad_bundle" });
   });
 
+  it("refuses a bundle whose tip adds or changes a gitlink (mode 160000), and moves nothing", async () => {
+    const { workspace, importer, out, start } = await card();
+    plain(workspace.path, "update-index", "--add", "--cacheinfo", `160000,${start},sub`);
+    plain(workspace.path, "commit", "-q", "-m", "a nested repository");
+    plain(workspace.path, "bundle", "create", join(out, "1.bundle"), `${start}..HEAD`);
+    const before = host(workspace.path, "rev-parse", "refs/heads/" + workspace.branch);
+    expect(await importer().sync()).toMatchObject({ ok: false, kind: "bad_bundle", reason: expect.stringContaining("nested repository") });
+    expect(host(workspace.path, "rev-parse", "refs/heads/" + workspace.branch)).toBe(before);
+  });
+
+  it("does not block on a FIFO where a bundle should be: it is refused at once", async () => {
+    const { importer, out } = await card();
+    execFileSync("mkfifo", [join(out, "1.bundle")]);
+    const started = Date.now();
+    expect(await importer().sync()).toMatchObject({ ok: false, kind: "bad_bundle" });
+    expect(Date.now() - started).toBeLessThan(5000);
+  }, 10_000);
+
   it("ignores a name that is not <n>.bundle, and a bundle with a ref it was not asked for", async () => {
     const { agentCommit, importer, out, workspace } = await card();
     agentCommit("b.txt");

@@ -1,7 +1,7 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
 import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
-import { hostFreshWorkspace } from "./adapters/git/clone.ts";
+import { hostFreshWorkspace, removeLeftovers } from "./adapters/git/clone.ts";
 import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
@@ -67,7 +67,7 @@ import { machineCredentials } from "./adapters/credentials/index.ts";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
-import { configureMachineRepos } from "./adapters/git/machine-repo.ts";
+import { configureMachineRepos, configureWorkspacesDir } from "./adapters/git/machine-repo.ts";
 import { Pipeline } from "./application/pipeline.ts";
 import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
@@ -82,6 +82,7 @@ import { verifyRunner } from "./application/stages/verify.ts";
 const config = loadConfig();
 // Each card has a git directory of the machine's own here, never mounted into a container.
 configureMachineRepos(join(config.stateDir, "repos"));
+configureWorkspacesDir(config.worktreesDir);
 const db = createDataSource(config.databaseUrl, poolSizeFor(config.maxConcurrentTasks));
 await db.initialize();
 const applied = await db.runMigrations();
@@ -129,6 +130,10 @@ async function sweep(): Promise<void> {
   await step("worktrees", async () => {
     const swept = await sweepWorktrees(db, config.worktreeRetentionDays);
     return swept.worktrees > 0 ? `removed ${swept.worktrees} closed task worktree(s), ${swept.branches} merged branch(es)` : null;
+  });
+  await step("workspace leftovers", async () => {
+    const removed = await removeLeftovers(config.worktreesDir);
+    return removed.length > 0 ? `removed ${removed.length} leftover scratch folder(s) and bundle copy(ies)` : null;
   });
   await step("kept sandboxes", async () => {
     const removed = await expireKept({ stateDir: config.stateDir, keepHours: FACTORY_DEFAULTS.sandbox.keep_hours });
@@ -265,7 +270,7 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
 /** The fresh clone Verify and fixes run on, with a kept folder registered so it ends after sandbox.keep_hours. */
 const keptFresh = { ...hostFreshWorkspace, keep: (path: string, taskId: string, runId: string) => keepFolder({ stateDir: config.stateDir, taskId, runId, path, keepHours: FACTORY_DEFAULTS.sandbox.keep_hours }) };
 const realVerifyRunner = verifyRunner({
-  exec: checksExec ?? exec,
+  exec: checksExec,
   runPack: verifyPack,
   // Verify runs on a fresh clone at the head commit, never in the folder Build used.
   fresh: keptFresh,
@@ -294,7 +299,7 @@ const runnerFor = buildRunnerFor({
   stubRunnerFor: (stage) => stubs.runnerFor(stage),
   pr: {
     // A PR task runs the project's checks before pushing, never the review pack.
-    checksOnlyVerifyRunner: verifyRunner({ exec: checksExec ?? exec, runPack: null, stateDir: config.stateDir }),
+    checksOnlyVerifyRunner: verifyRunner({ exec: checksExec, runPack: null, stateDir: config.stateDir }),
     followUpRunner: prFollowUpRunner({
       github,
       exec,

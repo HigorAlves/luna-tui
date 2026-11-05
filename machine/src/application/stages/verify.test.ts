@@ -633,3 +633,14 @@ describe("verify on a fresh clone", () => {
     });
   });
 });
+
+describe("with no sandbox to run the repository's checks in", () => {
+  it("runs nothing on the host and escalates as an environment problem", async () => {
+    const pack = vi.fn();
+    const runner = verifyRunner({ exec: null, runPack: pack, stateDir: "/tmp/state", detect: async () => ({ test: ["t"] }) as never, gitIdentity: async () => ({ name: "a", email: "a@b" }), changedPaths: async () => null });
+    const context = { task: { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" }, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    const result = await runner(context);
+    expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", reason: expect.stringContaining("never run on the host") } });
+    expect(pack).not.toHaveBeenCalled();
+  });
+});

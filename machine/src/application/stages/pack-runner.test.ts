@@ -601,6 +601,23 @@ describe("agent stages through packs", () => {
     expect(result).toMatchObject({ outcome: "fail", detail: { error: expect.stringContaining("could not be taken in") } });
   });
 
+  it("fails the run, before any host git reads the folder, when the agent left a nested repository: it is removed by plain file removal and its filter never runs", async () => {
+    const marker = join(root, "nested-filter-ran");
+    const run = runners(fakeSandbox(output(), (r) => {
+      const sub = join(r.worktree, "sub");
+      mkdirSync(sub);
+      execFileSync("git", ["init", "-q", sub]);
+      writeFileSync(join(sub, "f.txt"), "f\n");
+      writeFileSync(join(sub, ".gitattributes"), "* filter=x\n");
+      execFileSync("git", ["config", "--file", join(sub, ".git", "config"), "filter.x.clean", `touch ${marker}; cat`]);
+    }));
+    const result = await run.implementing!(context("implementing"));
+    expect(result).toMatchObject({ outcome: "fail", detail: { error: expect.stringContaining("nested repository") } });
+    expect(JSON.stringify(result.detail)).toContain("sub/.git");
+    expect(existsSync(join(seen!.worktree, "sub", ".git"))).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+  });
+
   it("fails the run when the folder differs from the branch tip after the commits came in", async () => {
     const run = runners(fakeSandbox(output(), (r) => {
       writeFileSync(join(r.worktree, "b.txt"), "b\n");

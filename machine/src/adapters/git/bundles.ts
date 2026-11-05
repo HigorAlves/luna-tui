@@ -24,9 +24,9 @@ const bad = (reason: string): ImportResult => ({ ok: false, kind: "bad_bundle", 
 function copyBounded(from: string, to: string, max: number): string | null {
   let fd: number;
   try {
-    fd = openSync(from, constants.O_RDONLY | constants.O_NOFOLLOW);
+    fd = openSync(from, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   } catch (error) {
-    return `cannot open the bundle without following a link: ${(error as NodeJS.ErrnoException).code ?? "error"}`;
+    return `cannot open the bundle (no links, no waiting): ${(error as NodeJS.ErrnoException).code ?? "error"}`;
   }
   try {
     const stat = fstatSync(fd);
@@ -93,6 +93,10 @@ export function bundleImporter(options: { path: string; branch: string; runId: s
         const tip = await refHead(ref);
         if (!tip) return bad("the bundle holds no HEAD");
         if (tip === current) return { ok: true, head: current, changed: false };
+        // A nested repository (mode 160000) at the tip would make host git start a child in the folder and read its own configuration.
+        const changes = await git("diff", "--raw", "--no-renames", "--ignore-submodules=none", current, tip);
+        if (changes.code !== 0) return bad("the bundle's tree could not be compared with the card's");
+        if (/^:\d{6} 160000 /m.test(changes.stdout)) return bad("the bundle adds or changes a nested repository (a gitlink, mode 160000)");
         const descends = await git("merge-base", "--is-ancestor", current, tip);
         if (descends.code !== 0) return { ok: false, kind: "head_moved", reason: `the run's commits do not descend from the card's branch at ${current.slice(0, 7)}` };
         // Compare-and-swap: the branch moves only if it is still where it was read.

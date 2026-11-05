@@ -254,18 +254,17 @@ describe("the tests step's git", () => {
     expect(pending.modes).toEqual({ "cart.test.ts": "100644" });
   });
 
-  it("reports a symlink as mode 120000 and a nested repository as 160000", async () => {
-    const { root, base } = repoWith();
+  it("reports a symlink as mode 120000, and refuses a nested repository (a gitlink, mode 160000) instead of staging it", async () => {
+    const root = workspaceWith("tests-step-");
+    const base = wgit(root, "rev-parse", "HEAD");
     mkdirSync(join(root, "tests"));
     symlinkSync("../a.txt", join(root, "tests", "link.test.ts"));
+    const pending = await stagePending(root, base);
+    expect(pending.modes?.["tests/link.test.ts"]).toBe("120000");
     mkdirSync(join(root, "tests", "vendor"));
     git(join(root, "tests", "vendor"), "init", "-q", "-b", "main");
     writeFileSync(join(root, "tests", "vendor", "f"), "x");
-    git(join(root, "tests", "vendor"), "add", "-A");
-    git(join(root, "tests", "vendor"), "commit", "-q", "-m", "n");
-    const pending = await stagePending(root, base);
-    expect(pending.modes?.["tests/link.test.ts"]).toBe("120000");
-    expect(pending.modes?.["tests/vendor"]).toBe("160000");
+    await expect(stagePending(root, base)).rejects.toThrow(/nested repository/);
   });
 
   it("reads against the base even when the container committed in between", async () => {
@@ -342,5 +341,39 @@ describe("currentBranch", () => {
     expect(await currentBranch(root)).toBe("main");
     wgit(root, "checkout", "-q", "-b", "task/x");
     expect(await currentBranch(root)).toBe("task/x");
+  });
+});
+
+describe("git that takes a path, near the workspaces", () => {
+  it("clearStaleLock removes an old lock in the card's repository, and in a read-only checkout, without running git", async () => {
+    const { clearStaleLock } = await import("./worktree.ts");
+    const root = workspaceWith("lock-");
+    const lock = join(machineGitDir(root), "index.lock");
+    writeFileSync(lock, "");
+    utimesSync(lock, new Date(Date.now() - 120_000), new Date(Date.now() - 120_000));
+    await clearStaleLock(root);
+    expect(existsSync(lock)).toBe(false);
+    // A hostile .git in the folder is not consulted: the lock is looked for in the card's repository only.
+    mkdirSync(join(root, ".git"), { recursive: true });
+    writeFileSync(join(root, ".git", "config"), "[core]\n\tfsmonitor = touch /nonexistent-marker\n");
+    await expect(clearStaleLock(root)).resolves.toBeUndefined();
+  });
+
+  it("originSlugOf answers from the card's repository, and fails closed for a folder under the workspaces directory that has none", async () => {
+    const { originSlugOf } = await import("./worktree.ts");
+    const { configureWorkspacesDir } = await import("./machine-repo.ts");
+    const root = workspaceWith("slug-");
+    wgit(root, "remote", "add", "origin", "https://github.com/acme/widgets.git");
+    expect(await originSlugOf(root)).toBe("acme/widgets");
+    const stray = realpathSync(mkdtempSync(join(tmpdir(), "stray-")));
+    git(stray, "init", "-q");
+    git(stray, "remote", "add", "origin", "https://github.com/acme/other.git");
+    expect(await originSlugOf(stray)).toBe("acme/other");
+    configureWorkspacesDir(join(stray, ".."));
+    try {
+      expect(await originSlugOf(stray)).toBeNull();
+    } finally {
+      configureWorkspacesDir("/nonexistent-workspaces-dir");
+    }
   });
 });

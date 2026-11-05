@@ -73,17 +73,11 @@ describe("sandboxArgs", () => {
     expect(args.join(" ")).toContain("-e LUNA_STAGE_DRY_RUN=1");
   });
 
-  it("mounts the git dir writable for a writable stage, which commits", () => {
+  it("mounts the user's git dir read-only even when the run is writable: nothing a container does may reach the repository", () => {
     const args = sandboxArgs(run({ writable: true, gitDir: "/g/.git" }), "/i", "/o");
-    expect(args).toContain("/g/.git:/g/.git");
-    expect(args).not.toContain("/g/.git:/g/.git:ro");
-  });
-
-  it("keeps hooks and config read-only inside a writable git dir, so a stage cannot plant a hook", () => {
-    const args = sandboxArgs(run({ writable: true, gitDir: "/g/.git", gitReadOnly: ["hooks", "config"] }), "/i", "/o");
-    const mounts = args.filter((_, i) => args[i - 1] === "-v");
-    expect(mounts.indexOf("/g/.git:/g/.git")).toBeLessThan(mounts.indexOf("/g/.git/hooks:/g/.git/hooks:ro"));
-    expect(mounts).toContain("/g/.git/config:/g/.git/config:ro");
+    expect(args).toContain("/g/.git:/g/.git:ro");
+    expect(args).not.toContain("/g/.git:/g/.git");
+    expect(args.filter((_, i) => args[i - 1] === "-v" && _.startsWith("/g/.git"))).toEqual(["/g/.git:/g/.git:ro"]);
   });
 
   it("sizes the container from the run's limits, two CPUs and four gigabytes by default, keeping the process limit", () => {

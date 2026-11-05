@@ -6,6 +6,8 @@ import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
+import { readRegularFile } from "../../adapters/fs/bounded.ts";
+import { removeNestedRepositories } from "../../adapters/git/machine-repo.ts";
 import { bundleImporter } from "../../adapters/git/bundles.ts";
 import { ensureClone, isClone, moveToClone, publishBranch, refreshScratch } from "../../adapters/git/clone.ts";
 import {
@@ -108,10 +110,6 @@ const MINUTE = 60_000;
 /** Where a repo's graph is mounted in a stage container, and the file the `graphify` verbs read. */
 const GRAPH_MOUNT = "/graph";
 const GRAPH_FILE = "/graph/graphify-out/graph.json";
-/** Kept read-only inside a writable stage's git dir: a planted hook or a rewritten config
- *  would otherwise run on the host, as you, at the next git command the machine issues. */
-const GIT_READ_ONLY = ["hooks", "config"];
-
 const isFile = (path: string): boolean => {
   try {
     return statSync(path).isFile();
@@ -430,7 +428,6 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     worktree: workspace.path,
     writable: limits.writable,
     gitDir,
-    gitReadOnly: gitDir ? [...GIT_READ_ONLY].filter((sub) => existsSync(join(gitDir, sub))) : [],
     limits: { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb },
     gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
     // The repo's services run beside every stage that runs its code; a read-only stage only reads.
@@ -478,7 +475,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // What the run left in its ledger survives an abort, a timeout or a stuck stop: the next attempt resumes from it.
   const keptLedger = async () => {
     try {
-      return Ledger.parse(JSON.parse(await readFile(join(runDir, "out", "ledger.json"), "utf8")));
+      return Ledger.parse(JSON.parse(await readRegularFile(join(runDir, "out", "ledger.json"), 4 * 1024 * 1024)));
     } catch {
       return null;
     }
@@ -488,6 +485,12 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     return dirty({ ...base, detail: { error, ...extraDetail, ...(ledger ? { ledger } : {}), ...(pushes.attempted ? { pushes } : {}) } });
   };
 
+  // A nested repository (a `.git` below the folder's top level) is data no host git may read: with a gitlink for it git would start a
+  // child in it and read its own configuration. The walk follows no link; what it finds is removed by plain file removal, and the run fails.
+  if (!extra.checkout) {
+    const nested = removeNestedRepositories(workspace.path);
+    if (nested.length > 0) return failed(`the run left a nested repository (${nested.join(", ")}); it was removed and nothing in the folder was read by git`);
+  }
   // The run's commits come into the card's repository first, whatever way it ended: only as a fast-forward of the card's branch.
   const imported = importer ? await importer.sync() : null;
   if (imported && !imported.ok) {

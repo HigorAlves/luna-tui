@@ -21,11 +21,12 @@ const TAIL_LINES = 60;
 const CHECK_NAMES = ["test", "lint", "typecheck"] as const;
 
 export interface VerifyDeps {
-  exec: (
+  /** Runs a check command in the runner image; null when there is no sandbox, and then no check runs: the repository's commands never run on the host. */
+  exec: ((
     command: string,
     args: string[],
     options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> },
-  ) => Promise<ExecResult>;
+  ) => Promise<ExecResult>) | null;
   /** Runs the verifying review pack; null when agents are off, which skips the review. */
   runPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) => Promise<StageResult>) | null;
   stateDir: string;
@@ -167,6 +168,10 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         },
       };
     }
+    const checkExec = deps.exec;
+    if (!checkExec) {
+      return { outcome: "escalated", detail: { escalation: "env_broken", step: "checks", reason: "no sandbox is available to run the repository's checks; they never run on the host", options: ["start Docker and the runner image (pnpm images), then resume"] } };
+    }
     const identityEnv = {
       GIT_AUTHOR_NAME: identity.name,
       GIT_AUTHOR_EMAIL: identity.email,
@@ -205,7 +210,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         result = { code: 1, stdout: "", stderr: "skipped: the 30 minute checks budget ran out" };
         timedOut = true;
       } else {
-        result = await deps.exec(argv[0]!, argv.slice(1), {
+        result = await checkExec(argv[0]!, argv.slice(1), {
           cwd,
           signal,
           timeoutMs: remaining,

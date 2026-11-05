@@ -1,13 +1,13 @@
 // Task worktrees on the host. Each task gets its own branch and checkout; the agent works
 // there through a bind mount, and the machine commits on the host.
-import { existsSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 
 import { basename, join } from "node:path";
 
 import { branchLinkOf, jiraBranch, slug } from "../../domain/jira-link.ts";
 import { DEFAULT_JIRA_BRANCH } from "../../domain/policy.ts";
 import { exec, execOrThrow } from "../process/exec.ts";
-import { at, machineGitDir } from "./machine-repo.ts";
+import { assertNoNestedRepository, at, isUnderWorkspaces, machineGitDir } from "./machine-repo.ts";
 
 export { slug };
 
@@ -208,14 +208,17 @@ export async function startPoint(repoPath: string): Promise<string> {
 }
 
 export async function clearStaleLock(worktreePath: string): Promise<void> {
-  // A card's workspace has its index in the machine's repository; a read-only checkout, in its own git dir.
-  const machine = machineGitDir(worktreePath);
-  let lock = join(machine, "index.lock");
-  if (!existsSync(machine)) {
-    const gitDir = await exec("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "--git-dir"]); // read-only checkout
-    if (gitDir.code !== 0) return;
-    const dir = gitDir.stdout.trim();
-    lock = join(dir.startsWith("/") ? dir : join(worktreePath, dir), "index.lock");
+  // No git runs here. A card's workspace has its index in the machine's repository; a read-only checkout (a linked worktree
+  // the machine made) names its git dir in its `.git` file.
+  let lock = join(machineGitDir(worktreePath), "index.lock");
+  if (!existsSync(machineGitDir(worktreePath))) {
+    try {
+      const pointer = /^gitdir: (.+)$/m.exec(readFileSync(join(worktreePath, ".git"), "utf8"));
+      if (!pointer) return;
+      lock = join(pointer[1]!.trim(), "index.lock");
+    } catch {
+      return;
+    }
   }
   try {
     if (Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS) rmSync(lock, { force: true });
@@ -231,6 +234,7 @@ export async function clearStaleLock(worktreePath: string): Promise<void> {
  * that should never have landed (e.g. one that touched a locked test file).
  */
 export async function resetWorktree(path: string, ref = "HEAD"): Promise<void> {
+  assertNoNestedRepository(path);
   await execOrThrow("git", [...HOST_GIT, ...at(path), "reset", "--hard", "--quiet", ref]);
   await execOrThrow("git", [...HOST_GIT, ...at(path), "clean", "-fd", "--quiet"]);
 }
@@ -328,11 +332,13 @@ export function diffText(path: string, from: string, to: string): Promise<string
 
 /** Undoes one commit with a new commit on top (never rewrites history a person may have fetched). */
 export async function revertCommit(path: string, sha: string): Promise<void> {
+  assertNoNestedRepository(path);
   await execOrThrow("git", [...HOST_GIT, ...at(path), "-c", "commit.gpgsign=false", "revert", "--no-edit", sha]);
 }
 
 /** Puts `files` back as they are at `ref`, leaving HEAD alone (undo with resetWorktree). */
 export async function restoreFiles(path: string, ref: string, files: string[]): Promise<void> {
+  assertNoNestedRepository(path);
   await execOrThrow("git", [...HOST_GIT, ...at(path), "checkout", ref, "--", ...files]);
 }
 
@@ -341,11 +347,21 @@ export async function restoreFiles(path: string, ref: string, files: string[]): 
  * Commits are not signed: signing needs your passphrase, which a background run cannot ask for.
  */
 export async function commitAll(path: string, message: string): Promise<string | null> {
+  assertNoNestedRepository(path);
   await execOrThrow("git", [...HOST_GIT, ...at(path), "add", "-A"]);
+  await refuseGitlinks(path, "HEAD");
   const staged = await exec("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--quiet"]);
   if (staged.code === 0) return null;
   await execOrThrow("git", [...HOST_GIT, ...at(path), "-c", "commit.gpgsign=false", "commit", "-q", "-m", message]);
   return headCommit(path);
+}
+
+/** Fails, with the index put back to HEAD, when what is staged against `base` holds a gitlink (mode 160000): a nested repository the walk of the folder should have caught. */
+export async function refuseGitlinks(path: string, base: string): Promise<void> {
+  const raw = await execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--raw", "--no-renames", base]);
+  if (!/^:\d{6} 160000 /m.test(raw)) return;
+  await exec("git", [...HOST_GIT, ...at(path), "read-tree", "HEAD"]);
+  throw new Error("a nested repository (mode 160000) was staged; nothing was committed");
 }
 
 /** The new mode of each path in `git diff --raw` output (`:100644 120000 abc def A\tpath`), keyed by the new path. */
@@ -360,7 +376,9 @@ function modesOf(raw: string): Record<string, string> {
 
 /** Stages everything a stage left in the worktree (new files too) and reads what that adds to `base`, the commit the run started from: the name-status, the unified diff and each path's new mode. */
 export async function stagePending(path: string, base: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string> }> {
+  assertNoNestedRepository(path);
   await execOrThrow("git", [...HOST_GIT, ...at(path), "add", "-A"]);
+  await refuseGitlinks(path, base);
   const [nameStatus, diff, raw] = await Promise.all([
     execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--name-status", base]),
     execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--no-color", "--no-ext-diff", base]),
@@ -408,14 +426,18 @@ export async function commitsSince(path: string, sinceSha: string): Promise<Arra
 
 /** What the worktree has uncommitted or untracked, one `git status --porcelain` line each. */
 export async function dirtyFiles(path: string): Promise<string[]> {
+  assertNoNestedRepository(path);
   const status = await execOrThrow("git", [...HOST_GIT, ...at(path), "status", "--porcelain"]);
   return status === "" ? [] : status.split("\n");
 }
 
 /** `owner/name` of the checkout's `origin` remote, or null when it has none or it is not on GitHub. */
 export async function originSlugOf(cwd: string): Promise<string | null> {
-  // A card's workspace answers from the machine's repository; a repository's own path from itself.
-  const url = await exec("git", [...HOST_GIT, ...(existsSync(machineGitDir(cwd)) ? at(cwd) : ["-C", cwd]), "remote", "get-url", "origin"]);
+  // A card's workspace answers from the machine's repository; a repository's own path from itself; a folder under the workspaces
+  // directory with no repository of the machine's is nobody's to ask, so it fails closed (git there would read the folder's own `.git`).
+  const pinned = existsSync(machineGitDir(cwd));
+  if (!pinned && isUnderWorkspaces(cwd)) return null;
+  const url = await exec("git", [...HOST_GIT, ...(pinned ? at(cwd) : ["-C", cwd]), "remote", "get-url", "origin"]);
   if (url.code !== 0) return null;
   const match = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?\s*$/.exec(url.stdout.trim());
   return match ? `${match[1]}/${match[2]}` : null;

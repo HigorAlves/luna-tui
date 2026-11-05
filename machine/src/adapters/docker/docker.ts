@@ -63,13 +63,9 @@ export interface SandboxRun {
   runDir: string;
   worktree: string;
   writable: boolean;
-  /** The repo's git dir, mounted at the same path so git works inside: writable for a
-   * writable stage, since committing writes objects, refs and the worktree's index there. */
+  /** The user's repository's git dir, for a checkout run that reads the repository itself, mounted at the same path so git
+   * works inside: always read-only, whatever the run. A card's workspace has no git dir mounted (its repository is the machine's). */
   gitDir: string | null;
-  /** Paths under `gitDir` to keep read-only even when the rest is writable: `hooks` and
-   * `config`, so a stage cannot plant a hook (or point `core.hooksPath` at one) that the
-   * host would then run as you. */
-  gitReadOnly?: string[];
   /** The container's CPUs and memory; absent, the defaults (2 CPUs, 4 GB). */
   limits?: SandboxSize;
   /** Who a writable stage commits as. The container has no gitconfig of its own. */
@@ -159,11 +155,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   for (const mount of run.mounts ?? []) args.push("-v", `${mount.host}:${mount.container}${mount.readOnly ? ":ro" : ""}`);
   args.push(...cacheArgs(run.cacheVolume));
   if (run.gitDir) {
-    args.push("-v", `${run.gitDir}:${run.gitDir}${run.writable ? "" : ":ro"}`);
-    // Later mounts shadow earlier ones, so these ride over the writable mount above.
-    if (run.writable) {
-      for (const sub of run.gitReadOnly ?? []) args.push("-v", `${run.gitDir}/${sub}:${run.gitDir}/${sub}:ro`);
-    }
+    args.push("-v", `${run.gitDir}:${run.gitDir}:ro`);
   }
   args.push(...identityEnv(run.gitIdentity));
   // A trace backend on the host (docs/configuration.md "Observability"): Docker Desktop resolves

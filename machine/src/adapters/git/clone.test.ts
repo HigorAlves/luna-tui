@@ -1,12 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { bringBack, copiedSettings, ensureClone, ensurePrClone, freshClone, isClone, moveToClone, publishBranch, removeClone, unpushedCommits } from "./clone.ts";
-import { machineGitDir } from "./machine-repo.ts";
+import { bringBack, copiedSettings, removeLeftovers, ensureClone, ensurePrClone, freshClone, isClone, moveToClone, publishBranch, removeClone, unpushedCommits } from "./clone.ts";
+import { configureMachineRepos, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
 import { branchBase, changedPaths, commitAll, ensureWorktree, removeWorktree, workspaceFor } from "./worktree.ts";
 
 const base = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"];
@@ -334,5 +334,43 @@ describe("the card's branch in the user's repository", () => {
     const workspace = workspaceFor(task, repo, dir);
     await ensureClone(repo, workspace);
     expect(await publishBranch(repo, workspace.path, "--upload-pack=x")).toMatchObject({ ok: false });
+  });
+});
+
+describe("what a card's workspace leaves behind", () => {
+  it("removes a failed move's repository, so no half-made workspace is left to be mistaken for the card's", async () => {
+    const { repo, dir } = repository("move-fail-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureWorktree(repo, workspace);
+    writeFileSync(join(workspace.path, "secret.txt"), "x\n");
+    chmodSync(join(workspace.path, "secret.txt"), 0o000);
+    try {
+      await expect(moveToClone(repo, workspace)).rejects.toThrow();
+    } finally {
+      chmodSync(join(workspace.path, "secret.txt"), 0o600);
+    }
+    expect(existsSync(machineGitDir(workspace.path))).toBe(false);
+    expect(existsSync(`${workspace.path}.moving`)).toBe(false);
+    expect(isClone(workspace.path)).toBe(false);
+    // The worktree is untouched, so the move can be tried again.
+    expect(git(repo, "worktree", "list")).toContain(workspace.path);
+  });
+
+  it("removes at boot the scratch folders and the bundle copies a crash left, and nothing else", async () => {
+    const { repo, dir, root } = repository("left-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    const stateRoot = join(root, "state-repos");
+    configureMachineRepos(stateRoot);
+    mkdirSync(join(stateRoot, "in"), { recursive: true });
+    writeFileSync(join(stateRoot, "in", "old.bundle"), "x");
+    mkdirSync(`${workspace.path}.scratch`, { recursive: true });
+    writeFileSync(join(`${workspace.path}.scratch`, "f"), "x");
+    mkdirSync(`${workspace.path}.verify-run-1`, { recursive: true });
+    const removed = await removeLeftovers(dir);
+    expect(removed.sort()).toEqual([join(stateRoot, "in", "old.bundle"), `${workspace.path}.scratch`].sort());
+    expect(existsSync(workspace.path)).toBe(true);
+    expect(existsSync(`${workspace.path}.verify-run-1`)).toBe(true);
+    expect(machineRepoRoot()).toBe(stateRoot);
   });
 });

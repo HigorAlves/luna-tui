@@ -9,7 +9,7 @@ import { pushBranch } from "../../application/stages/deliver.ts";
 import { exec } from "../process/exec.ts";
 import { ensureClone } from "./clone.ts";
 import { at, machineGitDir } from "./machine-repo.ts";
-import { HOST_GIT, commitAll, diffText, dirtyFiles, headCommit, workspaceFor } from "./worktree.ts";
+import { HOST_GIT, commitAll, diffText, dirtyFiles, headCommit, resetWorktree, restoreFiles, stagePending, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
@@ -106,5 +106,76 @@ describe("a hostile .git in the work folder is data", () => {
     expect(machine.startsWith(workspace.path)).toBe(false);
     expect(existsSync(join(workspace.path, ".git"))).toBe(false);
     expect(git(machine, "config", "--local", "remote.origin.url")).toMatch(/remote\.git$/);
+  });
+});
+
+/** A nested repository in the work folder with a clean filter in its own config, and a gitlink for it in the machine's repository (what a commit of it would have left). */
+function plantNestedRepository(path: string, markers: string): void {
+  const sub = join(path, "sub");
+  execFileSync("git", ["init", "-q", sub]);
+  writeFileSync(join(sub, ".gitattributes"), "* filter=x\n");
+  writeFileSync(join(sub, "f.txt"), "f\n");
+  execFileSync("git", ["-C", sub, "add", ".gitattributes", "f.txt"]);
+  execFileSync("git", ["-C", sub, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "n"]);
+  // The filter is set after the nested repository's own commit, so only the host can fire it.
+  execFileSync("git", ["config", "--file", join(sub, ".git", "config"), "filter.x.clean", `touch ${join(markers, "nested-filter")}; cat`]);
+  writeFileSync(join(sub, "f.txt"), "changed\n");
+  const head = git(sub, "rev-parse", "HEAD");
+  execFileSync("git", [...HOST_GIT, ...at(path), "update-index", "--add", "--cacheinfo", `160000,${head},sub`]);
+}
+
+describe("a nested repository in the work folder never reaches host git", () => {
+  it("is exploitable by the pinned git when M holds a gitlink for it (the control)", async () => {
+    const { workspace, root } = await card();
+    const markers = join(root, "markers");
+    mkdirSync(markers);
+    plantNestedRepository(workspace.path, markers);
+    await exec("git", [...HOST_GIT, ...at(workspace.path), "add", "-A"]);
+    await exec("git", [...HOST_GIT, ...at(workspace.path), "status", "--porcelain"]);
+    expect(existsSync(join(markers, "nested-filter"))).toBe(true);
+  });
+
+  it("makes every helper that reads the folder refuse, naming the nested repository, and no marker appears", async () => {
+    const { workspace, root } = await card();
+    const markers = join(root, "markers");
+    mkdirSync(markers);
+    plantNestedRepository(workspace.path, markers);
+    const base = await headCommit(workspace.path);
+    for (const run of [() => dirtyFiles(workspace.path), () => commitAll(workspace.path, "x"), () => stagePending(workspace.path, base), () => resetWorktree(workspace.path), () => restoreFiles(workspace.path, base, ["a.txt"])]) {
+      await expect(run()).rejects.toThrow(/nested repository.*sub/);
+    }
+    expect(readdirSync(markers)).toEqual([]);
+  });
+
+  it("finds a .git entry below the top level, a file too, a link too, and none at the top level", async () => {
+    const { findNestedRepository } = await import("./machine-repo.ts");
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "nested-")));
+    mkdirSync(join(root, ".git"));
+    mkdirSync(join(root, "a", "b"), { recursive: true });
+    expect(findNestedRepository(root)).toBeNull();
+    writeFileSync(join(root, "a", "b", ".git"), "gitdir: ../../x\n");
+    expect(findNestedRepository(root)).toBe(join("a", "b", ".git"));
+    rmSync(join(root, "a", "b", ".git"));
+    execFileSync("ln", ["-s", "/nonexistent", join(root, "a", ".git")]);
+    expect(findNestedRepository(root)).toBe(join("a", ".git"));
+  });
+
+  it("does not follow a link out of the folder", async () => {
+    const { findNestedRepository } = await import("./machine-repo.ts");
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "nested-")));
+    const elsewhere = realpathSync(mkdtempSync(join(tmpdir(), "elsewhere-")));
+    mkdirSync(join(elsewhere, ".git"));
+    execFileSync("ln", ["-s", elsewhere, join(root, "link")]);
+    expect(findNestedRepository(root)).toBeNull();
+  });
+
+  it("refuses staged gitlinks: what a commit would have recorded as mode 160000 is unstaged and refused", async () => {
+    const { refuseGitlinks } = await import("./worktree.ts");
+    const { workspace, root } = await card();
+    const markers = join(root, "markers");
+    mkdirSync(markers);
+    execFileSync("git", [...HOST_GIT, ...at(workspace.path), "update-index", "--add", "--cacheinfo", `160000,${await headCommit(workspace.path)},sub`]);
+    await expect(refuseGitlinks(workspace.path, await headCommit(workspace.path))).rejects.toThrow(/nested repository/);
+    expect(execFileSync("git", [...HOST_GIT, ...at(workspace.path), "ls-files", "--stage"], { encoding: "utf8" })).not.toContain("160000");
   });
 });

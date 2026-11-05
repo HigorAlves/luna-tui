@@ -6,7 +6,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFi
 import { dirname, join } from "node:path";
 
 import { exec, execOrThrow } from "../process/exec.ts";
-import { at, machineGitDir } from "./machine-repo.ts";
+import { at, machineGitDir, machineRepoRoot } from "./machine-repo.ts";
 import { HOST_GIT, type Workspace, branchExists, clearStaleLock, headCommit, isBranchName, startPoint } from "./worktree.ts";
 
 const CLONE_TIMEOUT_MS = 300_000;
@@ -109,22 +109,30 @@ export async function moveToClone(repoPath: string, workspace: Workspace): Promi
   // One-time migration of a worktree made before cards had their own repository: its HEAD is read once, here.
   const head = await execOrThrow("git", [...HOST_GIT, "-C", old, "rev-parse", "HEAD"]); // legacy worktree
   const staging = `${old}.moving`;
-  rmSync(staging, { recursive: true, force: true });
-  // Seed under the final path's name: the repository is keyed by the folder it serves.
-  await seedMachineRepo(old, await objectsOf(repoPath), head, workspace.branch, ["-C", repoPath], repoPath);
-  mkdirSync(staging, { recursive: true });
-  // The work tree as the agent left it: every entry but the git link, symlinks kept as links.
-  for (const name of readdirSync(old)) {
-    if (name !== ".git") cpSync(join(old, name), join(staging, name), { recursive: true, verbatimSymlinks: true, force: true });
-  }
-  const keep = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", "--quiet", `refs/heads/${workspace.branch}`]);
-  await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "remove", "--force", old]);
-  rmSync(old, { recursive: true, force: true });
-  renameSync(staging, old);
-  // The index in step with the branch, the files as they are: what differs shows as the agent's uncommitted work.
-  await execOrThrow("git", [...HOST_GIT, ...at(old), "read-tree", workspace.branch]);
-  if (keep.code === 0 && keep.stdout.trim() === head && (await branchExists(repoPath, workspace.branch))) {
-    await exec("git", [...HOST_GIT, "-C", repoPath, "branch", "-D", "--", workspace.branch]);
+  try {
+    rmSync(staging, { recursive: true, force: true });
+    // Seed under the final path's name: the repository is keyed by the folder it serves.
+    await seedMachineRepo(old, await objectsOf(repoPath), head, workspace.branch, ["-C", repoPath], repoPath);
+    mkdirSync(staging, { recursive: true });
+    // The work tree as the agent left it: every entry but the git link, symlinks kept as links.
+    for (const name of readdirSync(old)) {
+      if (name !== ".git") cpSync(join(old, name), join(staging, name), { recursive: true, verbatimSymlinks: true, force: true });
+    }
+    const keep = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", "--quiet", `refs/heads/${workspace.branch}`]);
+    await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "remove", "--force", old]);
+    rmSync(old, { recursive: true, force: true });
+    renameSync(staging, old);
+    // The index in step with the branch, the files as they are: what differs shows as the agent's uncommitted work.
+    await execOrThrow("git", [...HOST_GIT, ...at(old), "read-tree", workspace.branch]);
+    if (keep.code === 0 && keep.stdout.trim() === head && (await branchExists(repoPath, workspace.branch))) {
+      await exec("git", [...HOST_GIT, "-C", repoPath, "branch", "-D", "--", workspace.branch]);
+    }
+
+  } catch (error) {
+    // A half-made move leaves nothing that could be mistaken for the card's workspace: the repository it made and the staging folder go; the worktree is as it was.
+    rmSync(staging, { recursive: true, force: true });
+    if (existsSync(join(old, ".git"))) rmSync(machineGitDir(old), { recursive: true, force: true });
+    throw error;
   }
 }
 
@@ -241,3 +249,29 @@ export const hostFreshWorkspace = {
     removeClone(path);
   },
 };
+
+/**
+ * What a crash can leave and nothing else removes, cleared at boot: the scratch folders beside the work folders (`<folder>.scratch`, where an
+ * agent's repository is made) and the copies of bundles the host was reading (`<state>/repos/in`). Answers what it removed.
+ */
+export async function removeLeftovers(workspacesDir: string): Promise<string[]> {
+  const removed: string[] = [];
+  const drop = (path: string) => {
+    rmSync(path, { recursive: true, force: true });
+    removed.push(path);
+  };
+  const holding = join(machineRepoRoot(), "in");
+  try {
+    for (const name of readdirSync(holding)) drop(join(holding, name));
+  } catch {
+    // none
+  }
+  try {
+    for (const repo of readdirSync(workspacesDir)) {
+      for (const name of readdirSync(join(workspacesDir, repo))) if (name.endsWith(".scratch")) drop(join(workspacesDir, repo, name));
+    }
+  } catch {
+    // none
+  }
+  return removed;
+}
