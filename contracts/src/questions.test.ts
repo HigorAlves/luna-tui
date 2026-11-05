@@ -314,3 +314,16 @@ describe("confidence policy", () => {
     expect(v.verdicts.kind).toBe("proceed");
   });
 });
+
+describe("the intake_dedup decision pack", () => {
+  it("asks one same / related / different question per shortlist slot, with a confidence, and has no role or prompt", async () => {
+    const { PACKS, DedupContext } = await import("./index.ts");
+    const pack = PACKS.intake_dedup;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["slot1", "slot2", "slot3", "slot4", "slot5"]);
+    const answer = Object.fromEntries(Object.keys(pack.questions).map((k) => [k, { choice: "different", confidence: 0.9 }]));
+    expect(pack.answer.safeParse(answer).success).toBe(true);
+    expect(pack.answer.safeParse({ ...answer, slot1: { choice: "maybe", confidence: 0.9 } }).success).toBe(false);
+    expect(DedupContext.safeParse({ title: "t", text: "x", candidates: Array.from({ length: 6 }, (_, i) => ({ slot: i + 1, kind: "open", title: "a", summary: "b" })) }).success).toBe(false);
+  });
+});

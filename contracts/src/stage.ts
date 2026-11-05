@@ -161,6 +161,8 @@ export const PackId = z.enum([
   "fix_scope",
   "evidence_valid",
   "worth_learning",
+  // A decision at Intake (a dedup context, run on demand): is a new report the same problem as one of the five nearest cards.
+  "intake_dedup",
   // Drafts the answer to a reviewer's question on a shipped PR from the Evidence Pack (runs in the shipping state, after the retro in PACKS order).
   "pr_reply",
 ]);
@@ -844,6 +846,16 @@ export const IssueContext = z.object({
 });
 export type IssueContext = z.infer<typeof IssueContext>;
 
+/** What intake_dedup reads: the new report and the shortlist's titles and summaries, flattened and capped by the machine. At most five slots. */
+export const DedupContext = z.object({
+  title: z.string().max(500),
+  text: z.string().max(4000),
+  candidates: z
+    .array(z.object({ slot: z.number().int().min(1).max(5), kind: z.enum(["open", "closed", "backlog"]), title: z.string().max(500), summary: z.string().max(1000) }))
+    .max(5),
+});
+export type DedupContext = z.infer<typeof DedupContext>;
+
 /** What eval_judge reads: one eval case, what a good answer must contain, and the answer under
  *  test. The JSON fields are text, as the evals runner serialised them (evals/run.ts). */
 export const EvalJudgeContext = z.object({
@@ -987,6 +999,8 @@ export const StageInput = z.object({
     evidence: EvidenceContext.nullable().optional(),
     /** For Ship's decisions and pr_reply: the review event, comment, fix or retro facts. */
     ship: ShipContext.nullable().optional(),
+    /** For intake_dedup: the new report and the shortlist to judge. */
+    dedup: DedupContext.nullable().optional(),
     /** For the video packs (script, fix, recording, critic): the scenarios, the target, the narration, the film's measurements. */
     video: VideoContext.nullable().optional(),
     /** For the eval_judge pack: the case, its expectation and the answer to grade. */

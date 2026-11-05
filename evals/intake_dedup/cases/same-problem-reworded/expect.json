@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "slot1.choice",
+      "value": "same"
+    }
+  ],
+  "rubric": "The same symptom on the same page, reworded: fixing one fixes the other.",
+  "label": {
+    "slot1": {
+      "choice": "same"
+    }
+  }
+}

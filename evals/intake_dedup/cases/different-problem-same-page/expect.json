@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "slot1.choice",
+      "value": "different"
+    }
+  ],
+  "rubric": "Same page, another defect: a wrong currency is not a dead button.",
+  "label": {
+    "slot1": {
+      "choice": "different"
+    }
+  }
+}
