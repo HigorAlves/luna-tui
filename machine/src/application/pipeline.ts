@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildProgress, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type CardSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -10,6 +10,7 @@ import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { type CardFieldsInput, appendSource, cardFieldsOf, cardOf } from "../domain/card-fields.ts";
 import { questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
@@ -64,12 +65,17 @@ export function canonicalJson(value: unknown): string {
   );
 }
 
+/** The entry contract's fields a work order may carry; part of its hash only when it carries them, so a key stored before still matches. */
+const CARD_ORDER_KEYS = ["sources", "reporter", "hints", "originMachine", "attachments", "project", "owners", "followers", "links"] as const;
+
 /** A work order's hash: its fields with every default filled (`description: ""`, `criteria: []`,
  *  `repoPath: null`, `source: null`, `stages: {}`, a source's absent fields as null) and `start`
  *  left out, so an equivalent retry is the same order. */
 export function orderHash(order: NewTask & Record<string, unknown>): string {
   const source = order.source ? Object.fromEntries(Object.entries(order.source).filter(([, value]) => value !== null && value !== undefined)) : null;
+  const entry = Object.fromEntries(CARD_ORDER_KEYS.filter((key) => order[key] !== undefined).map((key) => [key, order[key]]));
   const canonical = {
+    ...entry,
     title: order.title,
     description: order.description ?? "",
     criteria: order.criteria ?? [],
@@ -83,7 +89,7 @@ export function orderHash(order: NewTask & Record<string, unknown>): string {
 /** What a task snapshot says about its last stage run and its gate. */
 export type TaskGlance = Pick<Task, "lastRun" | "gate">;
 
-export interface NewTask {
+export interface NewTask extends Omit<CardFieldsInput, "source"> {
   title: string;
   description?: string;
   criteria?: string[];
@@ -440,6 +446,7 @@ export class Pipeline {
       ...(input.classification ? { classification: input.classification } : {}),
       ...(input.record ? { record: input.record } : {}),
       ...(input.evidence ? { evidence: input.evidence } : {}),
+      card: cardFieldsOf({ ...input, source }),
     };
   }
 
@@ -449,6 +456,14 @@ export class Pipeline {
     if (!this.jiraSite || source?.kind === "notch") return null;
     const key = findJiraKey(title) ?? findJiraKey(description);
     return key ? bareLink(key, issueUrl(this.jiraSite, key)) : null;
+  }
+
+  /** Adds a report of the same card (a merged duplicate) after its sources. The first source never changes. */
+  async addSource(id: string, source: TaskSource | CardSource): Promise<TaskRow> {
+    const task = await this.get(id);
+    const card = cardOf(task);
+    await this.store.updateTask(id, { card: { ...card, sources: appendSource(card.sources, source) } });
+    return this.get(id);
   }
 
   /** The latest task linked to a Jira issue, by its link or its intake source, if any. */

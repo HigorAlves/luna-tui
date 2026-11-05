@@ -41,6 +41,7 @@ const issueJson = {
     priority: { name: "High" },
     duedate: "2026-10-31",
     labels: ["luna"],
+    reporter: { accountId: "R1", displayName: "Rita" },
     updated: "2026-10-28T10:00:00.000+0000",
     comment: { comments: [{ author: { accountId: "A1", displayName: "Marta" }, body: { type: "doc", version: 1, content: [{ type: "paragraph", content: [text("please")] }] }, created: "2026-10-27T09:00:00.000+0000" }] },
   },
@@ -50,7 +51,7 @@ describe("createJira", () => {
   it("reads an issue with basic auth and the fields the machine needs, description and comments as markdown", async () => {
     const { jira, calls } = wire({ json: issueJson });
     const issue = await jira.issue("PLAT-123");
-    expect(calls[0]!.url).toBe("https://acme.atlassian.net/rest/api/3/issue/PLAT-123?fields=summary%2Cdescription%2Cstatus%2Cissuetype%2Cpriority%2Cduedate%2Clabels%2Cupdated%2Ccomment");
+    expect(calls[0]!.url).toBe("https://acme.atlassian.net/rest/api/3/issue/PLAT-123?fields=summary%2Cdescription%2Cstatus%2Cissuetype%2Cpriority%2Cduedate%2Clabels%2Cupdated%2Ccomment%2Creporter");
     expect(calls[0]!.headers.Authorization).toBe(`Basic ${Buffer.from("me@acme.com:tok").toString("base64")}`);
     expect(issue).toEqual({
       key: "PLAT-123",
@@ -64,6 +65,7 @@ describe("createJira", () => {
       dueAt: "2026-10-31",
       labels: ["luna"],
       updated: "2026-10-28T10:00:00.000+0000",
+      reporter: { id: "R1", name: "Rita" },
       comments: [{ author: "Marta", authorId: "A1", text: "please", created: "2026-10-27T09:00:00.000+0000" }],
     });
   });

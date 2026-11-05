@@ -879,6 +879,7 @@ export class SlackInbox implements SlackInboxPort {
       description,
       repoPath: input.repoPath ?? null,
       source: { kind: "slack", channel: row.channel.id, ts: row.slackTs, permalink: row.permalink },
+      reporter: { id: row.author.id, name: row.author.name, channel: "slack" },
     });
     await this.saveAndPublish({ ...row, linked: { ...row.linked, taskId: task.id } });
     return task;

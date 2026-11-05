@@ -329,7 +329,7 @@ export class OctokitGitHub implements GitHub {
   async listReadyIssues(slug: string, label: string): Promise<GhIssue[]> {
     const { owner, repo } = repoRef(slug);
     const rows = await call(`listing ${slug} issues labelled ${label}`, () =>
-      this.octokit.paginate<{ number: number; title: string; body: string | null; html_url: string; labels?: Array<string | { name?: string }>; pull_request?: unknown }>(
+      this.octokit.paginate<{ number: number; title: string; body: string | null; html_url: string; labels?: Array<string | { name?: string }>; user?: { login?: string } | null; pull_request?: unknown }>(
         this.octokit.rest.issues.listForRepo,
         { owner, repo, labels: label, state: "open", per_page: 50 },
       ),
@@ -337,7 +337,7 @@ export class OctokitGitHub implements GitHub {
     // The issues API lists PRs too; intake wants issues.
     return rows
       .filter((i) => !i.pull_request)
-      .map((i) => ({ number: i.number, title: i.title, body: i.body ?? null, url: i.html_url, labels: (i.labels ?? []).map((l) => (typeof l === "string" ? l : (l.name ?? ""))).filter(Boolean) }));
+      .map((i) => ({ number: i.number, title: i.title, body: i.body ?? null, url: i.html_url, labels: (i.labels ?? []).map((l) => (typeof l === "string" ? l : (l.name ?? ""))).filter(Boolean), ...(i.user?.login ? { author: i.user.login } : {}) }));
   }
 
   async commentOnIssue(slug: string, number: number, body: string): Promise<void> {

@@ -77,6 +77,8 @@ export interface JiraIssue {
   labels: string[];
   /** Jira's `updated` stamp, so intake can tell an issue that moved since it last asked. */
   updated: string | null;
+  /** Who filed it; absent when the adapter did not read it. */
+  reporter?: { id: string; name?: string } | null;
   comments: JiraComment[];
 }
 

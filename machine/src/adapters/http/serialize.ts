@@ -11,6 +11,7 @@ import {
   WAITING_ON_USER,
 } from "@hardness/contracts";
 
+import { cardOf } from "../../domain/card-fields.ts";
 import { namesOf } from "../../domain/card-events.ts";
 import { jiraOf } from "../../domain/jira-link.ts";
 import type { ApprovalRow, ArtifactRow, EventRow, StageRunRow, TaskRow } from "../../domain/task.ts";
@@ -52,6 +53,7 @@ export const toTask = (
   classification: row.classification ?? null,
   record: row.record ?? null,
   evidence: row.evidence ?? null,
+  ...cardOf(row),
   seq: Number(row.seq),
   lastRun: glance?.lastRun ?? null,
   gate: glance?.gate ?? null,

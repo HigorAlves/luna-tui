@@ -46,6 +46,7 @@ export const TaskEntity = new EntitySchema<TaskRow>({
     classification: { type: "jsonb", nullable: true },
     record: { type: "jsonb", nullable: true },
     evidence: { type: "jsonb", nullable: true },
+    card: { type: "jsonb", nullable: true },
     // Stamped by the `tasks_seq` trigger on every insert and update; never written from here.
     seq: { type: "bigint", insert: false, update: false },
     createdAt: { name: "created_at", type: "timestamptz", createDate: true },

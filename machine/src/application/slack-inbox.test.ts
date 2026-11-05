@@ -424,6 +424,7 @@ describe("SlackInbox actions", () => {
     const task = await inbox.toTask(item.id, { repoPath: "/r/a" });
     expect(created[0]).toEqual({
       title: "re: @higor can you appro",
+      reporter: { id: "U2", name: "marta", channel: "slack" },
       description: `From Slack: @marta in #eng · ${item.permalink}\n\n> @marta: @higor can you approve?`,
       repoPath: "/r/a",
       source: { kind: "slack", channel: "C1", ts: ts(30), permalink: item.permalink },

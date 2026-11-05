@@ -69,6 +69,7 @@ export class PgTaskStore implements TaskStore {
       classification: input.classification ?? null,
       record: input.record ?? null,
       evidence: input.evidence ?? null,
+      card: input.card ?? null,
       stateSince: new Date(),
     };
   }

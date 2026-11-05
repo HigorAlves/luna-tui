@@ -9,7 +9,7 @@ import type { JiraLink, TaskSla } from "./jira.ts";
 import type { AgentPack, AgentRole, Pack } from "./packs.ts";
 import { type CredentialOwner, EngineId } from "./engines.ts";
 import type { ModelEntry, RuntimeId } from "./models.ts";
-import { CardEntryFields } from "./card.ts";
+import { type CardFields, CardEntryFields } from "./card.ts";
 import type { CardEventName } from "./card-events.ts";
 import type { TaskReports } from "./reports.ts";
 import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskClassification, type TaskRoute, TaskSource, TestCase, ArchiveReason, type EvidencePack, type TriageRecord } from "./stage.ts";
@@ -204,7 +204,7 @@ export interface Retries {
   strongerNext?: boolean;
 }
 
-export interface Task {
+export interface Task extends CardFields {
   id: string;
   title: string;
   description: string;
