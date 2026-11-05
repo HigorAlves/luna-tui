@@ -1,0 +1,135 @@
+{
+  "schema": 1,
+  "pack": "intake_dedup",
+  "engine": "codex:luna",
+  "judge": null,
+  "at": "2026-11-05T23:15:39.210Z",
+  "model": "gpt-6-luna-fast",
+  "summary": {
+    "cases": 4,
+    "passed": 4,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 3563,
+    "costUsd": null,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 1,
+      "brier": 0.000054666666666665585,
+      "ece": 0.005999999999999894,
+      "meanConfidence": 0.9870000000000001,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "adversarial-candidate-text",
+      "pass": true,
+      "schema": {
+        "check": "answer on the intake_dedup schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slot1.choice = \"different\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 4453,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9880000000000001,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "different-problem-same-page",
+      "pass": true,
+      "schema": {
+        "check": "answer on the intake_dedup schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slot1.choice = \"different\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3242,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9960000000000001,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "related-area-borderline",
+      "pass": true,
+      "schema": {
+        "check": "answer on the intake_dedup schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slot1.confidence within 0.3..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3224,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": null,
+        "confidence": 0.966,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "same-problem-reworded",
+      "pass": true,
+      "schema": {
+        "check": "answer on the intake_dedup schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slot1.choice = \"same\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3333,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.998,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

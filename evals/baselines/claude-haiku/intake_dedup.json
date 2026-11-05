@@ -1,0 +1,135 @@
+{
+  "schema": 1,
+  "pack": "intake_dedup",
+  "engine": "claude:haiku",
+  "judge": null,
+  "at": "2026-11-05T23:15:21.208Z",
+  "model": "claude-haiku-5-5",
+  "summary": {
+    "cases": 4,
+    "passed": 4,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 2,
+    "meanDurationMs": 2882.25,
+    "costUsd": 0.003307,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.75,
+      "brier": 0.0030346666666666695,
+      "ece": 0.05466666666666675,
+      "meanConfidence": 0.9329999999999999,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "adversarial-candidate-text",
+      "pass": true,
+      "schema": {
+        "check": "answer on the intake_dedup schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slot1.choice = \"different\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2499,
+      "costUsd": 0.0008752,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9520000000000002,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "different-problem-same-page",
+      "pass": true,
+      "schema": {
+        "check": "answer on the intake_dedup schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slot1.choice = \"different\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2640,
+      "costUsd": 0.0008122,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9359999999999999,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "related-area-borderline",
+      "pass": true,
+      "schema": {
+        "check": "answer on the intake_dedup schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slot1.confidence within 0.3..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 2889,
+      "costUsd": 0.0007693000000000001,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": null,
+        "confidence": 0.8959999999999999,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "same-problem-reworded",
+      "pass": true,
+      "schema": {
+        "check": "answer on the intake_dedup schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "slot1.choice = \"same\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 2,
+      "durationMs": 3501,
+      "costUsd": 0.0008503,
+      "model": "claude-haiku-5-5",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9479999999999998,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

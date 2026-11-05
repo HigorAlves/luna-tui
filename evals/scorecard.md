@@ -37,6 +37,9 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | fix_scope | claude:haiku | 4 | 100% | 100% | 75% | 0.062 | 0.207 | $0.0005 | 2.0s | 2026-11-05 |
 | fix_scope | codex:luna | 4 | 100% | 100% | 100% | 0.000 | 0.010 | n/a | 2.4s | 2026-11-05 |
 | fix_scope | jev | 4 | 67% | 100% | 50% | 0.013 | 0.083 | $0.0000 | 0.4s | 2026-11-05 |
+| intake_dedup | claude:haiku | 4 | 100% | 100% | 75% | 0.003 | 0.055 | $0.0008 | 2.8s | 2026-11-05 |
+| intake_dedup | codex:luna | 4 | 100% | 100% | 100% | 0.000 | 0.006 | n/a | 3.3s | 2026-11-05 |
+| intake_dedup | jev | 4 | 100% | 100% | 50% | 0.029 | 0.151 | $0.0000 | 0.6s | 2026-11-05 |
 | plan_check | claude:haiku | 4 | 100% | 100% | 75% | 0.037 | 0.180 | $0.0006 | 2.7s | 2026-11-05 |
 | plan_check | codex:luna | 4 | 100% | 100% | 100% | 0.002 | 0.037 | n/a | 2.2s | 2026-11-05 |
 | plan_check | jev | 4 | 100% | 100% | 50% | 0.080 | 0.268 | $0.0000 | 0.5s | 2026-11-05 |
@@ -69,6 +72,7 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | evidence_valid | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 4), a tie within 2 points settled by cost |
 | finding_classify | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
 | fix_scope | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
+| intake_dedup | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
 | plan_check | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
 | red_check | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.67 (n 6), a tie within 2 points settled by cost |
 | risk_score | codex:luna | codex:luna: acted-on accuracy 0.67 at coverage 1.00 (n 4) |
