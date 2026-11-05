@@ -16,10 +16,11 @@ import { withTriageSignals } from "./stages/triage-signals.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { ApprovalEntity } from "../adapters/persistence/schemas.ts";
-import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
+import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, OutsideApproverRequiredError, Pipeline, PlanApprovedError, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
-import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
+import { ensureClone } from "../adapters/git/clone.ts";
+import { commitAll, ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
 import type { CloseReport } from "./close-task.ts";
 import { toStageRun } from "../adapters/http/serialize.ts";
 import { type RunEnd, type RunStart, type Telemetry, noTelemetry } from "./telemetry.ts";
@@ -2844,6 +2845,31 @@ describe("deleting a task", () => {
 
     expect(existsSync(workspace.path)).toBe(false);
     await expect(pipeline.get(task.id)).rejects.toBeInstanceOf(TaskNotFoundError);
+  });
+});
+
+describe("removing a card's clone", () => {
+  it("removes a clone from disk, but says so instead of silently dropping commits no remote has", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "rmclone-")));
+    const repoPath = join(root, "repo");
+    mkdirSync(repoPath);
+    const git = (...args: string[]) =>
+      execFileSync("git", ["-C", repoPath, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" });
+    git("init", "-q", "-b", "main");
+    writeFileSync(join(repoPath, "a.txt"), "a\n");
+    git("add", "-A");
+    git("commit", "-q", "-m", "init");
+    const task = await pipeline.createTask({ title: "Login page", repoPath });
+    const workspace = workspaceFor(task, repoPath, join(root, "wt"));
+    await ensureClone(repoPath, workspace);
+    await db.query("update tasks set branch = $2, worktree_path = $3 where id = $1", [task.id, workspace.branch, workspace.path]);
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    await commitAll(workspace.path, "feat: b");
+
+    await expect(pipeline.removeWorktree(task.id)).rejects.toBeInstanceOf(WorktreeUnpushedError);
+    expect(existsSync(workspace.path)).toBe(true);
+    expect((await pipeline.removeWorktree(task.id, { discard: true })).worktreePath).toBeNull();
+    expect(existsSync(workspace.path)).toBe(false);
   });
 });
 

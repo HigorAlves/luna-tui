@@ -6,7 +6,8 @@ import { join } from "node:path";
 
 import type { DataSource } from "typeorm";
 
-import { HOST_GIT } from "../adapters/git/worktree.ts";
+import { isClone } from "../adapters/git/clone.ts";
+import { HOST_GIT, removeWorktree } from "../adapters/git/worktree.ts";
 import { TaskEntity } from "../adapters/persistence/schemas.ts";
 import { type ExecResult, exec } from "../adapters/process/exec.ts";
 import { JIRA_INTAKE_DIR } from "./stages/jira-intake-runner.ts";
@@ -31,7 +32,10 @@ export async function sweepWorktrees(db: DataSource, days: number): Promise<Work
   );
   const repos = new Set<string>();
   for (const row of rows) {
-    const removed = await exec("git", [...HOST_GIT, "-C", row.repo_path, "worktree", "remove", "--force", row.worktree_path]);
+    // A card's clone is a folder of its own; only a linked worktree is registered with the repository.
+    const clone = isClone(row.worktree_path);
+    if (clone) await removeWorktree(row.repo_path, row.worktree_path);
+    const removed = clone ? { code: 0 } : await exec("git", [...HOST_GIT, "-C", row.repo_path, "worktree", "remove", "--force", row.worktree_path]);
     // Already gone from disk: prune the registration, the row still needs clearing.
     if (removed.code !== 0) await exec("git", [...HOST_GIT, "-C", row.repo_path, "worktree", "prune"]);
     await db.getRepository(TaskEntity).update({ id: row.id }, { worktreePath: null });

@@ -6,7 +6,7 @@ import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
-import { ensureClone, gitDirStamp, isClone, sealedPaths } from "../../adapters/git/clone.ts";
+import { ensureClone, gitDirStamp, isClone, moveToClone, sealedPaths } from "../../adapters/git/clone.ts";
 import {
   type Workspace,
   branchBase,
@@ -211,6 +211,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches (or the branch it named for a Jira-linked task)` },
     };
   }
+  // A card still on a linked worktree moves to a clone before its next writable run: branch and commits kept, uncommitted work carried over.
+  if (!extra.checkout && limits.writable && persisted && !isClone(workspace.path)) await moveToClone(task.repoPath, workspace);
   if (!extra.checkout) await ensureClone(task.repoPath, workspace);
   // After a restart, the container the last machine started may still be running: its name and
   // the commit it started from come from the run row, and the sandbox waits on it instead.

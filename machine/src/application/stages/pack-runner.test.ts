@@ -315,17 +315,22 @@ describe("agent stages through packs", () => {
     expect(JSON.stringify(result.detail)).toContain(".git directory");
   });
 
-  it("mounts a card still on a linked worktree as before: its .git file read-only, the admin dir's pointers read-only in a writable stage", async () => {
+  it("keeps a read-only stage on a card's linked worktree as it was, and moves it to a clone before the next writable run, work and commits kept", async () => {
     const path = join(root, "worktrees", "repo", "task-linked");
     execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", "task/linked", path]);
+    writeFileSync(join(path, "wip.txt"), "uncommitted\n");
     const linked = (stage: StageContext["stage"]) => ({ ...context(stage), task: { ...context(stage).task, branch: "task/linked", worktreePath: path } }) as StageContext;
     await runners(fakeSandbox(output())).triage!(linked("triage"));
     expect(seen!.mounts).toContainEqual({ host: join(seen!.worktree, ".git"), container: "/work/.git", readOnly: true });
-    await runners(fakeSandbox(output())).implementing!(linked("implementing"));
+    expect(execFileSync("git", ["-C", repo, "worktree", "list"], { encoding: "utf8" })).toContain("task-linked");
+    let carried = "";
+    await runners(fakeSandbox(output(), (run) => void (carried = readFileSync(join(run.worktree, "wip.txt"), "utf8")))).implementing!(linked("implementing"));
     expect(seen!.writable).toBe(true);
-    expect(seen!.mounts).toContainEqual({ host: join(seen!.worktree, ".git"), container: "/work/.git", readOnly: true });
-    const name = seen!.worktree.split("/").pop()!;
-    expect(seen!.gitReadOnly).toEqual(expect.arrayContaining(["hooks", "config", `worktrees/${name}/commondir`, `worktrees/${name}/gitdir`]));
+    expect(statSync(join(path, ".git")).isDirectory()).toBe(true);
+    expect(seen!.gitDir).toBeNull();
+    expect(carried).toBe("uncommitted\n");
+    expect(execFileSync("git", ["-C", path, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).trim()).toBe("task/linked");
+    expect(execFileSync("git", ["-C", repo, "worktree", "list"], { encoding: "utf8" })).not.toContain("task-linked");
   });
 
   it("gives the sandbox the repo's cache volume, so a retry or the next task of the repo installs warm", async () => {

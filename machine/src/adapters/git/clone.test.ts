@@ -5,8 +5,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { copiedSettings, ensureClone, gitDirStamp, isClone, sealedPaths } from "./clone.ts";
-import { branchBase, changedPaths, commitAll, workspaceFor } from "./worktree.ts";
+import { copiedSettings, ensureClone, ensurePrClone, gitDirStamp, isClone, moveToClone, sealedPaths, unpushedCommits } from "./clone.ts";
+import { branchBase, changedPaths, commitAll, ensureWorktree, removeWorktree, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
@@ -130,5 +130,95 @@ describe("what a container may not write in a clone", () => {
     execFileSync("mv", [join(workspace.path, ".git"), join(workspace.path, ".git-aside")]);
     mkdirSync(join(workspace.path, ".git"));
     expect(gitDirStamp(workspace.path)).not.toBe(before);
+  });
+});
+
+describe("a card in flight moves from a linked worktree to a clone", () => {
+  it("keeps the branch, its commits and the uncommitted and untracked work; the worktree and the repository's branch go", async () => {
+    const { repo, dir } = repository("move-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureWorktree(repo, workspace);
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    const sha = await commitAll(workspace.path, "feat: b");
+    writeFileSync(join(workspace.path, "a.txt"), "edited\n");
+    writeFileSync(join(workspace.path, "new.txt"), "untracked\n");
+    expect(isClone(workspace.path)).toBe(false);
+    await moveToClone(repo, workspace);
+    expect(isClone(workspace.path)).toBe(true);
+    expect(git(workspace.path, "rev-parse", "--abbrev-ref", "HEAD")).toBe(workspace.branch);
+    expect(git(workspace.path, "rev-parse", "HEAD")).toBe(sha);
+    expect(git(workspace.path, "status", "--porcelain").split("\n").sort()).toEqual(["?? new.txt", "M a.txt"]);
+    expect(git(repo, "worktree", "list").split("\n")).toHaveLength(1);
+    expect(git(repo, "branch", "--list", workspace.branch)).toBe("");
+    expect(git(repo, "rev-parse", "HEAD")).not.toBe(sha);
+  });
+
+  it("keeps the repository's branch when it holds commits the clone does not", async () => {
+    const { repo, dir } = repository("move-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureWorktree(repo, workspace);
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    await commitAll(workspace.path, "feat: b");
+    git(workspace.path, "checkout", "-q", "--detach", "HEAD~1");
+    await moveToClone(repo, workspace);
+    expect(git(repo, "branch", "--list", workspace.branch)).toContain(workspace.branch);
+  });
+
+  it("does nothing to a workspace that is already a clone", async () => {
+    const { repo, dir } = repository("move-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    const stamp = gitDirStamp(workspace.path);
+    await moveToClone(repo, workspace);
+    expect(gitDirStamp(workspace.path)).toBe(stamp);
+  });
+});
+
+describe("a PR task's clone", () => {
+  it("is at the PR's head fetched from the remote, tracking it, and pushes go to that remote branch", async () => {
+    const { repo, root, dir } = repository("pr-");
+    const remote = join(root, "remote.git");
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", remote]);
+    git(repo, "remote", "add", "origin", remote);
+    git(repo, "push", "-q", "origin", "main");
+    git(repo, "checkout", "-q", "-b", "feat/pr");
+    writeFileSync(join(repo, "pr.txt"), "pr\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "pr");
+    git(repo, "push", "-q", "origin", "feat/pr");
+    const head = git(repo, "rev-parse", "HEAD");
+    git(repo, "checkout", "-q", "main");
+    git(repo, "branch", "-q", "-D", "feat/pr");
+    const path = join(dir, "pr-clone");
+    await ensurePrClone(repo, "feat/pr", path);
+    expect(isClone(path)).toBe(true);
+    expect(git(path, "rev-parse", "HEAD")).toBe(head);
+    expect(git(path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("feat/pr");
+    expect(git(path, "rev-parse", "--abbrev-ref", "@{u}")).toBe("origin/feat/pr");
+    writeFileSync(join(path, "fix.txt"), "fix\n");
+    await commitAll(path, "fix");
+    git(path, "push", "-q");
+    expect(git(remote, "rev-parse", "feat/pr")).toBe(git(path, "rev-parse", "HEAD"));
+    expect(git(repo, "branch", "--list", "feat/pr")).toBe("");
+  });
+
+  it("refuses a head ref shaped like an option", async () => {
+    const { repo, dir } = repository("pr-");
+    await expect(ensurePrClone(repo, "--upload-pack=x", join(dir, "p"))).rejects.toThrow(/branch/);
+  });
+});
+
+describe("removing a clone", () => {
+  it("lists the commits no remote has, and removes a clean one from disk", async () => {
+    const { repo, dir } = repository("rm-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    expect(await unpushedCommits(workspace.path)).toEqual([]);
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    const sha = await commitAll(workspace.path, "feat: b");
+    expect(await unpushedCommits(workspace.path)).toEqual([sha]);
+    await removeWorktree(repo, workspace.path);
+    expect(existsSync(workspace.path)).toBe(false);
+    expect(git(repo, "for-each-ref")).not.toContain(workspace.branch);
   });
 });

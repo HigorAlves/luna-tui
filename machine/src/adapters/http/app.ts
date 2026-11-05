@@ -57,7 +57,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError, WorktreeUnpushedError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -173,6 +173,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof TaskNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof TransitionError) return fail(c, 409, "invalid_transition", error.message);
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
+    if (error instanceof WorktreeUnpushedError) return fail(c, 409, "unpushed_commits", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
     if (error instanceof NoQuestionsToPostError) return fail(c, 409, "no_questions", error.message);
@@ -436,7 +437,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   app.post("/tasks/:id/resume", async (c) => c.json(await serialize(await pipeline.windowReset(taskId(c)))));
 
   /** Removes the task's worktree from disk; the task and its branch stay. */
-  app.post("/tasks/:id/worktree/remove", async (c) => c.json(await serialize(await pipeline.removeWorktree(taskId(c)))));
+  app.post("/tasks/:id/worktree/remove", async (c) => c.json(await serialize(await pipeline.removeWorktree(taskId(c), { discard: c.req.query("discard") === "true" }))));
 
   if (pulls) {
     // The PR inbox: what the last poll saw, a poll on demand, a merge, and a clone for a repo

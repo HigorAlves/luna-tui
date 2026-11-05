@@ -1,11 +1,11 @@
 // A card's workspace is its own clone: nothing in it is shared with the user's repository,
 // so nothing a container does there can move one of the repository's branches or touch its
 // objects, config or hooks. The machine copies in only the settings a push needs.
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { exec, execOrThrow } from "../process/exec.ts";
-import { HOST_GIT, type Workspace, clearStaleLock, startPoint } from "./worktree.ts";
+import { HOST_GIT, type Workspace, branchExists, clearStaleLock, isBranchName, startPoint } from "./worktree.ts";
 
 const CLONE_TIMEOUT_MS = 300_000;
 
@@ -61,14 +61,66 @@ export async function ensureClone(repoPath: string, workspace: Workspace): Promi
   }
   const start = await startPoint(repoPath);
   const sha = await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", `${start}^{commit}`]);
-  mkdirSync(dirname(workspace.path), { recursive: true });
-  const cloned = await exec("git", [...HOST_GIT, "clone", "--quiet", "--no-hardlinks", "--no-checkout", "--origin", "origin", "--", repoPath, workspace.path], { timeoutMs: CLONE_TIMEOUT_MS });
+  await cloneInto(repoPath, workspace.path, workspace.branch, sha);
+}
+
+/** An independent clone of `repoPath` at `path` (nothing shared with it), on `branch` at `sha`, with the settings a push needs. */
+async function cloneInto(repoPath: string, path: string, branch: string, sha: string): Promise<void> {
+  mkdirSync(dirname(path), { recursive: true });
+  const cloned = await exec("git", [...HOST_GIT, "clone", "--quiet", "--no-hardlinks", "--no-checkout", "--origin", "origin", "--", repoPath, path], { timeoutMs: CLONE_TIMEOUT_MS });
   if (cloned.code !== 0) throw new Error(`git clone failed: ${(cloned.stderr || cloned.stdout).trim() || `exit code ${cloned.code}`}`);
-  await execOrThrow("git", [...HOST_GIT, "-C", workspace.path, "checkout", "--quiet", "-b", workspace.branch, sha]);
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "checkout", "--quiet", "-B", branch, sha]);
   // The settings a push needs, taken from the repository; a repository with no remote leaves origin at its path.
   const settings = await copiedSettings(repoPath);
-  for (const key of new Set(settings.map(([k]) => k))) await exec("git", [...HOST_GIT, "-C", workspace.path, "config", "--local", "--unset-all", key]);
-  for (const [key, value] of settings) await execOrThrow("git", [...HOST_GIT, "-C", workspace.path, "config", "--local", "--add", key, value]);
+  for (const key of new Set(settings.map(([k]) => k))) await exec("git", [...HOST_GIT, "-C", path, "config", "--local", "--unset-all", key]);
+  for (const [key, value] of settings) await execOrThrow("git", [...HOST_GIT, "-C", path, "config", "--local", "--add", key, value]);
+}
+
+/**
+ * Moves a card's linked worktree to a clone before its next writable run: the same branch at the
+ * same commit, uncommitted and untracked work carried over, the worktree removed from the
+ * repository, and the repository's local branch deleted only when the clone holds the same head.
+ * A workspace that is already a clone (or missing) is left alone.
+ */
+export async function moveToClone(repoPath: string, workspace: Workspace): Promise<void> {
+  const old = workspace.path;
+  if (!existsSync(join(old, ".git")) || isClone(old)) return;
+  const head = await execOrThrow("git", [...HOST_GIT, "-C", old, "rev-parse", "HEAD"]);
+  const staging = `${old}.moving`;
+  rmSync(staging, { recursive: true, force: true });
+  await cloneInto(repoPath, staging, workspace.branch, head);
+  // The work tree as the agent left it: every entry but the git link, symlinks kept as links.
+  for (const name of readdirSync(old)) {
+    if (name !== ".git") cpSync(join(old, name), join(staging, name), { recursive: true, verbatimSymlinks: true, force: true });
+  }
+  const keep = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", "--quiet", `refs/heads/${workspace.branch}`]);
+  await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "remove", "--force", old]);
+  rmSync(old, { recursive: true, force: true });
+  renameSync(staging, old);
+  if (keep.code === 0 && keep.stdout.trim() === head && (await branchExists(repoPath, workspace.branch))) {
+    await exec("git", [...HOST_GIT, "-C", repoPath, "branch", "-D", "--", workspace.branch]);
+  }
+}
+
+/** A PR task's clone at `path`: the PR's head branch fetched from the repository's remote, checked out and tracking `origin/<headRef>`, so a fix lands on the PR's own branch. An existing clone is reused. */
+export async function ensurePrClone(repoPath: string, headRef: string, path: string): Promise<void> {
+  if (existsSync(join(path, ".git"))) {
+    await clearStaleLock(path);
+    return;
+  }
+  if (!isBranchName(headRef)) throw new Error(`not a usable branch name: ${JSON.stringify(headRef)}`);
+  const fetched = await exec("git", [...HOST_GIT, "-C", repoPath, "fetch", "--quiet", "--end-of-options", "origin", `+refs/heads/${headRef}:refs/remotes/origin/${headRef}`], { timeoutMs: CLONE_TIMEOUT_MS });
+  if (fetched.code !== 0) throw new Error(`git fetch origin ${headRef} failed: ${(fetched.stderr || fetched.stdout).trim()}`);
+  const sha = await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", `refs/remotes/origin/${headRef}^{commit}`]);
+  await cloneInto(repoPath, path, headRef, sha);
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "update-ref", `refs/remotes/origin/${headRef}`, sha]);
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "branch", "--set-upstream-to", `origin/${headRef}`, headRef]);
+}
+
+/** The commits in a clone that no remote-tracking ref holds, newest first. */
+export async function unpushedCommits(path: string): Promise<string[]> {
+  const out = await exec("git", [...HOST_GIT, "-C", path, "log", "HEAD", "--not", "--remotes", "--format=%H"]);
+  return out.code === 0 ? out.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [];
 }
 
 /**

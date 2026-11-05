@@ -5,7 +5,8 @@ import { lstat, mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { redact } from "../domain/evidence-markdown.ts";
-import { HOST_GIT, defaultBranch as hostDefaultBranch, isBranchName, originSlugOf } from "../adapters/git/worktree.ts";
+import { isClone, unpushedCommits } from "../adapters/git/clone.ts";
+import { HOST_GIT, defaultBranch as hostDefaultBranch, isBranchName, originSlugOf, removeWorktree } from "../adapters/git/worktree.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import type { GitHub } from "./github.ts";
 import { CAP_BYTES, CAP_LINES, CONTEXT_FILE, mergeRules } from "./stages/memory.ts";
@@ -167,6 +168,13 @@ export async function closeTask(task: CloseTarget, deps: CloseDeps): Promise<Clo
   const worktree = await attempt("worktree", async () => {
     if (!task.worktreePath || !task.repoPath) return "skipped: the task has no worktree";
     if (!deps.worktreeRemove) return "kept: remove it from the board with w";
+    if (isClone(task.worktreePath)) {
+      const unpushed = await unpushedCommits(task.worktreePath);
+      if (unpushed.length > 0) return `kept: the clone holds ${unpushed.length} unpushed commit(s); push them, or remove it from the board`;
+      await removeWorktree(task.repoPath, task.worktreePath);
+      worktreeRemoved = true;
+      return "workspace removed";
+    }
     const result = await deps.exec("git", [...HOST_GIT, "-C", task.repoPath, "worktree", "remove", "--force", task.worktreePath]);
     if (result.code !== 0) throw new Error(`git worktree remove failed: ${(result.stderr || result.stdout).trim()}`);
     worktreeRemoved = true;

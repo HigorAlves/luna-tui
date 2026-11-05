@@ -243,3 +243,33 @@ describe("closeTask: the rules file is only ever a real file inside the worktree
     expect(opened[0]!.body).toContain("[redacted]");
   });
 });
+
+describe("closing a card whose workspace is a clone", () => {
+  it("removes a clone with nothing unpushed, and keeps one with commits no remote has, saying so", async () => {
+    const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
+    const { execFileSync } = await import("node:child_process");
+    const { exec } = await import("../adapters/process/exec.ts");
+    const root = worktree();
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    const git = (cwd: string, ...a: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...a]);
+    git(repo, "init", "-q", "-b", "main");
+    writeFileSync(join(repo, "a.txt"), "a");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "init");
+    git(root, "clone", "-q", repo, join(root, "clone"));
+    const clone = join(root, "clone");
+    const closed = await closeTask({ id: "t1", repoPath: repo, worktreePath: clone }, { exec, worktreeRemove: true });
+    expect(closed.worktreeRemoved).toBe(true);
+    expect(existsSync(clone)).toBe(false);
+
+    git(root, "clone", "-q", repo, clone);
+    writeFileSync(join(clone, "b.txt"), "b");
+    git(clone, "add", "-A");
+    git(clone, "commit", "-q", "-m", "work");
+    const kept = await closeTask({ id: "t1", repoPath: repo, worktreePath: clone }, { exec, worktreeRemove: true });
+    expect(kept.worktreeRemoved).toBe(false);
+    expect(existsSync(clone)).toBe(true);
+    expect(kept.steps.find((s) => s.step === "worktree")).toMatchObject({ ok: true, note: expect.stringMatching(/unpushed/) });
+  });
+});

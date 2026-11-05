@@ -9,11 +9,12 @@ import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError, runFacts, runSummary, sameSource } from "../domain/task.ts";
 import { questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
+import { isClone, unpushedCommits } from "../adapters/git/clone.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { Credentials } from "../adapters/credentials/index.ts";
@@ -46,7 +47,7 @@ import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, ou
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
+export { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, WorktreeUnpushedError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -779,10 +780,15 @@ export class Pipeline {
 
   /** Removes a task's worktree from disk once you are done with it. The task, its branch
    * and commits stay; only the checkout the agent worked in is gone. */
-  async removeWorktree(id: string): Promise<TaskRow> {
+  async removeWorktree(id: string, options: { discard?: boolean } = {}): Promise<TaskRow> {
     const task = await this.get(id);
     if (RUNNING.has(task.state)) throw new TaskBusyError(id, task.state);
     if (!task.repoPath || !task.worktreePath) return task;
+    // A clone is the only copy of what no remote has: say so instead of dropping it silently.
+    if (!options.discard && isClone(task.worktreePath)) {
+      const unpushed = await unpushedCommits(task.worktreePath);
+      if (unpushed.length > 0) throw new WorktreeUnpushedError(id, unpushed.length);
+    }
     await removeWorktreeOnDisk(task.repoPath, task.worktreePath);
     await this.store.updateTask(id, { worktreePath: null });
     await this.log(id, "worktree.removed", { path: task.worktreePath });

@@ -1,6 +1,14 @@
 // Task worktrees on the host. Each task gets its own branch and checkout; the agent works
 // there through a bind mount, and the machine commits on the host.
 import { existsSync, rmSync, statSync } from "node:fs";
+
+const statIsDirectory = (path: string): boolean => {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+};
 import { basename, join } from "node:path";
 
 import { branchLinkOf, jiraBranch, slug } from "../../domain/jira-link.ts";
@@ -234,8 +242,12 @@ export async function resetWorktree(path: string, ref = "HEAD"): Promise<void> {
   await execOrThrow("git", [...HOST_GIT, "-C", path, "clean", "-fd", "--quiet"]);
 }
 
-/** Removes a task's worktree from disk. The branch (and its commits) stays. */
+/** Removes a task's workspace from disk: a clone is deleted, a linked worktree is removed from its repository (its branch and commits stay). */
 export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
+  if (statIsDirectory(join(worktreePath, ".git"))) {
+    rmSync(worktreePath, { recursive: true, force: true });
+    return;
+  }
   await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "remove", "--force", worktreePath]);
 }
 

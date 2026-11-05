@@ -158,6 +158,14 @@ export class TaskBusyError extends Error {
   }
 }
 
+/** A card's clone holds commits no remote has: removing it would drop them. */
+export class WorktreeUnpushedError extends Error {
+  constructor(id: string, public readonly commits: number) {
+    super(`task ${id}'s workspace holds ${commits} unpushed commit(s); push them, or remove it with discard`);
+    this.name = "WorktreeUnpushedError";
+  }
+}
+
 /** No plan to edit: the ticket is neither awaiting the plan's approval nor at the test check. */
 export class NoPlanToEditError extends Error {
   constructor(id: string) {
