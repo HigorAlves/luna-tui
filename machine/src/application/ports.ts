@@ -27,6 +27,8 @@ export interface StageContext {
   approvals: ApprovalRow[];
   /** For the plan stage after a plan was found wrong in Build, Verify or review: who raised it and the evidence (data, flattened and capped). */
   replan?: NonNullable<PlanContext["replan"]>;
+  /** For implementing: the minutes Build's budget has left; a run's time limit is the smaller of its own and this. */
+  budgetMinutes?: number;
   /** Findings from the latest verifying run, fed to the next implementing attempt. */
   priorFindings?: Finding[];
   /** Aborted when you abort the task; the runner should stop its container. */
@@ -59,7 +61,7 @@ export interface StageResult {
   events?: Array<{ at: string; kind: string; payload: Record<string, unknown> }>;
   /** Files the pack produced, already copied; `path` is absolute on the host. */
   artifacts?: Array<{ kind: ArtifactKind; path: string; label: string; sha256: string }>;
-  usage?: { turns: number | null; costUsd: number | null };
+  usage?: { turns: number | null; costUsd: number | null; /** The runtime's own count; null where it cannot report one. */ tokens?: { input: number; output: number } | null };
   /** Questions for the gate; shown as the approval's `questions`. */
   needsInput?: NeedsInputItem[];
   /** Outward actions awaiting approval; shown as the approval's `actions`. */

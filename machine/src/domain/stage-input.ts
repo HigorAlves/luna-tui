@@ -109,6 +109,8 @@ export function buildStageInput(opts: {
   /** The repo's PIPELINE.md holds test_design's cases out of implementing's input, so the
    *  implementer cannot overfit to them; verifying still judges by them. */
   holdoutCases?: boolean;
+  /** For implementing: the minutes Build's budget has left; the run's time limit is the smaller of its own and this. */
+  budgetMinutes?: number;
   /** For implementing: the tests Build's tests step wrote, one entry per scenario. */
   scenarioTests?: { scenario: string; file: string }[];
   /** For e2e: the repo's QA targets from luna.yaml. */
@@ -142,7 +144,10 @@ export function buildStageInput(opts: {
     ? { brief: reviewed.brief, criteria: reviewed.criteria, assumptions: reviewed.assumptions, ...(designer ? {} : { slices: reviewed.slices }), ...(reviewed.rollback !== undefined ? { rollback: reviewed.rollback } : {}) }
     : null;
   const plan = approvedPlan(approvals) ?? underReview;
-  const { maxTurns, timeoutMs } = budgetFor(pack, plan?.slices?.length ?? 0);
+  const scaled = budgetFor(pack, plan?.slices?.length ?? 0);
+  const { maxTurns } = scaled;
+  // Build's budget: a run never outlives the minutes the card has left.
+  const timeoutMs = opts.budgetMinutes !== undefined && pack === "implementing" ? Math.min(scaled.timeoutMs, Math.max(1, opts.budgetMinutes) * MINUTE) : scaled.timeoutMs;
   return {
     schema: 3,
     stage,

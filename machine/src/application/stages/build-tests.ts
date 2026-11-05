@@ -39,6 +39,17 @@ export interface BuildTestsDeps {
 
 const MAX_NAMED = 10;
 
+type Usage = NonNullable<StageResult["usage"]>;
+
+/** Two runs' usage added: turns and cost where both are known, tokens where either counted. */
+function addUsage(a: StageResult["usage"], b: StageResult["usage"]): StageResult["usage"] {
+  if (!a) return b;
+  if (!b) return a;
+  const sum = (x: number | null, y: number | null) => (x === null && y === null ? null : (x ?? 0) + (y ?? 0));
+  const tokens = a.tokens || b.tokens ? { input: (a.tokens?.input ?? 0) + (b.tokens?.input ?? 0), output: (a.tokens?.output ?? 0) + (b.tokens?.output ?? 0) } : null;
+  return { turns: sum(a.turns, b.turns), costUsd: sum(a.costUsd, b.costUsd), tokens } satisfies Usage;
+}
+
 /** What the diff check found wrong, as lines to send back or to say: ids and plain paths only. */
 function problemsOf(facts: ScenarioTagFacts): string[] {
   const path = (p: string) => (isPlainRepoPath(p) ? safe(p).slice(0, 120) : "(a path that is not a plain repository path)");
@@ -57,7 +68,12 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     const scenarios = approvedScenarios(context.approvals);
     if (task.route !== "feature" || context.resume || !task.repoPath || scenarios.length === 0) return deps.implement(context, {});
 
-    const withStep = (result: StageResult, testsStep: Record<string, unknown>): StageResult => ({ ...result, detail: { ...result.detail, testsStep } });
+    /** What the writer's runs cost: added to the run the stage reports, so the budget counts them. */
+    let writerUsage: StageResult["usage"];
+    const withStep = (result: StageResult, testsStep: Record<string, unknown>): StageResult => {
+      const usage = addUsage(writerUsage, result.usage);
+      return { ...result, ...(usage ? { usage } : {}), detail: { ...result.detail, testsStep } };
+    };
     if (await deps.holdout(task.repoPath)) return withStep(await deps.implement(context, {}), { status: "skipped", why: "holdout_cases" });
 
     const subject = `test(${task.id.slice(0, 8)}): scenarios`;
@@ -73,7 +89,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     const plan = Plan.safeParse(approved?.requested.plan);
     const escalate = async (where: string, problems: string[]): Promise<StageResult> => {
       await deps.git.discard(where);
-      return { outcome: "escalated", detail: { escalation: "other", reason: `the tests step could not make a tagged test that fails for the right reason for every scenario: ${problems.join("; ")}`, testsStep: { status: "failed", problems } } };
+      return { outcome: "escalated", ...(writerUsage ? { usage: writerUsage } : {}), detail: { escalation: "other", reason: `the tests step could not make a tagged test that fails for the right reason for every scenario: ${problems.join("; ")}`, testsStep: { status: "failed", problems } } };
     };
     // A missing tag is sent back once; a red that is missing or wrong, twice.
     let tagMisses = 0;
@@ -81,7 +97,8 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     let review: string[] | undefined;
     for (;;) {
       const written = await deps.runWriter(context, review ? { plan: reviewContext(review) } : {});
-      if (written.outcome !== "pass") return written;
+      writerUsage = addUsage(writerUsage, written.usage);
+      if (written.outcome !== "pass") return withUsage(written, writerUsage);
       const where = written.workspace?.worktreePath ?? worktree;
       if (!where) return { outcome: "fail", detail: { error: "the tests step has no worktree to read" } };
       const pending = await deps.git.pending(where);
@@ -119,6 +136,8 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     }
   };
 }
+
+const withUsage = (result: StageResult, usage: StageResult["usage"]): StageResult => (usage ? { ...result, usage } : result);
 
 const redsOf = (value: unknown): Record<string, string> =>
   value && typeof value === "object" && !Array.isArray(value) ? Object.fromEntries(Object.entries(value).filter((e): e is [string, string] => typeof e[1] === "string")) : {};

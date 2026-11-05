@@ -307,6 +307,7 @@ export class TurnFollower {
     } else if (event.type === "usage.recorded") {
       const usage = data.usage as { costUsd?: number; inputTokens?: number; outputTokens?: number } | undefined;
       if (typeof usage?.costUsd === "number") result.costUsd = (result.costUsd ?? 0) + usage.costUsd;
+      if (typeof usage?.inputTokens === "number" && typeof usage.outputTokens === "number") result.tokens = { input: (result.tokens?.input ?? 0) + usage.inputTokens, output: (result.tokens?.output ?? 0) + usage.outputTokens };
       this.emit({
         kind: "usage",
         payload: {

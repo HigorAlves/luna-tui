@@ -139,6 +139,15 @@ describe("Build's tests step", () => {
     expect(result.detail).toMatchObject({ testsStep: { status: "skipped", why: "holdout_cases" } });
   });
 
+  it("adds the writer's usage to the run's, so the budget counts the tests step's tokens and turns", async () => {
+    const f = fakes([tagged("S1")], {
+      runWriter: async () => ({ outcome: "pass", detail: { scenarioReds: { S1: "FAIL" } }, usage: { turns: 4, costUsd: 0.25, tokens: { input: 100, output: 20 } } }) as StageResult,
+      implement: async () => ({ outcome: "pass", usage: { turns: 10, costUsd: 1, tokens: { input: 1000, output: 200 } } }) as StageResult,
+    });
+    const result = await buildTestsStep(f.deps)(context([v2]));
+    expect(result.usage).toEqual({ turns: 14, costUsd: 1.25, tokens: { input: 1100, output: 220 } });
+  });
+
   it("leaves a PR route and a resumed run alone", async () => {
     const f = fakes([tagged("S1")]);
     await buildTestsStep(f.deps)(context([v2], { task: { id: "abcdef12", route: "pr", repoPath: "/r", worktreePath: "/w" } }));

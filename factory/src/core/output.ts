@@ -23,6 +23,8 @@ export interface RunOutcome {
   error: string | null;
   turns: number;
   costUsd: number | null;
+  /** The runtime's own token count; null when it cannot report one. Never read from the model's text. */
+  tokens: { input: number; output: number } | null;
   durationMs: number;
   model: string;
   rateLimited: boolean;
@@ -37,6 +39,7 @@ export const EMPTY_RUN: RunOutcome = {
   error: null,
   turns: 0,
   costUsd: null,
+  tokens: null,
   durationMs: 0,
   model: "",
   rateLimited: false,
@@ -160,7 +163,7 @@ export function finish(outDir: string, pack: Pack, run: RunOutcome, state: RunRe
     },
     commit: typeof s.commit === "string" ? s.commit : null,
     answer: run.structured,
-    usage: { turns: run.turns, costUsd: run.costUsd, durationMs: Math.round(run.durationMs), model: run.model },
+    usage: { turns: run.turns, costUsd: run.costUsd, tokens: run.tokens, durationMs: Math.round(run.durationMs), model: run.model },
     error: run.error,
     rateLimited: run.rateLimited,
     resetsAt: run.resetsAt,

@@ -278,6 +278,46 @@ describe("a plan found wrong comes back to the planner with its evidence", () =>
   });
 });
 
+describe("Build's budget", () => {
+  const events = (n: number) => Array.from({ length: n }, (_, i) => ({ at: new Date(i).toISOString(), kind: i % 2 ? "slice.green" : "slice.red", payload: { id: 1 } }));
+
+  it("escalates a card whose iterations are spent instead of running the implementer again, with the numbers", async () => {
+    const ran: string[] = [];
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(stage), { outcome: "fail" as const, events: events(16) }) : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(ran).toHaveLength(1);
+    const after = await p.get(task.id);
+    expect(after.state).toBe("escalated");
+    const gate = (await p.events(task.id)).findLast((e) => e.kind === "transition" && e.payload.to === "escalated");
+    expect(gate?.payload.reason).toMatch(/budget is spent: 16 of 15 iterations/);
+    expect((await p.events(task.id)).some((e) => e.kind === "build.budget")).toBe(true);
+  });
+
+  it("counts the runtime's tokens from the finish row, and a run that reports none leaves them uncounted", async () => {
+    const ran: string[] = [];
+    const usage = { turns: 1, costUsd: null, tokens: { input: 1_900_000, output: 100_001 } };
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(stage), { outcome: "fail" as const, usage }) : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(ran).toHaveLength(1);
+    const gate = (await p.events(task.id)).findLast((e) => e.kind === "transition" && e.payload.to === "escalated");
+    expect(gate?.payload.reason).toMatch(/budget is spent: 2000001 of 2000000 tokens/);
+    expect((await p.events(task.id)).find((e) => e.kind === "stage.finished" && e.payload.stage === "implementing")?.payload.tokens).toEqual({ input: 1_900_000, output: 100_001 });
+  });
+
+  it("lets a card inside its budget run again as before", async () => {
+    const ran: string[] = [];
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(stage), { outcome: "fail" as const, events: events(2) }) : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(ran.length).toBeGreaterThan(1);
+  });
+});
+
 describe("the plan gate's three decisions", () => {
   const atGate = async () => {
     stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], risk: { level: "low", scores: {} } } });

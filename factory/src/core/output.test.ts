@@ -61,6 +61,17 @@ describe("settle", () => {
   });
 });
 
+describe("finish: tokens", () => {
+  it("writes the runtime's own token count, and null when the runtime could not count", () => {
+    const dir = outDir();
+    finish(dir, PACKS.implementing, { ...EMPTY_RUN, ok: true, structured: { kind: "done", summary: "s" }, tokens: { input: 1200, output: 340 } }, state({}));
+    expect(read(dir, "result.json")).toMatchObject({ usage: { tokens: { input: 1200, output: 340 } } });
+    const none = outDir();
+    finish(none, PACKS.implementing, { ...EMPTY_RUN, ok: true, structured: { kind: "done", summary: "s" } }, state({}));
+    expect(read(none, "result.json")).toMatchObject({ usage: { tokens: null } });
+  });
+});
+
 describe("finish", () => {
   it("writes a schema-3 result the machine's contract accepts, with the ledger and the session", () => {
     const dir = outDir();

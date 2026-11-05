@@ -33,6 +33,16 @@ beforeEach(async () => {
   stateDir = await mkdtemp(join(tmpdir(), "ingest-state-"));
 });
 
+describe("tokens", () => {
+  it("carry from the result's usage to the stage result, null where the runtime could not count", async () => {
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output({ usage: { turns: 1, costUsd: null, durationMs: 1, model: "m", tokens: { input: 10, output: 5 } } })));
+    const counted = toStageResult(await ingestStageOutput({ outDir, stateDir, runId: "run1" } as never));
+    expect(counted.usage).toMatchObject({ tokens: { input: 10, output: 5 } });
+    await writeFile(join(outDir, "result.json"), JSON.stringify(output()));
+    expect(toStageResult(await ingestStageOutput({ outDir, stateDir, runId: "run1" } as never)).usage).toMatchObject({ tokens: null });
+  });
+});
+
 describe("ingestStageOutput", () => {
   it("lands an e2e manifest where the evidence stage reads it", async () => {
     await mkdir(join(outDir, "files", "qa"), { recursive: true });

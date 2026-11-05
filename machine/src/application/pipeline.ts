@@ -36,6 +36,7 @@ import { basename, join } from "node:path";
 import type { Policy } from "../domain/policy.ts";
 import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 
+import { buildBudget, rateLimitWaitMs } from "../domain/build-budget.ts";
 import { buildEntryOf } from "../domain/build-entry.ts";
 import { replanOf } from "../domain/replan.ts";
 import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, outsideSatisfied, ownersStateOf, ruleFiles, sameName } from "../domain/approvers.ts";
@@ -1545,10 +1546,27 @@ export class Pipeline {
           if (engine) fallback = { engine, reason: "one shot on a stronger engine after too_complex" };
         }
         let result: StageResult;
-        try {
-          result = await this.runStage(id, stage, controller.signal, resume, fallback);
-        } finally {
+        // Build's budget is read before each implementing run: a spent one escalates the card without another run.
+        const spentBefore = stage === "implementing" && !resume ? await this.spentBuildBudget(id) : null;
+        if (spentBefore) {
           this.offPool.delete(id);
+          result = spentBefore;
+        } else {
+          try {
+            result = await this.runStage(id, stage, controller.signal, resume, fallback);
+          } finally {
+            this.offPool.delete(id);
+          }
+          // ... and when one ends: a run that would be followed by another does not get one when the budget is spent.
+          if (stage === "implementing" && (result.outcome === "fail" || result.outcome === "test_change") && !result.rateLimited) {
+            result = (await this.spentBuildBudget(id)) ?? result;
+          }
+          // A provider's rate limit waits for its reset, clamped to the repo's `build.backoff_minutes`.
+          if (stage === "implementing" && result.rateLimited) {
+            const limits = (await this.policyFor((await this.get(id)).repoPath)).factory.build;
+            const wait = rateLimitWaitMs(resetSeconds(result.detail?.resetsAt), limits);
+            result = { ...result, detail: { ...result.detail, resetsAt: Math.floor((Date.now() + wait) / 1000) } };
+          }
         }
         resume = undefined;
         fallback = undefined;
@@ -1876,6 +1894,27 @@ export class Pipeline {
     return Array.isArray(findings) ? (findings as Finding[]) : [];
   }
 
+  /** The minutes of Build's budget the card has left. */
+  private async buildMinutesLeft(id: string, repoPath: string | null): Promise<number> {
+    const limits = (await this.policyFor(repoPath)).factory.build;
+    const [runs, events] = await Promise.all([this.stageRuns(id), this.events(id)]);
+    return buildBudget(runs, events, limits).minutesLeft;
+  }
+
+  /** The result of a Build whose budget is spent (a person decides; no run is made), or null while there is budget. Logs the numbers as a `build.budget` row. */
+  private async spentBuildBudget(id: string): Promise<StageResult | null> {
+    const task = await this.get(id);
+    if (task.route !== "feature") return null;
+    const limits = (await this.policyFor(task.repoPath)).factory.build;
+    const [runs, events] = await Promise.all([this.stageRuns(id), this.events(id)]);
+    const budget = buildBudget(runs, events, limits);
+    if (!budget.spent) return null;
+    const numbers = { iterations: budget.iterations, tokens: budget.tokens, minutes: budget.minutes, limits };
+    await this.log(id, "build.budget", { spent: budget.spent, ...numbers });
+    const said = { iterations: `${budget.iterations} of ${limits.max_iterations} iterations`, tokens: `${budget.tokens} of ${limits.max_tokens} tokens`, minutes: `${budget.minutes} of ${limits.max_minutes} minutes` }[budget.spent];
+    return { outcome: "escalated", detail: { reason: `Build's budget is spent: ${said} (${budget.spent}); a person decides`, budget: { spent: budget.spent, ...numbers } } };
+  }
+
   /** When the plan stage runs because a plan was found wrong (the last move into it was a `plan_wrong`): who raised it, why, and what the raising
    *  stage's last run said, flattened and capped (`replanOf`). Null for any other run of the plan stage. */
   private async replanEvidence(id: string): Promise<ReturnType<typeof replanOf> | null> {
@@ -1916,6 +1955,7 @@ export class Pipeline {
         stage === "test_design" ? this.replanEvidence(id) : Promise.resolve(null),
       ]);
       repo = task.repoPath;
+      const budgetMinutes = stage === "implementing" && task.route === "feature" ? await this.buildMinutesLeft(id, task.repoPath) : undefined;
       // The entry contract of Build: the feature route builds only from what Plan hands over; what is missing goes back to the planner (once per card), then to a person.
       const entry = stage === "implementing" && task.route === "feature" && !resume ? buildEntryOf(approvals, task.record) : null;
       if (entry && !entry.ok) {
@@ -1930,6 +1970,7 @@ export class Pipeline {
         approvals,
         priorFindings,
         ...(replan ? { replan } : {}),
+        ...(budgetMinutes !== undefined ? { budgetMinutes } : {}),
         signal,
         ...(resume ? { resume: { container: resume.container, inputCommit: resume.inputCommit, engine: resume.engine } } : {}),
         ...(fallback ? { engine: fallback.engine } : {}),
@@ -2015,6 +2056,7 @@ export class Pipeline {
         status,
         outcome,
         ...(error ? { error } : {}),
+        ...(result.usage?.tokens ? { tokens: result.usage.tokens } : {}),
         ...(result.detail || report ? { detail: { ...result.detail, ...(report ? { report } : {}) } } : {}),
         // What the next implementing attempt is handed as prior findings (see latestVerifyingFindings).
         ...(result.findings?.length ? { findings: result.findings } : {}),

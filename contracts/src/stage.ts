@@ -1014,6 +1014,8 @@ export const StageOutput = z.object({
   usage: z.object({
     turns: z.number().int(),
     costUsd: z.number().nullable(),
+    /** The runtime's own count (input and output); null or absent where it cannot report one. */
+    tokens: z.object({ input: z.number().int().nonnegative(), output: z.number().int().nonnegative() }).nullable().optional(),
     durationMs: z.number().int(),
     model: z.string(),
   }),

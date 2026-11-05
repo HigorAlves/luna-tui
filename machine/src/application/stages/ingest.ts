@@ -121,7 +121,7 @@ export function toStageResult({ output, events, artifacts }: Ingested): StageRes
       ...(output.ledger ? { ledger: output.ledger } : {}),
       ...(output.sessionId ? { sessionId: output.sessionId } : {}),
     },
-    usage: { turns: output.usage.turns, costUsd: output.usage.costUsd },
+    usage: { turns: output.usage.turns, costUsd: output.usage.costUsd, tokens: output.usage.tokens ?? null },
     needsInput: output.needsInput ?? undefined,
     requested: output.requested,
     findings: output.findings,

@@ -131,7 +131,7 @@ describe("agent stages through packs", () => {
     expect(seen?.writable).toBe(false);
     expect(seen?.timeoutMs).toBe(300_000);
     expect(result.outcome).toBe("pass");
-    expect(result.usage).toEqual({ turns: 7, costUsd: 0.5 });
+    expect(result.usage).toEqual({ turns: 7, costUsd: 0.5, tokens: null });
     expect(result.events?.map((e) => e.kind)).toEqual(["slice_committed"]);
     expect(result.artifacts).toHaveLength(1);
     expect(existsSync(result.artifacts![0]!.path)).toBe(true);
@@ -651,6 +651,15 @@ describe("agent stages through packs", () => {
     expect(result.run?.outputCommit).not.toBe(result.run?.inputCommit);
     expect(seen!.sessionMount).toBe(join(stateDir, "tasks", ctx.task.id, "session"));
     expect(existsSync(seen!.sessionMount!)).toBe(true);
+  });
+
+  it("caps the run's time at the minutes Build's budget has left, when that is smaller than its own limit", async () => {
+    const run = runners(fakeSandbox(output()));
+    await run.implementing!({ ...context("implementing"), budgetMinutes: 7 });
+    expect((seen!.input as { limits: { timeoutMs: number } }).limits.timeoutMs).toBe(7 * 60_000);
+    expect(seen!.timeoutMs).toBe(7 * 60_000);
+    await run.implementing!({ ...context("implementing"), budgetMinutes: 1000 });
+    expect((seen!.input as { limits: { timeoutMs: number } }).limits.timeoutMs).toBe(30 * 60_000);
   });
 
   it("gives the sandbox the time budget the stage input carries, not the pack's flat default", async () => {
