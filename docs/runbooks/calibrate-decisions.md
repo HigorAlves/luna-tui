@@ -26,7 +26,7 @@ pnpm eval defaults           # prints the proposal, changing nothing
 pnpm eval defaults --write   # updates contracts/src/decision-defaults.json
 ```
 
-The rule, stated in `evals/scorecard.md`: an engine qualifies with coverage >= 0.6 and n >= 4; the default is the qualifying engine with the highest **acted-on accuracy** (right when the machine would have acted); engines within 2 points tie and the cheaper wins; Jev wins only by 5 points or more over `claude:haiku`; a pack with fewer than two engines measured keeps its default. Overconfidence (wrong at or above the bar) and ECE are what to read when two numbers look alike: a model that is right 90% of the time and sure 99% of the time is worse than one that is right 88% and sure 90%.
+The rule, stated in `evals/scorecard.md`: an engine qualifies with coverage >= 0.6 and n >= 4; the default is the qualifying engine with the highest **acted-on accuracy** (right when the machine would have acted); engines within 2 points tie, and a tie goes to Jev when it is among them (by far the cheapest engine), else to the cheaper one; a pack with fewer than two engines measured keeps its default. Overconfidence (wrong at or above the bar) and ECE are what to read when two numbers look alike: a model that is right 90% of the time and sure 99% of the time is worse than one that is right 88% and sure 90%.
 
 ## Accept or override a default
 

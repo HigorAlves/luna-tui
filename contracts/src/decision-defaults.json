@@ -156,11 +156,11 @@
     }
   },
   "scope_check": {
-    "default": "claude:haiku",
+    "default": "jev",
     "fallback": [
-      "codex:luna"
+      "claude:haiku"
     ],
-    "reason": "claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 5), Jev ahead by 0 points, short of the 5 it needs over claude:haiku",
+    "reason": "jev: acted-on accuracy 1.00 at coverage 0.80 (n 5), a tie within 2 points that goes to Jev, the cheapest",
     "measuredAt": "2026-11-05",
     "scorecard": {
       "claude:haiku": {
@@ -267,11 +267,11 @@
     }
   },
   "evidence_format": {
-    "default": "claude:haiku",
+    "default": "jev",
     "fallback": [
-      "codex:luna"
+      "claude:haiku"
     ],
-    "reason": "claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), Jev ahead by 0 points, short of the 5 it needs over claude:haiku",
+    "reason": "jev: acted-on accuracy 1.00 at coverage 1.00 (n 4), a tie within 2 points that goes to Jev, the cheapest",
     "measuredAt": "2026-11-05",
     "scorecard": {
       "claude:haiku": {
@@ -308,7 +308,7 @@
     "fallback": [
       "claude:haiku"
     ],
-    "reason": "jev: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost",
+    "reason": "jev: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points that goes to Jev, the cheapest",
     "measuredAt": "2026-11-05",
     "scorecard": {
       "claude:haiku": {
@@ -452,11 +452,11 @@
     }
   },
   "worth_learning": {
-    "default": "claude:haiku",
+    "default": "jev",
     "fallback": [
-      "codex:luna"
+      "claude:haiku"
     ],
-    "reason": "claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 4), Jev ahead by 0 points, short of the 5 it needs over claude:haiku",
+    "reason": "jev: acted-on accuracy 1.00 at coverage 1.00 (n 4), a tie within 2 points that goes to Jev, the cheapest",
     "measuredAt": "2026-11-05",
     "scorecard": {
       "claude:haiku": {
@@ -489,11 +489,11 @@
     }
   },
   "escalation_reason": {
-    "default": "claude:haiku",
+    "default": "jev",
     "fallback": [
-      "codex:luna"
+      "claude:haiku"
     ],
-    "reason": "claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), Jev ahead by 0 points, short of the 5 it needs over claude:haiku",
+    "reason": "jev: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points that goes to Jev, the cheapest",
     "measuredAt": "2026-11-05",
     "scorecard": {
       "claude:haiku": {

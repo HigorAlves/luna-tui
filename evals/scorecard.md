@@ -4,7 +4,7 @@ Generated 2026-11-05 by `pnpm eval scorecard` from `evals/baselines/<engine>/<pa
 
 ## The rule
 
-An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifying engine with the highest acted-on accuracy; engines within 2 points of it tie and the cheaper one (cost per case) wins; Jev wins only by 5 points or more over claude:haiku (it is the metered path); a pack with fewer than two engines measured keeps its current default and reads `unmeasured`.
+An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifying engine with the highest acted-on accuracy; engines within 2 points of it tie, and a tie goes to Jev when it is among them (by far the cheapest engine), else to the cheaper one (cost per case). A pack with fewer than two engines measured keeps its current default.
 
 ## Every baseline
 
@@ -63,15 +63,15 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | comment_intent | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 4) |
 | coverage_check | claude:haiku | claude:haiku: acted-on accuracy 0.67 at coverage 1.00 (n 4), a tie within 2 points settled by cost |
 | e2e_failure_cause | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
-| escalation_reason | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), Jev ahead by 0 points, short of the 5 it needs over claude:haiku |
-| event_class | jev | jev: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
-| evidence_format | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), Jev ahead by 0 points, short of the 5 it needs over claude:haiku |
+| escalation_reason | jev | jev: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points that goes to Jev, the cheapest |
+| event_class | jev | jev: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points that goes to Jev, the cheapest |
+| evidence_format | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 4), a tie within 2 points that goes to Jev, the cheapest |
 | evidence_valid | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 4), a tie within 2 points settled by cost |
 | finding_classify | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
 | fix_scope | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
 | plan_check | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
 | red_check | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.67 (n 6), a tie within 2 points settled by cost |
 | risk_score | codex:luna | codex:luna: acted-on accuracy 0.67 at coverage 1.00 (n 4) |
-| scope_check | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 5), Jev ahead by 0 points, short of the 5 it needs over claude:haiku |
+| scope_check | jev | jev: acted-on accuracy 1.00 at coverage 0.80 (n 5), a tie within 2 points that goes to Jev, the cheapest |
 | triage_signals | jev | unmeasured: no engine reached coverage 0.6 on 4 cases |
-| worth_learning | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 4), Jev ahead by 0 points, short of the 5 it needs over claude:haiku |
+| worth_learning | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 4), a tie within 2 points that goes to Jev, the cheapest |

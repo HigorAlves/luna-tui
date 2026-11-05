@@ -7,17 +7,17 @@
     "comment_intent": "jev",
     "coverage_check": "claude:haiku",
     "e2e_failure_cause": "claude:haiku",
-    "escalation_reason": "claude:haiku",
+    "escalation_reason": "jev",
     "event_class": "jev",
-    "evidence_format": "claude:haiku",
+    "evidence_format": "jev",
     "evidence_valid": "claude:haiku",
     "finding_classify": "claude:haiku",
     "fix_scope": "claude:haiku",
     "plan_check": "claude:haiku",
     "red_check": "claude:haiku",
     "risk_score": "codex:luna",
-    "scope_check": "claude:haiku",
+    "scope_check": "jev",
     "triage_signals": "jev",
-    "worth_learning": "claude:haiku"
+    "worth_learning": "jev"
   }
 }

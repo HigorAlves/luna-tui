@@ -2,8 +2,8 @@
 // wave 7). The rule, stated once and applied by `proposeDefaults`:
 //   - an engine qualifies with coverage >= 0.6 and at least 4 graded cases;
 //   - the best is the highest acted-on accuracy among those; engines within 2 points of it tie,
-//     and a tie goes to the cheaper engine (cost per case);
-//   - Jev wins only by 5 points or more over claude:haiku (it is the metered path);
+//     and a tie goes to Jev when it is among them (by far the cheapest engine; the user's choice of 2026-11-05),
+//     else to the cheaper engine (cost per case);
 //   - a pack with fewer than two engines measured keeps its current default and reads `unmeasured`.
 // Pure over scorecards; `cli.ts` reads and writes the files.
 import { DecisionDefaults, type DecisionDefault, type EngineId, PACKS, type PackId } from "@hardness/contracts";
@@ -15,10 +15,9 @@ import type { Scorecard } from "./grade.ts";
 export const MIN_COVERAGE = 0.6;
 export const MIN_CASES = 4;
 export const TIE_POINTS = 0.02;
-export const JEV_MARGIN = 0.05;
 const ALLOWED: EngineId[] = ["jev", "claude:haiku", "codex:luna"];
 
-export const RULE = `An engine qualifies with coverage >= ${MIN_COVERAGE} and n >= ${MIN_CASES}. The default is the qualifying engine with the highest acted-on accuracy; engines within ${TIE_POINTS * 100} points of it tie and the cheaper one (cost per case) wins; Jev wins only by ${JEV_MARGIN * 100} points or more over claude:haiku (it is the metered path); a pack with fewer than two engines measured keeps its current default and reads \`unmeasured\`.`;
+export const RULE = `An engine qualifies with coverage >= ${MIN_COVERAGE} and n >= ${MIN_CASES}. The default is the qualifying engine with the highest acted-on accuracy; engines within ${TIE_POINTS * 100} points of it tie, and a tie goes to Jev when it is among them (by far the cheapest engine), else to the cheaper one (cost per case). A pack with fewer than two engines measured keeps its current default.`;
 
 /** Every decision pack's baselines under `evals/baselines/<engine>/<pack>.json`, those that parse. */
 export function loadBaselines(evalsDir: string): Scorecard[] {
@@ -66,13 +65,10 @@ export function proposeDefaults(pack: PackId, cards: Scorecard[], current: { def
   if (eligible.length === 0) return { default: current.default, fallback: [...current.fallback], reason: `unmeasured: no engine reached coverage ${MIN_COVERAGE} on ${MIN_CASES} cases`, measuredAt, measured: false, scorecard: numbers };
   const best = Math.max(...eligible.map(acted));
   const tied = eligible.filter((c) => best - acted(c) <= TIE_POINTS + 1e-9);
-  let chosen = [...tied].sort((a, b) => costPerCase(a) - costPerCase(b) || acted(b) - acted(a))[0]!;
-  const haiku = eligible.find((c) => c.engine === "claude:haiku");
-  let note = tied.length > 1 ? `, a tie within ${TIE_POINTS * 100} points settled by cost` : "";
-  if (chosen.engine === "jev" && haiku && acted(chosen) - acted(haiku) < JEV_MARGIN - 1e-9) {
-    note = `, Jev ahead by ${num((acted(chosen) - acted(haiku)) * 100, 0)} points, short of the ${JEV_MARGIN * 100} it needs over claude:haiku`;
-    chosen = haiku;
-  }
+  // Accuracy first; among the tied, Jev (by far the cheapest engine, whatever cost a baseline recorded for it), then the cheaper one.
+  const jevFirst = (card: Scorecard): number => (card.engine === "jev" ? 0 : 1);
+  const chosen = [...tied].sort((a, b) => jevFirst(a) - jevFirst(b) || costPerCase(a) - costPerCase(b) || acted(b) - acted(a))[0]!;
+  const note = tied.length > 1 ? (chosen.engine === "jev" ? `, a tie within ${TIE_POINTS * 100} points that goes to Jev, the cheapest` : `, a tie within ${TIE_POINTS * 100} points settled by cost`) : "";
   const c = chosen.summary.calibration!;
   return {
     default: chosen.engine,

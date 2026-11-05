@@ -47,10 +47,17 @@ describe("proposeDefaults", () => {
     expect(proposeDefaults("risk_score", [card("risk_score", "claude:haiku", { actedOnAccuracy: 0.96 }, { costUsd: 0.04 }), card("risk_score", "codex:luna", { actedOnAccuracy: 0.93 }, { costUsd: 0.001 })], current).default).toBe("claude:haiku");
   });
 
-  it("lets Jev win only by 5 points over claude:haiku, because it is the metered path", () => {
+  it("gives a tie to Jev, by far the cheapest engine, and keeps a better engine when Jev is behind or does not qualify", () => {
     const haiku = card("risk_score", "claude:haiku", { actedOnAccuracy: 0.85 }, { costUsd: 0.04 });
-    expect(proposeDefaults("risk_score", [card("risk_score", "jev", { actedOnAccuracy: 0.89 }, { costUsd: 0.04 }), haiku], current).default).toBe("claude:haiku");
-    expect(proposeDefaults("risk_score", [card("risk_score", "jev", { actedOnAccuracy: 0.9 }, { costUsd: 0.04 }), haiku], current)).toMatchObject({ default: "jev", fallback: ["claude:haiku"] });
+    // Level, or within the two points of a tie: Jev, with Claude as the engine to fall back on.
+    expect(proposeDefaults("risk_score", [card("risk_score", "jev", { actedOnAccuracy: 0.85 }, { costUsd: 0.001 }), haiku], current)).toMatchObject({ default: "jev", fallback: ["claude:haiku"] });
+    expect(proposeDefaults("risk_score", [card("risk_score", "jev", { actedOnAccuracy: 0.84 }, { costUsd: 0.001 }), haiku], current).default).toBe("jev");
+    // Jev wins the tie even when its cost was not recorded: the preference is for the engine, not for a number in a file.
+    expect(proposeDefaults("risk_score", [card("risk_score", "jev", { actedOnAccuracy: 0.85 }, { costUsd: null }), haiku], current).default).toBe("jev");
+    // Five points behind is no tie: accuracy comes first.
+    expect(proposeDefaults("risk_score", [card("risk_score", "jev", { actedOnAccuracy: 0.8 }, { costUsd: 0.001 }), haiku], current).default).toBe("claude:haiku");
+    // Jev that acts on too few cases does not qualify.
+    expect(proposeDefaults("risk_score", [card("risk_score", "jev", { actedOnAccuracy: 0.99, coverage: 0.5 }, { costUsd: 0.001 }), haiku], current).default).toBe("claude:haiku");
   });
 
   it("carries the numbers behind the choice and when they were measured", () => {
