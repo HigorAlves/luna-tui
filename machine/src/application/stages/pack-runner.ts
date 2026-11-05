@@ -51,6 +51,7 @@ import { pickEngine } from "../engine.ts";
 import type { Graph } from "../graph.ts";
 import { PolicyStore } from "../policy.ts";
 import { RepoImageError } from "../repo-images.ts";
+import { type GraphReadiness, graphEscalation, graphSkipped } from "../graph-ready.ts";
 import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
 
 export interface AgentDeps {
@@ -81,6 +82,8 @@ export interface AgentDeps {
   graph?: Graph;
   /** Asked for when a repo has no graph yet, so the first build starts without a stage waiting on it. */
   ensureGraph?: (repoPath: string) => void;
+  /** Waits for the repository's code graph before triage reads it (see plan.ts); absent, triage never waits. */
+  graphReady?: (input: { repoPath: string; signal: AbortSignal; skip: boolean; note?: (text: string) => Promise<void> }) => Promise<GraphReadiness>;
   /** Runs a host command; the locked-test replay uses it for the project's test command. */
   exec?: (
     command: string,
@@ -216,6 +219,10 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       if (!(error instanceof RepoImageError)) throw error;
       return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "image", reason: `the repository's image could not be built: ${error.reason}`, options: ["fix sandbox.image.base in luna.yaml, or remove it to use the machine's image, then resume"] } };
     }
+  }
+  if (pack === "triage" && deps.graphReady) {
+    const ready = await deps.graphReady({ repoPath: task.repoPath, signal: context.signal, skip: graphSkipped(context.approvals), ...(context.note ? { note: context.note } : {}) });
+    if (ready.state === "failed") return graphEscalation(ready.reason);
   }
   // The branch the pipeline would give this task today: `task/<id>-<slug>`, or the repo's
   // `jira.branch` pattern for a linked task (with the id appended when the repo already has

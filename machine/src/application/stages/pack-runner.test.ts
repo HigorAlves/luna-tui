@@ -551,6 +551,18 @@ describe("agent stages through packs", () => {
     expect((result.detail?.env as { image: string }).image).toBe("sha256:id-of-hardness-runner-shop:abc");
   });
 
+  it("makes triage wait for the repository's graph, and escalates as an environment problem when it cannot be built", async () => {
+    const sandbox = vi.fn();
+    const failing = { ...deps(sandbox), graphReady: async () => ({ state: "failed" as const, reason: "exit code 1" }) };
+    const result = await agentRunners(failing).triage!(context("triage"));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "graph" } });
+    expect(sandbox).not.toHaveBeenCalled();
+    const seen: boolean[] = [];
+    const going = { ...deps(fakeSandbox(output())), graphReady: async (i: { skip: boolean }) => (seen.push(i.skip), { state: "ready" as const }) };
+    await agentRunners(going).triage!(context("triage"));
+    expect(seen).toEqual([false]);
+  });
+
   it("escalates as an environment problem, with the reason, when the repository's image cannot be built", async () => {
     const sandbox = vi.fn();
     const d = { ...deps(sandbox), repoImages: { ensure: async () => { throw new RepoImageError("step 3 failed: no such package"); } } };

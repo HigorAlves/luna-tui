@@ -32,6 +32,7 @@ import { verifyRunner } from "../application/stages/verify.ts";
 import { loadCredential } from "../adapters/credentials/claude.ts";
 import { dockerImages } from "../adapters/docker/image-build.ts";
 import { repoSlug } from "../adapters/graph/slug.ts";
+import { ensureGraphReady } from "../application/graph-ready.ts";
 import { type RepoImageEvent, repoImages as makeRepoImages } from "../application/repo-images.ts";
 import { imageExists, imageId, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
@@ -143,6 +144,8 @@ export async function buildRealStages(
   const checksExec = sandboxExecutor({ machine: config.runnerImage, imageOf: async (repoPath) => (await repoImages.ensure(repoPath)).image });
   // Each stage gets only its own engine's credential, read when the stage starts.
   const credentials = engineCredentials;
+  // A card waits for its repository's graph before triage or the plan reads it (graph-ready.ts).
+  const graphReady = graphs ? (input: Parameters<typeof ensureGraphReady>[1]) => ensureGraphReady({ graph: graphs.graph, policies }, input) : undefined;
   const deps = {
     image: config.runnerImage,
     repoImages,
@@ -162,7 +165,7 @@ export async function buildRealStages(
     ...(cards ? { cards } : {}),
     policies,
     history,
-    ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure } : {}),
+    ...(graphs ? { graph: graphs.graph, ensureGraph: graphs.ensure, graphReady } : {}),
   };
   const verifyPack = (context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) =>
     runAgent(deps, context, "verifying", { ...(extra?.blastRadius?.length ? { blastRadius: extra.blastRadius } : {}), ...(extra?.coverage ? { coverage: extra.coverage } : {}) });
@@ -248,7 +251,7 @@ export async function buildRealStages(
         return planDecisions?.decide ?? null;
       },
       policies: { for: (repoPath) => policies.for(repoPath) },
-      ...(graphs ? { graph: graphs.graph } : {}),
+      ...(graphs ? { graph: graphs.graph, graphReady } : {}),
     }),
     // Setup reads the repo checkout itself (no worktree yet) and proves what it proposes in the image.
     setup: setupRunner({ runPack: (context) => runAgent(deps, context, "setup", { checkout: true }), exec: checksExec, stateDir: config.stateDir }),

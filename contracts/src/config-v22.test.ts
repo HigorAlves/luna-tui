@@ -44,6 +44,15 @@ describe("the sandbox's size and keep", () => {
   });
 });
 
+describe("the wait for a repository's first graph", () => {
+  it("is ten minutes by default, read from wave 11 (11b), and a repository's value wins; zero is refused", () => {
+    expect(FACTORY_DEFAULTS.graph).toEqual({ stale_commits: 50, first_build_minutes: 10 });
+    expect(CONSUMED_FROM["graph.first_build_minutes"]).toBe(11);
+    expect(factoryConfigOf({ graph: { first_build_minutes: 3 } }).graph).toEqual({ stale_commits: 50, first_build_minutes: 3 });
+    expect(LunaConfig.safeParse({ graph: { first_build_minutes: 0 } }).success).toBe(false);
+  });
+});
+
 describe("the base image a repository names", () => {
   it("is none by default, read from wave 11 (11b), and a repository's value wins", () => {
     expect(FACTORY_DEFAULTS.sandbox.image).toEqual({ base: null });

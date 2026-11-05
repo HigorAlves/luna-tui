@@ -205,6 +205,10 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       await appendFile(join(dirOf(repoPath), "misses.jsonl"), `${JSON.stringify(miss)}\n`);
     },
 
+    async behind(repoPath, commit) {
+      return behindOf(repoPath, commit).catch(() => null);
+    },
+
     async isFresh(repoPath, stamp, baseCommit) {
       const expected = (await deps.graphifyVersion?.().catch(() => null)) ?? null;
       if (expected !== null && stamp.graphify !== expected) return false;

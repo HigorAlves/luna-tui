@@ -112,9 +112,20 @@ describe("planStage's code map", () => {
   it("looks the goal up in the graph with the ticket's title and description and the repo's stale bar", async () => {
     const seen: Array<{ text: string; options?: { staleCommits?: number } }> = [];
     const graph = { stampOf: async () => ({ commit: "c" }), locate: async (_repo: string, text: string, options?: { staleCommits?: number }) => { seen.push({ text, options }); return located(); } };
-    const repo = { policies: { for: async () => ({ decisions: {}, graph: true, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2 }, graph: { stale_commits: 7 } } }) } };
+    const repo = { policies: { for: async () => ({ decisions: {}, graph: true, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2 }, graph: { stale_commits: 7, first_build_minutes: 10 } } }) } };
     await setup({}, { graph, ...repo }).run(context());
     expect(seen).toEqual([{ text: "Panic\nd", options: { staleCommits: 7 } }]);
+  });
+
+  it("waits for the repository's graph before it maps, and escalates as an environment problem when it cannot be built", async () => {
+    const waited: string[] = [];
+    const ok = setup({}, { ...locating(), graphReady: async (i: { skip: boolean }) => (waited.push(`ready skip=${i.skip}`), { state: "ready" as const }) });
+    expect((await ok.run(context())).outcome).not.toBe("escalated");
+    expect(waited).toEqual(["ready skip=false"]);
+    const broken = setup({}, { ...locating(), graphReady: async () => ({ state: "failed" as const, reason: "exit code 1" }) });
+    const result = await broken.run(context());
+    expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, reason: expect.stringContaining("exit code 1") } });
+    expect(broken.calls).toHaveLength(0);
   });
 
   it("flags a stale map on the gate with how far behind the graph is", async () => {

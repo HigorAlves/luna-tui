@@ -48,6 +48,8 @@ export interface Graph {
   build(repoPath: string, signal?: AbortSignal): Promise<GraphStamp>;
   /** False only when the graph is older than `baseCommit`: its commit is a strict ancestor of it. */
   isFresh(repoPath: string, stamp: GraphStamp, baseCommit: string): Promise<boolean>;
+  /** Commits the default branch has over `commit`; null when they cannot be counted. */
+  behind?(repoPath: string, commit: string): Promise<number | null>;
   /** Where `text` points in the repo's code, from the current graph; null when the repo has none. No model. */
   locate(repoPath: string, text: string, options?: { staleCommits?: number }): Promise<GraphLocation | null>;
   /** Who owns `paths` at the default branch (CODEOWNERS), for any plain repo-relative paths whether or not the graph knows them; null when the repo has no graph. */
