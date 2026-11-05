@@ -802,6 +802,9 @@ fn gate_facts(approval: &Approval) -> Vec<Line<'static>> {
         let high = approval.requested["risk"]["level"].as_str() == Some("high");
         lines.push(Line::from(vec![label("Risk"), if high { Span::from(risk).fg(c(PEACH)).bold() } else { Span::from(risk) }]));
     }
+    if let Some(line) = approval.risk_raised_line() {
+        lines.push(Line::from(vec![label("Raised"), Span::from(line).fg(c(PEACH))]));
+    }
     if let Some(line) = approval.risk_override_line() {
         lines.push(Line::from(vec![label("Override"), Span::from(line).fg(c(YELLOW))]));
     }

@@ -586,6 +586,8 @@ export const CodeMapAnswer = z.object({
   note: z.string().optional(),
   /** Added by the machine, not the agent: the graph is more than `graph.stale_commits` behind the default branch. */
   stale: z.boolean().optional(),
+  /** Added by the machine: paths the mapper named that were not plain repo-relative paths (a glob, an absolute path, `..`), dropped from `files`. */
+  dropped: z.array(z.string()).optional(),
   /** Added by the machine: commits the default branch has over the graph's; null when it cannot be counted. */
   behind: z.number().int().nullable().optional(),
 });

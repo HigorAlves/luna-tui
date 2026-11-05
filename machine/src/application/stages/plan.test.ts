@@ -139,6 +139,21 @@ describe("planStage's code map", () => {
     expect(failed.detail).toMatchObject({ map: null, mapNote: expect.stringMatching(/code map could not be made/i) });
   });
 
+  it("keeps the first 40 files and entry points of a map and drops what is not a plain repo path, the plan check naming it", async () => {
+    const files = [{ path: "**", role: "change" }, { path: "/etc/passwd", role: "read" }, ...Array.from({ length: 60 }, (_, i) => ({ path: `src/f${i}.ts`, role: "change" }))];
+    const entry_points = ["keys::handle", "src/*", ...Array.from({ length: 60 }, (_, i) => `e${i}`)];
+    const big = { outcome: "pass" as const, detail: { summary: "mapped", map: { components: ["c"], files, entry_points, owners: ["@marta"], confidence: 0.8 } } };
+    const { run } = setup({ code_map: [big], plan: [planned({ slices: [{ title: "g", est_loc: 1, touchpoints: ["src/f0.ts"], acceptance: ["no panic", "stays selected"] }] })] }, withGraph);
+    const result = await run(context());
+    const map = result.detail?.map as { files: Array<{ path: string }>; entry_points: string[]; dropped: string[] };
+    expect(map.files).toHaveLength(40);
+    expect(map.files[0]!.path).toBe("src/f0.ts");
+    expect(map.entry_points).toHaveLength(40);
+    expect(map.entry_points.slice(0, 2)).toEqual(["keys::handle", "e0"]);
+    expect(map.dropped).toEqual(["**", "/etc/passwd", "src/*"]);
+    expect(result.detail?.planIssues).toEqual([expect.stringMatching(/code map named a path that is not a plain repo-relative path: \*\*/), expect.stringMatching(/\/etc\/passwd/), expect.stringMatching(/src\/\*/)]);
+  });
+
   it("does not call code_map without a graph, or with the repo's graph off, and the detail says map null", async () => {
     for (const over of [{}, { graph: { stampOf: async () => null } }, { ...withGraph, policies: { for: async () => ({ decisions: {}, graph: false }) } }]) {
       const { run, calls, decided } = setup({}, over);
@@ -298,6 +313,43 @@ describe("planStage", () => {
     expect(calls[1]!.plan).toEqual({ record, brief: "", criteria: ["no panic", "stays selected"], assumptions: [], slices: [], round: 1 });
     for (const d of decided.filter((k) => k.pack === "plan_check")) expect(d.plan).toMatchObject({ record, brief: "", slices, cases: [{ title: "case 0" }, { title: "case 1" }] });
     expect(decided[0]!.repo).toBe("/repo");
+  });
+
+  describe("a plan that reaches the control plane", () => {
+    const lowTask = { ...task, record: { ...record, risk: "low" } } as unknown as TaskRow;
+    const touching = (...files: string[]) => planned({ slices: [{ title: "g", est_loc: 3, touchpoints: files, acceptance: ["no panic", "stays selected"] }] });
+
+    it.each([".github/workflows/release.yml", "CODEOWNERS", "luna.yaml", "pnpm-lock.yaml", "docs/CODEOWNERS"])("raises a low risk to high when a step touches %s, and the approvers rule reads it", async (file) => {
+      const { run } = setup({ plan: [touching("board/src/keys.rs", file)] });
+      const result = await run(context({ task: lowTask }));
+      expect(result.detail).toMatchObject({ risk: { level: "high", machine: "high" }, approvalRule: { needed: 2 }, riskRaised: expect.stringContaining(file) });
+    });
+
+    it("leaves an ordinary plan's level alone, and never lowers a high one", async () => {
+      const calm = await setup({ plan: [touching("board/src/keys.rs")] }).run(context({ task: lowTask }));
+      expect(calm.detail).toMatchObject({ risk: { level: "low" }, approvalRule: { needed: 1 } });
+      expect(calm.detail).not.toHaveProperty("riskRaised");
+      const high = { ...task, record: { ...record, risk: "high" } } as unknown as TaskRow;
+      expect((await setup({ plan: [touching("CODEOWNERS")] }).run(context({ task: high }))).detail).toMatchObject({ risk: { level: "high" } });
+    });
+
+    it("reads the files the fast lane's plan names too", async () => {
+      const lowFast = { ...fastTask } as unknown as TaskRow;
+      const result = await setup({ plan_fast: [touching(".github/workflows/ci.yml")] }).run(context({ task: lowFast }));
+      expect(result.detail).toMatchObject({ risk: { level: "high" } });
+    });
+
+    it("flags a step file outside the map's change and test files: a file the map marks read, or does not name", async () => {
+      const readOnly = { outcome: "pass" as const, detail: { summary: "m", map: { components: ["c"], files: [{ path: "board/src/keys.rs", role: "change" }, { path: "board/src/app.rs", role: "read" }, { path: "board/src/keys_test.rs", role: "test" }], entry_points: [], owners: [], confidence: 0.8 } } };
+      const outside = await setup({ code_map: [readOnly], plan: [touching("board/src/app.rs")] }, withGraph).run(context());
+      expect(outside.detail?.flagged).toContain("plan outside map");
+      const inside = await setup({ code_map: [readOnly], plan: [touching("board/src/keys.rs", "board/src/keys_test.rs")] }, withGraph).run(context());
+      expect(inside.detail?.flagged).not.toContain("plan outside map");
+      const created = planned({ steps: [{ title: "g", description: "g", est_loc: 3, files: ["board/src/new.rs"], new_files: ["board/src/new.rs"], done_when: ["no panic", "stays selected"], touchpoints: ["board/src/new.rs"], acceptance: ["no panic", "stays selected"] }] });
+      expect((await setup({ code_map: [readOnly], plan: [created] }, withGraph).run(context())).detail?.flagged).not.toContain("plan outside map");
+      // Without a map there is nothing to be outside of.
+      expect((await setup({ plan: [touching("board/src/app.rs")] }).run(context())).detail?.flagged).not.toContain("plan outside map");
+    });
   });
 
   describe("who may approve", () => {

@@ -5,14 +5,15 @@ import { z } from "zod";
 import type { Slice } from "./stage.ts";
 
 /** Ids kept across an edit: a text that was in the list keeps its id, a new text takes the next free `C<n>`. */
-export function reviseCriteria(previous: readonly Criterion[], texts: readonly string[]): Criterion[] {
+export function reviseCriteria(previous: readonly Criterion[], texts: readonly string[], floor = 0): Criterion[] {
   const taken = new Set<string>();
   const kept = texts.map((text) => {
     const same = previous.find((c) => c.text === text && !taken.has(c.id));
     if (same) taken.add(same.id);
     return same ?? null;
   });
-  let next = previous.reduce((max, c) => Math.max(max, Number(/^C(\d+)$/.exec(c.id)?.[1] ?? 0)), 0);
+  // The next id is past every id ever handed out: the Plan's high-water mark (`floor`), and any id in hand. A retired id is never reused.
+  let next = previous.reduce((max, c) => Math.max(max, Number(/^C(\d+)$/.exec(c.id)?.[1] ?? 0)), floor);
   return texts.map((text, i) => kept[i] ?? { id: `C${++next}`, text });
 }
 
@@ -68,6 +69,9 @@ export function scenarioText(s: { approach: string; given?: string | null; when?
 }
 
 const TITLE_MAX = 120;
+/** The longest a step's description or a `done_when` line may be, and a scenario's given, when, then and data need. */
+const STEP_TEXT_MAX = 500;
+const SCENARIO_TEXT_MAX = 300;
 
 /** The designer's scenarios as the scenarios the machine stores: `S1`... by position, the criterion's text by its ref (an unknown ref ties to nothing),
  *  a title from `then` (told apart by the id when another scenario has it) for the places that key on one, an approach that says the scenario in
@@ -77,7 +81,10 @@ export function scenariosOfAnswer(answer: readonly AnswerScenario[], criteria: r
   return answer.map((a, i) => {
     const id = `S${i + 1}`;
     const criterion = criteria.find((c) => c.id === a.criterion_ref) ?? null;
-    const base = a.then.replace(/\s+/g, " ").trim().slice(0, TITLE_MAX) || id;
+    const given = oneLine(a.given, SCENARIO_TEXT_MAX);
+    const when = oneLine(a.when, SCENARIO_TEXT_MAX);
+    const then = oneLine(a.then, SCENARIO_TEXT_MAX);
+    const base = then.slice(0, TITLE_MAX) || id;
     seen.set(base, (seen.get(base) ?? 0) + 1);
     return {
       id,
@@ -85,11 +92,11 @@ export function scenariosOfAnswer(answer: readonly AnswerScenario[], criteria: r
       criterion: criterion?.text ?? null,
       criterion_ref: criterion?.id ?? null,
       type: a.type,
-      given: a.given,
-      when: a.when,
-      then: a.then,
-      approach: `Given ${a.given}, when ${a.when}, then ${a.then} (${a.layer})`,
-      data_needs: a.data_needs ?? [],
+      given,
+      when,
+      then,
+      approach: `Given ${given}, when ${when}, then ${then} (${a.layer})`,
+      data_needs: (a.data_needs ?? []).map((need) => oneLine(need, SCENARIO_TEXT_MAX)),
       layer: a.layer,
       version,
     };
@@ -128,9 +135,25 @@ export const PlanStep = z.object({
   files: z.array(z.string()).optional(),
   /** The files of `files` the step creates: planned, but absent from the code map. */
   new_files: z.array(z.string()).optional(),
+  /** Paths the planner named that were not plain repo-relative paths (a glob, an absolute path, `..`): dropped from `files`, kept by name for the plan check. */
+  dropped_files: z.array(z.string()).optional(),
   done_when: z.array(z.string()).optional(),
 });
 export type PlanStep = z.infer<typeof PlanStep>;
+
+/** Text a model wrote, made one line and cut: whitespace (newlines included) collapsed, then at most `max` characters. */
+export const oneLine = (text: string, max: number): string => text.replace(/\s+/g, " ").trim().slice(0, max);
+
+const GLOB_CHARACTER = /[*?[\]{}]/;
+
+/** A path a model named that the machine may treat as one file: relative to the repo, no glob character, no `..`, no NUL, no control character,
+ *  not absolute (POSIX, drive or UNC), at most 300 characters. Anything else is dropped where it came in, never matched or opened. */
+export function isPlainRepoPath(path: string): boolean {
+  if (path.length === 0 || path.length > 300 || path.trim() !== path || path.trim() === "") return false;
+  if (/[\u0000-\u001f\u007f]/.test(path) || GLOB_CHARACTER.test(path) || path.includes("\\")) return false;
+  if (path.startsWith("/") || /^[A-Za-z]:/.test(path)) return false;
+  return !path.split("/").includes("..");
+}
 
 /** A step as the planner writes it: a description, its files (a path, or a path declared `new`), what makes it done and its size. */
 export const AnswerStep = z.object({
@@ -146,9 +169,14 @@ export type AnswerStep = z.infer<typeof AnswerStep>;
  *  Build, the test designer and the scope check read, and as those slices. A step's files are its touchpoints; a path is listed once. Pure. */
 export function stepsOfAnswer(answer: readonly AnswerStep[]): { steps: PlanStep[]; slices: Slice[] } {
   const steps = answer.map((a): PlanStep => {
-    const paths = [...new Set(a.files.map((f) => (typeof f === "string" ? f : f.path)))];
-    const created = [...new Set(a.files.flatMap((f) => (typeof f !== "string" && f.new === true ? [f.path] : [])))];
-    return { title: a.title ?? a.description, description: a.description, est_loc: a.est_loc, files: paths, new_files: created, done_when: a.done_when, touchpoints: paths, acceptance: a.done_when };
+    const named = a.files.map((f) => (typeof f === "string" ? { path: f, created: false } : { path: f.path, created: f.new === true }));
+    const plain = named.filter((f) => isPlainRepoPath(f.path));
+    const dropped = [...new Set(named.filter((f) => !isPlainRepoPath(f.path)).map((f) => oneLine(f.path, 100)))];
+    const paths = [...new Set(plain.map((f) => f.path))];
+    const created = [...new Set(plain.filter((f) => f.created).map((f) => f.path))];
+    const description = oneLine(a.description, STEP_TEXT_MAX);
+    const doneWhen = a.done_when.map((line) => oneLine(line, STEP_TEXT_MAX));
+    return { title: a.title ? oneLine(a.title, STEP_TEXT_MAX) : description, description, est_loc: a.est_loc, files: paths, new_files: created, ...(dropped.length ? { dropped_files: dropped } : {}), done_when: doneWhen, touchpoints: paths, acceptance: doneWhen };
   });
   return { steps, slices: steps.map((s) => ({ title: s.title, est_loc: s.est_loc, touchpoints: s.touchpoints, acceptance: s.acceptance })) };
 }
@@ -176,6 +204,8 @@ export const Plan = z.object({
   migration: z.string().optional(),
   flags: z.array(z.string()).optional(),
   version: z.number().int(),
+  /** The highest criterion number ever handed out (`C<n>`): an id retired by an edit is never reused, so a scenario tied to it cannot be tied to another criterion. */
+  next_criterion: z.number().int().optional(),
 });
 export type Plan = z.infer<typeof Plan>;
 
@@ -200,6 +230,7 @@ export function planOf(parts: {
     assumptions: [...(parts.assumptions ?? [])],
     rollback: parts.rollback ?? "",
     version: parts.version ?? 2,
+    next_criterion: criteriaOf(parts.criteria ?? []).length,
   };
   if (parts.migration !== undefined) plan.migration = parts.migration;
   if (parts.flags !== undefined) plan.flags = [...parts.flags];

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { PlanAnswer, TestDesignAnswer } from "./packs.ts";
-import { Plan, PlanStep, Scenario, criteriaOf, planOf, reviseCriteria, scenarioOf, scenarioText, scenariosOfAnswer, stepOf, stepsOfAnswer } from "./plan.ts";
+import { Plan, PlanStep, isPlainRepoPath, Scenario, criteriaOf, planOf, reviseCriteria, scenarioOf, scenarioText, scenariosOfAnswer, stepOf, stepsOfAnswer } from "./plan.ts";
 import { Slice, TestCase } from "./stage.ts";
 
 describe("the v2.2 plan contracts", () => {
@@ -70,6 +70,7 @@ describe("the v2.2 plan contracts", () => {
       assumptions: ["carts are per user"],
       rollback: "revert the commit",
       version: 2,
+      next_criterion: 1,
     });
     expect(Plan.parse(JSON.parse(JSON.stringify(plan)))).toEqual(plan);
   });
@@ -120,6 +121,55 @@ describe("the v2.2 plan contracts", () => {
       expect(plan.steps.map((s) => s.id)).toEqual(["P1", "P2"]);
       expect(plan.steps[0]!.new_files).toEqual(["src/coupon-cap.ts"]);
       expect(planOf({ brief: "g" }).version).toBe(2);
+    });
+
+    it("collapses whitespace and caps each model-written field of a step: a newline reaches no later prompt as written", () => {
+      const long = "x".repeat(900);
+      const { steps, slices } = stepsOfAnswer([{ description: `Cap\n\n  a coupon ${long}`, files: ["a.ts"], done_when: [`line one\nline two ${long}`, "ok"], est_loc: 5 }]);
+      expect(steps[0]!.description).not.toMatch(/\s{2}|\n/);
+      expect(steps[0]!.description!.length).toBeLessThanOrEqual(500);
+      expect(steps[0]!.done_when![0]).toMatch(/^line one line two x+$/);
+      expect(steps[0]!.done_when![0]!.length).toBeLessThanOrEqual(500);
+      expect(steps[0]!.title).toBe(steps[0]!.description);
+      expect(slices[0]!.acceptance).toEqual(steps[0]!.done_when);
+    });
+
+    it("collapses whitespace and caps each model-written field of a scenario at 300", () => {
+      const long = "y".repeat(500);
+      const [s] = scenariosOfAnswer([{ criterion_ref: "C1", type: "happy", given: `a\ncart ${long}`, when: `it is\n\napplied ${long}`, then: `it counts\nonce ${long}`, data_needs: [`a\nfixture ${long}`], layer: "unit" }], criteriaOf(["c"]), 1);
+      for (const field of [s!.given!, s!.when!, s!.then!, s!.data_needs![0]!]) {
+        expect(field.length).toBeLessThanOrEqual(300);
+        expect(field).not.toMatch(/\n|\s{2}/);
+      }
+      expect(s!.title).not.toMatch(/\n/);
+      expect(s!.approach).not.toMatch(/\n/);
+    });
+
+    it("takes only plain repo-relative paths from a model: no glob, no absolute path, no `..`, no NUL; the rest is dropped and kept by name", () => {
+      for (const ok of ["src/a.ts", "a.ts", "docs/read me.md", ".github/x.yml", "src/a..b.ts"]) expect(isPlainRepoPath(ok), ok).toBe(true);
+      for (const bad of ["**", "src/*.ts", "src/**/a.ts", "a?.ts", "{a,b}.ts", "[ab].ts", "/etc/passwd", "C:\\x", "\\\\host\\share", "../x", "a/../b", "a\0b", "", " ", "x".repeat(301), "a\nb"]) expect(isPlainRepoPath(bad), JSON.stringify(bad)).toBe(false);
+      const { steps, slices } = stepsOfAnswer([{ description: "d", files: ["src/a.ts", "**", { path: "../../etc/passwd", new: true }, { path: "src/new.ts", new: true }], done_when: ["x"], est_loc: 1 }]);
+      expect(steps[0]).toMatchObject({ files: ["src/a.ts", "src/new.ts"], new_files: ["src/new.ts"], touchpoints: ["src/a.ts", "src/new.ts"], dropped_files: ["**", "../../etc/passwd"] });
+      expect(slices[0]!.touchpoints).toEqual(["src/a.ts", "src/new.ts"]);
+      expect(stepsOfAnswer([{ description: "d", files: ["a.ts"], done_when: [], est_loc: 1 }]).steps[0]).not.toHaveProperty("dropped_files");
+    });
+
+    it("never reuses a retired criterion id: the next id comes from a high-water mark, not from the criteria left", () => {
+      const before = criteriaOf(["a", "b", "c"]);
+      const dropped = reviseCriteria(before, ["a", "b"], 3);
+      expect(dropped).toEqual([{ id: "C1", text: "a" }, { id: "C2", text: "b" }]);
+      // C3 was retired; the mark (3) is what is kept on the Plan, so the next new criterion is C4.
+      expect(reviseCriteria(dropped, ["a", "b", "d"], 3)).toEqual([{ id: "C1", text: "a" }, { id: "C2", text: "b" }, { id: "C4", text: "d" }]);
+      expect(reviseCriteria(dropped, ["a", "d", "e"], 3).map((c) => c.id)).toEqual(["C1", "C4", "C5"]);
+      // Without a mark it is still never below the highest id in hand.
+      expect(reviseCriteria(before, ["x"]).map((c) => c.id)).toEqual(["C4"]);
+    });
+
+    it("starts the Plan's high-water mark at the criteria it has, and reads a Plan written without one", () => {
+      expect(planOf({ criteria: ["a", "b"] }).next_criterion).toBe(2);
+      const old = { ...planOf({ criteria: ["a"] }) } as Record<string, unknown>;
+      delete old.next_criterion;
+      expect(Plan.safeParse(old).success).toBe(true);
     });
 
     it("keeps a criterion's id when a person edits the list: the same text keeps it, a new text takes the next free one", () => {

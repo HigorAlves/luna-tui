@@ -26,6 +26,7 @@ import {
   applyPolicy,
   type Coverage,
   coverageOf,
+  isPlainRepoPath,
   planFacts,
   criteriaOf,
   maxRisk,
@@ -36,6 +37,7 @@ import {
 import type { RequiredOwners } from "../../domain/codeowners.ts";
 import type { GraphLocation } from "../graph.ts";
 import { approvalRule } from "../../domain/approvers.ts";
+import { controlPlaneFiles } from "../../domain/control-plane.ts";
 import { triageVerdicts } from "../../domain/triage-policy.ts";
 import { recordIdOf } from "../decision-truth.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
@@ -171,7 +173,15 @@ export function planStage(deps: PlanDeps): StageRunner {
     const mapFromLocate = (found: GraphLocation): CodeMapAnswer | null =>
       found.files.length === 0
         ? null
-        : { components: found.components, files: found.files.slice(0, 40).map((path) => ({ path, role: "change" as const })), entry_points: [], owners: [...new Set(found.owners.flatMap((o) => o.owners))], confidence: found.confidence, stale: found.stale, behind: found.behind };
+        : capMap({ components: found.components, files: found.files.map((path) => ({ path, role: "change" as const })), entry_points: [], owners: [...new Set(found.owners.flatMap((o) => o.owners))], confidence: found.confidence, stale: found.stale, behind: found.behind });
+    /** What the machine stores of a map: the first 40 files and entry points, plain repo-relative paths only (what is not is kept by name for the plan check). Truncates, never rejects. */
+    const MAP_CAP = 40;
+    const capMap = (m: CodeMapAnswer): CodeMapAnswer => {
+      const files = m.files.filter((f) => isPlainRepoPath(f.path));
+      const entry = m.entry_points.filter((e) => isPlainRepoPath(e));
+      const dropped = [...m.files.filter((f) => !isPlainRepoPath(f.path)).map((f) => f.path), ...m.entry_points.filter((e) => !isPlainRepoPath(e))].map((p) => p.replace(/\s+/g, " ").slice(0, 100));
+      return { ...m, files: files.slice(0, MAP_CAP), entry_points: entry.slice(0, MAP_CAP), ...(dropped.length || m.dropped?.length ? { dropped: [...new Set([...(m.dropped ?? []), ...dropped])] } : {}) };
+    };
     const mapWithAgent = async (found: GraphLocation | null) => {
       const shortlist = found ? { files: found.files, symbols: found.symbols, components: found.components, owners: [...new Set(found.owners.flatMap((o) => o.owners))] } : undefined;
       const mapped = await deps.runPack("code_map", sub("map"), shortlist ? { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], shortlist } } : {});
@@ -179,7 +189,7 @@ export function planStage(deps: PlanDeps): StageRunner {
       const parsed = CodeMapAnswer.safeParse(mapped.detail?.map);
       if (mapped.outcome === "pass" && parsed.success) {
         // The machine, not the agent, says whether the graph the map came from is stale.
-        map = { ...parsed.data, ...(found ? { stale: found.stale, behind: found.behind } : {}) };
+        map = capMap({ ...parsed.data, ...(found ? { stale: found.stale, behind: found.behind } : {}) });
         mapNote = undefined;
       } else {
         map = null;
@@ -210,8 +220,8 @@ export function planStage(deps: PlanDeps): StageRunner {
     // The decision may raise the risk above triage's grade, never lower it: one small-model call must not drop the second approver.
     const graded: Risk = task.record?.risk ?? "medium";
     const scored = answer ? riskOf(answer as Parameters<typeof riskOf>[0]) : null;
-    const level: Risk = scored ? maxRisk(scored.level, graded) : graded;
-    const risk: PlanRisk = { level, machine: level, ...(scored ? { product: scored.product, scores } : { scores }), ...(complexity === "S" || complexity === "M" || complexity === "L" || complexity === "XL" ? { complexity } : {}) };
+    let level: Risk = scored ? maxRisk(scored.level, graded) : graded;
+    let risk: PlanRisk = { level, machine: level, ...(scored ? { product: scored.product, scores } : { scores }), ...(complexity === "S" || complexity === "M" || complexity === "L" || complexity === "XL" ? { complexity } : {}) };
     const riskPart = { risk };
     // A plan found wrong in Build, Verify or review comes back with its evidence: the planner's alone.
     const replanPart = context.replan ? { replan: context.replan } : {};
@@ -373,6 +383,24 @@ export function planStage(deps: PlanDeps): StageRunner {
       review = planCheck.problems.length ? planCheck.problems : ["the plan check could not tell whether the plan fits the record"];
     }
 
+    // The risk was fixed before the plan, so the files the planner named could not raise it: a script reads them now. A step that touches the
+    // control plane (CI, ownership, luna.yaml, a lockfile) makes the plan high risk, whatever its ticket reads like; the raised level is what the
+    // approvers rule and Ship read, and the machine's own floor from here on.
+    const stepFiles = (finalPlan?.steps ?? []).flatMap((s) => s.files ?? s.touchpoints);
+    const control = controlPlaneFiles(stepFiles);
+    let riskRaised: string | undefined;
+    if (control.length > 0 && level !== "high") {
+      level = "high";
+      risk = { ...risk, level: "high", machine: "high" };
+      riskRaised = `a step touches a control-plane file: ${control.slice(0, 5).join(", ")}`;
+    }
+    // Step files outside the map's change and test files (a file it marks read, or does not name) and not declared new are flagged.
+    if (map) {
+      const allowed = new Set(map.files.filter((f) => f.role !== "read").map((f) => f.path.replace(/^(\.\/)+/, "")));
+      const created = new Set((finalPlan?.steps ?? []).flatMap((s) => s.new_files ?? []).map((f) => f.replace(/^(\.\/)+/, "")));
+      if (stepFiles.some((f) => !allowed.has(f.replace(/^(\.\/)+/, "")) && !created.has(f.replace(/^(\.\/)+/, "")))) flagged.add("plan outside map");
+    }
+
     const verdicts = { coverage: coverage.verdict, plan: planCheck.verdict, risk: riskJudged.verdict };
     for (const [name, verdict] of Object.entries(verdicts)) if (verdict === "flag" || verdict === "ask") flagged.add(name);
     if (map?.stale) flagged.add("map stale");
@@ -401,6 +429,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         plan: finalPlan!,
         // What the plan check's script found wrong with the plan, still open when the planner's re-runs ran out.
         planIssues,
+        ...(riskRaised ? { riskRaised } : {}),
         ...(context.replan ? { replan: context.replan, ...(changed?.trim() ? { changed } : {}) } : {}),
         cases,
         // Coverage by criterion id: what each criterion's scenarios are, the score against the repo's bar, and what is still open.

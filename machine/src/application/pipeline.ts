@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -220,6 +220,32 @@ const HOST_POLLERS: ReadonlySet<TaskState> = new Set<TaskState>(["ci_watch", "sh
 
 const objectOf = (value: unknown): Record<string, unknown> | undefined => (value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
 
+/** Coverage of a revised list of criteria by the scenarios on the gate: the stored report (the shape the plan stage writes), what is open, and the bar.
+ *  Null for a gate with no scenarios. A scenario tied by id to a criterion the edit removed is named: it proves nothing now. */
+function revisedCoverage(criteria: Criterion[], cases: unknown, previous: Record<string, unknown> | undefined, barOf: number | undefined) {
+  if (!Array.isArray(cases) || cases.length === 0) return null;
+  const scenarios = cases.flatMap((c) => {
+    const parsed = Scenario.safeParse(c);
+    return parsed.success ? [parsed.data] : [];
+  });
+  const untestable = (Array.isArray(previous?.untestable) ? previous.untestable.map(String) : []).filter((u) => criteria.some((c) => c.id === u));
+  const report = coverageOf(criteria, scenarios, { untestable });
+  const textOf = (id: string) => criteria.find((c) => c.id === id)?.text ?? id;
+  const orphans = scenarios.filter((s) => s.criterion_ref && !criteria.some((c) => c.id === s.criterion_ref));
+  const open = [
+    ...report.gaps.filter((g) => !report.untestable.includes(g)).map((g) => `${g} has no scenario: ${textOf(g)}`),
+    ...report.thin.map((g) => `${g} names a limit or an error and has no edge or failure scenario: ${textOf(g)}`),
+    ...orphans.map((s) => `${s.id ?? s.title} is tied to ${s.criterion_ref}, which is no longer a criterion`),
+  ];
+  const bar = barOf ?? FACTORY_DEFAULTS.plan.coverage_score_min;
+  return {
+    report,
+    bar,
+    open,
+    stored: { score: report.score, bar, gaps: report.gaps, thin: report.thin, untestable: report.untestable, open, per: report.per.map((p) => ({ id: p.criterion.id, text: p.criterion.text, scenarios: p.scenarios, types: p.types })) },
+  };
+}
+
 /** The owners a code map names, as the gate keeps it; none for a gate with no map. */
 function ownersOf(map: unknown): string[] {
   const owners = (map as { owners?: unknown } | null | undefined)?.owners;
@@ -231,10 +257,13 @@ function revisePlan(current: unknown, after: Record<string, unknown>, steps?: Pl
   const parsed = Plan.safeParse(current);
   if (!parsed.success) return null;
   const plan = parsed.data;
+  // The high-water mark of criterion numbers: a Plan written without one is read from the ids it has.
+  const floor = plan.next_criterion ?? Math.max(0, ...plan.acceptance_criteria.map((c) => Number(/^C(\d+)$/.exec(c.id)?.[1] ?? 0)));
+  const criteria = Array.isArray(after.criteria) ? reviseCriteria(plan.acceptance_criteria, after.criteria.map(String), floor) : plan.acceptance_criteria;
   return {
     ...plan,
     ...(typeof after.brief === "string" ? { goal: after.brief } : {}),
-    ...(Array.isArray(after.criteria) ? { acceptance_criteria: reviseCriteria(plan.acceptance_criteria, after.criteria.map(String)) } : {}),
+    ...(Array.isArray(after.criteria) ? { acceptance_criteria: criteria, next_criterion: Math.max(floor, ...criteria.map((c) => Number(/^C(\d+)$/.exec(c.id)?.[1] ?? 0))) } : {}),
     ...(Array.isArray(after.assumptions) ? { assumptions: after.assumptions.map(String) } : {}),
     ...(typeof after.rollback === "string" ? { rollback: after.rollback } : {}),
     ...(steps ? { steps: steps.map(stepOf) } : {}),
@@ -539,7 +568,8 @@ export class Pipeline {
    *  fields given change; the rest (including slices) stay as triage wrote them. Each edit is
    *  kept as a revision on the approval and logged as `plan.edited`. */
   async editPlan(id: string, patch: EditPlanInput): Promise<TaskRow> {
-    const approvers = (await this.policyFor((await this.get(id)).repoPath)).factory.plan.approvers;
+    const planPolicy = (await this.policyFor((await this.get(id)).repoPath)).factory.plan;
+    const approvers = planPolicy.approvers;
     const { fields, gate } = await this.store.withTaskLock(id, async (task, tx) => {
       const open = await tx.findOpenApproval(id);
       let plan: ApprovalRow | undefined;
@@ -579,6 +609,10 @@ export class Pipeline {
         const revisions = Array.isArray(requested.revisions) ? requested.revisions : [];
         // The v2.2 Plan follows the edit and its version rises (a gate from before the Plan has none).
         const revised = revisePlan(requested.plan, after, stepped?.steps);
+        // A new list of criteria is new ids: coverage by id is recomputed against the scenarios the designer left, and what is open is stored and flagged.
+        const covered = Array.isArray(after.criteria) ? revisedCoverage(revised?.acceptance_criteria ?? criteriaOf(after.criteria.map(String)), requested.cases, objectOf(requested.coverageReport), planPolicy.coverage_score_min) : null;
+        const flaggedNow = Array.isArray(requested.flagged) ? requested.flagged.map(String) : [];
+        const flagged = covered ? [...flaggedNow.filter((f) => f !== "coverage"), ...(covered.open.length > 0 || covered.report.score < covered.bar ? ["coverage"] : [])] : flaggedNow;
         const level = (after.risk as PlanRisk | undefined)?.level ?? (objectOf(requested.risk)?.level as Risk | undefined) ?? "low";
         const owners = ownersOf(after.map ?? requested.map);
         // A changed plan is a new plan: whoever approved the old one has not approved this one.
@@ -586,6 +620,7 @@ export class Pipeline {
           ...requested,
           ...after,
           ...(revised ? { plan: revised } : {}),
+          ...(covered ? { coverageReport: covered.stored, flagged } : {}),
           ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
           ...("risk" in after || "map" in after || requested.approvalRule !== undefined ? { approvalRule: approvalRule(level === "high" || level === "medium" ? level : "low", approvers, owners) } : {}),
           ...(Array.isArray(requested.approvers) ? { approvers: [] } : {}),

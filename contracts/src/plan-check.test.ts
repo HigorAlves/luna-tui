@@ -47,6 +47,20 @@ describe("planFacts", () => {
     expect(planFacts(outside, [], null).issues).toEqual([]);
   });
 
+  it("fails a step that names no file: a plan whose steps name none cannot reach Build with nothing planned", () => {
+    const none = plan({ slices: [{ title: "x", description: "x", est_loc: 5, touchpoints: [], acceptance: ["C1 C2"], files: [], done_when: ["C1 C2"] }] });
+    expect(planFacts(none, [], theMap).issues).toEqual(["P1 names no file"]);
+    expect(planFacts(none, [], null).issues).toEqual(["P1 names no file"]);
+    // A step whose every path was dropped as not plain also names no file, and says which were dropped.
+    const dropped = plan({ slices: [{ title: "x", description: "x", est_loc: 5, touchpoints: [], acceptance: ["C1 C2"], files: [], dropped_files: ["**"], done_when: ["C1 C2"] }] });
+    expect(planFacts(dropped, [], theMap).issues).toEqual(["P1 named a path that is not a plain repo-relative path: **", "P1 names no file"]);
+  });
+
+  it("names the paths a map or a step had that were not plain repo paths", () => {
+    const withDropped = { ...theMap, dropped: ["/etc/passwd", "src/*"] };
+    expect(planFacts(plan(), [], withDropped).issues).toEqual(["the code map named a path that is not a plain repo-relative path: /etc/passwd", "the code map named a path that is not a plain repo-relative path: src/*"]);
+  });
+
   it("wants a rollback, and a blank one is none", () => {
     expect(planFacts(plan({ rollback: "" }), [], theMap).issues).toEqual(["the plan has no rollback"]);
     expect(planFacts(plan({ rollback: "  \n " }), [], theMap).issues).toEqual(["the plan has no rollback"]);

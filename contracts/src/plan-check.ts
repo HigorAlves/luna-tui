@@ -20,19 +20,23 @@ function names(line: string, criterion: { id: string; text: string }): boolean {
 
 export function planFacts(plan: Plan, scenarios: readonly Scenario[], map: CodeMapAnswer | null): PlanFacts {
   const issues: string[] = [];
+  const notPlain = "is not a plain repo-relative path";
   for (const criterion of plan.acceptance_criteria) {
     if (!plan.steps.some((step) => (step.done_when ?? step.acceptance).some((line) => names(line, criterion)))) {
       issues.push(`${criterion.id} appears in no step's done_when: ${criterion.text}`);
     }
   }
-  if (map) {
-    const mapped = new Set(map.files.map((f) => pathOf(f.path)));
-    for (const step of plan.steps) {
-      const created = new Set((step.new_files ?? []).map(pathOf));
-      for (const file of step.files ?? step.touchpoints) {
-        const path = pathOf(file);
-        if (!mapped.has(path) && !created.has(path)) issues.push(`${step.id ?? step.title} touches ${path}, which the code map does not name and the step does not declare new`);
-      }
+  for (const dropped of map?.dropped ?? []) issues.push(`the code map named a path that ${notPlain}: ${dropped}`);
+  const mapped = map ? new Set(map.files.map((f) => pathOf(f.path))) : null;
+  for (const step of plan.steps) {
+    const name = step.id ?? step.title;
+    for (const dropped of step.dropped_files ?? []) issues.push(`${name} named a path that ${notPlain}: ${dropped}`);
+    const files = step.files ?? step.touchpoints;
+    if (files.length === 0) issues.push(`${name} names no file`);
+    const created = new Set((step.new_files ?? []).map(pathOf));
+    for (const file of files) {
+      const path = pathOf(file);
+      if (mapped && !mapped.has(path) && !created.has(path)) issues.push(`${name} touches ${path}, which the code map does not name and the step does not declare new`);
     }
   }
   if (plan.rollback.trim() === "") issues.push("the plan has no rollback");

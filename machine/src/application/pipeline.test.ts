@@ -925,7 +925,7 @@ describe("editing the plan before approving", () => {
 
     await pipeline.editPlan(task.id, { brief: "new brief", criteria: ["c2", "c3"] });
     let approval = (await pipeline.approvals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
-    expect(approval?.requested.plan).toEqual({ ...plan, goal: "new brief", acceptance_criteria: [{ id: "C2", text: "c2" }, { id: "C3", text: "c3" }], version: 3 });
+    expect(approval?.requested.plan).toEqual({ ...plan, goal: "new brief", acceptance_criteria: [{ id: "C2", text: "c2" }, { id: "C3", text: "c3" }], version: 3, next_criterion: 3 });
     // An edit that changes nothing is no revision.
     await pipeline.editPlan(task.id, { brief: "new brief" });
     approval = (await pipeline.approvals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
@@ -1001,6 +1001,66 @@ describe("editing the plan before approving", () => {
       await pipeline.editPlan(id, { rollback: "revert" });
       expect((await gate(id)).requested.revisions).toBeUndefined();
       expect((await gate(id)).requested.plan).toMatchObject({ version: 2 });
+    });
+  });
+
+  it("never hands a retired criterion id to a new criterion: C3 dropped, the next new one is C4, and an old scenario tied to C3 stays tied to nothing", async () => {
+    const plan = { goal: "g", steps: [], acceptance_criteria: [{ id: "C1", text: "a" }, { id: "C2", text: "b" }, { id: "C3", text: "c" }], out_of_scope: [], assumptions: [], rollback: "r", version: 2, next_criterion: 3 };
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["a", "b", "c"], assumptions: [], plan, cases: [{ id: "S1", title: "t", criterion: "c", criterion_ref: "C3", approach: "x" }] } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    await pipeline.editPlan(task.id, { criteria: ["a", "b"] });
+    await pipeline.editPlan(task.id, { criteria: ["a", "b", "d"] });
+    const gate = (await pipeline.approvals(task.id)).find((a) => a.decision === null)!;
+    expect((gate.requested.plan as { acceptance_criteria: unknown }).acceptance_criteria).toEqual([{ id: "C1", text: "a" }, { id: "C2", text: "b" }, { id: "C4", text: "d" }]);
+    expect(gate.requested.plan).toMatchObject({ next_criterion: 4 });
+  });
+
+  describe("a criteria edit recomputes coverage by id on the revised gate", () => {
+    const plan = { goal: "g", steps: [], acceptance_criteria: [{ id: "C1", text: "a" }, { id: "C2", text: "b" }], out_of_scope: [], assumptions: [], rollback: "r", version: 2, next_criterion: 2 };
+    const cases = [{ id: "S1", title: "t1", criterion: "a", criterion_ref: "C1", type: "happy", approach: "x" }, { id: "S2", title: "t2", criterion: "b", criterion_ref: "C2", type: "happy", approach: "x" }];
+    const report = { score: 1, bar: 0.85, gaps: [], thin: [], untestable: [], open: [], per: [] };
+    const atGate = async (extra: Record<string, unknown> = {}) => {
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["a", "b"], assumptions: [], plan, cases, coverageReport: report, flagged: ["plan outside map"], ...extra } });
+      const task = await newTask();
+      await pipeline.start(task.id);
+      return task.id;
+    };
+    const gate = async (id: string) => (await pipeline.approvals(id)).find((a) => a.decision === null)!.requested;
+
+    it("lists the new criterion that no scenario names and the scenario now tied to a criterion that is gone, and flags the gate", async () => {
+      const id = await atGate();
+      await pipeline.editPlan(id, { criteria: ["a", "c"] });
+      const requested = await gate(id);
+      expect(requested.coverageReport).toMatchObject({ score: 0.5, bar: 0.85, gaps: ["C3"], thin: [], per: [{ id: "C1", scenarios: ["S1"] }, { id: "C3", scenarios: [] }] });
+      expect((requested.coverageReport as { open: string[] }).open).toEqual([expect.stringMatching(/C3 has no scenario: c/), expect.stringMatching(/S2 is tied to C2, which is no longer a criterion/)]);
+      expect(requested.flagged).toEqual(["plan outside map", "coverage"]);
+    });
+
+    it("clears the coverage flag when the edit leaves every criterion covered and no scenario orphaned, keeping the other flags", async () => {
+      const id = await atGate({ flagged: ["plan outside map", "coverage"] });
+      await pipeline.editPlan(id, { criteria: ["b", "a"] });
+      const requested = await gate(id);
+      expect(requested.coverageReport).toMatchObject({ score: 1, gaps: [], open: [] });
+      expect(requested.flagged).toEqual(["plan outside map"]);
+    });
+
+    it("matches a scenario with no ref by its criterion's text, and leaves a gate with no scenarios as it was", async () => {
+      const id = await atGate({ cases: [{ title: "t1", criterion: "a", approach: "x" }, { title: "t2", criterion: "b", approach: "x" }], plan: undefined });
+      await pipeline.editPlan(id, { criteria: ["a", "b2"] });
+      expect((await gate(id)).coverageReport).toMatchObject({ gaps: ["C2"], score: 0.5 });
+      stubs.reset();
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["a"], assumptions: [] } });
+      const bare = await newTask();
+      await pipeline.start(bare.id);
+      await pipeline.editPlan(bare.id, { criteria: ["a", "z"] });
+      expect(await gate(bare.id)).not.toHaveProperty("coverageReport");
+    });
+
+    it("does not touch coverage for an edit that leaves the criteria alone", async () => {
+      const id = await atGate();
+      await pipeline.editPlan(id, { brief: "other" });
+      expect((await gate(id)).coverageReport).toEqual(report);
     });
   });
 

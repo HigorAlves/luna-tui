@@ -585,6 +585,11 @@ impl Approval {
         Some(format!("you set {level}, below the machine's {machine}: kept as ground truth ({reason}); approvers and Ship read {machine}"))
     }
 
+    /// Why the machine raised the plan's risk after the plan was written (a step reaches the control plane); absent otherwise.
+    pub fn risk_raised_line(&self) -> Option<String> {
+        self.requested["riskRaised"].as_str().filter(|t| !t.trim().is_empty()).map(String::from)
+    }
+
     /// How many names the plan needs and who may be among them, in the gate's words (an attestation); absent on a gate from before the rule.
     pub fn rule_line(&self) -> Option<String> {
         self.requested["approvalRule"]["text"].as_str().filter(|t| !t.trim().is_empty()).map(String::from)
@@ -2989,6 +2994,13 @@ mod detail_tests {
         assert_eq!((old.approvals_line().as_deref(), old.rule_line()), (Some("1 of 2 (ana)"), None));
         let medium = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"medium"},"approvalRule":{"needed":1,"outside":"off","text":"Needs 1 approver."},"approvers":["ana"]}}"#);
         assert_eq!(medium.approvals_line().as_deref(), Some("approved by ana"));
+    }
+
+    #[test]
+    fn the_gate_says_why_the_machine_raised_the_risk_after_the_plan() {
+        let g = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high","machine":"high"},"riskRaised":"a step touches a control-plane file: CODEOWNERS"}}"#);
+        assert_eq!(g.risk_raised_line().as_deref(), Some("a step touches a control-plane file: CODEOWNERS"));
+        assert_eq!(gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"low"}}}"#).risk_raised_line(), None);
     }
 
     #[test]
