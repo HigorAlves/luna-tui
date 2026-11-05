@@ -14,6 +14,7 @@ import { parseNote } from "../../domain/fix-card.ts";
 import type { Policy } from "../../domain/policy.ts";
 import { approvedCases, approvedPlan } from "../../domain/stage-input.ts";
 import { EvidenceStore } from "../evidence-store.ts";
+import { evidenceFindings } from "../../domain/send-back.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import type { VideoPipeline } from "./video.ts";
 
@@ -176,8 +177,14 @@ async function prelude(deps: EvidenceDeps, context: StageContext): Promise<{ res
 }
 
 /** The script prelude alone: the manifest and scenario checks, the files listed. */
+/** A failure that says what is missing also carries it as a finding, which is what Build is given when the card goes back. */
+function withMissing(result: StageResult): StageResult {
+  const error = result.detail?.error;
+  return result.outcome === "fail" && typeof error === "string" && !result.findings ? { ...result, findings: evidenceFindings(error) } : result;
+}
+
 export function evidenceRunner(deps: EvidenceDeps): StageRunner {
-  return async (context) => (await prelude(deps, context)).result;
+  return async (context) => withMissing((await prelude(deps, context)).result);
 }
 
 export interface EvidenceStageDeps extends EvidenceDeps {
@@ -231,7 +238,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
     const { task } = context;
     const { result, facts } = await prelude(deps, context);
     // A manifest gap, a failed run or no manifest at all: today's failure, no pack.
-    if (result.outcome !== "pass" || !facts) return result;
+    if (result.outcome !== "pass" || !facts) return withMissing(result);
 
     const plan = approvedPlan(context.approvals);
     const approval = context.approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");

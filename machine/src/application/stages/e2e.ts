@@ -7,6 +7,7 @@ import { branchBase, diffNameStatus } from "../../adapters/git/worktree.ts";
 import type { DecisionOverrides } from "@hardness/contracts";
 
 import type { Policy } from "../../domain/policy.ts";
+import { type ScenarioRow, scenarioFindings } from "../../domain/send-back.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type TruthSink, e2eCauseTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
@@ -175,11 +176,24 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
       return (verdict === "proceed" || verdict === "flag") && (choice === "env_flake" || choice === "test_bug") ? choice : verdict === "skipped" ? null : "product_bug";
     };
 
+    /** What Build is given when the card goes back: one finding per scenario that did not pass, with the judged cause. */
+    const withFindings = (r: StageResult, cause: string | null): StageResult => {
+      if (r.outcome === "pass") return r;
+      const d = r.detail as { summary?: unknown; criteria?: unknown[] } | undefined;
+      const rows = (d?.criteria ?? []).flatMap((c): ScenarioRow[] => {
+        const row = c as { text?: unknown; criterion?: unknown; result?: unknown; evidence?: unknown } | null;
+        return row && typeof row === "object" && typeof row.text === "string" && typeof row.result === "string"
+          ? [{ text: row.text, criterion: typeof row.criterion === "string" ? row.criterion : null, result: row.result, evidence: Array.isArray(row.evidence) ? row.evidence.filter((e): e is string => typeof e === "string") : [] }]
+          : [];
+      });
+      const findings = scenarioFindings(rows, typeof d?.summary === "string" ? d.summary : "", cause);
+      return findings.length > 0 ? { ...r, findings } : r;
+    };
     let result = settle(await deps.runPack(context));
     if (result.outcome !== "fail") return result;
     const cause = await causeOf(result);
-    if (cause === null) return result;
-    if (cause !== "env_flake" || flakeRetries === 0) return { ...result, detail: { ...result.detail, cause } };
+    if (cause === null) return withFindings(result, null);
+    if (cause !== "env_flake" || flakeRetries === 0) return withFindings({ ...result, detail: { ...result.detail, cause } }, cause);
     // An environment flake: the scenario was never really tried, so once more before a person is asked.
     // The re-run writes into the same run folder: what the first attempt left there must not be read as its packet.
     if (deps.stateDir) await rm(join(deps.stateDir, "runs", context.runId, "out"), { recursive: true, force: true });
@@ -192,7 +206,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     if (causeRecord) await deps.truth?.learned({ pack: "e2e_failure_cause", recordId: causeRecord, label: e2eCauseTruth(result.outcome !== "fail"), source: "e2e_rerun", taskId: context.task.id });
     if (result.outcome !== "fail") return { ...result, detail: { ...result.detail, rerun: true, cause } };
     const summary = String(result.detail?.summary ?? "");
-    return {
+    return withFindings({
       ...result,
       outcome: "escalated",
       detail: {
@@ -203,7 +217,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
         reason: `e2e failed ${flakeRetries === 1 ? "twice" : `${flakeRetries + 1} times`} on what looks like an environment flake: ${summary}`,
         options: ["check the QA target or the dev server, then retry the task", "mark the scenario partial by hand"],
       },
-    };
+    }, cause);
   };
 }
 

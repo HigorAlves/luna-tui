@@ -212,6 +212,18 @@ describe("e2e_failure_cause", () => {
     expect(check).toEqual({ kind: "e2e", e2e: { verdict: "fail", summary: "login broke", attempt: 2, criteria: [{ text: "login works", result: "fail" }] } });
   });
 
+  it("sends Build one finding per failed scenario with the judged cause, in the result's findings", async () => {
+    const decide = vi.fn<Decide>(async () => cause("product_bug"));
+    const result = await run(vi.fn().mockResolvedValue(failing), decide);
+    expect(result.outcome).toBe("fail");
+    expect(result.findings).toEqual([expect.objectContaining({ severity: "blocker", title: "scenario failed: login works", body: "expected: login works\nseen: login broke\ncause: product_bug" })]);
+  });
+
+  it("sends the failed scenarios even when no cause was judged", async () => {
+    const result = await run(vi.fn().mockResolvedValue(failing), null);
+    expect(result.findings).toEqual([expect.objectContaining({ title: "scenario failed: login works", body: "expected: login works\nseen: login broke" })]);
+  });
+
   it("takes the number of environment-flake re-runs from the repo's luna.yaml `verify.env_flake_retries`", async () => {
     const withRetries = (n: number, runPack: (context: StageContext) => Promise<StageResult>) =>
       e2eRunner({ runPack, detectWeb: async () => true, decide: async () => cause("env_flake"), overrides: async () => ({}), policy: async () => ({ qa: "web", factory: { verify: { env_flake_retries: n } } }) })({ ...context(), attempt: 2 });

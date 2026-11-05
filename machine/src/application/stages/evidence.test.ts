@@ -63,6 +63,12 @@ describe("evidenceRunner: one manifest row per approved scenario", () => {
     expect(result.detail).toMatchObject({ verdict: "partial", error: `1 approved scenario(s) have no manifest row: ${scenarios[1]!.title}` });
   });
 
+  it("sends the card back with the missing part as a finding", async () => {
+    write({ acceptance: [row(scenarios[0]!.title)] });
+    const result = await runner({ runId: "e2e-run" })(approved);
+    expect(result.findings).toEqual([expect.objectContaining({ severity: "blocker", title: "Evidence is missing", body: expect.stringContaining("have no manifest row") })]);
+  });
+
   it("matches titles verbatim: a reworded row is a missing one", async () => {
     write({ acceptance: [row("rejects a bad password"), row(scenarios[1]!.title)] });
     const result = await runner({ runId: "e2e-run" })(approved);

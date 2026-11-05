@@ -1609,6 +1609,29 @@ describe("the implementing findings loop", () => {
     expect(seen).toEqual([[], ["left uncommitted"]]);
   });
 
+  it("gives Build the failed scenarios of a browser run that sent the card back, not the last Verify pass's findings", async () => {
+    const finding = (title: string) => ({ path: "", line: 0, start_line: null, severity: "blocker", title, body: "", suggestion_code: null, confidence: 1 });
+    const seen: Array<string[] | undefined> = [];
+    let e2eRuns = 0;
+    const runner = (stage: TaskState): StageRunner => {
+      if (stage === "implementing") {
+        return async (context) => {
+          seen.push(context.priorFindings?.map((f) => f.title));
+          return { outcome: "pass" };
+        };
+      }
+      if (stage === "verifying") return async () => ({ outcome: "pass", findings: [finding("leftover verify nit")] });
+      if (stage === "e2e") {
+        return async () => (++e2eRuns === 1 ? { outcome: "fail", detail: {}, findings: [finding("scenario failed: login works")] } : { outcome: "pass" });
+      }
+      return stubs.runnerFor(stage);
+    };
+    pipeline = new Pipeline(db, runner, { inline: true, hasConfig: () => true });
+    const task = await newTask();
+    await startAndApprove(task.id);
+    expect(seen[1]).toEqual(["scenario failed: login works"]);
+  });
+
   it("gives the next implementing attempt the findings its own failed run left", async () => {
     const finding = (title: string) => ({
       path: "test/a.test.ts", line: 0, start_line: null, severity: "test", title, body: "", suggestion_code: null, confidence: 1,
