@@ -106,6 +106,7 @@ checks:                                   # the repo's own checks; without this 
     cwd: machine
     paths: ["machine/**", "contracts/**"]
     coverage: coverage/lcov.info          # an lcov report the run writes, relative to cwd; Verify measures the change's added lines against it
+    minutes: 6                            # how long the check takes (optional): a check with no paths runs in Build's regression sweep when this is within build.regression_full_suite_minutes
 services:                                 # run beside every stage and check container, reachable by key as hostname
   postgres:
     image: postgres:16
@@ -186,7 +187,7 @@ Each `services` entry runs as its own container beside every stage that runs the
 | `fast_lane` | `max_risk: low`, `max_size: S`, `excluded_types: [infra, data]`, `cross_team: false` | 9 |
 | `plan` | `coverage_score_min: 0.85`, `coverage_rounds: 3`, `plan_check_retries: 2`, `approvers {low 1, medium 1, high 2, outside_owning_team true}`, `sla {reminder_days 2, escalate_days 5}` | all read by wave 9b (`coverage_rounds` and `plan_check_retries` since 8) |
 | `size` | `target_loc: [1000, 2000]`, `hard_limit_loc: 2500`, `max_children: 8`, `max_rounds: 3`, `depth: 2` | 15 |
-| `build` | `max_iterations: 15`, `max_tokens: 2000000`, `max_minutes: 90`, `backoff_minutes: [1, 30]`, `regression_full_suite_minutes: 10` | 10 |
+| `build` | `max_iterations: 15`, `max_tokens: 2000000`, `max_minutes: 90`, `backoff_minutes: [1, 30]`, `regression_full_suite_minutes: 10` | 10: all read. `max_iterations` counts each red or green the ledger reports after the tests commit and each failed regression sweep; `max_tokens` counts new work (the runtime's own count of input and output, cache reads kept off the budget; a runtime that cannot count leaves tokens uncounted and the card's gate says so); `max_minutes` is the implementing runs' wall clock, and a run's time limit is the smaller of its own and the minutes left; `backoff_minutes` clamps how long a provider's rate limit is waited for; `regression_full_suite_minutes` is the longest a whole-suite check (no `paths`) may take (its `minutes` hint) and still run in Build's sweep |
 | `sandbox` | `cpu: 4`, `memory_gb: 8`, `egress: [registries, github]` | 11 |
 | `verify` | `coverage_drop_max: 0.5`, `mutation {command null, min_score 0.6}`, `build_rounds: 1`, `env_flake_retries: 1`, `ci_flaky_reruns: 1`, `auto_rebase: 1`, `e2e {deploy {command null}, start {command null}}` | `env_flake_retries`, `ci_flaky_reruns` and `auto_rebase` 8, the rest 12 |
 | `evidence` | `video_budget_s: 240`, `regenerate: 1`, `tts {voice null, language null}`, `storage: release_asset`, `retention_days: 180` | `retention_days` keeps its meaning (a repo's value, else `MACHINE_RETENTION_DAYS`); the rest 12 |
