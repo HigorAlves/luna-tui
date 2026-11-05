@@ -331,6 +331,28 @@ describe("datasets and the labeling queue", () => {
     expect(calls[1]!.init!.body).not.toContain('"k"');
   });
 
+  it("posts straight to the queue when it is given the queue's id, without listing: a self-hosted Laminar has no list route", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fake = (async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      return init?.method === "POST" ? { ok: true, status: 201, json: async () => [] } : { ok: false, status: 404, json: async () => ({}) };
+    }) as unknown as typeof fetch;
+    const telemetry = await createLaminarTelemetry({ ...options, mode: "metadata", fetch: fake }, fakeSdk());
+    const id = "b3ea1137-a457-430d-8f3a-835a71554651";
+    expect(await telemetry.queue.push(id, [{ idempotencyKey: "rec-1", data: { plan: 1 } }])).toEqual({ pushed: 1 });
+    expect(calls.map((c) => c.url)).toEqual([`http://localhost:8000/v1/labeling_queues/${id}/items`]);
+    // Laminar wants a target on every item: an item with no answer to prefill carries an empty one.
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({ items: [{ data: { plan: 1 }, target: {}, idempotencyKey: "rec-1" }] });
+  });
+
+  it("says to pass the queue's id when this Laminar cannot list queues by name", async () => {
+    const warnings: string[] = [];
+    const noList = (async () => ({ ok: false, status: 404, json: async () => ({}) })) as unknown as typeof fetch;
+    const telemetry = await createLaminarTelemetry({ ...options, mode: "metadata", fetch: noList }, fakeSdk(), (line) => warnings.push(line));
+    expect(await telemetry.queue.push("review", [{ idempotencyKey: "r", data: {} }])).toEqual({ pushed: 0 });
+    expect(warnings[0]).toMatch(/pass the queue's id/);
+  });
+
   it("warns and pushes nothing when the queue is not there or the call fails", async () => {
     const warnings: string[] = [];
     const missing = (async () => ({ ok: true, status: 200, json: async () => [] })) as unknown as typeof fetch;

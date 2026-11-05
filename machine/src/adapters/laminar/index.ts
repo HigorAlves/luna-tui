@@ -232,8 +232,10 @@ export async function createLaminarTelemetry(options: LaminarOptions, sdk?: Lami
     },
   };
 
-  /** Labeling queues are reached over HTTP (`/v1/labeling_queues`), as the SDK has no resource for them; the project key never leaves this file. */
+  /** Labeling queues are reached over HTTP (`/v1/labeling_queues/<id>/items`), as the SDK has no resource for them; the project key never leaves this file.
+   *  A queue is made in Laminar's UI; it is named here by its id, or by its name where the instance can list queues. */
   const http = options.fetch ?? fetch;
+  const QUEUE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   const queueUrl = `${options.baseUrl}:${options.httpPort}/v1/labeling_queues`;
   const headers = { Authorization: `Bearer ${options.projectApiKey}`, "Content-Type": "application/json", Accept: "application/json" };
   const queue = {
@@ -241,14 +243,20 @@ export async function createLaminarTelemetry(options: LaminarOptions, sdk?: Lami
       let pushed = 0;
       await safe(`could not queue items for ${name}`, async () => {
         if (items.length === 0) return;
-        const listed = await http(queueUrl, { headers });
-        if (!listed.ok) throw new Error(`listing queues answered ${listed.status}`);
-        const body = (await listed.json()) as unknown;
-        const rows: unknown[] = Array.isArray(body) ? body : isRecord(body) && Array.isArray(body.items) ? body.items : [];
-        const found = rows.find((row) => isRecord(row) && row.name === name);
-        const id = isRecord(found) && typeof found.id === "string" ? found.id : null;
+        // A queue's id (the UUID in its page address) goes straight to its items route. A name needs the list route, which a
+        // self-hosted Laminar does not have: it answers 404, and the id is what to pass.
+        let id: string | null = QUEUE_ID.test(name) ? name : null;
+        if (id === null) {
+          const listed = await http(queueUrl, { headers });
+          if (listed.status === 404) throw new Error(`this Laminar cannot list queues by name: pass the queue's id (the UUID in its page address) instead of ${name}`);
+          if (!listed.ok) throw new Error(`listing queues answered ${listed.status}`);
+          const body = (await listed.json()) as unknown;
+          const rows: unknown[] = Array.isArray(body) ? body : isRecord(body) && Array.isArray(body.items) ? body.items : [];
+          const found = rows.find((row) => isRecord(row) && row.name === name);
+          id = isRecord(found) && typeof found.id === "string" ? found.id : null;
+        }
         if (id === null) throw new Error(`no labeling queue named ${name}: create it in Laminar first`);
-        const sent = await http(`${queueUrl}/${encodeURIComponent(id)}/items`, { method: "POST", headers, body: JSON.stringify({ items: items.map((i) => ({ data: i.data, ...(i.target ? { target: i.target } : {}), ...(i.metadata ? { metadata: i.metadata } : {}), idempotencyKey: i.idempotencyKey })) }) });
+        const sent = await http(`${queueUrl}/${encodeURIComponent(id)}/items`, { method: "POST", headers, body: JSON.stringify({ items: items.map((i) => ({ data: i.data, target: i.target ?? {}, ...(i.metadata ? { metadata: i.metadata } : {}), idempotencyKey: i.idempotencyKey })) }) });
         if (!sent.ok) throw new Error(`queueing answered ${sent.status}`);
         pushed = items.length;
       });

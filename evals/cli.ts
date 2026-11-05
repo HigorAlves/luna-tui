@@ -2,7 +2,7 @@
 //
 //   pnpm eval --pack <p> --engine <e> ...                    replay a pack's cases (run.ts)
 //   pnpm eval harvest --pack <decision> [--since <date>] [--with-truth] [--all]
-//   pnpm eval dataset push --pack <decision> [--queue <name>] [--records]
+//   pnpm eval dataset push --pack <decision> [--queue <id or name>] [--records]
 //   pnpm eval dataset pull --pack <decision>
 //   pnpm eval scorecard                       evals/scorecard.md over every decision baseline
 //   pnpm eval defaults [--write]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
