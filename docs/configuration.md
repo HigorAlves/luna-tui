@@ -181,6 +181,7 @@ Each `services` entry runs as its own container beside every stage that runs the
 | Section | Keys and defaults | Read from wave |
 |---|---|---|
 | `dedup` | `duplicate: 0.90`, `related: 0.70`, `ask_below: 0.7`, `lookback_days: 90` | 14 |
+| `backlog` | `stale_days: 14` | 14 |
 | `triage` | `confidence {kind 0.80, size 0.60, urgency 0.70, risk 0.85, archive 0.90}`, `flag_band: 0.15`, `hint_weight: 0.5`, `max_questions: 3`, `max_rounds: 2`, `sla {reminder_days 2, archive_days 5}` | 9 |
 | `graph` | `stale_commits: 50` | 9 (read by triage, and by the plan stage for the code map's stale flag) |
 | `scoring` | `weights {who 3, what 3, impact 2, time 2, demand 1}`, `bands {P0 28, P1 22, P2 16}` | 9 |
@@ -195,7 +196,7 @@ Each `services` entry runs as its own container beside every stage that runs the
 
 Wave 9b reads the whole `plan` section: `plan.coverage_score_min` (the bar the scenarios' coverage score must reach before the designer stops), `plan.approvers` (names needed per risk level and whether one must come from outside the code map's owners on a high-risk plan), `plan.sla.reminder_days` (the plan gate's reminder; a repo's `sla.gate` wins) and `plan.sla.escalate_days` (escalation to a person, once, after a reminder; `0` turns it off), and from `graph` the `stale_commits` bar for the code map's stale flag; the fast lane's `fast_lane.cross_team` is read again when the fast plan's own files are checked for owning teams. The plan gate's columns follow the diagram: a card waiting at `awaiting_approval` shows in Plan.
 
-Wave 8 reads `plan.coverage_rounds` (the test designer's rounds), `plan.plan_check_retries` (the planner's re-runs after a plan check), `verify.env_flake_retries` (browser re-runs on an environment flake), `verify.ci_flaky_reruns` and `verify.auto_rebase` (the ship monitor's CI re-runs and rebases) and `ship.stale_days` (how old a PR head may be before it blocks a merge). `evidence.video_budget_s` stays 240 in the film prompts and is wired in wave 12. `ship.auto_merge` is not read: today's `policy.auto_merge` (default `off`) decides what the machine merges. `verify.mutation.command`, `verify.e2e.deploy.command`, `verify.e2e.start.command` and `ship.merge.commit_template` are stored as written and are never run or rendered by this wave.
+Wave 14 reads `dedup.*` (the duplicate check's bars and how far back closed cards are compared) and `backlog.stale_days` (how long a backlog item may go unassessed before it is marked stale). Wave 8 reads `plan.coverage_rounds` (the test designer's rounds), `plan.plan_check_retries` (the planner's re-runs after a plan check), `verify.env_flake_retries` (browser re-runs on an environment flake), `verify.ci_flaky_reruns` and `verify.auto_rebase` (the ship monitor's CI re-runs and rebases) and `ship.stale_days` (how old a PR head may be before it blocks a merge). `evidence.video_budget_s` stays 240 in the film prompts and is wired in wave 12. `ship.auto_merge` is not read: today's `policy.auto_merge` (default `off`) decides what the machine merges. `verify.mutation.command`, `verify.e2e.deploy.command`, `verify.e2e.start.command` and `ship.merge.commit_template` are stored as written and are never run or rendered by this wave.
 
 ## GitHub gates
 
