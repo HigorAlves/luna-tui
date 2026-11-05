@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, renameS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { FACTORY_DEFAULTS, StageInput, type StageOutput } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, PACKS, StageInput, type StageOutput } from "@hardness/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CredentialWaitError, type Credentials, NoCredentialError, fixedCredentials } from "../../adapters/credentials/index.ts";
@@ -816,6 +816,18 @@ describe("agent stages through packs", () => {
     expect(existsSync(seen!.sessionMount!)).toBe(true);
   });
 
+  it("gives the verifier no session folder of the card's, and no slice_list tool", async () => {
+    await runAgent(deps(fakeSandbox(output())), context("verifying"), "verifying");
+    expect(seen!.sessionMount).toBeUndefined();
+    expect(PACKS.verifying.access.luna ?? []).not.toContain("slice_list");
+  });
+
+  it("runs the verifier on another family than the implementer's when that credential is there, and says so on the run", async () => {
+    const started = vi.fn(async () => {});
+    await runAgent(deps(fakeSandbox(output())), { ...context("verifying"), started }, "verifying");
+    expect(started).toHaveBeenCalledWith(expect.objectContaining({ engine: "codex:sol" }));
+  });
+
   it("caps the run's time at the minutes Build's budget has left, when that is smaller than its own limit", async () => {
     const run = runners(fakeSandbox(output()));
     await run.implementing!({ ...context("implementing"), budgetMinutes: 7 });
@@ -1049,8 +1061,9 @@ describe("the engine a stage runs on", () => {
   it("gives a verifying stage the Codex login its second opinion needs beside its own engine's, and releases both", async () => {
     const { credentials, log } = recordingCredentials();
     await runAgent({ ...deps(fakeSandbox(output(), () => log.push("sandbox"))), credentials }, context("verifying"), "verifying");
-    expect(seen!.credential).toEqual({ env: { KEY_FOR_CLAUDE_OPUS: "v", KEY_FOR_CODEX_SOL: "v" }, mounts: [] });
-    expect(log).toEqual(["prepare claude:opus", "prepare codex:sol", "sandbox", "release claude:opus", "release codex:sol"]);
+    // The reviewer is on the other family (codex:sol, which is also the second opinion's engine), so one credential serves both.
+    expect(seen!.credential).toEqual({ env: { KEY_FOR_CODEX_SOL: "v" }, mounts: [] });
+    expect(log).toEqual(["prepare codex:sol", "sandbox", "release codex:sol"]);
   });
 
   it("releases the credential when the sandbox throws", async () => {

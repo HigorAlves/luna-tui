@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, type EngineId, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -47,6 +47,7 @@ import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
+import { reviewerEngine } from "../../domain/engine-choice.ts";
 import { pickEngine } from "../engine.ts";
 import type { Graph } from "../graph.ts";
 import { PolicyStore } from "../policy.ts";
@@ -250,15 +251,23 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // The task's own engine for the pack, else luna.yaml's, else the default; a re-attached run
   // keeps the engine its container started on, and a fallback after a usage limit runs the engine
   // the machine handed it (which logs why). An engine passed over is logged with why.
-  const choice = resume?.engine
+  let choice: { engine: EngineId; reason: string | null; note?: string } = resume?.engine
     ? { engine: resume.engine, reason: null }
     : context.engine
       ? { engine: context.engine, reason: null }
       : await pickEngine(deps.credentials, PACKS[pack], task.stages ?? null, policy.engines, task.repoPath);
+  // The reviewer is another model family than the implementer when that family's credential is on the machine and nobody named an engine for it.
+  if (pack === "verifying" && !resume?.engine && !context.engine && "source" in choice && choice.source === "default") {
+    const implementer = task.stages?.implementing ?? policy.engines?.implementing ?? PACKS.implementing.engines.default;
+    const ready = new Set<EngineId>();
+    for (const engine of PACKS.verifying.engines.allowed) if ((await deps.credentials.check(engine, { repo: task.repoPath })).available) ready.add(engine);
+    const other = reviewerEngine(PACKS.verifying, implementer, (e) => ready.has(e));
+    if (other) choice = { engine: other.engine, reason: other.reason };
+  }
   const engineEvents = choice.reason ? [{ at: new Date().toISOString(), kind: "engine", payload: { pack, engine: choice.engine, reason: choice.reason } }] : [];
   if (!resume) await context.started?.({ container, inputCommit, engine: choice.engine });
   // An engine asked for that gave way to the default is said on the task as it starts, not only in the run's events.
-  if ("note" in choice && choice.note) await context.note?.(choice.note).catch(() => {});
+  if (choice.note) await context.note?.(choice.note).catch(() => {});
 
   // The repo's code graph, read-only at /graph, with how current it is against where this task forked.
   const baseCommit = extra.baseCommit ?? (await (extra.checkout ? repoHead(workspace.path) : branchBase(workspace.path, task.repoPath)));
@@ -421,7 +430,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const sandbox = await (deps.sandbox ?? runSandbox)({
     name: container,
     attach: Boolean(resume),
-    sessionMount,
+    // The verifier never sees the card's shared agent session: it reviews from the plan, the scenarios and the Build Report, not the implementer's trail.
+    ...(pack === "verifying" ? {} : { sessionMount }),
     cacheVolume: cacheVolumeFor(task.repoPath),
     image: pack === "e2e" ? deps.qaImage : pack === "recording" ? (deps.videoImage ?? deps.qaImage) : deps.image,
     runDir,

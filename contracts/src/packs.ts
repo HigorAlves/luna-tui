@@ -831,13 +831,13 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     skills: ["review-contract", "caveman-review"],
     access: access(READ_ONLY, {
       write: true,
-      luna: ["slice_list"],
       commands: ["gh pr view", "gh pr diff", "git diff", "git log", "git merge-base", "git rev-list", "git add", "git commit", ...CHECK_COMMANDS],
     }),
     writable: true,
     maxTurns: 60,
     timeoutMs: 20 * MINUTE,
-    engines: only("claude:opus"),
+    // A second family reviews when its credential is on the machine (D9); with one family it runs as before.
+    engines: { default: "claude:opus", allowed: ["claude:opus", "codex:sol"] },
     effort: "high",
     answer: VerifyingAnswer,
     template: "verifying.md",
