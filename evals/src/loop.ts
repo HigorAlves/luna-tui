@@ -14,8 +14,12 @@ export interface RecordSource {
   list(pack: PackId, options: { since?: Date; withTruth?: boolean }): Promise<DecisionRecord[]>;
 }
 
-export async function runHarvest(evalsDir: string, pack: PackId, source: RecordSource, options: { since?: Date; withTruth?: boolean }): Promise<HarvestReport> {
-  return harvest(evalsDir, pack, await source.list(pack, options));
+/** Only the pipeline's own records (they name a `stage`) unless `all`: an HTTP client's context is not the machine's to turn into a case. */
+export const ownRecords = (records: DecisionRecord[], all = false): DecisionRecord[] => (all ? records : records.filter((r) => r.stage !== undefined));
+
+export async function runHarvest(evalsDir: string, pack: PackId, source: RecordSource, options: { since?: Date; withTruth?: boolean; all?: boolean }): Promise<HarvestReport> {
+  const { all, ...filters } = options;
+  return harvest(evalsDir, pack, ownRecords(await source.list(pack, filters), all));
 }
 
 export interface PushReport {
@@ -24,11 +28,11 @@ export interface PushReport {
 }
 
 /** Every case of the pack to the dataset named for it; with a queue, the cases awaiting a label (and with `records`, the unlabelled records not yet cases) to the queue. */
-export async function runPush(evalsDir: string, pack: PackId, telemetry: Pick<Telemetry, "datasets" | "queue">, options: { queue?: string; records?: DecisionRecord[] } = {}): Promise<PushReport> {
+export async function runPush(evalsDir: string, pack: PackId, telemetry: Pick<Telemetry, "datasets" | "queue">, options: { queue?: string; records?: DecisionRecord[]; all?: boolean } = {}): Promise<PushReport> {
   const cases = loadCases(evalsDir, pack);
   const dataset = { name: pack as string, ...(await telemetry.datasets.push(pack, datapointsOf(pack, cases))) };
   if (!options.queue) return { dataset };
-  const extra = (options.records ?? [])
+  const extra = ownRecords(options.records ?? [], options.all)
     .filter((r) => !r.truth && !cases.some((c) => c.expect.recordId === r.id))
     // Scrubbed like a harvest: a record the scrub refuses never leaves the machine.
     .flatMap((r) => {

@@ -12,7 +12,7 @@ import { runHarvest, runPull, runPush } from "./loop.ts";
 const retro = { kind: "retro", retro: { predicted: { size: "small", risk: "low", estLoc: 120 }, actual: { added: 640, removed: 90, retries: { verify: 2, e2e: 1, ci: 1, total: 5 }, escalations: 1, format: "captures", durationMin: 310 }, runs: 14 } };
 const record = (id: string, truth?: DecisionRecord["truth"]): DecisionRecord => ({
   schema: 1, id, pack: "worth_learning", engine: "claude:haiku", model: "m", at: "2026-11-04T12:00:00.000Z", client: "ship", context: { ship: retro },
-  answer: { worth: { value: true, p: 0.9 } }, verdicts: { worth: "proceed" }, overall: "proceed", traceId: null, ...(truth ? { truth } : {}),
+  answer: { worth: { value: true, p: 0.9 } }, verdicts: { worth: "proceed" }, overall: "proceed", traceId: null, stage: "ship", ...(truth ? { truth } : {}),
 });
 
 function fakeTelemetry(pulled: Datapoint[] = []) {
@@ -31,6 +31,15 @@ describe("the loop", () => {
     const out = await runHarvest(dir, "worth_learning", { list: async (pack, options) => (asked.push([pack, options]), [record("11111111-aaaa", { label: { worth: { value: true } }, source: "x", at: "2026-11-05T00:00:00.000Z" }), record("22222222-bbbb")]) }, { withTruth: false, since: new Date("2026-11-01") });
     expect(out.written).toEqual(["rec-11111111", "rec-22222222"]);
     expect(asked).toEqual([["worth_learning", { withTruth: false, since: new Date("2026-11-01") }]]);
+  });
+
+  it("harvests only the pipeline's own records unless asked for all of them", async () => {
+    const own = { ...record("11111111-aaaa"), stage: "ship" };
+    const client = { ...record("22222222-bbbb"), stage: undefined };
+    const dir = mkdtempSync(join(tmpdir(), "loop-"));
+    expect((await runHarvest(dir, "worth_learning", { list: async () => [own, client] }, {})).written).toEqual(["rec-11111111"]);
+    const all = mkdtempSync(join(tmpdir(), "loop-"));
+    expect((await runHarvest(all, "worth_learning", { list: async () => [own, client] }, { all: true })).written).toEqual(["rec-11111111", "rec-22222222"]);
   });
 
   it("pushes every case to the dataset named for the pack, and nothing to a queue without --queue", async () => {

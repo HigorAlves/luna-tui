@@ -34,6 +34,8 @@ const ShipCursorSchema = z.object({
   decisions: z
     .array(z.object({ pack: z.enum(["event_class", "comment_intent"]), recordId: z.string(), choice: z.string(), threadId: z.string().optional(), further: z.boolean().optional() }))
     .optional(),
+  /** Threads the machine itself resolved in a fix round: its own resolution says nothing about what the reviewer meant. */
+  resolvedByMachine: z.array(z.string()).optional(),
   /** The blockers last noted, so a poll that finds the same ones says nothing. */
   lastBlockers: z.string().optional(),
 });

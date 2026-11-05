@@ -157,7 +157,7 @@ export interface FixInput {
 }
 
 export type FixOutcome =
-  | { ok: true; head: string; changed: boolean; replied: number; resolved: number; repliedTo: string[]; summary: string; note?: string }
+  | { ok: true; head: string; changed: boolean; replied: number; resolved: number; repliedTo: string[]; resolvedTo: string[]; summary: string; note?: string }
   | { ok: false; result: StageResult };
 
 const reasonOf = (result: StageResult): string => {
@@ -209,7 +209,7 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
     if (!input.postReplies) return stop(escalated("the addressing pack made no change for the failing check"));
     await resetTo(run, wt, before).catch(() => {});
     const posted = await followUp(deps.github, replies);
-    return { ok: true, head: before, changed: false, replied: posted.replied, resolved: posted.resolved, repliedTo: replies.map((r) => r.threadId), summary: answer.summary, ...(posted.ok ? {} : { note: posted.error }) };
+    return { ok: true, head: before, changed: false, replied: posted.replied, resolved: posted.resolved, repliedTo: replies.map((r) => r.threadId), resolvedTo: replies.filter((r) => r.resolve).map((r) => r.threadId), summary: answer.summary, ...(posted.ok ? {} : { note: posted.error }) };
   }
 
   // The checks run on exactly what will be pushed: the committed head, with whatever the pack left uncommitted gone.
@@ -241,7 +241,7 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
 
   // From here the commit is on the PR: no reset, whatever else goes wrong.
   const posted = replies.length > 0 ? await followUp(deps.github, replies) : { ok: true as const, replied: 0, resolved: 0, skipped: [] as string[] };
-  const out = { ok: true as const, head: after, changed: true, replied: posted.replied, resolved: posted.resolved, repliedTo: replies.map((r) => r.threadId), summary: answer.summary, ...(posted.ok ? {} : { note: posted.error }) };
+  const out = { ok: true as const, head: after, changed: true, replied: posted.replied, resolved: posted.resolved, repliedTo: replies.map((r) => r.threadId), resolvedTo: replies.filter((r) => r.resolve).map((r) => r.threadId), summary: answer.summary, ...(posted.ok ? {} : { note: posted.error }) };
 
   const pack = input.pack;
   if (!pack) return out;

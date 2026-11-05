@@ -368,6 +368,17 @@ describe("decision truth at the merge", () => {
     }
   });
 
+  it.each([true, false])("writes comment_intent truth for a fixed change request only when the machine did not resolve the thread itself (resolve: %s)", async (resolve) => {
+    const told: Learned[] = [];
+    const world = loopWorld({ choices: { comment_intent: "change_request" }, addressed: { answer: { kind: "done", summary: "renamed x", replies: [{ threadId: "T1", body: "Renamed.", resolve }] } } });
+    const decide = world.loop.decide!;
+    world.loop.decide = async (pack, ship, repo) => tagged({ answer: await decide(pack, ship, repo), recordId: `rec-${pack}` });
+    let threads = 0;
+    const { run } = review(world, { prThreads: async () => (++threads === 1 ? [threadOf()] : []) }, [commentAct()], { truth: { learned: async (fact: Learned) => (told.push(fact), true) } });
+    await run();
+    expect(told.filter((t) => t.pack === "comment_intent")).toHaveLength(resolve ? 0 : 1);
+  });
+
   it.each([true, false])("writes %s-activity truth onto event_class at the merge: comment when a person spoke after the event, noise when nobody did", async (later) => {
     const noise = async (pack: string) => tagged({ answer: { event: { choice: "noise", confidence: 0.95 } }, recordId: `rec-${pack}` });
     const told: Learned[] = [];

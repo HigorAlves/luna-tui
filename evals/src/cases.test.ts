@@ -6,7 +6,11 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
+import { TOKEN_SHAPE } from "./scrub.ts";
 import { baselinePath, caseInput, datasetCases, judgeInput, loadCases, parseTrials, prepareWorktree, verdictOf } from "./cases.ts";
+
+/** Every `@host` whose host is not a reserved one: `.example`, `example.com|org|net` or `.invalid`. */
+const unsafeAddresses = (text: string): string[] => [...text.matchAll(/@([a-z0-9-]+(?:\.[a-z0-9-]+)+)/gi)].map((m) => m[1]!).filter((host) => !/(?:^|\.)example(?:\.(?:com|org|net))?$|\.invalid$|^example$/i.test(host));
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 
@@ -119,6 +123,12 @@ describe("cases from a dataset", () => {
   });
 });
 
+describe("the case gate", () => {
+  it("refuses a host that is not reserved, and accepts the reserved ones", () => {
+    expect(unsafeAddresses("a@acme.dev b@corp.internal c@mail.example d@example.org e@x.invalid")).toEqual(["acme.dev", "corp.internal"]);
+  });
+});
+
 describe("the seed cases", () => {
   const EVALS = resolve(import.meta.dirname, "..");
   const packs = readdirSync(EVALS, { withFileTypes: true }).filter((d) => d.isDirectory() && existsSync(join(EVALS, d.name, "cases"))).map((d) => d.name);
@@ -133,8 +143,8 @@ describe("the seed cases", () => {
       const repo = evalCase.input.task.repoPath;
       if (repo !== "") expect(existsSync(join(ROOT, repo)), `${evalCase.id}: ${repo}`).toBe(true);
       const text = JSON.stringify(evalCase);
-      expect(text, evalCase.id).not.toMatch(/xox[abposr]-|ghp_|github_pat_|\bsk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{12}|eyJ[A-Za-z0-9_-]{20,}/);
-      expect(text, evalCase.id).not.toMatch(/@(?!example)[a-z0-9-]+\.(com|io|dev|net|org)\b/i);
+      expect(text, evalCase.id).not.toMatch(TOKEN_SHAPE);
+      expect(unsafeAddresses(text), evalCase.id).toEqual([]);
     }
   });
 

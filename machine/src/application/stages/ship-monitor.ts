@@ -136,7 +136,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       const open = await deps.github.prThreads(slug, number).catch(() => null);
       for (const d of pending) {
         if (d.pack === "event_class") await deps.truth.learned({ pack: "event_class", recordId: d.recordId, label: eventClassTruth(d.further === true), source: "pr_merged", taskId: task.id });
-        else if (open && d.threadId && !open.some((t) => t.id === d.threadId)) await deps.truth.learned({ pack: "comment_intent", recordId: d.recordId, label: commentIntentTruth(d.choice as "question" | "change_request"), source: "thread_resolved", taskId: task.id });
+        else if (open && d.threadId && !(cursor.resolvedByMachine ?? []).includes(d.threadId) && !open.some((t) => t.id === d.threadId)) await deps.truth.learned({ pack: "comment_intent", recordId: d.recordId, label: commentIntentTruth(d.choice as "question" | "change_request"), source: "thread_resolved", taskId: task.id });
       }
       cursor.decisions = [];
       await saveCursor(deps.stateDir, task.id, cursor);
@@ -225,6 +225,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       await bump(round.id, { fixRounds: 1 });
       const out = await fixRound(fixDeps(), context, { slug, number, threads: round.threads, scope: round.scope, threadSummary: round.summary, label: String(cursor.fixRounds), postReplies: round.postReplies, pack });
       if (!out.ok) return { result: out.result };
+      if (out.resolvedTo.length > 0) cursor.resolvedByMachine = [...new Set([...(cursor.resolvedByMachine ?? []), ...out.resolvedTo])];
       if (out.replied > 0) await bump(round.id, { replies: out.replied });
       if (out.note) await note(`a reply could not be posted: ${out.note}`);
       if (round.topLevel && out.summary) await deps.github.commentOnIssue(slug, number, postable(out.summary)).catch(() => {});
@@ -245,7 +246,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       const event: ShipContext = { kind: "event", event: { actor: a.actor ?? "ghost", isBot: a.isBot, isMe: false, kind: a.kind === "review" ? "review" : "comment", state: a.state, body, url: a.url } };
       const label = `${a.actor ?? "ghost"} ${a.kind}: ${plain(body, 80)}`;
       // A person's word on the PR after an earlier event means that event drew activity.
-      if (!a.isBot) for (const d of cursor.decisions ?? []) if (d.pack === "event_class") d.further = true;
+      if (!a.isBot && TRUSTED.has(a.association ?? "")) for (const d of cursor.decisions ?? []) if (d.pack === "event_class") d.further = true;
       const cls = await judgeShip(fixDeps(), "event_class", event, task.repoPath);
       if (cls.ok && cls.recordId && (cls.choice === "noise" || cls.choice === "comment")) cursor.decisions = [...(cursor.decisions ?? []), { pack: "event_class", recordId: cls.recordId, choice: cls.choice }];
       if (!cls.ok) return { result: escalated(`a review event needs a person (${cls.reason}): ${label}`) };

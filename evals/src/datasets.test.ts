@@ -27,6 +27,22 @@ describe("cases to datapoints and queue items", () => {
   });
 });
 
+describe("a pulled datapoint is untrusted", () => {
+  const token = ["gh", "p_", "c".repeat(36)].join("");
+  it("is scrubbed before it becomes a case, and refused when its data or target holds a token", () => {
+    const formatted = (format: string) => ({ ship: { ...retro, retro: { ...retro.retro, actual: { ...retro.retro.actual, format } } } });
+    const withHost = formatted("see https://git.acme.internal/team/api");
+    const out = casesOfDatapoints("worth_learning", [
+      { taskId: "host", data: withHost, target: { worth: { value: true } } },
+      { taskId: "tok-data", data: formatted(token), target: { worth: { value: true } } },
+      { taskId: "tok-target", data: { ship: retro }, target: { worth: { value: true, note: token } } },
+    ]);
+    expect(out.cases.map((c) => c.id)).toEqual(["host"]);
+    expect(JSON.stringify(out.cases[0]!.stage)).not.toContain("acme");
+    expect(out.skipped.map((s) => [s.taskId, s.reason.startsWith("refused")])).toEqual([["tok-data", true], ["tok-target", true]]);
+  });
+});
+
 describe("datapoints back to cases", () => {
   it("makes a case of each labelled datapoint, its checks from the target, and reports the rest", () => {
     const out = casesOfDatapoints("worth_learning", [

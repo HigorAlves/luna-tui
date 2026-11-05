@@ -306,6 +306,15 @@ describe("datasets and the labeling queue", () => {
     expect(warnings.join("\n")).toMatch(/could not push the dataset x: dataset down/);
   });
 
+  it("cuts a pull at 10,000 datapoints and says so", async () => {
+    const warnings: string[] = [];
+    pullTotal = 1_000_000;
+    pullPages = Array.from({ length: 120 }, (_, p) => Array.from({ length: 100 }, (_, i) => ({ taskId: `c${p * 100 + i}`, data: { n: i } })));
+    const telemetry = await createLaminarTelemetry({ ...options, mode: "metadata" }, fakeSdk(), (line) => warnings.push(line));
+    expect(await telemetry.datasets.pull("big")).toHaveLength(10_000);
+    expect(warnings.join("\n")).toMatch(/cut at 10000 datapoints/);
+  });
+
   it("finds the queue by name and posts the items to its endpoint with the record id as the idempotency key; the key never goes in the body", async () => {
     const calls: Array<{ url: string; init?: RequestInit }> = [];
     const fake = (async (url: string, init?: RequestInit) => {

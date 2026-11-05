@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { DECISION_ALLOWED, DECISION_DEFAULTS, DecisionDefault, DecisionDefaults, PACKS, decisionEngines } from "./index.ts";
 
@@ -39,5 +39,19 @@ describe("decision-defaults.json", () => {
 
   it("falls back to the built-in default for an entry it cannot trust, rather than failing", () => {
     expect(decisionEngines("not_a_pack")).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
+  });
+
+  it("boots on the built-in defaults, with one warning, when the file cannot be read or parsed", async () => {
+    for (const body of [null, "{ not json"]) {
+      vi.resetModules();
+      vi.doMock("node:fs", async (original) => ({ ...(await original<typeof import("node:fs")>()), readFileSync: () => { if (body === null) throw new Error("ENOENT"); return body; } }));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const mod = await import("./decision-defaults.ts");
+      expect(mod.DECISION_DEFAULTS).toEqual({});
+      expect(mod.decisionEngines("event_class")).toEqual({ default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] });
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
+      vi.doUnmock("node:fs");
+    }
   });
 });

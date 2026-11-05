@@ -1,7 +1,7 @@
 // `pnpm eval` entry: the subcommands of the ground-truth loop and the scorecard, and the replay run by default.
 //
 //   pnpm eval --pack <p> --engine <e> ...                    replay a pack's cases (run.ts)
-//   pnpm eval harvest --pack <decision> [--since <date>] [--with-truth]
+//   pnpm eval harvest --pack <decision> [--since <date>] [--with-truth] [--all]
 //   pnpm eval dataset push --pack <decision> [--queue <name>] [--records]
 //   pnpm eval dataset pull --pack <decision>
 //   pnpm eval scorecard                       evals/scorecard.md over every decision baseline
@@ -43,20 +43,20 @@ async function telemetry() {
 }
 
 if (command === "harvest") {
-  const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" }, since: { type: "string" }, "with-truth": { type: "boolean", default: false } } });
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" }, since: { type: "string" }, "with-truth": { type: "boolean", default: false }, all: { type: "boolean", default: false } } });
   const since = values.since ? new Date(values.since) : undefined;
   if (since && Number.isNaN(since.getTime())) fail("--since must be a date, like 2026-11-01");
   const pack = decisionOf(values.pack);
-  const out = await runHarvest(EVALS, pack, log(), { ...(since ? { since } : {}), withTruth: values["with-truth"] });
+  const out = await runHarvest(EVALS, pack, log(), { ...(since ? { since } : {}), withTruth: values["with-truth"], all: values.all });
   console.log(`wrote ${out.written.length}: ${out.written.join(", ") || "-"}\nkept (already cases) ${out.kept.length}`);
   for (const r of out.refused) console.log(`refused ${r.id}: ${r.reason}`);
 } else if (command === "dataset" && (sub === "push" || sub === "pull")) {
-  const { values } = parseArgs({ args: process.argv.slice(4), options: { pack: { type: "string" }, queue: { type: "string" }, records: { type: "boolean", default: false } } });
+  const { values } = parseArgs({ args: process.argv.slice(4), options: { pack: { type: "string" }, queue: { type: "string" }, records: { type: "boolean", default: false }, all: { type: "boolean", default: false } } });
   const pack = decisionOf(values.pack);
   const t = await telemetry();
   if (sub === "push") {
     const records = values.queue && values.records ? await log().list(pack) : [];
-    const out = await runPush(EVALS, pack, t, { ...(values.queue ? { queue: values.queue } : {}), records });
+    const out = await runPush(EVALS, pack, t, { ...(values.queue ? { queue: values.queue } : {}), records, all: values.all });
     console.log(`dataset ${out.dataset.name}: ${out.dataset.pushed} datapoint(s) pushed`);
     if (out.queue) console.log(`queue ${out.queue.name}: ${out.queue.pushed} item(s) pushed`);
   } else {

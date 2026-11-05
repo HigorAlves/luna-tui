@@ -8,6 +8,7 @@ import type { Datapoint, QueueItem } from "@hardness/machine/telemetry";
 import { type ContextPackId, contextSchema, isContextPack } from "@hardness/machine/decisions";
 
 import type { EvalCase } from "./cases.ts";
+import { TOKEN_SHAPE, scrubContext } from "./scrub.ts";
 import { type CaseFiles, caseIdOf, caseOf } from "./harvest.ts";
 import { type Label, checksOf, labelOfAnswer } from "./labels.ts";
 
@@ -68,8 +69,18 @@ export function casesOfDatapoints(pack: PackId, datapoints: Datapoint[], options
       result.skipped.push({ taskId: point.taskId, reason: `data is off the pack's context schema: ${data.error.issues.slice(0, 2).map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}` });
       continue;
     }
+    // Untrusted input is scrubbed like a harvested record: a refusal skips it, the case is built from the scrubbed value.
+    const scrubbed = scrubContext(data.data as Record<string, unknown>);
+    if (!scrubbed.ok) {
+      result.skipped.push({ taskId: point.taskId, reason: `refused: ${scrubbed.reason}` });
+      continue;
+    }
+    if (TOKEN_SHAPE.test(JSON.stringify(point.target))) {
+      result.skipped.push({ taskId: point.taskId, reason: "refused: a token-shaped string in the target" });
+      continue;
+    }
     const recordId = typeof point.metadata?.recordId === "string" ? point.metadata.recordId : undefined;
-    result.cases.push(caseOf(pack, id, data.data as Record<string, unknown>, point.target, recordId ? { recordId } : {}));
+    result.cases.push(caseOf(pack, id, scrubbed.value, point.target, recordId ? { recordId } : {}));
   }
   return result;
 }

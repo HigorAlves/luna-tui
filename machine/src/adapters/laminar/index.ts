@@ -195,6 +195,9 @@ export async function createLaminarTelemetry(options: LaminarOptions, sdk?: Lami
 
   const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
   const PAGE = 100;
+  /** A pull is bounded: a dataset larger than this is cut, with a warning. */
+  const MAX_PULL = 10_000;
+  const MAX_PAGES = 400;
 
   /** The datasets mirror the repo's cases; a failure is a warning and an empty answer, never a throw. */
   const datasets = {
@@ -210,8 +213,12 @@ export async function createLaminarTelemetry(options: LaminarOptions, sdk?: Lami
     pull: async (name: string, pullOptions: { limit?: number } = {}): Promise<Datapoint[]> => {
       const found: Datapoint[] = [];
       await safe(`could not pull the dataset ${name}`, async () => {
-        const wanted = pullOptions.limit ?? Number.POSITIVE_INFINITY;
-        for (let offset = 0; found.length < wanted; offset += PAGE) {
+        const wanted = Math.min(pullOptions.limit ?? MAX_PULL, MAX_PULL);
+        for (let offset = 0, pages = 0; found.length < wanted; offset += PAGE, pages++) {
+          if (pages >= MAX_PAGES) {
+            warn(`laminar: the dataset ${name} was cut at ${MAX_PAGES} pages`);
+            break;
+          }
           const page = await client.datasets.pull({ name, limit: Math.min(PAGE, wanted - found.length), offset });
           for (const item of page.items) {
             if (!isRecord(item.data) || typeof item.taskId !== "string") continue;
@@ -219,6 +226,7 @@ export async function createLaminarTelemetry(options: LaminarOptions, sdk?: Lami
           }
           if (page.items.length === 0 || offset + PAGE >= page.totalCount) break;
         }
+        if (found.length >= MAX_PULL && pullOptions.limit === undefined) warn(`laminar: the dataset ${name} was cut at ${MAX_PULL} datapoints`);
       });
       return found;
     },
