@@ -68,4 +68,8 @@ export interface CardFields {
   owners: string[];
   followers: string[];
   links: Record<string, string>;
+  /** The thread or ticket history Intake fetched, flat and capped; absent before a card started. */
+  history?: { author: string | null; text: string; at: string | null }[];
+  /** What context setup resolved, kept to compare with what a person later changes. */
+  resolved?: { repoPath: string | null; project: string | null; at: string };
 }

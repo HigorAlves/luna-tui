@@ -334,6 +334,23 @@ pipeline = new Pipeline(db, runnerFor, {
   onEvent: publish,
   // The outside-approver rule reads CODEOWNERS through the code graph port and nothing a model wrote.
   owners: (repoPath, paths) => graph.owners(repoPath, paths),
+  // Context setup: by script, through the ports. The history ports and the map are read at call time (they are built below).
+  contextSetup: {
+    resolveRepo: (slug) => repoMap.resolve(slug),
+    channelRepo: () => null,
+    projectRepo: () => null,
+    configProject: async () => null,
+    owners: async (repoPath, text) => {
+      const located = await graph.locate(repoPath, text);
+      return [...new Set((located?.owners ?? []).flatMap((entry) => entry.owners))];
+    },
+    history: async (source) => {
+      if (source.kind === "slack") return (await slackApi.replies(source.channel, source.ts, "0")).map((m) => ({ author: m.user, text: m.text, at: m.ts }));
+      if (source.kind === "jira") return (await jiraApi.issue(source.key)).comments.map((c) => ({ author: c.author, text: c.text, at: c.created }));
+      if (source.kind === "github") return (await github.listPrComments(source.repo, source.number)).map((c) => ({ author: c.author, text: c.body, at: null }));
+      return [];
+    },
+  },
   maxConcurrentTasks: config.maxConcurrentTasks,
   maxPerRepo: config.maxPerRepo,
   maxPerStage: config.maxPerStage,

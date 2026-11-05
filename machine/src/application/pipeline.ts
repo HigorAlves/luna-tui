@@ -10,6 +10,7 @@ import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 import { ApproverRequiredError, IdempotencyConflictError, InvalidEscalationReasonError, NoEscalationToCorrectError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, PlanApprovedError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
 import { type CardFieldsInput, appendSource, cardFieldsOf, cardOf } from "../domain/card-fields.ts";
 import { questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
@@ -126,6 +127,8 @@ export interface PipelineOptions {
   escalationDecide?: { decide: Decide | null };
   /** Whether the repo already has a luna.yaml; a task on one without runs setup first. Tests pass a fake. */
   hasConfig?: (repoPath: string) => boolean;
+  /** Resolves a card's repository, project, owners and history by script when it starts; absent, a card starts as it is. */
+  contextSetup?: ContextDeps;
   /** Writes the approved luna.yaml into the checkout. Tests pass a fake. */
   writeConfig?: (repoPath: string, text: string) => Promise<void>;
   /** Run stages inside the request instead of in the background. Tests use this. */
@@ -298,6 +301,7 @@ export class Pipeline {
   private readonly store: TaskStore;
   private readonly onEvent: (event: EventRow) => void;
   private readonly hasConfig: (repoPath: string) => boolean;
+  private readonly contextDeps: ContextDeps | null;
   private readonly escalationDecide: { decide: Decide | null };
   private readonly escalationTruth: NonNullable<PipelineOptions["escalationTruth"]> | undefined;
   private readonly commitsSince: NonNullable<PipelineOptions["commitsSince"]> | undefined;
@@ -354,6 +358,7 @@ export class Pipeline {
     this.escalationTruth = options.escalationTruth;
     this.commitsSince = options.commitsSince;
     this.headOf = options.headOf;
+    this.contextDeps = options.contextSetup ?? null;
     this.hasConfig = options.hasConfig ?? ((repoPath) => existsSync(join(repoPath, CONFIG_FILE)));
     this.writeConfig = options.writeConfig ?? ((repoPath, text) => writeFile(join(repoPath, CONFIG_FILE), text));
     this.inline = options.inline ?? false;
@@ -602,7 +607,13 @@ export class Pipeline {
       return Object.keys(changes);
     });
     if (fields.length > 0) await this.log(id, "task.edited", { fields });
-    return this.get(id);
+    const after = await this.get(id);
+    const resolved = after.card?.resolved;
+    if (resolved && patch.repoPath !== undefined) {
+      const corrections = correctionsOf(resolved, { repoPath: after.repoPath, project: resolved.project });
+      if (corrections.length > 0) await this.log(id, "context.corrected", { corrections });
+    }
+    return after;
   }
 
   /** Edits triage's plan while it awaits your approval, or at the test check (the plan is
@@ -804,8 +815,33 @@ export class Pipeline {
     return this.get(id);
   }
 
+  /** Context setup: the repository, project, owners and history of the card, by script, stored on it. A failure leaves the card as it was. */
+  private async resolveContext(id: string): Promise<void> {
+    if (!this.contextDeps) return;
+    const task = await this.get(id);
+    if (task.state !== "draft") return;
+    const out = await contextSetup(this.contextDeps, task).catch((error: unknown) => {
+      console.warn(`context setup: ${id}: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    });
+    if (!out) return;
+    const card = cardOf(task);
+    await this.store.updateTask(id, {
+      ...(out.repoPath && !task.repoPath ? { repoPath: out.repoPath } : {}),
+      card: {
+        ...card,
+        project: out.project ?? card.project,
+        owners: [...new Set([...card.owners, ...out.owners])].slice(0, 20),
+        history: out.history,
+        resolved: { repoPath: out.repoPath, project: out.project, at: new Date().toISOString() },
+      },
+    });
+    await this.log(id, "context.resolved", { repoFrom: out.repoFrom, project: out.project, owners: out.owners.length, history: out.history.length });
+  }
+
   /** Starts the pipeline; a repo with no luna.yaml yet gets the setup gate before triage. */
   async start(id: string): Promise<TaskRow> {
+    await this.resolveContext(id);
     const task = await this.get(id);
     const setup = task.route === "setup" || (task.repoPath !== null && !this.hasConfig(task.repoPath));
     return this.dispatch(id, { type: "start", setup });
