@@ -928,6 +928,19 @@ describe("the engine a stage runs on", () => {
       expect(result.findings).toEqual([expect.objectContaining({ path: "extra.txt", severity: "scope", confidence: 1 })]);
     });
 
+    it("stores the Diff Summary: the agent's words, and git's files over its own list (a changed file it left out is added with no reason)", async () => {
+      const answer = { kind: "done", summary: "x", diffSummary: { what: "Adds b", why: "C1", files: [{ path: "b.txt", reason: "the feature" }] }, outOfMap: [{ path: "extra.txt", reason: "shared helper" }] };
+      const result = await runners(fakeSandbox(output({ answer } as Partial<StageOutput>), commitFiles("b.txt", "extra.txt"))).implementing!(planned());
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).toMatchObject({ diffSummary: { what: "Adds b", why: "C1", files: [{ path: "b.txt", reason: "the feature" }, { path: "extra.txt", reason: null }] } });
+    });
+
+    it("reads a plain string diffSummary, as an older answer gave it, as `what`", async () => {
+      const answer = { kind: "done", summary: "x", diffSummary: "Adds b", outOfMap: [{ path: "extra.txt", reason: "shared helper" }] };
+      const result = await runners(fakeSandbox(output({ answer } as Partial<StageOutput>), commitFiles("b.txt", "extra.txt"))).implementing!(planned());
+      expect(result.detail).toMatchObject({ diffSummary: { what: "Adds b" } });
+    });
+
     it("passes when the file is declared, records it as a graph miss, and reports the scope", async () => {
       const misses: unknown[] = [];
       const answer = { kind: "done", summary: "x", outOfMap: [{ path: "extra.txt", reason: "shared helper" }] };

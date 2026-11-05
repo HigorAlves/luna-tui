@@ -28,6 +28,7 @@ import { safe } from "../../domain/evidence-markdown.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
+import { diffSummaryOf } from "../../domain/diff-summary.ts";
 import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
 import { checkpointPush } from "./checkpoint.ts";
@@ -575,7 +576,12 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       const declared = answered.success ? answered.data : [];
       try {
         const facts = await checks.finalFacts(declared);
-        mapped.detail = { ...mapped.detail, scope: { facts, verdict: await checks.lastVerdict() } };
+        mapped.detail = {
+          ...mapped.detail,
+          scope: { facts, verdict: await checks.lastVerdict() },
+          // The agent's own summary of its diff, with git's facts over it.
+          diffSummary: diffSummaryOf(answerOf(output.answer)?.diffSummary, { changed: facts.changed, newDependencies: facts.newDependencies, todos: facts.todos, mapFiles: (input.plan?.map?.files ?? []).map((f) => f.path) }),
+        };
         const wrong = [...facts.undeclared, ...facts.removedTests.filter((t) => !facts.undeclared.includes(t))];
         if (wrong.length > 0) {
           return merged({

@@ -28,7 +28,7 @@ For each slice, in plan order:
 11. Commit: Conventional Commit subject, at most 50 characters, no body, no AI attribution.
 12. `mcp__luna__slice_set {id, status: "committed", commit: <sha>, actualLoc: <lines added plus deleted>}`. Call `mcp__luna__step` with the slice title; continue.
 
-After the last slice, before answering `done`: call `mcp__luna__scope_check {diffSummary, outOfMap}` with what the change does and every file you changed outside the plan's touchpoints, each with its reason. Fix what it flags (one pass, in a new commit), then answer `done` with `diffSummary` and `outOfMap`. A file outside the touchpoints that you did not declare fails the stage.
+After the last slice, before answering `done`: call `mcp__luna__scope_check {diffSummary, outOfMap}` with what the change does and every file you changed outside the plan's touchpoints, each with its reason. Fix what it flags (one pass, in a new commit), then read your own diff as a reviewer would and answer `done` with `diffSummary` (`{what, why, files: [{path, reason}], flags_added, migrations, risks_noticed}`, one short sentence a field) and `outOfMap`. The machine fills what git knows (code-map membership, dependencies added, TODOs) and wins over you on it. A file outside the touchpoints that you did not declare fails the stage.
 
 Per `verification-before-completion`: run the command, read the output, then claim.
 

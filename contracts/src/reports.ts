@@ -5,6 +5,35 @@ import { z } from "zod";
 
 import { CoverageSummary, Finding } from "./stage.ts";
 
+/** The Diff Summary the implementer writes after reading its own diff. A plain string (an answer from before v2.2) is read as `what`. */
+export const DiffSummaryAnswer = z.preprocess(
+  (value) => (typeof value === "string" ? { what: value } : value),
+  z.object({
+    what: z.string().optional(),
+    why: z.string().optional(),
+    files: z.array(z.object({ path: z.string(), reason: z.string().nullable().optional(), in_code_map: z.boolean().optional() })).optional(),
+    flags_added: z.array(z.string()).optional(),
+    migrations: z.array(z.string()).optional(),
+    risks_noticed: z.array(z.string()).optional(),
+    deps_added: z.array(z.string()).optional(),
+    todos: z.array(z.string()).optional(),
+  }),
+);
+export type DiffSummaryAnswer = z.infer<typeof DiffSummaryAnswer>;
+
+/** The Diff Summary as the machine stores it: the agent's words, flattened and capped, with what git knows (`in_code_map`, `deps_added`, `todos`) filled by the machine. */
+export const DiffSummary = z.object({
+  what: z.string(),
+  why: z.string(),
+  files: z.array(z.object({ path: z.string(), reason: z.string().nullable(), in_code_map: z.boolean() })),
+  flags_added: z.array(z.string()),
+  migrations: z.array(z.string()),
+  risks_noticed: z.array(z.string()),
+  deps_added: z.array(z.string()),
+  todos: z.array(z.string()),
+});
+export type DiffSummary = z.infer<typeof DiffSummary>;
+
 /** One implementer run of the build. */
 export const BuildRun = z.object({
   attempt: z.number().int(),

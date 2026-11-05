@@ -11,6 +11,7 @@ import { type Access, type LunaTool, NO_ACCESS, access, readOnly } from "./acces
 import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
 import { AnswerScenario, AnswerStep } from "./plan.ts";
+import { DiffSummaryAnswer } from "./reports.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
@@ -183,7 +184,7 @@ export const ImplementingAnswer = z.object({
   options: z.array(z.string()).optional(),
   request: z.string().optional(),
   /** What the change does, as scope_check saw it. */
-  diffSummary: z.string().optional(),
+  diffSummary: DiffSummaryAnswer.optional(),
   /** Files changed outside the plan's touchpoints, each with why. */
   outOfMap: z.array(z.object({ path: z.string(), reason: z.string() })).optional(),
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { DiffSummary, DiffSummaryAnswer } from "./reports.ts";
 import { BuildReport, TaskReports, VerifyReport } from "./reports.ts";
 import { EvidencePack } from "./stage.ts";
 
@@ -75,5 +76,22 @@ describe("evidence pack v2", () => {
       version: 2,
     };
     expect(EvidencePack.parse(v2)).toEqual(v2);
+  });
+});
+
+describe("the Diff Summary", () => {
+  it("reads the implementer's object, every list optional", () => {
+    const parsed = DiffSummaryAnswer.parse({ what: "Adds CSV export", why: "C1", files: [{ path: "web/cart.tsx", reason: "the button" }], risks_noticed: ["a large cart"] });
+    expect(parsed).toMatchObject({ what: "Adds CSV export", files: [{ path: "web/cart.tsx" }] });
+    expect(DiffSummaryAnswer.parse({ what: "x" })).toMatchObject({ what: "x" });
+  });
+
+  it("reads a plain string, as an answer from before this wave gave it, as `what`", () => {
+    expect(DiffSummaryAnswer.parse("Adds CSV export")).toEqual({ what: "Adds CSV export" });
+  });
+
+  it("is what the machine stores: git's facts beside the agent's words", () => {
+    const stored = DiffSummary.parse({ what: "w", why: "y", files: [{ path: "a.ts", reason: null, in_code_map: true }], flags_added: [], migrations: [], risks_noticed: [], deps_added: ["left-pad"], todos: [] });
+    expect(stored.files[0]).toEqual({ path: "a.ts", reason: null, in_code_map: true });
   });
 });
