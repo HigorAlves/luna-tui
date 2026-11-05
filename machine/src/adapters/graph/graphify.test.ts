@@ -17,7 +17,7 @@ function stampFor(commit: string): GraphStamp {
   return { schema: 1, commit, builtAt: "2026-11-04T10:00:00Z", nodes: 3, edges: 2, communities: 1, graphify: "0.9.34" };
 }
 
-function setup(exitCode = 0) {
+function setup(exitCode = 0, extra: Partial<Parameters<typeof graphifyGraph>[0]> = {}) {
   const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "graph-")));
   const repo = join(stateDir, "repo");
   const checkout = join(stateDir, "wt", "graph");
@@ -41,6 +41,7 @@ function setup(exitCode = 0) {
     image: "img:1",
     worktreesDir: join(stateDir, "wt"),
     sandbox,
+    ...extra,
     git: {
       ensureCleanCheckout: async (_repo, path) => (checkouts.push(path), checkout),
       headCommit: async () => head,
@@ -62,7 +63,7 @@ describe("graphifyGraph.build", () => {
       writable: false,
       gitDir: null,
       credential: { env: {}, mounts: [] },
-      entrypoint: ["python3", "/graph-tools/build.py", "--input", "/work", "--out", "/graph", "--commit", head],
+      entrypoint: ["/opt/luna/python/bin/python3", "/opt/luna/graph-tools/build.py", "--input", "/work", "--out", "/graph", "--commit", head],
     });
     expect(seen[0]!.mounts).toEqual([{ host: expect.stringContaining(`building-${head}`), container: "/graph", readOnly: false }]);
     const dir = graph.currentDir(repo);
@@ -134,6 +135,30 @@ describe("graphifyGraph.build", () => {
     const { graph, repo } = setup();
     expect(graph.currentDir(repo)).toBeNull();
     expect(await graph.stampOf(repo)).toBeNull();
+  });
+});
+
+describe("a graph and the image that builds it", () => {
+  it("is built in the repository's own image, and the stamp records the image's id", async () => {
+    const { graph, repo, seen } = setup(0, { image: async (repoPath) => (repoPath === "/shop" ? "hardness-runner-shop:1" : "img:1"), imageId: async (image) => `sha256:id-of-${image}` });
+    const stamp = await graph.build("/shop");
+    expect(seen[0]?.image).toBe("hardness-runner-shop:1");
+    expect(stamp.image).toBe("sha256:id-of-hardness-runner-shop:1");
+    expect((await graph.stampOf("/shop"))?.image).toBe("sha256:id-of-hardness-runner-shop:1");
+    expect(repo).toBeTruthy();
+  });
+
+  it("is stale whatever its commit when the image's Graphify is another version, and is rebuilt before use", async () => {
+    let version = "0.9.34";
+    const { graph, repo, seen } = setup(0, { graphifyVersion: async () => version });
+    const first = await graph.build(repo);
+    expect(await graph.isFresh(repo, first, first.commit)).toBe(true);
+    await graph.build(repo);
+    expect(seen).toHaveLength(1);
+    version = "0.10.0";
+    expect(await graph.isFresh(repo, first, first.commit)).toBe(false);
+    await graph.build(repo);
+    expect(seen).toHaveLength(2);
   });
 });
 

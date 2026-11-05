@@ -4,7 +4,7 @@
 // entrypoint overridden to `/graph-tools/build.py`, over a clean checkout of the default branch
 // mounted read-only; no model, no credential.
 import { existsSync, readlinkSync, statSync } from "node:fs";
-import { appendFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, symlink } from "node:fs/promises";
+import { appendFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { join, sep } from "node:path";
 
 import { FACTORY_DEFAULTS, isPlainRepoPath } from "@hardness/contracts";
@@ -53,7 +53,12 @@ async function readGraphJson(dir: string): Promise<(GraphJson & LocateGraph) | n
 
 export interface GraphifyDeps {
   stateDir: string;
-  image: string;
+  /** The image a build runs in: one for every repository, or the repository's own (`RepoImages`). */
+  image: string | ((repoPath: string, signal?: AbortSignal) => Promise<string>);
+  /** The id of a local image, written into the stamp; absent, the stamp carries none. */
+  imageId?: (image: string) => Promise<string>;
+  /** The Graphify version the repository's image carries now; a stamp built by another version is stale. Absent, no version is compared. */
+  graphifyVersion?: () => Promise<string | null>;
   worktreesDir: string;
   sandbox: (run: SandboxRun) => Promise<SandboxResult>;
   git?: GraphGit;
@@ -113,7 +118,8 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       const commit = await git.headCommit(checkout);
       const target = join(repoDir, commit);
       const have = await readStamp(target);
-      if (have) {
+      const expected = (await deps.graphifyVersion?.().catch(() => null)) ?? null;
+      if (have && (expected === null || have.graphify === expected)) {
         const previous = current(repoPath);
         if (previous !== target) await point(repoDir, commit);
         return have;
@@ -125,10 +131,12 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       await rm(building, { recursive: true, force: true });
       await mkdir(building, { recursive: true });
       let result: SandboxResult;
+      let image: string;
       try {
+        image = typeof deps.image === "function" ? await deps.image(repoPath, signal) : deps.image;
         result = await deps.sandbox({
           name: `luna-graph-${repoSlug(repoPath)}`,
-          image: deps.image,
+          image,
           runDir: join(repoDir, "run"),
           worktree: checkout,
           writable: false,
@@ -138,7 +146,7 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
           credential: { env: {}, mounts: [] },
           labels: { luna: "graph", "luna.repo": repoSlug(repoPath) },
           mounts: [{ host: building, container: "/graph", readOnly: false }, ...(hasMisses ? [{ host: missesFile, container: MISSES_MOUNT, readOnly: true }] : [])],
-          entrypoint: ["python3", "/graph-tools/build.py", "--input", "/work", "--out", "/graph", "--commit", commit, ...(hasMisses ? ["--misses", MISSES_MOUNT] : [])],
+          entrypoint: ["/opt/luna/python/bin/python3", "/opt/luna/graph-tools/build.py", "--input", "/work", "--out", "/graph", "--commit", commit, ...(hasMisses ? ["--misses", MISSES_MOUNT] : [])],
           // Parsing untrusted code needs no network at all.
           networkNone: true,
           signal,
@@ -147,7 +155,12 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
         await rm(building, { recursive: true, force: true });
         throw new GraphBuildError(`the graph build did not run: ${(error as Error).message}`);
       }
-      const stamp = result.exitCode === 0 ? await readStamp(building) : null;
+      let stamp = result.exitCode === 0 ? await readStamp(building) : null;
+      // The image the graph was built in, by its id: the machine records it, the container cannot.
+      if (stamp && deps.imageId) {
+        stamp = { ...stamp, image: await deps.imageId(image) };
+        await writeFile(join(building, "stamp.json"), JSON.stringify(stamp, null, 2), "utf8");
+      }
       if (!stamp) {
         await rm(building, { recursive: true, force: true });
         const why = result.timedOut ? "timed out" : result.aborted ? "aborted" : `exit code ${result.exitCode}`;
@@ -193,6 +206,8 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
     },
 
     async isFresh(repoPath, stamp, baseCommit) {
+      const expected = (await deps.graphifyVersion?.().catch(() => null)) ?? null;
+      if (expected !== null && stamp.graphify !== expected) return false;
       if (stamp.commit === baseCommit) return true;
       return !(await isAncestor(repoPath, stamp.commit, baseCommit));
     },

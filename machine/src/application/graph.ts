@@ -14,6 +14,8 @@ export interface GraphStamp {
   edges: number;
   communities: number;
   graphify: string;
+  /** The id of the image the graph was built in (the repository's own); absent on a graph built before wave 11b. */
+  image?: string;
   /** Files tasks changed that the code map did not name, counted from `misses.jsonl` when the graph was built. */
   misses?: number;
 }

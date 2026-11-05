@@ -57,7 +57,7 @@ export interface RealStagesResult {
   checksExec: ReturnType<typeof sandboxExecutor> | null;
   /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
    *  the credentials, the state dir, the worktrees dir and each repo's luna.yaml; null when agents are off or something is missing. */
-  agentDeps: { image: string; imageOfWorkFolder: (folder: string) => string; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
+  agentDeps: { image: string; imageOfWorkFolder: (folder: string) => string; repoImageOf: (repoPath: string, signal?: AbortSignal) => Promise<string>; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
 }
 
 /** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
@@ -336,7 +336,7 @@ export async function buildRealStages(
       }),
     ),
   };
-  return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, imageOfWorkFolder, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+  return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, imageOfWorkFolder, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 /** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only

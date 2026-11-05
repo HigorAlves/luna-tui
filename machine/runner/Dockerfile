@@ -18,12 +18,9 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Graphify, pinned, for the machine's per-repo code graph: a graph build is this image with the
-# entrypoint overridden to /graph-tools/build.py (code-only, no model), and a stage reads the
+# entrypoint overridden to /opt/luna/graph-tools/build.py (below, in the machine's layer; the version is the label dev.hardness.graphify) (code-only, no model), and a stage reads the
 # result read-only at /graph with the `graphify query` verbs. Installed as root, before USER node.
 ARG GRAPHIFY_VERSION=0.9.34
-RUN pip3 install --no-cache-dir --break-system-packages "graphifyy==${GRAPHIFY_VERSION}"
-COPY machine/runner/graph/build.py /graph-tools/build.py
-RUN chmod -R a+rX /graph-tools
 
 # The machine's layer, /opt/luna: everything a stage needs of the machine, in one directory that runs
 # when copied onto another glibc Linux image (machine/runner/layer.md). Its Python is a relocatable
@@ -106,6 +103,7 @@ ENV LUNA_FACTORY_ROOT=/opt/luna/factory-src/factory
 COPY machine/runner/luna-stage /opt/luna/bin/luna-stage
 COPY machine/runner/layer-wrapper /opt/luna/bin/.wrapper
 ARG LAYER_REV=unknown
+LABEL dev.hardness.graphify="${GRAPHIFY_VERSION}"
 RUN for bin in /usr/local/bin/node /usr/bin/rg; do ldd "$bin" | awk '/=> \//{print $3}'; done | sort -u \
       | grep -Ev '/(libc|libm|libdl|libpthread|librt|libutil|libresolv|ld-linux[^/]*)\.so' | xargs -r -I{} cp -L {} /opt/luna/lib/ \
  && cp /usr/local/bin/node /opt/luna/libexec/node && cp /usr/bin/rg /opt/luna/libexec/rg && cp /usr/local/bin/gh /opt/luna/bin/gh \

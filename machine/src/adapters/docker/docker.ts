@@ -412,3 +412,10 @@ export async function imageId(image: string): Promise<string> {
   const id = out.stdout.trim();
   return out.code === 0 && id ? id : image;
 }
+
+/** One label of a local image; null when the image or the label is not there. */
+export async function imageLabel(image: string, label: string): Promise<string | null> {
+  const out = await exec("docker", ["image", "inspect", "--format", `{{index .Config.Labels "${label}"}}`, image]);
+  const value = out.stdout.trim();
+  return out.code === 0 && value ? value : null;
+}
