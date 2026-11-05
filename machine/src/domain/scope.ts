@@ -3,7 +3,8 @@
 // TODOs and secret-looking lines it added. scope_check judges the declared reasons against these. Pure.
 import picomatch from "picomatch";
 
-import { lockedFilesRemoved } from "./locked-files.ts";
+import { safe } from "./evidence-markdown.ts";
+import { lockedFilesRemoved, looksLikeTestPath } from "./locked-files.ts";
 
 /** A line a diff added, with its file and, in a toml file, the `[section]` it sits under. */
 export interface AddedLine {
@@ -30,6 +31,8 @@ export interface ScopeFacts {
 export type ScopeSeverity = "blocker" | "should_fix" | "nit";
 export interface ScopeIssue {
   severity: ScopeSeverity;
+  /** The file the issue is about, when it is about one. */
+  path?: string;
   kind: "undeclared_file" | "test_removed" | "switched_off_test" | "test_weakened" | "secret" | "new_dependency" | "unrelated_refactor" | "todo";
   text: string;
 }
@@ -95,7 +98,8 @@ export function removedLinesOf(diff: string): AddedLine[] {
   return removed;
 }
 
-const SWITCHED_OFF = /\b(?:it|test|describe)\.(?:skip|only)\b|\bx(?:it|describe|test)\(|@Ignore\b|@Disabled\b|\bt\.Skip\(|#\[ignore\]|pytest\.mark\.skip/;
+const SWITCHED_OFF = /\b(?:it|test|describe)\.(?:skip|only|skipIf|runIf|todo|fixme|fails)\b|\bx(?:it|describe|test)\(|@Ignore\b|@Disabled\b|\bt\.Skip(?:Now|f)?\(|#\[ignore\b|pytest\.mark\.(?:skip|skipif|xfail)|\bpytest\.skip\(|@unittest\.(?:skip|skipIf|skipUnless|expectedFailure)|\bthis\.skip\(/;
+const ISSUE_CAP = 120;
 const SCENARIO_TAG = /@scenario:([A-Za-z0-9_-]+)/g;
 
 /** The changed paths of `git diff --name-status`: a rename or copy counts under its new path. */
@@ -150,7 +154,7 @@ function dependencyOf({ path, line, section }: AddedLine): string | null {
   return null;
 }
 
-export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[]; removedLines?: AddedLine[]; planned: string[]; declared: { path: string; reason?: string }[];
+export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[]; removedLines?: AddedLine[]; /** The tests the tests step committed, by scenario: the scope is measured from that commit, and any change to one of these files is a weakened test. */ scenarioTests?: readonly { scenario: string; file: string }[]; planned: string[]; declared: { path: string; reason?: string }[];
   /** An approved plan exists: an empty planned list then switches nothing off (every changed file is undeclared). */
   planPresent?: boolean }): ScopeFacts {
   const changed = changedOf(input.nameStatus);
@@ -167,27 +171,43 @@ export function scopeFacts(input: { nameStatus: string; addedLines: AddedLine[];
       ...input.addedLines.filter((l) => TOKEN.test(l.line)).map((l) => `${l.path}: ${TOKEN.exec(l.line)![0].slice(0, 4)}\u2026`),
     ],
     switchedOff: input.addedLines.filter((l) => SWITCHED_OFF.test(l.line)).map((l) => `${l.path}: ${l.line.trim()}`),
-    weakened: weakenedOf(input.removedLines ?? [], input.addedLines),
+    weakened: weakenedOf(input.removedLines ?? [], input.addedLines, input.nameStatus, input.scenarioTests ?? []),
   };
 }
 
-function weakenedOf(removed: AddedLine[], added: AddedLine[]): string[] {
+function weakenedOf(removed: AddedLine[], added: AddedLine[], nameStatus: string, scenarioTests: readonly { scenario: string; file: string }[]): string[] {
   const tagsOf = (lines: AddedLine[]) => lines.flatMap((l) => [...l.line.matchAll(SCENARIO_TAG)].map((m) => m[1]!));
-  const kept = new Set(tagsOf(added));
-  return [...new Set(tagsOf(removed))].filter((id) => !kept.has(id));
+  // A tag counts as kept only on an added line of a test file: a tag re-added in production code keeps nothing.
+  const kept = new Set(tagsOf(added.filter((l) => looksLikeTestPath(l.path))));
+  const lost = tagsOf(removed).filter((id) => !kept.has(id));
+  // The scenario tests are fixed once committed: any change to a file that holds one (a delete or a rename-away included), tag untouched or not.
+  const touched = new Set(nameStatus.split("\n").filter((l) => l.trim()).flatMap((l) => l.split("\t").slice(1)));
+  const changed = scenarioTests.filter((t) => touched.has(t.file)).map((t) => t.scenario);
+  return [...new Set([...changed, ...lost])];
 }
 
-/** The facts as issues, each with a severity: a blocker for an undeclared file, a removed, switched-off or weakened test and a secret; should_fix for a dependency the plan did not name and an unrelated refactor the check judged; a nit for a TODO. `judged` names what scope_check's answers found beyond the facts. Pure. */
+/** The facts as issues, each with a severity: a blocker for an undeclared file, a removed, switched-off or weakened test and a secret; should_fix for a dependency the plan did not name and an unrelated refactor the check judged; a nit for a TODO. `judged` names what scope_check's answers found beyond the facts.
+ *  An issue's text is redacted by `safe()` and cut at 120 characters (an added line can hold anything), and carries the path apart so a message can say where in fixed words. Pure. */
 export function scopeIssues(facts: ScopeFacts, judged: readonly string[]): ScopeIssue[] {
-  const issue = (severity: ScopeSeverity, kind: ScopeIssue["kind"], text: string): ScopeIssue => ({ severity, kind, text });
+  const text = (value: string): string => safe(value).slice(0, ISSUE_CAP);
+  const where = (entry: string): string => entry.split(": ")[0] ?? "";
+  const issue = (severity: ScopeSeverity, kind: ScopeIssue["kind"], value: string, path?: string): ScopeIssue => ({ severity, kind, text: text(value), ...(path ? { path: text(path) } : {}) });
   return [
-    ...facts.undeclared.map((p) => issue("blocker", "undeclared_file", `${p}: changed outside the plan and not declared`)),
-    ...facts.removedTests.map((p) => issue("blocker", "test_removed", `${p}: test removed`)),
-    ...facts.switchedOff.map((t) => issue("blocker", "switched_off_test", `test switched off: ${t}`)),
+    ...facts.undeclared.map((p) => issue("blocker", "undeclared_file", `${p}: changed outside the plan and not declared`, p)),
+    ...facts.removedTests.map((p) => issue("blocker", "test_removed", `${p}: test removed`, p)),
+    ...facts.switchedOff.map((t) => issue("blocker", "switched_off_test", `test switched off: ${t}`, where(t))),
     ...facts.weakened.map((id) => issue("blocker", "test_weakened", `${id}: the scenario's tagged test was changed after the tests commit`)),
-    ...facts.secrets.map((s) => issue("blocker", "secret", `secret-looking addition: ${s}`)),
-    ...facts.newDependencies.map((d) => issue("should_fix", "new_dependency", `dependency the plan did not name: ${d}`)),
+    ...facts.secrets.map((s) => issue("blocker", "secret", `secret-looking addition: ${s}`, where(s))),
+    ...facts.newDependencies.map((d) => issue("should_fix", "new_dependency", `dependency the plan did not name: ${d}`, where(d))),
     ...(judged.includes("unrelated_refactor") ? [issue("should_fix", "unrelated_refactor", "an unrelated refactor rides in the change")] : []),
-    ...facts.todos.map((t) => issue("nit", "todo", `TODO left in place: ${t}`)),
+    ...facts.todos.map((t) => issue("nit", "todo", `TODO left in place: ${t}`, where(t))),
   ];
+}
+
+const FACT_CAP = 160;
+
+/** The facts as they may be stored and shown to a model: each line an added line contributed (a TODO, a switched-off test, a dependency) redacted by `safe()` and cut. Paths are left as they are, for matching. */
+export function sanitizeFacts(facts: ScopeFacts): ScopeFacts {
+  const clean = (lines: string[]) => lines.map((l) => safe(l).slice(0, FACT_CAP));
+  return { ...facts, todos: clean(facts.todos), switchedOff: clean(facts.switchedOff), newDependencies: clean(facts.newDependencies), secrets: clean(facts.secrets) };
 }

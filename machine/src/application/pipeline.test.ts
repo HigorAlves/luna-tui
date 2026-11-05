@@ -466,6 +466,7 @@ describe("Build's budget", () => {
     expect(after.state).toBe("escalated");
     const gate = (await p.events(task.id)).findLast((e) => e.kind === "transition" && e.payload.to === "escalated");
     expect(gate?.payload.reason).toMatch(/budget is spent: 16 of 15 iterations/);
+    expect(gate?.payload.reason).toMatch(/tokens not counted/);
     expect((await p.events(task.id)).some((e) => e.kind === "build.budget")).toBe(true);
   });
 

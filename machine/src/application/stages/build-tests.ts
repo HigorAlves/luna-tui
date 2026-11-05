@@ -19,7 +19,7 @@ export interface TestsDiff {
 
 export interface BuildTestsDeps {
   /** The implementer, handed the tests the step made (by scenario). */
-  implement: (context: StageContext, extra: { scenarioTests?: { scenario: string; file: string }[]; sweepFailures?: { name: string; tail: string }[] }) => Promise<StageResult>;
+  implement: (context: StageContext, extra: { scenarioTests?: { scenario: string; file: string }[]; sweepFailures?: { name: string; tail: string }[]; scopeBase?: string }) => Promise<StageResult>;
   /** The test writer, as a sub-run; a second round carries what the first left out as `plan.review`. */
   runWriter: (context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
   /** The red_check decision for one scenario's test; `skipped` when it did not answer in time (it never blocks). `problems` are what a confident no said is wrong. */
@@ -28,8 +28,8 @@ export interface BuildTestsDeps {
   checkpoint: (context: StageContext, worktree: string, follows: "red" | "green") => Promise<void>;
   /** The regression sweep by script, after the implementer's last slice is green. */
   sweep: (context: StageContext) => Promise<SweepOutcome>;
-  /** True when Build's budget is spent, so a failed sweep does not get another implementer run. */
-  budgetSpent?: (context: StageContext) => Promise<boolean>;
+  /** Build's budget now: whether it is spent and the minutes left, read before each fix run of a failed sweep. */
+  budget?: (context: StageContext) => Promise<{ spent: boolean; minutesLeft: number } | undefined>;
   /** The repo's `holdout_cases`: the implementer must not see the scenarios, so no test is written for it to read. */
   holdout: (repoPath: string) => Promise<boolean>;
   git: {
@@ -57,7 +57,7 @@ function addUsage(a: StageResult["usage"], b: StageResult["usage"]): StageResult
   if (!a) return b;
   if (!b) return a;
   const sum = (x: number | null, y: number | null) => (x === null && y === null ? null : (x ?? 0) + (y ?? 0));
-  const tokens = a.tokens || b.tokens ? { input: (a.tokens?.input ?? 0) + (b.tokens?.input ?? 0), output: (a.tokens?.output ?? 0) + (b.tokens?.output ?? 0) } : null;
+  const tokens = a.tokens || b.tokens ? { input: (a.tokens?.input ?? 0) + (b.tokens?.input ?? 0), output: (a.tokens?.output ?? 0) + (b.tokens?.output ?? 0), cached: (a.tokens?.cached ?? 0) + (b.tokens?.cached ?? 0) } : null;
   return { turns: sum(a.turns, b.turns), costUsd: sum(a.costUsd, b.costUsd), tokens } satisfies Usage;
 }
 
@@ -82,7 +82,8 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       let result = await deps.implement(context, extra);
       let usage = result.usage;
       for (let fixes = 0; ; fixes++) {
-        if (result.outcome !== "pass") return result;
+        // A fix run that fails still returns what every run before it spent.
+        if (result.outcome !== "pass") return { ...result, ...(usage ? { usage } : {}) };
         const sweep = await deps.sweep(context);
         const summary = { status: sweep.status, ran: sweep.ran, ...(sweep.note ? { note: sweep.note } : {}), ...(sweep.failed.length ? { failed: sweep.failed.map((f) => f.name) } : {}) };
         const done = (outcome: StageResult): StageResult => ({ ...outcome, ...(usage ? { usage } : {}), detail: { ...outcome.detail, sweep: summary } });
@@ -95,10 +96,12 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
         }
         const names = sweep.failed.map((f) => safe(f.name).slice(0, 60));
         await context.emit?.("build.sweep_failed", { checks: names });
-        if (fixes >= MAX_SWEEP_FIXES || (await deps.budgetSpent?.(context))) {
-          return done({ outcome: "fail", detail: { error: `the regression sweep failed: ${names.join(", ")}`, sweepFailures: sweep.failed } });
+        // The budget is read before each fix run, and the run gets the minutes that are left.
+        const state = await deps.budget?.(context);
+        if (fixes >= MAX_SWEEP_FIXES || state?.spent) {
+          return done({ outcome: "fail", detail: { error: `the regression sweep failed: ${names.join(", ")}`, sweepFailures: names } });
         }
-        result = await deps.implement(context, { ...extra, sweepFailures: sweep.failed });
+        result = await deps.implement(state ? { ...context, budgetMinutes: state.minutesLeft } : context, { ...extra, sweepFailures: sweep.failed });
         usage = addUsage(usage, result.usage);
       }
     };
@@ -121,7 +124,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     const earlier = worktree && context.testsCommit ? await deps.git.readCommit(worktree, context.testsCommit) : null;
     if (earlier) {
       const facts = scenarioTags({ ...earlier, scenarios });
-      return withStep(await implementSwept({ scenarioTests: testsOf(facts) }), { status: "committed", commit: context.testsCommit!, resumed: true, scenarioTests: testsOf(facts) });
+      return withStep(await implementSwept({ scenarioTests: testsOf(facts), scopeBase: context.testsCommit! }), { status: "committed", commit: context.testsCommit!, resumed: true, scenarioTests: testsOf(facts) });
     }
 
     const approved = context.approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
@@ -179,7 +182,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       for (const j of judged) await context.emit?.("scenario.red", { scenario: j.id });
       const sha = await deps.git.commit(where, subject, `plan version ${plan.success ? plan.data.version : 2}`);
       await deps.checkpoint(context, where, "red").catch(() => {});
-      const result = await implementSwept({ scenarioTests: testsOf(facts) });
+      const result = await implementSwept({ scenarioTests: testsOf(facts), scopeBase: sha });
       const skipped = judged.some((j) => j.verdict === "skipped");
       return withStep(result, { status: "committed", commit: sha, tests: Object.keys(facts.tagged).length, scenarioTests: testsOf(facts), ...(skipped ? { redCheck: "skipped" } : {}) });
     }

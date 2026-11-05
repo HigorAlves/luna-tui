@@ -1606,8 +1606,8 @@ export class Pipeline {
           }
         }
         let result: StageResult;
-        // Build's budget is read before each implementing run: a spent one escalates the card without another run.
-        const spentBefore = stage === "implementing" && !resume ? await this.spentBuildBudget(id) : null;
+        // Build's budget is read before each implementing run, a resumed one included: a spent one escalates the card without another run.
+        const spentBefore = stage === "implementing" ? await this.spentBuildBudget(id) : null;
         if (spentBefore) {
           this.offPool.delete(id);
           result = spentBefore;
@@ -2016,6 +2016,14 @@ export class Pipeline {
     return undefined;
   }
 
+  /** Build's budget now, counted from the last fresh budget: whether it is spent and the minutes left. Read between the fix runs of a failed sweep. */
+  async buildBudgetState(id: string): Promise<{ spent: boolean; minutesLeft: number }> {
+    const task = await this.get(id);
+    const { runs, events } = await this.budgetRows(id);
+    const budget = buildBudget(runs, events, (await this.policyFor(task.repoPath)).factory.build);
+    return { spent: budget.spent !== null, minutesLeft: budget.minutesLeft };
+  }
+
   /** The minutes of Build's budget the card has left. */
   private async buildMinutesLeft(id: string, repoPath: string | null): Promise<number> {
     const limits = (await this.policyFor(repoPath)).factory.build;
@@ -2040,7 +2048,7 @@ export class Pipeline {
     const numbers = { iterations: budget.iterations, tokens: budget.tokens, minutes: budget.minutes, consecutiveReds: budget.consecutiveReds, limits };
     await this.log(id, "build.budget", { spent: budget.spent, ...numbers });
     const said = { iterations: `${budget.iterations} of ${limits.max_iterations} iterations`, tokens: `${budget.tokens} of ${limits.max_tokens} tokens`, minutes: `${budget.minutes} of ${limits.max_minutes} minutes` }[budget.spent];
-    return { outcome: "escalated", detail: { reason: `Build's budget is spent: ${said} (${budget.spent}); a person decides`, budget: { spent: budget.spent, ...numbers } } };
+    return { outcome: "escalated", detail: { reason: `Build's budget is spent: ${said} (${budget.spent}); ${budget.tokensCounted ? "" : "tokens not counted; "}a person decides`, budget: { spent: budget.spent, ...numbers } } };
   }
 
   /** When the plan stage runs because a plan was found wrong (the last move into it was a `plan_wrong`): who raised it, why, and what the raising

@@ -63,7 +63,7 @@ export interface StageResult {
   events?: Array<{ at: string; kind: string; payload: Record<string, unknown> }>;
   /** Files the pack produced, already copied; `path` is absolute on the host. */
   artifacts?: Array<{ kind: ArtifactKind; path: string; label: string; sha256: string }>;
-  usage?: { turns: number | null; costUsd: number | null; /** The runtime's own count; null where it cannot report one. */ tokens?: { input: number; output: number } | null };
+  usage?: { turns: number | null; costUsd: number | null; /** The runtime's own count; null where it cannot report one. */ tokens?: { input: number; output: number; cached?: number } | null };
   /** Questions for the gate; shown as the approval's `questions`. */
   needsInput?: NeedsInputItem[];
   /** Outward actions awaiting approval; shown as the approval's `actions`. */

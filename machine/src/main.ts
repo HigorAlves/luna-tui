@@ -199,7 +199,7 @@ const triageSignals: TriageSignalDeps = { classify: null, graph, policy: (repoPa
 /** The plan stage's decisions run through PackRuns, which is built below: bound once it exists. */
 const planDecisions: { decide: PlanDeps["decide"] } = { decide: null };
 /** Build's red and scope checks run through PackRuns too: bound once it exists. */
-const buildDecisions: { decide: Decide | null } = { decide: null };
+const buildDecisions: { decide: Decide | null; budget?: (taskId: string) => Promise<{ spent: boolean; minutesLeft: number }> } = { decide: null };
 /** Verify's finding_classify (and e2e's failure cause) run through PackRuns as the `verify` client: bound once it exists. */
 const verifyDecisions: { decide: Decide | null } = { decide: null };
 /** Evidence's format decision runs through PackRuns as the `evidence` client: bound once it exists. */
@@ -425,6 +425,7 @@ if (packRuns) planDecisions.decide = async (pack, plan) => tagged(await packRuns
 if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "verify" }, "verify"));
 if (packRuns) evidenceDecisions.decide = async (evidence) => tagged(await packRuns.run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence"));
 if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await packRuns.run({ pack, context: { ship }, stage: "ship" }, "ship"));
+buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
 if (packRuns) buildDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "build" }, "build"));
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 const app = createApp({

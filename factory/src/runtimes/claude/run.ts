@@ -2,6 +2,7 @@
 // (its role as `agent`, its helpers as `agents`, the plugin's skills, its access as tool lists, the
 // guards as PreToolUse hooks, the luna tools as an in-process MCP server) and `query()` is
 // followed to its result, its messages and the hooks' decisions turned into run events as it goes.
+import { claudeTokens } from "../../core/usage.ts";
 import type { Options, Query } from "@anthropic-ai/claude-agent-sdk";
 import { type Pack, answerJsonSchema, lowestBar } from "@hardness/contracts";
 import { appendFileSync } from "node:fs";
@@ -189,8 +190,8 @@ async function drive(ctx: RunContext, transport: Transport | undefined, prompt: 
         run.turns = msg.num_turns ?? 0;
         run.costUsd = msg.total_cost_usd ?? null;
         run.durationMs = msg.duration_ms ?? 0;
-        const usage = msg.usage as { input_tokens?: number; output_tokens?: number } | undefined;
-        run.tokens = typeof usage?.input_tokens === "number" && typeof usage.output_tokens === "number" ? { input: usage.input_tokens, output: usage.output_tokens } : null;
+        const usage = msg.usage as { input_tokens?: number; output_tokens?: number; cache_creation_input_tokens?: number; cache_read_input_tokens?: number } | undefined;
+        run.tokens = claudeTokens(usage);
         emit({
           kind: "usage",
           payload: { model: run.model || engine.modelId, ...(usage?.input_tokens !== undefined && { inputTokens: usage.input_tokens }), ...(usage?.output_tokens !== undefined && { outputTokens: usage.output_tokens }), ...(run.costUsd !== null && { costUsd: run.costUsd }) },

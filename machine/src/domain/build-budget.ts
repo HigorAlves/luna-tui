@@ -32,25 +32,30 @@ const round1 = (n: number): number => Math.round(n * 10) / 10;
 export function buildBudget(runs: readonly RunFacts[], events: readonly { kind: string; payload: Record<string, unknown> }[], limits: BuildLimits, now: Date = new Date()): BuildBudget {
   const mine = runs.filter((r) => r.stage === "implementing");
   const minutes = round1(mine.reduce((sum, r) => sum + ((r.endedAt ?? now).getTime() - r.startedAt.getTime()) / 60_000, 0));
-  let iterations = 0;
+  let ledgerIterations = 0;
+  let machineIterations = 0;
   let consecutiveReds = 0;
   let tokens: number | null = null;
   for (const { kind, payload } of events) {
     if (kind === "stage.slice.red") {
-      iterations += 1;
+      ledgerIterations += 1;
       consecutiveReds += 1;
     } else if (kind === "stage.slice.green") {
-      iterations += 1;
+      ledgerIterations += 1;
       consecutiveReds = 0;
     } else if (kind === "stage.slice.committed") {
       consecutiveReds = 0;
     } else if (kind === "build.sweep_failed") {
-      iterations += 1;
+      ledgerIterations += 1;
+      machineIterations += 1;
     } else if (kind === "stage.finished" && payload.stage === "implementing") {
+      machineIterations += 1;
       const t = payload.tokens as { input?: unknown; output?: unknown } | undefined;
       if (t && typeof t.input === "number" && typeof t.output === "number") tokens = (tokens ?? 0) + t.input + t.output;
     }
   }
+  // The ledger is a file the agent writes: the machine's own rows (each implementing run, each failed sweep) count too, and the larger count stands.
+  const iterations = Math.max(ledgerIterations, machineIterations);
   const minutesLeft = Math.max(0, round1(limits.max_minutes - minutes));
   const spent = iterations > limits.max_iterations ? "iterations" : tokens !== null && tokens > limits.max_tokens ? "tokens" : minutes > limits.max_minutes ? "minutes" : null;
   return { iterations, tokens, tokensCounted: tokens !== null, minutes, minutesLeft, consecutiveReds, limits, spent };

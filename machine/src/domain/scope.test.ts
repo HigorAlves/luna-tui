@@ -133,11 +133,32 @@ describe("tests switched off in place", () => {
   const line = (text: string) => [{ path: "src/cart.test.ts", line: text }];
   it.each([
     ["it.skip('x', () => {})"], ["describe.only('x', () => {})"], ["xit('x', () => {})"], ["xdescribe('x', () => {})"], ["@Ignore"], ["@Disabled(\"later\")"], ["t.Skip(\"flaky\")"], ["#[ignore]"], ["@pytest.mark.skip(reason='x')"], ["pytest.mark.skip"],
+    ["it.skipIf(process.env.CI)('x', () => {})"], ["test.runIf(false)('x', () => {})"], ["it.todo('x')"], ["test.fixme('x', () => {})"], ["this.skip()"], ["pytest.skip('later')"], ["@unittest.skip('later')"], ["@pytest.mark.xfail"], ["t.SkipNow()"], ['#[ignore = "flaky"]'],
   ])("lists %s on an added line of a file", (text) => {
     expect(scopeFacts({ ...none, nameStatus: "M\tsrc/cart.test.ts", addedLines: line(text) }).switchedOff).toEqual([`src/cart.test.ts: ${text}`]);
   });
   it("leaves an ordinary test and a word that only contains skip alone", () => {
     expect(scopeFacts({ ...none, nameStatus: "M\tsrc/a.ts", addedLines: [{ path: "src/a.ts", line: "const skipped = true; it('x', () => {})" }] }).switchedOff).toEqual([]);
+  });
+});
+
+describe("scenario tests are fixed once committed", () => {
+  const tests = [{ scenario: "S1", file: "web/cart.test.ts" }, { scenario: "S2", file: "web/cart.test.ts" }, { scenario: "S3", file: "web/other.test.ts" }];
+
+  it("lists every scenario of a tagged test file the change touched at all, even with the tag untouched (an emptied body, a deleted expect)", () => {
+    expect(scopeFacts({ ...none, nameStatus: "M\tweb/cart.test.ts", scenarioTests: tests }).weakened).toEqual(["S1", "S2"]);
+    expect(scopeFacts({ ...none, nameStatus: "D\tweb/other.test.ts", scenarioTests: tests }).weakened).toEqual(["S3"]);
+    expect(scopeFacts({ ...none, nameStatus: "R100\tweb/other.test.ts\tweb/moved.test.ts", scenarioTests: tests }).weakened).toEqual(["S3"]);
+  });
+
+  it("is empty when the change leaves the scenario test files alone", () => {
+    expect(scopeFacts({ ...none, nameStatus: "M\tsrc/a.ts\nA\tweb/new.test.ts", scenarioTests: tests }).weakened).toEqual([]);
+  });
+
+  it("counts a kept tag only on an added line of a test file: re-adding the tag in production code does not keep the scenario", () => {
+    const removed = [{ path: "web/cart.test.ts", line: "it('x @scenario:S1', () => {" }];
+    const inProduction = [{ path: "src/cart.ts", line: "// @scenario:S1" }];
+    expect(scopeFacts({ ...none, nameStatus: "M\tweb/cart.test.ts", removedLines: removed, addedLines: inProduction }).weakened).toEqual(["S1"]);
   });
 });
 
@@ -171,6 +192,20 @@ describe("removedLinesOf", () => {
   it("lists each removed line with its file", () => {
     const diff = ["diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts", "@@ -1,2 +1 @@", "-gone", " kept"].join("\n");
     expect(removedLinesOf(diff)).toEqual([{ path: "a.ts", line: "gone" }]);
+  });
+});
+
+describe("scopeIssues texts", () => {
+  const token = ["ghp", "a".repeat(36)].join("_");
+  const facts = { changed: [], undeclared: [], removedTests: [], newDependencies: [], todos: [`a.ts: // TODO ${token}`], secrets: [], switchedOff: [`a.test.ts: it.skip("x", () => { const k = "${token}" })`], weakened: [] };
+
+  it("carries no raw added line: redacted by safe() and capped at 120, with the path beside it", () => {
+    const issues = scopeIssues(facts, []);
+    for (const issue of issues) {
+      expect(issue.text).not.toContain(token);
+      expect(issue.text.length).toBeLessThanOrEqual(120);
+    }
+    expect(issues.find((i) => i.kind === "switched_off_test")).toMatchObject({ path: "a.test.ts" });
   });
 });
 

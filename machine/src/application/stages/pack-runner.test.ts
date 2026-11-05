@@ -934,6 +934,15 @@ describe("the engine a stage runs on", () => {
       expect(result.findings).toEqual([expect.objectContaining({ severity: "scope", title: expect.stringMatching(/switched off/) })]);
     });
 
+    it("puts no token from an added line on the error, the findings or the issues: fixed words and the path only", async () => {
+      const token = ["ghp", "b".repeat(36)].join("_");
+      const result = await runners(fakeSandbox(output(), commitContent({ "b.txt": `it.skip("x", () => { const k = "${token}" })\n` }))).implementing!(planned());
+      expect(result.outcome).toBe("fail");
+      expect(JSON.stringify(result.detail)).not.toContain(token);
+      expect(JSON.stringify(result.findings)).not.toContain(token);
+      expect(result.detail?.error).toMatch(/switched off.*b\.txt/);
+    });
+
     it("passes with a dependency the plan did not name (should_fix) and a TODO (nit): they ride along as findings and do not fail the stage", async () => {
       const answer = { kind: "done", summary: "x", outOfMap: [{ path: "package.json", reason: "the export needs it" }] };
       const files = { "b.txt": "// TODO later\n", "package.json": '{\n  "dependencies": {\n    "left-pad": "^1.0.0"\n  }\n}\n' };
@@ -942,6 +951,27 @@ describe("the engine a stage runs on", () => {
       expect(result.detail).toMatchObject({ scope: { issues: expect.arrayContaining([expect.objectContaining({ severity: "should_fix", kind: "new_dependency" }), expect.objectContaining({ severity: "nit", kind: "todo" })]) } });
       expect(result.detail).not.toHaveProperty("scopeRed");
       expect(result.findings).toEqual(expect.arrayContaining([expect.objectContaining({ severity: "should_fix" }), expect.objectContaining({ severity: "nit" })]));
+    });
+
+    it("computes the scope over the card's whole change on the feature route: a fix run that changes nothing still sees the undeclared file the first run committed", async () => {
+      const first = await runners(fakeSandbox(output(), commitFiles("b.txt", "extra.txt"))).implementing!(planned());
+      expect(first).toMatchObject({ outcome: "fail", detail: { scopeRed: true } });
+      const again = { ...planned(), runId: "run-2", task: { ...planned().task, branch: first.workspace!.branch, worktreePath: first.workspace!.worktreePath } } as StageContext;
+      const second = await runners(fakeSandbox(output(), () => {})).implementing!(again);
+      expect(second).toMatchObject({ outcome: "fail", detail: { scopeRed: true, scope: { facts: { undeclared: ["extra.txt"] } } } });
+    });
+
+    it("keeps the run's own commit as the scope's base on a route with no plan (the PR routes)", async () => {
+      const first = await runners(fakeSandbox(output(), commitFiles("b.txt", "extra.txt"))).implementing!(planned());
+      const noPlan = { ...context("implementing"), runId: "run-2", task: { ...context("implementing").task, branch: first.workspace!.branch, worktreePath: first.workspace!.worktreePath } } as StageContext;
+      const second = await runners(fakeSandbox(output(), () => {})).implementing!(noPlan);
+      expect(second.detail).not.toHaveProperty("scopeRed");
+    });
+
+    it("fails closed when the scope facts cannot be computed: an escalation as an environment problem, not a pass with a note", async () => {
+      const d = { ...deps(fakeSandbox(output(), commitFiles("b.txt"))), scopeGit: { nameStatus: async () => { throw new Error("git is gone"); }, diff: async () => "" } };
+      const result = await agentRunners(d).implementing!(planned());
+      expect(result).toMatchObject({ outcome: "escalated", detail: { envBroken: true, reason: expect.stringMatching(/scope.*git is gone/i) } });
     });
 
     it("fails the stage on a changed file the plan does not name and the answer does not declare, one finding per file", async () => {

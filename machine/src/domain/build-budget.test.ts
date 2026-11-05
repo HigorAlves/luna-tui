@@ -44,6 +44,19 @@ describe("buildBudget", () => {
   });
 });
 
+describe("the machine's own count of iterations", () => {
+  it("counts every implementing run and every failed sweep as an iteration whatever the ledger says, and takes the larger of the two counts", () => {
+    const runs = Array.from({ length: 16 }, (_, i) => run("implementing", i, i));
+    const rows = runs.map(() => finished());
+    // The ledger (a file the agent writes) reports nothing: the machine's own rows still spend the card.
+    expect(buildBudget(runs, rows, limits)).toMatchObject({ iterations: 16, spent: "iterations" });
+    // A ledger that reports more than the rows wins.
+    expect(buildBudget([run("implementing", 0, 1)], [finished(), row("stage.slice.red"), row("stage.slice.green"), row("stage.slice.red")], limits).iterations).toBe(3);
+    // Sweep failures count as machine rows too.
+    expect(buildBudget([run("implementing", 0, 1)], [finished(), row("build.sweep_failed"), row("build.sweep_failed")], limits).iterations).toBe(3);
+  });
+});
+
 describe("rateLimitWaitMs", () => {
   const now = Date.UTC(2026, 10, 5, 12, 0);
   it("waits for the provider's reset, at least 1 minute and at most 30", () => {

@@ -105,3 +105,11 @@ describe("the sections in a luna.yaml", () => {
     expect(bad({ sla: { cycle: "3d" }, evidence: { retention_days: 0, somethingNew: true }, policy: { auto_merge: "low" } }).success).toBe(true);
   });
 });
+
+describe("build.backoff_minutes", () => {
+  it("must start at one minute or more: a zero low bound could spin a rate-limited card", () => {
+    expect(LunaConfig.safeParse({ build: { backoff_minutes: [0, 30] } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ build: { backoff_minutes: [0.5, 30] } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ build: { backoff_minutes: [1, 30] } }).success).toBe(true);
+  });
+});

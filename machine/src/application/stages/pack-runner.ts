@@ -84,6 +84,8 @@ export interface AgentDeps {
   truth?: TruthSink | null;
   /** How often the build watch looks at the run's ledger, in ms. */
   watchEvery?: number;
+  /** Replaces the git reads the scope check makes (tests). */
+  scopeGit?: { nameStatus(from: string, to: string): Promise<string>; diff(from: string, to: string): Promise<string> };
   /** Replaces the wait between checkpoint push tries (tests). */
   pushSleep?: (ms: number) => Promise<void>;
   /** The board search triage's agent asks for (`card_search`): read-only, the task's own repository only. Absent: the tool answers nothing. */
@@ -135,6 +137,8 @@ export interface AgentExtra {
   baseCommit?: string;
   /** pr_reply: the thread and the pack, built by the host; a reviewer's text only ever rides here. */
   ship?: ShipContext;
+  /** implementing, feature route: the commit the scope is measured from (the tests commit the machine made); absent, the branch's base. */
+  scopeBase?: string;
   /** implementing: the tests Build's tests step made, one per scenario. */
   scenarioTests?: { scenario: string; file: string }[];
   /** implementing, after a failed regression sweep: the failing checks and their output tails. */
@@ -307,17 +311,19 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           outDir: join(runDir, "out"),
           repoPath: task.repoPath,
           worktree: workspace.path,
-          inputCommit,
+          // The feature route measures the scope over the card's whole change (from the tests commit, else the branch's base), so a fix run that changes nothing still sees what an earlier run committed; a route with no plan keeps the run's own commit.
+          inputCommit: input.plan != null ? (extra.scopeBase ?? baseCommit ?? inputCommit) : inputCommit,
           slices: input.plan?.slices ?? [],
           planned: plannedFiles(input.plan),
           planPresent: input.plan != null,
+          ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
           get decide() {
             return deps.decide ?? null;
           },
           overrides: policy.decisions,
           truth: deps.truth ?? null,
           taskId: task.id,
-          git: { nameStatus: (from, to) => diffNameStatus(workspace.path, from, to), diff: (from, to) => diffText(workspace.path, from, to) },
+          git: deps.scopeGit ?? { nameStatus: (from, to) => diffNameStatus(workspace.path, from, to), diff: (from, to) => diffText(workspace.path, from, to) },
           log: (line) => void context.note?.(line).catch(() => {}),
         })
       : null;
@@ -624,7 +630,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           return merged({
             ...mapped,
             outcome: "fail",
-            detail: { ...mapped.detail, scopeRed: true, error: `scope check failed: ${blockers.map((i) => i.text).join("; ").slice(0, 1500)}` },
+            detail: { ...mapped.detail, scopeRed: true, error: `scope check failed: ${blockers.map((i) => `${SCOPE_TITLES[i.kind]}${i.path ? ` (${i.path})` : ""}`).join("; ").slice(0, 1500)}` },
             findings: blockers.map((i) => ({ ...asFinding(i), body: SCOPE_ADVICE[i.kind] ?? i.text })),
           });
         }
@@ -635,7 +641,10 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           await deps.graph.recordMisses(task.repoPath, { task: task.id, at: new Date().toISOString(), files: accepted }).catch((e: Error) => void context.note?.(`graph misses not recorded: ${e.message}`).catch(() => {}));
         }
       } catch (error) {
-        await context.note?.(`scope facts unavailable: ${(error as Error).message}`).catch(() => {});
+        // Fail closed: a scope that cannot be computed is an environment problem for a person, not a pass.
+        const message = safe((error as Error).message).slice(0, 200);
+        await context.note?.(`scope facts unavailable: ${message}`).catch(() => {});
+        return merged({ ...mapped, outcome: "escalated", detail: { ...mapped.detail, envBroken: true, reason: `the scope check could not be computed: ${message}` } });
       }
     }
   }

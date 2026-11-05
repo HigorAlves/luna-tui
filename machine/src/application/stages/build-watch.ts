@@ -9,7 +9,7 @@ import { join, sep } from "node:path";
 import { type TruthSink, redCheckTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import type { CardHit } from "../../domain/card-search.ts";
-import { type AddedLine, type ScopeFacts, addedLinesOf, removedLinesOf, scopeFacts } from "../../domain/scope.ts";
+import { type AddedLine, type ScopeFacts, addedLinesOf, removedLinesOf, sanitizeFacts, scopeFacts } from "../../domain/scope.ts";
 
 /** The most a request file the container writes may hold: a request is a few lines of JSON. */
 export const MAX_MAILBOX_BYTES = 64 * 1024;
@@ -222,6 +222,8 @@ export interface BuildChecksDeps {
   planned: string[];
   /** An approved plan exists (the feature route): an empty planned list does not switch the scope check off. */
   planPresent?: boolean;
+  /** The tests the tests step committed, by scenario: the scope is measured from that commit, and any change to one of these files is a weakened test. */
+  scenarioTests?: { scenario: string; file: string }[];
   /** Null when no decision can run: every check is skipped. Read at call time. */
   decide: Decide | null;
   overrides: Record<string, DecisionOverrides>;
@@ -283,7 +285,7 @@ export function buildChecks(deps: BuildChecksDeps) {
   const factsFor = async (declared: { path: string }[]): Promise<ScopeFacts> => {
     const [nameStatus, diff] = await Promise.all([deps.git.nameStatus(deps.inputCommit, "HEAD"), deps.git.diff(deps.inputCommit, "HEAD")]);
     const addedLines: AddedLine[] = addedLinesOf(diff);
-    return scopeFacts({ nameStatus, addedLines, removedLines: removedLinesOf(diff), planned: deps.planned, declared, planPresent: deps.planPresent === true });
+    return sanitizeFacts(scopeFacts({ nameStatus, addedLines, removedLines: removedLinesOf(diff), planned: deps.planned, declared, planPresent: deps.planPresent === true, ...(deps.scenarioTests?.length ? { scenarioTests: deps.scenarioTests } : {}) }));
   };
 
   /** The verdict the last scope_check came to, kept here: the answer file lives under /out, which the container can rewrite. */

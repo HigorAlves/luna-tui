@@ -73,7 +73,7 @@ export async function buildRealStages(
   /** The machine's code graphs, mounted read-only in every stage; `ensure` asks for a first build of a repo with none. */
   graphs?: { graph: Graph; ensure: (repoPath: string) => void },
   /** Build's checks (red_check, scope_check): `decide` is bound late, once PackRuns exists; null runs Build without them. */
-  buildDecisions?: { decide: Decide | null },
+  buildDecisions?: { decide: Decide | null; /** Build's budget now, read between a failed sweep's fix runs: bound once the pipeline exists. */ budget?: (taskId: string) => Promise<{ spent: boolean; minutesLeft: number }> },
   /** Verify's decisions (finding_classify, e2e_failure_cause), bound late like the others; null runs e2e without the failure cause. */
   verifyDecisions?: { decide: Decide | null },
   /** Evidence: the task's latest stage finishes, the pack's save and the format decision (`decide` bound late, once PackRuns exists; null picks captures or text). */
@@ -172,6 +172,7 @@ export async function buildRealStages(
         const policy = repoPath ? await policies.for(repoPath) : null;
         return judgeRedCheck(buildDecisions?.decide ?? null, check, repoPath, policy?.decisions ?? {});
       },
+      budget: async (context) => (buildDecisions?.budget ? buildDecisions.budget(context.task.id) : undefined),
       sweep: async (context) => {
         const { task } = context;
         if (!task.worktreePath || !task.repoPath) return { status: "skipped", ran: [], failed: [], note: "there was no worktree to sweep" };

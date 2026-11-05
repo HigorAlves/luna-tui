@@ -52,7 +52,7 @@ export const FactoryConfigInput = {
     max_iterations: count(50).optional(),
     max_tokens: count(20_000_000).optional(),
     max_minutes: minutes(1440).optional(),
-    backoff_minutes: z.tuple([minutes(1440), minutes(1440)]).optional(),
+    backoff_minutes: z.tuple([minutes(1440).min(1), minutes(1440)]).optional(),
     regression_full_suite_minutes: minutes(1440).optional(),
   }).optional(),
   sandbox: section({ cpu: count(128).optional(), memory_gb: count(1024).optional(), egress: z.array(z.string().max(80)).max(50).optional() }).optional(),

@@ -7,6 +7,7 @@
 // this process over a loopback bridge with a per-run bearer token. The server always stops.
 // LUNA_STAGE_DEBUG=1 also writes every session event to /out/raw.jsonl and the server's log to
 // /out/eve-server.log.
+import { eveTokens, sumTokens } from "../../core/usage.ts";
 import { ENGINES, type Pack, answerJsonSchema, lowestBar } from "@hardness/contracts";
 import type { SendTurnOptions } from "eve/client";
 import { type ChildProcess, spawn } from "node:child_process";
@@ -305,9 +306,9 @@ export class TurnFollower {
       const ok = data.outcome === "completed";
       this.calls.settled(id, ok, ok ? undefined : `${String(data.outcome)}: ${error?.message ?? ""}`);
     } else if (event.type === "usage.recorded") {
-      const usage = data.usage as { costUsd?: number; inputTokens?: number; outputTokens?: number } | undefined;
+      const usage = data.usage as { costUsd?: number; inputTokens?: number; outputTokens?: number; cachedInputTokens?: number } | undefined;
       if (typeof usage?.costUsd === "number") result.costUsd = (result.costUsd ?? 0) + usage.costUsd;
-      if (typeof usage?.inputTokens === "number" && typeof usage.outputTokens === "number") result.tokens = { input: (result.tokens?.input ?? 0) + usage.inputTokens, output: (result.tokens?.output ?? 0) + usage.outputTokens };
+      result.tokens = sumTokens(result.tokens, eveTokens(usage));
       this.emit({
         kind: "usage",
         payload: {

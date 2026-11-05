@@ -1,6 +1,7 @@
 // The implementer's Diff Summary, as the machine stores it: the agent's words flattened and capped, the files it lists checked against the diff,
 // and what git knows put over what the agent said (`in_code_map`, `deps_added`, `todos`). A file in the diff that the summary does not list is
 // added with no reason. Pure.
+import { safe } from "./evidence-markdown.ts";
 import { DiffSummaryAnswer, type DiffSummary, isPlainRepoPath, oneLine } from "@hardness/contracts";
 
 const FIELD_CAP = 300;
@@ -16,7 +17,7 @@ export interface DiffFacts {
   mapFiles: readonly string[];
 }
 
-const line = (text: unknown): string => (typeof text === "string" ? oneLine(text, FIELD_CAP) : "");
+const line = (text: unknown): string => (typeof text === "string" ? safe(oneLine(text, FIELD_CAP)).slice(0, FIELD_CAP) : "");
 const list = (items: readonly string[] | undefined): string[] => (items ?? []).map(line).filter(Boolean).slice(0, MAX_LIST);
 
 export function diffSummaryOf(answer: unknown, facts: DiffFacts): DiffSummary {

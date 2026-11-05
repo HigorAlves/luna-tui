@@ -43,4 +43,14 @@ describe("diffSummaryOf", () => {
     expect(none).toMatchObject({ what: "", why: "", deps_added: ["left-pad"] });
     expect(none.files).toHaveLength(3);
   });
+
+  it("puts the prose through safe(): a token is redacted and a mention or a tag is defused", () => {
+    const token = ["ghp", "c".repeat(36)].join("_");
+    const summary = diffSummaryOf({ what: `uses ${token} and pings @someone <b>x</b>`, why: "Closes #12", files: [{ path: "web/cart.tsx", reason: `reason ${token}` }], risks_noticed: [`risk ${token}`] }, facts);
+    const text = JSON.stringify(summary);
+    expect(text).not.toContain(token);
+    expect(summary.what).not.toContain("<b>");
+    expect(summary.what).not.toMatch(/@someone/);
+    expect(summary.why).not.toContain("#12");
+  });
 });

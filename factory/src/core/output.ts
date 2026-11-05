@@ -24,7 +24,7 @@ export interface RunOutcome {
   turns: number;
   costUsd: number | null;
   /** The runtime's own token count; null when it cannot report one. Never read from the model's text. */
-  tokens: { input: number; output: number } | null;
+  tokens: { input: number; output: number; cached: number } | null;
   durationMs: number;
   model: string;
   rateLimited: boolean;

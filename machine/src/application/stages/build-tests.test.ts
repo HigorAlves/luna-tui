@@ -168,6 +168,38 @@ describe("the regression sweep in Build", () => {
     expect(result).toMatchObject({ outcome: "fail", detail: { error: expect.stringMatching(/regression sweep failed: lint/), sweep: { status: "failed" } } });
   });
 
+  it("returns the summed usage when a fix run fails, and puts only the check names on the stage's result", async () => {
+    sweeps.length = 0;
+    sweeps.push(failing);
+    let runs = 0;
+    const f = fakes([tagged("S1")], {
+      implement: async () => (runs++ === 0 ? ({ outcome: "pass", usage: { turns: 2, costUsd: 1, tokens: { input: 100, output: 10 } } } as StageResult) : ({ outcome: "fail", usage: { turns: 3, costUsd: 2, tokens: { input: 200, output: 20 } } } as StageResult)),
+    });
+    const result = await buildTestsStep(f.deps)(context([v2]));
+    expect(result.outcome).toBe("fail");
+    expect(result.usage).toMatchObject({ turns: 5, tokens: { input: 300, output: 30 } });
+    sweeps.length = 0;
+    sweeps.push(failing, failing, failing, failing);
+    const g = fakes([tagged("S1")]);
+    const stopped = await buildTestsStep(g.deps)(context([v2]));
+    expect(stopped.detail?.sweepFailures).toEqual(["lint"]);
+    expect(JSON.stringify(stopped.detail)).not.toContain("no-unused-vars");
+  });
+
+  it("reads the budget before each fix run and gives that run the minutes left, and stops when it is spent", async () => {
+    sweeps.length = 0;
+    sweeps.push(failing, failing, failing);
+    const seenMinutes: Array<number | undefined> = [];
+    const states = [{ spent: false, minutesLeft: 40 }, { spent: false, minutesLeft: 25 }, { spent: true, minutesLeft: 0 }];
+    const f = fakes([tagged("S1")], {
+      implement: async (c) => (seenMinutes.push(c.budgetMinutes), { outcome: "pass" } as StageResult),
+      budget: async () => states.shift()!,
+    });
+    const result = await buildTestsStep(f.deps)(context([v2]));
+    expect(seenMinutes).toEqual([undefined, 40, 25]);
+    expect(result).toMatchObject({ outcome: "fail", detail: { error: expect.stringMatching(/sweep failed/) } });
+  });
+
   it("says a repository with no checks was not swept, and leaves a PR route and a failing implementer unswept", async () => {
     sweeps.length = 0;
     sweeps.push({ status: "skipped", ran: [], failed: [], note: "the repository declares no checks" });
@@ -238,7 +270,7 @@ describe("Build's tests step", () => {
       implement: async () => ({ outcome: "pass", usage: { turns: 10, costUsd: 1, tokens: { input: 1000, output: 200 } } }) as StageResult,
     });
     const result = await buildTestsStep(f.deps)(context([v2]));
-    expect(result.usage).toEqual({ turns: 14, costUsd: 1.25, tokens: { input: 1100, output: 220 } });
+    expect(result.usage).toEqual({ turns: 14, costUsd: 1.25, tokens: { input: 1100, output: 220, cached: 0 } });
   });
 
   it("leaves a PR route and a resumed run alone", async () => {
