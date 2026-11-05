@@ -3,7 +3,7 @@
   "pack": "risk_score",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-05T12:08:03.241Z",
+  "at": "2026-11-05T17:30:40.836Z",
   "model": "claude-haiku-5-5",
   "summary": {
     "cases": 4,
@@ -11,18 +11,18 @@
     "passRate": 0.75,
     "meanJudgeScore": null,
     "meanTurns": 2,
-    "meanDurationMs": 3522,
-    "costUsd": 0.0026344100000000002,
+    "meanDurationMs": 3026,
+    "costUsd": 0.00168083,
     "judgeCostUsd": null,
     "calibration": {
       "n": 4,
       "labelled": 3,
       "accuracy": 0.6666666666666666,
-      "actedOnAccuracy": 0.6666666666666666,
-      "coverage": 0.75,
-      "brier": 0.2548296296296296,
-      "ece": 0.33555555555555544,
-      "meanConfidence": 0.8141666666666666,
+      "actedOnAccuracy": 1,
+      "coverage": 0.25,
+      "brier": 0.22139374999999994,
+      "ece": 0.1858333333333333,
+      "meanConfidence": 0.8012499999999999,
       "overconfident": 1
     }
   },
@@ -40,17 +40,22 @@
           "check": "reversibility.score within 1.5..2.5",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"S\",\"M\"]",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3563,
-      "costUsd": 0.0009344,
+      "durationMs": 3203,
+      "costUsd": 0.00058595,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.7666666666666666,
-        "verdict": "proceed"
+        "confidence": 0.75,
+        "verdict": "flag"
       }
     },
     {
@@ -76,16 +81,21 @@
           "check": "data_sensitivity.score within -0.5..0.5",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"S\"]",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2156,
-      "costUsd": 0.00029007,
+      "durationMs": 2011,
+      "costUsd": 0.00011643000000000001,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.9333333333333332,
+        "confidence": 0.9675,
         "verdict": "proceed"
       }
     },
@@ -101,7 +111,7 @@
         {
           "check": "blast_radius.score within 1.5..2.5",
           "pass": false,
-          "detail": "found 1.2"
+          "detail": "found 1.3"
         },
         {
           "check": "reversibility.score within 1.5..2.5",
@@ -112,17 +122,22 @@
           "check": "data_sensitivity.score within 1.5..2.5",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"L\",\"XL\"]",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 4283,
-      "costUsd": 0.00071887,
+      "durationMs": 2784,
+      "costUsd": 0.00042929000000000003,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": false,
-        "confidence": 0.8399999999999999,
-        "verdict": "proceed"
+        "confidence": 0.7749999999999999,
+        "verdict": "flag"
       }
     },
     {
@@ -138,16 +153,21 @@
           "check": "blast_radius.confidence within 0..0.85",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"S\",\"M\"]",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 4086,
-      "costUsd": 0.00069107,
+      "durationMs": 4106,
+      "costUsd": 0.00054916,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": null,
-        "confidence": 0.7166666666666667,
+        "confidence": 0.7125,
         "verdict": "flag"
       }
     }

@@ -3,33 +3,33 @@
   "pack": "coverage_check",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-05T12:08:23.130Z",
+  "at": "2026-11-05T17:28:34.579Z",
   "model": "claude-haiku-5-5",
   "summary": {
     "cases": 4,
-    "passed": 3,
-    "passRate": 0.75,
+    "passed": 2,
+    "passRate": 0.5,
     "meanJudgeScore": null,
     "meanTurns": 2,
-    "meanDurationMs": 2802.5,
-    "costUsd": 0.0025380100000000003,
+    "meanDurationMs": 3451,
+    "costUsd": 0.0023160100000000003,
     "judgeCostUsd": null,
     "calibration": {
       "n": 4,
       "labelled": 3,
       "accuracy": 0.6666666666666666,
-      "actedOnAccuracy": 1,
-      "coverage": 0.75,
-      "brier": 0.19274074074074068,
-      "ece": 0.3466666666666667,
-      "meanConfidence": 0.8025,
+      "actedOnAccuracy": 0.6666666666666666,
+      "coverage": 1,
+      "brier": 0.2516666666666667,
+      "ece": 0.20000000000000007,
+      "meanConfidence": 0.8583333333333334,
       "overconfident": 1
     }
   },
   "cases": [
     {
       "id": "one-weak-scenario",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the coverage_check schema",
         "pass": true,
@@ -38,18 +38,18 @@
       "checks": [
         {
           "check": "pins.p within 0.25..0.75",
-          "pass": true,
-          "detail": null
+          "pass": false,
+          "detail": "found 0.85"
         }
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2261,
-      "costUsd": 0.0006932,
+      "durationMs": 2796,
+      "costUsd": 0.0006758000000000001,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": null,
-        "confidence": 0.7966666666666667,
+        "confidence": 0.8333333333333334,
         "verdict": "proceed"
       }
     },
@@ -70,12 +70,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2945,
-      "costUsd": 0.00055137,
+      "durationMs": 4278,
+      "costUsd": 0.0005212700000000001,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.8666666666666667,
+        "confidence": 0.85,
         "verdict": "proceed"
       }
     },
@@ -101,12 +101,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 2568,
-      "costUsd": 0.00062447,
+      "durationMs": 3030,
+      "costUsd": 0.00052437,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.82,
+        "confidence": 0.9,
         "verdict": "proceed"
       }
     },
@@ -132,13 +132,13 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3436,
-      "costUsd": 0.0006689700000000001,
+      "durationMs": 3700,
+      "costUsd": 0.00059457,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": false,
-        "confidence": 0.7266666666666666,
-        "verdict": "flag"
+        "confidence": 0.8500000000000001,
+        "verdict": "proceed"
       }
     }
   ]

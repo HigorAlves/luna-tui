@@ -3,7 +3,7 @@
   "pack": "risk_score",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-05T12:07:56.886Z",
+  "at": "2026-11-05T17:30:57.112Z",
   "model": "gpt-6-luna-fast",
   "summary": {
     "cases": 4,
@@ -11,19 +11,19 @@
     "passRate": 0.75,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 2954,
+    "meanDurationMs": 3520.5,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
       "n": 4,
       "labelled": 3,
-      "accuracy": 1,
-      "actedOnAccuracy": 1,
+      "accuracy": 0.6666666666666666,
+      "actedOnAccuracy": 0.6666666666666666,
       "coverage": 1,
-      "brier": 0.0003555555555555562,
-      "ece": 0.01777777777777778,
-      "meanConfidence": 0.9808333333333333,
-      "overconfident": 0
+      "brier": 0.28934166666666666,
+      "ece": 0.28833333333333344,
+      "meanConfidence": 0.946875,
+      "overconfident": 1
     }
   },
   "cases": [
@@ -40,16 +40,21 @@
           "check": "reversibility.score within 1.5..2.5",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"S\",\"M\"]",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3005,
+      "durationMs": 4394,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.9866666666666667,
+        "confidence": 0.945,
         "verdict": "proceed"
       }
     },
@@ -76,16 +81,21 @@
           "check": "data_sensitivity.score within -0.5..0.5",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"S\"]",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3041,
+      "durationMs": 3279,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.9866666666666667,
+        "confidence": 0.99,
         "verdict": "proceed"
       }
     },
@@ -112,16 +122,21 @@
           "check": "data_sensitivity.score within 1.5..2.5",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "complexity.choice in [\"L\",\"XL\"]",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2925,
+      "durationMs": 2848,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
-        "correct": true,
-        "confidence": 0.9733333333333333,
+        "correct": false,
+        "confidence": 0.9299999999999999,
         "verdict": "proceed"
       }
     },
@@ -137,17 +152,22 @@
         {
           "check": "blast_radius.confidence within 0..0.85",
           "pass": false,
-          "detail": "found 0.98"
+          "detail": "found 0.93"
+        },
+        {
+          "check": "complexity.choice in [\"S\",\"M\"]",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 2845,
+      "durationMs": 3561,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": null,
-        "confidence": 0.9766666666666666,
+        "confidence": 0.9225,
         "verdict": "proceed"
       }
     }
