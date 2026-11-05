@@ -6,7 +6,7 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "eval": "node run.ts"
+    "eval": "node cli.ts"
   },
   "dependencies": {
     "@hardness/contracts": "workspace:*",

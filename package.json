@@ -20,7 +20,7 @@
     "board:test": "cargo test --manifest-path board/Cargo.toml",
     "board:keys": "cargo run --manifest-path board/Cargo.toml -- --keys-md board/README.md",
     "golden": "pnpm --filter @hardness/machine golden",
-    "eval": "node evals/run.ts",
+    "eval": "node evals/cli.ts",
     "site:dev": "pnpm --filter site dev",
     "site:build": "pnpm --filter site build",
     "site:test": "pnpm --filter site test",

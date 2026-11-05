@@ -6,7 +6,8 @@
     "./run-once": "./src/application/stages/run-once.ts",
     "./credentials": "./src/adapters/credentials/index.ts",
     "./docker": "./src/adapters/docker/docker.ts",
-    "./telemetry": "./src/bootstrap/telemetry.ts"
+    "./telemetry": "./src/bootstrap/telemetry.ts",
+    "./decisions": "./src/bootstrap/decisions.ts"
   },
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/main.ts",

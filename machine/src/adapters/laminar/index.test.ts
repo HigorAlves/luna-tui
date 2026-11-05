@@ -24,6 +24,10 @@ let evals: Array<Record<string, unknown>>;
 let datapoints: Array<Record<string, unknown>>;
 let updates: Array<Record<string, unknown>>;
 let active: FakeSpan | null;
+let pushedSets: Array<Record<string, unknown>>;
+let pullPages: unknown[][];
+let pullTotal: number;
+let failDatasets: boolean;
 
 function fakeSdk(): LaminarSdk {
   return {
@@ -84,6 +88,13 @@ function fakeSdk(): LaminarSdk {
         },
         updateDatapoint: async (args: Record<string, unknown>) => void updates.push(args),
       };
+      datasets = {
+        push: async (args: Record<string, unknown>) => {
+          if (failDatasets) throw new Error("dataset down");
+          pushedSets.push(args);
+        },
+        pull: async (args: { offset?: number }) => ({ items: (pullPages[(args.offset ?? 0) / 100] ?? []) as never[], totalCount: pullTotal }),
+      };
       constructor(readonly options: Record<string, unknown>) {}
     } as unknown as LaminarSdk["LaminarClient"],
   };
@@ -99,6 +110,10 @@ beforeEach(() => {
   datapoints = [];
   updates = [];
   active = null;
+  pushedSets = [];
+  pullPages = [];
+  pullTotal = 0;
+  failDatasets = false;
 });
 
 describe("createLaminarTelemetry", () => {
@@ -267,5 +282,55 @@ describe("createLaminarTelemetry", () => {
     expect(spans).toHaveLength(1);
     expect(spans[0]!.ended).toBe(true);
     expect(warnings[1]).toBe("laminar: span end failed: circular");
+  });
+});
+
+describe("datasets and the labeling queue", () => {
+  it("pushes datapoints to the dataset by name, created when missing, each with its taskId", async () => {
+    const telemetry = await createLaminarTelemetry({ ...options, mode: "metadata" }, fakeSdk());
+    const out = await telemetry.datasets.push("risk_score", [{ taskId: "c1", data: { plan: 1 }, target: { a: 1 }, metadata: { pack: "risk_score" } }, { taskId: "c2", data: { plan: 2 } }]);
+    expect(out).toEqual({ pushed: 2 });
+    expect(pushedSets).toEqual([{ name: "risk_score", createDataset: true, points: [{ data: { plan: 1 }, target: { a: 1 }, metadata: { pack: "risk_score" }, taskId: "c1" }, { data: { plan: 2 }, taskId: "c2" }] }]);
+  });
+
+  it("pulls every page, keeps what has a taskId and an object as data, and warns instead of throwing", async () => {
+    const warnings: string[] = [];
+    pullTotal = 101;
+    pullPages = [Array.from({ length: 100 }, (_, i) => ({ taskId: `c${i}`, data: { n: i }, target: i === 0 ? { a: 1 } : undefined })), [{ taskId: "c100", data: { n: 100 } }, { data: { n: 1 } }, { taskId: "bad", data: "text" }]];
+    const telemetry = await createLaminarTelemetry({ ...options, mode: "metadata" }, fakeSdk(), (line) => warnings.push(line));
+    const got = await telemetry.datasets.pull("risk_score");
+    expect(got).toHaveLength(101);
+    expect(got[0]).toEqual({ taskId: "c0", data: { n: 0 }, target: { a: 1 } });
+    failDatasets = true;
+    expect(await telemetry.datasets.push("x", [{ taskId: "c", data: {} }])).toEqual({ pushed: 0 });
+    expect(warnings.join("\n")).toMatch(/could not push the dataset x: dataset down/);
+  });
+
+  it("finds the queue by name and posts the items to its endpoint with the record id as the idempotency key; the key never goes in the body", async () => {
+    const calls: Array<{ url: string; init?: RequestInit }> = [];
+    const fake = (async (url: string, init?: RequestInit) => {
+      calls.push({ url, init });
+      return init?.method === "POST" ? { ok: true, status: 200, json: async () => ({}) } : { ok: true, status: 200, json: async () => [{ id: "q-7", name: "other" }, { id: "q-1", name: "review risk_score" }] };
+    }) as unknown as typeof fetch;
+    const telemetry = await createLaminarTelemetry({ ...options, mode: "metadata", fetch: fake }, fakeSdk());
+    const out = await telemetry.queue.push("review risk_score", [{ idempotencyKey: "rec-1", data: { plan: 1 }, target: { blast_radius: { score: 1 } }, metadata: { recordId: "rec-1" } }]);
+    expect(out).toEqual({ pushed: 1 });
+    expect(calls[0]!.url).toBe("http://localhost:8000/v1/labeling_queues");
+    expect(calls[1]!.url).toBe("http://localhost:8000/v1/labeling_queues/q-1/items");
+    expect((calls[1]!.init!.headers as Record<string, string>).Authorization).toBe("Bearer k");
+    expect(JSON.parse(calls[1]!.init!.body as string)).toEqual({ items: [{ data: { plan: 1 }, target: { blast_radius: { score: 1 } }, metadata: { recordId: "rec-1" }, idempotencyKey: "rec-1" }] });
+    expect(calls[1]!.init!.body).not.toContain('"k"');
+  });
+
+  it("warns and pushes nothing when the queue is not there or the call fails", async () => {
+    const warnings: string[] = [];
+    const missing = (async () => ({ ok: true, status: 200, json: async () => [] })) as unknown as typeof fetch;
+    const down = (async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch;
+    for (const fetchImpl of [missing, down]) {
+      const telemetry = await createLaminarTelemetry({ ...options, mode: "metadata", fetch: fetchImpl }, fakeSdk(), (line) => warnings.push(line));
+      expect(await telemetry.queue.push("review", [{ idempotencyKey: "r", data: {} }])).toEqual({ pushed: 0 });
+    }
+    expect(warnings[0]).toMatch(/no labeling queue named review/);
+    expect(warnings[1]).toMatch(/ECONNREFUSED/);
   });
 });

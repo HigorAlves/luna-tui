@@ -14,7 +14,7 @@
 // so `metadata` keeps it on the host.
 import { readFile } from "node:fs/promises";
 
-import type { Evaluation, EvaluationCase, EvaluationStart, RunEnd, RunSpan, RunStart, Telemetry, TracesMode } from "../../application/telemetry.ts";
+import type { Datapoint, Evaluation, EvaluationCase, EvaluationStart, QueueItem, RunEnd, RunSpan, RunStart, Telemetry, TracesMode } from "../../application/telemetry.ts";
 
 export interface LaminarOptions {
   projectApiKey: string;
@@ -25,6 +25,8 @@ export interface LaminarOptions {
   httpPort: number;
   grpcPort: number;
   mode: Exclude<TracesMode, "off">;
+  /** The HTTP client for the labeling-queue calls, which the SDK has no resource for; tests pass a fake. */
+  fetch?: typeof fetch;
 }
 
 /** The OpenTelemetry span surface the adapter uses. */
@@ -51,6 +53,10 @@ export interface LaminarSdk {
       create(args: { name?: string; groupName?: string; metadata?: Record<string, unknown> }): Promise<string>;
       createDatapoint(args: { evalId: string; data: unknown; target?: unknown; metadata?: Record<string, unknown>; index?: number; taskId?: string; traceId?: string }): Promise<string>;
       updateDatapoint(args: { evalId: string; datapointId: string; scores: Record<string, number | null>; executorOutput?: unknown }): Promise<void>;
+    };
+    datasets: {
+      push(args: { points: Array<{ data: unknown; target?: unknown; metadata?: Record<string, unknown>; taskId?: string }>; name: string; createDataset?: boolean }): Promise<unknown>;
+      pull(args: { name: string; limit?: number; offset?: number }): Promise<{ items: Array<{ data: unknown; target?: unknown; metadata?: Record<string, unknown>; taskId?: string; id?: string }>; totalCount: number }>;
     };
   };
 }
@@ -187,5 +193,60 @@ export async function createLaminarTelemetry(options: LaminarOptions, sdk?: Lami
     };
   };
 
-  return { mode: options.mode, run, evaluation, flush: () => safe("flush failed", () => Laminar.flush()) };
+  const isRecord = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
+  const PAGE = 100;
+
+  /** The datasets mirror the repo's cases; a failure is a warning and an empty answer, never a throw. */
+  const datasets = {
+    push: async (name: string, datapoints: Datapoint[]): Promise<{ pushed: number }> => {
+      let pushed = 0;
+      await safe(`could not push the dataset ${name}`, async () => {
+        if (datapoints.length === 0) return;
+        await client.datasets.push({ name, createDataset: true, points: datapoints.map((d) => ({ data: d.data, ...(d.target ? { target: d.target } : {}), ...(d.metadata ? { metadata: d.metadata } : {}), taskId: d.taskId })) });
+        pushed = datapoints.length;
+      });
+      return { pushed };
+    },
+    pull: async (name: string, pullOptions: { limit?: number } = {}): Promise<Datapoint[]> => {
+      const found: Datapoint[] = [];
+      await safe(`could not pull the dataset ${name}`, async () => {
+        const wanted = pullOptions.limit ?? Number.POSITIVE_INFINITY;
+        for (let offset = 0; found.length < wanted; offset += PAGE) {
+          const page = await client.datasets.pull({ name, limit: Math.min(PAGE, wanted - found.length), offset });
+          for (const item of page.items) {
+            if (!isRecord(item.data) || typeof item.taskId !== "string") continue;
+            found.push({ ...(item.id ? { id: item.id } : {}), taskId: item.taskId, data: item.data, ...(isRecord(item.target) ? { target: item.target } : {}), ...(item.metadata ? { metadata: item.metadata } : {}) });
+          }
+          if (page.items.length === 0 || offset + PAGE >= page.totalCount) break;
+        }
+      });
+      return found;
+    },
+  };
+
+  /** Labeling queues are reached over HTTP (`/v1/labeling_queues`), as the SDK has no resource for them; the project key never leaves this file. */
+  const http = options.fetch ?? fetch;
+  const queueUrl = `${options.baseUrl}:${options.httpPort}/v1/labeling_queues`;
+  const headers = { Authorization: `Bearer ${options.projectApiKey}`, "Content-Type": "application/json", Accept: "application/json" };
+  const queue = {
+    push: async (name: string, items: QueueItem[]): Promise<{ pushed: number }> => {
+      let pushed = 0;
+      await safe(`could not queue items for ${name}`, async () => {
+        if (items.length === 0) return;
+        const listed = await http(queueUrl, { headers });
+        if (!listed.ok) throw new Error(`listing queues answered ${listed.status}`);
+        const body = (await listed.json()) as unknown;
+        const rows: unknown[] = Array.isArray(body) ? body : isRecord(body) && Array.isArray(body.items) ? body.items : [];
+        const found = rows.find((row) => isRecord(row) && row.name === name);
+        const id = isRecord(found) && typeof found.id === "string" ? found.id : null;
+        if (id === null) throw new Error(`no labeling queue named ${name}: create it in Laminar first`);
+        const sent = await http(`${queueUrl}/${encodeURIComponent(id)}/items`, { method: "POST", headers, body: JSON.stringify({ items: items.map((i) => ({ data: i.data, ...(i.target ? { target: i.target } : {}), ...(i.metadata ? { metadata: i.metadata } : {}), idempotencyKey: i.idempotencyKey })) }) });
+        if (!sent.ok) throw new Error(`queueing answered ${sent.status}`);
+        pushed = items.length;
+      });
+      return { pushed };
+    },
+  };
+
+  return { mode: options.mode, datasets, queue, run, evaluation, flush: () => safe("flush failed", () => Laminar.flush()) };
 }

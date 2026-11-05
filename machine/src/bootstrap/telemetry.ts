@@ -8,7 +8,7 @@ import { type TracesConfig, tracesConfig } from "../config.ts";
 import { type LaminarSdk, createLaminarTelemetry } from "../adapters/laminar/index.ts";
 import { type Telemetry, noTelemetry } from "../application/telemetry.ts";
 
-export type { Telemetry, RunSpan, RunStart, RunEnd, Evaluation, EvaluationCase } from "../application/telemetry.ts";
+export type { Telemetry, RunSpan, RunStart, RunEnd, Evaluation, EvaluationCase, Datapoint, QueueItem } from "../application/telemetry.ts";
 export type { TracesConfig } from "../config.ts";
 
 export interface BuildTelemetryDeps {

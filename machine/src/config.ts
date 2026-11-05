@@ -214,6 +214,9 @@ function portFrom(env: NodeJS.ProcessEnv, key: string, fallback: number): number
   return value;
 }
 
+/** The machine's state dir: `MACHINE_STATE_DIR`, else `~/.local/state/hardness`. The evals' harvest reads decision records from it by the same rule. */
+export const stateDirFrom = (env: NodeJS.ProcessEnv, home: string): string => env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness");
+
 /** `MACHINE_TRACES` and the Laminar address and key. Exported for the evals runner, which has no
  *  machine config of its own: `tracesConfig(process.env, homedir())`. */
 export function tracesConfig(env: NodeJS.ProcessEnv, home: string): TracesConfig {
@@ -351,7 +354,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     cycleSecs: env.MACHINE_SLA_CYCLE === undefined || env.MACHINE_SLA_CYCLE === "" ? null : parseDuration(env.MACHINE_SLA_CYCLE, "MACHINE_SLA_CYCLE"),
   };
   const home = env.HOME ?? homedir();
-  const stateDir = env.MACHINE_STATE_DIR ?? join(home, ".local", "state", "hardness");
+  const stateDir = stateDirFrom(env, home);
   const rules = env.MACHINE_SLACK_RULES?.trim();
   const host = env.MACHINE_HOST ?? "127.0.0.1";
   const apiToken = env.MACHINE_API_TOKEN?.replace(/\s+/g, "") || secretFileSync(join(home, ".config", "hardness", API_TOKEN_FILE));

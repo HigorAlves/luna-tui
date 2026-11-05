@@ -16,5 +16,8 @@ describe("noTelemetry", () => {
     await expect(evaluation.record({ id: "c1", index: 0, data: {}, scores: { pass: 1 }, traceId: null })).resolves.toBeUndefined();
     await expect(evaluation.finish()).resolves.toBeUndefined();
     await expect(telemetry.flush()).resolves.toBeUndefined();
+    await expect(telemetry.datasets.push("risk_score", [{ taskId: "c1", data: {} }])).resolves.toEqual({ pushed: 0 });
+    await expect(telemetry.datasets.pull("risk_score")).resolves.toEqual([]);
+    await expect(telemetry.queue.push("review", [{ idempotencyKey: "r1", data: {} }])).resolves.toEqual({ pushed: 0 });
   });
 });

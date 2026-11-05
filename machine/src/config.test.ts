@@ -76,6 +76,13 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_DIGEST_AT: "25:00" })).toThrow(/MACHINE_SLACK_DIGEST_AT/);
   });
 
+  it("resolves the state dir by one rule the evals' harvest shares", async () => {
+    const { stateDirFrom } = await import("./config.ts");
+    expect(stateDirFrom({}, "/h")).toBe("/h/.local/state/hardness");
+    expect(stateDirFrom({ MACHINE_STATE_DIR: "/s" }, "/h")).toBe("/s");
+    expect(loadConfig({ HOME: "/h", MACHINE_STATE_DIR: "/s" }).stateDir).toBe("/s");
+  });
+
   it("reads the thread-reply switch and the Slack pair, which go together", () => {
     expect(loadConfig({ HOME: "/h", MACHINE_THREAD_REPLIES: "off" }).threadReplies).toBe(false);
     expect(loadConfig({ HOME: "/h" }).groundTruth).toBe(true);

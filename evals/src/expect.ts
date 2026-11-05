@@ -31,6 +31,14 @@ export const Expect = z.object({
   checks: z.array(Check).default([]),
   /** For the judge: what a good answer does, in words. */
   rubric: z.string().min(1),
+  /** A decision case: the label a reviewer (or a later fact) gave, one object per question in the answer's shape. A scalar is exact, an array the labels it may be. */
+  label: z.record(z.string(), z.record(z.string(), z.unknown())).optional(),
+  /** Harvested without a label: a person still has to give it, in the Laminar queue or here. */
+  review: z.boolean().optional(),
+  /** Where a harvested case came from, and the model's own answer then (to prefill a labeling queue). */
+  recordId: z.string().optional(),
+  traceId: z.string().nullable().optional(),
+  modelAnswer: z.record(z.string(), z.unknown()).optional(),
 });
 export type Expect = z.infer<typeof Expect>;
 

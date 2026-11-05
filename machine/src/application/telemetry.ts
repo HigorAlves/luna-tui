@@ -91,8 +91,39 @@ export interface Evaluation {
   finish(): Promise<void>;
 }
 
+/** One example of a dataset: what a pack is given (`data`), what a good answer is (`target`), where it came from (`metadata`). */
+export interface Datapoint {
+  /** The backend's id, when it has one (a pulled datapoint). */
+  id?: string;
+  /** Aligns the same case across runs and datasets. */
+  taskId: string;
+  data: Record<string, unknown>;
+  target?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+/** An item for a person to label; `idempotencyKey` makes a re-push of the same one a no-op. */
+export interface QueueItem {
+  idempotencyKey: string;
+  data: Record<string, unknown>;
+  /** Prefilled with the model's own answer, so the person corrects rather than types. */
+  target?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+/** Datasets mirroring the repo's cases, and the labeling queue for the ones nobody has labelled. Explicit calls only: nothing pushes by itself. */
+export interface Datasets {
+  push(name: string, datapoints: Datapoint[]): Promise<{ pushed: number }>;
+  pull(name: string, options?: { limit?: number }): Promise<Datapoint[]>;
+}
+export interface LabelingQueue {
+  push(name: string, items: QueueItem[]): Promise<{ pushed: number }>;
+}
+
 export interface Telemetry {
   readonly mode: TracesMode;
+  readonly datasets: Datasets;
+  readonly queue: LabelingQueue;
   run(start: RunStart): RunSpan;
   evaluation(start: EvaluationStart): Promise<Evaluation>;
   /** Sends what is buffered; on shutdown. Never rejects. */
@@ -104,5 +135,12 @@ const NO_EVALUATION: Evaluation = { id: null, record: () => Promise.resolve(), f
 
 /** The telemetry of a machine with no backend configured: every call answers, nothing is kept. */
 export function noTelemetry(): Telemetry {
-  return { mode: "off", run: () => NO_SPAN, evaluation: () => Promise.resolve(NO_EVALUATION), flush: () => Promise.resolve() };
+  return {
+    mode: "off",
+    datasets: { push: () => Promise.resolve({ pushed: 0 }), pull: () => Promise.resolve([]) },
+    queue: { push: () => Promise.resolve({ pushed: 0 }) },
+    run: () => NO_SPAN,
+    evaluation: () => Promise.resolve(NO_EVALUATION),
+    flush: () => Promise.resolve(),
+  };
 }
