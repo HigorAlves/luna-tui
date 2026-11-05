@@ -46,9 +46,9 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | scope_check | claude:haiku | 4 | 100% | 100% | 75% | 0.008 | 0.091 | $0.0007 | 3.0s | 2026-11-05 |
 | scope_check | codex:luna | 4 | 100% | 100% | 100% | 0.000 | 0.008 | n/a | 3.3s | 2026-11-05 |
 | scope_check | jev | 4 | 100% | 100% | 100% | 0.015 | 0.123 | $0.0000 | 0.5s | 2026-11-05 |
-| triage_signals | claude:haiku | 5 | 100% | n/a | 20% | 0.110 | 0.331 | $0.0009 | 3.1s | 2026-11-05 |
-| triage_signals | codex:luna | 5 | 100% | n/a | 40% | 0.019 | 0.139 | n/a | 6.0s | 2026-11-05 |
-| triage_signals | jev | 5 | 100% | n/a | 0% | 0.088 | 0.296 | $0.0000 | 0.4s | 2026-11-05 |
+| triage_signals | claude:haiku | 6 | 100% | n/a | 0% | 0.089 | 0.295 | $0.0006 | 3.8s | 2026-11-05 |
+| triage_signals | codex:luna | 6 | 75% | n/a | 17% | 0.210 | 0.095 | n/a | 4.9s | 2026-11-05 |
+| triage_signals | jev | 6 | 50% | n/a | 0% | 0.327 | 0.399 | $0.0001 | 0.6s | 2026-11-05 |
 | worth_learning | claude:haiku | 4 | 100% | 100% | 100% | 0.035 | 0.167 | $0.0004 | 4.2s | 2026-11-05 |
 | worth_learning | codex:luna | 4 | 100% | 100% | 100% | 0.000 | 0.017 | n/a | 2.7s | 2026-11-05 |
 | worth_learning | jev | 4 | 100% | 100% | 100% | 0.026 | 0.147 | $0.0000 | 0.4s | 2026-11-05 |

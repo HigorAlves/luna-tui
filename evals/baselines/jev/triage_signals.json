@@ -3,27 +3,27 @@
   "pack": "triage_signals",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-05T12:07:17.385Z",
+  "at": "2026-11-05T15:39:57.836Z",
   "model": "typesafe-ai/jev",
   "summary": {
-    "cases": 5,
-    "passed": 5,
-    "passRate": 1,
+    "cases": 6,
+    "passed": 3,
+    "passRate": 0.5,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 437.2,
-    "costUsd": 0.0002189,
+    "meanDurationMs": 524.1666666666666,
+    "costUsd": 0.00035401,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 5,
-      "labelled": 1,
-      "accuracy": 1,
+      "n": 6,
+      "labelled": 4,
+      "accuracy": 0.5,
       "actedOnAccuracy": null,
       "coverage": 0,
-      "brier": 0.08776406249999995,
-      "ece": 0.2962499999999999,
-      "meanConfidence": 0.7380000000000001,
-      "overconfident": 0
+      "brier": 0.32674739583333334,
+      "ece": 0.3985416666666668,
+      "meanConfidence": 0.7066666666666667,
+      "overconfident": 2
     }
   },
   "cases": [
@@ -47,7 +47,7 @@
           "detail": null
         },
         {
-          "check": "area.choice = \"board\"",
+          "check": "type_of_work.choice = \"frontend\"",
           "pass": true,
           "detail": null
         },
@@ -57,17 +57,17 @@
           "detail": null
         },
         {
-          "check": "size.score within 0..1.5",
+          "check": "size.choice in [\"XS\",\"S\"]",
           "pass": true,
           "detail": null
         },
         {
-          "check": "urgency.score within 1..3",
+          "check": "time.score within 0.5..1.5",
           "pass": true,
           "detail": null
         },
         {
-          "check": "risk.score within 0.5..1.5",
+          "check": "risk_prelim.choice = \"low\"",
           "pass": true,
           "detail": null
         },
@@ -79,12 +79,68 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 632,
-      "costUsd": 0.0000454,
+      "durationMs": 602,
+      "costUsd": 0.00006023,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.7133333333333334,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "checkout-down-incident",
+      "pass": true,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice = \"incident\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "type_of_work.choice in [\"backend\",\"mixed\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within 1.5..2",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within 1.5..2",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk_prelim.choice in [\"medium\",\"high\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 419,
+      "costUsd": 0.00006098,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": null,
-        "confidence": 0.89125,
+        "confidence": 0.9500000000000001,
         "verdict": "flag"
       }
     },
@@ -101,22 +157,27 @@
           "check": "archive.value = false",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "risk_prelim.choice = \"high\"",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 418,
-      "costUsd": 0.00004292,
+      "durationMs": 540,
+      "costUsd": 0.00005775,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": true,
-        "confidence": 0.7037500000000001,
+        "confidence": 0.5399999999999999,
         "verdict": "ask"
       }
     },
     {
       "id": "judge-engine-question",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the triage_signals schema",
         "pass": true,
@@ -139,14 +200,14 @@
           "detail": null
         },
         {
-          "check": "urgency.score within 0..1.5",
+          "check": "time.score within -0.5..1.5",
           "pass": true,
           "detail": null
         },
         {
-          "check": "risk.score within 0..1.5",
-          "pass": true,
-          "detail": null
+          "check": "risk_prelim.choice = \"low\"",
+          "pass": false,
+          "detail": "found \"medium\""
         },
         {
           "check": "archive.value = false",
@@ -156,18 +217,18 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 374,
-      "costUsd": 0.00004343,
+      "durationMs": 414,
+      "costUsd": 0.00005825,
       "model": "typesafe-ai/jev",
       "decision": {
-        "correct": null,
-        "confidence": 0.64375,
+        "correct": false,
+        "confidence": 0.6666666666666666,
         "verdict": "ask"
       }
     },
     {
       "id": "vague-slowness",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the triage_signals schema",
         "pass": true,
@@ -176,6 +237,11 @@
       "checks": [
         {
           "check": "kind.confidence within 0..0.85",
+          "pass": false,
+          "detail": "found 0.89"
+        },
+        {
+          "check": "size.confidence within 0..0.8",
           "pass": true,
           "detail": null
         },
@@ -187,18 +253,18 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 366,
-      "costUsd": 0.00004183,
+      "durationMs": 562,
+      "costUsd": 0.00005666,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": null,
-        "confidence": 0.5650000000000001,
+        "confidence": 0.6158333333333333,
         "verdict": "ask"
       }
     },
     {
       "id": "zod-upgrade-contracts",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the triage_signals schema",
         "pass": true,
@@ -216,7 +282,7 @@
           "detail": null
         },
         {
-          "check": "area.choice = \"contracts\"",
+          "check": "type_of_work.choice = \"backend\"",
           "pass": true,
           "detail": null
         },
@@ -226,19 +292,19 @@
           "detail": null
         },
         {
-          "check": "size.score within 0.5..2.5",
+          "check": "size.choice in [\"S\",\"M\"]",
           "pass": true,
           "detail": null
         },
         {
-          "check": "urgency.score within 0..1.5",
-          "pass": true,
-          "detail": null
+          "check": "time.score within -0.5..0.5",
+          "pass": false,
+          "detail": "found 0.56"
         },
         {
-          "check": "risk.score within 1..2.5",
-          "pass": true,
-          "detail": null
+          "check": "risk_prelim.choice = \"medium\"",
+          "pass": false,
+          "detail": "found \"low\""
         },
         {
           "check": "archive.value = false",
@@ -248,13 +314,13 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 396,
-      "costUsd": 0.00004532,
+      "durationMs": 608,
+      "costUsd": 0.00006014,
       "model": "typesafe-ai/jev",
       "decision": {
-        "correct": null,
-        "confidence": 0.88625,
-        "verdict": "flag"
+        "correct": false,
+        "confidence": 0.7541666666666668,
+        "verdict": "ask"
       }
     }
   ]

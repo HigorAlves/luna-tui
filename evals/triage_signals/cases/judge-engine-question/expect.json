@@ -16,7 +16,7 @@
       "kind": "between",
       "path": "time.score",
       "min": -0.5,
-      "max": 0.5
+      "max": 1.5
     },
     {
       "kind": "equals",
@@ -29,16 +29,13 @@
       "value": false
     }
   ],
-  "rubric": "It asks for a decision, not a change: a question, not ready for an agent (no acceptance criteria an agent could verify). Nothing is waiting on it and nothing can break: urgency whenever, low risk. It is real work or a real question: not a duplicate, not stale, so the archive suggestion is no.",
+  "rubric": "It asks for a decision, not a change: a question, not ready for an agent (no acceptance criteria an agent could verify). Nothing is on fire and nothing can break; the asker wants the decision before more cases are added, so the time is whenever or this cycle, never now: low risk. It is real work or a real question: not a duplicate, not stale, so the archive suggestion is no.",
   "label": {
     "kind": {
       "choice": "question"
     },
     "ready": {
       "value": false
-    },
-    "time": {
-      "score": 0
     },
     "risk_prelim": {
       "choice": "low"

@@ -3,33 +3,33 @@
   "pack": "triage_signals",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-05T12:07:42.625Z",
+  "at": "2026-11-05T15:39:51.555Z",
   "model": "gpt-6-luna-fast",
   "summary": {
-    "cases": 5,
-    "passed": 3,
-    "passRate": 0.6,
+    "cases": 6,
+    "passed": 4,
+    "passRate": 0.6666666666666666,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 5445,
+    "meanDurationMs": 4907.666666666667,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 5,
-      "labelled": 1,
-      "accuracy": 1,
+      "n": 6,
+      "labelled": 4,
+      "accuracy": 0.75,
       "actedOnAccuracy": null,
-      "coverage": 0.4,
-      "brier": 0.01925156249999998,
-      "ece": 0.13874999999999993,
-      "meanConfidence": 0.8262500000000002,
-      "overconfident": 0
+      "coverage": 0.16666666666666666,
+      "brier": 0.2098020833333333,
+      "ece": 0.09458333333333335,
+      "meanConfidence": 0.8216666666666667,
+      "overconfident": 1
     }
   },
   "cases": [
     {
       "id": "board-key-panic",
-      "pass": true,
+      "pass": false,
       "schema": {
         "check": "answer on the triage_signals schema",
         "pass": true,
@@ -47,7 +47,7 @@
           "detail": null
         },
         {
-          "check": "area.choice = \"board\"",
+          "check": "type_of_work.choice = \"frontend\"",
           "pass": true,
           "detail": null
         },
@@ -57,17 +57,17 @@
           "detail": null
         },
         {
-          "check": "size.score within 0..1.5",
+          "check": "size.choice in [\"XS\",\"S\"]",
           "pass": true,
           "detail": null
         },
         {
-          "check": "urgency.score within 1..3",
-          "pass": true,
-          "detail": null
+          "check": "time.score within 0.5..1.5",
+          "pass": false,
+          "detail": "found 0"
         },
         {
-          "check": "risk.score within 0.5..1.5",
+          "check": "risk_prelim.choice = \"low\"",
           "pass": true,
           "detail": null
         },
@@ -79,12 +79,68 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 6791,
+      "durationMs": 4513,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": false,
+        "confidence": 0.8683333333333333,
+        "verdict": "ask"
+      }
+    },
+    {
+      "id": "checkout-down-incident",
+      "pass": true,
+      "schema": {
+        "check": "answer on the triage_signals schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "outcome = pass",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "kind.choice = \"incident\"",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "type_of_work.choice in [\"backend\",\"mixed\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "impact.score within 1.5..2",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "time.score within 1.5..2",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "risk_prelim.choice in [\"medium\",\"high\"]",
+          "pass": true,
+          "detail": null
+        },
+        {
+          "check": "archive.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 5383,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": null,
-        "confidence": 0.9487500000000001,
+        "confidence": 0.9333333333333332,
         "verdict": "proceed"
       }
     },
@@ -101,22 +157,27 @@
           "check": "archive.value = false",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "risk_prelim.choice = \"high\"",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 6867,
+      "durationMs": 4998,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.8612500000000001,
+        "confidence": 0.8133333333333334,
         "verdict": "flag"
       }
     },
     {
       "id": "judge-engine-question",
-      "pass": false,
+      "pass": true,
       "schema": {
         "check": "answer on the triage_signals schema",
         "pass": true,
@@ -139,29 +200,29 @@
           "detail": null
         },
         {
-          "check": "urgency.score within 0..1.5",
+          "check": "time.score within -0.5..1.5",
           "pass": true,
           "detail": null
         },
         {
-          "check": "risk.score within 0..1.5",
+          "check": "risk_prelim.choice = \"low\"",
           "pass": true,
           "detail": null
         },
         {
           "check": "archive.value = false",
-          "pass": false,
-          "detail": "found true"
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3950,
+      "durationMs": 4731,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
-        "correct": null,
-        "confidence": 0.7875,
+        "correct": true,
+        "confidence": 0.8016666666666666,
         "verdict": "ask"
       }
     },
@@ -180,19 +241,24 @@
           "detail": null
         },
         {
+          "check": "size.confidence within 0..0.8",
+          "pass": true,
+          "detail": null
+        },
+        {
           "check": "ready.p within 0..0.4",
           "pass": false,
-          "detail": "found 0.92"
+          "detail": "found 0.91"
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3638,
+      "durationMs": 5226,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": null,
-        "confidence": 0.5950000000000001,
+        "confidence": 0.6183333333333333,
         "verdict": "ask"
       }
     },
@@ -216,7 +282,7 @@
           "detail": null
         },
         {
-          "check": "area.choice = \"contracts\"",
+          "check": "type_of_work.choice = \"backend\"",
           "pass": true,
           "detail": null
         },
@@ -226,17 +292,17 @@
           "detail": null
         },
         {
-          "check": "size.score within 0.5..2.5",
+          "check": "size.choice in [\"S\",\"M\"]",
           "pass": true,
           "detail": null
         },
         {
-          "check": "urgency.score within 0..1.5",
+          "check": "time.score within -0.5..0.5",
           "pass": true,
           "detail": null
         },
         {
-          "check": "risk.score within 1..2.5",
+          "check": "risk_prelim.choice = \"medium\"",
           "pass": true,
           "detail": null
         },
@@ -248,13 +314,13 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 5979,
+      "durationMs": 4595,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
-        "correct": null,
-        "confidence": 0.9387500000000001,
-        "verdict": "proceed"
+        "correct": true,
+        "confidence": 0.895,
+        "verdict": "flag"
       }
     }
   ]
