@@ -520,6 +520,22 @@ export const TriageRecord = z.object({
   reason: z.string(),
   at: z.string(),
   model: z.string(),
+  // v2.2, all optional: a record written before the wave has none of them. Wave 9 fills them.
+  summary: z.string().optional(),
+  typeOfWork: z.enum(["frontend", "backend", "infra", "data", "docs", "mixed"]).optional(),
+  /** The goal this ticket serves: an id, or `none`. */
+  goalRef: z.string().optional(),
+  urgencyDetail: z
+    .object({
+      priority: z.enum(["P0", "P1", "P2", "P3"]),
+      subScores: z.object({ who: z.number(), what: z.number(), impact: z.number(), time: z.number(), demand: z.number() }),
+    })
+    .optional(),
+  riskPrelim: z.enum(["low", "medium", "high"]).optional(),
+  /** The hints the filer gave that triage read. */
+  hintsUsed: z.array(z.string()).optional(),
+  decisionBy: z.enum(["machine", "person"]).optional(),
+  version: z.number().int().optional(),
 });
 export type TriageRecord = z.infer<typeof TriageRecord>;
 

@@ -9,6 +9,7 @@ import type { JiraLink, TaskSla } from "./jira.ts";
 import type { AgentPack, AgentRole, Pack } from "./packs.ts";
 import { type CredentialOwner, EngineId } from "./engines.ts";
 import type { ModelEntry, RuntimeId } from "./models.ts";
+import { CardEntryFields } from "./card.ts";
 import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskClassification, type TaskRoute, TaskSource, TestCase, ArchiveReason, type EvidencePack, type TriageRecord } from "./stage.ts";
 
 export const NewTaskInput = z.object({
@@ -21,7 +22,14 @@ export const NewTaskInput = z.object({
   start: z.boolean().optional(),
   /** The engine per pack for this task, over the repo's luna.yaml and the pack's default. */
   stages: StageEngines.optional(),
+  // The v2.2 entry contract (card.ts). Accepted and ignored in wave 8; wave 14 stores them.
+  ...CardEntryFields,
 });
+
+/** The `create_card` entry contract of the v2.2 diagram: `NewTaskInput` with its optional sources,
+ *  reporter, hints, origin machine and attachments. One schema, so a task created today parses as a card. */
+export const CreateCardInput = NewTaskInput;
+export type CreateCardInput = z.infer<typeof CreateCardInput>;
 
 /** `PATCH /tasks/:id/stages`: the engine per pack to set; null goes back to luna.yaml's, else the pack's default. */
 export const EditStagesInput = z.object({ stages: z.partialRecord(PackId, EngineId.nullable()) });
