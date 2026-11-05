@@ -185,7 +185,7 @@ export async function ensureCleanCheckout(repoPath: string, path: string): Promi
 }
 
 /** `origin/<default>` freshly fetched when the repo has an origin; HEAD otherwise. */
-async function startPoint(repoPath: string): Promise<string> {
+export async function startPoint(repoPath: string): Promise<string> {
   const head = await exec("git", [...HOST_GIT, "-C", repoPath, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
   if (head.code !== 0) return "HEAD";
   const ref = head.stdout.trim().replace(/^refs\/remotes\//, "");
@@ -194,7 +194,7 @@ async function startPoint(repoPath: string): Promise<string> {
   return ref;
 }
 
-async function clearStaleLock(worktreePath: string): Promise<void> {
+export async function clearStaleLock(worktreePath: string): Promise<void> {
   const gitDir = await exec("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "--git-dir"]);
   if (gitDir.code !== 0) return;
   const dir = gitDir.stdout.trim();
@@ -254,7 +254,12 @@ export function commonGitDir(repoPath: string): Promise<string> {
 export async function branchBase(worktreePath: string, repoPath: string): Promise<string | null> {
   const repoHead = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "HEAD"]);
   if (repoHead.code !== 0) return null;
-  const base = await exec("git", [...HOST_GIT, "-C", worktreePath, "merge-base", "HEAD", repoHead.stdout.trim()]);
+  const head = repoHead.stdout.trim();
+  // A clone shares no objects with the repo: when the repo moved on, bring its HEAD over (a read of the repo, never a write to it).
+  if ((await exec("git", [...HOST_GIT, "-C", worktreePath, "cat-file", "-e", `${head}^{commit}`])).code !== 0) {
+    await exec("git", [...HOST_GIT, "-C", worktreePath, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", repoPath, head], { timeoutMs: FETCH_TIMEOUT_MS });
+  }
+  const base = await exec("git", [...HOST_GIT, "-C", worktreePath, "merge-base", "HEAD", head]);
   return base.code === 0 ? base.stdout.trim() || null : null;
 }
 

@@ -5,8 +5,8 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ensureClone } from "./clone.ts";
-import { commitAll, workspaceFor } from "./worktree.ts";
+import { copiedSettings, ensureClone, isClone } from "./clone.ts";
+import { branchBase, changedPaths, commitAll, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
@@ -56,5 +56,52 @@ describe("a card's workspace is its own clone", () => {
     const sha = await commitAll(workspace.path, "feat: b");
     await ensureClone(repo, workspace);
     expect(git(workspace.path, "rev-parse", "HEAD")).toBe(sha);
+  });
+});
+
+describe("a clone reaches the repository's remote and nothing else of its config", () => {
+  it("keeps the repository's origin and push url, and the settings a push needs", async () => {
+    const { repo, dir, root } = repository("clone-");
+    const remote = join(root, "remote.git");
+    execFileSync("git", ["init", "-q", "--bare", remote]);
+    git(repo, "remote", "add", "origin", remote);
+    git(repo, "remote", "set-url", "--push", "origin", `${remote}-push`);
+    git(repo, "config", "credential.helper", "store");
+    git(repo, "config", "core.sshCommand", "ssh -i k");
+    git(repo, "config", "url.https://x/.insteadOf", "x:");
+    git(repo, "config", "core.fsmonitor", "touch /tmp/never");
+    git(repo, "config", "alias.st", "status");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    expect(git(workspace.path, "remote", "get-url", "origin")).toBe(remote);
+    expect(git(workspace.path, "remote", "get-url", "--push", "origin")).toBe(`${remote}-push`);
+    expect(git(workspace.path, "config", "--local", "credential.helper")).toBe("store");
+    expect(git(workspace.path, "config", "--local", "core.sshCommand")).toBe("ssh -i k");
+    expect(git(workspace.path, "config", "--local", "url.https://x/.insteadOf")).toBe("x:");
+    const keys = (await copiedSettings(repo)).map(([k]) => k);
+    expect(keys).not.toContain("core.fsmonitor");
+    expect(git(workspace.path, "config", "--local", "--list")).not.toMatch(/fsmonitor|alias/);
+    expect(isClone(workspace.path)).toBe(true);
+  });
+
+  it("uses the repository's path as origin when it has no remote", async () => {
+    const { repo, dir } = repository("clone-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    expect(git(workspace.path, "remote", "get-url", "origin")).toBe(repo);
+  });
+
+  it("answers branchBase and changedPaths as a worktree did, even after the repository moved on", async () => {
+    const { repo, dir } = repository("clone-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    const fork = git(repo, "rev-parse", "HEAD");
+    writeFileSync(join(workspace.path, "b.txt"), "b\n");
+    await commitAll(workspace.path, "feat: b");
+    writeFileSync(join(repo, "c.txt"), "c\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "later");
+    expect(await branchBase(workspace.path, repo)).toBe(fork);
+    expect(await changedPaths(workspace.path, repo)).toEqual(["b.txt"]);
   });
 });

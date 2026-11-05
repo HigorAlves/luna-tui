@@ -6,6 +6,7 @@ import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
+import { ensureClone, isClone } from "../../adapters/git/clone.ts";
 import {
   type Workspace,
   branchBase,
@@ -13,7 +14,6 @@ import {
   gitIdentity,
   diffNameStatus,
   diffText,
-  ensureWorktree,
   headCommit,
   defaultBranch,
   dirtyFiles,
@@ -211,15 +211,18 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches (or the branch it named for a Jira-linked task)` },
     };
   }
-  if (!extra.checkout) await ensureWorktree(task.repoPath, workspace);
+  if (!extra.checkout) await ensureClone(task.repoPath, workspace);
   // After a restart, the container the last machine started may still be running: its name and
   // the commit it started from come from the run row, and the sandbox waits on it instead.
   const resume = context.resume;
   const inputCommit = resume?.inputCommit ?? (await headCommit(workspace.path));
-  const gitDir = await commonGitDir(task.repoPath);
+  // A clone carries its own git dir inside the workspace; only a card still on a linked worktree
+  // (moved to a clone by slice 3) or a checkout run needs the repository's git dir mounted.
+  const sharesGitDir = extra.checkout || !isClone(workspace.path);
+  const gitDir = sharesGitDir ? await commonGitDir(task.repoPath) : null;
   // The admin dir's pointers back to the checkout and to the common dir: a stage must not rewrite them.
-  const adminDir = await worktreeAdminDir(workspace.path);
-  const adminRel = adminDir ? relative(gitDir, adminDir) : null;
+  const adminDir = gitDir ? await worktreeAdminDir(workspace.path) : null;
+  const adminRel = gitDir && adminDir ? relative(gitDir, adminDir) : null;
   const adminPointers = adminRel && adminRel.startsWith("worktrees/") ? ["commondir", "gitdir"].map((f) => `${adminRel}/${f}`) : [];
   // A pack the state is not named for (the planner in test_design) names its container after itself.
   const unit = pack === context.stage ? context.stage : pack;
@@ -388,7 +391,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     worktree: workspace.path,
     writable: limits.writable,
     gitDir,
-    gitReadOnly: [...GIT_READ_ONLY, ...adminPointers].filter((sub) => existsSync(join(gitDir, sub))),
+    gitReadOnly: gitDir ? [...GIT_READ_ONLY, ...adminPointers].filter((sub) => existsSync(join(gitDir, sub))) : [],
     gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
     // The repo's services run beside every stage that runs its code; a read-only stage only reads.
     services: limits.writable ? policy.services : {},
