@@ -105,6 +105,8 @@ export interface NewTask {
 }
 
 export interface PipelineOptions {
+  /** Ends a card's kept sandbox (its extra folders) when the card is resumed or closed. Never throws into the pipeline. */
+  releaseKept?: (taskId: string) => Promise<void>;
   /** Where each stage run is reported as a span; the no-op without a backend. */
   telemetry?: Telemetry;
   /** Called after each event is stored; the API streams these to the board. */
@@ -313,6 +315,7 @@ export class Pipeline {
   private readonly revertCommit: (worktreePath: string, sha: string) => Promise<void>;
   private readonly diffStat: (worktreePath: string, repoPath: string | null) => Promise<{ added: number; removed: number } | null>;
   private readonly closeDeps: CloseDeps | undefined;
+  private readonly releaseKept: ((taskId: string) => Promise<void>) | undefined;
   private readonly groundTruth: PipelineOptions["groundTruth"];
   private readonly owners: PipelineOptions["owners"];
   private readonly truth: DecisionTruth | undefined;
@@ -360,6 +363,7 @@ export class Pipeline {
     this.revertCommit = options.revertCommit ?? revertCommit;
     this.diffStat = options.diffStat ?? branchDiffStat;
     this.closeDeps = options.closeDeps;
+    this.releaseKept = options.releaseKept;
     this.groundTruth = options.groundTruth;
     this.owners = options.owners;
     this.truth = options.truth;
@@ -1473,6 +1477,7 @@ export class Pipeline {
 
   /** Runs the host-side close step for a task that just closed and logs what it did. Never throws. */
   private async close(id: string): Promise<void> {
+    await this.releaseKept?.(id).catch((error: unknown) => console.error(`could not release the kept sandbox of ${id}`, error));
     if (!this.closeDeps) return;
     try {
       const task = await this.get(id);
@@ -2091,6 +2096,8 @@ export class Pipeline {
     const attempt = resume?.attempt ?? (await this.store.countStageRunAttempts(id, stage)) + 1;
     const runId = resume?.runId ?? (await this.store.insertStageRun({ taskId: id, stage, attempt }));
     if (!resume) await this.log(id, "stage.started", { stage, attempt }, runId);
+    // A stage starting is the card resuming: whatever an earlier escalation kept besides the clone goes.
+    if (!resume) await this.releaseKept?.(id).catch((error: unknown) => console.error(`could not release the kept sandbox of ${id}`, error));
     if (fallback) await this.log(id, "stage.engine", { stage, pack: packForState(stage), engine: fallback.engine, reason: fallback.reason }, runId);
 
     const t0 = Date.now();

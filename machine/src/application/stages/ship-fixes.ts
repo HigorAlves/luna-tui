@@ -53,6 +53,7 @@ export interface ReviewLoop {
     make: (cardPath: string, branch: string, runId: string) => Promise<{ path: string; commit: string }>;
     bringBack: (cardPath: string, freshPath: string, branch: string, from: string) => Promise<{ ok: boolean; reason?: string }>;
     remove: (path: string) => Promise<void>;
+    keep?: (path: string, taskId: string, runId: string) => Promise<void>;
   };
   /** Runs git (default: the real one); tests inject a recorder. */
   exec?: GitExec;
@@ -186,7 +187,9 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
     if (fresh) await deps.loop.fresh!.remove(fresh.path);
   };
   const stop = async (result: StageResult): Promise<FixOutcome> => {
-    await resetTo(run, work, before).catch(() => {});
+    // The fresh clone is kept as it is after an escalation (the machine runs no git in it again until the stamp is checked); the rest resets.
+    if (fresh) await deps.loop.fresh!.keep?.(fresh.path, task.id, context.runId);
+    else await resetTo(run, work, before).catch(() => {});
     return { ok: false, result };
   };
 

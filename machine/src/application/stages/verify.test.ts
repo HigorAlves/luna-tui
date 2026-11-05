@@ -523,7 +523,7 @@ describe("verifying stage", () => {
 describe("verify on a fresh clone", () => {
   const card = { id: "t1", branch: "task/x", worktreePath: "/card", repoPath: "/repo" };
   const build = (outcome: "pass" | "fail" | "escalated", broughtBack: { ok: boolean; reason?: string } = { ok: true }) => {
-    const seen = { cwd: [] as (string | undefined)[], packPath: "", removed: [] as string[], back: [] as string[][], made: [] as string[][] };
+    const seen = { cwd: [] as (string | undefined)[], packPath: "", removed: [] as string[], kept: [] as string[][], back: [] as string[][], made: [] as string[][] };
     const runner = verifyRunner({
       exec: async (_c, _a, options) => (seen.cwd.push(options.cwd), { code: 0, stdout: "", stderr: "" }),
       runPack: async (context) => {
@@ -538,6 +538,7 @@ describe("verify on a fresh clone", () => {
         make: async (path, branch, runId) => (seen.made.push([path, branch, runId]), { path: "/card.verify", commit: "a".repeat(40) }),
         bringBack: async (path, freshPath, branch, from) => (seen.back.push([path, freshPath, branch, from]), broughtBack),
         remove: async (path) => void seen.removed.push(path),
+        keep: async (path, taskId, runId) => void seen.kept.push([path, taskId, runId]),
       },
     });
     const context = { task: card, stage: "verifying", attempt: 1, runId: "run-1", approvals: [], signal: new AbortController().signal } as unknown as StageContext;
@@ -578,6 +579,9 @@ describe("verify on a fresh clone", () => {
     await escalated.runner(escalated.context);
     expect(escalated.seen.back).toEqual([]);
     expect(escalated.seen.removed).toEqual([]);
+    // Kept folders are registered, so the keep ends after sandbox.keep_hours.
+    expect(escalated.seen.kept).toEqual([["/card.verify", "t1", "run-1"]]);
+    expect(failed.seen.kept).toEqual([]);
   });
 
   describe("the environment comparison", () => {

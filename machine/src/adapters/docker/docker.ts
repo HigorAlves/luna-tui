@@ -16,7 +16,14 @@ import { type ExecResult, exec, execOrThrow } from "../process/exec.ts";
 /** Label on every stage container, so leftovers can be found and removed. */
 export const CONTAINER_LABEL = "dev.hardness.stage";
 /** What one stage may take of the machine: one runaway build or fork bomb stays one slot's problem. */
-export const SANDBOX_LIMITS = ["--memory", "4g", "--cpus", "2", "--pids-limit", "1024"];
+/** What a container may use: `sandbox.cpu` and `sandbox.memory_gb` of luna.yaml (the factory defaults are 4 and 8); the process limit is fixed. */
+export interface SandboxSize {
+  cpu: number;
+  memoryGb: number;
+}
+export const DEFAULT_SANDBOX_SIZE: SandboxSize = { cpu: 4, memoryGb: 8 };
+export const sandboxLimits = (size: SandboxSize = DEFAULT_SANDBOX_SIZE): string[] => ["--memory", `${size.memoryGb}g`, "--cpus", `${size.cpu}`, "--pids-limit", "1024"];
+export const SANDBOX_LIMITS = sandboxLimits();
 /** `docker wait` gets this long past the stage's own timeout before the container is forced down. */
 const WAIT_GRACE_MS = 60_000;
 /** Where the repo's cache volume is mounted, and what each package manager is told to keep
@@ -67,6 +74,8 @@ export interface SandboxRun {
    * `.git/config`, `hooks`, `info` and its submodules' (`sealedPaths`), so a stage cannot plant
    * config or a hook that the host's git would read. */
   workReadOnly?: string[];
+  /** The container's CPUs and memory; absent, the defaults (4 CPUs, 8 GB). */
+  limits?: SandboxSize;
   /** Who a writable stage commits as. The container has no gitconfig of its own. */
   gitIdentity?: { name: string; email: string } | null;
   input: Record<string, unknown>;
@@ -129,7 +138,7 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
   // but nothing it does needs write access outside its mounted worktree, /in, /out or /tmp.
   // The tmpfs is `exec`: Docker's default is noexec, and `go test` runs the test binary it
   // builds under TMPDIR. The worktree bind mount is executable anyway, so this hides nothing.
-  args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...SANDBOX_LIMITS);
+  args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...sandboxLimits(run.limits));
   const user = run.user === undefined ? hostUser() : run.user;
   if (user) args.push("--user", user);
   args.push(
@@ -270,6 +279,8 @@ export interface SandboxExec {
   name: string;
   image: string;
   worktree: string;
+  /** CPUs and memory; absent, the defaults. */
+  limits?: SandboxSize;
   argv: string[];
   /** As for a stage: the host user, so what the check writes into the worktree stays the host's. */
   user?: string | null;
@@ -307,7 +318,7 @@ const identityEnv = (identity: { name: string; email: string } | null | undefine
 export function sandboxExecArgs(run: SandboxExec): string[] {
   const [command, ...rest] = run.argv;
   const args = ["run", "--rm", "--name", run.name, "--label", `${CONTAINER_LABEL}=1`];
-  args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...SANDBOX_LIMITS);
+  args.push("--read-only", "--tmpfs", "/tmp:rw,exec,size=512m", "--security-opt", "no-new-privileges", ...sandboxLimits(run.limits));
   const user = run.user === undefined ? hostUser() : run.user;
   if (user) args.push("--user", user);
   args.push("-e", "HOME=/tmp", "-e", "TMPDIR=/tmp", ...GIT_CONFIG_ENV.flatMap((env) => ["-e", env]), ...identityEnv(run.gitIdentity));

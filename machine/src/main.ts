@@ -1,7 +1,8 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
+import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
 import { hostFreshWorkspace } from "./adapters/git/clone.ts";
-import { type BudgetAlert, type EvidenceContext, Ledger, PrAction, type PullRequest, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
+import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -124,6 +125,10 @@ async function sweep(): Promise<void> {
   await step("worktrees", async () => {
     const swept = await sweepWorktrees(db, config.worktreeRetentionDays);
     return swept.worktrees > 0 ? `removed ${swept.worktrees} closed task worktree(s), ${swept.branches} merged branch(es)` : null;
+  });
+  await step("kept sandboxes", async () => {
+    const removed = await expireKept({ stateDir: config.stateDir, keepHours: FACTORY_DEFAULTS.sandbox.keep_hours });
+    return removed.length > 0 ? `removed ${removed.length} kept sandbox folder(s) past their keep` : null;
   });
   await step("run folders", async () => {
     const removed = await sweepRunFolders(db, config.stateDir);
@@ -253,11 +258,13 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
  *  pack joins when agents are on. */
+/** The fresh clone Verify and fixes run on, with a kept folder registered so it ends after sandbox.keep_hours. */
+const keptFresh = { ...hostFreshWorkspace, keep: (path: string, taskId: string, runId: string) => keepFolder({ stateDir: config.stateDir, taskId, runId, path, keepHours: FACTORY_DEFAULTS.sandbox.keep_hours }) };
 const realVerifyRunner = verifyRunner({
   exec: checksExec ?? exec,
   runPack: verifyPack,
   // Verify runs on a fresh clone at the head commit, never in the folder Build used.
-  fresh: hostFreshWorkspace,
+  fresh: keptFresh,
   // The environment Build recorded, and the one Verify's fresh clone has.
   buildEnv: async (taskId) => {
     const env = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.env as EnvRecord | undefined;
@@ -341,6 +348,8 @@ function publish(event: EventRow): void {
 }
 
 pipeline = new Pipeline(db, runnerFor, {
+  // A resumed or closed card ends its kept sandbox: the extra folders go, the clone and its kept ref stay.
+  releaseKept: async (taskId) => void (await expireKept({ stateDir: config.stateDir, keepHours: FACTORY_DEFAULTS.sandbox.keep_hours, taskId })),
   onEvent: publish,
   // The outside-approver rule reads CODEOWNERS through the code graph port and nothing a model wrote.
   owners: (repoPath, paths) => graph.owners(repoPath, paths),

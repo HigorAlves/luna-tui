@@ -33,6 +33,7 @@ import { loadCredential } from "../adapters/credentials/claude.ts";
 import { imageExists, imageId, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
+import { keepFolder } from "../application/kept-sandboxes.ts";
 import { hostFreshWorkspace } from "../adapters/git/clone.ts";
 import { HOST_GIT, changedPaths, gitIdentity, commitAll, currentBranch, headCommit, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
@@ -293,7 +294,7 @@ export async function buildRealStages(
             },
             checks: deltaChecks,
             // A fix is made on a fresh clone at the PR's head and comes back as a fast-forward.
-            fresh: hostFreshWorkspace,
+            fresh: { ...hostFreshWorkspace, keep: (path: string, taskId: string, runId: string) => keepFolder({ stateDir: config.stateDir, taskId, runId, path }) },
           },
           stateDir: config.stateDir,
           pollMs: config.shipPoll.intervalMs,

@@ -2873,6 +2873,17 @@ describe("removing a card's clone", () => {
   });
 });
 
+describe("a card's kept sandbox", () => {
+  it("is released when the card's next stage starts, so the extra folders of an escalation do not outlive the resume", async () => {
+    const released: string[] = [];
+    pipeline = new Pipeline(db, stubs.runnerFor, { hasConfig: () => true, releaseKept: async (id: string) => void released.push(id) });
+    const card = await newTask();
+    await pipeline.start(card.id);
+    await until(async () => released.length > 0, "the release");
+    expect(released[0]).toBe(card.id);
+  });
+});
+
 describe("drain and slots", () => {
   let reached = 0;
   const runnerFor = (stage: TaskState) =>

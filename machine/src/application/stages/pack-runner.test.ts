@@ -3,12 +3,13 @@ import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, renameS
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { StageInput, type StageOutput } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, StageInput, type StageOutput } from "@hardness/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CredentialWaitError, type Credentials, NoCredentialError, fixedCredentials } from "../../adapters/credentials/index.ts";
 import { envHash } from "../../domain/env-hash.ts";
 import { HOST_GIT } from "../../adapters/git/worktree.ts";
+import { DEFAULT_POLICY } from "../../domain/policy.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
@@ -200,6 +201,33 @@ describe("agent stages through packs", () => {
     const result = await run.implementing!(context("implementing"));
     expect(result.outcome).toBe("escalated");
     expect(result.detail).toMatchObject({ reason: "needs a new dependency", options: ["add it", "drop it"], escalation: "other" });
+  });
+
+  it("leaves an escalated run's clone exactly as the agent left it, saves the uncommitted work on refs/luna/kept/<run>, and names the folder", async () => {
+    const answer = { kind: "escalated", summary: "stopped", reason: "needs a new dependency", options: [] };
+    const run = runners(fakeSandbox(output({ summary: "stopped", answer }), (r) => writeFileSync(join(r.worktree, "half.txt"), "half done\n")));
+    const result = await run.implementing!(context("implementing"));
+    expect(result.outcome).toBe("escalated");
+    const path = seen!.worktree;
+    expect(readFileSync(join(path, "half.txt"), "utf8")).toBe("half done\n");
+    expect(git(path, "status", "--porcelain")).toBe("?? half.txt");
+    expect(git(path, "show", "refs/luna/kept/run-1:half.txt")).toBe("half done");
+    expect(result.detail).toMatchObject({ keptSandbox: { path, ref: "refs/luna/kept/run-1", keepHours: 24, until: expect.any(String) } });
+    expect(existsSync(join(stateDir, "kept", "run-1.json"))).toBe(true);
+  });
+
+  it("still resets a failed run, which the next attempt starts over from", async () => {
+    const run = runners(fakeSandbox(output({ outcome: "fail", ok: false } as never), (r) => writeFileSync(join(r.worktree, "half.txt"), "x\n")));
+    await run.implementing!(context("implementing"));
+    expect(existsSync(join(seen!.worktree, "half.txt"))).toBe(false);
+  });
+
+  it("sizes the container from the repository's sandbox section, four CPUs and eight gigabytes without one", async () => {
+    await runners(fakeSandbox(output())).triage!(context("triage"));
+    expect(seen!.limits).toEqual({ cpu: 4, memoryGb: 8 });
+    const small = { ...deps(fakeSandbox(output())), policies: { for: async () => ({ ...DEFAULT_POLICY, factory: { ...FACTORY_DEFAULTS, sandbox: { ...FACTORY_DEFAULTS.sandbox, cpu: 2, memory_gb: 3 } } }) } as never };
+    await agentRunners(small).triage!(context("triage"));
+    expect(seen!.limits).toEqual({ cpu: 2, memoryGb: 3 });
   });
 
   it("carries the agent's typed escalation reason, and reads one off the enum as other", async () => {

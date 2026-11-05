@@ -24,6 +24,7 @@ import {
 } from "../../adapters/git/worktree.ts";
 import { CredentialWaitError, type CredentialMount, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
+import { saveKept } from "../kept-sandboxes.ts";
 import { envOf, lockfileHashes } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
@@ -413,6 +414,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     gitDir,
     gitReadOnly: gitDir ? [...GIT_READ_ONLY, ...adminPointers].filter((sub) => existsSync(join(gitDir, sub))) : [],
     ...(sharesGitDir ? {} : { workReadOnly: sealedPaths(workspace.path) }),
+    limits: { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb },
     gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
     // The repo's services run beside every stage that runs its code; a read-only stage only reads.
     services: limits.writable ? policy.services : {},
@@ -539,7 +541,16 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   // The agent stopped on purpose. Runners before the `escalated` outcome reported this as a pass.
   const stopped = answerOf(output.answer);
   if (output.outcome === "escalated" || stopped?.kind === "escalated") {
-    return dirty(
+    // An escalated card's clone stays exactly as the agent left it: nothing is reset or cleaned. What it left
+    // uncommitted is also saved on refs/luna/kept/<run>, so a resume that resets the tree loses nothing.
+    let kept: Record<string, unknown> | null = null;
+    if (limits.writable && stampBefore !== null) {
+      const saved = await saveKept({ stateDir: deps.stateDir, taskId: task.id, runId: context.runId, path: workspace.path, stamp: stampBefore, keepHours: policy.factory.sandbox.keep_hours });
+      kept = saved.ok ? { path: saved.path, ref: saved.ref, until: saved.until, keepHours: policy.factory.sandbox.keep_hours } : { path: workspace.path, error: saved.reason };
+    } else if (limits.writable) {
+      await dirty(null);
+    }
+    return (
       merged({
         ...mapped,
         outcome: "escalated",
@@ -549,8 +560,9 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           reason: typeof stopped?.reason === "string" && stopped.reason ? stopped.reason : output.summary,
           options: Array.isArray(stopped?.options) ? stopped.options : [],
           escalation: EscalationReason.safeParse(stopped?.escalation).data ?? "other",
+          ...(kept ? { keptSandbox: kept } : {}),
         },
-      }),
+      })
     );
   }
 

@@ -784,6 +784,11 @@ fn escalation_lines(detail: &TaskDetail) -> Vec<Line<'static>> {
     if let Some(summary) = gate.requested["summary"].as_str().filter(|s| !s.trim().is_empty()) {
         lines.push(Line::from(format!("  {}", plain(summary))));
     }
+    // The sandbox the machine kept: the clone as the agent left it, and until when.
+    if let Some(path) = gate.requested["keptSandbox"]["path"].as_str() {
+        let until = gate.requested["keptSandbox"]["until"].as_str().map(|u| format!(" until {}", plain(u))).unwrap_or_default();
+        lines.push(muted(format!("  sandbox kept at {}{until}", plain(path))));
+    }
     if let Some(tail) = gate.requested["outputTail"].as_str().filter(|s| !s.trim().is_empty()) {
         lines.push(muted("  last failing output:".into()));
         let rows: Vec<&str> = tail.lines().collect();
@@ -1884,5 +1889,16 @@ mod tests {
         detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalationDecision":{"reason":"flaky_tests","confidence":0.8,"source":"decision","agentReason":null},"summary":"s","outputTail":"x"},"decision":null}"#).unwrap());
         detail.events.push(serde_json::from_str(r#"{"taskId":"abcdef123456","kind":"escalation.corrected","payload":{"from":"flaky_tests","to":"env_broken"},"at":"2026-10-22T10:20:00Z"}"#).unwrap());
         assert!(lines_text(&escalation_lines(&detail)).contains("corrected to env_broken"));
+    }
+
+    #[test]
+    fn an_escalated_gate_names_the_kept_sandbox_and_how_long_it_lasts_with_control_characters_taken_out() {
+        let task = TASK.replace("\"state\":\"implementing\"", "\"state\":\"escalated\"");
+        let mut detail: TaskDetail = serde_json::from_str(&detail_json(&task)).unwrap();
+        detail.approvals.push(serde_json::from_str(r#"{"kind":"escalated","requested":{"escalationDecision":{"reason":"flaky_tests","confidence":0.8,"source":"decision","agentReason":null},"summary":"s","outputTail":"x","keptSandbox":{"path":"/w/app/task-1\u001b[31m","ref":"refs/luna/kept/r1","until":"2026-11-06T12:00:00Z","keepHours":24}},"decision":null}"#).unwrap());
+        let text = lines_text(&escalation_lines(&detail));
+        assert!(text.contains("sandbox kept at /w/app/task-1"), "{text}");
+        assert!(text.contains("until 2026-11-06T12:00:00Z"), "{text}");
+        assert!(!text.contains('\u{1b}'));
     }
 }

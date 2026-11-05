@@ -35,6 +35,8 @@ export interface VerifyDeps {
     make: (cardPath: string, branch: string, runId: string) => Promise<{ path: string; commit: string }>;
     bringBack: (cardPath: string, freshPath: string, branch: string, from: string) => Promise<{ ok: boolean; reason?: string }>;
     remove: (path: string) => Promise<void>;
+    /** Registers a folder kept after an escalation, to be removed when the keep ends. */
+    keep?: (path: string, taskId: string, runId: string) => Promise<void>;
   };
   /** The environment Build recorded for the task (its passing run's `env`); null when none. */
   buildEnv?: (taskId: string) => Promise<EnvRecord | null>;
@@ -419,6 +421,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       }
       // Kept on an escalation, for the person to look at (slice 7 sets how long); removed otherwise.
       if (result.outcome !== "escalated") await deps.fresh!.remove(fresh.path);
+      else await deps.fresh!.keep?.(fresh.path, task.id, context.runId);
     }
     return state.radius.length > 0 ? { ...result, detail: { ...result.detail, blastRadius: state.radius } } : result;
   };
