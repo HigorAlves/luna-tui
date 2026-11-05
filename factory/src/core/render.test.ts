@@ -228,6 +228,15 @@ describe("renderPrompt", () => {
     expect(render()).toContain("(none)");
   });
 
+  it("renders the fast planner's prompt with the map locate found, the risk and no placeholder left", () => {
+    const real = readFileSync(new URL("../../prompts/plan_fast.md", import.meta.url), "utf8");
+    const plan = { record: null, brief: "", criteria: [], assumptions: [], slices: [], map: { components: ["cart"], files: [{ path: "src/cart.ts", role: "change" }], entry_points: [], owners: ["@marta"], confidence: 0.6 }, risk: { level: "low" } };
+    const prompt = renderPrompt({ pack: PACKS.plan_fast, input: { ...input, pack: "plan_fast", context: { ...input.context, plan } } as never, template: real });
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toContain("- src/cart.ts (change)");
+    expect(prompt).toContain("Risk: low");
+  });
+
   it("renders the evidence a wrong plan came back with, marked as data, or none", () => {
     const plan = { record: null, brief: "", criteria: [], assumptions: [], slices: [] };
     const replan = { raised_by: "shipping", reason: "the review says the plan is wrong", output: "tsc: cannot find x", findings: ["a.ts:3 x is missing"], thread: "bo: rename x" };

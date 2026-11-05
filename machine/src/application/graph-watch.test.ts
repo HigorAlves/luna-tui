@@ -18,6 +18,7 @@ function setup(opts: { stamps?: Record<string, string>; heads?: Record<string, s
     recordMisses: async () => {},
     locate: async () => null,
     impact: async () => null,
+    owners: async () => null,
     build: async (repo) => {
       running++;
       overlap ||= running > 1;

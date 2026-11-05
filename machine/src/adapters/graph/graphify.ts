@@ -173,6 +173,13 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       return { ...found, owners: requiredOwners(found.files, rules), codeowners: owners !== null, stale: behind !== null && behind > bar, behind };
     },
 
+    async owners(repoPath, paths) {
+      if (!current(repoPath)) return null;
+      const text = await ownersText(repoPath).catch(() => null);
+      const plain = paths.filter((p) => p.length > 0 && p.length <= 300 && !/[*?[\]{}\0]/.test(p) && !p.startsWith("/") && !p.split("/").includes(".."));
+      return { owners: text === null ? [] : requiredOwners(plain, parseCodeowners(text)), codeowners: text !== null };
+    },
+
     async impact(repoPath, files) {
       const dir = current(repoPath);
       const graph = dir ? await readGraphJson(dir) : null;

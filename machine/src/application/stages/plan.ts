@@ -33,6 +33,7 @@ import {
   riskOf,
 } from "@hardness/contracts";
 
+import type { RequiredOwners } from "../../domain/codeowners.ts";
 import type { GraphLocation } from "../graph.ts";
 import { approvalRule } from "../../domain/approvers.ts";
 import { triageVerdicts } from "../../domain/triage-policy.ts";
@@ -55,12 +56,14 @@ export interface PlanDeps {
   /** Runs a decision pack on a plan context and answers its answer; null when no decision can run (agents off, no runtime). Read at call time: main.ts binds it late. */
   decide: ((pack: DecisionPackName, plan: PlanContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** Each repo's luna.yaml bars for the decisions. */
-  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { plan: { coverage_rounds: number; plan_check_retries: number; coverage_score_min?: number; approvers?: FactoryConfig["plan"]["approvers"] }; triage?: FactoryConfig["triage"]; graph?: FactoryConfig["graph"] } }> };
+  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { fast_lane?: FactoryConfig["fast_lane"]; plan: { coverage_rounds: number; plan_check_retries: number; coverage_score_min?: number; approvers?: FactoryConfig["plan"]["approvers"] }; triage?: FactoryConfig["triage"]; graph?: FactoryConfig["graph"] } }> };
   /** The machine's code graphs: a repo with one (and its luna.yaml `policy.graph` on) gets a code map before the plan. */
   graph?: {
     stampOf(repoPath: string): Promise<unknown | null>;
     /** Where the goal's words point in the graph, with who owns it and how stale the graph is; null when there is none. Seeds the mapper and marks the map. */
     locate?(repoPath: string, text: string, options?: { staleCommits?: number }): Promise<GraphLocation | null>;
+    /** Who owns these paths at the default branch (CODEOWNERS); null when the repo has no graph. The fast lane asks it about the plan's own files. */
+    owners?(repoPath: string, paths: string[]): Promise<{ owners: RequiredOwners[]; codeowners: boolean } | null>;
   };
   log?: (line: string) => void;
 }
@@ -149,17 +152,27 @@ export function planStage(deps: PlanDeps): StageRunner {
     };
 
     // The code map opens the stage when the repo has a graph. It is advice: a failed run is logged and the stage plans without one.
-    // The machine first matches the goal against the graph (a script) and hands the shortlist to the mapper, which confirms it and gives each file a role.
+    // The machine first matches the goal against the graph (a script, `locate`) and hands the shortlist to the mapper, which confirms it and gives
+    // each file a role. The fast lane stops at `locate`: no agent, no impact walk; its map is what locate found, every file to change.
+    // A fast lane that turns into a full plan runs the agent then, in the same stage run.
     let map: CodeMapAnswer | null = null;
     let mapNote: string | undefined = "the repo has no code graph, so there is no code map";
-    if (task.repoPath && deps.graph && (await deps.policies.for(task.repoPath)).graph !== false && (await deps.graph.stampOf(task.repoPath))) {
+    let located: GraphLocation | null = null;
+    const graphOn = async () => Boolean(task.repoPath && deps.graph && (await deps.policies.for(task.repoPath)).graph !== false && (await deps.graph.stampOf(task.repoPath!)));
+    const locateGoal = async (): Promise<GraphLocation | null> => {
       const repoConfig = (await deps.policies.for(task.repoPath)).factory;
-      const found = deps.graph.locate
-        ? await deps.graph.locate(task.repoPath, `${task.title}\n${task.description}`, { staleCommits: repoConfig?.graph?.stale_commits ?? FACTORY_DEFAULTS.graph.stale_commits }).catch((error: unknown) => {
+      return deps.graph?.locate
+        ? await deps.graph.locate(task.repoPath!, `${task.title}\n${task.description}`, { staleCommits: repoConfig?.graph?.stale_commits ?? FACTORY_DEFAULTS.graph.stale_commits }).catch((error: unknown) => {
             log(`plan stage: locate skipped for task ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
             return null;
           })
         : null;
+    };
+    const mapFromLocate = (found: GraphLocation): CodeMapAnswer | null =>
+      found.files.length === 0
+        ? null
+        : { components: found.components, files: found.files.slice(0, 40).map((path) => ({ path, role: "change" as const })), entry_points: [], owners: [...new Set(found.owners.flatMap((o) => o.owners))], confidence: found.confidence, stale: found.stale, behind: found.behind };
+    const mapWithAgent = async (found: GraphLocation | null) => {
       const shortlist = found ? { files: found.files, symbols: found.symbols, components: found.components, owners: [...new Set(found.owners.flatMap((o) => o.owners))] } : undefined;
       const mapped = await deps.runPack("code_map", sub("map"), shortlist ? { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], shortlist } } : {});
       results.push(mapped);
@@ -169,14 +182,28 @@ export function planStage(deps: PlanDeps): StageRunner {
         map = { ...parsed.data, ...(found ? { stale: found.stale, behind: found.behind } : {}) };
         mapNote = undefined;
       } else {
+        map = null;
         mapNote = "the code map could not be made, so the plan was written without one";
         log(`plan stage: code_map skipped for task ${task.id}: ${mapped.outcome === "pass" ? "no usable map" : String(mapped.detail?.error ?? mapped.outcome)}`);
       }
+    };
+    let fastFirst = task.record?.decision === "fast_lane";
+    if (await graphOn()) {
+      located = await locateGoal();
+      if (fastFirst) {
+        map = located ? mapFromLocate(located) : null;
+        mapNote = map ? undefined : "the fast lane found no file the code graph names, so there is no code map";
+      } else await mapWithAgent(located);
     }
-    const mapPart = map ? { map } : {};
+    /** The fast lane plans in full: the code map agent runs now, over what locate found. */
+    const fullMap = async () => {
+      if (fastFirst && (await graphOn())) await mapWithAgent(located);
+      fastFirst = false;
+    };
+    const mapPart = () => (map ? { map } : {});
 
     // risk_score runs before the plan, on the record and the code map: the planner writes for the risk it is given.
-    const riskJudged = await judge("risk_score", { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], ...mapPart });
+    const riskJudged = await judge("risk_score", { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], ...mapPart() });
     const answer = riskJudged.answer;
     const scores = answer ? { blast_radius: score(answer, "blast_radius"), reversibility: score(answer, "reversibility"), data_sensitivity: score(answer, "data_sensitivity") } : {};
     const complexity = (answer?.complexity as { choice?: string } | undefined)?.choice;
@@ -193,8 +220,13 @@ export function planStage(deps: PlanDeps): StageRunner {
     let laneNote: string | undefined;
     /** Planner runs on the current lane: the re-run cap counts from the last switch. */
     let planRunsOnLane = 0;
+    /** Why the fast plan's owners could not be checked, when they could not; stays on the gate. */
+    let ownersFlag: string | undefined;
+    let ownersRechecked = false;
     /** The stage moves to the full path: the fast lane's plan is dropped, and the full planner starts from the record. */
-    const goFull = (note: string) => {
+    const goFull = async (note: string) => {
+      await fullMap();
+      ownersFlag = undefined;
       lane = "full";
       laneNote = note;
       planRunsOnLane = 0;
@@ -227,14 +259,14 @@ export function planStage(deps: PlanDeps): StageRunner {
       planRunsOnLane += 1;
       const planned = await deps.runPack(lane === "fast" ? "plan_fast" : "plan", sub(planRuns === 1 ? "plan" : `plan-${planRuns}`), {
         ...(plan
-          ? { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, ...(review ? { review } : {}), ...mapPart, ...riskPart, ...replanPart } }
-          : { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], ...mapPart, ...riskPart, ...replanPart } }),
+          ? { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, ...(review ? { review } : {}), ...mapPart(), ...riskPart, ...replanPart } }
+          : { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], ...mapPart(), ...riskPart, ...replanPart } }),
       });
       if (planned.outcome !== "pass") return ended(planned);
       results.push(planned);
       const d = planned.detail ?? {};
       if (lane === "fast" && d.needsFullPlan === true) {
-        goFull(`the fast planner asked for the full plan: ${String(d.summary ?? "the ticket is bigger than it looked")}`);
+        await goFull(`the fast planner asked for the full plan: ${String(d.summary ?? "the ticket is bigger than it looked")}`);
         continue;
       }
       if (typeof d.changed === "string") changed = d.changed;
@@ -252,6 +284,31 @@ export function planStage(deps: PlanDeps): StageRunner {
         ...(typeof d.rollback === "string" ? { rollback: d.rollback } : {}),
         ...(typeof d.summary === "string" ? { summary: d.summary } : {}),
       };
+
+      // The fast lane's owners are asked about again from the plan's own files, never the ticket's words: more than one owning team leaves the lane.
+      if (lane === "fast" && deps.graph) {
+        const paths = [...new Set((extras.steps ? extras.steps.flatMap((st) => st.files ?? st.touchpoints) : plan.slices.flatMap((sl) => sl.touchpoints)))];
+        const config = (await deps.policies.for(task.repoPath)).factory?.fast_lane ?? FACTORY_DEFAULTS.fast_lane;
+        let verdict: { cross: number } | { why: string } | null = null;
+        if (!deps.graph.owners) verdict = { why: "the owners could not be checked" };
+        else {
+          const found = await deps.graph.owners(task.repoPath!, paths).catch((): "failed" => "failed");
+          if (found === "failed") verdict = { why: "the code graph could not be asked" };
+          else if (found === null) verdict = { why: "no code graph" };
+          else if (paths.length === 0) verdict = { why: "the fast plan names no file" };
+          else if (!found.codeowners) verdict = { why: "the repository has no CODEOWNERS" };
+          else {
+            const teams = new Set(found.owners.flatMap((o) => o.owners)).size;
+            if (teams > 1 && !config.cross_team) verdict = { cross: teams };
+          }
+        }
+        ownersRechecked = true;
+        if (verdict && "cross" in verdict) {
+          await goFull(`the fast plan's own files reach ${verdict.cross} owning teams; planned in full`);
+          continue;
+        }
+        ownersFlag = verdict?.why;
+      }
 
       // The test designer, told the criteria it missed until none is left or the rounds run out.
       let roundsOnThisPlan = 0;
@@ -300,7 +357,7 @@ export function planStage(deps: PlanDeps): StageRunner {
       // never the plan's own brief, assumptions or rollback.
       const planDoc = planOf({ brief: plan.brief, criteria: plan.criteria, assumptions: plan.assumptions, slices: extras.steps ?? plan.slices, rollback: plan.rollback, outOfScope: extras.outOfScope, version: planRuns, ...(extras.migration !== undefined ? { migration: extras.migration } : {}), ...(extras.flags !== undefined ? { flags: extras.flags } : {}) });
       const facts = planFacts(planDoc, cases, map);
-      const judgedCheck = await judge("plan_check", { record: task.record ?? null, brief: "", criteria: plan.criteria, assumptions: [], slices: plan.slices, cases, ...mapPart, ...riskPart });
+      const judgedCheck = await judge("plan_check", { record: task.record ?? null, brief: "", criteria: plan.criteria, assumptions: [], slices: plan.slices, cases, ...mapPart(), ...riskPart });
       const problems = [...facts.issues, ...judgedCheck.problems];
       planCheck = { ...judgedCheck, problems, verdict: judgedCheck.verdict === "proceed" && facts.issues.length > 0 ? "flag" : judgedCheck.verdict };
       planIssues = facts.issues;
@@ -308,7 +365,7 @@ export function planStage(deps: PlanDeps): StageRunner {
       if (lane === "fast") {
         // One plan check, no re-run: unsure whether the plan fits means the ticket needs the full path.
         if (planCheck.verdict !== "ask") break;
-        goFull("the plan check could not tell whether the fast plan fits the record; planned again in full");
+        await goFull("the plan check could not tell whether the fast plan fits the record; planned again in full");
         continue;
       }
       const wrong = planCheck.problems.length > 0 || planCheck.verdict === "ask";
@@ -320,8 +377,9 @@ export function planStage(deps: PlanDeps): StageRunner {
     for (const [name, verdict] of Object.entries(verdicts)) if (verdict === "flag" || verdict === "ask") flagged.add(name);
     if (map?.stale) flagged.add("map stale");
     if (context.replan && !changed?.trim()) flagged.add("replan: the planner did not say what it changed");
-    // A fast lane taken without the owners looked at says so at the gate.
-    if (task.record?.decision === "fast_lane" && task.record.ownersNotChecked) flagged.add(`owners not checked: ${task.record.ownersNotChecked}`);
+    // A fast lane whose owners could not be looked at says so at the gate: the plan's own files were asked about when the graph can; else triage's note stays.
+    if (lane === "fast" && ownersFlag) flagged.add(`owners not checked: ${ownersFlag}`);
+    else if (lane === "fast" && task.record?.decision === "fast_lane" && task.record.ownersNotChecked && ownersFlag === undefined && !ownersRechecked) flagged.add(`owners not checked: ${task.record.ownersNotChecked}`);
     // The triage signals the person did not settle and the machine let through: shown at this gate as `triage.<field>`.
     if (task.classification) {
       const repo = await deps.policies.for(task.repoPath);

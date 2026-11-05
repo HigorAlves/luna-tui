@@ -48,6 +48,8 @@ export interface Graph {
   isFresh(repoPath: string, stamp: GraphStamp, baseCommit: string): Promise<boolean>;
   /** Where `text` points in the repo's code, from the current graph; null when the repo has none. No model. */
   locate(repoPath: string, text: string, options?: { staleCommits?: number }): Promise<GraphLocation | null>;
+  /** Who owns `paths` at the default branch (CODEOWNERS), for any plain repo-relative paths whether or not the graph knows them; null when the repo has no graph. */
+  owners(repoPath: string, paths: string[]): Promise<{ owners: RequiredOwners[]; codeowners: boolean } | null>;
   /** What a change to `files` reaches (importers, dependents, tests), from the current graph; null when there is none. */
   impact(repoPath: string, files: string[]): Promise<Impact | null>;
   /** Appends the files a task changed that its plan and the code map did not name (accepted by scope_check), one JSON line per call. */
@@ -72,6 +74,7 @@ export function noGraph(): Graph {
     isFresh: async () => true,
     locate: async () => null,
     impact: async () => null,
+    owners: async () => null,
     recordMisses: async () => {},
   };
 }

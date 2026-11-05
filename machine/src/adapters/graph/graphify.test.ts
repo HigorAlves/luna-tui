@@ -224,6 +224,17 @@ describe("graphifyGraph.locate and impact", () => {
     expect(await none.graph.impact(none.repo, ["src/cart/coupon.ts"])).toBeNull();
   });
 
+  it("names who owns the paths it is given, whether or not the graph knows those files, and says when there is no CODEOWNERS or no graph", async () => {
+    const { graph, repo } = await built({ codeowners: "src/cart/ @acme/cart\ndocs/ @acme/docs\n" });
+    expect(await graph.owners(repo, ["src/cart/new.ts", "docs/a.md", "src/other.ts"])).toEqual({ owners: [{ path: "src/cart/new.ts", owners: ["@acme/cart"] }, { path: "docs/a.md", owners: ["@acme/docs"] }], codeowners: true });
+    const bare = await built({ codeowners: null });
+    expect(await bare.graph.owners(bare.repo, ["src/cart/new.ts"])).toEqual({ owners: [], codeowners: false });
+    const none = setup();
+    expect(await none.graph.owners(none.repo, ["a.ts"])).toBeNull();
+    // Only plain repo paths are asked about: a glob or a parent path names nothing.
+    expect(await graph.owners(repo, ["**", "../x", "/etc/passwd", "src/*"])).toEqual({ owners: [], codeowners: true });
+  });
+
   it("answers impact from the current graph: importers and tests", async () => {
     const { graph, repo } = await built();
     expect(await graph.impact(repo, ["src/cart/coupon.ts"])).toEqual({ importers: ["src/cart/coupon.test.ts", "src/cart/total.ts"], dependents: [], tests: ["src/cart/coupon.test.ts"] });

@@ -249,6 +249,7 @@ describe("agent stages through packs", () => {
       recordMisses: async () => {},
       locate: async () => null,
       impact: async () => null,
+      owners: async () => null,
     });
     const withGraph = (graph: Graph, ensure?: (repo: string) => void) => agentRunners({ ...deps(fakeSandbox(output())), graph, ensureGraph: ensure });
 
@@ -899,6 +900,7 @@ describe("the engine a stage runs on", () => {
       recordMisses: async (_repo, miss) => void misses.push(miss),
       locate: async () => null,
       impact: async () => null,
+      owners: async () => null,
     });
 
     it("fails the stage on a changed file the plan does not name and the answer does not declare, one finding per file", async () => {

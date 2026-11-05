@@ -612,6 +612,74 @@ describe("planStage", () => {
       expect(result.detail).toMatchObject({ lane: "full", laneNote: expect.stringMatching(/plan check/i), verdicts: { coverage: "proceed", plan: "proceed" } });
     });
 
+    describe("as drawn: locate only, one run, owners from the plan's own files", () => {
+      const graphOf = (over: Record<string, unknown> = {}) => ({ stampOf: async () => ({ commit: "c" }), locate: async () => located(), ...over });
+      const owners = (teams: string[][], codeowners = true) => async (_repo: string, paths: string[]) => ({ owners: teams.map((t, i) => ({ path: paths[i] ?? "x", owners: t })), codeowners });
+
+      it("asks the graph's locate and nothing else: no code_map agent, a map from what locate found", async () => {
+        const { run, calls } = fast({}, { graph: graphOf({ owners: owners([["@marta"]]) }) });
+        const result = await run(ctx());
+        expect(calls.map((c) => c.pack)).toEqual(["plan_fast", "test_design_fast"]);
+        expect(result.detail).toMatchObject({ lane: "fast", map: { components: ["board keys"], files: [{ path: "board/src/keys.rs", role: "change" }], owners: ["@marta"], stale: false, behind: 3 } });
+        expect(calls[0]!.plan).toMatchObject({ map: { files: [{ path: "board/src/keys.rs" }] } });
+      });
+
+      it("has no map without a graph or when locate found no file, and still does not run the agent", async () => {
+        for (const graph of [graphOf({ locate: async () => null }), graphOf({ locate: async () => located({ files: [] }) })]) {
+          const { run, calls } = fast({}, { graph });
+          const result = await run(ctx());
+          expect(calls.map((c) => c.pack)).toEqual(["plan_fast", "test_design_fast"]);
+          expect(result.detail).toMatchObject({ map: null });
+        }
+      });
+
+      it("plans again in full with the full map when the planner refuses the lane: the agent runs now, in the same stage run", async () => {
+        const { run, calls } = fast({ plan_fast: [needsFull] }, { graph: graphOf({ owners: owners([["@marta"]]) }) });
+        const result = await run(ctx());
+        expect(calls.map((c) => c.pack)).toEqual(["plan_fast", "code_map", "plan", "test_design"]);
+        expect(calls[2]!.plan).toMatchObject({ map: theMap });
+        expect(result.detail).toMatchObject({ lane: "full", map: { files: [{ path: "board/src/keys.rs", role: "change" }] } });
+      });
+
+      it("plans again in full with the full map when the plan check cannot tell whether the fast plan fits", async () => {
+        const unsure = { ...good.plan_check, fits_record: { score: 2, confidence: 0.3 } };
+        const { run, calls } = fast({ answers: { plan_check: [unsure, good.plan_check] } }, { graph: graphOf({ owners: owners([["@marta"]]) }) });
+        await run(ctx());
+        expect(calls.map((c) => c.pack)).toEqual(["plan_fast", "test_design_fast", "code_map", "plan", "test_design"]);
+      });
+
+      it("leaves the lane when the fast plan's own files reach more than one owning team, and checks the plan's files, not the ticket's words", async () => {
+        const asked: string[][] = [];
+        const { run, calls } = fast({}, { graph: graphOf({ owners: async (_r: string, paths: string[]) => (asked.push(paths), { owners: [{ path: "a", owners: ["@marta"] }, { path: "b", owners: ["@lee"] }], codeowners: true }) }) });
+        const result = await run(ctx());
+        expect(asked).toEqual([["board/src/keys.rs"]]);
+        expect(calls.map((c) => c.pack)).toEqual(["plan_fast", "code_map", "plan", "test_design"]);
+        expect(result.detail).toMatchObject({ lane: "full", laneNote: expect.stringMatching(/2 owning teams/) });
+      });
+
+      it("stays on the lane for one team, or several when the repo's fast_lane.cross_team allows it", async () => {
+        const one = fast({}, { graph: graphOf({ owners: owners([["@marta"], ["@marta"]]) }) });
+        expect((await one.run(ctx())).detail).toMatchObject({ lane: "fast", flagged: [] });
+        const open = { policies: { for: async () => ({ decisions: {}, graph: true, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2 }, fast_lane: { max_risk: "low" as const, max_size: "S" as const, excluded_types: [], cross_team: true } } }) } };
+        const many = fast({}, { graph: graphOf({ owners: owners([["@marta"], ["@lee"]]) }), policies: open.policies as never });
+        expect((await many.run(ctx())).detail).toMatchObject({ lane: "fast" });
+      });
+
+      it("keeps the lane and says why when the owners could not be checked: no CODEOWNERS, no files, no answer", async () => {
+        const cases: Array<[Record<string, unknown>, RegExp]> = [
+          [{ owners: owners([["@marta"]], false) }, /no CODEOWNERS/],
+          [{ owners: async () => null }, /no code graph/],
+          [{ owners: async () => { throw new Error("boom"); } }, /could not be asked/],
+          [{}, /no code graph|could not be checked/],
+        ];
+        for (const [over, why] of cases) {
+          const result = await fast({}, { graph: graphOf(over) }).run(ctx());
+          expect(result.detail).toMatchObject({ lane: "fast", flagged: [expect.stringMatching(/^owners not checked: /)] });
+          expect((result.detail?.flagged as string[])[0]).toMatch(why);
+        }
+      });
+    });
+
     it("stays on the full path for a ticket triage did not send to the fast lane", async () => {
       const { run, calls } = setup();
       await run(context());

@@ -22,6 +22,11 @@ If the risk is above low, or the change is wider than one or two files, say `nee
 ## Answers and decisions so far
 {{decisions}}
 
+## Where the graph points
+{{context.plan.map}}
+
+This is the machine's match of the goal against the code graph, not a survey: the files it names are where to start. A file you need that it does not name is fine to read, but say so in `needs_full_plan` if it leads to a second component.
+
 ## Code graph
 {{context.graph}}
 
