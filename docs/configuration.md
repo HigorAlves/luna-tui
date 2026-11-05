@@ -69,7 +69,7 @@ See `machine/.env.example`. The defaults match `compose.yaml`, so a `.env` is on
 | `MACHINE_JIRA_TOKEN_EXPIRES` | unset | when the API token expires, as an ISO date (`2027-01-31`), copied from id.atlassian.com when you make it: Jira never tells the machine ahead of time, so this is what drives the once-a-day warning in the last two weeks and `tokenExpiresAt` in `GET /jira/status`. A 401 that names a date overrides it once the token has gone |
 | `MACHINE_JIRA_CLOUD_ID` | unset | for a *scoped* API token only: calls go through `https://api.atlassian.com/ex/jira/<cloud id>` instead of the site (the site is still where issue urls point). Find the id at `https://<site>/_edge/tenant_info`. An unscoped token needs nothing here |
 | `MACHINE_JIRA` | on | `off` turns everything Jira off even when the three variables are set |
-| `MACHINE_SLA_GATE` | `1h` | how long a task may wait on you at a gate (plan, test check, answers, ship, memory review, escalated) before its clock turns red, where the repo's `luna.yaml` `sla.gate` says nothing. `30m`, `4h`, `3d` or `off`. A Jira priority of Highest or High halves it, Lowest doubles it |
+| `MACHINE_SLA_GATE` | `2d` (was `1h` before wave 9) | how long a task may wait on you at a gate (plan, test check, answers, ship, memory review, escalated) before its clock turns red, where the repo's `luna.yaml` `sla.gate` says nothing. `30m`, `4h`, `3d` or `off`. A Jira priority of Highest or High halves it, Lowest doubles it |
 | `MACHINE_SLA_CYCLE` | unset | created-to-closed target for every ticket, where the repo's `sla.cycle` says nothing; same durations |
 | `RUNNER_IMAGE` | `hardness-runner:dev` | the stage container image |
 | `RUNNER_QA_IMAGE` | `hardness-runner-qa:dev` | the QA stage image; without it e2e is skipped |
@@ -146,12 +146,12 @@ jira:                                     # how this repo's tasks talk to Jira (
     awaiting_ship:
       customfield_10045: "{pr_url}"       # also {task_id}, {branch}, {board_url}
 sla:                                      # ticket clocks; the machine's env defaults apply where a key is missing
-  gate: 1h                                # any gate waiting on you (MACHINE_SLA_GATE)
+  gate: 2d                                # any gate waiting on you (MACHINE_SLA_GATE; the setup and questions gates also follow `triage.sla.reminder_days`)
   stage:                                  # per running stage; yellow from 80%, red past it; the stage is not aborted
     implementing: 4h
     verifying: 1h
   cycle: 3d                               # created → closed (MACHINE_SLA_CYCLE)
-  archive: 5d                             # auto-archive a ticket left at Intake or Triage (setup, questions) this long; off by default. A gate past its clock gets one reminder per visit (a `sla.reminder` event, a Jira comment with `comments: gates`, a line in the task's thread)
+  archive: 5d                             # auto-archive a ticket left at Intake or Triage (setup, questions) this long (reason `no_setup` or `no_answer`); five days when this key is missing, `off` keeps it waiting; an answer restarts the clock. A gate past its clock gets one reminder per visit (a `sla.reminder` event, a Jira comment with `comments: gates`, a line in the task's thread)
 engines:                                  # the engine a pack runs on in this repo, over its default
   triage: claude:opus                     # must be one of the pack's engines.allowed (GET /packs)
 budget:
@@ -175,12 +175,13 @@ Each `services` entry runs as its own container beside every stage that runs the
 
 ### The v2.2 diagram's sections
 
-`luna.yaml` also takes the sections of the v2.2 flow diagram (RFC 0006). Each has the default shown; a key you write is merged over it into `Policy.factory`. A wrong type, a number out of range or an unknown key inside one of these sections makes the file invalid, naming the key (the `evidence` section keeps ignoring unknown keys, as it always did). The last column is the wave that reads the key: `8` means it already changes behaviour; every other key is defined now and does nothing until that wave, so setting it has no effect yet. The existing keys keep their meaning and win when both forms are set: `policy.auto_merge`, `freeze`, `evidence.retention_days` and the top-level `sla`.
+`luna.yaml` also takes the sections of the v2.2 flow diagram (RFC 0006). Each has the default shown; a key you write is merged over it into `Policy.factory`. A wrong type, a number out of range or an unknown key inside one of these sections makes the file invalid, naming the key (the `evidence` section keeps ignoring unknown keys, as it always did). The last column is the wave that reads the key: `8` and `9` mean it already changes behaviour; every other key is defined now and does nothing until that wave, so setting it has no effect yet. The existing keys keep their meaning and win when both forms are set: `policy.auto_merge`, `freeze`, `evidence.retention_days` and the top-level `sla`.
 
 | Section | Keys and defaults | Read from wave |
 |---|---|---|
 | `dedup` | `duplicate: 0.90`, `related: 0.70`, `ask_below: 0.7`, `lookback_days: 90` | 14 |
 | `triage` | `confidence {kind 0.80, size 0.60, urgency 0.70, risk 0.85, archive 0.90}`, `flag_band: 0.15`, `hint_weight: 0.5`, `max_questions: 3`, `max_rounds: 2`, `sla {reminder_days 2, archive_days 5}` | 9 |
+| `graph` | `stale_commits: 50` | 9 |
 | `scoring` | `weights {who 3, what 3, impact 2, time 2, demand 1}`, `bands {P0 28, P1 22, P2 16}` | 9 |
 | `fast_lane` | `max_risk: low`, `max_size: S`, `excluded_types: [infra, data]`, `cross_team: false` | 9 |
 | `plan` | `coverage_score_min: 0.85`, `coverage_rounds: 3`, `plan_check_retries: 2`, `approvers {low 1, medium 1, high 2, outside_owning_team true}`, `sla {reminder_days 2, escalate_days 5}` | `coverage_rounds` and `plan_check_retries` 8, the rest 9 |

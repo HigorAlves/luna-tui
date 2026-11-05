@@ -312,4 +312,35 @@ describe("the v2.2 diagram's sections", () => {
     expect(Object.keys(read).sort()).toEqual(wave8.sort());
     for (const key of wave8) expect(sources).toMatch(read[key]!);
   });
+
+  it("are read by code for every triage, scoring, graph and fast-lane key marked wave 9; the plan's own wave 9 keys are 9b's", () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const sources = ["triage-policy.ts", "fast-lane.ts", "../application/stages/triage-signals.ts", "../application/sla.ts", "../main.ts"].map((f) => readFileSync(join(here, f), "utf8")).join("\n");
+    const read: Record<string, RegExp> = {
+      "triage.confidence.kind": /config\.confidence\.kind/,
+      "triage.confidence.size": /config\.confidence\.size/,
+      "triage.confidence.urgency": /config\.confidence\.urgency/,
+      "triage.confidence.risk": /config\.confidence\.risk/,
+      "triage.confidence.archive": /config\.confidence\.archive/,
+      "triage.flag_band": /config\.flag_band/,
+      "triage.hint_weight": /config\.hint_weight/,
+      "triage.max_questions": /caps\.max_questions/,
+      "triage.max_rounds": /caps\.max_rounds/,
+      "triage.sla.reminder_days": /sla\.reminder_days/,
+      "triage.sla.archive_days": /sla\.archive_days/,
+      "scoring.weights": /scoring\.weights/,
+      "scoring.bands": /scoring\.bands/,
+      "fast_lane.max_risk": /config\.max_risk/,
+      "fast_lane.max_size": /config\.max_size/,
+      "fast_lane.excluded_types": /config\.excluded_types/,
+      "fast_lane.cross_team": /config\.cross_team/,
+      "graph.stale_commits": /graph\.stale_commits/,
+    };
+    for (const [key, pattern] of Object.entries(read)) {
+      expect(CONSUMED_FROM[key], key).toBe(9);
+      expect(sources, key).toMatch(pattern);
+    }
+    const planned = Object.entries(CONSUMED_FROM).filter(([k, w]) => w === 9 && !(k in read)).map(([k]) => k).sort();
+    expect(planned).toEqual(["plan.approvers.high", "plan.approvers.low", "plan.approvers.medium", "plan.approvers.outside_owning_team", "plan.coverage_score_min", "plan.sla.escalate_days", "plan.sla.reminder_days"]);
+  });
 });
