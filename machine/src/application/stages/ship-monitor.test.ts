@@ -419,7 +419,7 @@ function loopWorld(over: { choices?: Record<string, string>; confidence?: number
   let head = HEAD;
   const git: string[][] = [];
   const exec: GitExec = async (_c, args) => {
-    const a = args.slice(args.indexOf("-C") + 2);
+    const a = args.slice(args.indexOf("-C") + 2).filter((a) => !a.startsWith("--git-dir=") && !a.startsWith("--work-tree="));
     git.push(a);
     const out = (stdout = "") => ({ code: 0, stdout, stderr: "" });
     if (a[0] === "symbolic-ref") return out("refs/heads/hardness/t1");

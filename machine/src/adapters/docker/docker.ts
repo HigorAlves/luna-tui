@@ -70,10 +70,6 @@ export interface SandboxRun {
    * `config`, so a stage cannot plant a hook (or point `core.hooksPath` at one) that the
    * host would then run as you. */
   gitReadOnly?: string[];
-  /** Paths under the worktree, relative to it, mounted read-only over a writable `/work`: a clone's
-   * `.git/config`, `hooks`, `info` and its submodules' (`sealedPaths`), so a stage cannot plant
-   * config or a hook that the host's git would read. */
-  workReadOnly?: string[];
   /** The container's CPUs and memory; absent, the defaults (4 CPUs, 8 GB). */
   limits?: SandboxSize;
   /** Who a writable stage commits as. The container has no gitconfig of its own. */
@@ -159,7 +155,6 @@ export function sandboxArgs(run: SandboxRun, inDir: string, outDir: string): str
     "-v", `${outDir}:/out`,
   );
   if (run.sessionMount) args.push("-v", `${run.sessionMount}:/session`);
-  if (run.writable) for (const rel of run.workReadOnly ?? []) args.push("-v", `${run.worktree}/${rel}:/work/${rel}:ro`);
   for (const mount of run.credential.mounts) args.push("-v", `${mount.host}:${mount.container}${mount.readOnly ? ":ro" : ""}`);
   for (const mount of run.mounts ?? []) args.push("-v", `${mount.host}:${mount.container}${mount.readOnly ? ":ro" : ""}`);
   args.push(...cacheArgs(run.cacheVolume));

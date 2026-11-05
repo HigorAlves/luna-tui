@@ -18,6 +18,7 @@ import {
   applyPolicy,
 } from "@hardness/contracts";
 
+import { at } from "../../adapters/git/machine-repo.ts";
 import { HOST_GIT, type GitExec, type RebaseResult } from "../../adapters/git/worktree.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
 import { carriesSecret, postable } from "../../domain/postable.ts";
@@ -111,12 +112,12 @@ export const subContext = (context: StageContext, suffix: string): StageContext 
 /** Resets the worktree to a commit the machine itself read (never a name from anywhere else). */
 export async function resetTo(run: GitExec, worktreePath: string, ref: string): Promise<void> {
   if (!SHA.test(ref)) return;
-  await run("git", [...HOST_GIT, "-C", worktreePath, "reset", "--hard", "--quiet", ref]);
-  await run("git", [...HOST_GIT, "-C", worktreePath, "clean", "-fd", "--quiet"]);
+  await run("git", [...HOST_GIT, ...at(worktreePath), "reset", "--hard", "--quiet", ref]);
+  await run("git", [...HOST_GIT, ...at(worktreePath), "clean", "-fd", "--quiet"]);
 }
 
 export async function headOfWorktree(run: GitExec, worktreePath: string): Promise<string | null> {
-  const out = await run("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "HEAD"]);
+  const out = await run("git", [...HOST_GIT, ...at(worktreePath), "rev-parse", "HEAD"]);
   const sha = out.code === 0 ? out.stdout.trim() : "";
   return SHA.test(sha) ? sha : null;
 }
@@ -240,11 +241,11 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
 
   // The push is of what was checked: the head must still be the one the checks ran on, a descendant of the one we started from, with the PR's head where it was.
   const now = await headOfWorktree(run, work);
-  const descends = (await run("git", [...HOST_GIT, "-C", work, "merge-base", "--is-ancestor", before, now ?? ""])).code === 0;
+  const descends = (await run("git", [...HOST_GIT, ...at(work), "merge-base", "--is-ancestor", before, now ?? ""])).code === 0;
   if (now !== after || !descends) return stop(escalated("the branch changed while the fix was being checked; nothing was pushed"));
   // The push is of the branch's ref: it must be the checked commit, and HEAD must be that branch (refs are writable in the pack's container).
-  const onBranch = await run("git", [...HOST_GIT, "-C", work, "symbolic-ref", "-q", "HEAD"]);
-  const tip = await run("git", [...HOST_GIT, "-C", work, "rev-parse", `refs/heads/${branch}`]);
+  const onBranch = await run("git", [...HOST_GIT, ...at(work), "symbolic-ref", "-q", "HEAD"]);
+  const tip = await run("git", [...HOST_GIT, ...at(work), "rev-parse", `refs/heads/${branch}`]);
   if (onBranch.stdout.trim() !== `refs/heads/${branch}` || tip.stdout.trim() !== after) return stop(escalated("the branch ref is not the checked commit; nothing was pushed"));
   const remoteNow = await deps.github.prHeadSha(input.slug, input.number).catch(() => null);
   if (remoteNow && remoteNow !== before) return stop(escalated(`someone pushed to the PR (${remoteNow.slice(0, 7)}) while the fix was checked; nothing was pushed`, "head_moved"));
@@ -262,8 +263,8 @@ export async function fixRound(deps: FixDeps, context: StageContext, input: FixI
 
   const pack = input.pack;
   if (!pack) return out;
-  const names = await run("git", [...HOST_GIT, "-C", wt, "diff", "--name-only", before, after]);
-  const stat = await run("git", [...HOST_GIT, "-C", wt, "diff", "--stat", "--no-color", before, after]);
+  const names = await run("git", [...HOST_GIT, ...at(wt), "diff", "--name-only", before, after]);
+  const stat = await run("git", [...HOST_GIT, ...at(wt), "diff", "--stat", "--no-color", before, after]);
   const ship: ShipContext = {
     kind: "fix",
     fix: {

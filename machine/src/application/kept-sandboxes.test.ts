@@ -1,25 +1,29 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { ensureClone, gitDirStamp } from "../adapters/git/clone.ts";
+import { ensureClone } from "../adapters/git/clone.ts";
+import { machineGitDir } from "../adapters/git/machine-repo.ts";
 import { workspaceFor } from "../adapters/git/worktree.ts";
 import { expireKept, keepFolder, saveKept } from "./kept-sandboxes.ts";
 
 const git = (cwd: string, ...args: string[]) =>
+  execFileSync("git", ["--git-dir=" + machineGitDir(cwd), "--work-tree=" + cwd, "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+
+const plain = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
 
 async function card() {
   const root = realpathSync(mkdtempSync(join(tmpdir(), "kept-")));
   const repo = join(root, "repo");
   mkdirSync(repo);
-  git(repo, "init", "-q", "-b", "main");
+  plain(repo, "init", "-q", "-b", "main");
   writeFileSync(join(repo, "a.txt"), "a\n");
-  git(repo, "add", "-A");
-  git(repo, "commit", "-q", "-m", "init");
+  plain(repo, "add", "-A");
+  plain(repo, "commit", "-q", "-m", "init");
   const workspace = workspaceFor({ id: "11111111-2222-3333-4444-555555555555", title: "Fix it" } as never, repo, join(root, "cards"));
   await ensureClone(repo, workspace);
   return { root, stateDir: join(root, "state"), path: workspace.path };
@@ -36,7 +40,7 @@ describe("saving what an escalated run left", () => {
     git(path, "add", "a.txt");
     writeFileSync(join(path, "a.txt"), "edited again\n");
     const before = { head: git(path, "rev-parse", "HEAD"), status: git(path, "status", "--porcelain"), staged: git(path, "diff", "--cached") };
-    const out = await saveKept({ stateDir, taskId: "t1", runId: "run-1", path, stamp: gitDirStamp(path)!, keepHours: 24, now: NOW });
+    const out = await saveKept({ stateDir, taskId: "t1", runId: "run-1", path, keepHours: 24, now: NOW });
     expect(out).toEqual({ ok: true, ref: "refs/luna/kept/run-1", path, until: new Date(NOW.getTime() + 24 * HOUR).toISOString() });
     expect({ head: git(path, "rev-parse", "HEAD"), status: git(path, "status", "--porcelain"), staged: git(path, "diff", "--cached") }).toEqual(before);
     expect(git(path, "show", "refs/luna/kept/run-1:a.txt")).toBe("edited again");
@@ -44,20 +48,9 @@ describe("saving what an escalated run left", () => {
     expect(git(path, "rev-parse", "refs/luna/kept/run-1^")).toBe(before.head);
   });
 
-  it("runs no git in a folder whose .git is not the one the machine recorded", async () => {
-    const { path, stateDir } = await card();
-    const stamp = gitDirStamp(path)!;
-    renameSync(join(path, ".git"), join(path, ".git-aside"));
-    mkdirSync(join(path, ".git"));
-    writeFileSync(join(path, ".git", "config"), "[core]\n\tsshCommand = evil\n");
-    const out = await saveKept({ stateDir, taskId: "t1", runId: "run-2", path, stamp, keepHours: 24, now: NOW });
-    expect(out).toMatchObject({ ok: false, reason: expect.stringContaining(".git") });
-    expect(readdirSync(join(path, ".git"))).toEqual(["config"]);
-  });
-
   it("refuses a run id that is not a plain name", async () => {
     const { path, stateDir } = await card();
-    expect(await saveKept({ stateDir, taskId: "t1", runId: "../x", path, stamp: gitDirStamp(path)!, keepHours: 24, now: NOW })).toMatchObject({ ok: false });
+    expect(await saveKept({ stateDir, taskId: "t1", runId: "../x", path, keepHours: 24, now: NOW })).toMatchObject({ ok: false });
   });
 });
 
@@ -73,7 +66,7 @@ describe("a kept sandbox's extra folders", () => {
 
   it("lasts keep_hours: still there before, removed after; the clone and the kept ref stay", async () => {
     const { path, stateDir, folder } = await extra();
-    await saveKept({ stateDir, taskId: "t1", runId: "run-1", path, stamp: gitDirStamp(path)!, keepHours: 24, now: NOW });
+    await saveKept({ stateDir, taskId: "t1", runId: "run-1", path, keepHours: 24, now: NOW });
     expect(await expireKept({ stateDir, keepHours: 24, now: new Date(NOW.getTime() + 23 * HOUR) })).toEqual([]);
     expect(existsSync(folder)).toBe(true);
     expect(await expireKept({ stateDir, keepHours: 24, now: new Date(NOW.getTime() + 25 * HOUR) })).toEqual([folder]);

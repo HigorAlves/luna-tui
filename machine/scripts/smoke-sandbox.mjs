@@ -8,7 +8,9 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
 import { runSandbox } from "../src/adapters/docker/docker.ts";
-import { ensureClone, sealedPaths } from "../src/adapters/git/clone.ts";
+import { ensureClone, refreshScratch } from "../src/adapters/git/clone.ts";
+import { at, machineGitDir } from "../src/adapters/git/machine-repo.ts";
+import { HOST_GIT } from "../src/adapters/git/worktree.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = join(here, "..", "..", "fixtures", "golden-task");
@@ -27,6 +29,8 @@ const branch = "task/smoke-1";
 const workspace = { branch, path: join(root, "cards", "clone") };
 await ensureClone(repo, workspace);
 const clone = workspace.path;
+// The host's git on the card: the machine's repository as the git dir, the folder as the work tree.
+const hostGit = (...a) => execFileSync("git", [...HOST_GIT, ...at(clone), ...ident, ...a], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 
 const stageInput = (pack) => ({
   schema: 1,
@@ -48,6 +52,8 @@ const check = (name, ok, detail) => rows.push({ name, ok, detail });
 
 async function sandbox(label, pack, writable, extraEnv, entrypoint) {
   const runDir = join(root, label);
+  // The agent's own repository in the folder, made by the machine before every run.
+  await refreshScratch(clone, branch);
   const result = await runSandbox({
     name: `smoke-sandbox-${label}-${process.pid}`,
     image,
@@ -55,7 +61,6 @@ async function sandbox(label, pack, writable, extraEnv, entrypoint) {
     worktree: clone,
     writable,
     gitDir: null,
-    workReadOnly: writable ? sealedPaths(clone) : [],
     entrypoint,
     input: stageInput(pack),
     timeoutMs: 120000,
@@ -74,7 +79,7 @@ try {
   check("evidence: exit 0", a.result.exitCode === 0, `exit ${a.result.exitCode}`);
   check("evidence: result.json outcome", ["pass", "fail"].includes(resA?.outcome), `outcome ${resA?.outcome}`);
   check("evidence: events.jsonl", existsSync(join(a.out, "events.jsonl")), "");
-  check("evidence: worktree untouched", git(clone, "status", "--porcelain") === "", "git status not clean");
+  check("evidence: worktree untouched", hostGit("status", "--porcelain") === "", "git status not clean");
 
   const b = await sandbox("implementing", "implementing", true, { LUNA_STAGE_DRY_RUN: "1" });
   const resB = readJson(join(b.out, "result.json"));
@@ -88,21 +93,24 @@ try {
     for (const [l, t] of [["evidence", a.transcript], ["implementing", b.transcript]]) console.log(`--- ${l} transcript ---\n${t}`);
   }
 
-  // From inside a writable container: the repository's git dir is not there, and the clone's config, hooks and info refuse a write.
+  // From inside a writable container: nothing of the user's repository or of the machine's is there, the agent's own .git is writable,
+  // and whatever it writes there is not what the host's git reads.
   const probe = [
-    `[ -e ${repo}/.git ] && echo "repo git dir visible"`,
     `[ -e ${repo} ] && echo "repo visible"`,
-    ...["config", "hooks/pre-commit", "info/exclude", "objects/info/alternates"].map((f) => `(echo x >> /work/.git/${f}) 2>/dev/null && echo "wrote ${f}"`),
-    "(echo ok > /work/.git/refs/heads/probe) 2>/dev/null && echo \"refs of the clone writable\"",
+    `[ -e ${machineGitDir(clone)} ] && echo "machine repository visible"`,
+    `(printf '[core]\\n\\tfsmonitor = touch /out/pwned-fsmonitor\\n[filter "x"]\\n\\tclean = touch /out/pwned-filter\\n' >> /work/.git/config) 2>/dev/null && echo "own .git writable"`,
+    `echo '* filter=x' > /work/.gitattributes`,
+    `echo changed > /work/a-new-file.txt`,
     "true",
   ].join("; ");
-  const configBefore = readFileSync(join(clone, ".git", "config"), "utf8");
   const c = await sandbox("isolation", "implementing", true, undefined, ["sh", "-c", `{ ${probe}; } > /out/probe.txt 2>&1`]);
   const probed = existsSync(join(c.out, "probe.txt")) ? readFileSync(join(c.out, "probe.txt"), "utf8") : "(no probe output)";
-  check("isolation: the repository is not mounted", !/repo (git dir )?visible/.test(probed), probed);
-  check("isolation: config, hooks, info and alternates refuse writes", !/wrote /.test(probed), probed);
-  check("isolation: the rest of the clone is writable (the probe ran)", probed.includes("refs of the clone writable"), probed);
-  check("isolation: the clone's config is unchanged on the host", readFileSync(join(clone, ".git", "config"), "utf8") === configBefore, "config changed");
+  check("isolation: neither the repository nor the machine's repository is mounted", !/visible/.test(probed), probed);
+  check("isolation: the agent's own .git is writable (the probe ran)", probed.includes("own .git writable"), probed);
+  // The host's git on the card, with the hostile config and attributes in the folder: it runs nothing the container wrote.
+  const status = hostGit("status", "--porcelain");
+  hostGit("add", "-A");
+  check("isolation: the host's git reads the machine's repository, not the folder's .git", status.includes("a-new-file.txt") && !existsSync(join(c.out, "pwned-fsmonitor")) && !existsSync(join(c.out, "pwned-filter")), `status ${status}; markers ${existsSync(join(c.out, "pwned-filter"))}`);
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

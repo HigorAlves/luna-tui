@@ -144,7 +144,7 @@ describe("closeTask after a merge: the rules go to their own branch and a draft 
   function wire(over: { push?: number; defaultBranch?: string | null } = {}) {
     const calls: string[][] = [];
     const exec: CloseDeps["exec"] = async (_c, args) => {
-      const a = args.slice(args.indexOf("-C") + 2);
+      const a = args.slice(args.indexOf("-C") + 2).filter((a) => !a.startsWith("--git-dir=") && !a.startsWith("--work-tree="));
       calls.push(a);
       return { code: a[0] === "push" ? (over.push ?? 0) : 0, stdout: "", stderr: over.push ? "denied" : "" };
     };
@@ -209,7 +209,7 @@ describe("closeTask: the rules file is only ever a real file inside the worktree
 
   function wire() {
     const calls: string[][] = [];
-    const exec: CloseDeps["exec"] = async (_c, args) => (calls.push(args.slice(args.indexOf("-C") + 2)), { code: 0, stdout: "", stderr: "" });
+    const exec: CloseDeps["exec"] = async (_c, args) => (calls.push(args.slice(args.indexOf("-C") + 2).filter((a) => !a.startsWith("--git-dir=") && !a.startsWith("--work-tree="))), { code: 0, stdout: "", stderr: "" });
     const github = { openPr: async () => ({ url: "https://github.com/o/a/pull/9", number: 9, isDraft: true }) };
     const deps: CloseDeps = { exec, worktreeRemove: false, github, slugOf: async () => "o/a", defaultBranchOf: async () => "main" };
     return { calls, deps };
@@ -245,10 +245,13 @@ describe("closeTask: the rules file is only ever a real file inside the worktree
 });
 
 describe("closing a card whose workspace is a clone", () => {
-  it("removes a clone with nothing unpushed, and keeps one with commits no remote has, saying so", async () => {
+  it("removes a clone with nothing unpushed, folder and repository, and keeps one with commits the machine has not pushed, saying so", async () => {
     const { mkdirSync, writeFileSync, existsSync } = await import("node:fs");
     const { execFileSync } = await import("node:child_process");
     const { exec } = await import("../adapters/process/exec.ts");
+    const { ensureClone } = await import("../adapters/git/clone.ts");
+    const { machineGitDir } = await import("../adapters/git/machine-repo.ts");
+    const { commitAll, workspaceFor } = await import("../adapters/git/worktree.ts");
     const root = worktree();
     const repo = join(root, "repo");
     mkdirSync(repo);
@@ -257,19 +260,19 @@ describe("closing a card whose workspace is a clone", () => {
     writeFileSync(join(repo, "a.txt"), "a");
     git(repo, "add", "-A");
     git(repo, "commit", "-q", "-m", "init");
-    git(root, "clone", "-q", repo, join(root, "clone"));
-    const clone = join(root, "clone");
-    const closed = await closeTask({ id: "t1", repoPath: repo, worktreePath: clone }, { exec, worktreeRemove: true });
+    const workspace = workspaceFor({ id: "11111111-2222-3333-4444-555555555555", title: "Fix it" } as never, repo, join(root, "cards"));
+    await ensureClone(repo, workspace);
+    const closed = await closeTask({ id: "t1", repoPath: repo, worktreePath: workspace.path }, { exec, worktreeRemove: true });
     expect(closed.worktreeRemoved).toBe(true);
-    expect(existsSync(clone)).toBe(false);
+    expect(existsSync(workspace.path)).toBe(false);
+    expect(existsSync(machineGitDir(workspace.path))).toBe(false);
 
-    git(root, "clone", "-q", repo, clone);
-    writeFileSync(join(clone, "b.txt"), "b");
-    git(clone, "add", "-A");
-    git(clone, "commit", "-q", "-m", "work");
-    const kept = await closeTask({ id: "t1", repoPath: repo, worktreePath: clone }, { exec, worktreeRemove: true });
+    await ensureClone(repo, workspace);
+    writeFileSync(join(workspace.path, "b.txt"), "b");
+    await commitAll(workspace.path, "work");
+    const kept = await closeTask({ id: "t1", repoPath: repo, worktreePath: workspace.path }, { exec, worktreeRemove: true });
     expect(kept.worktreeRemoved).toBe(false);
-    expect(existsSync(clone)).toBe(true);
+    expect(existsSync(workspace.path)).toBe(true);
     expect(kept.steps.find((s) => s.step === "worktree")).toMatchObject({ ok: true, note: expect.stringMatching(/unpushed/) });
   });
 });

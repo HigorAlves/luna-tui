@@ -5,12 +5,29 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { commitsSince, currentBranch, dirtyFiles, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor, ensurePrWorktree, ensureWorktree, intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
+import { ensureClone } from "./clone.ts";
+import { machineGitDir } from "./machine-repo.ts";
+import { commitsSince, currentBranch, dirtyFiles, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor,  intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
     encoding: "utf8",
   }).trim();
+
+/** git on a card's workspace, the way the host runs it: the machine's repository as the git directory, the folder as the work tree. */
+const wgit = (path: string, ...args: string[]) =>
+  execFileSync("git", ["--git-dir=" + machineGitDir(path), "--work-tree=" + path, "-C", path, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+
+
+/** A work folder with a repository of the machine's, one commit on `main` (a.txt), nothing in it of its own. */
+function workspaceWith(prefix: string, content = "a\n"): string {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", machineGitDir(root)]);
+  writeFileSync(join(root, "a.txt"), content);
+  wgit(root, "add", "-A");
+  wgit(root, "commit", "-q", "-m", "init");
+  return root;
+}
 
 describe("host-side git", () => {
   it("never runs the repo's hooks: a hook a stage planted cannot execute as you", async () => {
@@ -27,7 +44,7 @@ describe("host-side git", () => {
     writeFileSync(join(repo, ".git", "hooks", "pre-commit"), `#!/bin/sh\ntouch ${marker}\n`, { mode: 0o755 });
 
     const workspace = workspaceFor({ id: "11111111-2222-3333-4444-555555555555", title: "Fix it" } as never, repo, join(root, "wt"));
-    await ensureWorktree(repo, workspace);
+    await ensureClone(repo, workspace);
     writeFileSync(join(workspace.path, "b.txt"), "b\n");
     const sha = await commitAll(workspace.path, "feat: b");
 
@@ -46,7 +63,7 @@ describe("host-side git", () => {
     const fork = git(repo, "rev-parse", "HEAD");
 
     const workspace = workspaceFor({ id: "11111111-2222-3333-4444-555555555555", title: "Fix it" } as never, repo, join(root, "wt"));
-    await ensureWorktree(repo, workspace);
+    await ensureClone(repo, workspace);
     writeFileSync(join(workspace.path, "b.txt"), "b\n");
     await commitAll(workspace.path, "feat: b");
     writeFileSync(join(repo, "c.txt"), "c\n");
@@ -74,8 +91,8 @@ describe("host-side git", () => {
     const tip = git(upstream, "rev-parse", "HEAD");
 
     const workspace = workspaceFor({ id: "11111111-2222-3333-4444-555555555555", title: "Fix it" } as never, repo, join(root, "wt"));
-    await ensureWorktree(repo, workspace);
-    expect(git(workspace.path, "rev-parse", "HEAD")).toBe(tip);
+    await ensureClone(repo, workspace);
+    expect(wgit(workspace.path, "rev-parse", "HEAD")).toBe(tip);
     expect(git(repo, "rev-parse", "HEAD")).not.toBe(tip);
   });
 
@@ -126,12 +143,12 @@ describe("host-side git", () => {
     git(repo, "add", "-A");
     git(repo, "commit", "-q", "-m", "init");
     const workspace = workspaceFor({ id: "11111111-2222-3333-4444-555555555555", title: "Fix it" } as never, repo, join(root, "wt"));
-    await ensureWorktree(repo, workspace);
+    await ensureClone(repo, workspace);
     rmSync(workspace.path, { recursive: true, force: true });
 
-    await ensureWorktree(repo, workspace);
+    await ensureClone(repo, workspace);
     expect(existsSync(join(workspace.path, "a.txt"))).toBe(true);
-    expect(git(workspace.path, "branch", "--show-current")).toBe(workspace.branch);
+    expect(wgit(workspace.path, "branch", "--show-current")).toBe(workspace.branch);
   });
 
   it("clears a stale index.lock left by a killed git, so the next attempt can commit", async () => {
@@ -143,45 +160,16 @@ describe("host-side git", () => {
     git(repo, "add", "-A");
     git(repo, "commit", "-q", "-m", "init");
     const workspace = workspaceFor({ id: "11111111-2222-3333-4444-555555555555", title: "Fix it" } as never, repo, join(root, "wt"));
-    await ensureWorktree(repo, workspace);
-    const lock = join(git(workspace.path, "rev-parse", "--git-dir"), "index.lock");
+    await ensureClone(repo, workspace);
+    const lock = join(wgit(workspace.path, "rev-parse", "--git-dir"), "index.lock");
     writeFileSync(lock, "");
     const old = new Date(Date.now() - 10 * 60_000);
     utimesSync(lock, old, old);
 
-    await ensureWorktree(repo, workspace);
+    await ensureClone(repo, workspace);
     expect(existsSync(lock)).toBe(false);
     writeFileSync(join(workspace.path, "b.txt"), "b\n");
     expect(await commitAll(workspace.path, "feat: b")).toMatch(/^[0-9a-f]{40}$/);
-  });
-});
-
-describe("a PR task's worktree", () => {
-  it("checks the PR's head branch out from origin, and a second call only reuses it", async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "pr-wt-")));
-    const upstream = join(root, "upstream");
-    mkdirSync(upstream);
-    git(upstream, "init", "-q", "-b", "main");
-    writeFileSync(join(upstream, "a.txt"), "a\n");
-    git(upstream, "add", "-A");
-    git(upstream, "commit", "-q", "-m", "init");
-    git(upstream, "switch", "-q", "-c", "feat/export");
-    writeFileSync(join(upstream, "b.txt"), "b\n");
-    git(upstream, "add", "-A");
-    git(upstream, "commit", "-q", "-m", "feat: export");
-    const tip = git(upstream, "rev-parse", "HEAD");
-    git(upstream, "switch", "-q", "main");
-    const repo = join(root, "repo");
-    git(root, "clone", "-q", upstream, repo);
-
-    const path = prWorktreePath(repo, join(root, "wt"), 12, "feat/export");
-    expect(path).toBe(join(root, "wt", "repo", "pr-12-feat-export"));
-    await ensurePrWorktree(repo, "feat/export", path);
-    expect(git(path, "rev-parse", "HEAD")).toBe(tip);
-    expect(git(path, "branch", "--show-current")).toBe("feat/export");
-    expect(git(path, "rev-parse", "--abbrev-ref", "@{u}")).toBe("origin/feat/export");
-    await ensurePrWorktree(repo, "feat/export", path);
-    expect(existsSync(join(path, "b.txt"))).toBe(true);
   });
 });
 
@@ -253,12 +241,8 @@ describe("graph helpers", () => {
 
 describe("the tests step's git", () => {
   const repoWith = () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "tests-step-")));
-    git(root, "init", "-q", "-b", "main");
-    writeFileSync(join(root, "a.txt"), "a\n");
-    git(root, "add", "-A");
-    git(root, "commit", "-q", "-m", "init");
-    return { root, base: git(root, "rev-parse", "HEAD") };
+    const root = workspaceWith("tests-step-", "a\n");
+    return { root, base: wgit(root, "rev-parse", "HEAD") };
   };
 
   it("stages what the writer left, new files included, and reads it against the base as a name-status, a diff and each path's new mode", async () => {
@@ -287,8 +271,8 @@ describe("the tests step's git", () => {
   it("reads against the base even when the container committed in between", async () => {
     const { root, base } = repoWith();
     writeFileSync(join(root, "src.ts"), "production\n");
-    git(root, "add", "-A");
-    git(root, "commit", "-q", "-m", "test(abc): scenarios");
+    wgit(root, "add", "-A");
+    wgit(root, "commit", "-q", "-m", "test(abc): scenarios");
     const pending = await stagePending(root, base);
     expect(pending.nameStatus).toBe("A\tsrc.ts");
   });
@@ -298,9 +282,9 @@ describe("the tests step's git", () => {
     writeFileSync(join(root, "cart.test.ts"), "t\n");
     const sha = await commitAll(root, "test(abc): scenarios\n\nplan version 2");
     const read = await readCommitDiff(root, sha!);
-    expect(read).toMatchObject({ nameStatus: "A\tcart.test.ts", modes: { "cart.test.ts": "100644" }, parent: git(root, "rev-parse", "HEAD~1") });
+    expect(read).toMatchObject({ nameStatus: "A\tcart.test.ts", modes: { "cart.test.ts": "100644" }, parent: wgit(root, "rev-parse", "HEAD~1") });
     expect(read!.diff).toContain("+t");
-    git(root, "checkout", "-q", "-b", "other", "HEAD~1");
+    wgit(root, "checkout", "-q", "-b", "other", "HEAD~1");
     expect(await readCommitDiff(root, sha!)).toBeNull();
     expect(await readCommitDiff(root, "nonsense")).toBeNull();
   });
@@ -308,31 +292,27 @@ describe("the tests step's git", () => {
 
 describe("commitsSince", () => {
   const repo = () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "since-")));
-    git(root, "init", "-q", "-b", "main");
-    writeFileSync(join(root, "a.txt"), "one\n");
-    git(root, "add", "-A");
-    git(root, "commit", "-q", "-m", "old");
-    return { root, from: git(root, "rev-parse", "HEAD") };
+    const root = workspaceWith("since-", "one\n");
+    return { root, from: wgit(root, "rev-parse", "HEAD") };
   };
 
   it("lists the commits made after a sha with each file's name and added and removed counts, and no content", async () => {
     const { root, from } = repo();
     writeFileSync(join(root, "a.txt"), "one\ntwo\nthree\n");
     writeFileSync(join(root, "b.txt"), "secret content\n");
-    git(root, "add", "-A");
-    git(root, "commit", "-q", "-m", "fix: the person's change");
+    wgit(root, "add", "-A");
+    wgit(root, "commit", "-q", "-m", "fix: the person's change");
     const commits = await commitsSince(root, from);
     expect(commits).toEqual([{ sha: expect.stringMatching(/^[0-9a-f]{40}$/), files: expect.arrayContaining([{ path: "a.txt", added: 2, removed: 0 }, { path: "b.txt", added: 1, removed: 0 }]) }]);
     expect(JSON.stringify(commits)).not.toContain("secret content");
-    expect(await commitsSince(root, git(root, "rev-parse", "HEAD"))).toEqual([]);
+    expect(await commitsSince(root, wgit(root, "rev-parse", "HEAD"))).toEqual([]);
   });
 
   it("does not select by committer date, which the agent can set: a commit dated in the past is listed, one dated in the future too, by the sha range alone", async () => {
     const { root, from } = repo();
     writeFileSync(join(root, "b.txt"), "x\n");
-    git(root, "add", "-A");
-    execFileSync("git", ["-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "back-dated", "--date=2001-01-01T00:00:00Z"], { env: { ...process.env, GIT_COMMITTER_DATE: "2001-01-01T00:00:00Z" } });
+    wgit(root, "add", "-A");
+    execFileSync("git", ["--git-dir=" + machineGitDir(root), "--work-tree=" + root, "-C", root, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "back-dated", "--date=2001-01-01T00:00:00Z"], { env: { ...process.env, GIT_COMMITTER_DATE: "2001-01-01T00:00:00Z" } });
     expect((await commitsSince(root, from)).length).toBe(1);
   });
 
@@ -342,29 +322,25 @@ describe("commitsSince", () => {
     expect(await commitsSince(root, "2024-01-01")).toEqual([]);
     for (let i = 0; i < 3; i++) {
       for (let f = 0; f < 205; f++) writeFileSync(join(root, `f${i}-${f}.txt`), "x\n");
-      git(root, "add", "-A");
-      git(root, "commit", "-q", "-m", `c${i}`);
+      wgit(root, "add", "-A");
+      wgit(root, "commit", "-q", "-m", `c${i}`);
     }
     const commits = await commitsSince(root, from);
     expect(commits).toHaveLength(3);
     expect(commits[0]!.files).toHaveLength(200);
     mkdirSync(join(root, "d".repeat(150)), { recursive: true });
     writeFileSync(join(root, "d".repeat(150), "e".repeat(200)), "x\n");
-    git(root, "add", "-A");
-    git(root, "commit", "-q", "-m", "long");
+    wgit(root, "add", "-A");
+    wgit(root, "commit", "-q", "-m", "long");
     expect((await commitsSince(root, from))[0]!.files[0]!.path.length).toBeLessThanOrEqual(300);
   });
 });
 
 describe("currentBranch", () => {
   it("names the branch the worktree is on", async () => {
-    const root = realpathSync(mkdtempSync(join(tmpdir(), "branch-")));
-    git(root, "init", "-q", "-b", "main");
-    writeFileSync(join(root, "a.txt"), "a\n");
-    git(root, "add", "-A");
-    git(root, "commit", "-q", "-m", "init");
+    const root = workspaceWith("branch-");
     expect(await currentBranch(root)).toBe("main");
-    git(root, "checkout", "-q", "-b", "task/x");
+    wgit(root, "checkout", "-q", "-b", "task/x");
     expect(await currentBranch(root)).toBe("task/x");
   });
 });

@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 
 import { redact } from "../domain/evidence-markdown.ts";
 import { isClone, unpushedCommits } from "../adapters/git/clone.ts";
+import { at } from "../adapters/git/machine-repo.ts";
 import { HOST_GIT, defaultBranch as hostDefaultBranch, isBranchName, originSlugOf, removeWorktree } from "../adapters/git/worktree.ts";
 import type { ExecResult } from "../adapters/process/exec.ts";
 import type { GitHub } from "./github.ts";
@@ -90,7 +91,7 @@ async function applyRules(
   await mkdir(dirname(file), { recursive: true });
   await requireInside(worktreePath, file);
   await writeFile(file, merged);
-  const run = async (args: string[]): Promise<ExecResult> => deps.exec("git", [...HOST_GIT, "-C", worktreePath, ...args]);
+  const run = async (args: string[]): Promise<ExecResult> => deps.exec("git", [...HOST_GIT, ...at(worktreePath), ...args]);
   const added = await run(["add", CONTEXT_FILE]);
   if (added.code !== 0) throw new Error(`git add failed: ${(added.stderr || added.stdout).trim()}`);
   const committed = await run(["-c", "commit.gpgsign=false", "commit", "-m", "docs(context): rules from the memory review"]);
@@ -113,7 +114,7 @@ async function applyRulesOnBranch(target: CloseTarget, worktreePath: string, rul
   const branch = `luna/memory-${short}`;
   const slug = await (deps.slugOf ?? originSlugOf)(worktreePath);
   if (!deps.github || !slug) throw new Error("cannot open the rules PR: no GitHub token or origin");
-  const run = async (args: string[]): Promise<ExecResult> => deps.exec("git", [...HOST_GIT, "-C", worktreePath, ...args]);
+  const run = async (args: string[]): Promise<ExecResult> => deps.exec("git", [...HOST_GIT, ...at(worktreePath), ...args]);
   const must = async (what: string, args: string[]) => {
     const out = await run(args);
     if (out.code !== 0) throw new Error(`git ${what} failed: ${(out.stderr || out.stdout).trim()}`);

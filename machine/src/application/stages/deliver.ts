@@ -1,5 +1,6 @@
 // The delivering stage: push the task's branch and open a draft PR on the host, so CI starts
 // early. The push is git with your own credentials; the PR is the GitHub port.
+import { at } from "../../adapters/git/machine-repo.ts";
 import { HOST_GIT, type RebaseResult, defaultBranch as hostDefaultBranch, originSlugOf, rebaseOntoDefault } from "../../adapters/git/worktree.ts";
 import { type ExecResult, exec as realExec } from "../../adapters/process/exec.ts";
 import { buildPr } from "../../domain/prbody.ts";
@@ -24,14 +25,21 @@ export function describe(result: ExecResult): string {
   return text || `exit code ${result.code}`;
 }
 
+/** What the machine itself pushed, kept in the card's own repository as `refs/luna/pushed/<name>`: a commit reachable from one is not lost if the workspace goes. */
+async function recordPushed(exec: ExecFn, cwd: string, name: string, commit: string): Promise<void> {
+  await exec("git", [...HOST_GIT, ...at(cwd), "update-ref", `refs/luna/pushed/${name}`, commit]).catch(() => {});
+}
+
 /** Pushes the task's branch from its worktree. Returns an error message on failure. */
 export async function pushBranch(exec: ExecFn, branch: string, cwd: string, options: { force?: boolean; lease?: string } = {}): Promise<string | null> {
   // `--force-with-lease`: after a rebase, only over the head this worktree last saw on the task's own branch.
   // With `lease` (a sha the machine read) the lease is pinned to it, so a concurrent fetch cannot move what it is compared with.
   if (options.lease !== undefined && !/^[0-9a-f]{40,64}$/.test(options.lease)) return "git push refused: the lease is not a commit sha";
   const force = options.force ? [options.lease ? `--force-with-lease=refs/heads/${branch}:${options.lease}` : "--force-with-lease"] : [];
-  const pushed = await exec("git", [...HOST_GIT, "-C", cwd, "push", ...force, "-u", "origin", branch]);
-  return pushed.code === 0 ? null : `git push failed: ${describe(pushed)}`;
+  const pushed = await exec("git", [...HOST_GIT, ...at(cwd), "push", ...force, "-u", "origin", branch]);
+  if (pushed.code !== 0) return `git push failed: ${describe(pushed)}`;
+  await recordPushed(exec, cwd, branch, `refs/heads/${branch}`);
+  return null;
 }
 
 /** The ref a Build checkpoint goes to: outside refs/heads and refs/tags, so no CI runs on it and no PR head moves. */
@@ -39,8 +47,10 @@ export const checkpointRef = (branch: string): string => `refs/luna/wip/${branch
 
 /** Pushes the worktree's HEAD to the branch's checkpoint ref (forced: the ref is the machine's own). Returns an error message on failure. */
 export async function pushCheckpoint(exec: ExecFn, branch: string, cwd: string, options: { signal?: AbortSignal; timeoutMs?: number } = {}): Promise<string | null> {
-  const pushed = await exec("git", [...HOST_GIT, "-C", cwd, "push", "--force", "origin", `HEAD:${checkpointRef(branch)}`], options);
-  return pushed.code === 0 ? null : `git push failed: ${describe(pushed)}`;
+  const pushed = await exec("git", [...HOST_GIT, ...at(cwd), "push", "--force", "origin", `HEAD:${checkpointRef(branch)}`], options);
+  if (pushed.code !== 0) return `git push failed: ${describe(pushed)}`;
+  await recordPushed(exec, cwd, `wip/${branch}`, "HEAD");
+  return null;
 }
 
 /** Opens the PR for a task's branch with the caveman body. */

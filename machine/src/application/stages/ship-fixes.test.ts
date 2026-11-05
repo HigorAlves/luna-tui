@@ -21,7 +21,7 @@ function setup(over: { addressed?: StageResult; commit?: boolean; checks?: Stage
   const git: string[][] = [];
   const gitIn: Array<[string, string]> = [];
   const exec: GitExec = async (_c, args) => {
-    const a = args.slice(args.indexOf("-C") + 2);
+    const a = args.slice(args.indexOf("-C") + 2).filter((a) => !a.startsWith("--git-dir=") && !a.startsWith("--work-tree="));
     gitIn.push([args[args.indexOf("-C") + 1]!, a[0]!]);
     git.push(a);
     if (a[0] === "symbolic-ref") return ok(over.symbolicRef ?? "refs/heads/hardness/t1");

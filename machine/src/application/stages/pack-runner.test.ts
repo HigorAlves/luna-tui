@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CredentialWaitError, type Credentials, NoCredentialError, fixedCredentials } from "../../adapters/credentials/index.ts";
 import { envHash } from "../../domain/env-hash.ts";
+import { machineGitDir } from "../../adapters/git/machine-repo.ts";
 import { HOST_GIT } from "../../adapters/git/worktree.ts";
 import { DEFAULT_POLICY } from "../../domain/policy.ts";
 import type { TaskRow } from "../../domain/task.ts";
@@ -17,8 +18,9 @@ import type { StageContext } from "../ports.ts";
 import type { Graph, GraphStamp } from "../graph.ts";
 import { engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "../engine-gates.ts";
 
+/** git in a repository of the user's, or, for a card's workspace, in the machine's repository for it (the agent's commits arrive there). */
 const git = (cwd: string, ...args: string[]) =>
-  execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
+  execFileSync("git", [...(existsSync(machineGitDir(cwd)) ? ["--git-dir=" + machineGitDir(cwd), "--work-tree=" + cwd] : []), "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
     encoding: "utf8",
   }).trim();
 
@@ -244,8 +246,10 @@ describe("agent stages through packs", () => {
     const result = await runners(sandbox).implementing!(tampered);
     expect(result).toMatchObject({ outcome: "fail", detail: { error: "refusing to run implementing on branch main: the pipeline only writes task/* branches (or the branch it named for a Jira-linked task)" } });
     expect(sandbox).not.toHaveBeenCalled();
-    // A read-only pack on the same branch is fine: it changes nothing.
-    await runners(fakeSandbox(output())).triage!({ ...tampered, stage: "triage" });
+    // A read-only pack is refused too: a folder that is not a card's workspace (the repository's own checkout) is nobody's to run in.
+    const read = await runners(sandbox).triage!({ ...tampered, stage: "triage" });
+    expect(read).toMatchObject({ outcome: "fail", detail: { error: expect.stringContaining("not a card's workspace") } });
+    expect(sandbox).not.toHaveBeenCalled();
   });
 
   it("keeps a linked task on the branch it already works on, even after Jira renamed the issue type", async () => {
@@ -324,42 +328,19 @@ describe("agent stages through packs", () => {
     expect(refs()).toBe(before);
   });
 
-  it("seals the clone's config, hooks, info and object info inside a writable /work, and nothing for a read-only stage", async () => {
-    await runners(fakeSandbox(output())).implementing!(context("implementing"));
-    expect(seen!.writable).toBe(true);
-    expect(seen!.workReadOnly).toEqual(expect.arrayContaining([".git/config", ".git/hooks", ".git/info", ".git/objects/info"]));
-    // The repository's own git dir is nowhere in the mounts.
-    const repoGit = join(repo, ".git");
-    expect(JSON.stringify([seen!.gitDir, seen!.mounts])).not.toContain(repoGit);
-  });
-
-  it("fails the run, without a git command on the workspace, when the container swapped the clone's .git directory", async () => {
-    const swap = (run: SandboxRun) => {
-      renameSync(join(run.worktree, ".git"), join(run.worktree, ".git-aside"));
-      mkdirSync(join(run.worktree, ".git"));
-      writeFileSync(join(run.worktree, ".git", "config"), "[core]\n\tsshCommand = evil\n");
-    };
-    const result = await runners(fakeSandbox(output(), swap)).implementing!(context("implementing"));
-    expect(result.outcome).toBe("fail");
-    expect(JSON.stringify(result.detail)).toContain(".git directory");
-  });
-
-  it("keeps a read-only stage on a card's linked worktree as it was, and moves it to a clone before the next writable run, work and commits kept", async () => {
+  it("moves a card still on a linked worktree to a workspace of its own before its next run, read-only or not, work and commits kept, and mounts no git dir", async () => {
     const path = join(root, "worktrees", "repo", "task-linked");
     execFileSync("git", ["-C", repo, "worktree", "add", "-q", "-b", "task/linked", path]);
     writeFileSync(join(path, "wip.txt"), "uncommitted\n");
     const linked = (stage: StageContext["stage"]) => ({ ...context(stage), task: { ...context(stage).task, branch: "task/linked", worktreePath: path } }) as StageContext;
-    await runners(fakeSandbox(output())).triage!(linked("triage"));
-    expect(seen!.mounts).toContainEqual({ host: join(seen!.worktree, ".git"), container: "/work/.git", readOnly: true });
-    expect(execFileSync("git", ["-C", repo, "worktree", "list"], { encoding: "utf8" })).toContain("task-linked");
     let carried = "";
-    await runners(fakeSandbox(output(), (run) => void (carried = readFileSync(join(run.worktree, "wip.txt"), "utf8")))).implementing!(linked("implementing"));
-    expect(seen!.writable).toBe(true);
-    expect(statSync(join(path, ".git")).isDirectory()).toBe(true);
-    expect(seen!.gitDir).toBeNull();
+    await runners(fakeSandbox(output(), (run) => void (carried = readFileSync(join(run.worktree, "wip.txt"), "utf8")))).triage!(linked("triage"));
     expect(carried).toBe("uncommitted\n");
-    expect(execFileSync("git", ["-C", path, "rev-parse", "--abbrev-ref", "HEAD"], { encoding: "utf8" }).trim()).toBe("task/linked");
+    expect(seen!.gitDir).toBeNull();
+    expect(seen!.mounts).not.toContainEqual(expect.objectContaining({ container: "/work/.git" }));
+    expect(existsSync(machineGitDir(path))).toBe(true);
     expect(execFileSync("git", ["-C", repo, "worktree", "list"], { encoding: "utf8" })).not.toContain("task-linked");
+    expect(git(path, "rev-parse", "--abbrev-ref", "HEAD")).toBe("task/linked");
   });
 
   it("gives the sandbox the repo's cache volume, so a retry or the next task of the repo installs warm", async () => {
@@ -1140,7 +1121,9 @@ describe("the engine a stage runs on", () => {
       const lead = 1 + HOST_GIT.length;
       expect(pushes[0]!.slice(0, lead + 1)).toEqual(["git", ...HOST_GIT, "-C"]);
       // A checkpoint goes to a ref that triggers no CI and is nobody's PR head; Deliver updates the branch itself.
-      expect(pushes[0]!.slice(lead + 2)).toEqual(["push", "--force", "origin", expect.stringMatching(/^HEAD:refs\/luna\/wip\/task\//)]);
+      expect(pushes[0]![lead + 2]).toMatch(/^--git-dir=/);
+      expect(pushes[0]![lead + 3]).toMatch(/^--work-tree=/);
+      expect(pushes[0]!.slice(lead + 4)).toEqual(["push", "--force", "origin", expect.stringMatching(/^HEAD:refs\/luna\/wip\/task\//)]);
       expect(pushOptions[0]?.timeoutMs).toBeGreaterThan(0);
       expect(pushOptions[0]?.signal).toBeInstanceOf(AbortSignal);
     });

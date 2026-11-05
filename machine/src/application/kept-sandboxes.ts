@@ -1,11 +1,11 @@
 // A sandbox kept after an escalation: the clone as the agent left it, what it left uncommitted also
 // saved as a commit on `refs/luna/kept/<run>`, and the run's extra folders (a fresh clone of Verify or
-// a fix) for `sandbox.keep_hours`. The machine runs no git in a folder whose `.git` is not the one it recorded.
+// a fix) for `sandbox.keep_hours`. The saved commit lives in the card's own repository, never in the folder.
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
-import { gitDirStamp } from "../adapters/git/clone.ts";
+import { at } from "../adapters/git/machine-repo.ts";
 import { HOST_GIT } from "../adapters/git/worktree.ts";
 import { exec } from "../adapters/process/exec.ts";
 
@@ -42,17 +42,15 @@ function read(stateDir: string, runId: string): KeptRecord | null {
 /**
  * Saves what an escalated run left in `path`: a commit of the whole working tree (tracked changes and untracked files,
  * built in a temporary index) on `refs/luna/kept/<run>`, on top of HEAD. The tree, the index and HEAD are not touched.
- * `stamp` is the `.git` the machine recorded before the run; a different one stops everything before any git runs.
  */
-export async function saveKept(input: { stateDir: string; taskId: string; runId: string; path: string; stamp: string; keepHours: number; now?: Date }): Promise<{ ok: true; ref: string; path: string; until: string } | { ok: false; reason: string }> {
+export async function saveKept(input: { stateDir: string; taskId: string; runId: string; path: string; keepHours: number; now?: Date }): Promise<{ ok: true; ref: string; path: string; until: string } | { ok: false; reason: string }> {
   const { stateDir, taskId, runId, path } = input;
   const now = input.now ?? new Date();
   if (!PLAIN.test(runId)) return { ok: false, reason: "the run id is not a plain name" };
-  if (gitDirStamp(path) !== input.stamp) return { ok: false, reason: "the workspace's .git directory is not the one the machine recorded; no git was run in it" };
   const scratch = mkdtempSync(join(tmpdir(), "kept-index-"));
   try {
     const env = { ...process.env, GIT_INDEX_FILE: join(scratch, "index"), GIT_AUTHOR_NAME: "luna", GIT_AUTHOR_EMAIL: "luna@localhost", GIT_COMMITTER_NAME: "luna", GIT_COMMITTER_EMAIL: "luna@localhost" };
-    const git = (args: string[]) => exec("git", [...HOST_GIT, "-C", path, ...args], { env });
+    const git = (args: string[]) => exec("git", [...HOST_GIT, ...at(path), ...args], { env });
     const added = await git(["add", "-A"]);
     if (added.code !== 0) return { ok: false, reason: `git add failed: ${(added.stderr || added.stdout).trim()}` };
     const tree = await git(["write-tree"]);

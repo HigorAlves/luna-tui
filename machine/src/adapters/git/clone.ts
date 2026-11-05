@@ -1,15 +1,17 @@
-// A card's workspace is its own clone: nothing in it is shared with the user's repository,
-// so nothing a container does there can move one of the repository's branches or touch its
-// objects, config or hooks. The machine copies in only the settings a push needs.
-import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, statSync } from "node:fs";
+// A card's workspace: a work folder `W` (what a container sees at /work) and `M`, the machine's own bare git
+// directory for the card (adapters/git/machine-repo.ts), which no container ever sees. `M` holds the card's branch,
+// the only remotes and the push settings copied from the user's repository; the host runs git only there, with
+// `W` as the work tree. Whatever a container leaves in `W` (its own `.git` included) is data, never configuration.
+import { cpSync, existsSync, mkdirSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { exec, execOrThrow } from "../process/exec.ts";
+import { at, machineGitDir } from "./machine-repo.ts";
 import { HOST_GIT, type Workspace, branchExists, clearStaleLock, headCommit, isBranchName, startPoint } from "./worktree.ts";
 
 const CLONE_TIMEOUT_MS = 300_000;
 
-/** The settings of the repository's own config a push from the clone needs, and nothing else.
+/** The settings of a repository's config a push needs, and nothing else.
  *  Git lower-cases a key's section and variable (never its subsection), so a key is matched by its parts. */
 function isCopied(key: string): boolean {
   const first = key.indexOf(".");
@@ -24,9 +26,9 @@ function isCopied(key: string): boolean {
   return section === "core" && variable === "sshcommand";
 }
 
-/** The repository's local config entries a clone keeps, as `[key, value]` pairs in file order. */
-export async function copiedSettings(repoPath: string): Promise<Array<[string, string]>> {
-  const out = await exec("git", [...HOST_GIT, "-C", repoPath, "config", "--local", "-z", "--list"]);
+/** The local config entries a repository has that a card's repository keeps, as `[key, value]` pairs in file order. `gitArgs` names it: `["-C", repo]` or `["--git-dir=<M>"]`. */
+export async function copiedSettings(gitArgs: string[]): Promise<Array<[string, string]>> {
+  const out = await exec("git", [...HOST_GIT, ...gitArgs, "config", "--local", "-z", "--list"]);
   if (out.code !== 0) return [];
   const pairs: Array<[string, string]> = [];
   for (const entry of out.stdout.split("\0")) {
@@ -38,57 +40,79 @@ export async function copiedSettings(repoPath: string): Promise<Array<[string, s
   return pairs;
 }
 
-/** Whether `path` holds a clone (its own `.git` directory) rather than a linked worktree (a `.git` file). */
-export function isClone(path: string): boolean {
-  try {
-    return statSync(join(path, ".git")).isDirectory();
-  } catch {
-    return false;
-  }
+/** Whether `path` is a card's workspace: it has a repository of the machine's. A linked worktree of the user's repository is not. */
+export const isClone = (path: string): boolean => existsSync(machineGitDir(path));
+
+const inMachine = (path: string) => ["--git-dir=" + machineGitDir(path)];
+
+/** The objects directory of a repository of the user's (the common one, for a linked worktree). */
+const objectsOf = (repoPath: string): Promise<string> => execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--path-format=absolute", "--git-path", "objects"]);
+
+/**
+ * A new repository for the workspace at `path`, with `branch` at `sha`. Its history is borrowed in place from `objects`
+ * (the user's repository, or another card's `M`) through alternates: nothing is copied, and the host never writes through
+ * them, so the repository holds only the card's own new objects. `origin` is `fallbackOrigin` unless `settingsFrom` names one.
+ */
+async function seedMachineRepo(path: string, objects: string, sha: string, branch: string, settingsFrom: string[], fallbackOrigin: string): Promise<void> {
+  const machine = machineGitDir(path);
+  rmSync(machine, { recursive: true, force: true });
+  mkdirSync(dirname(machine), { recursive: true });
+  await execOrThrow("git", [...HOST_GIT, "init", "--bare", "--quiet", machine]);
+  mkdirSync(join(machine, "objects", "info"), { recursive: true });
+  writeFileSync(join(machine, "objects", "info", "alternates"), `${objects}\n`);
+  const git = (...args: string[]) => execOrThrow("git", [...HOST_GIT, ...inMachine(path), ...args]);
+  await git("config", "gc.auto", "0");
+  const present = await exec("git", [...HOST_GIT, ...inMachine(path), "cat-file", "-e", `${sha}^{commit}`]);
+  if (present.code !== 0) throw new Error(`the commit ${sha.slice(0, 7)} is not in ${objects}`);
+  await git("update-ref", `refs/heads/${branch}`, sha);
+  await git("symbolic-ref", "HEAD", `refs/heads/${branch}`);
+  // What the repository already had is not the card's to lose: it counts as pushed from the start.
+  await git("update-ref", "refs/luna/pushed/base", sha);
+  // The push settings of the repository the card belongs to; with no remote, origin is the repository itself.
+  const settings = await copiedSettings(settingsFrom);
+  if (!settings.some(([key]) => key === "remote.origin.url")) await git("config", "remote.origin.url", fallbackOrigin);
+  for (const [key, value] of settings) await git("config", "--local", "--add", key, value);
+}
+
+/** Puts the branch's files in `path` and the index in step with it. The folder is the card's; the repository is the machine's. */
+async function checkoutWork(path: string, branch: string): Promise<void> {
+  mkdirSync(path, { recursive: true });
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "checkout", "--quiet", "--force", branch]);
 }
 
 /**
- * Creates the card's workspace as an independent clone, unless it exists: no hardlinks, no
- * alternates. The branch starts from origin's default branch after a fetch in the repository
- * (its HEAD with no origin), as `ensureWorktree` did. The clone's `origin` is the repository's
- * own remote, so a push reaches the same remote as before; with no remote it is the repository.
+ * Creates the card's workspace unless it exists: the card's repository, seeded with the branch from origin's default
+ * branch after a fetch in the user's repository (its HEAD with no origin), and the work folder checked out from it.
  * An existing workspace is reused and a stale `index.lock` cleared.
  */
 export async function ensureClone(repoPath: string, workspace: Workspace): Promise<void> {
-  if (existsSync(join(workspace.path, ".git"))) {
+  const machine = machineGitDir(workspace.path);
+  if (existsSync(machine)) {
+    if (!existsSync(workspace.path)) await checkoutWork(workspace.path, workspace.branch);
     await clearStaleLock(workspace.path);
     return;
   }
   const start = await startPoint(repoPath);
   const sha = await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", `${start}^{commit}`]);
-  await cloneInto(repoPath, workspace.path, workspace.branch, sha);
-}
-
-/** An independent clone of `repoPath` at `path` (nothing shared with it), on `branch` at `sha`, with the settings a push needs. */
-async function cloneInto(repoPath: string, path: string, branch: string, sha: string): Promise<void> {
-  mkdirSync(dirname(path), { recursive: true });
-  const cloned = await exec("git", [...HOST_GIT, "clone", "--quiet", "--no-hardlinks", "--no-checkout", "--origin", "origin", "--", repoPath, path], { timeoutMs: CLONE_TIMEOUT_MS });
-  if (cloned.code !== 0) throw new Error(`git clone failed: ${(cloned.stderr || cloned.stdout).trim() || `exit code ${cloned.code}`}`);
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "checkout", "--quiet", "-B", branch, sha]);
-  // The settings a push needs, taken from the repository; a repository with no remote leaves origin at its path.
-  const settings = await copiedSettings(repoPath);
-  for (const key of new Set(settings.map(([k]) => k))) await exec("git", [...HOST_GIT, "-C", path, "config", "--local", "--unset-all", key]);
-  for (const [key, value] of settings) await execOrThrow("git", [...HOST_GIT, "-C", path, "config", "--local", "--add", key, value]);
+  await seedMachineRepo(workspace.path, await objectsOf(repoPath), sha, workspace.branch, ["-C", repoPath], repoPath);
+  await checkoutWork(workspace.path, workspace.branch);
 }
 
 /**
- * Moves a card's linked worktree to a clone before its next writable run: the same branch at the
- * same commit, uncommitted and untracked work carried over, the worktree removed from the
- * repository, and the repository's local branch deleted only when the clone holds the same head.
- * A workspace that is already a clone (or missing) is left alone.
+ * Moves a card's linked worktree to a workspace of its own before its next writable run: the same branch at the same
+ * commit, uncommitted and untracked work carried over, the worktree removed from the repository, and the repository's
+ * local branch deleted only when the card's repository holds the same head. A workspace that is already one (or missing) is left alone.
  */
 export async function moveToClone(repoPath: string, workspace: Workspace): Promise<void> {
   const old = workspace.path;
   if (!existsSync(join(old, ".git")) || isClone(old)) return;
-  const head = await execOrThrow("git", [...HOST_GIT, "-C", old, "rev-parse", "HEAD"]);
+  // One-time migration of a worktree made before cards had their own repository: its HEAD is read once, here.
+  const head = await execOrThrow("git", [...HOST_GIT, "-C", old, "rev-parse", "HEAD"]); // legacy worktree
   const staging = `${old}.moving`;
   rmSync(staging, { recursive: true, force: true });
-  await cloneInto(repoPath, staging, workspace.branch, head);
+  // Seed under the final path's name: the repository is keyed by the folder it serves.
+  await seedMachineRepo(old, await objectsOf(repoPath), head, workspace.branch, ["-C", repoPath], repoPath);
+  mkdirSync(staging, { recursive: true });
   // The work tree as the agent left it: every entry but the git link, symlinks kept as links.
   for (const name of readdirSync(old)) {
     if (name !== ".git") cpSync(join(old, name), join(staging, name), { recursive: true, verbatimSymlinks: true, force: true });
@@ -97,48 +121,17 @@ export async function moveToClone(repoPath: string, workspace: Workspace): Promi
   await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "remove", "--force", old]);
   rmSync(old, { recursive: true, force: true });
   renameSync(staging, old);
+  // The index in step with the branch, the files as they are: what differs shows as the agent's uncommitted work.
+  await execOrThrow("git", [...HOST_GIT, ...at(old), "read-tree", workspace.branch]);
   if (keep.code === 0 && keep.stdout.trim() === head && (await branchExists(repoPath, workspace.branch))) {
     await exec("git", [...HOST_GIT, "-C", repoPath, "branch", "-D", "--", workspace.branch]);
   }
 }
 
-/** A new clone of the card's clone at exactly `sha`, on `branch`, in a new folder: where Verify and a fix run. Origin is the card's own origin. */
-export async function freshClone(cardClone: string, sha: string, branch: string, path: string): Promise<void> {
-  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`not a commit id: ${JSON.stringify(sha)}`);
-  if (!isBranchName(branch)) throw new Error(`not a usable branch name: ${JSON.stringify(branch)}`);
-  if (existsSync(path)) throw new Error(`${path} exists already`);
-  await cloneInto(cardClone, path, branch, sha);
-}
-
-/**
- * Brings the commits made in a fresh clone back into the card's clone, only as a fast-forward of
- * the card's branch from `from` (the commit the fresh clone was made at): the card's branch must
- * still be at `from` and the fresh clone's branch must descend from it. Anything else is refused
- * and nothing in the card's clone changes. Fetches by a ref the machine names, never by a name the fresh clone gives.
- */
-export async function bringBack(cardClone: string, fresh: string, branch: string, from: string): Promise<{ ok: true; head: string } | { ok: false; reason: string }> {
-  if (!/^[0-9a-f]{40}$/.test(from) || !isBranchName(branch)) return { ok: false, reason: "not a commit id or a branch name" };
-  const head = await exec("git", [...HOST_GIT, "-C", fresh, "rev-parse", "--verify", `refs/heads/${branch}^{commit}`]);
-  if (head.code !== 0) return { ok: false, reason: `the fresh clone has no branch ${branch}` };
-  const tip = head.stdout.trim();
-  if (tip === from) return { ok: true, head: tip };
-  const current = await exec("git", [...HOST_GIT, "-C", cardClone, "rev-parse", "--verify", `refs/heads/${branch}^{commit}`]);
-  if (current.code !== 0 || current.stdout.trim() !== from) return { ok: false, reason: `the card's branch is no longer at ${from.slice(0, 7)}` };
-  const ref = "refs/luna/brought-back";
-  const fetched = await exec("git", [...HOST_GIT, "-C", cardClone, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", fresh, `+refs/heads/${branch}:${ref}`], { timeoutMs: CLONE_TIMEOUT_MS });
-  if (fetched.code !== 0) return { ok: false, reason: `fetch from the fresh clone failed: ${(fetched.stderr || fetched.stdout).trim()}` };
-  try {
-    if ((await exec("git", [...HOST_GIT, "-C", cardClone, "merge-base", "--is-ancestor", from, tip])).code !== 0) return { ok: false, reason: "the fresh clone's history does not descend from the commit it was made at" };
-    const merged = await exec("git", [...HOST_GIT, "-C", cardClone, "merge", "--ff-only", "--quiet", "--no-verify-signatures", tip]);
-    return merged.code === 0 ? { ok: true, head: tip } : { ok: false, reason: `not a fast-forward: ${(merged.stderr || merged.stdout).trim()}` };
-  } finally {
-    await exec("git", [...HOST_GIT, "-C", cardClone, "update-ref", "-d", ref]);
-  }
-}
-
-/** A PR task's clone at `path`: the PR's head branch fetched from the repository's remote, checked out and tracking `origin/<headRef>`, so a fix lands on the PR's own branch. An existing clone is reused. */
+/** A PR task's workspace at `path`: the PR's head branch fetched from the repository's remote, checked out and tracking `origin/<headRef>`, so a fix lands on the PR's own branch. An existing workspace is reused. */
 export async function ensurePrClone(repoPath: string, headRef: string, path: string): Promise<void> {
-  if (existsSync(join(path, ".git"))) {
+  if (isClone(path)) {
+    if (!existsSync(path)) await checkoutWork(path, headRef);
     await clearStaleLock(path);
     return;
   }
@@ -146,68 +139,94 @@ export async function ensurePrClone(repoPath: string, headRef: string, path: str
   const fetched = await exec("git", [...HOST_GIT, "-C", repoPath, "fetch", "--quiet", "--end-of-options", "origin", `+refs/heads/${headRef}:refs/remotes/origin/${headRef}`], { timeoutMs: CLONE_TIMEOUT_MS });
   if (fetched.code !== 0) throw new Error(`git fetch origin ${headRef} failed: ${(fetched.stderr || fetched.stdout).trim()}`);
   const sha = await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", `refs/remotes/origin/${headRef}^{commit}`]);
-  await cloneInto(repoPath, path, headRef, sha);
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "update-ref", `refs/remotes/origin/${headRef}`, sha]);
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "branch", "--set-upstream-to", `origin/${headRef}`, headRef]);
-}
-
-/** The commits in a clone that no remote-tracking ref holds, newest first. */
-export async function unpushedCommits(path: string): Promise<string[]> {
-  const out = await exec("git", [...HOST_GIT, "-C", path, "log", "HEAD", "--not", "--remotes", "--format=%H"]);
-  return out.code === 0 ? out.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+  await seedMachineRepo(path, await objectsOf(repoPath), sha, headRef, ["-C", repoPath], repoPath);
+  await execOrThrow("git", [...HOST_GIT, ...inMachine(path), "update-ref", `refs/remotes/origin/${headRef}`, sha]);
+  await execOrThrow("git", [...HOST_GIT, ...inMachine(path), "branch", "--set-upstream-to", `origin/${headRef}`, headRef]);
+  await checkoutWork(path, headRef);
 }
 
 /**
- * What a container must not write inside a clone, relative to the clone: the config, hooks and
- * info the host's git reads as configuration or code, the object store's `info` (alternates),
- * and the same in every submodule's git dir. Only paths that exist, since a mount creates what is missing.
+ * Gives the agent a git repository of its own in `W/.git` before a run: the old one is deleted (plain file removal, no git
+ * run in it), a shallow clone of the card's branch (depth 50, nothing shared) is made from the card's repository into a
+ * folder the machine owns beside the work folder, its remote removed so no host path or setting is left in its config, and
+ * its `.git` is moved in. From then on it is the agent's, and the host never reads it. The work tree already equals the
+ * branch tip (a retry resets it), so the new index is set to the tip and the agent starts clean.
  */
-export function sealedPaths(clonePath: string): string[] {
-  const sealed: string[] = [];
-  const add = (gitDir: string, names: string[]) => {
-    for (const name of names) if (existsSync(join(clonePath, gitDir, name))) sealed.push(`${gitDir}/${name}`);
-  };
-  add(".git", ["config", "hooks", "info", "objects/info"]);
-  const walk = (gitDir: string) => {
-    const modules = join(clonePath, gitDir, "modules");
-    let names: string[] = [];
-    try {
-      names = readdirSync(modules);
-    } catch {
-      return;
-    }
-    for (const name of names) {
-      const sub = `${gitDir}/modules/${name}`;
-      if (!statSync(join(clonePath, sub)).isDirectory()) continue;
-      add(sub, ["config", "hooks", "info", "objects/info"]);
-      walk(sub);
-    }
-  };
-  walk(".git");
-  return sealed;
+export async function refreshScratch(path: string, branch: string): Promise<void> {
+  if (!isBranchName(branch)) throw new Error(`not a usable branch name: ${JSON.stringify(branch)}`);
+  rmSync(join(path, ".git"), { recursive: true, force: true });
+  const staging = `${path}.scratch`;
+  rmSync(staging, { recursive: true, force: true });
+  const cloned = await exec("git", [...HOST_GIT, "clone", "--quiet", "--depth=50", "--no-hardlinks", "--no-checkout", "--single-branch", "--branch", branch, "--", `file://${machineGitDir(path)}`, staging], { timeoutMs: CLONE_TIMEOUT_MS });
+  if (cloned.code !== 0) throw new Error(`git clone failed: ${(cloned.stderr || cloned.stdout).trim() || `exit code ${cloned.code}`}`);
+  // The folder is the machine's own and brand new: git may run in it.
+  await execOrThrow("git", [...HOST_GIT, "-C", staging, "remote", "remove", "origin"]); // scratch staging
+  await execOrThrow("git", [...HOST_GIT, "-C", staging, "reset", "--quiet"]); // scratch staging
+  renameSync(join(staging, ".git"), join(path, ".git"));
+  rmSync(staging, { recursive: true, force: true });
 }
 
-/** `device:inode` of the clone's `.git` directory, or null when it is not a directory: a container that moved it aside and made another shows as a different stamp. */
-export function gitDirStamp(clonePath: string): string | null {
+/** The commits in a workspace's repository that the machine has not pushed (nothing under `refs/luna/pushed/*` holds them), newest first. */
+export async function unpushedCommits(path: string): Promise<string[]> {
+  const out = await exec("git", [...HOST_GIT, ...at(path), "log", "HEAD", "--not", "--glob=refs/luna/pushed/*", "--format=%H"]);
+  return out.code === 0 ? out.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : [];
+}
+
+/** Removes a workspace and its repository. */
+export function removeClone(path: string): void {
+  rmSync(path, { recursive: true, force: true });
+  rmSync(machineGitDir(path), { recursive: true, force: true });
+}
+
+/**
+ * A new workspace at exactly `sha`, on `branch`, in a new folder: where Verify and fixes run. Its repository is cloned
+ * from the card's (both the machine's), so nothing is shared with it, and takes the card's origin and push settings.
+ */
+export async function freshClone(cardPath: string, sha: string, branch: string, path: string): Promise<void> {
+  if (!/^[0-9a-f]{40}$/.test(sha)) throw new Error(`not a commit id: ${JSON.stringify(sha)}`);
+  if (!isBranchName(branch)) throw new Error(`not a usable branch name: ${JSON.stringify(branch)}`);
+  if (existsSync(path) || existsSync(machineGitDir(path))) throw new Error(`${path} exists already`);
+  const card = machineGitDir(cardPath);
+  await seedMachineRepo(path, join(card, "objects"), sha, branch, ["--git-dir=" + card], card);
+  await checkoutWork(path, branch);
+}
+
+/**
+ * Brings the commits made in a fresh workspace back into the card's: only as a fast-forward of the card's branch from `from`
+ * (the commit the fresh workspace was made at). The card's branch must still be at `from` and the fresh branch must descend
+ * from it; anything else is refused and nothing of the card changes. Both repositories are the machine's.
+ */
+export async function bringBack(cardPath: string, freshPath: string, branch: string, from: string): Promise<{ ok: true; head: string } | { ok: false; reason: string }> {
+  if (!/^[0-9a-f]{40}$/.test(from) || !isBranchName(branch)) return { ok: false, reason: "not a commit id or a branch name" };
+  const head = await exec("git", [...HOST_GIT, ...at(freshPath), "rev-parse", "--verify", `refs/heads/${branch}^{commit}`]);
+  if (head.code !== 0) return { ok: false, reason: `the fresh workspace has no branch ${branch}` };
+  const tip = head.stdout.trim();
+  if (tip === from) return { ok: true, head: tip };
+  const current = await exec("git", [...HOST_GIT, ...at(cardPath), "rev-parse", "--verify", `refs/heads/${branch}^{commit}`]);
+  if (current.code !== 0 || current.stdout.trim() !== from) return { ok: false, reason: `the card's branch is no longer at ${from.slice(0, 7)}` };
+  const ref = "refs/luna/brought-back";
+  const fetched = await exec("git", [...HOST_GIT, ...at(cardPath), "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", machineGitDir(freshPath), `+refs/heads/${branch}:${ref}`], { timeoutMs: CLONE_TIMEOUT_MS });
+  if (fetched.code !== 0) return { ok: false, reason: `fetch from the fresh workspace failed: ${(fetched.stderr || fetched.stdout).trim()}` };
   try {
-    const stat = statSync(join(clonePath, ".git"));
-    return stat.isDirectory() ? `${stat.dev}:${stat.ino}` : null;
-  } catch {
-    return null;
+    if ((await exec("git", [...HOST_GIT, ...at(cardPath), "merge-base", "--is-ancestor", from, tip])).code !== 0) return { ok: false, reason: "the fresh branch does not descend from the commit it was made at" };
+    const merged = await exec("git", [...HOST_GIT, ...at(cardPath), "merge", "--ff-only", "--quiet", "--no-verify-signatures", tip]);
+    return merged.code === 0 ? { ok: true, head: tip } : { ok: false, reason: `not a fast-forward: ${(merged.stderr || merged.stdout).trim()}` };
+  } finally {
+    await exec("git", [...HOST_GIT, ...at(cardPath), "update-ref", "-d", ref]);
   }
 }
 
-/** The fresh clone Verify runs on, beside the card's clone as `<clone>.verify-<run>`: made at the card's head, brought back as a fast-forward, removed with the folder. */
+/** The fresh workspace Verify runs on, beside the card's as `<card>.verify-<run>`: made at the card's head, brought back as a fast-forward, removed with its repository. */
 export const hostFreshWorkspace = {
   async make(cardPath: string, branch: string, runId: string): Promise<{ path: string; commit: string }> {
     const path = `${cardPath}.verify-${runId.replace(/[^A-Za-z0-9]/g, "").slice(0, 48)}`;
-    rmSync(path, { recursive: true, force: true });
+    removeClone(path);
     const commit = await headCommit(cardPath);
     await freshClone(cardPath, commit, branch, path);
     return { path, commit };
   },
   bringBack: (cardPath: string, freshPath: string, branch: string, from: string) => bringBack(cardPath, freshPath, branch, from),
   async remove(path: string): Promise<void> {
-    rmSync(path, { recursive: true, force: true });
+    removeClone(path);
   },
 };

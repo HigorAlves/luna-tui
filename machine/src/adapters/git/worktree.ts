@@ -2,18 +2,12 @@
 // there through a bind mount, and the machine commits on the host.
 import { existsSync, rmSync, statSync } from "node:fs";
 
-const statIsDirectory = (path: string): boolean => {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-};
 import { basename, join } from "node:path";
 
 import { branchLinkOf, jiraBranch, slug } from "../../domain/jira-link.ts";
 import { DEFAULT_JIRA_BRANCH } from "../../domain/policy.ts";
 import { exec, execOrThrow } from "../process/exec.ts";
+import { at, machineGitDir } from "./machine-repo.ts";
 
 export { slug };
 
@@ -22,6 +16,7 @@ export { slug };
  *  or an `ext::` transport it left there must never execute as you. */
 export const HOST_GIT = [
   "--no-optional-locks",
+  "--no-replace-objects",
   "-c", "core.hooksPath=/dev/null",
   "-c", "core.fsmonitor=",
   "-c", "diff.external=",
@@ -93,7 +88,7 @@ export async function rebaseOntoDefault(
 ): Promise<RebaseResult> {
   const base = await defaultBranchOf(repoPath);
   if (!base || !isBranchName(base)) return { ok: false, error: `no usable default branch: ${JSON.stringify(base ?? null)}`, conflicts: [] };
-  const git = (...args: string[]) => [...HOST_GIT, "-C", worktreePath, ...args];
+  const git = (...args: string[]) => [...HOST_GIT, ...at(worktreePath), ...args];
   // `--end-of-options`: whatever the name, it is a ref, never an option.
   const fetched = await run("git", git("fetch", "--quiet", "--end-of-options", "origin", base), { timeoutMs: FETCH_TIMEOUT });
   if (fetched.code !== 0) return { ok: false, error: `git fetch failed: ${(fetched.stderr || fetched.stdout).trim() || `exit code ${fetched.code}`}`, conflicts: [] };
@@ -196,7 +191,9 @@ export async function ensureCleanCheckout(repoPath: string, path: string): Promi
     return path;
   }
   await clearStaleLock(path);
-  await resetWorktree(path, sha);
+  // A read-only checkout (a linked worktree of the repo that no container can write): not a card's workspace.
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "reset", "--hard", "--quiet", sha]); // read-only checkout
+  await execOrThrow("git", [...HOST_GIT, "-C", path, "clean", "-fd", "--quiet"]); // read-only checkout
   return path;
 }
 
@@ -211,24 +208,20 @@ export async function startPoint(repoPath: string): Promise<string> {
 }
 
 export async function clearStaleLock(worktreePath: string): Promise<void> {
-  const gitDir = await exec("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "--git-dir"]);
-  if (gitDir.code !== 0) return;
-  const dir = gitDir.stdout.trim();
-  const lock = join(dir.startsWith("/") ? dir : join(worktreePath, dir), "index.lock");
+  // A card's workspace has its index in the machine's repository; a read-only checkout, in its own git dir.
+  const machine = machineGitDir(worktreePath);
+  let lock = join(machine, "index.lock");
+  if (!existsSync(machine)) {
+    const gitDir = await exec("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "--git-dir"]); // read-only checkout
+    if (gitDir.code !== 0) return;
+    const dir = gitDir.stdout.trim();
+    lock = join(dir.startsWith("/") ? dir : join(worktreePath, dir), "index.lock");
+  }
   try {
     if (Date.now() - statSync(lock).mtimeMs > STALE_LOCK_MS) rmSync(lock, { force: true });
   } catch {
     // no lock, or gone already
   }
-}
-
-/** The admin dir of a linked worktree (`<common>/worktrees/<name>`); null for a main checkout or when git cannot say. */
-export async function worktreeAdminDir(worktreePath: string): Promise<string | null> {
-  const dir = await exec("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-dir"]);
-  const common = await exec("git", [...HOST_GIT, "-C", worktreePath, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
-  if (dir.code !== 0 || common.code !== 0) return null;
-  const admin = dir.stdout.trim();
-  return admin && admin !== common.stdout.trim() ? admin : null;
 }
 
 /**
@@ -238,14 +231,15 @@ export async function worktreeAdminDir(worktreePath: string): Promise<string | n
  * that should never have landed (e.g. one that touched a locked test file).
  */
 export async function resetWorktree(path: string, ref = "HEAD"): Promise<void> {
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "reset", "--hard", "--quiet", ref]);
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "clean", "-fd", "--quiet"]);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "reset", "--hard", "--quiet", ref]);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "clean", "-fd", "--quiet"]);
 }
 
 /** Removes a task's workspace from disk: a clone is deleted, a linked worktree is removed from its repository (its branch and commits stay). */
 export async function removeWorktree(repoPath: string, worktreePath: string): Promise<void> {
-  if (statIsDirectory(join(worktreePath, ".git"))) {
+  if (existsSync(machineGitDir(worktreePath))) {
     rmSync(worktreePath, { recursive: true, force: true });
+    rmSync(machineGitDir(worktreePath), { recursive: true, force: true });
     return;
   }
   await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "remove", "--force", worktreePath]);
@@ -260,13 +254,7 @@ export async function gitIdentity(repoPath: string): Promise<{ name: string; ema
 
 /** The repo's shared git dir, which the worktree's `.git` file points into. */
 export function commonGitDir(repoPath: string): Promise<string> {
-  return execOrThrow("git", [...HOST_GIT, 
-    "-C",
-    repoPath,
-    "rev-parse",
-    "--path-format=absolute",
-    "--git-common-dir",
-  ]);
+  return execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
 }
 
 /** The commit the task branch forked from: the merge base of the worktree's HEAD and the
@@ -276,10 +264,10 @@ export async function branchBase(worktreePath: string, repoPath: string): Promis
   if (repoHead.code !== 0) return null;
   const head = repoHead.stdout.trim();
   // A clone shares no objects with the repo: when the repo moved on, bring its HEAD over (a read of the repo, never a write to it).
-  if ((await exec("git", [...HOST_GIT, "-C", worktreePath, "cat-file", "-e", `${head}^{commit}`])).code !== 0) {
-    await exec("git", [...HOST_GIT, "-C", worktreePath, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", repoPath, head], { timeoutMs: FETCH_TIMEOUT_MS });
+  if ((await exec("git", [...HOST_GIT, ...at(worktreePath), "cat-file", "-e", `${head}^{commit}`])).code !== 0) {
+    await exec("git", [...HOST_GIT, ...at(worktreePath), "fetch", "--quiet", "--no-tags", "--no-write-fetch-head", "--end-of-options", repoPath, head], { timeoutMs: FETCH_TIMEOUT_MS });
   }
-  const base = await exec("git", [...HOST_GIT, "-C", worktreePath, "merge-base", "HEAD", head]);
+  const base = await exec("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "HEAD", head]);
   return base.code === 0 ? base.stdout.trim() || null : null;
 }
 
@@ -288,14 +276,14 @@ export async function branchBase(worktreePath: string, repoPath: string): Promis
 export async function changedPaths(worktreePath: string, repoPath: string): Promise<string[] | null> {
   const base = await branchBase(worktreePath, repoPath);
   if (!base) return null;
-  const out = await exec("git", [...HOST_GIT, "-C", worktreePath, "diff", "--name-only", `${base}..HEAD`]);
+  const out = await exec("git", [...HOST_GIT, ...at(worktreePath), "diff", "--name-only", `${base}..HEAD`]);
   if (out.code !== 0) return null;
   return out.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
 }
 
 /** Lines added and removed on the branch since `base`, from `git diff --shortstat`. */
 export async function diffShortstat(path: string, base: string): Promise<{ added: number; removed: number }> {
-  const out = await execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--shortstat", `${base}..HEAD`]);
+  const out = await execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--shortstat", `${base}..HEAD`]);
   const added = Number(/(\d+) insertion/.exec(out)?.[1] ?? 0);
   const removed = Number(/(\d+) deletion/.exec(out)?.[1] ?? 0);
   return { added, removed };
@@ -308,28 +296,33 @@ export async function branchDiffStat(worktreePath: string, repoPath: string | nu
   return base ? diffShortstat(worktreePath, base) : null;
 }
 
+/** HEAD of the user's own repository (a checkout run reads it directly). */
+export function repoHead(repoPath: string): Promise<string> {
+  return execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "HEAD"]);
+}
+
 export function headCommit(path: string): Promise<string> {
-  return execOrThrow("git", [...HOST_GIT, "-C", path, "rev-parse", "HEAD"]);
+  return execOrThrow("git", [...HOST_GIT, ...at(path), "rev-parse", "HEAD"]);
 }
 
 /** `git diff --name-status <from> <to>` in `path`, for checking what a commit touched. */
 export function diffNameStatus(path: string, from: string, to: string): Promise<string> {
-  return execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--name-status", from, to]);
+  return execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--name-status", from, to]);
 }
 
 /** `git diff <from> <to>` in `path`: the unified diff, for reading what a change added. */
 export function diffText(path: string, from: string, to: string): Promise<string> {
-  return execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--no-color", "--no-ext-diff", from, to]);
+  return execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--no-color", "--no-ext-diff", from, to]);
 }
 
 /** Undoes one commit with a new commit on top (never rewrites history a person may have fetched). */
 export async function revertCommit(path: string, sha: string): Promise<void> {
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "-c", "commit.gpgsign=false", "revert", "--no-edit", sha]);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "-c", "commit.gpgsign=false", "revert", "--no-edit", sha]);
 }
 
 /** Puts `files` back as they are at `ref`, leaving HEAD alone (undo with resetWorktree). */
 export async function restoreFiles(path: string, ref: string, files: string[]): Promise<void> {
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "checkout", ref, "--", ...files]);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "checkout", ref, "--", ...files]);
 }
 
 /**
@@ -337,10 +330,10 @@ export async function restoreFiles(path: string, ref: string, files: string[]): 
  * Commits are not signed: signing needs your passphrase, which a background run cannot ask for.
  */
 export async function commitAll(path: string, message: string): Promise<string | null> {
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "add", "-A"]);
-  const staged = await exec("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--quiet"]);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "add", "-A"]);
+  const staged = await exec("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--quiet"]);
   if (staged.code === 0) return null;
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "-c", "commit.gpgsign=false", "commit", "-q", "-m", message]);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "-c", "commit.gpgsign=false", "commit", "-q", "-m", message]);
   return headCommit(path);
 }
 
@@ -356,11 +349,11 @@ function modesOf(raw: string): Record<string, string> {
 
 /** Stages everything a stage left in the worktree (new files too) and reads what that adds to `base`, the commit the run started from: the name-status, the unified diff and each path's new mode. */
 export async function stagePending(path: string, base: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string> }> {
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "add", "-A"]);
+  await execOrThrow("git", [...HOST_GIT, ...at(path), "add", "-A"]);
   const [nameStatus, diff, raw] = await Promise.all([
-    execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--name-status", base]),
-    execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--no-color", "--no-ext-diff", base]),
-    execOrThrow("git", [...HOST_GIT, "-C", path, "diff", "--cached", "--raw", base]),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--name-status", base]),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--no-color", "--no-ext-diff", base]),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "diff", "--cached", "--raw", base]),
   ]);
   return { nameStatus, diff, modes: modesOf(raw) };
 }
@@ -368,25 +361,25 @@ export async function stagePending(path: string, base: string): Promise<{ nameSt
 /** What the commit `sha` changed, only when it is an ancestor of HEAD (the machine's own tests commit, never one found by its subject); null otherwise. */
 export async function readCommitDiff(path: string, sha: string): Promise<{ nameStatus: string; diff: string; modes: Record<string, string>; parent: string } | null> {
   if (!/^[0-9a-f]{7,64}$/.test(sha)) return null;
-  if (!(await isAncestor(path, sha, "HEAD"))) return null;
+  if ((await exec("git", [...HOST_GIT, ...at(path), "merge-base", "--is-ancestor", sha, "HEAD"])).code !== 0) return null;
   const [nameStatus, diff, raw, parent] = await Promise.all([
-    execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--name-status", "--format=", sha]),
-    execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--no-color", "--no-ext-diff", "--format=", sha]),
-    execOrThrow("git", [...HOST_GIT, "-C", path, "show", "--raw", "--format=", sha]),
-    execOrThrow("git", [...HOST_GIT, "-C", path, "rev-parse", `${sha}^`]).catch(() => ""),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "show", "--name-status", "--format=", sha]),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "show", "--no-color", "--no-ext-diff", "--format=", sha]),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "show", "--raw", "--format=", sha]),
+    execOrThrow("git", [...HOST_GIT, ...at(path), "rev-parse", `${sha}^`]).catch(() => ""),
   ]);
   return { nameStatus, diff, modes: modesOf(raw), parent };
 }
 
 /** The branch the worktree is on (`HEAD` when detached). */
 export function currentBranch(path: string): Promise<string> {
-  return execOrThrow("git", [...HOST_GIT, "-C", path, "rev-parse", "--abbrev-ref", "HEAD"]);
+  return execOrThrow("git", [...HOST_GIT, ...at(path), "rev-parse", "--abbrev-ref", "HEAD"]);
 }
 
 /** The commits between `sinceSha` and HEAD (`git log <sha>..HEAD`), newest first, each with its files' names and added and removed line counts (`--numstat`); never a diff, never selected by a date the agent could set. At most 100 commits, 200 files a commit and 300 characters of path; anything that is not a sha gives nothing. */
 export async function commitsSince(path: string, sinceSha: string): Promise<Array<{ sha: string; files: Array<{ path: string; added: number; removed: number }> }>> {
   if (!/^[0-9a-f]{7,64}$/.test(sinceSha)) return [];
-  const out = await exec("git", [...HOST_GIT, "-C", path, "log", `${sinceSha}..HEAD`, "-n", "100", "--numstat", "--format=commit %H"]);
+  const out = await exec("git", [...HOST_GIT, ...at(path), "log", `${sinceSha}..HEAD`, "-n", "100", "--numstat", "--format=commit %H"]);
   if (out.code !== 0) return [];
   const commits: Array<{ sha: string; files: Array<{ path: string; added: number; removed: number }> }> = [];
   for (const line of out.stdout.split("\n")) {
@@ -404,13 +397,14 @@ export async function commitsSince(path: string, sinceSha: string): Promise<Arra
 
 /** What the worktree has uncommitted or untracked, one `git status --porcelain` line each. */
 export async function dirtyFiles(path: string): Promise<string[]> {
-  const status = await execOrThrow("git", [...HOST_GIT, "-C", path, "status", "--porcelain"]);
+  const status = await execOrThrow("git", [...HOST_GIT, ...at(path), "status", "--porcelain"]);
   return status === "" ? [] : status.split("\n");
 }
 
 /** `owner/name` of the checkout's `origin` remote, or null when it has none or it is not on GitHub. */
 export async function originSlugOf(cwd: string): Promise<string | null> {
-  const url = await exec("git", [...HOST_GIT, "-C", cwd, "remote", "get-url", "origin"]);
+  // A card's workspace answers from the machine's repository; a repository's own path from itself.
+  const url = await exec("git", [...HOST_GIT, ...(existsSync(machineGitDir(cwd)) ? at(cwd) : ["-C", cwd]), "remote", "get-url", "origin"]);
   if (url.code !== 0) return null;
   const match = /github\.com[:/]([^/\s]+)\/([^/\s]+?)(?:\.git)?\/?\s*$/.exec(url.stdout.trim());
   return match ? `${match[1]}/${match[2]}` : null;
@@ -419,25 +413,4 @@ export async function originSlugOf(cwd: string): Promise<string | null> {
 /** A PR task's checkout: `<dir>/<repo>/pr-<number>-<head slug>`, beside the task worktrees. */
 export function prWorktreePath(repoPath: string, worktreesDir: string, number: number, headRef: string): string {
   return join(worktreesDir, basename(repoPath), `pr-${number}-${slug(headRef)}`);
-}
-
-/**
- * Checks a PR's head branch out at `path`, tracking `origin/<headRef>` after a fetch, so a
- * fix lands on the PR's own branch. An existing worktree is reused (its stale lock cleared),
- * not reset: a retry continues from what the last attempt pushed.
- */
-export async function ensurePrWorktree(repoPath: string, headRef: string, path: string): Promise<void> {
-  if (existsSync(join(path, ".git"))) {
-    await clearStaleLock(path);
-    return;
-  }
-  await exec("git", [...HOST_GIT, "-C", repoPath, "worktree", "prune"]);
-  const fetched = await exec(
-    "git",
-    [...HOST_GIT, "-C", repoPath, "fetch", "--quiet", "origin", `+refs/heads/${headRef}:refs/remotes/origin/${headRef}`],
-    { timeoutMs: FETCH_TIMEOUT_MS },
-  );
-  if (fetched.code !== 0) throw new Error(`git fetch origin ${headRef} failed: ${(fetched.stderr || fetched.stdout).trim()}`);
-  await execOrThrow("git", [...HOST_GIT, "-C", repoPath, "worktree", "add", "-B", headRef, path, `origin/${headRef}`]);
-  await execOrThrow("git", [...HOST_GIT, "-C", path, "branch", "--set-upstream-to", `origin/${headRef}`, headRef]);
 }

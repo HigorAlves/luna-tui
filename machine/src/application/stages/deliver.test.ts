@@ -1,3 +1,4 @@
+import { at } from "../../adapters/git/machine-repo.ts";
 import { HOST_GIT } from "../../adapters/git/worktree.ts";
 import { describe, expect, it, vi } from "vitest";
 
@@ -13,6 +14,8 @@ const bad = (stderr = "nope"): ExecResult => ({ code: 1, stdout: "", stderr });
 function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult; task?: Record<string, unknown>; respond?: (args: string[]) => ExecResult | undefined; defaultBranch?: string | null } = {}) {
   const calls: string[][] = [];
   const exec = vi.fn(async (command: string, args: string[]) => {
+    // Recording what was pushed is the machine's own bookkeeping, asserted once below.
+    if (args.includes("update-ref")) return ok();
     calls.push([command, ...args]);
     return opts.respond?.(args) ?? opts.push ?? ok();
   });
@@ -27,6 +30,22 @@ function setup(github: ReturnType<typeof fakeGitHub>, opts: { push?: ExecResult;
   return { run: deliverRunner({ exec, github, slugOf: async () => "acme/widgets", defaultBranch: async () => (opts.defaultBranch === undefined ? "main" : opts.defaultBranch) }), context, calls };
 }
 
+describe("what the machine pushed", () => {
+  it("is recorded in the card's own repository, so an unpushed commit is told from a pushed one by what the machine did", async () => {
+    const { pushBranch, pushCheckpoint } = await import("./deliver.ts");
+    const calls: string[][] = [];
+    const exec = async (_c: string, args: string[]) => (calls.push(args), ok());
+    expect(await pushBranch(exec, "hardness/t1", "/wt")).toBeNull();
+    expect(await pushCheckpoint(exec, "hardness/t1", "/wt")).toBeNull();
+    const refs = calls.filter((c) => c.includes("update-ref")).map((c) => c.slice(c.indexOf("update-ref") + 1));
+    expect(refs).toEqual([["refs/luna/pushed/hardness/t1", "refs/heads/hardness/t1"], ["refs/luna/pushed/wip/hardness/t1", "HEAD"]]);
+    const failed = async () => bad();
+    const before = refs.length;
+    expect(await pushBranch(failed, "hardness/t1", "/wt")).toMatch(/push failed/);
+    expect(refs.length).toBe(before);
+  });
+});
+
 describe("delivering", () => {
   it("pushes with git, then opens a draft PR through GitHub, logging pr.opened", async () => {
     const github = fakeGitHub({
@@ -38,7 +57,7 @@ describe("delivering", () => {
     expect(result.outcome).toBe("pass");
     expect(result.detail).toMatchObject({ prUrl: "https://github.com/acme/widgets/pull/7", prNumber: 7, draft: true, reused: false });
     expect(result.events).toMatchObject([{ kind: "pr.opened", payload: { url: "https://github.com/acme/widgets/pull/7", number: 7 } }]);
-    expect(calls).toEqual([["git", ...HOST_GIT, "-C", "/wt", "push", "-u", "origin", "hardness/t1"]]);
+    expect(calls).toEqual([["git", ...HOST_GIT, ...at("/wt"), "push", "-u", "origin", "hardness/t1"]]);
     expect(github.openPr).toHaveBeenCalledWith("acme/widgets", expect.objectContaining({ head: "hardness/t1", draft: true, title: "feat: thing" }));
   });
 
@@ -71,7 +90,7 @@ describe("delivering", () => {
 });
 
 describe("delivering a branch that conflicts with the default branch", () => {
-  const G = ["git", ...HOST_GIT, "-C", "/wt"];
+  const G = ["git", ...HOST_GIT, ...at("/wt")];
   const pr = { url: "https://x/pull/3", number: 3, isDraft: true };
   const facts = (mergeable: string) => async () => ({ mergeable }) as never;
 
@@ -139,7 +158,7 @@ describe("pushBranch with a lease", () => {
   it("pins the lease to the sha it is given, and refuses a lease that is not a sha", async () => {
     const { pushBranch } = await import("./deliver.ts");
     const calls: string[][] = [];
-    const exec = async (_c: string, args: string[]) => (calls.push(args), ok());
+    const exec = async (_c: string, args: string[]) => (args.includes("update-ref") || calls.push(args), ok());
     const sha = "a".repeat(40);
     expect(await pushBranch(exec, "hardness/t1", "/wt", { force: true, lease: sha })).toBeNull();
     expect(calls[0]).toContain(`--force-with-lease=refs/heads/hardness/t1:${sha}`);

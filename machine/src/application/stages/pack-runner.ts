@@ -6,7 +6,7 @@ import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
-import { ensureClone, gitDirStamp, isClone, moveToClone, sealedPaths } from "../../adapters/git/clone.ts";
+import { ensureClone, isClone, moveToClone, refreshScratch } from "../../adapters/git/clone.ts";
 import {
   type Workspace,
   branchBase,
@@ -15,12 +15,12 @@ import {
   diffNameStatus,
   diffText,
   headCommit,
+  repoHead,
   defaultBranch,
   dirtyFiles,
   ownedWorkspace,
   resetWorktree,
   restoreFiles,
-  worktreeAdminDir,
 } from "../../adapters/git/worktree.ts";
 import { CredentialWaitError, type CredentialMount, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
@@ -229,21 +229,20 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       detail: { error: `refusing to run ${pack} on branch ${workspace.branch}: the pipeline only writes ${TASK_BRANCH_PREFIX}* branches (or the branch it named for a Jira-linked task)` },
     };
   }
-  // A card still on a linked worktree moves to a clone before its next writable run: branch and commits kept, uncommitted work carried over.
-  if (!extra.checkout && limits.writable && persisted && !isClone(workspace.path)) await moveToClone(task.repoPath, workspace);
+  // A folder that is neither a card's workspace nor a linked worktree of the repository (its own main checkout) is nobody's to run in.
+  if (!extra.checkout && persisted && !isClone(workspace.path) && !isFile(join(workspace.path, ".git")) && existsSync(workspace.path)) {
+    return { outcome: "fail", detail: { error: `refusing to run ${pack} in ${workspace.path}: it is not a card's workspace` } };
+  }
+  // A card still on a linked worktree moves to a workspace of its own before its next run: branch and commits kept, uncommitted work carried over.
+  if (!extra.checkout && persisted && !isClone(workspace.path)) await moveToClone(task.repoPath, workspace);
   if (!extra.checkout) await ensureClone(task.repoPath, workspace);
   // After a restart, the container the last machine started may still be running: its name and
   // the commit it started from come from the run row, and the sandbox waits on it instead.
   const resume = context.resume;
-  const inputCommit = resume?.inputCommit ?? (await headCommit(workspace.path));
-  // A clone carries its own git dir inside the workspace; only a card still on a linked worktree
-  // (moved to a clone by slice 3) or a checkout run needs the repository's git dir mounted.
-  const sharesGitDir = extra.checkout || !isClone(workspace.path);
-  const gitDir = sharesGitDir ? await commonGitDir(task.repoPath) : null;
-  // The admin dir's pointers back to the checkout and to the common dir: a stage must not rewrite them.
-  const adminDir = gitDir ? await worktreeAdminDir(workspace.path) : null;
-  const adminRel = gitDir && adminDir ? relative(gitDir, adminDir) : null;
-  const adminPointers = adminRel && adminRel.startsWith("worktrees/") ? ["commondir", "gitdir"].map((f) => `${adminRel}/${f}`) : [];
+  const inputCommit = resume?.inputCommit ?? (await (extra.checkout ? repoHead(workspace.path) : headCommit(workspace.path)));
+  // A card's workspace is a folder: its repository is the machine's and is never mounted. Only a checkout run reads the user's
+  // repository directly, through its git dir, read-only.
+  const gitDir = extra.checkout ? await commonGitDir(task.repoPath) : null;
   // A pack the state is not named for (the planner in test_design) names its container after itself.
   const unit = pack === context.stage ? context.stage : pack;
   const container = resume?.container ?? `hardness-${task.id.slice(0, 8)}-${unit.replaceAll("_", "-")}-${context.attempt}`;
@@ -262,7 +261,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   if ("note" in choice && choice.note) await context.note?.(choice.note).catch(() => {});
 
   // The repo's code graph, read-only at /graph, with how current it is against where this task forked.
-  const baseCommit = extra.baseCommit ?? (await branchBase(workspace.path, task.repoPath));
+  const baseCommit = extra.baseCommit ?? (await (extra.checkout ? repoHead(workspace.path) : branchBase(workspace.path, task.repoPath)));
   const graphStamp = deps.graph && policy.graph ? await deps.graph.stampOf(task.repoPath) : null;
   const graphDir = graphStamp ? deps.graph!.currentDir(task.repoPath) : null;
   if (deps.graph && policy.graph && !graphDir) deps.ensureGraph?.(task.repoPath);
@@ -401,7 +400,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       },
     });
   };
-  const stampBefore = sharesGitDir ? null : gitDirStamp(workspace.path);
+  // The agent starts with a git repository of its own in the folder, made by the machine from the card's: the one the host never reads.
+  if (!extra.checkout && !resume) await refreshScratch(workspace.path, workspace.branch);
   const sandbox = await (deps.sandbox ?? runSandbox)({
     name: container,
     attach: Boolean(resume),
@@ -412,8 +412,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     worktree: workspace.path,
     writable: limits.writable,
     gitDir,
-    gitReadOnly: gitDir ? [...GIT_READ_ONLY, ...adminPointers].filter((sub) => existsSync(join(gitDir, sub))) : [],
-    ...(sharesGitDir ? {} : { workReadOnly: sealedPaths(workspace.path) }),
+    gitReadOnly: gitDir ? [...GIT_READ_ONLY].filter((sub) => existsSync(join(gitDir, sub))) : [],
     limits: { cpu: policy.factory.sandbox.cpu, memoryGb: policy.factory.sandbox.memory_gb },
     gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
     // The repo's services run beside every stage that runs its code; a read-only stage only reads.
@@ -426,7 +425,6 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     mounts: [
       ...(graphContext && graphDir ? [{ host: graphDir, container: GRAPH_MOUNT, readOnly: true }] : []),
       // The worktree's `.git` file points at its admin dir: read-only, so no stage can repoint the checkout.
-      ...(isFile(join(workspace.path, ".git")) ? [{ host: join(workspace.path, ".git"), container: "/work/.git", readOnly: true }] : []),
       ...(extra.mounts ?? []),
     ],
     // The graph's path for the pack, and what the stage container needs to continue the machine's trace.
@@ -446,16 +444,6 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     credential.release();
   });
 
-  // A container that moved the clone's `.git` aside and made another hides the sealed config and hooks:
-  // no git command may run in that folder, since it would read the config the container wrote.
-  if (stampBefore !== null && gitDirStamp(workspace.path) !== stampBefore) {
-    return {
-      outcome: "fail",
-      detail: { error: "the container replaced the workspace's .git directory; the workspace was left untouched and no git command was run in it" },
-      workspace: { branch: workspace.branch, worktreePath: workspace.path },
-      run: { containerId: container, transcriptPath: sandbox.transcriptPath, inputCommit },
-    };
-  }
   const base: StageResult = {
     outcome: "fail",
     ...(engineEvents.length ? { events: engineEvents } : {}),
@@ -544,8 +532,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     // An escalated card's clone stays exactly as the agent left it: nothing is reset or cleaned. What it left
     // uncommitted is also saved on refs/luna/kept/<run>, so a resume that resets the tree loses nothing.
     let kept: Record<string, unknown> | null = null;
-    if (limits.writable && stampBefore !== null) {
-      const saved = await saveKept({ stateDir: deps.stateDir, taskId: task.id, runId: context.runId, path: workspace.path, stamp: stampBefore, keepHours: policy.factory.sandbox.keep_hours });
+    if (limits.writable && !extra.checkout) {
+      const saved = await saveKept({ stateDir: deps.stateDir, taskId: task.id, runId: context.runId, path: workspace.path, keepHours: policy.factory.sandbox.keep_hours });
       kept = saved.ok ? { path: saved.path, ref: saved.ref, until: saved.until, keepHours: policy.factory.sandbox.keep_hours } : { path: workspace.path, error: saved.reason };
     } else if (limits.writable) {
       await dirty(null);

@@ -10,7 +10,7 @@ import { type ShipDeps, shipRunnerWith } from "./ship.ts";
 const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
 
 function setup(github: ReturnType<typeof fakeGitHub>) {
-  const exec = vi.fn(async () => ok());
+  const exec = vi.fn(async (_command: string, _args: string[]) => ok());
   const context = {
     task: { id: "t1", title: "feat: thing", description: "d", criteria: [], branch: "hardness/t1", worktreePath: "/wt", repoPath: "/repo", source: null } as unknown as TaskRow,
     stage: "shipping",
@@ -29,7 +29,8 @@ describe("shipping", () => {
     const { run, context, exec } = setup(github);
     const result = await run(context);
     expect(result).toMatchObject({ outcome: "pass", detail: { prUrl: "https://x/pull/3", readied: true } });
-    expect(exec).toHaveBeenCalledTimes(1);
+    // One push, and the machine's note of it in the card's repository.
+    expect(exec.mock.calls.filter((c) => !c[1].includes("update-ref"))).toHaveLength(1);
     expect(github.markPrReady).toHaveBeenCalledWith("a/b", 3);
   });
 

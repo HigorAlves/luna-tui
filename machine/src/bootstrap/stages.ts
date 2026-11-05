@@ -35,6 +35,7 @@ import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
 import { keepFolder } from "../application/kept-sandboxes.ts";
 import { hostFreshWorkspace } from "../adapters/git/clone.ts";
+import { at } from "../adapters/git/machine-repo.ts";
 import { HOST_GIT, changedPaths, gitIdentity, commitAll, currentBranch, headCommit, readCommitDiff, resetWorktree, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
@@ -161,7 +162,7 @@ export async function buildRealStages(
       },
       changedPaths: async (worktreePath) => {
         if (!/^[0-9a-f]{40,64}$/.test(since)) return null;
-        const out = await exec("git", [...HOST_GIT, "-C", worktreePath, "diff", "--name-only", `${since}..HEAD`]);
+        const out = await exec("git", [...HOST_GIT, ...at(worktreePath), "diff", "--name-only", `${since}..HEAD`]);
         return out.code === 0 ? out.stdout.split("\n").map((l) => l.trim()).filter(Boolean) : null;
       },
     })(context);

@@ -86,16 +86,6 @@ describe("sandboxArgs", () => {
     expect(mounts).toContain("/g/.git/config:/g/.git/config:ro");
   });
 
-  it("keeps the clone's config, hooks and info read-only inside the writable /work, over the writable mount", () => {
-    const args = sandboxArgs(run({ writable: true, workReadOnly: [".git/config", ".git/hooks", ".git/info"] }), "/i", "/o");
-    const mounts = args.filter((_, i) => args[i - 1] === "-v");
-    expect(mounts.indexOf("/wt:/work")).toBeLessThan(mounts.indexOf("/wt/.git/config:/work/.git/config:ro"));
-    expect(mounts).toContain("/wt/.git/hooks:/work/.git/hooks:ro");
-    expect(mounts).toContain("/wt/.git/info:/work/.git/info:ro");
-    // A read-only /work needs no overlay.
-    expect(sandboxArgs(run({ workReadOnly: [".git/config"] }), "/i", "/o").join(" ")).not.toContain("/work/.git/config");
-  });
-
   it("sizes the container from the run's limits, four CPUs and eight gigabytes by default, keeping the process limit", () => {
     const flags = (args: string[]) => args.join(" ");
     expect(flags(sandboxArgs(run(), "/i", "/o"))).toContain("--memory 8g --cpus 4 --pids-limit 1024");

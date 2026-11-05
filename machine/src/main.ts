@@ -66,6 +66,7 @@ import { machineCredentials } from "./adapters/credentials/index.ts";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
+import { configureMachineRepos } from "./adapters/git/machine-repo.ts";
 import { Pipeline } from "./application/pipeline.ts";
 import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
@@ -78,6 +79,8 @@ import { StubStages } from "./application/stages/stubs.ts";
 import { verifyRunner } from "./application/stages/verify.ts";
 
 const config = loadConfig();
+// Each card has a git directory of the machine's own here, never mounted into a container.
+configureMachineRepos(join(config.stateDir, "repos"));
 const db = createDataSource(config.databaseUrl, poolSizeFor(config.maxConcurrentTasks));
 await db.initialize();
 const applied = await db.runMigrations();

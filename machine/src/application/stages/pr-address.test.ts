@@ -1,3 +1,4 @@
+import { at } from "../../adapters/git/machine-repo.ts";
 import { HOST_GIT } from "../../adapters/git/worktree.ts";
 import { describe, expect, it } from "vitest";
 
@@ -100,7 +101,7 @@ describe("the follow-up: push, reply, resolve", () => {
     const { run, calls, github } = setup();
     const result = await run(context({ stage: "delivering" }));
     expect(result.outcome).toBe("pass");
-    expect(calls[0]).toEqual(["git", ...HOST_GIT, "-C", "/wt", "push", "-u", "origin", "feat/export"]);
+    expect(calls[0]).toEqual(["git", ...HOST_GIT, ...at("/wt"), "push", "-u", "origin", "feat/export"]);
     expect(github.replyToThread.mock.calls).toEqual([["T1", "Fixed in abc."], ["T2", "Kept as is."]]);
     expect(github.resolveThread.mock.calls).toEqual([["T1"]]);
     expect(result.detail).toMatchObject({ replied: 2, resolved: 1, skipped: [] });

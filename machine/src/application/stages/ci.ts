@@ -5,6 +5,7 @@
 // host fetches the PR, the checks and the failed run's log and hands them over as context.
 import type { CiContext, Finding } from "@hardness/contracts";
 
+import { at } from "../../adapters/git/machine-repo.ts";
 import { HOST_GIT, type GitExec, type RebaseResult, originSlugOf, rebaseOntoDefault } from "../../adapters/git/worktree.ts";
 import { exec } from "../../adapters/process/exec.ts";
 import { type Check, type GitHub, messageOf } from "../github.ts";
@@ -42,7 +43,7 @@ const PENDING = new Set(["PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "REQUEST
 const FAILED = new Set(["FAILURE", "ERROR", "TIMED_OUT", "CANCELLED", "STARTUP_FAILURE", "ACTION_REQUIRED", "STALE"]);
 
 const parentOf = async (cwd: string): Promise<string | null> => {
-  const parent = await exec("git", [...HOST_GIT, "-C", cwd, "rev-parse", "--verify", "-q", "HEAD~1"]).catch(() => null);
+  const parent = await exec("git", [...HOST_GIT, ...at(cwd), "rev-parse", "--verify", "-q", "HEAD~1"]).catch(() => null);
   return parent && parent.code === 0 && parent.stdout.trim() ? parent.stdout.trim() : null;
 };
 
