@@ -8,6 +8,7 @@ export * from "./card.ts";
 export * from "./finding.ts";
 export * from "./reports.ts";
 export * from "./card-events.ts";
+export * from "./scoring.ts";
 export * from "./events.ts";
 export * from "./packs.ts";
 export * from "./models.ts";
