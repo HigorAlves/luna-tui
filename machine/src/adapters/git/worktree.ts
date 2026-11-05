@@ -301,6 +301,17 @@ export function repoHead(repoPath: string): Promise<string> {
   return execOrThrow("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "HEAD"]);
 }
 
+/** The id of each lockfile (by its fixed name) in the tree of `commit` in the card's repository: what the commit holds, never a file in the folder. */
+export async function lockfilesAt(path: string, commit: string, names: readonly string[]): Promise<Record<string, string>> {
+  const found: Record<string, string> = {};
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) return found;
+  for (const name of names) {
+    const out = await exec("git", [...HOST_GIT, ...at(path), "rev-parse", "--verify", "--quiet", `${commit}:${name}`]);
+    if (out.code === 0 && out.stdout.trim()) found[name] = out.stdout.trim();
+  }
+  return found;
+}
+
 export function headCommit(path: string): Promise<string> {
   return execOrThrow("git", [...HOST_GIT, ...at(path), "rev-parse", "HEAD"]);
 }

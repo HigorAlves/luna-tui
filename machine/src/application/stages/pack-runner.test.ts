@@ -18,6 +18,9 @@ import type { StageContext } from "../ports.ts";
 import type { Graph, GraphStamp } from "../graph.ts";
 import { engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "../engine-gates.ts";
 
+/** What the agent does in its own repository, in the folder's own .git (the one the machine made for it). */
+const agent = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+
 /** git in a repository of the user's, or, for a card's workspace, in the machine's repository for it (the agent's commits arrive there). */
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", [...(existsSync(machineGitDir(cwd)) ? ["--git-dir=" + machineGitDir(cwd), "--work-tree=" + cwd] : []), "-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -57,7 +60,21 @@ function fakeSandbox(
     seen = run;
     const out = join(run.runDir, "out");
     mkdirSync(out, { recursive: true });
+    // The factory's job in the container: the agent's commits leave as a bundle from the tip the run started at.
+    const scratchHead = () => {
+      try {
+        return agent(run.worktree, "rev-parse", "HEAD");
+      } catch {
+        return null;
+      }
+    };
+    const started = scratchHead();
     act(run);
+    const ended = scratchHead();
+    if (started && ended && ended !== started) {
+      mkdirSync(join(out, "bundles"), { recursive: true });
+      agent(run.worktree, "bundle", "create", join(out, "bundles", "1.bundle"), `${started}..HEAD`);
+    }
     writeFileSync(join(out, "result.json"), JSON.stringify(typeof result === "function" ? result() : result));
     writeFileSync(
       join(out, "events.jsonl"),
@@ -505,9 +522,9 @@ describe("agent stages through packs", () => {
         () => output({ commit: made }),
         (r) => {
           writeFileSync(join(r.worktree, "b.txt"), "b\n");
-          git(r.worktree, "add", "-A");
-          git(r.worktree, "commit", "-q", "-m", "slice 1");
-          made = git(r.worktree, "rev-parse", "HEAD");
+          agent(r.worktree, "add", "-A");
+          agent(r.worktree, "commit", "-q", "-m", "slice 1");
+          made = agent(r.worktree, "rev-parse", "HEAD");
         },
       ),
     );
@@ -522,9 +539,9 @@ describe("agent stages through packs", () => {
     let made = "";
     const d = { ...deps(fakeSandbox(() => output({ commit: made }), (r) => {
       writeFileSync(join(r.worktree, "pnpm-lock.yaml"), "lock\n");
-      git(r.worktree, "add", "-A");
-      git(r.worktree, "commit", "-q", "-m", "slice 1");
-      made = git(r.worktree, "rev-parse", "HEAD");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice 1");
+      made = agent(r.worktree, "rev-parse", "HEAD");
     })), imageId: async (image: string) => `sha256:id-of-${image}` };
     const result = await agentRunners(d).implementing!(context("implementing"));
     expect(result.outcome).toBe("pass");
@@ -541,14 +558,68 @@ describe("agent stages through packs", () => {
     expect(result.detail).not.toHaveProperty("env");
   });
 
+  it("takes the run's commits in as a fast-forward of the card's branch in the machine's repository, whatever the agent's own repository says", async () => {
+    let made = "";
+    const run = runners(fakeSandbox(() => output({ commit: made }), (r) => {
+      writeFileSync(join(r.worktree, "b.txt"), "b\n");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice 1");
+      made = agent(r.worktree, "rev-parse", "HEAD");
+    }));
+    const result = await run.implementing!(context("implementing"));
+    expect(result.outcome).toBe("pass");
+    expect(result.run?.outputCommit).toBe(made);
+    expect(git(seen!.worktree, "rev-parse", "refs/heads/" + result.workspace!.branch)).toBe(made);
+  });
+
+  it("escalates head_moved, and takes nothing in, when the run's commits do not descend from the card's branch", async () => {
+    const run = runners(fakeSandbox(output(), (r) => {
+      // The machine moved the card's branch while the agent worked; the agent committed on the old tip.
+      writeFileSync(join(r.worktree, "machine.txt"), "m\n");
+      git(r.worktree, "add", "-A");
+      git(r.worktree, "commit", "-q", "-m", "the machine's own");
+      writeFileSync(join(r.worktree, "agent.txt"), "a\n");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "agent");
+    }));
+    const result = await run.implementing!(context("implementing"));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "head_moved" } });
+    expect(git(seen!.worktree, "log", "--format=%s", "-1")).toBe("the machine's own");
+  });
+
+  it("fails the run on a bundle it cannot read", async () => {
+    const cut = runners(fakeSandbox(output(), (r) => {
+      writeFileSync(join(r.worktree, "b.txt"), "b\n");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice 1");
+      mkdirSync(join(r.runDir, "out", "bundles"), { recursive: true });
+      writeFileSync(join(r.runDir, "out", "bundles", "9.bundle"), "# v2 git bundle\nnot a bundle");
+    }));
+    const result = await cut.implementing!(context("implementing"));
+    expect(result).toMatchObject({ outcome: "fail", detail: { error: expect.stringContaining("could not be taken in") } });
+  });
+
+  it("fails the run when the folder differs from the branch tip after the commits came in", async () => {
+    const run = runners(fakeSandbox(output(), (r) => {
+      writeFileSync(join(r.worktree, "b.txt"), "b\n");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice 1");
+      // Left in the folder after the commit: not what the bundle carries.
+      writeFileSync(join(r.worktree, "b.txt"), "changed after the commit\n");
+    }));
+    const result = await run.implementing!(context("implementing"));
+    expect(result.outcome).toBe("fail");
+    expect(JSON.stringify(result.detail)).toContain("uncommitted changes");
+  });
+
   it("hands the latest verifying findings to implementing, keeping only confident ones", async () => {
     const f = (confidence: number, title: string) => ({
       path: "a.ts", line: 1, start_line: null, severity: "bug", title, body: "", suggestion_code: null, confidence,
     });
     const run = runners(fakeSandbox(output(), (r) => {
       writeFileSync(join(r.worktree, "b.txt"), "b\n");
-      git(r.worktree, "add", "-A");
-      git(r.worktree, "commit", "-q", "-m", "slice");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice");
     }));
     await run.implementing!({ ...context("implementing"), priorFindings: [f(0.9, "keep"), f(0.5, "drop")] });
     expect((seen?.input as { priorFindings: Array<{ title: string }> }).priorFindings.map((x) => x.title)).toEqual(["keep"]);
@@ -562,9 +633,9 @@ describe("agent stages through packs", () => {
       git(repo, "commit", "-q", "-m", "tests");
     };
     const commitIn = (cwd: string, msg = "slice") => {
-      git(cwd, "add", "-A");
-      git(cwd, "commit", "-q", "-m", msg);
-      return git(cwd, "rev-parse", "HEAD");
+      agent(cwd, "add", "-A");
+      agent(cwd, "commit", "-q", "-m", msg);
+      return agent(cwd, "rev-parse", "HEAD");
     };
     const expectLocked = async (act: (cwd: string) => void) => {
       seedTests();
@@ -582,9 +653,9 @@ describe("agent stages through packs", () => {
     it("fails and undoes a commit that modified an existing test", () =>
       expectLocked((cwd) => writeFileSync(join(cwd, "test", "cart.test.js"), "new\n")));
     it("fails and undoes a commit that deleted an existing test", () =>
-      expectLocked((cwd) => git(cwd, "rm", "-q", "test/cart.test.js")));
+      expectLocked((cwd) => agent(cwd, "rm", "-q", "test/cart.test.js")));
     it("fails and undoes a commit that renamed an existing test", () =>
-      expectLocked((cwd) => git(cwd, "mv", "test/cart.test.js", "src-moved.js")));
+      expectLocked((cwd) => agent(cwd, "mv", "test/cart.test.js", "src-moved.js")));
 
     // A test file that existed is allowed to change as long as the tests that were there
     // still pass against the new code: the machine puts the original file back, runs the
@@ -642,7 +713,7 @@ describe("agent stages through packs", () => {
       seedTests();
       const before = git(repo, "rev-parse", "HEAD");
       const run = withTestCommand(["sh", "-c", "exit 0"], fakeSandbox(output(), (r) => {
-        git(r.worktree, "rm", "-q", "test/cart.test.js");
+        agent(r.worktree, "rm", "-q", "test/cart.test.js");
         commitIn(r.worktree);
       }));
       const result = await run.implementing!(context("implementing"));
@@ -714,8 +785,8 @@ describe("agent stages through packs", () => {
   it("records the commit a writable pass ended on, and mounts a per-task session dir", async () => {
     const run = runners(fakeSandbox(output(), (r) => {
       writeFileSync(join(r.worktree, "a.txt"), "changed\n");
-      git(r.worktree, "add", "-A");
-      git(r.worktree, "commit", "-q", "-m", "slice");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice");
     }));
     const ctx = context("implementing");
     const result = await run.implementing!(ctx);
@@ -980,8 +1051,8 @@ describe("the engine a stage runs on", () => {
     });
     const commitFiles = (...names: string[]) => (r: SandboxRun) => {
       for (const name of names) writeFileSync(join(r.worktree, name), "x\n");
-      git(r.worktree, "add", "-A");
-      git(r.worktree, "commit", "-q", "-m", "slice");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice");
     };
     const graphWith = (misses: unknown[]): Graph => ({
       stampOf: async () => null,
@@ -996,8 +1067,8 @@ describe("the engine a stage runs on", () => {
 
     const commitContent = (files: Record<string, string>) => (r: SandboxRun) => {
       for (const [name, text] of Object.entries(files)) writeFileSync(join(r.worktree, name), text);
-      git(r.worktree, "add", "-A");
-      git(r.worktree, "commit", "-q", "-m", "slice");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice");
     };
 
     it("fails the stage on a test switched off in place (a blocker), marks the run as a scope red and lists the issue with its severity", async () => {

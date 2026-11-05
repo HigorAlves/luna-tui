@@ -6,6 +6,7 @@ import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
+import { bundleImporter } from "../../adapters/git/bundles.ts";
 import { ensureClone, isClone, moveToClone, refreshScratch } from "../../adapters/git/clone.ts";
 import {
   type Workspace,
@@ -15,6 +16,7 @@ import {
   diffNameStatus,
   diffText,
   headCommit,
+  lockfilesAt,
   repoHead,
   defaultBranch,
   dirtyFiles,
@@ -25,7 +27,7 @@ import {
 import { CredentialWaitError, type CredentialMount, type Credentials, NoCredentialError } from "../../adapters/credentials/index.ts";
 import { type SandboxResult, type SandboxRun, cacheVolumeFor, runSandbox } from "../../adapters/docker/docker.ts";
 import { saveKept } from "../kept-sandboxes.ts";
-import { envOf, lockfileHashes } from "../../domain/env-hash.ts";
+import { LOCKFILES, envOf } from "../../domain/env-hash.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
@@ -189,7 +191,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   if (pack !== "implementing" || result.outcome !== "pass" || !path || !deps.imageId) return result;
   try {
     const commit = await headCommit(path);
-    return { ...result, detail: { ...result.detail, env: envOf({ image: await deps.imageId(deps.image), lockfiles: lockfileHashes(path), commit }) } };
+    return { ...result, detail: { ...result.detail, env: envOf({ image: await deps.imageId(deps.image), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }) } };
   } catch (error) {
     console.warn(`could not record the Build's environment: ${(error as Error).message}`);
     return result;
@@ -322,6 +324,8 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     if (!(error instanceof NoCredentialError || error instanceof CredentialWaitError)) throw error;
     return { outcome: "fail", detail: { error: error.message }, ...(engineEvents.length ? { events: engineEvents } : {}) };
   }
+  // What the run commits comes back as bundles in /out/bundles, read like a fetch from an untrusted server: the host never reads the agent's own repository.
+  const importer = extra.checkout ? null : bundleImporter({ path: workspace.path, branch: workspace.branch, runId: context.runId, dir: join(runDir, "out", "bundles") });
   // Implementing: every slice that turns committed is pushed as it lands, one push at a time.
   const pushes = { attempted: 0, ok: 0 };
   let lastPushed: string | null = null;
@@ -348,7 +352,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           overrides: policy.decisions,
           truth: deps.truth ?? null,
           taskId: task.id,
-          git: deps.scopeGit ?? { nameStatus: (from, to) => diffNameStatus(workspace.path, from, to), diff: (from, to) => diffText(workspace.path, from, to) },
+          git: deps.scopeGit ?? { nameStatus: async (from, to) => (await importer?.sync(), diffNameStatus(workspace.path, from, to)), diff: async (from, to) => (await importer?.sync(), diffText(workspace.path, from, to)) },
           log: (line) => void context.note?.(line).catch(() => {}),
         })
       : null;
@@ -364,15 +368,17 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
       outDir: join(runDir, "out"),
       every: deps.watchEvery ?? 2000,
       log: (line) => void context.note?.(line).catch(() => {}),
-      ...(checks ? { onRed: checks.onRed, onScopeRequest: checks.onScopeRequest } : {}),
+      ...(checks ? { onRed: async (...a: Parameters<typeof checks.onRed>) => (await importer?.sync(), checks.onRed(...a)), onScopeRequest: async (...a: Parameters<typeof checks.onScopeRequest>) => (await importer?.sync(), checks.onScopeRequest(...a)) } : {}),
       ...(cardSearch ? { onCardSearch: cardSearch.onCardSearch } : {}),
       onCommitted: async (slice) => {
         if (!checks) return;
+        await importer?.sync();
         await checks.onGreen(slice).catch((error: Error) => void context.note?.(`red_check truth: ${error.message}`).catch(() => {}));
         if (!hostExec) return;
         pushing = pushing.then(async () => {
           // One push per tip: two slices committed on the same HEAD need one checkpoint, and a tip
           // already on the remote is not pushed again.
+          await importer?.sync();
           const tip = await headCommit(workspace.path).catch(() => null);
           if (tip && tip === lastPushed) return;
           pushes.attempted += 1;
@@ -470,6 +476,12 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     return dirty({ ...base, detail: { error, ...extraDetail, ...(ledger ? { ledger } : {}), ...(pushes.attempted ? { pushes } : {}) } });
   };
 
+  // The run's commits come into the card's repository first, whatever way it ended: only as a fast-forward of the card's branch.
+  const imported = importer ? await importer.sync() : null;
+  if (imported && !imported.ok) {
+    if (imported.kind === "head_moved") return { ...base, outcome: "escalated", detail: { escalation: "head_moved", reason: imported.reason, options: [] } };
+    return failed(`the run's commits could not be taken in: ${imported.reason}`);
+  }
   if (sandbox.aborted) return failed("aborted");
   if (sandbox.timedOut) return failed(`timed out after ${input.limits.timeoutMs / MINUTE} minutes`);
   if (sandbox.stuck) return failed(`stuck: ${sandbox.stuck}`);

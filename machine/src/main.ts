@@ -58,7 +58,8 @@ import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
 import { imageId, runSandbox } from "./adapters/docker/docker.ts";
-import { type EnvRecord, envOf, lockfileHashes } from "./domain/env-hash.ts";
+import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
+import { lockfilesAt } from "./adapters/git/worktree.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
 import { PgTaskStore } from "./adapters/persistence/task-store.ts";
@@ -273,7 +274,7 @@ const realVerifyRunner = verifyRunner({
     const env = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.env as EnvRecord | undefined;
     return env && typeof env.hash === "string" ? env : null;
   },
-  envOf: async (path, commit) => envOf({ image: await imageId(config.runnerImage), lockfiles: lockfileHashes(path), commit }),
+  envOf: async (path, commit) => envOf({ image: await imageId(config.runnerImage), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
   graph,
   stateDir: config.stateDir,
   get decide() {

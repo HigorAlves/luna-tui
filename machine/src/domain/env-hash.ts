@@ -1,8 +1,6 @@
 // The environment a Build ran in, as one hash: the runner image, the lockfiles the repository has at
 // that commit, and the commit. Verify computes it again on its fresh clone and compares the parts.
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
 
 /** The lockfile names the machine reads (npm, pnpm, yarn, bun, Cargo, Go, Poetry, uv, Pipfile, Gemfile, composer). */
 export const LOCKFILES = ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock", "Cargo.lock", "go.sum", "poetry.lock", "uv.lock", "Pipfile.lock", "Gemfile.lock", "composer.lock"] as const;
@@ -25,21 +23,6 @@ export function envHash({ image, lockfiles, commit }: EnvInputs): string {
 }
 
 export const envOf = (inputs: EnvInputs): EnvRecord => ({ ...inputs, hash: envHash(inputs) });
-
-/** The sha256 of each lockfile that exists as a regular file at the top of `dir`. */
-export function lockfileHashes(dir: string): Record<string, string> {
-  const found: Record<string, string> = {};
-  for (const name of LOCKFILES) {
-    try {
-      const path = join(dir, name);
-      if (!statSync(path).isFile()) continue;
-      found[name] = createHash("sha256").update(readFileSync(path)).digest("hex");
-    } catch {
-      // not there
-    }
-  }
-  return found;
-}
 
 /** What Verify's environment has that Build's did not: a different image, or at the same commit a lockfile that differs. */
 export function compareEnv(recorded: EnvInputs, current: EnvInputs): { matched: boolean; differences: string[] } {

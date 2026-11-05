@@ -1,10 +1,6 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import { describe, expect, it } from "vitest";
 
-import { compareEnv, envHash, envOf, lockfileHashes } from "./env-hash.ts";
+import { LOCKFILES, compareEnv, envHash, envOf } from "./env-hash.ts";
 
 // Digests computed by hand with `shasum -a 256` over the documented text.
 const LOCKED = { image: "sha256:abc", lockfiles: { "pnpm-lock.yaml": "h1", "Cargo.lock": "h2" }, commit: "c0ffee" };
@@ -23,13 +19,9 @@ describe("envHash", () => {
   });
 });
 
-describe("lockfileHashes", () => {
-  it("hashes the lockfiles the repository has, by name, and nothing else", () => {
-    const dir = mkdtempSync(join(tmpdir(), "env-"));
-    writeFileSync(join(dir, "pnpm-lock.yaml"), "hello");
-    writeFileSync(join(dir, "package.json"), "{}");
-    mkdirSync(join(dir, "Cargo.lock"));
-    expect(lockfileHashes(dir)).toEqual({ "pnpm-lock.yaml": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824" });
+describe("LOCKFILES", () => {
+  it("names the lockfiles of npm, pnpm, yarn, bun, Cargo, Go, Poetry, uv, Pipfile, Gemfile and composer", () => {
+    for (const name of ["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "Cargo.lock", "go.sum", "poetry.lock", "uv.lock", "Pipfile.lock", "Gemfile.lock", "composer.lock"]) expect(LOCKFILES).toContain(name);
   });
 });
 
