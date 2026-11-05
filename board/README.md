@@ -146,6 +146,7 @@ and a test fails when they drift from the registry.
 | `I` | Inbox: what needs you, by why |
 | `D` | Digest: what changed since last time |
 | `P` | Pulls: every open PR involving you |
+| `B` | Backlog: candidates, not tickets yet |
 | `S` | Slack: mentions, DMs and watches |
 
 **Marks & bulk**
@@ -191,6 +192,8 @@ and a test fails when they drift from the registry.
 | `:inbox` | open the Inbox |
 | `:digest` | open the Digest |
 | `:prs` | open Pulls |
+| `:backlog` | open the Backlog |
+| `:context repo\|project\|text <value>` | answer Intake: repo, project or text |
 | `:slack` | open Slack |
 | `:jira <KEY>` | link that Jira issue (bare: the search) |
 | `:help` | this sheet |
@@ -380,6 +383,35 @@ Review requested, Ready to merge, CI failed and Changes requested count on the B
 |---|---|
 | `R` | poll GitHub now |
 | `x` | the same actions as a menu |
+| `?` | keys |
+
+<!-- keys:end -->
+
+## Backlog
+
+`B` (or `:backlog`) opens the shared backlog: candidates that are not tickets yet, from every source, ranked by the machine (cost of delay over cost of doing, ties by age). A row shows the score, size, demand, age and a stale mark; the selected item's text and sources sit beside the list. Text from outside is flattened before it is drawn.
+
+<!-- keys:start backlog -->
+**Item**
+
+| Key | Does |
+|---|---|
+| `p` | promote: make it a ticket |
+| `b` | bump: one more report of it |
+| `d` | decline: drop it from the backlog |
+
+**Move**
+
+| Key | Does |
+|---|---|
+| `j / k` | previous / next item |
+| `esc / B / q` | close |
+
+**App**
+
+| Key | Does |
+|---|---|
+| `R` | fetch the backlog again |
 | `?` | keys |
 
 <!-- keys:end -->

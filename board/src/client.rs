@@ -18,6 +18,7 @@ use ureq::{
     typestate::AgentScope,
 };
 
+use crate::backlog::BacklogEntry;
 use crate::model::{
     EngineCatalog, EngineInfo, Health, JiraIssueHit, JiraStatus, Metrics, PlanEdit, PrAction, PrSnapshot, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch, Slots,
     StreamMessage, Task, TaskDetail, TaskDiff, TestCase, TicketText,
@@ -321,6 +322,21 @@ impl Machine {
     /// Removes the task's worktree from disk; the task and its branch stay.
     pub fn remove_worktree(&self, id: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/worktree/remove"), json!({}))
+    }
+
+    /// The ranked backlog.
+    pub fn backlog(&self) -> Result<Vec<BacklogEntry>, String> {
+        Self::typed(self.agent.get(self.url("/backlog")).call())
+    }
+
+    /// `bump`, `promote` or `decline` on a backlog item.
+    pub fn backlog_act(&self, id: &str, action: &str) -> Result<(), String> {
+        Self::json(self.agent.post(self.url(&format!("/backlog/{id}/{action}"))).send_json(json!({}))).map(|_| ())
+    }
+
+    /// What a person gives Intake's context gate: a repository, a project or more text; the card is checked again.
+    pub fn give_context(&self, id: &str, given: Value) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/context"), given)
     }
 
     /// The PR inbox as the machine last polled it.

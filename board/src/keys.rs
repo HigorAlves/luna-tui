@@ -37,6 +37,7 @@ pub enum Scope {
     Board,
     Detail,
     Pulls,
+    Backlog,
     Slack,
     Watches,
     Inbox,
@@ -47,10 +48,11 @@ pub enum Scope {
 }
 
 impl Scope {
-    pub const ALL: [Scope; 10] = [
+    pub const ALL: [Scope; 11] = [
         Scope::Board,
         Scope::Detail,
         Scope::Pulls,
+        Scope::Backlog,
         Scope::Slack,
         Scope::Watches,
         Scope::Inbox,
@@ -66,6 +68,7 @@ impl Scope {
             Scope::Board => "Board",
             Scope::Detail => "Ticket",
             Scope::Pulls => "Pulls",
+            Scope::Backlog => "Backlog",
             Scope::Slack => "Slack",
             Scope::Watches => "Watches",
             Scope::Inbox => "Inbox",
@@ -82,6 +85,7 @@ impl Scope {
             Scope::Board => "board",
             Scope::Detail => "detail",
             Scope::Pulls => "pulls",
+            Scope::Backlog => "backlog",
             Scope::Slack => "slack",
             Scope::Watches => "watches",
             Scope::Inbox => "inbox",
@@ -124,6 +128,7 @@ impl Group {
             Group::Gate => "Gate",
             Group::Ticket => match scope {
                 Scope::Pulls => "Pull request",
+                Scope::Backlog => "Item",
                 Scope::Slack => "Message",
                 Scope::Watches => "Watch",
                 _ => "Ticket",
@@ -555,6 +560,7 @@ const BOARD: &[Binding] = &[
     cmd(b("I", "Inbox: what needs you, by why", Group::Views, Scope::Board, on, 20), "inbox"),
     cmd(b("D", "Digest: what changed since last time", Group::Views, Scope::Board, on, 20), "digest"),
     cmd(b("P", "Pulls: every open PR involving you", Group::Views, Scope::Board, on, 20), "prs"),
+    cmd(b("B", "Backlog: candidates, not tickets yet", Group::Views, Scope::Board, on, 20), "backlog"),
     cmd(b("S", "Slack: mentions, DMs and watches", Group::Views, Scope::Board, on, 20), "slack"),
     // Marks & bulk.
     b("v", "mark the ticket; a X d w act on marks", Group::Marks, Scope::Board, |app| with_task(app, |_| Avail::On), 25),
@@ -584,6 +590,8 @@ const BOARD: &[Binding] = &[
     cmd(b(":inbox", "open the Inbox", Group::Commands, Scope::Board, on, 0), "inbox"),
     cmd(b(":digest", "open the Digest", Group::Commands, Scope::Board, on, 0), "digest"),
     cmd(b(":prs", "open Pulls", Group::Commands, Scope::Board, on, 0), "prs"),
+    cmd(b(":backlog", "open the Backlog", Group::Commands, Scope::Board, on, 0), "backlog"),
+    cmd(b(":context repo|project|text <value>", "answer Intake: repo, project or text", Group::Commands, Scope::Board, on, 0), "context"),
     cmd(b(":slack", "open Slack", Group::Commands, Scope::Board, on, 0), "slack"),
     cmd(b(":jira <KEY>", "link that Jira issue (bare: the search)", Group::Commands, Scope::Board, on, 0), "jira"),
     cmd(b(":help", "this sheet", Group::Commands, Scope::Board, on, 0), "help"),
@@ -654,6 +662,17 @@ const PULLS: &[Binding] = &[
     b("R", "poll GitHub now", Group::App, Scope::Pulls, on, 60),
     b("x", "the same actions as a menu", Group::App, Scope::Pulls, |app| if app.pr_under_cursor().is_some() { Avail::On } else { Avail::Off("no PR selected") }, 65),
     cmd(b("?", "keys", Group::App, Scope::Pulls, on, 100), "help"),
+];
+
+/// The Backlog view: ranked candidates that are not tickets yet.
+const BACKLOG: &[Binding] = &[
+    b("p", "promote: make it a ticket", Group::Ticket, Scope::Backlog, |app| if app.backlog_under_cursor().is_some() { Avail::On } else { Avail::Off("no item selected") }, 90),
+    b("b", "bump: one more report of it", Group::Ticket, Scope::Backlog, |app| if app.backlog_under_cursor().is_some() { Avail::On } else { Avail::Off("no item selected") }, 85),
+    b("d", "decline: drop it from the backlog", Group::Ticket, Scope::Backlog, |app| if app.backlog_under_cursor().is_some() { Avail::On } else { Avail::Off("no item selected") }, 80),
+    b("j / k", "previous / next item", Group::Move, Scope::Backlog, on, 30),
+    b("esc / B / q", "close", Group::Move, Scope::Backlog, on, 20),
+    b("R", "fetch the backlog again", Group::App, Scope::Backlog, on, 60),
+    cmd(b("?", "keys", Group::App, Scope::Backlog, on, 100), "help"),
 ];
 
 const SLACK: &[Binding] = &[
@@ -730,7 +749,7 @@ const HELP: &[Binding] = &[
     b("esc / q", "close", Group::App, Scope::Help, on, 60),
 ];
 
-const TOTAL: usize = BOARD.len() + SHARED.len() + count_except(SHARED, "J") + count_except(SHARED, "A") + DETAIL.len() + INBOX.len() + PULLS.len() + SLACK.len() + WATCHES.len() + DIGEST.len() + FLOOR.len() + EDITOR.len() + HELP.len();
+const TOTAL: usize = BOARD.len() + SHARED.len() + count_except(SHARED, "J") + count_except(SHARED, "A") + DETAIL.len() + INBOX.len() + PULLS.len() + BACKLOG.len() + SLACK.len() + WATCHES.len() + DIGEST.len() + FLOOR.len() + EDITOR.len() + HELP.len();
 
 /// Copies `rows` into `out` under `scope`, skipping the key `except` (the view handles it
 /// itself: `A` approves the Inbox split, `J` scrolls the popup).
@@ -786,6 +805,7 @@ const fn build() -> [Binding; TOTAL] {
     copy_into(SHARED, Scope::Inbox, "A", &mut out, &mut at);
     copy_into(INBOX, Scope::Inbox, "", &mut out, &mut at);
     copy_into(PULLS, Scope::Pulls, "", &mut out, &mut at);
+    copy_into(BACKLOG, Scope::Backlog, "", &mut out, &mut at);
     copy_into(SLACK, Scope::Slack, "", &mut out, &mut at);
     copy_into(WATCHES, Scope::Watches, "", &mut out, &mut at);
     copy_into(DIGEST, Scope::Digest, "", &mut out, &mut at);
@@ -820,6 +840,8 @@ pub fn active_scope(app: &App) -> Scope {
         Scope::Digest
     } else if app.pulls.is_some() {
         Scope::Pulls
+    } else if app.backlog.is_some() {
+        Scope::Backlog
     } else if app.slack.is_some() {
         Scope::Slack
     } else {
@@ -1375,6 +1397,7 @@ mod tests {
         parity(Scope::Detail, handled::DETAIL);
         parity(Scope::Inbox, handled::INBOX);
         parity(Scope::Pulls, handled::PULLS);
+        parity(Scope::Backlog, handled::BACKLOG);
         parity(Scope::Slack, handled::SLACK);
         parity(Scope::Watches, handled::WATCHES);
         parity(Scope::Digest, handled::DIGEST);

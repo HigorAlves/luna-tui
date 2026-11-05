@@ -6,6 +6,7 @@
 //! wires them to the terminal, and answers `--keys-md` (the README's key tables) without one.
 
 mod app;
+mod backlog;
 mod client;
 mod detail;
 mod digest;

@@ -234,6 +234,23 @@ pub struct Task {
     /// luna.yaml's, else its default. Empty from machines that predate engines.
     #[serde(default)]
     pub stages: BTreeMap<String, String>,
+    /// What the card keeps of where it came from (the machine's `CardFields`): every report of it, who filed it,
+    /// who follows it, its project and owners, its attachments (references) and the duplicates merged into it.
+    /// All empty from machines that predate them. Every text in them is a stranger's: print through `detail::plain`.
+    #[serde(default)]
+    pub sources: Vec<Value>,
+    #[serde(default)]
+    pub reporter: Option<Value>,
+    #[serde(default)]
+    pub followers: Vec<String>,
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub owners: Vec<String>,
+    #[serde(default)]
+    pub attachments: Vec<Value>,
+    #[serde(default)]
+    pub merged: Vec<Value>,
 }
 
 /// The last declared transition Jira refused, until the next one succeeds.

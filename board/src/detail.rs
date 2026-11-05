@@ -593,6 +593,70 @@ fn criteria_table(rows: &[CriterionRow], width: usize) -> Vec<Line<'static>> {
 
 /// Overview: the status line, the criteria summary, the facts, then the ticket's own text and
 /// whatever an open gate asks that has no section of its own (setup, questions, rules).
+/// Where the card came from and what Intake still needs: its sources, reporter, followers, project, owners, attachments, merged duplicates, and the
+/// open Intake gate's missing list with the command that answers it. Every text is a stranger's, so each goes through `plain` and a cap.
+fn origin_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
+    const LISTED: usize = 5;
+    let text = |v: &serde_json::Value, key: &str| v.get(key).and_then(|x| x.as_str()).map(|s| truncate(&plain(s), 60));
+    let mut lines = Vec::new();
+    for s in task.sources.iter().take(LISTED) {
+        let line = match text(s, "kind").or_else(|| text(s, "type")).as_deref() {
+            Some("github") | Some("github_pr") => format!("GitHub {}#{}", text(s, "repo").unwrap_or_default(), s.get("number").and_then(|n| n.as_u64()).unwrap_or(0)),
+            Some("jira") => format!("Jira {}", text(s, "key").unwrap_or_default()),
+            Some(other) => other.to_string(),
+            None => "unknown source".to_string(),
+        };
+        lines.push(muted(format!("Source     {line}")));
+    }
+    if task.sources.len() > LISTED {
+        lines.push(muted(format!("Source     … and {} more", task.sources.len() - LISTED)));
+    }
+    if let Some(r) = &task.reporter {
+        let channel = text(r, "channel").map(|c| format!(" ({c})")).unwrap_or_default();
+        lines.push(muted(format!("Reporter   {}{channel}", text(r, "name").or_else(|| text(r, "id")).unwrap_or_default())));
+    }
+    let list = |items: &[String]| items.iter().take(LISTED).map(|s| truncate(&plain(s), 40)).collect::<Vec<_>>().join(", ");
+    if !task.followers.is_empty() {
+        lines.push(muted(format!("Followers  {}", list(&task.followers))));
+    }
+    if let Some(project) = &task.project {
+        lines.push(muted(format!("Project    {}", truncate(&plain(project), 40))));
+    }
+    if !task.owners.is_empty() {
+        lines.push(muted(format!("Owners     {}", list(&task.owners))));
+    }
+    for a in task.attachments.iter().take(LISTED) {
+        lines.push(muted(format!("Attached   {}", text(a, "name").unwrap_or_default())));
+    }
+    if !task.merged.is_empty() {
+        let ids = task.merged.iter().take(LISTED).filter_map(|m| text(m, "id")).map(|id| id.chars().take(8).collect::<String>()).collect::<Vec<_>>().join(", ");
+        lines.push(muted(format!("Merged     {ids}")));
+    }
+    if let Some(gate) = detail.and_then(|d| d.open_approval()).filter(|a| a.requested.get("kind").and_then(|k| k.as_str()) == Some("context")) {
+        let words = gate
+            .requested
+            .get("missing")
+            .and_then(|m| m.as_array())
+            .map(|names| {
+                names
+                    .iter()
+                    .filter_map(|n| n.as_str())
+                    .map(|n| match n {
+                        "repository" => "which repository it is for",
+                        "reporter" => "a way to reach the reporter",
+                        "text" => "more detail on what is wrong",
+                        _ => "more context",
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_default();
+        lines.push(muted(format!("Intake     waiting for: {words}")));
+        lines.push(muted("           give it with :context repo <path> · project <KEY> · text <more>".to_string()));
+    }
+    lines
+}
+
 fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u64) -> Vec<Line<'static>> {
     let look = task.look();
     let mut status = vec![Span::from(format!("{} {}", look_glyph(look), task.status_label())).fg(c(look_color(look))).bold()];
@@ -629,6 +693,7 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
         lines.push(muted(source.detail_line()));
     }
     lines.extend(jira_lines(task, now));
+    lines.extend(origin_lines(task, detail));
     if let Some(d) = detail {
         lines.extend(build_progress_lines(d));
         lines.extend(escalation_lines(d));
@@ -738,7 +803,7 @@ fn jira_lines(task: &Task, now: u64) -> Vec<Line<'static>> {
 
 /// Plan: the latest triage plan, decided or not, then what happened to it.
 /// Text from a run or a model, made safe for a terminal: every control character (an escape sequence included) becomes a space.
-fn plain(text: &str) -> String {
+pub(crate) fn plain(text: &str) -> String {
     text.chars().map(|ch| if ch.is_control() && ch != '\n' { ' ' } else { ch }).collect()
 }
 
@@ -1318,6 +1383,27 @@ mod tests {
         let task: Task = serde_json::from_str(TASK).unwrap();
         let detail: TaskDetail = serde_json::from_str(&detail_json(TASK)).unwrap();
         (task, detail)
+    }
+
+    #[test]
+    fn the_overview_shows_where_a_card_came_from_and_what_merged_into_it() {
+        let (_, detail) = fixture();
+        let extra = r#""reason":null,"sources":[{"kind":"github","repo":"o/a","number":3,"url":"u"},{"type":"slack"}],"reporter":{"id":"U1\u001b[2J","channel":"slack"},"followers":["U2"],"project":"PAY","owners":["@team-a"],"attachments":[{"name":"trace.txt","url":"https://f/t"}],"merged":[{"id":"11111111-2222-3333-4444-555555555555"}]"#;
+        let task: Task = serde_json::from_str(&TASK.replace(r#""reason":null"#, extra)).unwrap();
+        let rows = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
+        for needle in ["GitHub o/a#3", "slack", "Reporter   U1", "Followers  U2", "Project    PAY", "Owners     @team-a", "trace.txt", "Merged     11111111"] {
+            assert!(rows.contains(needle), "{needle} missing in\n{rows}");
+        }
+        assert!(!rows.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn the_overview_names_what_the_intake_gate_is_missing() {
+        let (task, mut detail) = fixture();
+        detail.approvals.push(serde_json::from_str(r#"{"kind":"awaiting_setup","requested":{"kind":"context","missing":["repository","text"]},"decision":null}"#).unwrap());
+        let rows = render(120, 40, &task, Some(&detail), Section::Overview, 0).join("\n");
+        assert!(rows.contains("Intake     waiting for: which repository it is for, more detail on what is wrong"), "{rows}");
+        assert!(rows.contains(":context repo"), "{rows}");
     }
 
     fn col_of(rows: &[String], needle: &str) -> Option<usize> {

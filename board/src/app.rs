@@ -23,6 +23,7 @@ use crate::inbox::{self, InboxState, Split};
 use crate::keys::{self, Scope};
 use crate::model::now_secs;
 use crate::notify::{self, Notice};
+use crate::backlog::{BacklogEntry, BacklogState};
 use crate::pulls::{self, PrKey, PrSplit, PullsState};
 use crate::slack::{self, SlackKey, SlackSplit, SlackState, WatchesState};
 use crate::{
@@ -425,6 +426,9 @@ pub struct App {
     pub slack_polling: bool,
     /// The PR view, open while this is `Some`.
     pub pulls: Option<PullsState>,
+    /// The Backlog view, open while this is `Some`, and the ranked items it fetched when it opened.
+    pub backlog: Option<BacklogState>,
+    pub backlog_items: Vec<BacklogEntry>,
     /// A dispatch waiting for a clone to land: the PR's key and the action to run then.
     pending_dispatch: Option<(String, PrAction)>,
     /// The Slack inbox as the machine last sent it; empty until the first `slack.items` event.
@@ -530,6 +534,8 @@ impl App {
             prs_polling: false,
             slack_polling: false,
             pulls: None,
+            backlog: None,
+            backlog_items: Vec::new(),
             pending_dispatch: None,
             slack_snapshot: SlackSnapshot::default(),
             slack: None,
@@ -1881,6 +1887,9 @@ impl App {
         if self.pulls.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_pulls(key);
         }
+        if self.backlog.is_some() && matches!(self.mode, Mode::Normal) {
+            return self.handle_backlog(key);
+        }
         if self.slack.is_some() && matches!(self.mode, Mode::Normal) {
             return self.handle_slack(key);
         }
@@ -2269,6 +2278,95 @@ impl App {
         }
         self.pulls = Some(next);
         Outcome::Continue
+    }
+
+    /// The item under the Backlog cursor.
+    pub fn backlog_under_cursor(&self) -> Option<BacklogEntry> {
+        let state = self.backlog.as_ref()?;
+        self.backlog_items.get(state.cursor.min(self.backlog_items.len().saturating_sub(1))).cloned()
+    }
+
+    /// Fetches the ranked backlog; a failure is a toast and the list stays as it was.
+    fn refresh_backlog(&mut self) {
+        match self.machine.backlog() {
+            Ok(items) => {
+                self.backlog_items = items;
+                if let Some(state) = self.backlog.as_mut() {
+                    state.cursor = state.cursor.min(self.backlog_items.len().saturating_sub(1));
+                }
+            }
+            Err(error) => self.notify(format!("backlog: {error}"), true),
+        }
+    }
+
+    fn open_backlog(&mut self) {
+        self.backlog = Some(BacklogState::default());
+        self.refresh_backlog();
+    }
+
+    /// The keys `handle_backlog` matches.
+    #[cfg(test)]
+    pub(crate) const HANDLED_BACKLOG: &[&str] = &["esc", "B", "q", "?", "j", "k", "R", "p", "b", "d"];
+
+    /// The Backlog view's keys: move, promote, bump, decline, refetch.
+    fn handle_backlog(&mut self, key: KeyEvent) -> Outcome {
+        let Some(state) = self.backlog.clone() else {
+            return Outcome::Continue;
+        };
+        let count = self.backlog_items.len();
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('B') | KeyCode::Char('q') => self.backlog = None,
+            KeyCode::Char('?') => self.open_help(),
+            KeyCode::Char('j') | KeyCode::Down => self.backlog = Some(BacklogState { cursor: (state.cursor + 1).min(count.saturating_sub(1)) }),
+            KeyCode::Char('k') | KeyCode::Up => self.backlog = Some(BacklogState { cursor: state.cursor.saturating_sub(1) }),
+            KeyCode::Char('R') => self.refresh_backlog(),
+            KeyCode::Char(c @ ('p' | 'b' | 'd')) => {
+                let Some(item) = self.backlog_under_cursor() else {
+                    self.notify("no item selected", true);
+                    return Outcome::Continue;
+                };
+                let (action, done) = match c {
+                    'p' => ("promote", "promoted to a ticket"),
+                    'b' => ("bump", "bumped"),
+                    _ => ("decline", "declined"),
+                };
+                match self.machine.backlog_act(&item.id, action) {
+                    Ok(()) => {
+                        self.notify(done, false);
+                        self.refresh_backlog();
+                    }
+                    Err(error) => self.notify(format!("backlog: {error}"), true),
+                }
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// `:context repo|project|text <value>` on the selected ticket: what Intake's gate asked for.
+    fn give_context(&mut self, rest: &str) {
+        let Some(id) = self.selected_id() else {
+            self.notify("select a ticket first", true);
+            return;
+        };
+        let (field, value) = rest.split_once(char::is_whitespace).map_or((rest, ""), |(f, v)| (f, v.trim()));
+        let key = match field {
+            "repo" => "repoPath",
+            "project" => "project",
+            "text" => "text",
+            _ => {
+                self.notify("use :context repo|project|text <value>", true);
+                return;
+            }
+        };
+        if value.is_empty() {
+            self.notify(format!("{field}: give a value"), true);
+            return;
+        }
+        match self.machine.give_context(&id, serde_json::json!({ key: value })) {
+            Ok(_) => self.notify("Intake checked the ticket again", false),
+            Err(error) => self.notify(format!("context: {error}"), true),
+        }
     }
 
     /// Opens a URL in the browser, detached; says so when it cannot.
@@ -2887,7 +2985,7 @@ impl App {
     /// everything `ticket_key` takes (`S` opens Slack here, so it is not ship).
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
-        "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "S", "v", "V", "?", ":",
+        "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "B", "S", "v", "V", "?", ":",
         "esc", "enter", "R", "a", "A", "e", "r", "N", "X", "w", "Z", "C", "d", "f", "o", "J", "T", "p",
     ];
 
@@ -2947,6 +3045,7 @@ impl App {
             KeyCode::Char('I') => self.inbox = Some(InboxState::default()),
             KeyCode::Char('D') => self.digest = Some(DigestState::default()),
             KeyCode::Char('P') => self.open_pulls(),
+            KeyCode::Char('B') => self.open_backlog(),
             KeyCode::Char('S') => self.open_slack(),
             KeyCode::Char('v') => {
                 // Toggle: remove it if it was marked, else mark it.
@@ -3494,7 +3593,7 @@ impl App {
     /// The names `run_command` knows, aliases left out.
     #[cfg(test)]
     pub(crate) const HANDLED_COMMANDS: &[&str] = &[
-        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "slack", "jira",
+        "q", "new", "filter", "repo", "open", "group", "fold", "unfold", "setup", "slots", "drain", "resume", "start", "floor", "inbox", "digest", "prs", "backlog", "context", "slack", "jira",
         "help",
     ];
 
@@ -3577,6 +3676,8 @@ impl App {
             "inbox" => self.inbox = Some(InboxState::default()),
             "digest" => self.digest = Some(DigestState::default()),
             "prs" | "pulls" => self.open_pulls(),
+            "backlog" => self.open_backlog(),
+            "context" => self.give_context(rest),
             "slack" => self.open_slack(),
             "jira" => match self.selected_id() {
                 Some(id) if rest.is_empty() => return self.ticket_key('J', &id),
@@ -3903,6 +4004,7 @@ pub(crate) mod handled {
     pub(crate) const DETAIL: &[&str] = App::HANDLED_DETAIL;
     pub(crate) const INBOX: &[&str] = App::HANDLED_INBOX;
     pub(crate) const PULLS: &[&str] = App::HANDLED_PULLS;
+    pub(crate) const BACKLOG: &[&str] = App::HANDLED_BACKLOG;
     pub(crate) const SLACK: &[&str] = App::HANDLED_SLACK;
     pub(crate) const WATCHES: &[&str] = App::HANDLED_WATCHES;
     pub(crate) const DIGEST: &[&str] = App::HANDLED_DIGEST;

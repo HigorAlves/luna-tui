@@ -141,6 +141,14 @@ pub fn draw(frame: &mut Frame, app: &App) {
         }
         return;
     }
+    if let Some(state) = app.backlog.as_ref().filter(|_| matches!(app.mode, Mode::Normal | Mode::Help { .. })) {
+        render_backlog(frame, body, app, state);
+        frame.render_widget(footer_line(app), footer);
+        if matches!(app.mode, Mode::Help { .. }) {
+            render_help(frame, app);
+        }
+        return;
+    }
     if let Some(state) = app.pulls.as_ref().filter(|_| {
         matches!(app.mode, Mode::Normal | Mode::ConfirmMerge { .. } | Mode::ConfirmClose { .. } | Mode::ClonePrompt { .. } | Mode::PrActions { .. } | Mode::Help { .. })
     }) {
@@ -408,6 +416,9 @@ fn header_line(app: &App) -> Line<'static> {
     if app.floor.is_some() {
         spans.push(Span::from("  [floor]").fg(c(BLUE)).bold());
     }
+    if app.backlog.is_some() {
+        spans.push(Span::from("  [backlog]").fg(c(BLUE)).bold());
+    }
     if app.pulls.is_some() {
         spans.push(Span::from("  [pulls]").fg(c(BLUE)).bold());
     }
@@ -520,6 +531,7 @@ fn view_footer(app: &App) -> Line<'static> {
         Scope::Digest => hint(&[("j/k", "move"), ("enter", "jump to the ticket"), ("o", "open the PR"), ("esc", "close")]),
         Scope::Inbox => hint(&[("j/k", "move"), ("h/l", "split"), ("a/r/e", "act"), ("A", "approve all"), ("enter", "open"), ("esc", "close")]),
         Scope::Pulls => hint(&[("j/k", "move"), ("h/l", "split"), ("m", "merge"), ("c/v/t", "CI fix / review / threads"), ("o", "open"), ("R", "poll"), ("x", "menu"), ("esc", "close")]),
+        Scope::Backlog => hint(&[("j/k", "move"), ("p", "promote"), ("b", "bump"), ("d", "decline"), ("R", "refetch"), ("esc", "close")]),
         Scope::Watches => hint(&[("j/k", "move"), ("n", "add"), ("e", "floor"), ("d", "delete"), ("space", "on/off"), ("esc", "close")]),
         Scope::Slack => hint(&[
             ("j/k", "move"),
@@ -1175,6 +1187,43 @@ fn render_inbox(frame: &mut Frame, area: Rect, app: &App, inbox: &InboxState) {
 /// The PR view: a header of splits with their counts and when GitHub was last polled; the
 /// split's PRs oldest first as an aligned list on the left; the selected PR drawn by the same
 /// widget the ticket popup uses on the right (from 100 columns; `x` shows it narrower).
+/// The Backlog view: the machine's ranking, one row per candidate, the selected one's text and sources beside it.
+fn render_backlog(frame: &mut Frame, area: Rect, app: &App, state: &crate::backlog::BacklogState) {
+    let now = now_secs();
+    let items = &app.backlog_items;
+    let selected = state.cursor.min(items.len().saturating_sub(1));
+    let [list_area, detail_area] = Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)]).areas(area);
+    let block = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(ACCENT))).title(Line::from(format!(" Backlog {} ", items.len())).bold());
+    let inner = block.inner(list_area);
+    let mut lines = Vec::new();
+    if items.is_empty() {
+        lines.push(Line::from(Span::from("  ✓ nothing waiting").fg(c(GREEN))));
+    }
+    let visible = (inner.height as usize).max(1);
+    let start = selected.saturating_sub(visible / 2).min(items.len().saturating_sub(visible));
+    for (row, item) in items.iter().enumerate().skip(start).take(visible) {
+        let text = truncate(&item.row(now), inner.width.saturating_sub(2) as usize);
+        lines.push(if row == selected { Line::from(Span::from(format!("▸ {text}")).fg(c(BASE)).bg(c(ACCENT)).bold()) } else { Line::from(Span::from(format!("  {text}")).fg(c(SUBTEXT0))) });
+    }
+    frame.render_widget(Paragraph::new(lines).block(block), list_area);
+    let side = Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(c(MUTED))).padding(Padding::horizontal(1)).title(Line::from(" Item ").bold());
+    let lines = match items.get(selected) {
+        Some(item) => {
+            let mut lines = vec![Line::from(Span::from(crate::detail::plain(&item.title).replace('\n', " ")).bold())];
+            lines.push(Line::from(Span::from(format!("size {} · demand {} · score {:.2}{}", crate::detail::plain(&item.size), item.demand, item.score, if item.stale { " · stale" } else { "" })).fg(c(SUBTEXT0))));
+            if let Some(repo) = &item.repo {
+                lines.push(Line::from(Span::from(format!("repo {}", crate::detail::plain(repo))).fg(c(SUBTEXT0))));
+            }
+            lines.extend(item.source_lines().into_iter().map(|s| Line::from(Span::from(format!("from {s}")).fg(c(SUBTEXT0)))));
+            lines.push(Line::default());
+            lines.extend(crate::detail::plain(&item.text).lines().take(12).map(|l| Line::from(l.to_string())));
+            lines
+        }
+        None => vec![Line::from(Span::from("nothing selected").fg(c(SUBTEXT0)))],
+    };
+    frame.render_widget(Paragraph::new(lines).block(side).wrap(Wrap { trim: false }), detail_area);
+}
+
 fn render_pulls(frame: &mut Frame, area: Rect, app: &App, state: &PullsState) {
     let now = now_secs();
     let counts = pulls::counts(&app.prs.prs);
