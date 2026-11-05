@@ -83,7 +83,11 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
         const done = (outcome: StageResult): StageResult => ({ ...outcome, ...(usage ? { usage } : {}), detail: { ...outcome.detail, sweep: summary } });
         if (sweep.aborted) return done({ outcome: "fail", detail: { error: "aborted" } });
         if (sweep.missingTool) return done({ outcome: "escalated", detail: { envBroken: true, reason: `\`${safe(sweep.missingTool.cmd).slice(0, 200)}\` cannot run: the runner image lacks the tool (${safe(sweep.missingTool.tail).slice(0, 200)})` } });
-        if (sweep.status !== "failed") return done(result);
+        if (sweep.status !== "failed") {
+          // The build is green and swept: each scenario's test is green (the implementer runs the full suite before it commits a slice).
+          for (const t of extra.scenarioTests ?? []) await context.emit?.("scenario.green", { scenario: t.scenario });
+          return done(result);
+        }
         const names = sweep.failed.map((f) => safe(f.name).slice(0, 60));
         await context.emit?.("build.sweep_failed", { checks: names });
         if (fixes >= MAX_SWEEP_FIXES || (await deps.budgetSpent?.(context))) {
@@ -111,7 +115,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
     const earlier = worktree ? await deps.git.findTestsCommit(worktree, subject) : null;
     if (earlier) {
       const facts = scenarioTags({ ...earlier, scenarios });
-      return withStep(await implementSwept({ scenarioTests: testsOf(facts) }), { status: "committed", commit: earlier.sha, resumed: true });
+      return withStep(await implementSwept({ scenarioTests: testsOf(facts) }), { status: "committed", commit: earlier.sha, resumed: true, scenarioTests: testsOf(facts) });
     }
 
     const approved = context.approvals.findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
@@ -161,7 +165,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       await deps.checkpoint(context, where, "red").catch(() => {});
       const result = await implementSwept({ scenarioTests: testsOf(facts) });
       const skipped = judged.some((j) => j.verdict === "skipped");
-      return withStep(result, { status: "committed", commit: sha, tests: Object.keys(facts.tagged).length, ...(skipped ? { redCheck: "skipped" } : {}) });
+      return withStep(result, { status: "committed", commit: sha, tests: Object.keys(facts.tagged).length, scenarioTests: testsOf(facts), ...(skipped ? { redCheck: "skipped" } : {}) });
     }
   };
 }

@@ -22,6 +22,8 @@ const FIXTURES: Array<[string, ReturnType<typeof row>, CardEventName[]]> = [
   ["archived as duplicate", row("transition", { event: "archive", from: "triage", to: "archived", archiveReason: "duplicate" }), ["card.archived"]],
   ["build started", row("stage.started", { stage: "implementing", attempt: 1 }), ["build.started"]],
   ["a slice committed in the ledger is not a checkpoint: only a push that landed is", row("stage.slice.committed", { id: 1 }), []],
+  ["a scenario's red and green are rows of their own, not diagram names", row("scenario.red", { scenario: "S1" }), []],
+  ["an escalation from Build names build.escalated, and its row carries the decided reason", row("transition", { from: "implementing", to: "escalated", escalation: "flaky_tests" }), ["build.escalated"]],
   ["a push that landed", row("build.checkpoint", { sha: "a".repeat(40), follows: "red" }), ["build.checkpoint"]],
   ["build paused", row("transition", { event: "rate_limited", from: "implementing", to: "paused_rate_limit" }), ["build.paused"]],
   ["build escalated", moved("implementing", "escalated", { escalation: "too_complex" }), ["build.escalated"]],

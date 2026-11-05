@@ -958,6 +958,11 @@ describe("the engine a stage runs on", () => {
       expect(result.detail).toMatchObject({ diffSummary: { what: "Adds b", why: "C1", files: [{ path: "b.txt", reason: "the feature" }, { path: "extra.txt", reason: null }] } });
     });
 
+    it("records the branch the card was cut from (the repo's default branch) for the Build Report", async () => {
+      const result = await runners(fakeSandbox(output(), commitFiles("b.txt"))).implementing!(planned());
+      expect(result.detail).toMatchObject({ base: expect.stringMatching(/^(main|master)$/) });
+    });
+
     it("reads a plain string diffSummary, as an older answer gave it, as `what`", async () => {
       const answer = { kind: "done", summary: "x", diffSummary: "Adds b", outOfMap: [{ path: "extra.txt", reason: "shared helper" }] };
       const result = await runners(fakeSandbox(output({ answer } as Partial<StageOutput>), commitFiles("b.txt", "extra.txt"))).implementing!(planned());

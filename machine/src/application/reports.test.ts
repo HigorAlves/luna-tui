@@ -43,8 +43,55 @@ describe("buildReportOf", () => {
       minutes: 3,
       scopeCheck: { clean: true, issues: [] },
       version: 2,
+      iterations: [],
+      summary: null,
+      limits: null,
+      testsStep: null,
+      sweep: null,
     });
     expect(BuildReport.safeParse(report).success).toBe(true);
+  });
+
+  it("fills what wave 8 left empty: the base, the tokens of every run, the iteration log, each scenario's test before and after, the Diff Summary, the severities and the budget's limits", () => {
+    const limits = { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90, backoff_minutes: [1, 30] as [number, number], regression_full_suite_minutes: 10 };
+    const summary = { what: "w", why: "y", files: [{ path: "src/a.ts", reason: null, in_code_map: true }], flags_added: [], migrations: [], risks_noticed: [], deps_added: [], todos: [] };
+    const events = [
+      event("scenario.red", { scenario: "S1" }),
+      event("scenario.red", { scenario: "S2" }),
+      event("stage.slice.red", { id: 1, title: "s", commit: null }),
+      event("stage.slice.green", { id: 1, title: "s", commit: null }),
+      event("stage.slice.committed", { id: 1, title: "s", commit: "abc123" }),
+      event("build.sweep_failed", { checks: ["lint"] }),
+      event("scenario.green", { scenario: "S1" }),
+      finished("implementing", 1, "failed", {}, { tokens: { input: 1000, output: 200 } }),
+      finished("implementing", 2, "passed", {
+        base: "main",
+        diffSummary: summary,
+        sweep: { status: "passed", ran: ["lint"] },
+        testsStep: { status: "committed", commit: "def456", scenarioTests: [{ scenario: "S1", file: "web/cart.test.ts" }, { scenario: "S2", file: "web/cart.test.ts" }] },
+        scope: { facts: { changed: ["src/a.ts"] }, issues: [{ severity: "should_fix", kind: "new_dependency", text: "dependency the plan did not name: left-pad" }, { severity: "nit", kind: "todo", text: "TODO left in place: a.ts" }] },
+      }, { tokens: { input: 500, output: 50 } }),
+    ];
+    const report = buildReportOf(task, [run("implementing", 1), run("implementing", 2)], events, limits)!;
+    expect(report).toMatchObject({
+      base: "main",
+      tokens: 1750,
+      // A slice's commit lands on its green: the committed row fills the sha, it is not a third iteration.
+      iterations: [{ kind: "red", ref: "slice 1", sha: null }, { kind: "green", ref: "slice 1", sha: "abc123" }, { kind: "sweep", ref: "lint", sha: null }],
+      tests: [{ scenario: "S1", file: "web/cart.test.ts", before: "fail", after: "pass" }, { scenario: "S2", file: "web/cart.test.ts", before: "fail", after: null }],
+      summary,
+      limits: { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90 },
+      testsStep: { status: "committed" },
+      sweep: { status: "passed", ran: ["lint"] },
+      scopeCheck: { clean: false, severities: [{ severity: "should_fix" }, { severity: "nit" }] },
+    });
+    expect(report.scopeCheck.issues).toEqual(["dependency the plan did not name: left-pad", "TODO left in place: a.ts"]);
+    expect(BuildReport.safeParse(report).success).toBe(true);
+  });
+
+  it("reports a card built with the tests step skipped: no tests, and the step says why", () => {
+    const events = [finished("implementing", 1, "passed", { testsStep: { status: "skipped", why: "holdout_cases" } })];
+    expect(buildReportOf(task, [run("implementing", 1)], events)).toMatchObject({ tests: [], testsStep: { status: "skipped", why: "holdout_cases" } });
   });
 
   it("names the scope issues and reads a build with no scope facts as clean", () => {

@@ -53,14 +53,30 @@ export const BuildReport = z.object({
   diffSummary: z.object({ added: z.number().int().nullable(), removed: z.number().int().nullable(), files: z.array(z.string()) }),
   /** Files the implementer declared outside the plan, with its reason. */
   declaredFiles: z.array(z.object({ path: z.string(), reason: z.string() })),
-  /** Which scenario a test proves, and whether it failed before and passed after: empty until wave 10 tags tests. */
-  tests: z.array(z.object({ scenario: z.string(), before: z.enum(["fail", "pass"]).nullable(), after: z.enum(["fail", "pass"]).nullable() })),
+  /** Which scenario a test proves (and its file), and whether it failed before (red at the tests commit) and passed after: empty when the tests step did not run. */
+  tests: z.array(z.object({ scenario: z.string(), before: z.enum(["fail", "pass"]).nullable(), after: z.enum(["fail", "pass"]).nullable(), file: z.string().nullable().optional() })),
   runs: z.array(BuildRun),
-  /** Tokens spent: null until wave 10. */
+  /** Tokens spent, from the runtime's own count; null when no run could count them. */
   tokens: z.number().nullable(),
   minutes: z.number(),
-  scopeCheck: z.object({ clean: z.boolean(), issues: z.array(z.string()) }),
+  scopeCheck: z.object({
+    clean: z.boolean(),
+    issues: z.array(z.string()),
+    /** Every issue with its severity (blocker, should_fix, nit): the ones that do not fail the stage ride on to Verify. */
+    severities: z.array(z.object({ severity: z.enum(["blocker", "should_fix", "nit"]), kind: z.string(), text: z.string() })).optional(),
+  }),
   version: z.number().int(),
+  // v2.2, wave 10: all optional, so a report assembled before them still validates.
+  /** Each red or green the ledger reported, and each failed regression sweep, in order: the slice or scenario it was about and the commit. */
+  iterations: z.array(z.object({ kind: z.enum(["red", "green", "sweep"]), ref: z.string().nullable(), sha: z.string().nullable() })).optional(),
+  /** The implementer's own Diff Summary, with git's facts over it. */
+  summary: DiffSummary.nullable().optional(),
+  /** The budget's limits, to show what was used against. */
+  limits: z.object({ max_iterations: z.number(), max_tokens: z.number(), max_minutes: z.number() }).nullable().optional(),
+  /** What the tests step did: committed, or skipped (and why, e.g. holdout_cases). */
+  testsStep: z.object({ status: z.string(), why: z.string().optional(), commit: z.string().optional(), redCheck: z.string().optional() }).nullable().optional(),
+  /** What the regression sweep did: passed, failed, or skipped (a repo with no checks). */
+  sweep: z.object({ status: z.string(), ran: z.array(z.string()), note: z.string().optional(), failed: z.array(z.string()).optional() }).nullable().optional(),
 });
 export type BuildReport = z.infer<typeof BuildReport>;
 

@@ -601,6 +601,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           ...mapped.detail,
           scope: { facts, verdict: await checks.lastVerdict() },
           // The agent's own summary of its diff, with git's facts over it.
+          // The branch the card was cut from, for the Build Report.
+          ...((await defaultBranch(task.repoPath).catch(() => null)) ? { base: (await defaultBranch(task.repoPath)) as string } : {}),
           diffSummary: diffSummaryOf(answerOf(output.answer)?.diffSummary, { changed: facts.changed, newDependencies: facts.newDependencies, todos: facts.todos, mapFiles: (input.plan?.map?.files ?? []).map((f) => f.path) }),
         };
         // Every issue has a severity: a blocker fails the stage (one fix pass, then a person: the pipeline counts scope reds); a should_fix or a nit

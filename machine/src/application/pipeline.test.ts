@@ -409,6 +409,16 @@ describe("Build's budget", () => {
     expect((await p.events(task.id)).find((e) => e.kind === "stage.finished" && e.payload.stage === "implementing")?.payload.tokens).toEqual({ input: 1_900_000, output: 100_001 });
   });
 
+  it("puts the tokens, the iteration log and the limits on the Build Report of a card that passed", async () => {
+    const usage = { turns: 1, costUsd: null, tokens: { input: 1000, output: 250 } };
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => ({ outcome: "pass" as const, usage, events: events(2) }) : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    const report = (await p.reports(task.id)).build;
+    expect(report).toMatchObject({ tokens: 1250, iterations: [{ kind: "red" }, { kind: "green" }], limits: { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90 } });
+  });
+
   it("lets a card inside its budget run again as before", async () => {
     const ran: string[] = [];
     const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(stage), { outcome: "fail" as const, events: events(2) }) : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });

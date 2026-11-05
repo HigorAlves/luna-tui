@@ -2118,7 +2118,7 @@ export class Pipeline {
       await this.store.updateTask(id, { branch: result.workspace.branch, worktreePath: result.workspace.worktreePath });
     }
     await this.recordTriad(id, stage, status, result);
-    const report = status === "passed" ? await this.reportFor(id, stage, { stage, attempt, status, outcome, ...(result.detail ? { detail: result.detail } : {}) }).catch(() => null) : null;
+    const report = status === "passed" ? await this.reportFor(id, stage, { stage, attempt, status, outcome, ...(result.usage?.tokens ? { tokens: result.usage.tokens } : {}), ...(result.detail ? { detail: result.detail } : {}) }).catch(() => null) : null;
     await this.log(
       id,
       "stage.finished",
@@ -2146,13 +2146,13 @@ export class Pipeline {
     const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
     // This run's finish is not logged yet: it is the newest row.
     const current: EventRow = { id: "0", taskId: id, stageRunId: null, kind: "stage.finished", payload: finishing, at: new Date() };
-    return stage === "implementing" ? buildReportOf(task, runs, [...events, current]) : verifyReportOf(task, runs, [...events, current]);
+    return stage === "implementing" ? buildReportOf(task, runs, [...events, current], (await this.policyFor(task.repoPath)).factory.build) : verifyReportOf(task, runs, [...events, current]);
   }
 
   /** The task's Build and Verify Reports, each null until its stage has passed; `GET /tasks/:id` shows them. */
   async reports(id: string): Promise<TaskReports> {
     const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
-    const build = buildReportOf(task, runs, events);
+    const build = buildReportOf(task, runs, events, (await this.policyFor(task.repoPath)).factory.build);
     const ciPassed = runs.some((r) => r.stage === "ci_watch" && r.status === "passed");
     return { build, verify: ciPassed ? verifyReportOf(task, runs, events) : null };
   }

@@ -1,7 +1,7 @@
 // The v2.2 Build Report and Verify Report, assembled from what the stages already leave: the stage runs,
 // the `stage.finished` details, the task's counters. Pure; the caller reads the rows. Reads only the
 // machine's own events, never anything a model or a ticket wrote beyond what a stage detail already holds.
-import { type BuildReport, CoverageSummary, Finding, type VerifyReport, mergeDuplicateFindings, normaliseFinding } from "@hardness/contracts";
+import { type BuildReport, CoverageSummary, DiffSummary, Finding, type VerifyReport, mergeDuplicateFindings, normaliseFinding } from "@hardness/contracts";
 
 import type { EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
 
@@ -28,7 +28,26 @@ function finishes(events: readonly EventRow[]): Finish[] {
 const durationOf = (r: StageRunRow): number | null => (r.endedAt ? r.endedAt.getTime() - r.startedAt.getTime() : null);
 
 /** What Build hands to Verify; null until an implementing run has passed. */
-export function buildReportOf(task: TaskRow, runs: readonly StageRunRow[], events: readonly EventRow[]): BuildReport | null {
+type BuildLimits = { max_iterations: number; max_tokens: number; max_minutes: number };
+
+/** The iteration log: each red or green the ledger reported (a commit fills the sha of its slice's green) and each failed sweep, in order. */
+function iterationsOf(events: readonly EventRow[]): NonNullable<BuildReport["iterations"]> {
+  const log: NonNullable<BuildReport["iterations"]> = [];
+  for (const { kind, payload } of events) {
+    const slice = `slice ${String(payload.id ?? "?")}`;
+    if (kind === "stage.slice.red") log.push({ kind: "red", ref: slice, sha: null });
+    else if (kind === "stage.slice.green") log.push({ kind: "green", ref: slice, sha: null });
+    else if (kind === "stage.slice.committed" && typeof payload.commit === "string") {
+      const green = log.findLast((i) => i.kind === "green" && i.ref === slice && i.sha === null);
+      if (green) green.sha = payload.commit;
+    } else if (kind === "build.sweep_failed") {
+      for (const check of stringsOf(payload.checks)) log.push({ kind: "sweep", ref: check, sha: null });
+    }
+  }
+  return log;
+}
+
+export function buildReportOf(task: TaskRow, runs: readonly StageRunRow[], events: readonly EventRow[], limits?: BuildLimits | null): BuildReport | null {
   const mine = runs.filter((r) => r.stage === "implementing");
   const passed = mine.filter((r) => r.status === "passed").at(-1);
   if (!passed) return null;
@@ -41,24 +60,43 @@ export function buildReportOf(task: TaskRow, runs: readonly StageRunRow[], event
     const item = objectOf(o);
     return typeof item?.path === "string" && typeof item.reason === "string" ? [{ path: item.path, reason: item.reason }] : [];
   });
+  const issueRows: NonNullable<BuildReport["scopeCheck"]["severities"]> = (Array.isArray(objectOf(finish?.detail.scope)?.issues) ? (objectOf(finish?.detail.scope)!.issues as unknown[]) : []).flatMap((i) => {
+    const item = objectOf(i);
+    const severity = item?.severity;
+    return (severity === "blocker" || severity === "should_fix" || severity === "nit") && typeof item?.kind === "string" && typeof item.text === "string" ? [{ severity, kind: item.kind, text: item.text }] : [];
+  });
+  const counted = events.flatMap((e) => (e.kind === "stage.finished" && e.payload.stage === "implementing" ? [objectOf(e.payload.tokens)] : []));
+  const tokens = counted.some((t) => typeof t?.input === "number" && typeof t.output === "number") ? counted.reduce((sum, t) => sum + (typeof t?.input === "number" && typeof t.output === "number" ? t.input + t.output : 0), 0) : null;
+  const step = objectOf(finish?.detail.testsStep);
+  const planned = (Array.isArray(step?.scenarioTests) ? (step!.scenarioTests as unknown[]) : []).flatMap((t) => {
+    const item = objectOf(t);
+    return typeof item?.scenario === "string" && /^[A-Za-z0-9_-]{1,40}$/.test(item.scenario) ? [{ scenario: item.scenario, file: typeof item.file === "string" ? item.file : null }] : [];
+  });
+  const sceneRows = (name: string) => new Set(events.filter((e) => e.kind === name && typeof e.payload.scenario === "string").map((e) => e.payload.scenario as string));
+  const reds = sceneRows("scenario.red");
+  const greens = sceneRows("scenario.green");
+  const summary = DiffSummary.safeParse(finish?.detail.diffSummary);
+  const sweep = objectOf(finish?.detail.sweep);
   const totalMs = mine.reduce((sum, r) => sum + (durationOf(r) ?? 0), 0);
   return {
     branch: task.branch,
-    // Nothing logs the PR's base branch before wave 11.
-    base: null,
+    base: typeof finish?.detail.base === "string" ? finish.detail.base : null,
     headSha: passed.outputCommit,
     // The sandbox's environment hash exists from wave 11.
     envHash: null,
     diffSummary: { added: task.diffAdded, removed: task.diffRemoved, files: stringsOf(facts?.changed) },
     declaredFiles,
-    // Tests are tagged with the scenario they prove from wave 10.
-    tests: [],
+    tests: planned.map((t) => ({ scenario: t.scenario, file: t.file, before: reds.has(t.scenario) ? ("fail" as const) : null, after: greens.has(t.scenario) ? ("pass" as const) : null })),
     runs: mine.map((r) => ({ attempt: r.attempt, outcome: r.outcome, engine: r.engine, durationMs: durationOf(r) })),
-    // Token counts are recorded from wave 10.
-    tokens: null,
+    tokens,
     minutes: Math.round((totalMs / 60_000) * 10) / 10,
-    scopeCheck: { clean: issues.length === 0, issues },
+    scopeCheck: issueRows.length > 0 ? { clean: issueRows.every((i) => i.severity === "nit"), issues: issueRows.map((i) => i.text), severities: issueRows } : { clean: issues.length === 0, issues },
     version: REPORT_VERSION,
+    iterations: iterationsOf(events),
+    summary: summary.success ? summary.data : null,
+    limits: limits ? { max_iterations: limits.max_iterations, max_tokens: limits.max_tokens, max_minutes: limits.max_minutes } : null,
+    testsStep: step && typeof step.status === "string" ? { status: step.status, ...(typeof step.why === "string" ? { why: step.why } : {}), ...(typeof step.commit === "string" ? { commit: step.commit } : {}), ...(typeof step.redCheck === "string" ? { redCheck: step.redCheck } : {}) } : null,
+    sweep: sweep && typeof sweep.status === "string" ? { status: sweep.status, ran: stringsOf(sweep.ran), ...(typeof sweep.note === "string" ? { note: sweep.note } : {}), ...(stringsOf(sweep.failed).length ? { failed: stringsOf(sweep.failed) } : {}) } : null,
   };
 }
 

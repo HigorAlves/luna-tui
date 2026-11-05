@@ -76,7 +76,7 @@ describe("the red check, per scenario", () => {
       { kind: "red", scenario: { id: "S1" }, exists: true, output: allRed.S1 },
       { kind: "red", scenario: { id: "S2" }, exists: true, output: allRed.S2 },
     ]);
-    expect(e.rows).toEqual([["scenario.red", { scenario: "S1" }], ["scenario.red", { scenario: "S2" }]]);
+    expect(e.rows.filter(([k]) => k === "scenario.red")).toEqual([["scenario.red", { scenario: "S1" }], ["scenario.red", { scenario: "S2" }]]);
     expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
   });
 
@@ -101,6 +101,30 @@ describe("the red check, per scenario", () => {
     const result = await buildTestsStep(f.deps)(context([v2]));
     expect(f.calls).toEqual(["writer", "commit", "checkpoint:red", "implement", "sweep"]);
     expect(result.detail).toMatchObject({ testsStep: { status: "committed", redCheck: "skipped" } });
+  });
+});
+
+describe("scenario.green", () => {
+  const emitted = () => {
+    const rows: Array<[string, Record<string, unknown>]> = [];
+    return { rows, emit: async (kind: string, payload: Record<string, unknown>) => void rows.push([kind, payload]) };
+  };
+
+  it("puts a scenario.green row with the id for each scenario's test when the stage passes, and lists the tests with their files on the step", async () => {
+    sweeps.length = 0;
+    const f = fakes([tagged("S1", "S2")]);
+    const e = emitted();
+    const result = await buildTestsStep(f.deps)(context([v1], { emit: e.emit }));
+    expect(e.rows.filter(([k]) => k === "scenario.green")).toEqual([["scenario.green", { scenario: "S1" }], ["scenario.green", { scenario: "S2" }]]);
+    expect(result.detail).toMatchObject({ testsStep: { scenarioTests: [{ scenario: "S1", file: "web/cart.test.ts" }, { scenario: "S2", file: "web/cart.test.ts" }] } });
+  });
+
+  it("puts none when the implementer or the sweep did not pass", async () => {
+    sweeps.length = 0;
+    const f = fakes([tagged("S1")], { implement: async () => ({ outcome: "fail" }) as StageResult });
+    const e = emitted();
+    await buildTestsStep(f.deps)(context([v2], { emit: e.emit }));
+    expect(e.rows.filter(([k]) => k === "scenario.green")).toEqual([]);
   });
 });
 

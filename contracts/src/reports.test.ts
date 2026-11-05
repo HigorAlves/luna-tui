@@ -95,3 +95,25 @@ describe("the Diff Summary", () => {
     expect(stored.files[0]).toEqual({ path: "a.ts", reason: null, in_code_map: true });
   });
 });
+
+describe("the complete Build Report", () => {
+  it("still validates a report assembled before this wave: none of the new fields is required", () => {
+    expect(BuildReport.safeParse(build).success).toBe(true);
+  });
+
+  it("carries the iteration log, the tests with their file, the Diff Summary, the severities, the budget limits and what the tests step and the sweep did", () => {
+    const full = {
+      ...build,
+      base: "main",
+      tokens: 175_000,
+      iterations: [{ kind: "red", ref: "slice 1", sha: null }, { kind: "green", ref: "slice 1", sha: "abc" }, { kind: "sweep", ref: "lint", sha: null }],
+      tests: [{ scenario: "S1", file: "web/cart.test.ts", before: "fail", after: "pass" }],
+      summary: { what: "w", why: "y", files: [], flags_added: [], migrations: [], risks_noticed: [], deps_added: [], todos: [] },
+      scopeCheck: { clean: false, issues: ["dependency the plan did not name: left-pad"], severities: [{ severity: "should_fix", kind: "new_dependency", text: "dependency the plan did not name: left-pad" }] },
+      limits: { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90 },
+      testsStep: { status: "skipped", why: "holdout_cases" },
+      sweep: { status: "passed", ran: ["lint"] },
+    };
+    expect(BuildReport.parse(full)).toMatchObject({ iterations: [{ kind: "red" }, { kind: "green" }, { kind: "sweep" }], tests: [{ file: "web/cart.test.ts" }], limits: { max_iterations: 15 } });
+  });
+});
