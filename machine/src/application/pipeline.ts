@@ -2,22 +2,23 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, TriageOutcome, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RecordNotEditableError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
 import { questionsComment } from "../domain/notices.ts";
+import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
 import { type PipelineEvent, type Step, transition } from "../domain/transition.ts";
 import { branchDiffStat, removeWorktree as removeWorktreeOnDisk, revertCommit } from "../adapters/git/worktree.ts";
 import { containerRunning, removeContainer } from "../adapters/docker/docker.ts";
 import type { Credentials } from "../adapters/credentials/index.ts";
 import { type RunSpan, type Telemetry, noTelemetry } from "./telemetry.ts";
-import { type DecisionTruth, findingTruth, planTruth, worthLearningTruth } from "./decision-truth.ts";
+import { type DecisionTruth, findingTruth, planTruth, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth } from "./decision-truth.ts";
 import { fallbackCandidates } from "../domain/engine-choice.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { pickEngine } from "./engine.ts";
@@ -38,7 +39,7 @@ import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
+export { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RecordNotEditableError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -553,6 +554,47 @@ export class Pipeline {
     return this.get(id);
   }
 
+  /** A person's correction of the Triage Record while the card waits at a gate. The record's version rises and the corrected fields are the
+   *  person's (`decisionBy: person`, `editedFields`); each correction is ground truth for the `triage_signals` reading that said otherwise. */
+  async editRecord(id: string, patch: { kind?: string; typeOfWork?: string; size?: string; riskPrelim?: string; priority?: string }): Promise<TaskRow> {
+    const { record, classification, fields } = await this.store.withTaskLock(id, async (task, tx) => {
+      if (!task.record) throw new RecordNotEditableError(id, "triage has not written one");
+      if (!WAITING_ON_USER.has(task.state)) throw new RecordNotEditableError(id, `the card is ${task.state}, not waiting at a gate`);
+      const before = task.record;
+      const next: Record<string, unknown> = { ...before };
+      const changed: Array<NonNullable<TriageRecord["editedFields"]>[number]> = [];
+      const set = (field: (typeof changed)[number], current: unknown, value: string | undefined, apply: () => void) => {
+        if (value === undefined || value === current) return;
+        apply();
+        changed.push(field);
+      };
+      set("kind", before.kind, patch.kind, () => (next.kind = patch.kind));
+      set("typeOfWork", before.typeOfWork, patch.typeOfWork, () => (next.typeOfWork = patch.typeOfWork));
+      set("size", before.size, patch.size, () => (next.size = patch.size));
+      set("riskPrelim", before.riskPrelim, patch.riskPrelim, () => {
+        next.riskPrelim = patch.riskPrelim;
+        next.risk = patch.riskPrelim;
+      });
+      set("priority", before.urgencyDetail?.priority, patch.priority, () => {
+        next.urgency = patch.priority;
+        next.urgencyDetail = { subScores: { who: 2, what: 2, impact: 2, time: 2, demand: 2 }, ...before.urgencyDetail, priority: patch.priority };
+      });
+      if (changed.length === 0) return { record: before, classification: task.classification, fields: [] as typeof changed };
+      next.version = (before.version ?? 1) + 1;
+      next.decisionBy = "person";
+      next.editedFields = [...new Set([...(before.editedFields ?? []), ...changed])];
+      await tx.updateTask(id, { record: next as TriageRecord });
+      return { record: next as TriageRecord, classification: task.classification, fields: changed };
+    });
+    if (fields.length > 0) {
+      await this.log(id, "record.edited", { fields, version: record.version ?? null });
+      const recordId = classification?.recordId;
+      const label = triageEditTruth({ ...record, editedFields: fields });
+      if (this.truth && recordId && Object.keys(label).length > 0) await this.truth.learned({ pack: "triage_signals", recordId, label, source: "record_edit", taskId: id });
+    }
+    return this.get(id);
+  }
+
   /** Replaces the scenarios on the open gate that carries them (the plan gate, or a legacy test check); everything else on the gate stays. */
   async editCases(id: string, cases: TestCase[]): Promise<TaskRow> {
     await this.store.withTaskLock(id, async (_task, tx) => {
@@ -693,11 +735,13 @@ export class Pipeline {
       // the row lock, so only the request that closed the gate goes on to post.
       await this.dispatch(id, { type: "replied" }, { decision: record, onlyFrom: new Set<TaskState>(["awaiting_approval"]) });
       await this.log(id, "task.reply", { body: String(open!.requested.reply ?? "") });
+      if (gate) await this.learnFromGate(id, gate, decision, response);
       return this.get(id);
     }
     if (decision === "approved" && outcome === "archive") {
       // One click: an archive is final and neither plans nor posts.
       const archived = await this.archive(id, TRIAGE_ARCHIVE[String(open!.requested.archiveReason)] ?? "rejected", { decision: record });
+      if (gate) await this.learnFromGate(id, gate, decision, response);
       return (await this.store.getTask(id)) ?? archived;
     }
     // A gate that carries triage's outcome came from triage; any other open approval is the plan stage's.
@@ -722,6 +766,18 @@ export class Pipeline {
     try {
       const requested = gate.requested as { decisions?: Record<string, unknown>; outcome?: unknown; revisions?: unknown; rules?: unknown };
       const ids = requested.decisions ?? {};
+      const task = await this.get(taskId);
+      const recordId = task.classification?.recordId;
+      const edited = new Set((task.record?.editedFields ?? []).flatMap((f) => (f === "kind" ? ["kind"] : f === "typeOfWork" ? ["type_of_work"] : f === "size" ? ["size"] : f === "riskPrelim" ? ["risk_prelim"] : [])));
+      const edits = task.record ? triageEditTruth(task.record) : {};
+      if (gate.kind === "awaiting_approval" && recordId && (requested.outcome === "conversation" || requested.outcome === "archive")) {
+        await truth.learned({ pack: "triage_signals", recordId, label: { ...edits, ...triageOutcomeTruth(requested.outcome, decision) }, source: decision === "sent_back" ? "triage_sent_back" : "triage_outcome_approved", taskId });
+      } else if (gate.kind === "awaiting_approval" && requested.outcome === undefined && recordId && decision === "approved" && task.classification) {
+        // An approval that left the signals alone confirms the ones the machine acted on; a correction stands in for its own question.
+        const policy = await this.policyFor(task.repoPath);
+        const verdicts = triageVerdicts(task.classification, policy.factory.triage, { ...(policy.decisions.triage_signals ? { overrides: policy.decisions.triage_signals } : {}) });
+        await truth.learned({ pack: "triage_signals", recordId, label: { ...triageConfirmTruth(task.classification, verdicts, edited), ...edits }, source: "plan_approved", taskId });
+      }
       if (gate.kind === "awaiting_approval" && requested.outcome === undefined) {
         const touched = new Set((Array.isArray(requested.revisions) ? requested.revisions : []).flatMap((r) => Object.keys((r as { after?: object }).after ?? {})));
         const subject: Record<string, string[]> = { coverage_check: ["cases"], plan_check: ["brief", "criteria", "assumptions", "slices", "rollback"], risk_score: ["risk"] };

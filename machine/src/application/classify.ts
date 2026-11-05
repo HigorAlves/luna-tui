@@ -30,9 +30,9 @@ export function createIssueClassifier(deps: { runs: PackRunsPort; now?: () => Da
   return {
     async classify(issue, options = {}) {
       try {
-        const { answer, usage } = await deps.runs.run({ pack: "triage_signals", context: { issue } }, INTAKE_CLIENT);
+        const { answer, usage, recordId } = await deps.runs.run({ pack: "triage_signals", context: { issue } }, INTAKE_CLIENT);
         const security = (issue.labels ?? []).some((label) => label.toLowerCase() === "security");
-        return classificationOf(answer, usage.model, now(), { ...options, flags: { ...(security ? { security: true } : {}), ...options.flags } });
+        return { ...classificationOf(answer, usage.model, now(), { ...options, flags: { ...(security ? { security: true } : {}), ...options.flags } }), ...(recordId ? { recordId } : {}) };
       } catch (thrown) {
         if (!(thrown instanceof RunNoCredentialError)) log(`intake: could not classify ${issue.source ?? issue.title}: ${thrown instanceof Error ? thrown.message : String(thrown)}; going on without it`);
         return null;

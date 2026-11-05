@@ -444,6 +444,38 @@ fn heading(text: &str) -> Line<'static> {
     Line::from(Span::from(text.to_string()).fg(c(ACCENT)).bold())
 }
 
+/// The Triage Record on the card: the summary, the kind, the type of work, the size, the priority with its five sub-scores, the
+/// preliminary risk, the signals the plan gate flags and who decided. Empty until triage has written one.
+fn record_lines(task: &Task, requested: &serde_json::Value) -> Vec<Line<'static>> {
+    let Some(record) = task.record.as_ref() else { return Vec::new() };
+    let who = match record.decision_by.as_deref() {
+        Some("person") => format!("corrected by a person ({})", if record.edited_fields.is_empty() { "record".to_string() } else { record.edited_fields.join(", ") }),
+        _ => "decided by the machine".to_string(),
+    };
+    let mut lines = vec![Line::default(), proposal_heading(&format!("Triage record v{} · {who}", record.version.unwrap_or(1)))];
+    if let Some(summary) = record.summary.as_deref().filter(|s| !s.trim().is_empty()) {
+        lines.extend(summary.lines().map(|l| Line::from(format!("  {l}"))));
+    }
+    let row = |label: &str, value: String| Line::from(vec![Span::from(format!("  {label:<11}")).fg(c(SUBTEXT0)), Span::from(value)]);
+    lines.push(row("Kind", record.kind.clone()));
+    if let Some(t) = &record.type_of_work {
+        lines.push(row("Type", t.clone()));
+    }
+    lines.push(row("Size", record.size.clone()));
+    if let Some(u) = &record.urgency_detail {
+        let s = &u.sub_scores;
+        lines.push(row("Priority", format!("{} (who {}, what {}, impact {}, time {}, demand {})", u.priority, s.who, s.what, s.impact, s.time, s.demand)));
+    }
+    if let Some(r) = &record.risk_prelim {
+        lines.push(row("Risk", r.clone()));
+    }
+    let flagged: Vec<String> = requested["flagged"].as_array().map(|a| a.iter().filter_map(|v| v.as_str()).filter_map(|v| v.strip_prefix("triage.")).map(str::to_string).collect()).unwrap_or_default();
+    if !flagged.is_empty() {
+        lines.push(Line::from(vec![Span::from(format!("  {:<11}", "Flagged")).fg(c(SUBTEXT0)), Span::from(format!("{} (T corrects the record)", flagged.join(", "))).fg(c(YELLOW))]));
+    }
+    lines
+}
+
 fn proposal_heading(text: &str) -> Line<'static> {
     Line::from(Span::from(text.to_string()).fg(c(PEACH)).bold())
 }
@@ -667,6 +699,7 @@ fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'s
         return lines;
     };
     let requested = &approval.requested;
+    lines.extend(record_lines(task, requested));
     let facts = gate_facts(approval);
     if !facts.is_empty() {
         lines.push(Line::default());
@@ -1531,6 +1564,24 @@ mod tests {
         let (task, detail) = at_gate(r#"{"outcome":"archive","archiveReason":"duplicate","brief":"same as #7"}"#, "awaiting_approval");
         let text = render(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(text.contains("Outcome    archive (duplicate)") && text.contains("archives the ticket"), "{text}");
+    }
+
+    const RECORD: &str = r#"{"kind":"bug","goal":"Stop the panic","summary":"The board panics on j.","typeOfWork":"frontend","size":"S","urgencyDetail":{"priority":"P1","subScores":{"who":3,"what":2,"impact":2,"time":1,"demand":1}},"riskPrelim":"low","decisionBy":"machine","version":1}"#;
+
+    #[test]
+    fn the_plan_shows_the_triage_record_its_priority_flags_and_who_decided() {
+        let (mut task, detail) = at_gate(r#"{"brief":"b","flagged":["triage.size","plan"]}"#, "awaiting_approval");
+        task.record = Some(serde_json::from_str(RECORD).unwrap());
+        let text = render(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
+        for want in ["Triage record v1 · decided by the machine", "The board panics on j.", "Kind       bug", "Type       frontend", "Size       S", "Priority   P1 (who 3, what 2, impact 2, time 1, demand 1)", "Risk       low", "Flagged    size (T corrects the record)"] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        assert!(text.find("Triage record").unwrap() < text.find("Brief").unwrap(), "{text}");
+        task.record = serde_json::from_str(&RECORD.replace(r#""decisionBy":"machine","version":1"#, r#""decisionBy":"person","version":2,"editedFields":["kind","size"]"#)).unwrap();
+        let text = render(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(text.contains("Triage record v2 · corrected by a person (kind, size)"), "{text}");
+        task.record = None;
+        assert!(!render(110, 40, &task, Some(&detail), Section::Plan, 0).join("\n").contains("Triage record"));
     }
 
     #[test]

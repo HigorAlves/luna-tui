@@ -494,6 +494,8 @@ export const TaskClassification = z.object({
   confidence: z.number().min(0).max(1),
   at: z.string(),
   model: z.string(),
+  /** The decision record this reading left (an id, never its content), so a person's correction can be written onto it as ground truth. */
+  recordId: z.string().optional(),
   /** Every question's answer with its own confidence. */
   signals: z.record(z.string(), z.object({ answer: z.union([z.string(), z.number(), z.boolean(), z.null()]), confidence: z.number().min(0).max(1) })).optional(),
 });
@@ -546,6 +548,8 @@ export const TriageRecord = z.object({
   /** The hints the filer gave that triage read. */
   hintsUsed: z.array(z.string()).optional(),
   decisionBy: z.enum(["machine", "person"]).optional(),
+  /** The fields a person corrected (`kind`, `typeOfWork`, `size`, `riskPrelim`, `priority`); the rest are the machine's. */
+  editedFields: z.array(z.enum(["kind", "typeOfWork", "size", "riskPrelim", "priority"])).optional(),
   version: z.number().int().optional(),
 });
 export type TriageRecord = z.infer<typeof TriageRecord>;

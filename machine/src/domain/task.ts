@@ -166,6 +166,14 @@ export class NoPlanToEditError extends Error {
   }
 }
 
+/** No record to correct: the card has none yet, or it is not waiting at a gate (a stage is working on it, or it ended). */
+export class RecordNotEditableError extends Error {
+  constructor(id: string, why: string) {
+    super(`the triage record of task ${id} cannot be corrected: ${why}`);
+    this.name = "RecordNotEditableError";
+  }
+}
+
 /** A work order reused an `Idempotency-Key` with another body. */
 export class IdempotencyConflictError extends Error {
   /** The task the key already made, for the client to follow. */

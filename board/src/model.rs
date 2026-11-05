@@ -107,6 +107,74 @@ impl TaskSource {
     }
 }
 
+/// The urgency sub-scores of a record, 1 to 3.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct SubScores {
+    pub who: f64,
+    pub what: f64,
+    pub impact: f64,
+    pub time: f64,
+    pub demand: f64,
+}
+
+/// The priority and what it came from.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct UrgencyDetail {
+    pub priority: String,
+    pub sub_scores: SubScores,
+}
+
+/// The Triage Record on a card (the machine's `TriageRecord`): what triage understood, composed by the machine.
+#[derive(Deserialize, Clone, Debug, PartialEq, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TriageRecord {
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub goal: String,
+    #[serde(default)]
+    pub summary: Option<String>,
+    #[serde(default)]
+    pub type_of_work: Option<String>,
+    #[serde(default)]
+    pub size: String,
+    #[serde(default)]
+    pub urgency_detail: Option<UrgencyDetail>,
+    #[serde(default)]
+    pub risk_prelim: Option<String>,
+    /// `machine` or `person`.
+    #[serde(default)]
+    pub decision_by: Option<String>,
+    #[serde(default)]
+    pub version: Option<u32>,
+    #[serde(default)]
+    pub edited_fields: Vec<String>,
+}
+
+/// What `E` corrects, in the order its picker lists them: the machine's key, a label and the values it accepts.
+pub const RECORD_FIELDS: [(&str, &str, &[&str]); 5] = [
+    ("kind", "kind", &["bug", "feature", "task", "chore", "question", "incident"]),
+    ("typeOfWork", "type of work", &["frontend", "backend", "infra", "data", "docs", "mixed"]),
+    ("size", "size", &["XS", "S", "M", "L", "XL"]),
+    ("riskPrelim", "risk", &["low", "medium", "high"]),
+    ("priority", "priority", &["P0", "P1", "P2", "P3"]),
+];
+
+impl TriageRecord {
+    /// The record's value for one of `RECORD_FIELDS` by key.
+    pub fn value_of(&self, key: &str) -> Option<&str> {
+        match key {
+            "kind" => Some(self.kind.as_str()),
+            "typeOfWork" => self.type_of_work.as_deref(),
+            "size" => Some(self.size.as_str()),
+            "riskPrelim" => self.risk_prelim.as_deref(),
+            "priority" => self.urgency_detail.as_ref().map(|u| u.priority.as_str()),
+            _ => None,
+        }
+    }
+}
+
 fn feature_route() -> String {
     "feature".to_string()
 }
@@ -137,6 +205,9 @@ pub struct Task {
     /// Why the ticket was archived (`duplicate`, `sla_expired`, `rejected`, `not_for_agent`, `pr_closed`, `no_setup`, `no_answer`); absent otherwise and from machines that predate archiving.
     #[serde(default)]
     pub archive_reason: Option<String>,
+    /// The Triage Record, once triage wrote one; absent before and from machines that predate it.
+    #[serde(default)]
+    pub record: Option<TriageRecord>,
     /// What every stage run of this ticket has cost so far; None when unknown.
     #[serde(default)]
     pub spent_usd: Option<f64>,

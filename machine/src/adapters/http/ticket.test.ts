@@ -146,3 +146,33 @@ describe("GET /tasks/:id/diff", () => {
     expect(await call(`/tasks/${built.id}/diff`)).toMatchObject({ status: 404, body: { error: "no_worktree" } });
   });
 });
+
+describe("PATCH /tasks/:id/record", () => {
+  const record = { source: "manual", kind: "bug", goal: "g", size: "S", urgency: "P2", risk: "low", signals: {}, qa: [], decision: "plan", reason: "r", at: "2026-11-05T00:00:00.000Z", model: "m", typeOfWork: "backend", riskPrelim: "low", urgencyDetail: { priority: "P2", subScores: { who: 2, what: 2, impact: 2, time: 1, demand: 1 } }, version: 1, decisionBy: "machine" };
+  const atGate = async () => {
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
+    const task = await newTask();
+    await db.query("update tasks set record = $1 where id = $2", [JSON.stringify(record), task.id]);
+    await pipeline.start(task.id);
+    await db.query("update tasks set record = $1 where id = $2", [JSON.stringify(record), task.id]);
+    return task;
+  };
+
+  it("corrects the record at a gate: the version rises and the fields are the person's", async () => {
+    const task = await atGate();
+    const edited = await call(`/tasks/${task.id}/record`, json({ kind: "feature", riskPrelim: "high" }));
+    expect(edited).toMatchObject({ status: 200, body: { record: { kind: "feature", riskPrelim: "high", version: 2, decisionBy: "person", editedFields: ["kind", "riskPrelim"] } } });
+  });
+
+  it("takes enum values only: 400 for a made-up one, a free-text field, an unknown key or nothing at all", async () => {
+    const task = await atGate();
+    for (const body of [{ kind: "epic" }, { size: "XXL" }, { priority: "P9" }, { goal: "rewrite everything" }, { kind: "bug", extra: 1 }, {}]) {
+      expect((await call(`/tasks/${task.id}/record`, json(body))).status, JSON.stringify(body)).toBe(400);
+    }
+  });
+
+  it("is 409 record_locked when the card is not at a gate or has no record", async () => {
+    const bare = await newTask();
+    expect(await call(`/tasks/${bare.id}/record`, json({ kind: "bug" }))).toMatchObject({ status: 409, body: { error: "record_locked" } });
+  });
+});

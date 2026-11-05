@@ -1,7 +1,7 @@
 import { PACKS } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
-import { DecisionTruth, commentIntentTruth, e2eCauseTruth, eventClassTruth, evidenceFormatTruth, findingTruth, planTruth, recordIdOf, redCheckTruth, tagged, worthLearningTruth } from "./decision-truth.ts";
+import { DecisionTruth, commentIntentTruth, e2eCauseTruth, eventClassTruth, evidenceFormatTruth, findingTruth, planTruth, recordIdOf, redCheckTruth, tagged, triageConfirmTruth, triageEditTruth, triageOutcomeTruth, worthLearningTruth } from "./decision-truth.ts";
 
 describe("what each fact says about the answer", () => {
   it("e2e_failure_cause: a re-run that passed makes env_flake right; one that failed the same way rules it out", () => {
@@ -74,5 +74,35 @@ describe("DecisionTruth", () => {
     const broken = new DecisionTruth({ setTruth: async () => Promise.reject(new Error("disk")) }, { told: async (e) => void told.push(e) });
     expect(await broken.learned({ pack: "worth_learning", recordId: "r", label: {}, source: "x" })).toBe(false);
     expect(told).toEqual([]);
+  });
+});
+
+describe("the triage_signals truths", () => {
+  const classification = { signals: { kind: { answer: "bug", confidence: 0.9 }, size: { answer: "S", confidence: 0.5 }, who: { answer: 1.4, confidence: 0.9 }, time: { answer: 0, confidence: 0.9 }, risk_prelim: { answer: "low", confidence: 0.9 }, archive: { answer: false, confidence: 0.95 } } };
+  const verdicts = { kind: { verdict: "proceed" }, size: { verdict: "flag" }, urgency: { verdict: "proceed" }, risk: { verdict: "proceed" }, archive: { verdict: "proceed" } } as const;
+
+  it("labels what a person corrected, by the question it corrects, and nothing for a priority edit", () => {
+    expect(triageEditTruth({ editedFields: ["kind", "size", "riskPrelim", "typeOfWork"], kind: "feature", size: "M", riskPrelim: "high", typeOfWork: "infra" })).toEqual({
+      kind: { choice: "feature" }, size: { choice: "M" }, risk_prelim: { choice: "high" }, type_of_work: { choice: "infra" },
+    });
+    expect(triageEditTruth({ editedFields: ["priority"], kind: "bug" })).toEqual({});
+    expect(triageEditTruth({ kind: "bug" })).toEqual({});
+  });
+
+  it("confirms the signals the machine acted on: each as it answered, scores rounded, the flagged ones left out", () => {
+    expect(triageConfirmTruth(classification, verdicts)).toEqual({
+      kind: { choice: "bug" }, who: { score: 1 }, time: { score: 0 }, risk_prelim: { choice: "low" }, archive: { value: false },
+    });
+  });
+
+  it("leaves a corrected question to the correction", () => {
+    expect(triageConfirmTruth(classification, verdicts, new Set(["kind"]))).not.toHaveProperty("kind");
+  });
+
+  it("reads a reply or an archive gate: approved confirms it, sent back contradicts it", () => {
+    expect(triageOutcomeTruth("conversation", "approved")).toEqual({ kind: { choice: "question" } });
+    expect(triageOutcomeTruth("conversation", "sent_back")).toEqual({ kind: { choice: ["bug", "feature", "task", "chore", "incident"] } });
+    expect(triageOutcomeTruth("archive", "approved")).toEqual({ archive: { value: true } });
+    expect(triageOutcomeTruth("archive", "sent_back")).toEqual({ archive: { value: false } });
   });
 });

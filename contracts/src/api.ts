@@ -91,6 +91,20 @@ export interface PlanRevision {
   after: EditPlanInput;
 }
 
+/** `PATCH /tasks/:id/record`: a person's correction of the Triage Record while the card waits at a gate. Enum values only, so nothing a
+ *  client types reaches a prompt; at least one field. */
+export const EditRecordInput = z
+  .object({
+    kind: z.enum(["bug", "feature", "task", "chore", "question", "incident"]).optional(),
+    typeOfWork: z.enum(["frontend", "backend", "infra", "data", "docs", "mixed"]).optional(),
+    size: z.enum(["XS", "S", "M", "L", "XL"]).optional(),
+    riskPrelim: z.enum(["low", "medium", "high"]).optional(),
+    priority: z.enum(["P0", "P1", "P2", "P3"]).optional(),
+  })
+  .strict()
+  .refine((input) => Object.values(input).some((v) => v !== undefined), { message: "give at least one field to correct" });
+export type EditRecordInput = z.infer<typeof EditRecordInput>;
+
 /** `PATCH /tasks/:id/cases`: replaces test_design's cases while the test check is open. */
 export const EditCasesInput = z.object({
   cases: z.array(TestCase).min(1),

@@ -358,6 +358,14 @@ const SHARED: &[Binding] = &[
     b("a", "approve the memory review", Group::Gate, Scope::Board, |app| gate_is(app, &["reviewing_memory"]), 90),
     b("a", "advance", Group::Gate, Scope::Board, advance_fallback, 90),
     b(
+        "T",
+        "correct the triage record",
+        Group::Gate,
+        Scope::Board,
+        |app| with_task(app, |t| if t.record.is_none() { Avail::Off("triage has not written a record yet") } else if t.waiting_on_you { Avail::On } else { Avail::Off("the record can be corrected while the ticket waits at a gate") }),
+        45,
+    ),
+    b(
         "A",
         "memory review: approve, skip the rules",
         Group::Gate,

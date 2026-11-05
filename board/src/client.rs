@@ -216,6 +216,12 @@ impl Machine {
         Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/plan"))).send_json(body))
     }
 
+    /// Corrects the Triage Record at a gate: `(key, value)` pairs from `RECORD_FIELDS`, enum values only.
+    pub fn edit_record(&self, id: &str, changes: &[(String, String)]) -> Result<Task, String> {
+        let body: serde_json::Map<String, Value> = changes.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
+        Self::typed(self.agent.patch(self.url(&format!("/tasks/{id}/record"))).send_json(Value::Object(body)))
+    }
+
     /// Replaces test_design's cases while they wait for your check.
     pub fn edit_cases(&self, id: &str, cases: &[TestCase]) -> Result<Task, String> {
         let cases: Vec<Value> = cases

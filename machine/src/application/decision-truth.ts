@@ -4,9 +4,10 @@
 // been (`equals`), an array the labels it may have been (`oneOf`) for a fact that only rules one out.
 // A decision's record id travels on its answer as a symbol-keyed property: it survives the spreads
 // and hand-offs between a decide function and its stage, and never reaches JSON.
-import type { DecisionPack, DecisionTruth as Truth, PackId } from "@hardness/contracts";
+import type { DecisionPack, DecisionTruth as Truth, PackId, TaskClassification, TriageRecord } from "@hardness/contracts";
 
 import type { DecisionLog } from "./decision-log.ts";
+import type { FieldVerdict, TriageField } from "../domain/triage-policy.ts";
 
 const RECORD_ID = Symbol("decision.recordId");
 
@@ -87,4 +88,47 @@ export class DecisionTruth implements TruthSink {
       return false;
     }
   }
+}
+
+// ---- triage_signals: what a person's correction, a one-tap reply or archive, or an approval with no edit says about the signals ----
+
+/** The questions each field of the record answers. */
+const QUESTIONS_OF: Record<TriageField, string[]> = { kind: ["kind"], size: ["size"], urgency: ["who", "what", "impact", "time", "demand"], risk: ["risk_prelim"], archive: ["archive"] };
+/** The record fields a person may correct, and the question each one corrects (priority has no question of its own: it is five sub-scores). */
+const EDIT_QUESTION: Partial<Record<NonNullable<TriageRecord["editedFields"]>[number], { question: string; value: (r: Partial<TriageRecord>) => string | undefined }>> = {
+  kind: { question: "kind", value: (r) => r.kind },
+  typeOfWork: { question: "type_of_work", value: (r) => r.typeOfWork },
+  size: { question: "size", value: (r) => r.size },
+  riskPrelim: { question: "risk_prelim", value: (r) => r.riskPrelim },
+};
+
+/** What the person corrected, as the questions' labels. A priority edit labels nothing: no single question said it. */
+export function triageEditTruth(record: Partial<Pick<TriageRecord, "editedFields" | "kind" | "typeOfWork" | "size" | "riskPrelim">>): Label {
+  const label: Label = {};
+  for (const field of record.editedFields ?? []) {
+    const edit = EDIT_QUESTION[field];
+    const value = edit?.value(record);
+    if (edit && value !== undefined) label[edit.question] = { choice: value };
+  }
+  return label;
+}
+
+/** An approval that left the signals alone confirms the ones the machine acted on (verdict `proceed`), each as it answered, except what the person corrected. */
+export function triageConfirmTruth(classification: Pick<TaskClassification, "signals">, verdicts: Record<TriageField, Pick<FieldVerdict, "verdict">>, edited: ReadonlySet<string> = new Set()): Label {
+  const label: Label = {};
+  for (const [field, questions] of Object.entries(QUESTIONS_OF) as Array<[TriageField, string[]]>) {
+    if (verdicts[field].verdict !== "proceed") continue;
+    for (const q of questions) {
+      const answer = classification.signals?.[q]?.answer;
+      if (edited.has(q) || answer === undefined || answer === null) continue;
+      label[q] = typeof answer === "string" ? { choice: answer } : typeof answer === "boolean" ? { value: answer } : { score: Math.round(answer) };
+    }
+  }
+  return label;
+}
+
+/** The gate triage opened for a reply or an archive: approving it says the kind was a question (or the card should be archived), sending it back says it was not. */
+export function triageOutcomeTruth(outcome: "conversation" | "archive", decision: "approved" | "sent_back"): Label {
+  if (outcome === "conversation") return { kind: { choice: decision === "approved" ? "question" : ["bug", "feature", "task", "chore", "incident"] } };
+  return { archive: { value: decision === "approved" } };
 }

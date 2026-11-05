@@ -12,6 +12,7 @@ import {
   type PullRequest,
   EditCasesInput,
   EditPlanInput,
+  EditRecordInput,
   EditStagesInput,
   JiraCreateInput,
   JiraLinkInput,
@@ -55,7 +56,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, type Pipeline, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, type Pipeline, RecordNotEditableError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -173,6 +174,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
+    if (error instanceof RecordNotEditableError) return fail(c, 409, "record_locked", error.message);
     if (error instanceof NoCasesToEditError) return fail(c, 409, "no_cases", error.message);
     if (error instanceof ApproverRequiredError) return fail(c, 400, "approver_required", error.message);
     if (error instanceof SameApproverError) return fail(c, 409, "same_approver", error.message);
@@ -325,6 +327,15 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     const id = taskId(c);
     const patch = await body(c, EditPlanInput);
     const task = await serialize(await pipeline.editPlan(id, patch));
+    bus.publish({ type: "task.updated", task, seq: task.seq });
+    return c.json(task);
+  });
+
+  /** A person's correction of the Triage Record while the card waits at a gate: enum values only. */
+  app.patch("/tasks/:id/record", async (c) => {
+    const id = taskId(c);
+    const patch = await body(c, EditRecordInput);
+    const task = await serialize(await pipeline.editRecord(id, patch));
     bus.publish({ type: "task.updated", task, seq: task.seq });
     return c.json(task);
   });

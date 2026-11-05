@@ -15,7 +15,7 @@ import { StubStages } from "./stages/stubs.ts";
 import { withTriageSignals } from "./stages/triage-signals.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { ApproverRequiredError, type BudgetAlert, Pipeline, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
+import { ApproverRequiredError, type BudgetAlert, Pipeline, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
@@ -369,6 +369,62 @@ describe("decision truth at the plan gate", () => {
   it("learns nothing from an auto-approval", async () => {
     const { learned } = await setup((p, id) => p.decide(id, "approved", "auto", undefined, { auto: true }));
     expect(learned).toEqual([]);
+  });
+});
+
+describe("the triage record: a correction and its ground truth", () => {
+  const signals = { kind: { answer: "bug", confidence: 0.95 }, size: { answer: "S", confidence: 0.9 }, who: { answer: 1, confidence: 0.9 }, what: { answer: 1, confidence: 0.9 }, impact: { answer: 1, confidence: 0.9 }, time: { answer: 0, confidence: 0.9 }, demand: { answer: 0, confidence: 0.9 }, risk_prelim: { answer: "medium", confidence: 0.95 }, archive: { answer: false, confidence: 0.95 } };
+  const classification = { kind: "bug", ready: true, size: 1, sizeBucket: "S" as const, typeOfWork: "backend" as const, priority: "P2" as const, riskPrelim: "medium" as const, subScores: { who: 2, what: 2, impact: 2, time: 1, demand: 1 }, confidence: 0.9, at: "2026-11-05T00:00:00.000Z", model: "m", recordId: "rt", signals };
+  const setup = async (outcome = "plan") => {
+    const learned: Array<{ pack: string; recordId: string; label: unknown; source: string }> = [];
+    const truth = new DecisionTruth({ setTruth: async (pack, recordId, t) => (learned.push({ pack, recordId, label: t.label, source: t.source }), true), read: async () => null }, { told: async () => {} });
+    stubs.plan("triage", { outcome: "pass", detail: { outcome, summary: "A bug.", reply: "Use pnpm dev.", archiveReason: "stale", record: { goal: "Fix it", reason: "r" } } });
+    const saving = (stage: TaskState) => (stage === "triage" ? withTriageSignals(stubs.runnerFor(stage), { classify: null, save: (id, patch) => new PgTaskStore(db).updateTask(id, patch) }) : stubs.runnerFor(stage));
+    const p = new Pipeline(db, saving, { inline: true, hasConfig: () => true, truth });
+    const task = await p.createTask({ title: "Login page", classification });
+    await p.start(task.id);
+    return { p, id: task.id, learned };
+  };
+
+  it("takes a correction at a gate: the version rises, the fields are the person's, and each is ground truth on the reading that said otherwise", async () => {
+    const { p, id, learned } = await setup();
+    const edited = await p.editRecord(id, { kind: "feature", size: "M", priority: "P0" });
+    expect(edited.record).toMatchObject({ kind: "feature", size: "M", urgency: "P0", urgencyDetail: { priority: "P0" }, version: 2, decisionBy: "person", editedFields: ["kind", "size", "priority"] });
+    expect(learned).toEqual([{ pack: "triage_signals", recordId: "rt", label: { kind: { choice: "feature" }, size: { choice: "M" } }, source: "record_edit" }]);
+    expect((await p.events(id)).filter((e) => e.kind === "record.edited").map((e) => e.payload)).toEqual([{ fields: ["kind", "size", "priority"], version: 2 }]);
+    // The same value again is no edit.
+    await p.editRecord(id, { kind: "feature" });
+    expect((await p.get(id)).record?.version).toBe(2);
+  });
+
+  it("refuses a correction when there is no record or the card is not at a gate", async () => {
+    const { p } = await setup();
+    const bare = await p.createTask({ title: "No record yet" });
+    await expect(p.editRecord(bare.id, { kind: "bug" })).rejects.toBeInstanceOf(RecordNotEditableError);
+    const running = await p.createTask({ title: "Running", classification });
+    await new PgTaskStore(db).updateTask(running.id, { state: "implementing", record: { source: "manual", kind: "bug", goal: "g", size: "S", urgency: "P2", risk: "low", signals: {}, qa: [], decision: "plan", reason: "r", at: "2026-11-05T00:00:00.000Z", model: "m" } });
+    await expect(p.editRecord(running.id, { kind: "bug" })).rejects.toBeInstanceOf(RecordNotEditableError);
+  });
+
+  it("confirms the signals at proceed when the plan is approved with no edit, and lets a correction stand for its own question", async () => {
+    const { p, id, learned } = await setup();
+    await p.decide(id, "approved", undefined, undefined, { approver: "ana" });
+    const confirmed = learned.find((l) => l.source === "plan_approved" && l.pack === "triage_signals")!;
+    expect(confirmed.label).toMatchObject({ kind: { choice: "bug" }, size: { choice: "S" }, risk_prelim: { choice: "medium" }, archive: { value: false }, who: { score: 1 }, time: { score: 0 } });
+    const second = await setup();
+    await second.p.editRecord(second.id, { kind: "chore" });
+    await second.p.decide(second.id, "approved", undefined, undefined, { approver: "ana" });
+    const withEdit = second.learned.filter((l) => l.source === "plan_approved").at(-1)!;
+    expect(withEdit.label).toMatchObject({ kind: { choice: "chore" }, size: { choice: "S" } });
+  });
+
+  it("writes the outcome's truth when a reply or an archive gate is approved or sent back", async () => {
+    const reply = await setup("conversation");
+    await reply.p.decide(reply.id, "approved");
+    expect(reply.learned.at(-1)).toMatchObject({ pack: "triage_signals", source: "triage_outcome_approved", label: { kind: { choice: "question" } } });
+    const archive = await setup("archive");
+    await archive.p.decide(archive.id, "sent_back", "no");
+    expect(archive.learned.at(-1)).toMatchObject({ pack: "triage_signals", source: "triage_sent_back", label: { archive: { value: false } } });
   });
 });
 

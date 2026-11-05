@@ -239,6 +239,11 @@ pub fn draw(frame: &mut Frame, app: &App) {
                 render_archive_reason(frame, task, *cursor);
             }
         }
+        Mode::RecordEdit { id, field, picks } => {
+            if let Some(task) = app.task(id) {
+                render_record_edit(frame, task, *field, picks);
+            }
+        }
         Mode::ConfirmWorktree(id) => {
             if let Some(task) = app.task(id) {
                 render_confirm(
@@ -476,6 +481,7 @@ fn footer_line(app: &App) -> Line<'static> {
         Mode::ConfirmMerge { .. } => hint(&[("y", "merge"), ("n", "cancel")]),
         Mode::ConfirmClose { .. } => hint(&[("y", "close the PR"), ("n", "cancel")]),
         Mode::JiraLink { .. } => hint(&[("type", "search from 3 chars"), ("↑/↓", "move"), ("enter", "link (row 0 creates)"), ("ctrl+n", "create"), ("esc", "cancel")]),
+        Mode::RecordEdit { .. } => hint(&[("j/k", "field"), ("h/l", "value"), ("enter", "send what changed"), ("esc", "cancel")]),
         Mode::ArchiveReason { .. } => hint(&[("j/k 1-5", "pick"), ("enter", "archive"), ("esc", "cancel")]),
         Mode::ConfirmJiraUnlink(_) => hint(&[("y", "unlink"), ("n", "cancel")]),
         Mode::EnginePicker { .. } => hint(&[("j/k", "move"), ("enter", "set"), ("esc", "back")]),
@@ -1825,6 +1831,34 @@ fn render_archive_reason(frame: &mut Frame, task: &Task, cursor: usize) {
                 Span::from(format!("{}  ", i + 1)).fg(c(SUBTEXT0)),
                 Span::from(format!("{name:<14}")).style(style),
                 Span::from(*means).fg(c(SUBTEXT0)),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines).block(block), area);
+}
+
+/// `T`: the Triage Record's five correctable fields, each with the value the picker is on; a value off the record's own is marked.
+fn render_record_edit(frame: &mut Frame, task: &Task, field: usize, picks: &[usize; 5]) {
+    let area = centered(frame.area(), 52, crate::model::RECORD_FIELDS.len() as u16 + 4);
+    frame.render_widget(Clear, area);
+    let block = Block::bordered()
+        .border_type(BorderType::Rounded)
+        .border_style(Style::new().fg(c(ACCENT)))
+        .padding(Padding::horizontal(2))
+        .title(Line::from(format!(" correct the record of #{} ", task.short_id())).bold());
+    let lines: Vec<Line> = crate::model::RECORD_FIELDS
+        .iter()
+        .enumerate()
+        .map(|(i, (key, label, values))| {
+            let selected = i == field;
+            let style = if selected { Style::new().fg(c(ACCENT)).bold() } else { Style::new() };
+            let value = values[picks[i]];
+            let changed = task.record.as_ref().is_some_and(|r| r.value_of(key) != Some(value));
+            Line::from(vec![
+                Span::from(if selected { "▌ " } else { "  " }).fg(c(ACCENT)),
+                Span::from(format!("{label:<14}")).fg(c(SUBTEXT0)),
+                Span::from(format!("◂ {value} ▸")).style(style),
+                Span::from(if changed { "  (you)" } else { "" }).fg(c(YELLOW)),
             ])
         })
         .collect();

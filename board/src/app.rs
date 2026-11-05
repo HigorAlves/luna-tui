@@ -30,7 +30,7 @@ use crate::{
     discover::{discover_folders, discover_repos, repos_root},
     herdr,
     model::{
-        ARCHIVE_REASONS, COLUMNS, EngineCatalog, EngineInfo, EngineMetrics, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
+        ARCHIVE_REASONS, COLUMNS, RECORD_FIELDS, TriageRecord, EngineCatalog, EngineInfo, EngineMetrics, JiraIssueHit, Look, Metrics, PrAction, PrSnapshot, PullRequest, RepoMetrics, SlackItem, SlackMetrics, SlackOption, SlackSnapshot, SlackWatch,
         StreamMessage, Task, TaskDetail, TaskDiff, TicketText, answers_markdown, iso_of, parse_answers, parse_cases, parse_plan, parse_ticket, plan_edit_of,
         plan_markdown, priority_step, questions_of, short_id, ticket_markdown, cases_markdown, Slots,
     },
@@ -267,6 +267,8 @@ pub enum Mode {
     },
     /// `Z` on a ticket: pick why it is archived; enter archives it.
     ArchiveReason { id: String, cursor: usize },
+    /// `T`: correct the Triage Record. `field` is the row, `picks` the value index of each `RECORD_FIELDS` row.
+    RecordEdit { id: String, field: usize, picks: [usize; 5] },
     ConfirmDelete(String),
     ConfirmAbort(String),
     ConfirmWorktree(String),
@@ -1680,6 +1682,10 @@ impl App {
                     self.mode = Mode::ArchiveReason { id: id.to_string(), cursor: 0 };
                 }
             }
+            'T' => match record_edit_mode(&task) {
+                Ok(mode) => self.mode = mode,
+                Err(why) => self.notify(why, false),
+            },
             'd' => self.mode = Mode::ConfirmDelete(id.to_string()),
             'f' => self.watch(&task),
             'o' => match task.source.as_ref().and_then(|s| s.link().map(str::to_string)).or_else(|| task.jira.as_ref().map(|j| j.url.clone())) {
@@ -1872,6 +1878,7 @@ impl App {
                 self.handle_confirm(key, &id)
             }
             Mode::ArchiveReason { .. } => self.handle_archive_reason(key),
+            Mode::RecordEdit { .. } => self.handle_record_edit(key),
             Mode::ConfirmApproveAll(_) => self.handle_confirm_approve_all(key),
             Mode::ConfirmMany { .. } => self.handle_confirm_many(key),
             Mode::Actions { .. } => self.handle_actions(key),
@@ -2089,7 +2096,7 @@ impl App {
     /// own: the split's approval, not the memory review).
     #[cfg(test)]
     pub(crate) const HANDLED_INBOX: &[&str] =
-        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "X", "w", "Z", "d", "f", "o", "J"];
+        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "X", "w", "Z", "d", "f", "o", "J", "T"];
 
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
     fn handle_inbox(&mut self, key: KeyEvent) -> Outcome {
@@ -2854,7 +2861,7 @@ impl App {
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
         "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "S", "v", "V", "?", ":",
-        "esc", "enter", "R", "a", "A", "e", "r", "X", "w", "Z", "d", "f", "o", "J",
+        "esc", "enter", "R", "a", "A", "e", "r", "X", "w", "Z", "d", "f", "o", "J", "T",
     ];
 
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
@@ -3073,7 +3080,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "X", "w", "Z", "d", "f"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "X", "w", "Z", "d", "f", "T"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -3582,6 +3589,39 @@ impl App {
         Outcome::Continue
     }
 
+    /// `T`'s picker: j/k pick the field, h/l (or the arrows) change its value, enter sends what changed, esc cancels.
+    fn handle_record_edit(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::RecordEdit { id, field, picks } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        let id = id.clone();
+        let mut send = false;
+        let mut cancel = false;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *field = (*field + 1).min(RECORD_FIELDS.len() - 1),
+            KeyCode::Up | KeyCode::Char('k') => *field = field.saturating_sub(1),
+            KeyCode::Right | KeyCode::Char('l') => picks[*field] = (picks[*field] + 1) % RECORD_FIELDS[*field].2.len(),
+            KeyCode::Left | KeyCode::Char('h') => picks[*field] = (picks[*field] + RECORD_FIELDS[*field].2.len() - 1) % RECORD_FIELDS[*field].2.len(),
+            KeyCode::Enter => send = true,
+            KeyCode::Esc | KeyCode::Char('q') => cancel = true,
+            _ => {}
+        }
+        if cancel {
+            self.mode = Mode::Normal;
+        } else if send {
+            let picks = *picks;
+            self.mode = Mode::Normal;
+            let changes = self.task(&id).and_then(|t| t.record.as_ref()).map(|r| record_changes(r, &picks)).unwrap_or_default();
+            if changes.is_empty() {
+                self.notify("nothing changed in the record", false);
+            } else {
+                let done = format!("record corrected: {}", changes.iter().map(|(k, v)| format!("{k} {v}")).collect::<Vec<_>>().join(", "));
+                self.act(|m| m.edit_record(&id, &changes), &done);
+            }
+        }
+        Outcome::Continue
+    }
+
     /// `Z`'s picker: j/k or 1-5 move, enter archives with the highlighted reason, esc cancels.
     fn handle_archive_reason(&mut self, key: KeyEvent) -> Outcome {
         let Mode::ArchiveReason { id, cursor } = &mut self.mode else {
@@ -4037,6 +4077,33 @@ mod tests {
             "createdAt":"2026-10-22T23:24:22.089Z","updatedAt":"2026-10-22T23:24:22.089Z"}}"#
         ))
         .unwrap()
+    }
+
+    #[test]
+    fn the_record_picker_starts_on_the_record_and_sends_only_what_moved() {
+        let mut task = ticket("a1", "awaiting_approval", false, false);
+        task.waiting_on_you = true;
+        task.record = Some(serde_json::from_str(r#"{"kind":"bug","size":"S","typeOfWork":"backend","riskPrelim":"low","urgencyDetail":{"priority":"P2","subScores":{"who":2,"what":2,"impact":2,"time":1,"demand":1}}}"#).unwrap());
+        let Ok(Mode::RecordEdit { picks, field: 0, .. }) = record_edit_mode(&task) else { panic!("expected the picker") };
+        assert_eq!(picks, [0, 1, 1, 0, 2], "bug, backend, S, low, P2");
+        assert!(record_changes(task.record.as_ref().unwrap(), &picks).is_empty());
+        let moved = [1, 1, 3, 2, 0];
+        assert_eq!(
+            record_changes(task.record.as_ref().unwrap(), &moved),
+            vec![("kind".to_string(), "feature".to_string()), ("size".to_string(), "L".to_string()), ("riskPrelim".to_string(), "high".to_string()), ("priority".to_string(), "P0".to_string())]
+        );
+    }
+
+    #[test]
+    fn the_record_picker_says_why_it_will_not_open() {
+        let mut task = ticket("a1", "awaiting_approval", false, false);
+        task.waiting_on_you = true;
+        assert!(record_edit_mode(&task).is_err(), "no record yet");
+        task.record = Some(TriageRecord::default());
+        task.waiting_on_you = false;
+        assert!(record_edit_mode(&task).is_err(), "not at a gate");
+        task.waiting_on_you = true;
+        assert!(record_edit_mode(&task).is_ok());
     }
 
     #[test]
@@ -5945,4 +6012,30 @@ mod engine_tests {
         press(&mut app, KeyCode::Esc);
         assert!(matches!(app.mode, Mode::Detail(_)), "esc goes back to the popup");
     }
+}
+
+/// `T` on a ticket: the picker over its record, starting from what the record says; why not when there is none or it is not at a gate.
+pub fn record_edit_mode(task: &Task) -> Result<Mode, &'static str> {
+    let Some(record) = task.record.as_ref() else { return Err("triage has not written a record for this ticket yet") };
+    if !task.waiting_on_you {
+        return Err("the record can be corrected while the ticket waits at a gate");
+    }
+    let mut picks = [0usize; 5];
+    for (i, (key, _, values)) in RECORD_FIELDS.iter().enumerate() {
+        picks[i] = record.value_of(key).and_then(|v| values.iter().position(|x| *x == v)).unwrap_or(0);
+    }
+    Ok(Mode::RecordEdit { id: task.id.clone(), field: 0, picks })
+}
+
+/// The fields the picker moved off the record's own value, as `(key, value)` pairs.
+pub fn record_changes(record: &TriageRecord, picks: &[usize; 5]) -> Vec<(String, String)> {
+    RECORD_FIELDS
+        .iter()
+        .enumerate()
+        .filter_map(|(i, (key, _, values))| {
+            let value = values[picks[i]];
+            (record.value_of(key) != Some(value)).then(|| (key.to_string(), value.to_string()))
+        })
+        .collect()
+
 }
