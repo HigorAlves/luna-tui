@@ -186,6 +186,8 @@ export function planStage(deps: PlanDeps): StageRunner {
     const level: Risk = scored ? maxRisk(scored.level, graded) : graded;
     const risk: PlanRisk = { level, machine: level, ...(scored ? { product: scored.product, scores } : { scores }), ...(complexity === "S" || complexity === "M" || complexity === "L" || complexity === "XL" ? { complexity } : {}) };
     const riskPart = { risk };
+    // A plan found wrong in Build, Verify or review comes back with its evidence: the planner's alone.
+    const replanPart = context.replan ? { replan: context.replan } : {};
 
     let lane: "fast" | "full" = task.record?.decision === "fast_lane" ? "fast" : "full";
     let laneNote: string | undefined;
@@ -211,6 +213,8 @@ export function planStage(deps: PlanDeps): StageRunner {
     /** What coverage found wrong with the last scenarios, told to the designer's next round and shown at the gate when rounds ran out. */
     let notes: string[] = [];
     let planIssues: string[] = [];
+    /** What a re-planned plan says it changed from the one found wrong. */
+    let changed: string | undefined;
     let finalPlan: ReturnType<typeof planOf> | undefined;
     let report: Coverage = coverageOf([], []);
     let coverage: Judged = { verdict: "skipped", problems: [], answer: null };
@@ -223,8 +227,8 @@ export function planStage(deps: PlanDeps): StageRunner {
       planRunsOnLane += 1;
       const planned = await deps.runPack(lane === "fast" ? "plan_fast" : "plan", sub(planRuns === 1 ? "plan" : `plan-${planRuns}`), {
         ...(plan
-          ? { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, ...(review ? { review } : {}), ...mapPart, ...riskPart } }
-          : { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], ...mapPart, ...riskPart } }),
+          ? { plan: { record: task.record ?? null, ...plan, cases, round: planRuns, ...(review ? { review } : {}), ...mapPart, ...riskPart, ...replanPart } }
+          : { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], ...mapPart, ...riskPart, ...replanPart } }),
       });
       if (planned.outcome !== "pass") return ended(planned);
       results.push(planned);
@@ -233,6 +237,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         goFull(`the fast planner asked for the full plan: ${String(d.summary ?? "the ticket is bigger than it looked")}`);
         continue;
       }
+      if (typeof d.changed === "string") changed = d.changed;
       extras = {
         ...(Array.isArray(d.steps) ? { steps: d.steps as PlanStep[] } : {}),
         outOfScope: strings(d.outOfScope),
@@ -314,6 +319,7 @@ export function planStage(deps: PlanDeps): StageRunner {
     const verdicts = { coverage: coverage.verdict, plan: planCheck.verdict, risk: riskJudged.verdict };
     for (const [name, verdict] of Object.entries(verdicts)) if (verdict === "flag" || verdict === "ask") flagged.add(name);
     if (map?.stale) flagged.add("map stale");
+    if (context.replan && !changed?.trim()) flagged.add("replan: the planner did not say what it changed");
     // A fast lane taken without the owners looked at says so at the gate.
     if (task.record?.decision === "fast_lane" && task.record.ownersNotChecked) flagged.add(`owners not checked: ${task.record.ownersNotChecked}`);
     // The triage signals the person did not settle and the machine let through: shown at this gate as `triage.<field>`.
@@ -337,6 +343,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         plan: finalPlan!,
         // What the plan check's script found wrong with the plan, still open when the planner's re-runs ran out.
         planIssues,
+        ...(context.replan ? { replan: context.replan, ...(changed?.trim() ? { changed } : {}) } : {}),
         cases,
         // Coverage by criterion id: what each criterion's scenarios are, the score against the repo's bar, and what is still open.
         coverageReport: { score: report.score, bar: coverageBar, gaps: report.gaps, thin: report.thin, untestable: report.untestable, open: notes, per: report.per.map((p) => ({ id: p.criterion.id, text: p.criterion.text, scenarios: p.scenarios, types: p.types })) },

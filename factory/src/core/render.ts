@@ -198,6 +198,18 @@ function scenarioLine(c: { id?: string; title: string; criterion: string | null;
   return `${c.id ? `${c.id} ` : ""}${c.title}${tags ? ` [${tags}]` : ""}${c.criterion ? ` (criterion: ${c.criterion})` : ""}: ${scenarioText(c)}`;
 }
 
+/** The evidence a plan found wrong came back with: who raised it, why, the findings, the failing output's tail and the reviewer's thread (all data). */
+function replanText(replan: NonNullable<StageInput["context"]["plan"]>["replan"]): string {
+  if (!replan) return NONE;
+  return [
+    `Raised by: ${replan.raised_by}`,
+    `Reason: ${replan.reason}`,
+    ...(replan.findings?.length ? [`Findings:\n${replan.findings.map((f) => `- ${f}`).join("\n")}`] : []),
+    ...(replan.output ? [`Failing output (tail):\n${replan.output}`] : []),
+    ...(replan.thread ? [`Reviewer's thread:\n${replan.thread}`] : []),
+  ].join("\n");
+}
+
 /** A map file as `path (role)`; a plain string, as an old map wrote it, is a file to change. */
 const mapFileText = (f: string | { path: string; role?: string }): string => (typeof f === "string" ? `${f} (change)` : `${f.path} (${f.role ?? "change"})`);
 
@@ -358,6 +370,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{task.record}}": recordText(input.task.record),
     "{{context.plan.map}}": mapText(input.context.plan?.map),
     "{{context.plan.shortlist}}": shortlistText(input.context.plan?.shortlist),
+    "{{context.plan.replan}}": replanText(input.context.plan?.replan),
     "{{context.plan.risk}}": riskText(input.context.plan?.risk),
     "{{plan.risk}}": riskText(input.plan?.risk),
     "{{context.plan.coverageNotes}}": bullets(input.context.plan?.coverage_notes),

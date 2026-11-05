@@ -20,6 +20,8 @@ export interface Retries {
   stronger: number;
   /** The next implementing run is that one shot; the pipeline reads it as the run starts and the run's own end clears it. */
   strongerNext?: boolean;
+  /** Times a plan found wrong in Build, Verify or review went back to the planner: the second goes to a person. */
+  planWrong?: number;
 }
 
 export const NO_RETRIES: Retries = { verify: 0, e2e: 0, ci: 0, total: 0, stronger: 0 };
@@ -315,10 +317,10 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
 
   // The agent stopped on purpose and says why: a human decides, so no retry is spent.
   if (outcome === "escalated" && RUNNING.has(state)) {
-    // A plan that cannot be built as written goes back to triage, retries kept; on a PR route there
-    // is no plan to redo, and triage itself cannot send the task to triage.
-    if (event.escalation === "plan_wrong" && task.route === "feature" && state !== "triage" && state !== "setup") {
-      return { ...run("triage", retries), reason: event.reason };
+    // A plan that cannot be built as written goes back to the planner (the plan stage) with the evidence, retries kept and the record as triage
+    // left it; the second time on the same card a person decides. On a PR route there is no plan to redo, and triage and setup have none.
+    if (event.escalation === "plan_wrong" && task.route === "feature" && state !== "triage" && state !== "setup" && state !== "test_design" && (retries.planWrong ?? 0) < 1) {
+      return { ...run("test_design", { ...retries, planWrong: (retries.planWrong ?? 0) + 1 }), reason: event.reason, escalation: "plan_wrong" };
     }
     // The PR head moved after the evidence pack was made: Evidence runs again, retries kept; its format is kept too.
     if (event.escalation === "head_moved" && task.route === "feature" && state === "shipping") {

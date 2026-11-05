@@ -593,10 +593,10 @@ describe("the review loop: fixes", () => {
     expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining('a reviewer disagrees: src/export.ts:12: bo: "please rename x"') } });
   });
 
-  it("sends a change that needs a new plan back to triage, with the thread quoted", async () => {
+  it("sends a change that needs a new plan back to the planner, with the thread quoted and carried whole for the planner's evidence", async () => {
     const world = loopWorld({ choices: { comment_intent: "change_request", fix_scope: "re_plan" } });
     const { run } = review(world);
-    expect(await run()).toMatchObject({ outcome: "escalated", detail: { escalation: "plan_wrong", reason: expect.stringContaining("please rename x") } });
+    expect(await run()).toMatchObject({ outcome: "escalated", detail: { escalation: "plan_wrong", reason: expect.stringContaining("please rename x"), thread: expect.stringContaining("bo: please rename x") } });
   });
 });
 

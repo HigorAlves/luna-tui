@@ -53,9 +53,13 @@ describe("evidence at the ship gate", () => {
 });
 
 describe("typed escalations", () => {
-  it("plan_wrong sends a feature task back to triage with its retries kept", () => {
-    const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2 } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "the plan names a module that does not exist" });
-    expect(step).toMatchObject({ state: "triage", effect: { kind: "run", stage: "triage" }, retries: { total: 2 }, reason: "the plan names a module that does not exist" });
+  it.each(["implementing", "verifying", "shipping"] as const)("plan_wrong from %s sends a feature task back to the planner (the plan stage), not to triage, with its retries kept", (state) => {
+    const step = transition(at(state, { retries: { ...NO_RETRIES, total: 2 } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "the plan names a module that does not exist" });
+    expect(step).toMatchObject({ state: "test_design", effect: { kind: "run", stage: "test_design" }, retries: { total: 2, planWrong: 1 }, escalation: "plan_wrong", reason: "the plan names a module that does not exist" });
+  });
+  it("a second plan_wrong on the same card waits for a person", () => {
+    const step = transition(at("implementing", { retries: { ...NO_RETRIES, total: 2, planWrong: 1 } }), { type: "stage_done", outcome: "escalated", escalation: "plan_wrong", reason: "still wrong" });
+    expect(step).toMatchObject({ state: "escalated", resumeTo: "implementing", escalation: "plan_wrong" });
   });
   it.each(["env_broken", "flaky_tests", "too_complex", "undeclared_scope", "other"] as const)("%s waits for a person", (escalation) => {
     const step = transition(at("verifying"), { type: "stage_done", outcome: "escalated", escalation, reason: "r" });

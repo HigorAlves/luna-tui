@@ -190,6 +190,55 @@ describe("the plan gate", () => {
   });
 });
 
+describe("a plan found wrong comes back to the planner with its evidence", () => {
+  const seen: Array<NonNullable<StageContext["replan"]> | undefined> = [];
+  const capturing = (stage: TaskState): StageRunner => {
+    const inner = stubs.runnerFor(stage);
+    return (context) => {
+      if (stage === "test_design") seen.push(context.replan);
+      return inner(context);
+    };
+  };
+  const wrong = (from: "implementing" | "verifying") => ({ outcome: "escalated" as const, detail: { escalation: "plan_wrong", reason: "the plan names a module that does not exist", error: `tsc: cannot find module x\n${"noise ".repeat(600)}last line`, findings: [{ title: "x is missing", path: "a.ts", line: 3 }], from } });
+
+  it.each(["implementing", "verifying"] as const)("from %s: the plan stage runs again, the record is untouched, and the planner is told who raised it, why and the output's tail", async (from) => {
+    seen.length = 0;
+    const p = new Pipeline(db, capturing, { inline: true, hasConfig: () => true });
+    stubs.plan(from, wrong(from));
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    const recordBefore = (await p.get(task.id)).record;
+    await p.decide(task.id, "approved");
+    expect(seen[0]).toBeUndefined();
+    expect(seen.length).toBe(2);
+    expect(seen[1]).toMatchObject({ raised_by: from, reason: "the plan names a module that does not exist", findings: ["a.ts:3 x is missing"], output: expect.stringMatching(/last line$/) });
+    expect(seen[1]!.output!.length).toBeLessThanOrEqual(2000);
+    expect((await p.get(task.id)).record).toEqual(recordBefore);
+    expect((await p.events(task.id)).some((e) => e.kind === "transition" && e.payload.to === "triage" && e.payload.from !== "draft")).toBe(false);
+  });
+
+  it("a second plan_wrong on the same card escalates to a person", async () => {
+    seen.length = 0;
+    const p = new Pipeline(db, capturing, { inline: true, hasConfig: () => true });
+    stubs.plan("implementing", wrong("implementing"), wrong("implementing"));
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect((await p.get(task.id)).state).toBe("awaiting_approval");
+    await p.decide(task.id, "approved");
+    expect((await p.get(task.id)).state).toBe("escalated");
+  });
+
+  it("a plan stage that runs for any other reason carries no replan", async () => {
+    seen.length = 0;
+    const p = new Pipeline(db, capturing, { inline: true, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "sent_back", "again");
+    expect(seen.every((r) => r === undefined)).toBe(true);
+  });
+});
+
 describe("the plan gate's three decisions", () => {
   const atGate = async () => {
     stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], risk: { level: "low", scores: {} } } });

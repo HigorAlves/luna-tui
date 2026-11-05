@@ -203,7 +203,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       if (intent.choice === "change_request") {
         const sized = await judgeShip(fixDeps(), "fix_scope", ship, task.repoPath);
         if (!sized.ok) return { result: escalated(`a change request needs a person (${sized.reason}): ${quoted(thread)}`) };
-        if (sized.choice === "re_plan") return { result: escalated(`the review says the plan is wrong: ${quoted(thread)}`, "plan_wrong") };
+        if (sized.choice === "re_plan") return { result: escalated(`the review says the plan is wrong: ${quoted(thread)}`, "plan_wrong", { thread: thread.comments.map((c) => `${c.author}: ${c.body}`).join("\n").slice(0, 20_000) }) };
         if (sized.choice !== "in_place" && sized.choice !== "re_verify_partial") return { result: escalated(`a change request needs a person: ${quoted(thread)}`) };
         scope = sized.choice;
       } else if (intent.choice !== "nit") {

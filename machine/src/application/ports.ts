@@ -3,6 +3,7 @@ import type {
   EngineId,
   Finding,
   NeedsInputItem,
+  PlanContext,
   RequestedAction,
   RunInfo,
   TaskState,
@@ -24,6 +25,8 @@ export interface StageContext {
   runId: string;
   /** Everything decided on this task so far, oldest first: answers, approvals, guidance. */
   approvals: ApprovalRow[];
+  /** For the plan stage after a plan was found wrong in Build, Verify or review: who raised it and the evidence (data, flattened and capped). */
+  replan?: NonNullable<PlanContext["replan"]>;
   /** Findings from the latest verifying run, fed to the next implementing attempt. */
   priorFindings?: Finding[];
   /** Aborted when you abort the task; the runner should stop its container. */

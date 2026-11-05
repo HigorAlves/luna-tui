@@ -505,7 +505,7 @@ export type TaskClassification = z.infer<typeof TaskClassification>;
 export const ArchiveReason = z.enum(["duplicate", "sla_expired", "rejected", "not_for_agent", "pr_closed", "no_setup", "no_answer"]);
 export type ArchiveReason = z.infer<typeof ArchiveReason>;
 
-/** Why a stage stopped on purpose: `plan_wrong` the plan cannot be built as written (triage runs again),
+/** Why a stage stopped on purpose: `plan_wrong` the plan cannot be built as written (the planner runs again with the evidence),
  *  `env_broken` the sandbox or toolchain is, `flaky_tests` the tests do not hold still, `too_complex`
  *  the work is bigger than one stage, `undeclared_scope` it needs files or packages the plan did not name, `head_moved` the PR head moved after
  *  the evidence pack was made (Evidence runs again). */
@@ -621,6 +621,8 @@ export const PlanContext = z.object({
   map: CodeMapAnswer.nullable().optional(),
   /** The risk scored before the plan, which the planner writes for. */
   risk: PlanRisk.optional(),
+  /** A plan found wrong in Build, Verify or review is back with the planner: who raised it, why and the evidence (all data: flattened and capped by the machine). */
+  replan: z.object({ raised_by: z.string(), reason: z.string(), output: z.string().optional(), findings: z.array(z.string()).optional(), thread: z.string().optional() }).optional(),
   /** For the code mapper: where the graph says the goal lives (the machine's lexical match), to confirm and give roles to. */
   shortlist: z.object({ files: z.array(z.string()), symbols: z.array(z.string()), components: z.array(z.string()), owners: z.array(z.string()) }).optional(),
 });

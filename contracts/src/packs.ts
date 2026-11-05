@@ -141,6 +141,8 @@ export const PlanAnswer = z.object({
   steps: z.array(AnswerStep).optional(),
   /** A paragraph a person can follow to undo the change. */
   rollback: z.string().optional(),
+  /** After a plan was found wrong: what this plan changed from it. */
+  changed: z.string().optional(),
   /** v2.2, asked for by the plan prompts. */
   outOfScope: z.array(z.string()).optional(),
   migration: z.string().optional(),
@@ -602,7 +604,7 @@ const FIX_SCOPE_QUESTIONS: QuestionSet = {
     criteria: {
       in_place: "a local change: fix, run the checks, push",
       re_verify_partial: "the change touches behaviour: fix and have the verifier review the delta",
-      re_plan: "the plan itself is wrong: back to triage with the thread",
+      re_plan: "the plan itself is wrong: back to the planner with the thread",
     },
   },
 };

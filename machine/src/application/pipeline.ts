@@ -36,6 +36,7 @@ import { basename, join } from "node:path";
 import type { Policy } from "../domain/policy.ts";
 import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 
+import { replanOf } from "../domain/replan.ts";
 import { applyRiskOverride, approvalRule, outsideSatisfied, sameName } from "../domain/approvers.ts";
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
@@ -1793,6 +1794,21 @@ export class Pipeline {
     return Array.isArray(findings) ? (findings as Finding[]) : [];
   }
 
+  /** When the plan stage runs because a plan was found wrong (the last move into it was a `plan_wrong`): who raised it, why, and what the raising
+   *  stage's last run said, flattened and capped (`replanOf`). Null for any other run of the plan stage. */
+  private async replanEvidence(id: string): Promise<ReturnType<typeof replanOf> | null> {
+    const entry = (await this.events(id)).findLast((e) => e.kind === "transition" && e.payload.to === "test_design");
+    if (!entry || entry.payload.escalation !== "plan_wrong" || typeof entry.payload.from !== "string") return null;
+    const from = entry.payload.from;
+    const finished = (await this.store.findFinishedEvents(id)).find((e) => e.payload.stage === from);
+    const detail = finished?.payload.detail;
+    return replanOf({
+      raisedBy: from,
+      reason: typeof entry.payload.reason === "string" ? entry.payload.reason : "the plan was found wrong",
+      finished: finished ? { detail: objectOf(detail) ?? null, findings: finished.payload.findings ?? objectOf(detail)?.findings } : null,
+    });
+  }
+
   private async runStage(id: string, stage: TaskState, signal: AbortSignal, resume?: Resume, fallback?: { engine: EngineId; reason: string }): Promise<StageResult> {
     // Re-attaching after a restart: the run row and its container already exist.
     const attempt = resume?.attempt ?? (await this.store.countStageRunAttempts(id, stage)) + 1;
@@ -1810,10 +1826,11 @@ export class Pipeline {
     /** The engine the run is on, as the runner says when it starts: what its cost counts against. */
     let ranOn: EngineId | null = fallback?.engine ?? resume?.engine ?? null;
     try {
-      const [task, approvals, priorFindings] = await Promise.all([
+      const [task, approvals, priorFindings, replan] = await Promise.all([
         this.get(id),
         this.approvals(id),
         stage === "implementing" ? this.latestVerifyingFindings(id) : Promise.resolve([]),
+        stage === "test_design" ? this.replanEvidence(id) : Promise.resolve(null),
       ]);
       repo = task.repoPath;
       result = await this.runnerFor(stage)({
@@ -1823,6 +1840,7 @@ export class Pipeline {
         runId,
         approvals,
         priorFindings,
+        ...(replan ? { replan } : {}),
         signal,
         ...(resume ? { resume: { container: resume.container, inputCommit: resume.inputCommit, engine: resume.engine } } : {}),
         ...(fallback ? { engine: fallback.engine } : {}),

@@ -619,6 +619,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
         ...(planned ? { steps: planned.steps } : {}),
         ...(Array.isArray(answer?.outOfScope) ? { outOfScope: list(answer.outOfScope, []) } : {}),
         ...(typeof answer?.migration === "string" ? { migration: answer.migration } : {}),
+        ...(typeof answer?.changed === "string" ? { changed: answer.changed.slice(0, 1000) } : {}),
         ...(Array.isArray(answer?.flags) ? { flags: list(answer.flags, []) } : {}),
         ...(typeof answer?.rollback === "string" ? { rollback: answer.rollback } : {}),
         // The fast planner refusing the lane: the plan stage plans again in full.

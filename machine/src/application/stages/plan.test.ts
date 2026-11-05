@@ -322,6 +322,34 @@ describe("planStage", () => {
     });
   });
 
+  describe("a plan found wrong in Build, Verify or review", () => {
+    const replan = { raised_by: "verifying", reason: "the plan names a module that does not exist", output: "tsc: cannot find x", findings: ["a.ts:3 x is missing"], thread: "bo: rename x" };
+
+    it("hands the planner the evidence on its first run and its re-runs, and the designer and the decisions none", async () => {
+      const { run, calls, decided } = setup({ answers: { plan_check: [bad, good.plan_check] } }, withGraph);
+      await run(context({ replan }));
+      const planners = calls.filter((c) => c.pack === "plan");
+      expect(planners).toHaveLength(2);
+      for (const c of planners) expect(c.plan).toMatchObject({ replan });
+      for (const c of calls.filter((k) => k.pack !== "plan")) expect(c.plan ?? {}).not.toHaveProperty("replan");
+      for (const d of decided) expect(d.plan).not.toHaveProperty("replan");
+    });
+
+    it("shows on the gate what the planner says it changed, and that the plan came back", async () => {
+      const { run } = setup({ plan: [planned({ changed: "dropped the missing module and touched keys.rs instead" })] });
+      const result = await run(context({ replan }));
+      expect(result.detail).toMatchObject({ replan: { raised_by: "verifying" }, changed: "dropped the missing module and touched keys.rs instead" });
+      const plain = await setup({ plan: [planned({ changed: "ignored without a replan" })] }).run(context());
+      expect(plain.detail).not.toHaveProperty("replan");
+      expect(plain.detail).not.toHaveProperty("changed");
+    });
+
+    it("flags the gate when a re-planned plan says nothing about what it changed", async () => {
+      const result = await setup().run(context({ replan }));
+      expect(result.detail).toMatchObject({ flagged: ["replan: the planner did not say what it changed"] });
+    });
+  });
+
   it("keeps the designer blind to the plan on every round and on the fast lane, and tells it only the gaps and its earlier scenarios", async () => {
     const { run, calls } = setup({ test_design: [cased("no panic"), cased("no panic", "stays selected")] }, withGraph);
     await run(context());

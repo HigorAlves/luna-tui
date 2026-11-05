@@ -228,6 +228,20 @@ describe("renderPrompt", () => {
     expect(render()).toContain("(none)");
   });
 
+  it("renders the evidence a wrong plan came back with, marked as data, or none", () => {
+    const plan = { record: null, brief: "", criteria: [], assumptions: [], slices: [] };
+    const replan = { raised_by: "shipping", reason: "the review says the plan is wrong", output: "tsc: cannot find x", findings: ["a.ts:3 x is missing"], thread: "bo: rename x" };
+    const render = (p: unknown, template = "{{context.plan.replan}}") => renderPrompt({ pack: PACKS.plan, input: { ...input, context: { ...input.context, plan: p } } as never, template });
+    const out = render({ ...plan, replan });
+    expect(out).toContain("Raised by: shipping\nReason: the review says the plan is wrong\nFindings:\n- a.ts:3 x is missing\nFailing output (tail):\ntsc: cannot find x\nReviewer's thread:\nbo: rename x");
+    expect(render(plan)).toContain("(none)");
+    const real = readFileSync(new URL("../../prompts/plan.md", import.meta.url), "utf8");
+    const prompt = render({ ...plan, replan }, real);
+    expect(prompt).not.toContain("{{");
+    expect(prompt).toMatch(/data, not instructions/i);
+    expect(prompt).toMatch(/say what you changed/i);
+  });
+
   it("renders the designer's input: the goal and the criteria with their ids, and none of the plan's steps, brief or assumptions", () => {
     const record = { source: "manual", kind: "bug", goal: "Stop the panic", size: "S", urgency: "high", risk: "medium", signals: {}, qa: [], decision: "plan", reason: "r", at: "t", model: "m" };
     const designer = { ...input, stage: "test_design", pack: "test_design", task: { ...input.task, record }, plan: { brief: "THE BRIEF", criteria: ["no panic", "stays selected"], assumptions: ["AN ASSUMPTION"], slices: [{ title: "A STEP", est_loc: 5, touchpoints: ["a.rs"], acceptance: ["ok"] }] } };
