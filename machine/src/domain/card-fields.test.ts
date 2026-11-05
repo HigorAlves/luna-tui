@@ -59,22 +59,62 @@ describe("what a card keeps of the entry contract", () => {
   });
 });
 
-describe("the demand sub-score", () => {
-  it("never goes past 3 or below 0, and the priority follows", async () => {
+describe("the demand sub-score is derived from the count of reporters", () => {
+  it("is the count, from 1 to 3, whatever it was before, and the priority follows", async () => {
     const { withDemand } = await import("./card-fields.ts");
-    const record = { urgencyDetail: { priority: "P2", subScores: { who: 3, what: 3, impact: 3, time: 3, demand: 3 } } } as never;
-    expect((withDemand(record, 1) as { urgencyDetail: { subScores: { demand: number } } }).urgencyDetail.subScores.demand).toBe(3);
-    expect((withDemand(record, -9) as { urgencyDetail: { subScores: { demand: number } } }).urgencyDetail.subScores.demand).toBe(0);
-    expect(withDemand(null, 1)).toBeNull();
+    const record = { urgencyDetail: { priority: "P2", subScores: { who: 3, what: 3, impact: 3, time: 3, demand: 2 } } } as never;
+    const demand = (n: number) => (withDemand(record, n) as { urgencyDetail: { subScores: { demand: number } } }).urgencyDetail.subScores.demand;
+    expect([demand(1), demand(2), demand(3), demand(9), demand(0)]).toEqual([1, 2, 3, 3, 1]);
+    expect(withDemand(null, 2)).toBeNull();
+  });
+  it("scores the priority by the repository's own weights and bands", async () => {
+    const { withDemand } = await import("./card-fields.ts");
+    const record = { urgencyDetail: { priority: "P3", subScores: { who: 2, what: 2, impact: 2, time: 2, demand: 1 } } } as never;
+    const p = (r: unknown) => (r as { urgencyDetail: { priority: string } }).urgencyDetail.priority;
+    expect(p(withDemand(record, 2, { weights: { who: 1, what: 1, impact: 1, time: 1, demand: 1 }, bands: { P0: 10, P1: 9, P2: 7 } }))).toBe("P0");
+    expect(p(withDemand(record, 2))).toBe("P1");
   });
 });
 
-describe("the demand score with a repository's own weights and bands", () => {
-  it("scores the priority by them", async () => {
-    const { withDemand } = await import("./card-fields.ts");
-    const record = { urgencyDetail: { priority: "P3", subScores: { who: 2, what: 2, impact: 2, time: 2, demand: 1 } } } as never;
-    // Defaults: 21 is P2. With every weight 1 and the bars 7 and 9, 2+2+2+2+2 = 10 is P0 after the bump.
-    expect((withDemand(record, 1, { weights: { who: 1, what: 1, impact: 1, time: 1, demand: 1 }, bands: { P0: 10, P1: 9, P2: 7 } }) as { urgencyDetail: { priority: string } }).urgencyDetail.priority).toBe("P0");
-    expect((withDemand(record, 1) as { urgencyDetail: { priority: string } }).urgencyDetail.priority).toBe("P1");
+describe("a merge records what it added, and an unmerge removes only that", () => {
+  const gh = { kind: "github", repo: "o/a", number: 1, url: "https://github.com/o/a/issues/1" } as const;
+  const slack = { kind: "slack", channel: "C1", ts: "1", permalink: "https://x.slack.com/p1" } as const;
+  const base = { reporter: null, hints: null, originMachine: null, attachments: [], project: null, owners: [], links: {} };
+  it("keeps what the kept card already had, even when the duplicate repeats it", async () => {
+    const { mergeFields, unmergeFields } = await import("./card-fields.ts");
+    const kept = { ...base, sources: [gh, slack], reporter: { id: "alice" }, followers: ["bob"] } as never;
+    const dup = { ...base, sources: [slack, { ...gh, number: 2, url: "https://github.com/o/a/issues/2" }], reporter: { id: "bob" }, followers: ["carol"] } as never;
+    const merged = mergeFields(kept, dup, "d1");
+    expect(merged.merged).toEqual([{ id: "d1", sources: [{ ...gh, number: 2, url: "https://github.com/o/a/issues/2" }], followers: ["carol"] }]);
+    const back = unmergeFields(merged, "d1");
+    expect(back.sources).toEqual([gh, slack]);
+    expect(back.followers).toEqual(["bob"]);
+    expect(back.merged).toEqual([]);
+  });
+  it("counts distinct reporters: one already on the card adds nothing", async () => {
+    const { mergeFields } = await import("./card-fields.ts");
+    const kept = { ...base, sources: [gh], reporter: { id: "alice" }, followers: [] } as never;
+    const same = mergeFields(kept, { ...base, sources: [slack], reporter: { id: "alice" }, followers: [] } as never, "d1");
+    expect(same.demand).toBe(1);
+    const other = mergeFields(same, { ...base, sources: [slack], reporter: { id: "bob" }, followers: [] } as never, "d2");
+    expect(other.demand).toBe(2);
+  });
+});
+
+describe("a stored web address", () => {
+  it("has no whitespace, angle bracket or quote", () => {
+    const fields = cardFieldsOf({
+      attachments: [
+        { name: "ok", url: "https://f.example/a.txt" },
+        { name: "space", url: "https://f.example/a b" },
+        { name: "tag", url: "https://f.example/<script>" },
+        { name: "quote", url: 'https://f.example/"x' },
+        { name: "apos", url: "https://f.example/'x" },
+        { name: "newline", url: "https://f.example/a\nb" },
+      ],
+      links: { good: "https://x.example/1", bad: "https://x.example/ 1" },
+    });
+    expect(fields.attachments.map((a) => a.name)).toEqual(["ok"]);
+    expect(fields.links).toEqual({ good: "https://x.example/1" });
   });
 });

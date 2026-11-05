@@ -7,7 +7,9 @@ import { TaskSource } from "./stage.ts";
 /** Ids, names and types are short; permalinks and urls are longer; lists are bounded. The machine reads none of these before wave 14. */
 const short = z.string().max(200);
 const long = z.string().max(2000);
-const web = z.string().max(2000).regex(/^https?:\/\//i, "must be an http or https url");
+/** An http or https address with no whitespace, angle bracket or quote: it can sit in a prompt or a line of markdown without breaking out of it. */
+export const WEB_URL = /^https?:\/\/[^\s<>"']+$/i;
+const web = z.string().max(2000).regex(WEB_URL, "must be an http or https url without spaces, angle brackets or quotes");
 
 /** What triage weighs a filer's hint at, against its own reading (0.5 = half). Triage applies it from wave 9. */
 export const HINT_WEIGHT = 0.5;
@@ -74,7 +76,7 @@ export interface CardFields {
   /** How many reports the card stands for: 1, and one more for each duplicate merged into it. */
   demand?: number;
   /** The duplicates merged into this card (their cards are archived), newest last. */
-  merged?: { id: string }[];
+  merged?: { id: string; /** What the merge added to this card: only that is taken back on an unmerge. */ sources?: (TaskSource | CardSource)[]; followers?: string[] }[];
   /** What Intake's duplicate check found: the shortlist (by slot, as the decision saw it), the answers, the outcome and the decision record's id (ground truth names it). */
   dedup?: {
     at: string;

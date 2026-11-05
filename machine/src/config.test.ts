@@ -45,6 +45,7 @@ describe("loadConfig", () => {
       repoMap: {},
       reposDir: "/home/me/Developer",
       threadReplies: true,
+      publicUrl: null,
       groundTruth: true,
       decisions: { enabled: true, retentionDays: 90 },
       slack: null,
@@ -85,6 +86,8 @@ describe("loadConfig", () => {
 
   it("reads the thread-reply switch and the Slack pair, which go together", () => {
     expect(loadConfig({ HOME: "/h", MACHINE_THREAD_REPLIES: "off" }).threadReplies).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_PUBLIC_URL: "https://board.example/" }).publicUrl).toBe("https://board.example");
+    for (const bad of ["ftp://x", "javascript:alert(1)", "https://x y", "http://127.0.0.1:4317 ", "not a url", ""]) expect(loadConfig({ HOME: "/h", MACHINE_PUBLIC_URL: bad }).publicUrl, bad).toBeNull();
     expect(loadConfig({ HOME: "/h" }).groundTruth).toBe(true);
     expect(loadConfig({ HOME: "/h", MACHINE_GROUND_TRUTH: "off" }).groundTruth).toBe(false);
     expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS: "off" }).decisions.enabled).toBe(false);

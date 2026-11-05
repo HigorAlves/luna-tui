@@ -340,7 +340,8 @@ pipeline = new Pipeline(db, runnerFor, {
   // The outside-approver rule reads CODEOWNERS through the code graph port and nothing a model wrote.
   owners: (repoPath, paths) => graph.owners(repoPath, paths),
   // Context setup: by script, through the ports. The history ports and the map are read at call time (they are built below).
-  boardUrl: `http://${config.host}:${config.port}`,
+  ...(config.publicUrl ? { publicBoardUrl: config.publicUrl } : {}),
+  knownRepos: async () => [...Object.values(config.repoMap), ...(await repoMap.remembered())],
   // Intake's duplicate check: one `intake_dedup` call through the packs-on-demand runner, and the backlog as it is at that moment (both read at call time: they are built below).
   dedup: {
     decide: async (context) => {
@@ -349,8 +350,9 @@ pipeline = new Pipeline(db, runnerFor, {
       return { answer: answer as DedupAnswer, ...(recordId ? { recordId } : {}) };
     },
     backlog: {
-      list: async () => (await backlog.list()).map((e) => ({ id: e.id, title: e.title, text: e.text, repo: e.repo })),
+      list: async () => (await backlog.list()).map((e) => ({ id: e.id, title: e.title, text: e.text, repo: e.repo, sources: e.sources })),
       bump: async (id) => void (await backlog.bump(id)),
+      unbump: async (id) => backlog.unbump(id),
     },
   },
   contextSetup: {

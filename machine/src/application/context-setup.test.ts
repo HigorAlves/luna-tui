@@ -40,6 +40,17 @@ describe("context setup is a script", () => {
     expect(await contextSetup(d, card())).toMatchObject({ repoPath: null, repoFrom: null });
   });
 
+  it("reads the repository hint as owner/name, or from a github.com URL", async () => {
+    const slack = { kind: "slack", channel: "C1", ts: "1", permalink: "https://x/1" };
+    const seen: string[] = [];
+    const d = deps({ resolveRepo: async (slug) => (seen.push(slug), slug === "o/a" ? "/repos/a" : null) });
+    for (const repo of ["o/a", "https://github.com/o/a", "https://github.com/o/a/issues/12", "https://github.com/o/a.git"]) {
+      expect(await contextSetup(d, card({ source: slack, card: { links: { repo } } as never }))).toMatchObject({ repoPath: "/repos/a", repoFrom: "hint" });
+    }
+    expect(await contextSetup(d, card({ source: slack, card: { links: { repo: "https://evil.example/o/a" } } as never }))).toMatchObject({ repoPath: null });
+    expect(seen.every((s) => /^[\w.-]+\/[\w.-]+$/.test(s))).toBe(true);
+  });
+
   it("takes the project from the Jira source, else luna.yaml, else none", async () => {
     const jira = { kind: "jira", key: "PAY-3", url: "https://x/PAY-3", issueType: null };
     expect((await contextSetup(deps(), card({ source: jira }))).project).toBe("PAY");

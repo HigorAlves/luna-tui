@@ -74,6 +74,7 @@ describe("the create_card entry contract", () => {
     expect(NewTaskInput.safeParse({ title: "t", attachments: Array.from({ length: 21 }, () => ({ name: "a", url: "https://x/a" })) }).success).toBe(false);
     for (const url of ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,x", "/etc/passwd"]) expect(NewTaskInput.safeParse({ title: "t", attachments: [{ name: "a", url }] }).success).toBe(false);
     expect(NewTaskInput.safeParse({ title: "t", attachments: [{ name: "a", url: "http://x/a" }] }).success).toBe(true);
+    for (const url of ["https://x/a b", "https://x/<b>", "https://x/\"", "https://x/'", "https://x/a\nb"]) expect(NewTaskInput.safeParse({ title: "t", attachments: [{ name: "a", url }] }).success, url).toBe(false);
   });
 
   it("weighs a hint at half", () => {

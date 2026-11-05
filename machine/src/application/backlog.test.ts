@@ -75,6 +75,13 @@ describe("the backlog routes", () => {
     expect((await call("POST", `/backlog/${a.body.id}/promote`)).status).toBe(404);
   });
 
+  it("two promotes of one item at once make one card", async () => {
+    const a = await add("Race me");
+    const both = await Promise.all([call("POST", `/backlog/${a.body.id}/promote`), call("POST", `/backlog/${a.body.id}/promote`)]);
+    expect(both.map((r) => r.status).sort()).toEqual([201, 404]);
+    expect(await pipeline.list()).toHaveLength(1);
+  });
+
   it("decline removes the item; an unknown item is 404", async () => {
     const a = await add("Nope");
     expect((await call("POST", `/backlog/${a.body.id}/decline`)).status).toBe(200);

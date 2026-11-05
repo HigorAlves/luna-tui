@@ -58,8 +58,9 @@ export async function contextSetup(deps: ContextDeps, row: CardInput): Promise<R
 
   let repoPath = row.repoPath;
   let repoFrom: RepoFrom = repoPath ? "card" : null;
-  if (!repoPath && card.links.repo) {
-    repoPath = await deps.resolveRepo(card.links.repo).catch(() => null);
+  const hint = repoSlugOf(card.links.repo);
+  if (!repoPath && hint) {
+    repoPath = await deps.resolveRepo(hint).catch(() => null);
     if (repoPath) repoFrom = "hint";
   }
   if (!repoPath) {
@@ -108,4 +109,13 @@ export async function uniqueRepoForProject(project: string, repos: string[], pro
   const matches: string[] = [];
   for (const repo of new Set(repos)) if ((await projectOf(repo).catch(() => null)) === project) matches.push(repo);
   return matches.length === 1 ? matches[0]! : null;
+}
+
+/** `owner/name` from a hint that is either that or a github.com URL (an issue, a PR, a `.git` remote); null for anything else. */
+export function repoSlugOf(hint: string | undefined): string | null {
+  if (!hint) return null;
+  const text = hint.trim();
+  const url = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?(?:[/?#].*)?$/i.exec(text);
+  if (url) return `${url[1]}/${url[2]}`;
+  return /^[\w.-]+\/[\w.-]+$/.test(text) ? text : null;
 }

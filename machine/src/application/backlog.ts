@@ -26,6 +26,8 @@ export interface BacklogStore {
   get(id: string): Promise<BacklogRow | null>;
   /** Demand plus one, and the item counts as assessed now. */
   bump(id: string): Promise<BacklogRow | null>;
+  /** Demand minus one (never under 1): the undo of a bump. */
+  unbump(id: string): Promise<BacklogRow | null>;
   remove(id: string): Promise<boolean>;
 }
 
@@ -81,22 +83,32 @@ export class Backlog {
     return this.entry(row);
   }
 
-  /** The item becomes a card: its text, its first source and its scores as the card's hints; the item is removed. */
+  /** The undo of a bump (an unmerged duplicate). */
+  async unbump(id: string): Promise<void> {
+    await this.options.store.unbump(id);
+  }
+
+  /** The item becomes a card: its text, its first source and its scores as the card's hints. The item is removed FIRST and the card made only when this call removed it,
+   *  so two promotes at once make one card; if making it fails the item is put back. */
   async promote(id: string): Promise<TaskRow> {
     const item = await this.options.store.get(id);
     if (!item) throw new BacklogItemNotFoundError(id);
+    if (!(await this.options.store.remove(id))) throw new BacklogItemNotFoundError(id);
     const first = item.sources.find((s): s is TaskSource => "kind" in s);
-    const task = await this.options.pipeline.createTask({
+    try {
+      return await this.options.pipeline.createTask({
       title: item.title,
-      description: item.text,
-      ...(first ? { source: first } : {}),
-      sources: item.sources,
-      ...(item.repo?.startsWith("/") ? { repoPath: item.repo } : {}),
-      hints: { size: item.size, urgency: String(item.scores.time) },
-      ...(item.repo ? { links: {} } : {}),
-    });
-    await this.options.store.remove(id);
-    return task;
+        description: item.text,
+        ...(first ? { source: first } : {}),
+        sources: item.sources,
+        ...(item.repo?.startsWith("/") ? { repoPath: item.repo } : {}),
+        hints: { size: item.size, urgency: String(item.scores.time) },
+        ...(item.repo ? { links: {} } : {}),
+      });
+    } catch (error) {
+      await this.options.store.add({ title: item.title, text: item.text, sources: item.sources, repo: item.repo, scores: item.scores, size: item.size, dependsOn: item.dependsOn }).catch(() => undefined);
+      throw error;
+    }
   }
 
   async decline(id: string): Promise<void> {

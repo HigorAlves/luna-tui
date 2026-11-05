@@ -17,7 +17,8 @@ const learned: any[] = [];
 const bumped: string[] = [];
 let calls: any[] = [];
 let answer: DedupAnswer | Error = {} as DedupAnswer;
-let backlogItems: Array<{ id: string; title: string; text: string; repo: string | null }> = [];
+let backlogItems: Array<{ id: string; title: string; text: string; repo: string | null; sources: object[] }> = [];
+const unbumped: string[] = [];
 let pipeline: Pipeline;
 
 beforeAll(async () => {
@@ -37,6 +38,7 @@ beforeEach(async () => {
   stubs.reset();
   learned.length = 0;
   bumped.length = 0;
+  unbumped.length = 0;
   calls = [];
   backlogItems = [];
   answer = { slot1: { choice: "different", confidence: 0.9 } } as DedupAnswer;
@@ -44,7 +46,7 @@ beforeEach(async () => {
     inline: true,
     hasConfig: () => true,
     contextSetup: context,
-    boardUrl: "http://127.0.0.1:7777",
+    publicBoardUrl: "https://board.example",
     truth: { learned: async (fact: unknown) => (learned.push(fact), true) } as never,
     dedup: {
       decide: async (ctx) => {
@@ -52,7 +54,7 @@ beforeEach(async () => {
         if (answer instanceof Error) throw answer;
         return { answer, recordId: "rec-1" };
       },
-      backlog: { list: async () => backlogItems, bump: async (id) => void bumped.push(id) },
+      backlog: { list: async () => backlogItems, bump: async (id) => void bumped.push(id), unbump: async (id) => void unbumped.push(id) },
     },
   });
 });
@@ -63,9 +65,9 @@ const fresh = () => make("Checkout fails when paying");
 
 describe("the duplicate check at start", () => {
   it("a confident same on an open card merges the new card into it, with no person, before triage", async () => {
-    const k = await kept();
+    const k = await make("Checkout fails when paying with card", { reporter: { id: "alice", channel: "slack" } });
     answer = { slot1: { choice: "same", confidence: 0.95 } } as DedupAnswer;
-    const n = await fresh();
+    const n = await make("Checkout fails when paying", { reporter: { id: "bob", channel: "slack" } });
     const after = await pipeline.start(n.id);
     expect(after.state).toBe("closed");
     expect(cardOf(after).mergedInto).toBe(k.id);
@@ -90,7 +92,7 @@ describe("the duplicate check at start", () => {
   });
 
   it("a duplicate of a backlog item bumps that item and closes the card", async () => {
-    backlogItems = [{ id: "99999999-0000-0000-0000-000000000000", title: "Checkout fails when paying with card", text: fill("Checkout"), repo: REPO }];
+    backlogItems = [{ id: "99999999-0000-0000-0000-000000000000", title: "Checkout fails when paying with card", text: fill("Checkout"), repo: REPO, sources: [] }];
     answer = { slot1: { choice: "same", confidence: 0.95 } } as DedupAnswer;
     const n = await fresh();
     const after = await pipeline.start(n.id);
@@ -118,6 +120,78 @@ describe("the duplicate check at start", () => {
     expect(after.state).not.toBe("awaiting_setup");
     expect(cardOf(after).dedup).toMatchObject({ outcome: "skipped" });
     expect((await pipeline.events(n.id)).some((e) => e.kind === "intake.dedup_skipped")).toBe(true);
+  });
+});
+
+describe("only a card the new card's reporter could see is a candidate", () => {
+  const ghNew = { kind: "github", repo: "o/a", number: 5, url: "https://github.com/o/a/issues/5" } as const;
+  const jiraPrivate = { kind: "jira", key: "PAY-1", url: "https://x.atlassian.net/browse/PAY-1", issueType: null } as const;
+  const slackPrivate = { kind: "slack", channel: "C9", ts: "1", permalink: "https://x.slack.com/p1" } as const;
+
+  it("never shortlists, shows, merges into or says anything about a private card for a public report", async () => {
+    const privateCards = [await make("Checkout fails when paying with card", { source: jiraPrivate }), await make("Checkout fails when paying with card", { source: slackPrivate }), await make("Checkout fails when paying with card")];
+    answer = { slot1: { choice: "same", confidence: 0.99 } } as DedupAnswer;
+    const n = await make("Checkout fails when paying", { source: ghNew });
+    const after = await pipeline.start(n.id);
+    expect(calls).toEqual([]);
+    expect(after.state).not.toBe("closed");
+    expect(cardOf(after).dedup).toMatchObject({ outcome: "none", candidates: [] });
+    const events = (await pipeline.events(n.id)).map((e) => e.kind);
+    expect(events).not.toContain("card.merged");
+    expect(events).not.toContain("task.reply");
+    for (const k of privateCards) expect(cardOf(await pipeline.get(k.id)).merged ?? []).toEqual([]);
+  });
+
+  it("does offer a card of the same GitHub repository, and a Jira or Slack card of the same project or channel", async () => {
+    await make("Checkout fails when paying with card", { source: { ...ghNew, number: 1 } });
+    await make("Checkout fails when paying with card", { source: jiraPrivate });
+    answer = { slot1: { choice: "different", confidence: 0.9 } } as DedupAnswer;
+    await pipeline.start((await make("Checkout fails when paying", { source: ghNew })).id);
+    expect(calls[0].candidates).toHaveLength(1);
+    await pipeline.start((await make("Checkout fails when paying", { source: { ...jiraPrivate, key: "PAY-7" } })).id);
+    expect(calls[1].candidates).toHaveLength(1);
+  });
+
+  it("a card typed in the TUI, with no source, sees every card of its repository", async () => {
+    await make("Checkout fails when paying with card", { source: jiraPrivate });
+    await make("Checkout fails when paying with card", { source: slackPrivate });
+    answer = { slot1: { choice: "different", confidence: 0.9 } } as DedupAnswer;
+    await pipeline.start((await fresh()).id);
+    expect(calls[0].candidates).toHaveLength(2);
+  });
+
+  it("a backlog item with no source is the operator's: a public report does not see it", async () => {
+    backlogItems = [{ id: "99999999-0000-0000-0000-000000000000", title: "Checkout fails when paying with card", text: fill("Checkout"), repo: REPO, sources: [] }];
+    await pipeline.start((await make("Checkout fails when paying", { source: ghNew })).id);
+    expect(calls).toEqual([]);
+    backlogItems[0]!.sources = [{ ...ghNew, number: 1 }];
+    await pipeline.start((await make("Checkout fails when paying", { source: ghNew })).id);
+    expect(calls).toHaveLength(1);
+  });
+});
+
+describe("an unmerge stays unmerged", () => {
+  it("the restored card is not checked again at start, so it does not merge again", async () => {
+    const k = await kept();
+    answer = { slot1: { choice: "same", confidence: 0.95 } } as DedupAnswer;
+    const n = await fresh();
+    await pipeline.start(n.id);
+    const restored = await pipeline.unmerge(n.id);
+    const before = calls.length;
+    const after = await pipeline.start(restored.id);
+    expect(calls.length).toBe(before);
+    expect(after.state).not.toBe("closed");
+    expect(cardOf(after).related).toEqual([k.id]);
+  });
+
+  it("undoing a merge into a backlog item undoes its bump", async () => {
+    backlogItems = [{ id: "99999999-0000-0000-0000-000000000000", title: "Checkout fails when paying with card", text: fill("Checkout"), repo: REPO, sources: [] }];
+    answer = { slot1: { choice: "same", confidence: 0.95 } } as DedupAnswer;
+    const n = await fresh();
+    await pipeline.start(n.id);
+    expect(bumped).toHaveLength(1);
+    await pipeline.unmerge(n.id);
+    expect(unbumped).toEqual(["99999999-0000-0000-0000-000000000000"]);
   });
 });
 

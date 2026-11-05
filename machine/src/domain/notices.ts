@@ -44,14 +44,19 @@ const srcs = (card: CardView): Src[] => card.sources as Src[];
 const githubRepos = (card: CardView): string[] => srcs(card).filter((s) => s.kind === "github" || s.kind === "github_pr").map((s) => String(s.repo));
 const projectOf = (key: string | undefined): string | null => /^([A-Z][A-Z0-9_]+)-\d+$/.exec(key ?? "")?.[1] ?? null;
 
-/** Whether the reporter of `dup` could already see the card it is merged into: the same repository and, for a private Slack or Jira source, the same channel or project. */
+/** Whether the reporter of `dup` could already see the card it is (or would be) merged into. It fails closed, by the kept card's own first source:
+ *  a GitHub card is seen by a report from that GitHub repository, a Slack card by one from the same channel, a Jira card by one from the same project.
+ *  A card with no source, one in the diagram's shape (`type`: its audience is unknown) or from anywhere else is seen by nobody. Both cards' sources are read in the machine's shape (`kind`). */
 export function canSeeKept(dup: CardView, kept: CardView): boolean {
-  const sameRepo = (dup.repoPath !== null && dup.repoPath === kept.repoPath) || githubRepos(dup).some((r) => githubRepos(kept).includes(r));
-  if (!sameRepo) return false;
   const first = srcs(kept)[0];
-  if (first?.kind === "slack") return srcs(dup).some((s) => s.kind === "slack" && s.channel === first.channel);
-  if (first?.kind === "jira") return srcs(dup).some((s) => s.kind === "jira" && projectOf(s.key) !== null && projectOf(s.key) === projectOf(first.key));
-  return true;
+  if (!first || typeof first.kind !== "string") return false;
+  if (first.kind === "github" || first.kind === "github_pr") return typeof first.repo === "string" && githubRepos(dup).includes(first.repo);
+  if (first.kind === "slack") return typeof first.channel === "string" && srcs(dup).some((s) => s.kind === "slack" && s.channel === first.channel);
+  if (first.kind === "jira") {
+    const project = projectOf(first.key);
+    return project !== null && srcs(dup).some((s) => s.kind === "jira" && projectOf(s.key) === project);
+  }
+  return false;
 }
 
 /** What a duplicate's source is told: which card tracks it (fixed words, the card's id and a link, never its title or text) when its reporter could see that card, else only that the report is tracked. */

@@ -24,14 +24,16 @@ beforeEach(async () => {
   await db.query("truncate tasks cascade");
   stubs.reset();
   learned.length = 0;
-  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, boardUrl: "http://127.0.0.1:7777", truth: { learned: async (fact: unknown) => (learned.push(fact), true) } as never });
+  pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, publicBoardUrl: "https://board.example", truth: { learned: async (fact: unknown) => (learned.push(fact), true) } as never });
 });
 
 const gh = { kind: "github", repo: "o/a", number: 1, url: "https://github.com/o/a/issues/1" } as const;
 const slack = { kind: "slack", channel: "C1", ts: "1.2", permalink: "https://example.slack.com/archives/C1/p12" } as const;
-const pair = async (dupRepo = "/r/a") => {
+const ghDup = { kind: "github", repo: "o/a", number: 2, url: "https://github.com/o/a/issues/2" } as const;
+/** `visible`: the duplicate also has a report from the kept card's GitHub repository, so its reporter could see the kept card. */
+const pair = async (visible = true, reporter = "U2") => {
   const kept = await pipeline.createTask({ title: "Secret roadmap item", source: gh, repoPath: "/r/a", reporter: { id: "alice", channel: "github" } });
-  const dup = await pipeline.createTask({ title: "Checkout broken", description: "it fails", source: slack, repoPath: dupRepo, reporter: { id: "U2", channel: "slack" } });
+  const dup = await pipeline.createTask({ title: "Checkout broken", description: "it fails", source: slack, ...(visible ? { sources: [ghDup] } : {}), repoPath: "/r/a", reporter: { id: reporter, channel: "slack" } });
   return { kept, dup };
 };
 
@@ -40,10 +42,10 @@ describe("merging a duplicate", () => {
     const { kept, dup } = await pair();
     await pipeline.merge(dup.id, kept.id);
     const card = cardOf(await pipeline.get(kept.id));
-    expect(card.sources).toEqual([gh, slack]);
+    expect(card.sources).toEqual([gh, slack, ghDup]);
     expect(card.followers).toEqual(["U2"]);
     expect(card.demand).toBe(2);
-    expect(card.merged).toEqual([{ id: dup.id }]);
+    expect(card.merged).toEqual([{ id: dup.id, sources: [slack, ghDup], followers: ["U2"] }]);
     const after = await pipeline.get(dup.id);
     expect(after).toMatchObject({ state: "closed", archiveReason: null });
     expect(cardOf(after).mergedInto).toBe(kept.id);
@@ -59,13 +61,14 @@ describe("merging a duplicate", () => {
     const reply = (await pipeline.events(dup.id)).find((e) => e.kind === "task.reply");
     const body = String(reply?.payload.body);
     expect(body).toContain(kept.id.slice(0, 8));
-    expect(body).toContain(`http://127.0.0.1:7777/tasks/${kept.id}`);
+    expect(body).toContain(`https://board.example/tasks/${kept.id}`);
+    expect(body).not.toContain("127.0.0.1");
     expect(body).not.toContain("Secret roadmap");
     expect(body).not.toContain("Checkout broken");
   });
 
-  it("says only that the report is tracked when its reporter could not see the kept card: another repository", async () => {
-    const { kept, dup } = await pair("/r/other");
+  it("says only that the report is tracked when its reporter could not see the kept card: no report from its repository", async () => {
+    const { kept, dup } = await pair(false);
     await pipeline.merge(dup.id, kept.id);
     const body = String((await pipeline.events(dup.id)).find((e) => e.kind === "task.reply")?.payload.body);
     expect(body).toContain("tracked");
@@ -103,6 +106,24 @@ describe("merging a duplicate", () => {
   });
 });
 
+describe("what a merge may touch", () => {
+  it("counts distinct reporters: a reporter already on the card raises nothing", async () => {
+    const { kept, dup } = await pair(true, "alice");
+    await pipeline.merge(dup.id, kept.id);
+    expect(cardOf(await pipeline.get(kept.id)).demand).toBe(1);
+  });
+
+  it("a person's merge is refused for a card that has reached Build: a workspace or a state past the plan", async () => {
+    const { kept, dup } = await pair();
+    await db.query("update tasks set worktree_path = '/w/x' where id = $1", [dup.id]);
+    await expect(pipeline.merge(dup.id, kept.id)).rejects.toThrow(/Build/);
+    await db.query("update tasks set worktree_path = null, state = 'implementing' where id = $1", [dup.id]);
+    await expect(pipeline.merge(dup.id, kept.id)).rejects.toThrow(/Build/);
+    const route = await createApp({ db, pipeline, bus: new Bus() }).request(`/tasks/${dup.id}/merge`, { method: "POST", body: JSON.stringify({ into: kept.id }), headers: { "content-type": "application/json" } });
+    expect(route.status).toBe(409);
+  });
+});
+
 describe("a merge the machine made alone", () => {
   it("is no person's word, so it teaches the decision nothing", async () => {
     const { kept, dup } = await pair();
@@ -120,8 +141,11 @@ describe("undoing a merge", () => {
     const restored = await pipeline.unmerge(dup.id);
     const card = cardOf(await pipeline.get(kept.id));
     expect(card).toMatchObject({ sources: [gh], followers: [], demand: 1, merged: [] });
+    expect(card.related).toEqual([restored.id]);
     expect(restored).toMatchObject({ id: expect.not.stringMatching(dup.id), title: "Checkout broken", state: "draft" });
-    expect(cardOf(restored).sources).toEqual([slack]);
+    expect(cardOf(restored).sources).toEqual([slack, ghDup]);
+    expect(cardOf(restored).dedup).toMatchObject({ chosen: "neither" });
+    expect(cardOf(restored).related).toEqual([kept.id]);
     expect((await pipeline.events(kept.id)).some((e) => e.kind === "card.unmerged")).toBe(true);
     await expect(pipeline.unmerge(kept.id)).rejects.toThrow();
   });

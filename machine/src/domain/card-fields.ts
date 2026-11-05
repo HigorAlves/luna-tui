@@ -1,6 +1,7 @@
 // What a card keeps of the entry contract (`create_card`): pure, so every intake and the HTTP route store the same shape.
 // Every text is a stranger's: flattened and capped, every list bounded, an attachment a reference with a web address.
 import { type Bands, SCORING_DEFAULTS, type Weights, scorePriority, type TriageRecord } from "@hardness/contracts";
+import { WEB_URL } from "@hardness/contracts";
 import type { CardAttachment, CardFields, CardHints, CardSource, OriginMachine, Reporter, TaskSource } from "@hardness/contracts";
 
 import { safe } from "./evidence-markdown.ts";
@@ -30,7 +31,7 @@ export interface CardFieldsInput {
 
 /** Text a stranger wrote: no markup, one line, capped. */
 const text = (value: string, max = TEXT): string => safe(value).slice(0, max).trim();
-const web = (url: string): boolean => /^https?:\/\//i.test(url.trim());
+const web = (url: string): boolean => WEB_URL.test(url.trim());
 /** An identifier (a login, a team, a project key): only letters, digits and `@ / . _ -` survive, capped, so it cannot carry markup, a link or a control character. `@team` still matches; output escapes it again. */
 const ident = (value: string, max = TEXT): string => value.replace(/[^\p{L}\p{N}@/._-]/gu, "").slice(0, max);
 const list = (values: string[] | undefined, max: number): string[] =>
@@ -44,7 +45,7 @@ function cleanSource(source: Source): Source {
 }
 
 /** Keys sorted: jsonb hands an object back in its own key order. */
-const canon = (v: Source): string => JSON.stringify(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1)));
+const canon = (v: object): string => JSON.stringify(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1)));
 const sameSource = (a: Source, b: Source): boolean => canon(a) === canon(b);
 
 /** The card's sources with `extra` after them, the first one untouched, no repeats, at most MAX_SOURCES. */
@@ -106,40 +107,36 @@ export function cardFieldsOf(input: CardFieldsInput): CardFields {
 const MAX_MERGED = 50;
 const DEMAND_MAX = 3;
 
-/** The kept card with a duplicate's report merged in: its sources after the kept ones, its reporter and followers following, the demand up by one. Pure. */
+/** Distinct reporters of a card: its own and its followers. Demand is this count, at least 1. */
+export const reportersOf = (card: Pick<CardFields, "reporter" | "followers">): number => Math.max(1, new Set([card.reporter?.id ?? "", ...card.followers].filter(Boolean)).size);
+
+/** The kept card with a duplicate's report merged in: its sources after the kept ones, its reporter and followers following. The merge records what it
+ *  added (a source or follower the kept card already had is not added, so it is not taken back); demand is the count of distinct reporters. Pure. */
 export function mergeFields(kept: CardFields, dup: CardFields, dupId: string): CardFields {
   let sources = kept.sources;
   for (const source of dup.sources) sources = appendSource(sources, source);
+  const addedSources = sources.slice(kept.sources.length);
   const who = [dup.reporter?.id ?? "", ...dup.followers].map((v) => ident(v)).filter(Boolean);
-  return {
-    ...kept,
-    sources,
-    followers: [...new Set([...kept.followers, ...who])].slice(0, MAX_FOLLOWERS),
-    demand: (kept.demand ?? 1) + 1,
-    merged: [...(kept.merged ?? []), { id: dupId }].slice(-MAX_MERGED),
-  };
+  const followers = [...new Set([...kept.followers, ...who])].slice(0, MAX_FOLLOWERS);
+  const addedFollowers = followers.filter((f) => !kept.followers.includes(f) && f !== kept.reporter?.id);
+  const next = { ...kept, sources, followers };
+  return { ...next, demand: reportersOf(next), merged: [...(kept.merged ?? []), { id: dupId, sources: addedSources, followers: addedFollowers }].slice(-MAX_MERGED) };
 }
 
-/** The kept card without what a merge added: the duplicate's sources (never the first), its followers (but not the kept card's own reporter), one demand. Pure. */
-export function unmergeFields(kept: CardFields, dup: CardFields, dupId: string): CardFields {
-  const gone = new Set((dup.sources ?? []).map((s) => JSON.stringify(Object.entries(s).sort(([a], [b]) => (a < b ? -1 : 1)))));
-  const first = kept.sources[0];
-  const own = new Set([kept.reporter?.id ?? ""]);
-  const leaving = new Set([dup.reporter?.id ?? "", ...dup.followers].map((v) => ident(v)));
-  return {
-    ...kept,
-    sources: kept.sources.filter((s, i) => i === 0 || s === first || !gone.has(JSON.stringify(Object.entries(s).sort(([a], [b]) => (a < b ? -1 : 1))))),
-    followers: kept.followers.filter((v) => own.has(v) || !leaving.has(v)),
-    demand: Math.max(1, (kept.demand ?? 1) - 1),
-    merged: (kept.merged ?? []).filter((m) => m.id !== dupId),
-  };
+/** The kept card without what that merge added: its sources (never the first) and followers; demand follows the reporters left. Pure. */
+export function unmergeFields(kept: CardFields, dupId: string): CardFields {
+  const entry = (kept.merged ?? []).find((m) => m.id === dupId);
+  const gone = new Set((entry?.sources ?? []).map(canon));
+  const leaving = new Set(entry?.followers ?? []);
+  const sources = kept.sources.filter((s, i) => i === 0 || !gone.has(canon(s)));
+  const next = { ...kept, sources, followers: kept.followers.filter((f) => !leaving.has(f)) };
+  return { ...next, demand: reportersOf(next), merged: (kept.merged ?? []).filter((m) => m.id !== dupId) };
 }
 
-/** A triage record with its demand sub-score moved by `delta` (0 to 3) and the priority scored again; the record as it was when it has no sub-scores. Pure. */
-export function withDemand(record: TriageRecord | null, delta: number, scoring: { weights: Weights; bands: Bands } = { weights: SCORING_DEFAULTS.weights, bands: SCORING_DEFAULTS.bands }): TriageRecord | null {
+/** A triage record with its demand sub-score derived from the count of reporters (1 to 3) and the priority scored again; the record as it was when it has no sub-scores. Pure. */
+export function withDemand(record: TriageRecord | null, count: number, scoring: { weights: Weights; bands: Bands } = { weights: SCORING_DEFAULTS.weights, bands: SCORING_DEFAULTS.bands }): TriageRecord | null {
   const detail = record?.urgencyDetail;
   if (!record || !detail) return record;
-  const demand = Math.min(DEMAND_MAX, Math.max(0, detail.subScores.demand + delta));
-  const subScores = { ...detail.subScores, demand };
+  const subScores = { ...detail.subScores, demand: Math.min(DEMAND_MAX, Math.max(1, count)) };
   return { ...record, urgencyDetail: { priority: scorePriority(subScores, scoring).priority, subScores } };
 }

@@ -36,7 +36,7 @@ import { stageFactRows } from "./stage-facts.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
-import { basename, join } from "node:path";
+import { basename, isAbsolute, join, normalize } from "node:path";
 
 import type { Policy } from "../domain/policy.ts";
 import { CONFIG_FILE, PolicyStore } from "./policy.ts";
@@ -104,7 +104,7 @@ export class NoContextGateError extends Error {
 /** What the duplicate check needs from outside: the one decision call, and the backlog (to list its items and to bump one). */
 export interface DedupPort {
   decide(context: DedupContext): Promise<{ answer: DedupAnswer; recordId?: string }>;
-  backlog?: { list(): Promise<Array<{ id: string; title: string; text: string; repo: string | null }>>; bump(id: string): Promise<void> };
+  backlog?: { list(): Promise<Array<{ id: string; title: string; text: string; repo: string | null; sources: object[] }>>; bump(id: string): Promise<void>; unbump(id: string): Promise<void> };
 }
 
 /** A person's answer at the dedup gate named no listed candidate, or the wrong number of them. */
@@ -114,6 +114,17 @@ export class DedupAnswerError extends Error {
     this.name = "DedupAnswerError";
   }
 }
+
+/** A person named a repository the machine does not know (or not as an absolute, normalised path). */
+export class UnknownRepositoryError extends Error {
+  constructor(repoPath: string) {
+    super(`the machine does not know a repository at ${JSON.stringify(repoPath.slice(0, 80))}: pick one it knows`);
+    this.name = "UnknownRepositoryError";
+  }
+}
+
+/** The states before Build: a card here has no workspace and no PR, so merging it loses nothing. */
+const BEFORE_BUILD: ReadonlySet<TaskState> = new Set<TaskState>(["draft", "setup", "awaiting_setup", "triage", "awaiting_answers", "test_design", "awaiting_approval", "awaiting_test_check"]);
 
 /** A merge or an undo the card's state does not allow. */
 export class MergeError extends Error {
@@ -164,8 +175,10 @@ export interface PipelineOptions {
   contextSetup?: ContextDeps;
   /** Intake's duplicate check; absent, no card is checked. */
   dedup?: DedupPort;
-  /** The board's address, for the link a merged duplicate's source is given. */
-  boardUrl?: string;
+  /** The board's PUBLIC address (`MACHINE_PUBLIC_URL`), for the link a merged duplicate's source is given when its reporter may see the kept card; never the machine's own address. */
+  publicBoardUrl?: string;
+  /** The repositories the machine knows (the repository map, remembered checkouts): the only ones a person may give the context gate. Absent, none. */
+  knownRepos?: () => Promise<string[]>;
   /** Writes the approved luna.yaml into the checkout. Tests pass a fake. */
   writeConfig?: (repoPath: string, text: string) => Promise<void>;
   /** Run stages inside the request instead of in the background. Tests use this. */
@@ -341,6 +354,7 @@ export class Pipeline {
   private readonly contextDeps: ContextDeps | null;
   private readonly dedupDeps: DedupPort | null;
   private readonly boardUrl: string | null;
+  private readonly knownRepos: (() => Promise<string[]>) | null;
   private readonly escalationDecide: { decide: Decide | null };
   private readonly escalationTruth: NonNullable<PipelineOptions["escalationTruth"]> | undefined;
   private readonly commitsSince: NonNullable<PipelineOptions["commitsSince"]> | undefined;
@@ -399,7 +413,8 @@ export class Pipeline {
     this.headOf = options.headOf;
     this.contextDeps = options.contextSetup ?? null;
     this.dedupDeps = options.dedup ?? null;
-    this.boardUrl = options.boardUrl ?? null;
+    this.boardUrl = options.publicBoardUrl ?? null;
+    this.knownRepos = options.knownRepos ?? null;
     this.hasConfig = options.hasConfig ?? ((repoPath) => existsSync(join(repoPath, CONFIG_FILE)));
     this.writeConfig = options.writeConfig ?? ((repoPath, text) => writeFile(join(repoPath, CONFIG_FILE), text));
     this.inline = options.inline ?? false;
@@ -520,8 +535,10 @@ export class Pipeline {
     const kept = await this.get(keptId);
     if (TERMINAL.has(dup.state)) throw new MergeError(`card ${dupId} has ended: nothing to merge`);
     if (TERMINAL.has(kept.state)) throw new MergeError(`card ${keptId} has ended: nothing to merge into`);
+    if (!BEFORE_BUILD.has(dup.state) || dup.worktreePath || dup.branch) throw new MergeError(`card ${dupId} has reached Build (a workspace or a PR may exist): it cannot be merged`);
     const scoring = (await this.policyFor(kept.repoPath)).factory.scoring;
-    await this.store.updateTask(keptId, { card: mergeFields(cardOf(kept), cardOf(dup), dupId), record: withDemand(kept.record ?? null, 1, scoring) });
+    const mergedCard = mergeFields(cardOf(kept), cardOf(dup), dupId);
+    await this.store.updateTask(keptId, { card: mergedCard, record: withDemand(kept.record ?? null, mergedCard.demand ?? 1, scoring) });
     await this.log(keptId, "card.merged", { from: dupId });
     await this.log(dupId, "card.merged", { into: keptId });
     const dupView = { repoPath: dup.repoPath, sources: cardOf(dup).sources };
@@ -541,7 +558,11 @@ export class Pipeline {
     const keptId = String(merged.payload.into);
     const kept = await this.store.getTask(keptId);
     const card = cardOf(dup);
-    if (kept) await this.store.updateTask(keptId, { card: unmergeFields(cardOf(kept), card, dupId), record: withDemand(kept.record ?? null, -1, (await this.policyFor(kept.repoPath)).factory.scoring) });
+    if (kept) {
+      const back = unmergeFields(cardOf(kept), dupId);
+      await this.store.updateTask(keptId, { card: back, record: withDemand(kept.record ?? null, back.demand ?? 1, (await this.policyFor(kept.repoPath)).factory.scoring) });
+    }
+    if (merged.payload.backlog === true) await this.dedupDeps?.backlog?.unbump(keptId).catch(() => undefined);
     const restored = await this.createTask({
       title: dup.title,
       description: dup.description,
@@ -557,10 +578,17 @@ export class Pipeline {
       followers: card.followers,
       links: card.links,
     });
-    if (kept) await this.log(keptId, "card.unmerged", { restored: restored.id, from: dupId });
+    // The person said these are not the same: the new card carries that, is linked to the card it was taken from, and is not checked again.
+    const decided = { at: new Date().toISOString(), recordId: null, candidates: [], answer: null, outcome: "none" as const, chosen: "neither" as const };
+    await this.store.updateTask(restored.id, { card: { ...cardOf(restored), dedup: decided, ...(kept ? { related: [keptId] } : {}) } });
+    if (kept) {
+      const theirs = cardOf(await this.get(keptId));
+      await this.store.updateTask(keptId, { card: { ...theirs, related: [...new Set([...(theirs.related ?? []), restored.id])].slice(0, 20) } });
+      await this.log(keptId, "card.unmerged", { restored: restored.id, from: dupId });
+    }
     await this.log(dupId, "card.unmerged", { restored: restored.id });
     await this.dedupTruth(dup, keptId, "different", "merge_undone");
-    return restored;
+    return this.get(restored.id);
   }
 
   /** Adds a report of the same card (a merged duplicate) after its sources. The first source never changes. */
@@ -952,11 +980,18 @@ export class Pipeline {
     return held;
   }
 
+  /** A repository a person names must be one the machine already knows, as an absolute, normalised path: never a path of their choosing. */
+  private async checkKnownRepo(repoPath: string): Promise<void> {
+    const known = this.knownRepos ? await this.knownRepos() : [];
+    if (!isAbsolute(repoPath) || normalize(repoPath) !== repoPath || repoPath.length > 1000 || !known.includes(repoPath)) throw new UnknownRepositoryError(repoPath);
+  }
+
   /** What a person gives the context gate: a repository, a project or more text. The card goes back through the check; complete, it goes on as a start would. */
   async provideContext(id: string, given: { repoPath?: string; project?: string; text?: string }): Promise<TaskRow> {
     const task = await this.get(id);
     const open = (await this.approvals(id)).find((a) => a.kind === "awaiting_setup" && a.decision === null && a.requested.kind === "context");
     if (task.state !== "awaiting_setup" || !open) throw new NoContextGateError(id, task.state);
+    if (given.repoPath !== undefined) await this.checkKnownRepo(given.repoPath);
     const text = given.text?.trim().slice(0, 20_000);
     const card = cardOf(task);
     const project = given.project?.trim().slice(0, 120) || card.project;
@@ -980,7 +1015,7 @@ export class Pipeline {
     }
     const decision: DecisionRecord = { decision: "answered", response: { ...(given.repoPath ? { repoPath: given.repoPath } : {}), ...(given.project ? { project: given.project } : {}), text: Boolean(text) } };
     // The card is whole: now it is checked for a duplicate, as a card that was whole at start is.
-    if (this.dedupDeps && !cardOf(await this.get(id)).dedup) {
+    if (this.dedupDeps && !cardOf(await this.get(id)).dedup?.chosen && !cardOf(await this.get(id)).dedup) {
       const checked = await this.dedupCheck(id, decision);
       if (checked) return checked;
     }
@@ -995,7 +1030,7 @@ export class Pipeline {
       const check = this.contextCheck(task);
       if (!check.complete) return this.holdForContext(id, check.missing);
     }
-    if (this.dedupDeps && task.route === "feature" && task.state === "draft") {
+    if (this.dedupDeps && task.route === "feature" && task.state === "draft" && !cardOf(task).dedup?.chosen) {
       const checked = await this.dedupCheck(id);
       if (checked) return checked;
     }
@@ -1013,13 +1048,18 @@ export class Pipeline {
   /** The cards a new card could be a report of: those of the same repository only, open ones, closed ones (not merged duplicates) and the backlog's items. */
   private async dedupCandidates(task: TaskRow): Promise<Candidate[]> {
     if (!task.repoPath) return [];
+    const self = { repoPath: task.repoPath, sources: cardOf(task).sources };
+    // A card typed in the TUI has no source and is the operator's own: it sees everything of its repository. Any other card sees only what its reporter could already see.
+    const operator = self.sources.length === 0 && !task.jira;
     const cards = (await this.store.listTasks())
       .filter((r) => r.id !== task.id && r.repoPath === task.repoPath && r.state !== "archived" && !cardOf(r).mergedInto)
+      .filter((r) => operator || canSeeKept(self, { repoPath: r.repoPath, sources: cardOf(r).sources }))
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, 500)
       .map((r): Candidate => ({ id: r.id, kind: r.state === "closed" ? "closed" : "open", title: r.title, text: r.description, repo: r.repoPath, closedAt: r.state === "closed" ? (r.stateSince ?? r.updatedAt) : null }));
     const slugs = cardOf(task).sources.flatMap((s) => ("kind" in s && (s.kind === "github" || s.kind === "github_pr") ? [s.repo] : []));
-    const items = ((await this.dedupDeps?.backlog?.list().catch(() => [])) ?? []).filter((i) => i.repo !== null && (i.repo === task.repoPath || slugs.includes(i.repo)));
+    const items = ((await this.dedupDeps?.backlog?.list().catch(() => [])) ?? []).filter((i) => i.repo !== null && (i.repo === task.repoPath || slugs.includes(i.repo)))
+      .filter((i) => operator || canSeeKept(self, { repoPath: task.repoPath, sources: i.sources }));
     return [...cards, ...items.map((i): Candidate => ({ id: i.id, kind: "backlog", title: i.title, text: i.text, repo: task.repoPath, closedAt: null }))];
   }
 

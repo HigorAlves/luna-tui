@@ -22,9 +22,26 @@ beforeEach(async () => {
 });
 
 const none: ContextDeps = { resolveRepo: async () => null, channelRepo: () => null, projectRepo: async () => null, configProject: async () => null, owners: async () => [], history: async () => [] };
-const make = (deps: ContextDeps = none) => new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, contextSetup: deps });
+const make = (deps: ContextDeps = none) => new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, contextSetup: deps, knownRepos: async () => ["/repos/a"] });
 const slack = { kind: "slack", channel: "C1", ts: "1.2", permalink: "https://example.slack.com/archives/C1/p12" } as const;
 const longText = Array.from({ length: 25 }, (_, i) => `word${i}`).join(" ");
+
+describe("the repository a person gives the gate", () => {
+  it("must be one the machine already knows, as an absolute normalised path", async () => {
+    const pipeline = make();
+    const task = await pipeline.createTask({ title: "T", description: "short", source: slack });
+    await pipeline.start(task.id);
+    for (const repoPath of ["/etc", "/repos/b", "repos/a", "/repos/a/../a", "/repos/a/", "/repos//a", "~/x", "/repos/a\n/etc"]) await expect(pipeline.provideContext(task.id, { repoPath }), repoPath).rejects.toThrow(/repository/);
+    expect((await pipeline.get(task.id)).repoPath).toBeNull();
+    expect((await pipeline.provideContext(task.id, { repoPath: "/repos/a" })).repoPath).toBe("/repos/a");
+  });
+  it("is refused whatever it is when the machine knows no repositories", async () => {
+    const bare = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, contextSetup: none });
+    const task = await bare.createTask({ title: "T", description: "short", source: slack });
+    await bare.start(task.id);
+    await expect(bare.provideContext(task.id, { repoPath: "/repos/a" })).rejects.toThrow(/repository/);
+  });
+});
 
 describe("the context gate", () => {
   it("holds a card without a repository at awaiting_setup, names what is missing and asks the reporter in fixed words", async () => {
