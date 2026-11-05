@@ -25,7 +25,7 @@ export interface VerifyDeps {
   exec: ((
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> },
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string },
   ) => Promise<ExecResult>) | null;
   /** Runs the verifying review pack; null when agents are off, which skips the review. */
   runPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) => Promise<StageResult>) | null;
@@ -42,7 +42,7 @@ export interface VerifyDeps {
   /** The environment Build recorded for the task (its passing run's `env`); null when none. */
   buildEnv?: (taskId: string) => Promise<EnvRecord | null>;
   /** The environment as it is in `path` at `commit`: the image id and the lockfiles. */
-  envOf?: (path: string, commit: string) => Promise<EnvRecord>;
+  envOf?: (path: string, commit: string, repoPath?: string) => Promise<EnvRecord>;
   /** Who a check commits as: the identity git resolves for the repo. Null escalates. */
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
   /** The repo's luna.yaml: its own checks (null means detect them from the tree) and the
@@ -216,6 +216,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
           timeoutMs: remaining,
           env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
           services,
+          ...(task.repoPath ? { repoPath: task.repoPath } : {}),
         });
         timedOut = result.code !== 0 && Date.now() >= deadline;
       }
@@ -406,7 +407,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     if (fresh && deps.buildEnv && deps.envOf) {
       const recorded = await deps.buildEnv(task.id);
       if (recorded) {
-        const compared = compareEnv(recorded, await deps.envOf(fresh.path, fresh.commit));
+        const compared = compareEnv(recorded, await deps.envOf(fresh.path, fresh.commit, task.repoPath ?? undefined));
         envReproduction = compared.matched ? "matched" : compared.differences.join("; ");
         if (!compared.matched) {
           envFinding = { path: "", line: 0, start_line: null, severity: "blocker", category: "env", title: "the environment Verify has is not the one Build ran in", body: compared.differences.join("\n"), suggestion_code: null, confidence: 1 };

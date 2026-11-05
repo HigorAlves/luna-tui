@@ -24,18 +24,19 @@ export interface ImageDocker {
   build(spec: ImageBuildSpec): Promise<{ ok: true } | { ok: false; log: string }>;
 }
 
-export type RepoImageEvent =
-  | { kind: "image_refused"; repoPath: string; reason: string }
-  | { kind: "image_built"; repoPath: string; image: string; base: string }
-  | { kind: "image_build_failed"; repoPath: string; base: string; reason: string };
+/** What happened to a repository's image, for the card that needed it (`taskId`): a row on its stream. Text is flattened and capped. */
+export type RepoImageEvent = { taskId?: string; repoPath: string } & (
+  | { kind: "image.build_started"; base: string }
+  | { kind: "image.built"; image: string; base: string }
+  | { kind: "image.refused"; base?: string; reason: string }
+  | { kind: "image.build_failed"; base: string; reason: string }
+);
 
 export interface RepoImagesDeps {
   machineImage: string;
   /** The repository's `sandbox.image`, from its own luna.yaml as the machine already reads policy. */
   imageOf: (repoPath: string) => Promise<{ base?: string | null } | undefined>;
   slugOf: (repoPath: string) => string;
-  /** What names a repository's work folders' parent (the checks runner knows only the folder); defaults to the slug. */
-  workKeyOf?: (repoPath: string) => string;
   docker: ImageDocker;
   /** How long a repository's resolved image is trusted before its base is looked at again (a floating tag moves). Default ten minutes. */
   ttlMs?: number;
@@ -45,9 +46,7 @@ export interface RepoImagesDeps {
 
 export interface RepoImages {
   /** The image the repository's stages run in, built first when it names a base and has none yet. */
-  ensure(repoPath: string, signal?: AbortSignal): Promise<{ image: string }>;
-  /** The image last ensured for the repository whose work folders sit under this key; null when unknown or ambiguous. */
-  knownFor(workKey: string): string | null;
+  ensure(repoPath: string, signal?: AbortSignal, taskId?: string): Promise<{ image: string }>;
 }
 
 export class RepoImageError extends Error {
@@ -68,7 +67,6 @@ export function logTail(log: string): string {
 }
 
 export function repoImages(deps: RepoImagesDeps): RepoImages {
-  const known = new Map<string, string | null>();
   const resolved = new Map<string, { base: string; image: string; at: number }>();
   const now = deps.now ?? Date.now;
   const ttl = deps.ttlMs ?? 10 * 60_000;
@@ -78,19 +76,15 @@ export function repoImages(deps: RepoImagesDeps): RepoImages {
     queue = run.catch(() => undefined);
     return run;
   };
-  const remember = (repoPath: string, image: string) => {
-    const key = (deps.workKeyOf ?? deps.slugOf)(repoPath);
-    known.set(key, known.has(key) && known.get(key) !== image ? null : image);
-  };
   const emit = (event: RepoImageEvent) => deps.onEvent?.(event);
 
   return {
-    knownFor: (workKey) => known.get(workKey) ?? null,
-    async ensure(repoPath, signal) {
+    async ensure(repoPath, signal, taskId) {
+      const at = { repoPath, ...(taskId ? { taskId } : {}) };
       const spec = imageSpecOf(await deps.imageOf(repoPath));
       if (spec.kind === "machine") return { image: deps.machineImage };
       if (spec.kind === "refused") {
-        emit({ kind: "image_refused", repoPath, reason: safe(spec.reason) });
+        emit({ ...at, kind: "image.refused", reason: safe(spec.reason) });
         return { image: deps.machineImage };
       }
       const fresh = resolved.get(repoPath);
@@ -98,21 +92,21 @@ export function repoImages(deps: RepoImagesDeps): RepoImages {
       return oneAtATime(async () => {
         const checked = await deps.docker.checkBase(spec.base);
         if (!checked.ok) {
-          emit({ kind: "image_refused", repoPath, reason: logTail(checked.reason) });
+          emit({ ...at, kind: "image.refused", base: safe(spec.base), reason: logTail(checked.reason) });
           return { image: deps.machineImage };
         }
         const layerKey = await deps.docker.layerKey(deps.machineImage);
         const tag = repoImageTag(deps.slugOf(repoPath), checked.digest, layerKey);
         if (!(await deps.docker.exists(tag))) {
+          emit({ ...at, kind: "image.build_started", base: safe(spec.base) });
           const built = await deps.docker.build({ tag, base: spec.base, baseDigest: checked.digest, machineImage: deps.machineImage, layerKey, signal });
           if (!built.ok) {
             const reason = logTail(built.log);
-            emit({ kind: "image_build_failed", repoPath, base: safe(spec.base), reason });
+            emit({ ...at, kind: "image.build_failed", base: safe(spec.base), reason });
             throw new RepoImageError(reason);
           }
-          emit({ kind: "image_built", repoPath, image: tag, base: safe(spec.base) });
+          emit({ ...at, kind: "image.built", image: tag, base: safe(spec.base) });
         }
-        remember(repoPath, tag);
         resolved.set(repoPath, { base: spec.base, image: tag, at: now() });
         return { image: tag };
       });

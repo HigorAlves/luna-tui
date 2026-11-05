@@ -22,10 +22,10 @@ describe("docker for a repository's image", () => {
     const run = async (_c: string, a: string[]): Promise<ExecResult> => {
       if (a[0] === "pull") return ok();
       if (a[0] === "image") return ok(`${digest}|linux|${process.arch === "arm64" ? "arm64" : "amd64"}\n`);
-      return ok("/lib/ld-linux-aarch64.so.1\n");
+      return ok("/lib/ld-linux-aarch64.so.1\n/usr/bin/git\n");
     };
     expect(await dockerImages({ exec: run }).checkBase("debian:12")).toEqual({ ok: true, digest });
-    const musl = async (_c: string, a: string[]): Promise<ExecResult> => (a[0] === "run" ? ok("\n") : run(_c, a));
+    const musl = async (_c: string, a: string[]): Promise<ExecResult> => (a[0] === "run" ? ok("\n/usr/bin/git\n") : run(_c, a));
     expect(await dockerImages({ exec: musl }).checkBase("alpine:3")).toMatchObject({ ok: false, reason: expect.stringMatching(/glibc/) });
     const wrongArch = async (_c: string, a: string[]): Promise<ExecResult> => (a[0] === "image" ? ok(`${digest}|linux|riscv64\n`) : run(_c, a));
     expect(await dockerImages({ exec: wrongArch }).checkBase("x:1")).toMatchObject({ ok: false, reason: expect.stringMatching(/architecture/) });
@@ -53,5 +53,19 @@ describe("docker for a repository's image", () => {
   it("returns the build log on failure", async () => {
     const run = async (): Promise<ExecResult> => ({ code: 1, stdout: "out", stderr: "boom" });
     expect(await dockerImages({ exec: run }).build({ tag: "t:1", base: "debian:12", machineImage: "m", layerKey: "k", baseDigest: digest })).toEqual({ ok: false, log: "out\nboom" });
+  });
+});
+
+describe("a base without git", () => {
+  it("is refused with that reason", async () => {
+    const run = async (_c: string, a: string[]): Promise<ExecResult> => {
+      if (a[0] === "pull") return ok();
+      if (a[0] === "image") return ok(`${digest}|linux|${process.arch === "arm64" ? "arm64" : "amd64"}\n`);
+      // The probe prints the loader and then `git` when it is found.
+      return ok(a.join(" ").includes("command -v git") ? "/lib/ld-linux-x\n" : "");
+    };
+    expect(await dockerImages({ exec: run }).checkBase("debian:12")).toMatchObject({ ok: false, reason: expect.stringMatching(/git/) });
+    const withGit = async (c: string, a: string[]): Promise<ExecResult> => (a[0] === "run" ? ok("/lib/ld-linux-x\n/usr/bin/git\n") : run(c, a));
+    expect(await dockerImages({ exec: withGit }).checkBase("debian:12")).toEqual({ ok: true, digest });
   });
 });

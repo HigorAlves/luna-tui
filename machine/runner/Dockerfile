@@ -31,9 +31,13 @@ ARG PYTHON_STANDALONE=20261026
 ARG PYTHON_VERSION=3.13.18
 RUN mkdir -p /opt/luna/bin /opt/luna/lib /opt/luna/libexec /opt/luna/graph-tools \
  && arch="$(dpkg --print-architecture)" \
- && case "$arch" in amd64) parch=x86_64 ;; arm64) parch=aarch64 ;; *) echo "unsupported architecture $arch" >&2; exit 1 ;; esac \
- && curl -fsSL "https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_STANDALONE}/cpython-${PYTHON_VERSION}%2B${PYTHON_STANDALONE}-${parch}-unknown-linux-gnu-install_only.tar.gz" \
-    | tar -xz -C /opt/luna \
+ && case "$arch" in \
+      amd64) parch=x86_64; psum=126343c54daff4068efc1ac269518d0cc202d57857794948103dd1454e8881be ;; \
+      arm64) parch=aarch64; psum=b48451865bde9a39e2f3e71d7fdcbf1f32615f50f24d78dc50d04ede6501cf81 ;; \
+      *) echo "unsupported architecture $arch" >&2; exit 1 ;; esac \
+ && curl -fsSL -o /tmp/python.tar.gz "https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_STANDALONE}/cpython-${PYTHON_VERSION}%2B${PYTHON_STANDALONE}-${parch}-unknown-linux-gnu-install_only.tar.gz" \
+ && echo "${psum}  /tmp/python.tar.gz" | sha256sum -c - \
+ && tar -xz -C /opt/luna -f /tmp/python.tar.gz && rm /tmp/python.tar.gz \
  && /opt/luna/python/bin/python3 -m pip install --no-cache-dir "graphifyy==${GRAPHIFY_VERSION}" \
  && ln -s ../python/bin/graphify /opt/luna/bin/graphify \
  && /opt/luna/bin/graphify --help >/dev/null

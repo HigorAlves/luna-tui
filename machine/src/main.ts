@@ -267,7 +267,10 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   // Triage's card_search: the task's own repository's cards, from the board the pipeline keeps.
   { search: async ({ repoPath, selfId, selfSource, query }) => searchCards(await pipeline.list(), query, { repoPath, selfId, selfSource, now: new Date() }) },
 );
-if (agentDeps) graphImage = agentDeps.repoImageOf;
+if (agentDeps) {
+  graphImage = agentDeps.repoImageOf;
+  agentDeps.imageEvents.sink = (event) => { if (event.taskId) void pipeline.recordImageEvent(event.taskId, event).catch(() => undefined); else console.warn(`repository image: ${JSON.stringify(event)}`); };
+}
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
  *  pack joins when agents are on. */
@@ -283,7 +286,7 @@ const realVerifyRunner = verifyRunner({
     const env = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.env as EnvRecord | undefined;
     return env && typeof env.hash === "string" ? env : null;
   },
-  envOf: async (path, commit) => envOf({ image: await imageId(agentDeps?.imageOfWorkFolder(path) ?? config.runnerImage), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
+  envOf: async (path, commit, repoPath) => envOf({ image: await imageId(agentDeps && repoPath ? await agentDeps.repoImageOf(repoPath) : config.runnerImage), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
   graph,
   stateDir: config.stateDir,
   get decide() {

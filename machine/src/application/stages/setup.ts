@@ -23,7 +23,7 @@ export interface SetupDeps {
   exec: (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> },
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string },
   ) => Promise<ExecResult>;
   stateDir: string;
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
@@ -83,6 +83,7 @@ export function setupRunner(deps: SetupDeps): StageRunner {
               timeoutMs: remaining,
               env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "setup" },
               services: config.services ?? {},
+              ...(task.repoPath ? { repoPath: task.repoPath } : {}),
             });
       if (signal.aborted) return { outcome: "fail", detail: { error: "aborted" } };
       const output = `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`;

@@ -28,9 +28,16 @@ describe.skipIf(!ready)("a repository's image, built for real", () => {
   });
 
   it("is built from a glibc base and runs the factory's dry run", async () => {
+    // A small glibc base with git (the machine's layer does not carry git), built locally under a test tag.
+    const base = "hardness-runner-test-11b-base:1";
+    const dir = mkdtempSync(join(tmpdir(), "repo-image-base-"));
+    writeFileSync(join(dir, "Dockerfile"), "FROM python:3.13-slim\nRUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*\n");
+    execFileSync("docker", ["build", "-q", "-t", base, dir], { stdio: "ignore", timeout: 300_000 });
+    built.push(base);
+    rmSync(dir, { recursive: true, force: true });
     const images = repoImages({
       machineImage,
-      imageOf: async () => ({ base: "python:3.13-slim" }),
+      imageOf: async () => ({ base }),
       slugOf: () => "test-11b-integration",
       docker: dockerImages(),
     });

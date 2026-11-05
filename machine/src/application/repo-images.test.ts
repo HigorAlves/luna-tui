@@ -90,11 +90,19 @@ describe("the image a repository's stages run in", () => {
     expect((await images.ensure("/r")).image).toMatch(/^hardness-runner-/);
   });
 
-  it("remembers the image of a repository by its work folders' parent, for the checks runner", async () => {
+  it("reports each step as an event for the card that needed it: started, built, refused, failed", async () => {
+    events.length = 0;
     const { docker } = fakeDocker();
-    const images = make({ base: "debian:12" }, docker);
-    const { image } = await images.ensure("/r");
-    expect(images.knownFor("slug-/r")).toBe(image);
-    expect(images.knownFor("other")).toBeNull();
+    await make({ base: "debian:12" }, docker).ensure("/r", undefined, "card-1");
+    expect(events).toMatchObject([
+      { taskId: "card-1", repoPath: "/r", kind: "image.build_started", base: "debian:12" },
+      { taskId: "card-1", kind: "image.built", base: "debian:12", image: expect.stringMatching(/^hardness-runner-/) },
+    ]);
+    events.length = 0;
+    await make({ base: "alpine:3" }, fakeDocker({ checkBase: async () => ({ ok: false, reason: "no git" }) }).docker).ensure("/r", undefined, "card-2");
+    expect(events).toMatchObject([{ taskId: "card-2", kind: "image.refused", reason: "no git" }]);
+    events.length = 0;
+    await make({ base: "debian:12" }, fakeDocker({ build: async () => ({ ok: false, log: "bad" }) }).docker).ensure("/r", undefined, "card-3").catch(() => undefined);
+    expect(events.map((e) => (e as { kind: string }).kind)).toEqual(["image.build_started", "image.build_failed"]);
   });
 });

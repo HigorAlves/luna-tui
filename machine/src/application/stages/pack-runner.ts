@@ -59,7 +59,7 @@ export interface AgentDeps {
   /** The base stage image. */
   image: string;
   /** Resolves the image a repository's stages run in (its own, built from its base, or `image`); absent, every repository runs in `image`. */
-  repoImages?: { ensure(repoPath: string, signal?: AbortSignal): Promise<{ image: string }> };
+  repoImages?: { ensure(repoPath: string, signal?: AbortSignal, taskId?: string): Promise<{ image: string }> };
   /** The image with browsers, used by the e2e pack. */
   qaImage: string;
   /** The image with the video tools, used by the recording pack; absent falls back to the QA image. */
@@ -85,7 +85,7 @@ export interface AgentDeps {
   exec?: (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> },
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string },
   ) => Promise<ExecResult>;
   /** Runs a command on the host (not in the stage image): the build watch pushes the task branch with it. */
   hostExec?: (command: string, args: string[], options?: { cwd?: string; signal?: AbortSignal; timeoutMs?: number }) => Promise<ExecResult>;
@@ -211,7 +211,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   let stageImage = deps.image;
   if (deps.repoImages && !extra.checkout) {
     try {
-      stageImage = (await deps.repoImages.ensure(task.repoPath, context.signal)).image;
+      stageImage = (await deps.repoImages.ensure(task.repoPath, context.signal, task.id)).image;
     } catch (error) {
       if (!(error instanceof RepoImageError)) throw error;
       return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "image", reason: `the repository's image could not be built: ${error.reason}`, options: ["fix sandbox.image.base in luna.yaml, or remove it to use the machine's image, then resume"] } };
@@ -629,6 +629,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
           timeoutMs: LOCKED_REPLAY_TIMEOUT_MS,
           env: { ...process.env, HARDNESS_STAGE: pack },
           services: policy.services,
+          repoPath: task.repoPath,
         });
         await resetWorktree(workspace.path);
         if (ran.code === 0) replayed = true;

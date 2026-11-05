@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CACHE_ENV, cacheVolumeFor, sandboxArgs, sandboxExecArgs, type SandboxRun } from "./docker.ts";
+import { CACHE_ENV, cacheVolumeFor, sandboxArgs, sandboxExecArgs, sandboxExecutor, type SandboxRun } from "./docker.ts";
 
 function run(over: Partial<SandboxRun> = {}): SandboxRun {
   return {
@@ -225,5 +225,18 @@ describe("sandboxExecArgs with a linked worktree's .git file", () => {
   it("mounts nothing extra without one", () => {
     const args = sandboxExecArgs({ name: "c", image: "i", worktree: "/wt", argv: ["pnpm", "test"] });
     expect(args.filter((a) => a.includes("/work/.git"))).toEqual([]);
+  });
+});
+
+describe("sandboxExecutor's image", () => {
+  const seen: string[] = [];
+  const fake = (async (r: { image: string }) => (seen.push(r.image), { code: 0, stdout: "", stderr: "" })) as never;
+  it("is the one the repository resolves to, given explicitly, never guessed from the folder", async () => {
+    seen.length = 0;
+    const exec = sandboxExecutor({ machine: "machine:dev", imageOf: async (repo) => `img-of-${repo}` }, fake);
+    await exec("true", [], { cwd: "/wt/same-name/task-1", repoPath: "/a/shop" });
+    await exec("true", [], { cwd: "/wt/same-name/task-2", repoPath: "/b/shop" });
+    await exec("true", [], { cwd: "/wt/same-name/task-3" });
+    expect(seen).toEqual(["img-of-/a/shop", "img-of-/b/shop", "machine:dev"]);
   });
 });

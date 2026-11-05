@@ -340,13 +340,15 @@ export async function execInSandbox(
  *  `cwd` is the worktree, and only HARDNESS_* env and the git identity (GIT_AUTHOR_*,
  *  GIT_COMMITTER_*) reach the container. The cache volume is the repo's: task worktrees live
  *  at `<worktreesDir>/<repo>/task-…`, so the parent names it. */
-export function sandboxExecutor(image: string | ((worktree: string) => string)) {
-  return (
+export function sandboxExecutor(images: { machine: string; imageOf: (repoPath: string) => Promise<string> }, run: typeof execInSandbox = execInSandbox) {
+  return async (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> } = {},
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string } = {},
   ): Promise<ExecResult> => {
     if (!options.cwd) throw new Error("sandboxExecutor needs cwd: the worktree to mount");
+    // The image is the repository's, named by the caller: never guessed from the folder. No repository, the machine's image.
+    const image = options.repoPath ? await images.imageOf(options.repoPath) : images.machine;
     const env: Record<string, string> = {};
     const identity: Record<string, string> = {};
     for (const [key, value] of Object.entries(options.env ?? {})) {
@@ -356,10 +358,10 @@ export function sandboxExecutor(image: string | ((worktree: string) => string)) 
     }
     const gitIdentity =
       identity.GIT_AUTHOR_NAME && identity.GIT_AUTHOR_EMAIL ? { name: identity.GIT_AUTHOR_NAME, email: identity.GIT_AUTHOR_EMAIL } : null;
-    return execInSandbox(
+    return run(
       {
         name: `hardness-check-${randomUUID().slice(0, 8)}`,
-        image: typeof image === "function" ? image(options.cwd) : image,
+        image,
         worktree: options.cwd,
         ...(isFile(join(options.cwd, ".git")) ? { gitFile: join(options.cwd, ".git") } : {}),
         argv: [command, ...args],
