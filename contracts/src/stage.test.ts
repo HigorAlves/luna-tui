@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { z } from "zod";
 
 import {
   AGENT_PACKS,
@@ -250,21 +251,46 @@ describe("the code_map pack", () => {
     expect(access?.commands).toEqual(expect.arrayContaining(["graphify query", "graphify affected", "graphify god-nodes", "git shortlog", "git log"]));
   });
 
-  it("answers components, files, owners and a confidence, with an optional note", () => {
-    const map = { components: ["board keys"], files: ["board/src/keys.rs"], owners: ["@marta"], confidence: 0.8 };
+  it("answers components, files with a role, entry points, owners and a confidence, with an optional note", () => {
+    const map = { components: ["board keys"], files: [{ path: "board/src/keys.rs", role: "change" }, { path: "board/src/model.rs", role: "read" }, { path: "board/src/keys_test.rs", role: "test" }], entry_points: ["keys::handle"], owners: ["@marta"], confidence: 0.8 };
     expect(CodeMapAnswer.parse({ ...map, note: "no tests found" })).toEqual({ ...map, note: "no tests found" });
     expect(CodeMapAnswer.safeParse({ ...map, confidence: 1.4 }).success).toBe(false);
     expect(CodeMapAnswer.safeParse({ components: [], files: [] }).success).toBe(false);
+    expect(CodeMapAnswer.safeParse({ ...map, files: [{ path: "a.rs", role: "delete" }] }).success).toBe(false);
+  });
+
+  it("still reads a map written before roles: a plain string is a file to change, and no entry points is none", () => {
+    const v1 = { components: ["board keys"], files: ["board/src/keys.rs"], owners: ["@marta"], confidence: 0.8 };
+    expect(CodeMapAnswer.parse(v1)).toEqual({ ...v1, files: [{ path: "board/src/keys.rs", role: "change" }], entry_points: [] });
+    expect(CodeMapAnswer.parse({ ...v1, files: [{ path: "a.rs" }] }).files).toEqual([{ path: "a.rs", role: "change" }]);
+  });
+
+  it("carries what the machine adds from the graph: whether it is stale and how far behind", () => {
+    const map = { components: [], files: [], owners: [], confidence: 0.5 };
+    expect(CodeMapAnswer.parse({ ...map, stale: true, behind: 120 })).toMatchObject({ stale: true, behind: 120 });
+    expect(CodeMapAnswer.parse({ ...map, stale: false, behind: null })).toMatchObject({ stale: false, behind: null });
+    expect(CodeMapAnswer.parse(map).stale).toBeUndefined();
+  });
+
+  it("has a JSON schema the agent can answer: files are objects with a role", () => {
+    const schema = JSON.stringify(z.toJSONSchema(CodeMapAnswer, { target: "draft-2020-12" }));
+    expect(schema).toContain("role");
   });
 
   it("rides on a plan context as an optional map", () => {
     const plan = { record: null, brief: "b", criteria: [], assumptions: [], slices: [] };
-    const map = { components: ["c"], files: ["a.ts"], owners: [], confidence: 0.5 };
+    const map = { components: ["c"], files: [{ path: "a.ts", role: "change" }], entry_points: [], owners: [], confidence: 0.5 };
     expect(PlanContext.parse({ ...plan, map })).toEqual({ ...plan, map });
     expect(PlanContext.parse({ ...plan, map: null }).map).toBeNull();
     expect(PlanContext.parse(plan).map).toBeUndefined();
   });
 
+  it("carries the shortlist the machine located, for the mapper to confirm", () => {
+    const plan = { record: null, brief: "b", criteria: [], assumptions: [], slices: [] };
+    const shortlist = { files: ["a.ts"], symbols: ["applyCoupon"], components: ["cart"], owners: ["@marta"] };
+    expect(PlanContext.parse({ ...plan, shortlist })).toEqual({ ...plan, shortlist });
+    expect(PlanContext.parse(plan).shortlist).toBeUndefined();
+  });
   it("carries the risk the plan was written for: level, the three scores, the product and the complexity; a context without it still parses", () => {
     const plan = { record: null, brief: "b", criteria: [], assumptions: [], slices: [] };
     const risk = { level: "medium", product: 9, scores: { blast_radius: 2, reversibility: 2, data_sensitivity: 0 }, complexity: "L" };

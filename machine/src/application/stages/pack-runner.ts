@@ -135,13 +135,13 @@ export interface AgentExtra {
   mounts?: CredentialMount[];
 }
 
-/** The files the plan's slices touch, with the code map's files when it has one. */
+/** The files the plan's slices touch, with the code map's files to change or test when it has one (a file only to read is not planned). */
 function plannedFiles(plan: StageInput["plan"]): string[] {
   const touched = (plan?.slices ?? []).flatMap((slice) => {
     const parsed = Slice.safeParse(slice);
     return parsed.success ? parsed.data.touchpoints : [];
   });
-  return [...new Set([...touched, ...(plan?.map?.files ?? [])])];
+  return [...new Set([...touched, ...(plan?.map?.files ?? []).filter((f) => f.role !== "read").map((f) => f.path)])];
 }
 
 const OutOfMap = z.array(z.object({ path: z.string(), reason: z.string() }));

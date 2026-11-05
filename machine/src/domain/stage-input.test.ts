@@ -73,9 +73,14 @@ describe("buildStageInput's pack and plan", () => {
     expect(input.plan).toMatchObject({ brief: "b", rollback: "revert it", slices });
     expect(input.context.testCases).toEqual(cases);
     // The code map the plan stage opened with rides along; a malformed one is dropped.
-    const map = { components: ["export"], files: ["src/a.ts"], owners: ["@marta"], confidence: 0.8 };
+    const map = { components: ["export"], files: [{ path: "src/a.ts", role: "change" }, { path: "src/a.test.ts", role: "test" }], entry_points: ["export::run"], owners: ["@marta"], confidence: 0.8, stale: true, behind: 80 };
     const mapped = [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices, map } })];
     expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: mapped, priorFindings: [] }).plan).toMatchObject({ map });
+    // A gate written before roles (files as plain strings) still approves: each file reads as one to change.
+    const v1 = [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices, map: { components: ["export"], files: ["src/a.ts"], owners: ["@marta"], confidence: 0.8 } } })];
+    const old = buildStageInput({ task, stage: "implementing", attempt: 1, approvals: v1, priorFindings: [] });
+    expect(old.plan).toMatchObject({ map: { files: [{ path: "src/a.ts", role: "change" }], entry_points: [] } });
+    expect(StageInput.safeParse(old).success).toBe(true);
     const broken = [approval({ requested: { brief: "b", criteria: [], assumptions: [], slices, map: { files: 3 } } })];
     expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals: broken, priorFindings: [] }).plan).not.toHaveProperty("map");
     // The risk the plan was approved at rides along to Build; a malformed one is dropped.

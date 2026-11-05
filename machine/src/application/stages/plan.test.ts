@@ -41,8 +41,11 @@ const mapped = (over: Record<string, unknown> = {}): StageResult => ({
   events: [{ at: "t", kind: "stage.note", payload: { from: "map" } }],
   usage: { turns: 1, costUsd: 0.01 },
 });
-const theMap = { components: ["board keys"], files: ["board/src/keys.rs"], owners: ["@marta"], confidence: 0.8 };
+// What the stage hands on after parsing: a plain-string file reads as a file to change.
+const theMap = { components: ["board keys"], files: [{ path: "board/src/keys.rs", role: "change" }], entry_points: [], owners: ["@marta"], confidence: 0.8 };
 const withGraph = { graph: { stampOf: async () => ({ commit: "c" }) } };
+const located = (over: Record<string, unknown> = {}) => ({ files: ["board/src/keys.rs"], symbols: ["handleKey"], components: ["board keys"], confidence: 0.6, owners: [{ path: "board/src/keys.rs", owners: ["@marta"] }], codeowners: true, stale: false, behind: 3, ...over });
+const locating = (over: Record<string, unknown> | null = {}) => ({ graph: { stampOf: async () => ({ commit: "c" }), locate: async () => (over === null ? null : located(over)) } });
 
 interface Call { pack: string; runId: string; context: StageContext; plan?: PlanContext }
 const fastTask = { ...task, record: { ...record, decision: "fast_lane", risk: "low" } } as unknown as TaskRow;
@@ -89,6 +92,44 @@ describe("planStage's code map", () => {
     expect(result.detail).toMatchObject({ map: theMap });
     expect(result.events).toContainEqual({ at: "t", kind: "stage.note", payload: { from: "map" } });
     expect(result.usage?.turns).toBe(6);
+  });
+
+  it("seeds the mapper with the graph's shortlist (files, symbols, components, owners) and says nothing is stale when the graph is current", async () => {
+    const { run, calls } = setup({}, locating());
+    const result = await run(context());
+    expect(calls[0]).toMatchObject({ pack: "code_map", plan: { record, shortlist: { files: ["board/src/keys.rs"], symbols: ["handleKey"], components: ["board keys"], owners: ["@marta"] } } });
+    expect(result.detail).toMatchObject({ map: { ...theMap, stale: false, behind: 3 }, flagged: [] });
+    expect(result.detail).not.toHaveProperty("mapNote");
+  });
+
+  it("looks the goal up in the graph with the ticket's title and description and the repo's stale bar", async () => {
+    const seen: Array<{ text: string; options?: { staleCommits?: number } }> = [];
+    const graph = { stampOf: async () => ({ commit: "c" }), locate: async (_repo: string, text: string, options?: { staleCommits?: number }) => { seen.push({ text, options }); return located(); } };
+    const repo = { policies: { for: async () => ({ decisions: {}, graph: true, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2 }, graph: { stale_commits: 7 } } }) } };
+    await setup({}, { graph, ...repo }).run(context());
+    expect(seen).toEqual([{ text: "Panic\nd", options: { staleCommits: 7 } }]);
+  });
+
+  it("flags a stale map on the gate with how far behind the graph is", async () => {
+    const { run } = setup({}, locating({ stale: true, behind: 120 }));
+    const result = await run(context());
+    expect(result.detail).toMatchObject({ map: { stale: true, behind: 120 }, flagged: ["map stale"] });
+  });
+
+  it("goes on with an unseeded mapper and an unmarked map when the graph cannot locate", async () => {
+    const { run, calls } = setup({}, locating(null));
+    const result = await run(context());
+    expect(calls[0]!.plan?.shortlist).toBeUndefined();
+    expect(result.detail?.map).toEqual(theMap);
+    const throwing = { graph: { stampOf: async () => ({ commit: "c" }), locate: async () => { throw new Error("graph unreadable"); } } };
+    expect((await setup({}, throwing).run(context())).detail?.map).toEqual(theMap);
+  });
+
+  it("says on the gate that there is no map when the repo has no graph, or the mapper gave none", async () => {
+    const none = await setup().run(context());
+    expect(none.detail).toMatchObject({ map: null, mapNote: expect.stringMatching(/no code graph/i) });
+    const failed = await setup({ code_map: [{ outcome: "fail", detail: { error: "timed out" } }] }, withGraph).run(context());
+    expect(failed.detail).toMatchObject({ map: null, mapNote: expect.stringMatching(/code map could not be made/i) });
   });
 
   it("does not call code_map without a graph, or with the repo's graph off, and the detail says map null", async () => {

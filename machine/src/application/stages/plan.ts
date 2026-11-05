@@ -28,6 +28,7 @@ import {
   riskOf,
 } from "@hardness/contracts";
 
+import type { GraphLocation } from "../graph.ts";
 import { triageVerdicts } from "../../domain/triage-policy.ts";
 import { recordIdOf } from "../decision-truth.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
@@ -45,9 +46,13 @@ export interface PlanDeps {
   /** Runs a decision pack on a plan context and answers its answer; null when no decision can run (agents off, no runtime). Read at call time: main.ts binds it late. */
   decide: ((pack: DecisionPackName, plan: PlanContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** Each repo's luna.yaml bars for the decisions. */
-  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { plan: { coverage_rounds: number; plan_check_retries: number }; triage?: FactoryConfig["triage"] } }> };
+  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { plan: { coverage_rounds: number; plan_check_retries: number }; triage?: FactoryConfig["triage"]; graph?: FactoryConfig["graph"] } }> };
   /** The machine's code graphs: a repo with one (and its luna.yaml `policy.graph` on) gets a code map before the plan. */
-  graph?: { stampOf(repoPath: string): Promise<unknown | null> };
+  graph?: {
+    stampOf(repoPath: string): Promise<unknown | null>;
+    /** Where the goal's words point in the graph, with who owns it and how stale the graph is; null when there is none. Seeds the mapper and marks the map. */
+    locate?(repoPath: string, text: string, options?: { staleCommits?: number }): Promise<GraphLocation | null>;
+  };
   log?: (line: string) => void;
 }
 
@@ -132,13 +137,29 @@ export function planStage(deps: PlanDeps): StageRunner {
     };
 
     // The code map opens the stage when the repo has a graph. It is advice: a failed run is logged and the stage plans without one.
+    // The machine first matches the goal against the graph (a script) and hands the shortlist to the mapper, which confirms it and gives each file a role.
     let map: CodeMapAnswer | null = null;
+    let mapNote: string | undefined = "the repo has no code graph, so there is no code map";
     if (task.repoPath && deps.graph && (await deps.policies.for(task.repoPath)).graph !== false && (await deps.graph.stampOf(task.repoPath))) {
-      const mapped = await deps.runPack("code_map", sub("map"), {});
+      const repoConfig = (await deps.policies.for(task.repoPath)).factory;
+      const found = deps.graph.locate
+        ? await deps.graph.locate(task.repoPath, `${task.title}\n${task.description}`, { staleCommits: repoConfig?.graph?.stale_commits ?? FACTORY_DEFAULTS.graph.stale_commits }).catch((error: unknown) => {
+            log(`plan stage: locate skipped for task ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+            return null;
+          })
+        : null;
+      const shortlist = found ? { files: found.files, symbols: found.symbols, components: found.components, owners: [...new Set(found.owners.flatMap((o) => o.owners))] } : undefined;
+      const mapped = await deps.runPack("code_map", sub("map"), shortlist ? { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], shortlist } } : {});
       results.push(mapped);
       const parsed = CodeMapAnswer.safeParse(mapped.detail?.map);
-      if (mapped.outcome === "pass" && parsed.success) map = parsed.data;
-      else log(`plan stage: code_map skipped for task ${task.id}: ${mapped.outcome === "pass" ? "no usable map" : String(mapped.detail?.error ?? mapped.outcome)}`);
+      if (mapped.outcome === "pass" && parsed.success) {
+        // The machine, not the agent, says whether the graph the map came from is stale.
+        map = { ...parsed.data, ...(found ? { stale: found.stale, behind: found.behind } : {}) };
+        mapNote = undefined;
+      } else {
+        mapNote = "the code map could not be made, so the plan was written without one";
+        log(`plan stage: code_map skipped for task ${task.id}: ${mapped.outcome === "pass" ? "no usable map" : String(mapped.detail?.error ?? mapped.outcome)}`);
+      }
     }
     const mapPart = map ? { map } : {};
 
@@ -239,6 +260,7 @@ export function planStage(deps: PlanDeps): StageRunner {
 
     const verdicts = { coverage: coverage.verdict, plan: planCheck.verdict, risk: riskJudged.verdict };
     for (const [name, verdict] of Object.entries(verdicts)) if (verdict === "flag" || verdict === "ask") flagged.add(name);
+    if (map?.stale) flagged.add("map stale");
     // A fast lane taken without the owners looked at says so at the gate.
     if (task.record?.decision === "fast_lane" && task.record.ownersNotChecked) flagged.add(`owners not checked: ${task.record.ownersNotChecked}`);
     // The triage signals the person did not settle and the machine let through: shown at this gate as `triage.<field>`.
@@ -266,6 +288,7 @@ export function planStage(deps: PlanDeps): StageRunner {
         rounds: { tests: testRuns, plan: planRuns },
         flagged: [...flagged],
         map,
+        ...(mapNote ? { mapNote } : {}),
         lane,
         ...(laneNote ? { laneNote } : {}),
       },

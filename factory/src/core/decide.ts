@@ -33,7 +33,7 @@ export function renderPlan(plan: PlanContext): string {
     ...(byCriterion.size ? [`Scenarios:\n${[...byCriterion].map(([criterion, lines]) => `- ${criterion}\n${lines.join("\n")}`).join("\n")}`] : []),
     ...(plan.gaps?.length ? [`No scenario names these criteria:\n${list(plan.gaps)}`] : []),
     ...(plan.map
-      ? [`Code map (confidence ${plan.map.confidence}):\n- components: ${plan.map.components.join(", ") || "?"}\n- files: ${plan.map.files.join(", ") || "?"}\n- owners: ${plan.map.owners.join(", ") || "?"}${plan.map.note ? `\n- note: ${plan.map.note}` : ""}`]
+      ? [`Code map (confidence ${plan.map.confidence}${plan.map.stale ? `, stale: ${plan.map.behind ?? "many"} commits behind` : ""}):\n- components: ${plan.map.components.join(", ") || "?"}\n- files: ${plan.map.files.map((f) => (typeof f === "string" ? `${f} (change)` : `${f.path} (${f.role})`)).join(", ") || "?"}${plan.map.entry_points?.length ? `\n- entry points: ${plan.map.entry_points.join(", ")}` : ""}\n- owners: ${plan.map.owners.join(", ") || "?"}${plan.map.note ? `\n- note: ${plan.map.note}` : ""}`]
       : []),
   ].join("\n");
 }

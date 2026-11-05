@@ -476,6 +476,43 @@ fn record_lines(task: &Task, requested: &serde_json::Value) -> Vec<Line<'static>
     lines
 }
 
+/// The code map a plan stage opened with: components, files by role (a plain string is a file to change), entry points,
+/// owners and whether the graph it came from is stale. Only a plan stage's gate has one (it carries a lane); without a map the gate says why.
+fn map_lines(requested: &serde_json::Value) -> Vec<Line<'static>> {
+    if !requested["lane"].is_string() {
+        return Vec::new();
+    }
+    let row = |label: &str, value: String| Line::from(vec![Span::from(format!("  {label:<11}")).fg(c(SUBTEXT0)), Span::from(value)]);
+    let mut lines = vec![Line::default(), proposal_heading("Code map")];
+    let map = &requested["map"];
+    if !map.is_object() {
+        lines.push(muted(format!("  no code map: {}", requested["mapNote"].as_str().unwrap_or("the plan was written without one"))));
+        return lines;
+    }
+    let list = |v: &serde_json::Value| -> String { json_list(v).join(", ") };
+    lines.push(row("Components", list(&map["components"])));
+    for role in ["change", "read", "test"] {
+        for file in map["files"].as_array().into_iter().flatten() {
+            let (path, file_role) = match file.as_str() {
+                Some(path) => (Some(path), "change"),
+                None => (file["path"].as_str(), file["role"].as_str().unwrap_or("change")),
+            };
+            if let Some(path) = path.filter(|_| file_role == role) {
+                lines.push(row(role, path.to_string()));
+            }
+        }
+    }
+    if map["entry_points"].as_array().is_some_and(|a| !a.is_empty()) {
+        lines.push(row("Entry", list(&map["entry_points"])));
+    }
+    lines.push(row("Owners", if map["owners"].as_array().is_some_and(|a| !a.is_empty()) { list(&map["owners"]) } else { "none found".to_string() }));
+    if map["stale"].as_bool() == Some(true) {
+        let behind = map["behind"].as_u64().map(|n| n.to_string()).unwrap_or_else(|| "many".into());
+        lines.push(Line::from(Span::from(format!("  stale: the graph is {behind} commits behind the default branch; treat the map as a lead")).fg(c(PEACH))));
+    }
+    lines
+}
+
 fn proposal_heading(text: &str) -> Line<'static> {
     Line::from(Span::from(text.to_string()).fg(c(PEACH)).bold())
 }
@@ -705,6 +742,7 @@ fn plan_lines(task: &Task, detail: Option<&TaskDetail>, now: u64) -> Vec<Line<'s
         lines.push(Line::default());
         lines.extend(facts);
     }
+    lines.extend(map_lines(requested));
     if let Some(reply) = approval.reply() {
         lines.extend([Line::default(), proposal_heading("Reply (a posts it where the ticket came from and closes it)")]);
         lines.extend(reply.lines().map(|l| Line::from(format!("  {l}"))));
@@ -1554,6 +1592,31 @@ mod tests {
         let (task, detail) = at_gate(r#"{"brief":"b"}"#, "awaiting_approval");
         let text = render(100, 30, &task, Some(&detail), Section::Plan, 0).join("\n");
         assert!(!text.contains("Checks") && !text.contains("Risk ") && !text.contains("Outcome"), "{text}");
+    }
+
+    #[test]
+    fn the_plan_gate_shows_the_code_map_by_role_with_owners_entry_points_and_the_stale_flag() {
+        let gate = r#"{"brief":"b","lane":"full","map":{"components":["board keys","board app"],"files":[{"path":"board/src/keys.rs","role":"change"},{"path":"board/src/app.rs","role":"read"},{"path":"board/src/keys_tests.rs","role":"test"},"board/src/old.rs"],"entry_points":["keys::handle"],"owners":["@marta","@lee"],"confidence":0.7,"stale":true,"behind":120}}"#;
+        let (task, detail) = at_gate(gate, "awaiting_approval");
+        let text = render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        for want in ["Code map", "Components board keys, board app", "change     board/src/keys.rs", "change     board/src/old.rs", "read       board/src/app.rs", "test       board/src/keys_tests.rs", "Entry      keys::handle", "Owners     @marta, @lee", "stale: the graph is 120 commits behind"] {
+            assert!(text.contains(want), "{want}: {text}");
+        }
+        assert!(text.find("Code map").unwrap() < text.find("Brief").unwrap(), "the map sits above the brief: {text}");
+        let (task, detail) = at_gate(&gate.replace(r#","stale":true,"behind":120"#, r#","stale":false,"behind":3"#), "awaiting_approval");
+        let text = render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(text.contains("Code map") && !text.contains("stale"), "a current graph shows no flag: {text}");
+    }
+
+    #[test]
+    fn a_plan_gate_without_a_map_says_so_and_why_and_a_triage_gate_shows_none() {
+        let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","map":null,"mapNote":"the repo has no code graph, so there is no code map"}"#, "awaiting_approval");
+        let text = render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(text.contains("Code map") && text.contains("no code graph"), "{text}");
+        let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","map":null}"#, "awaiting_approval");
+        assert!(render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n").contains("no code map"));
+        let (task, detail) = at_gate(r#"{"brief":"b","outcome":"conversation","reply":"hi"}"#, "awaiting_approval");
+        assert!(!render(110, 50, &task, Some(&detail), Section::Plan, 0).join("\n").contains("Code map"));
     }
 
     #[test]

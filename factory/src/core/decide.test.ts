@@ -58,8 +58,10 @@ describe("a plan as the state", () => {
 
   it("renders the code map when the plan has one, and says nothing when it has none", () => {
     expect(renderPlan(plan as never)).not.toContain("Code map");
-    const withMap = renderPlan({ ...plan, map: { components: ["board keys"], files: ["board/src/keys.rs", "board/src/app.rs"], owners: ["@marta"], confidence: 0.8, note: "no tests found" } } as never);
-    expect(withMap).toContain("Code map (confidence 0.8):\n- components: board keys\n- files: board/src/keys.rs, board/src/app.rs\n- owners: @marta\n- note: no tests found");
+    const withMap = renderPlan({ ...plan, map: { components: ["board keys"], files: [{ path: "board/src/keys.rs", role: "change" }, { path: "board/src/app.rs", role: "read" }], entry_points: ["keys::handle"], owners: ["@marta"], confidence: 0.8, note: "no tests found" } } as never);
+    expect(withMap).toContain("Code map (confidence 0.8):\n- components: board keys\n- files: board/src/keys.rs (change), board/src/app.rs (read)\n- entry points: keys::handle\n- owners: @marta\n- note: no tests found");
+    const stale = renderPlan({ ...plan, map: { components: [], files: [], entry_points: [], owners: [], confidence: 0.4, stale: true, behind: 120 } } as never);
+    expect(stale).toContain("Code map (confidence 0.4, stale: 120 commits behind):");
     expect(renderPlan({ ...plan, map: null } as never)).not.toContain("Code map");
   });
 

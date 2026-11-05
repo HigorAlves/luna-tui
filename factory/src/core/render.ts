@@ -192,17 +192,29 @@ export interface RenderInput {
   projectContext?: string | null;
 }
 
+/** A map file as `path (role)`; a plain string, as an old map wrote it, is a file to change. */
+const mapFileText = (f: string | { path: string; role?: string }): string => (typeof f === "string" ? `${f} (change)` : `${f.path} (${f.role ?? "change"})`);
+
 /** The code map the plan stage opens with, as the planner reads it. */
 function mapText(map: NonNullable<StageInput["context"]["plan"]>["map"]): string {
   if (!map) return NONE;
   const list = (items: string[]) => (items.length ? items.join(", ") : "?");
   return [
     `Components: ${list(map.components)}`,
-    `Files:\n${map.files.length ? map.files.map((f) => `- ${f}`).join("\n") : "- ?"}`,
+    `Files:\n${map.files.length ? map.files.map((f) => `- ${mapFileText(f)}`).join("\n") : "- ?"}`,
+    ...(map.entry_points?.length ? [`Entry points: ${map.entry_points.join(", ")}`] : []),
     `Owners: ${list(map.owners)}`,
     `Confidence: ${map.confidence}`,
+    ...(map.stale ? [`Stale: the graph is ${map.behind ?? "many"} commits behind the default branch; treat the map as a lead`] : []),
     ...(map.note ? [`Note: ${map.note}`] : []),
   ].join("\n");
+}
+
+/** What the machine's lexical match of the goal against the graph found: the code mapper confirms it. */
+function shortlistText(shortlist: NonNullable<StageInput["context"]["plan"]>["shortlist"]): string {
+  if (!shortlist) return NONE;
+  const list = (items: string[]) => (items.length ? items.join(", ") : "?");
+  return [`Files: ${list(shortlist.files)}`, `Symbols: ${list(shortlist.symbols)}`, `Components: ${list(shortlist.components)}`, `Owners: ${list(shortlist.owners)}`].join("\n");
 }
 
 /** The risk a plan is written for and approved at: the level, and the three scores, product and complexity when risk_score ran. */
@@ -339,6 +351,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{task.classification}}": classificationLines(input.task.classification),
     "{{task.record}}": recordText(input.task.record),
     "{{context.plan.map}}": mapText(input.context.plan?.map),
+    "{{context.plan.shortlist}}": shortlistText(input.context.plan?.shortlist),
     "{{context.plan.risk}}": riskText(input.context.plan?.risk),
     "{{plan.risk}}": riskText(input.plan?.risk),
     "{{context.plan.gaps}}": bullets(input.context.plan?.gaps),

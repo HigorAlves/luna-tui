@@ -192,14 +192,23 @@ describe("renderPrompt", () => {
     expect(render()).toContain("(no coverage report)");
   });
 
-  it("renders the code map the planner reads: components, files, owners and the note", () => {
+  it("renders the code map the planner reads: components, files by role, entry points, owners, staleness and the note", () => {
     const template = "{{context.plan.map}}";
     const plan = { record: null, brief: "b", criteria: [], assumptions: [], slices: [] };
-    const map = { components: ["board keys", "board app"], files: ["board/src/keys.rs"], owners: ["@marta", "@lee"], confidence: 0.7, note: "tests not placed" };
+    const map = { components: ["board keys", "board app"], files: [{ path: "board/src/keys.rs", role: "change" }, { path: "board/src/app.rs", role: "read" }, { path: "board/src/keys_tests.rs", role: "test" }], entry_points: ["keys::handle"], owners: ["@marta", "@lee"], confidence: 0.7, note: "tests not placed" };
     const render = (p: unknown) => renderPrompt({ pack: PACKS.plan, input: { ...input, context: { ...input.context, plan: p } } as never, template });
-    expect(render({ ...plan, map })).toContain("Components: board keys, board app\nFiles:\n- board/src/keys.rs\nOwners: @marta, @lee\nConfidence: 0.7\nNote: tests not placed");
+    expect(render({ ...plan, map })).toContain("Components: board keys, board app\nFiles:\n- board/src/keys.rs (change)\n- board/src/app.rs (read)\n- board/src/keys_tests.rs (test)\nEntry points: keys::handle\nOwners: @marta, @lee\nConfidence: 0.7\nNote: tests not placed");
+    expect(render({ ...plan, map: { ...map, stale: true, behind: 120 } })).toContain("Stale: the graph is 120 commits behind the default branch; treat the map as a lead");
+    expect(render({ ...plan, map: { ...map, files: ["board/src/keys.rs"] } })).toContain("- board/src/keys.rs (change)");
     expect(render(plan)).toContain("(none)");
     expect(render({ ...plan, map: null })).toContain("(none)");
+  });
+
+  it("renders the shortlist the machine located for the code mapper", () => {
+    const plan = { record: null, brief: "", criteria: [], assumptions: [], slices: [], shortlist: { files: ["src/cart.ts"], symbols: ["applyCoupon"], components: ["cart"], owners: ["@marta"] } };
+    const render = (p: unknown) => renderPrompt({ pack: PACKS.code_map, input: { ...input, context: { ...input.context, plan: p } } as never, template: "{{context.plan.shortlist}}" });
+    expect(render(plan)).toContain("Files: src/cart.ts\nSymbols: applyCoupon\nComponents: cart\nOwners: @marta");
+    expect(render({ ...plan, shortlist: undefined })).toContain("(none)");
   });
 
   it("renders the plan's risk for the planner and for Build: the level, the three scores, the product and the complexity", () => {

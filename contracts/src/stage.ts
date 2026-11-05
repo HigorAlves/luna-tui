@@ -561,16 +561,33 @@ export type TriageRecord = z.infer<typeof TriageRecord>;
 /** What the plan stage's decisions read, and what its second round hands the planner and the test
  *  designer: the record, the plan, the scenarios so far, the criteria no scenario names (`gaps`,
  *  computed from `cases[].criterion`) and which round this is. */
+/** What a file in the map is for: the change edits it, a read file is context, a test file is where its checks live. */
+export const MapRole = z.enum(["change", "read", "test"]);
+export type MapRole = z.infer<typeof MapRole>;
+
+/** A file of the map. A plain string, as maps were written before roles, is a file to change. */
+export const MapFile = z.preprocess(
+  (value) => (typeof value === "string" ? { path: value, role: "change" } : value),
+  z.object({ path: z.string(), role: MapRole.default("change") }),
+);
+export type MapFile = z.infer<typeof MapFile>;
+
 export const CodeMapAnswer = z.object({
   /** The parts of the system the goal touches: graph communities or top-level folders. */
   components: z.array(z.string()),
-  /** Repo-relative files the goal touches, deduplicated, at most 40. */
-  files: z.array(z.string()),
+  /** Repo-relative files the goal touches, deduplicated, at most 40, each with its role. */
+  files: z.array(MapFile),
+  /** Where the flow the goal changes starts: handlers, commands, jobs (symbols or paths). */
+  entry_points: z.array(z.string()).default([]),
   /** Who owns those files: CODEOWNERS entries, else the top committers. */
   owners: z.array(z.string()),
   confidence: z.number().min(0).max(1),
   /** What the mapper could not place. */
   note: z.string().optional(),
+  /** Added by the machine, not the agent: the graph is more than `graph.stale_commits` behind the default branch. */
+  stale: z.boolean().optional(),
+  /** Added by the machine: commits the default branch has over the graph's; null when it cannot be counted. */
+  behind: z.number().int().nullable().optional(),
 });
 export type CodeMapAnswer = z.infer<typeof CodeMapAnswer>;
 
@@ -599,6 +616,8 @@ export const PlanContext = z.object({
   map: CodeMapAnswer.nullable().optional(),
   /** The risk scored before the plan, which the planner writes for. */
   risk: PlanRisk.optional(),
+  /** For the code mapper: where the graph says the goal lives (the machine's lexical match), to confirm and give roles to. */
+  shortlist: z.object({ files: z.array(z.string()), symbols: z.array(z.string()), components: z.array(z.string()), owners: z.array(z.string()) }).optional(),
 });
 export type PlanContext = z.infer<typeof PlanContext>;
 
