@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { baselinePath, caseInput, judgeInput, loadCases, prepareWorktree, verdictOf } from "./cases.ts";
+import { baselinePath, caseInput, datasetCases, judgeInput, loadCases, parseTrials, prepareWorktree, verdictOf } from "./cases.ts";
 
 const ROOT = resolve(import.meta.dirname, "..", "..");
 
@@ -96,6 +96,25 @@ describe("the runs' inputs", () => {
 
   it("keeps a baseline per engine and pack, with no colon in the path", () => {
     expect(baselinePath("/e", "claude:opus", "triage")).toBe("/e/baselines/claude-opus/triage.json");
+  });
+});
+
+describe("cases from a dataset", () => {
+  const retro = { kind: "retro", retro: { predicted: { size: "small", risk: "low", estLoc: 120 }, actual: { added: 640, removed: 90, retries: { verify: 2, e2e: 1, ci: 1, total: 5 }, escalations: 1, format: "captures", durationMs: 1, durationMin: 310 }, runs: 14 } };
+
+  it("makes an EvalCase of each labelled datapoint, the taskId as its id, and skips a bad one", () => {
+    const { cases, skipped } = datasetCases("worth_learning", [
+      { taskId: "reviewed/1", data: { ship: retro }, target: { worth: { value: true } } },
+      { taskId: "broken", data: { ship: { kind: "nope" } }, target: { worth: { value: true } } },
+    ]);
+    expect(cases.map((c) => [c.id, c.pack, c.input.pack])).toEqual([["reviewed-1", "worth_learning", "worth_learning"]]);
+    expect(cases[0]!.expect.checks).toEqual([{ kind: "equals", path: "worth.value", value: true }]);
+    expect(skipped.map((s) => s.taskId)).toEqual(["broken"]);
+  });
+
+  it("reads --trials as 1 to 20", () => {
+    expect([parseTrials(undefined), parseTrials("3")]).toEqual([1, 3]);
+    for (const bad of ["0", "21", "x", "1.5"]) expect(() => parseTrials(bad)).toThrow(/--trials/);
   });
 });
 

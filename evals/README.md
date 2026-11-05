@@ -36,6 +36,26 @@ The credentials are the machine's: the Claude subscription token, the Codex logi
 The scorecard gives, per pack and engine, the pass rate, the mean judge score, the mean turns and duration, and the summed cost (`n/a` when the runtime reports none). Without `--save-baseline` it is compared with the engine's saved baseline, over the cases both ran. Every run folder (the input, the output, the transcript) stays under `evals/.runs/`, which git ignores; delete it whenever.
 
 
+## Decision packs
+
+A decision pack (`risk_score`, `worth_learning`, ...) answers typed questions with a confidence, so its grade is not a judge's opinion: it is **was the label right** and **was the confidence honest**. For a decision pack the runner uses no judge (`--judge` opts in) and grades each answer with `schema`, the case's checks, and:
+
+- `correct`: every labelled question's choice, value or score equals the case's label (null when the case has no label: a borderline one, or one awaiting review). A label value that is an array is the set of labels it may be; a score matches within half a level.
+- `confidence`: the answer's confidence, the mean over its questions (a yes/no's is its distance from a coin toss).
+- `verdict`: the pack's own bars applied to the answer (`proceed`, `flag`, `ask`).
+
+The scorecard adds the calibration over the labelled cases: `accuracy`; `actedOnAccuracy` (among `proceed`: the answers the machine would act on); `coverage` (the share that was `proceed`); `brier` (mean of (confidence - correct)^2); `ece` (expected calibration error, five equal-width bins); `meanConfidence`; `overconfident` (wrong at or above the proceed bar); `n` and `labelled`. They are in the baseline file, in the printed scorecard and in the diff against a baseline. In Laminar each case's scores gain `correct`, `confidence` and `proceed` (1/0), and the evaluation's metadata carries `trials`.
+
+`--trials N` runs every case N times, each in its own container with the same `taskId`, so a model's variance shows. `--dataset <name>` takes the cases from the Laminar dataset of that name (its datapoints with a target, each parsed with the pack's context schema, the `taskId` as the case id) instead of the folder, to grade what a person labelled before it is committed.
+
+### The loop: record, harvest, push, label, pull, commit
+
+1. The machine keeps one **decision record** per decision pack call under its state dir (`<MACHINE_STATE_DIR>/decisions/<pack>/<day>/<id>.json`, owner-only; `MACHINE_DECISIONS=off` stops it, `MACHINE_DECISIONS_RETENTION_DAYS` bounds it): the context, the answer, the verdicts, the trace id. When a later fact settles a decision (a re-run passed, a plan was approved untouched, a retro was approved) the machine writes that **truth** onto the record.
+2. `pnpm eval harvest --pack <decision> [--since <date>] [--with-truth]` scrubs each record (logins to `user-N.example`, emails, internal hosts, home paths; a token-shaped string **refuses** the record, which is named and left out) and writes `evals/<pack>/cases/rec-<id>/`. A record with a truth becomes a case with `equals` checks; one without gets `"review": true` and no checks. It never overwrites a case.
+3. `pnpm eval dataset push --pack <decision> [--queue <name> [--records]]` mirrors the pack's cases to the Laminar dataset named for the pack (`taskId` = the case id). With `--queue`, the cases marked for review (and with `--records` the unlabelled records) go to that labeling queue with the model's own answer as the prefilled target. Nothing goes to Laminar without this command.
+4. A person corrects the targets in Laminar's labeling queue and pushes them to the dataset.
+5. `pnpm eval dataset pull --pack <decision>` turns the dataset's labelled datapoints into cases (a datapoint whose data is off the pack's context schema is reported and skipped). Review the diff and commit them.
+
 ## In Laminar
 
 With a Laminar key set (`LMNR_PROJECT_API_KEY`, or `~/.config/hardness/lmnr-project-api-key`; see [configuration](../docs/configuration.md#observability-laminar)), each `pnpm eval` run on an engine is an evaluation in the group named after the pack, so two engines' runs compare side by side in the UI, and each case is a trace (`eval:<pack>`) in the session `eval-<pack>-<time>`, and in `MACHINE_TRACES=full` with the case's model turns and tool calls under it (the container continues the trace, as it does for a stage). A datapoint carries the case's input as data, the expectation as target, the answer and its three grades as output, and the scores `pass`, `schema`, `checks` (the share passed), `judge`, `turns` and `costUsd`. `MACHINE_TRACES=full` attaches each case's transcript. Without a key nothing changes: the scorecards and baselines here stay the record.

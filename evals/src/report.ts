@@ -16,6 +16,8 @@ export function evalScores(result: CaseResult): Record<string, number | null> {
     judge: result.judge !== null && "score" in result.judge ? result.judge.score : null,
     turns: result.turns,
     costUsd: result.costUsd,
+    // A decision pack's grades: was the label right, how sure was it, did the policy act on it.
+    ...(result.decision ? { correct: result.decision.correct === null ? null : result.decision.correct ? 1 : 0, confidence: result.decision.confidence, proceed: result.decision.verdict === "proceed" ? 1 : 0 } : {}),
   };
 }
 

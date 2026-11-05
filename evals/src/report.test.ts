@@ -32,6 +32,14 @@ describe("evalScores", () => {
   });
 });
 
+describe("a decision's scores", () => {
+  it("add correct, confidence and proceed", () => {
+    expect(evalScores({ ...result, decision: { correct: true, confidence: 0.8, verdict: "proceed" } })).toMatchObject({ correct: 1, confidence: 0.8, proceed: 1 });
+    expect(evalScores({ ...result, decision: { correct: null, confidence: 0.5, verdict: "ask" } })).toMatchObject({ correct: null, confidence: 0.5, proceed: 0 });
+    expect(evalScores(result)).not.toHaveProperty("correct");
+  });
+});
+
 describe("evalDatapoint", () => {
   it("carries the case as data, the expectation as target, the answer and grades as output, and the trace", () => {
     const evalCase: EvalCase = {
