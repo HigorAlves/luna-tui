@@ -38,6 +38,37 @@ describe("slaActions", () => {
     expect(slaActions([row("awaiting_answers", 6 * DAY, { targets: { gate: 2 * 86_400, archive: null } })], NOW)).toEqual([expect.objectContaining({ action: "remind" })]);
   });
 
+  describe("escalation at the plan gate", () => {
+    const plan = (waited: number, over: Partial<SlaRow> = {}) => row("awaiting_approval", waited, { escalateAfter: 5 * 86_400, escalateTo: ["@marta"], ...over });
+
+    it("escalates to a person once the plan gate has waited escalate_days and was reminded in this visit", () => {
+      expect(slaActions([plan(6 * DAY, { lastReminderAt: ago(3 * DAY) })], NOW)).toEqual([{ taskId: "t1", action: "escalate", gate: "awaiting_approval", to: ["@marta"], afterSecs: 5 * 86_400 }]);
+    });
+
+    it("reminds first when nobody was reminded in this visit, and does not escalate before the days are up", () => {
+      expect(slaActions([plan(6 * DAY)], NOW)).toEqual([expect.objectContaining({ action: "remind" })]);
+      expect(slaActions([plan(4 * DAY, { lastReminderAt: ago(2 * DAY) })], NOW)).toEqual([]);
+    });
+
+    it("escalates once per visit: an earlier visit's escalation does not count, this visit's does", () => {
+      expect(slaActions([plan(6 * DAY, { lastReminderAt: ago(3 * DAY), lastEscalationAt: ago(1 * DAY) })], NOW)).toEqual([]);
+      expect(slaActions([plan(6 * DAY, { lastReminderAt: ago(3 * DAY), lastEscalationAt: ago(10 * DAY) })], NOW)).toEqual([expect.objectContaining({ action: "escalate" })]);
+    });
+
+    it("escalates only at the plan gate, only when the repo's days are set, and never archives or throws a plan away", () => {
+      expect(slaActions([row("awaiting_ship", 9 * DAY, { escalateAfter: 5 * 86_400, lastReminderAt: ago(3 * DAY) })], NOW)).toEqual([]);
+      expect(slaActions([plan(9 * DAY, { escalateAfter: null, lastReminderAt: ago(3 * DAY) })], NOW)).toEqual([]);
+      expect(slaActions([plan(9 * DAY, { lastReminderAt: ago(3 * DAY) })], NOW)).not.toContainEqual(expect.objectContaining({ action: "archive" }));
+    });
+
+    it("names no one when the code map had no owners, and applies the escalation as an `sla.escalated` event", async () => {
+      const recorded: Array<[string, string, Record<string, unknown>]> = [];
+      const effects = { record: async (id: string, kind: string, payload: Record<string, unknown>) => void recorded.push([id, kind, payload]), archive: async () => ({}) as never };
+      await applySlaActions([plan(6 * DAY, { lastReminderAt: ago(3 * DAY), escalateTo: [] })], NOW, effects);
+      expect(recorded).toEqual([["t1", "sla.escalated", { gate: "awaiting_approval", afterDays: 5, to: [] }]]);
+    });
+  });
+
   it("archives after the diagram's five days when the repo's sla block says nothing, and not before", () => {
     const quiet = (state: TaskState, waited: number) => row(state, waited, { targets: {}, defaultArchive: 5 * 86_400, lastReminderAt: waited >= 5 * DAY ? ago(2 * DAY) : null });
     expect(slaActions([quiet("awaiting_answers", 4 * DAY)], NOW)).toEqual([expect.objectContaining({ action: "remind" })]);

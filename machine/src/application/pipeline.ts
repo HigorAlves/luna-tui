@@ -2,14 +2,14 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, RUNNING, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, QuestionsCarrySecretError, RecordNotEditableError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
 import { questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
@@ -36,10 +36,11 @@ import { basename, join } from "node:path";
 import type { Policy } from "../domain/policy.ts";
 import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 
+import { applyRiskOverride, approvalRule, outsideSatisfied, sameName } from "../domain/approvers.ts";
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, QuestionsCarrySecretError, RecordNotEditableError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
+export { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -212,14 +213,20 @@ function casesOf(detail: Record<string, unknown> | undefined): StageRunCase[] | 
   return rows.length > 0 ? rows : null;
 }
 
-/** Two approver names are the same person's: compared NFKC-normalised, trimmed and lower-cased, so a trailing space or a width variant is no second name. */
-const sameName = (a: string, b: string): boolean => a.normalize("NFKC").trim().toLowerCase() === b.normalize("NFKC").trim().toLowerCase();
 
 /** Stages that only poll GitHub from the host: a restart runs them again. */
 const HOST_POLLERS: ReadonlySet<TaskState> = new Set<TaskState>(["ci_watch", "shipping"]);
 
-/** The gate's v2.2 Plan after a person's edit of the brief, criteria or assumptions: those follow (criteria keep their ids), the version rises. */
-function revisePlan(current: unknown, after: Record<string, unknown>): Plan | null {
+const objectOf = (value: unknown): Record<string, unknown> | undefined => (value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
+
+/** The owners a code map names, as the gate keeps it; none for a gate with no map. */
+function ownersOf(map: unknown): string[] {
+  const owners = (map as { owners?: unknown } | null | undefined)?.owners;
+  return Array.isArray(owners) ? owners.map(String) : [];
+}
+
+/** The gate's v2.2 Plan after a person's edit: the brief, criteria (ids kept), assumptions, rollback and steps follow, the version rises. */
+function revisePlan(current: unknown, after: Record<string, unknown>, steps?: PlanStep[]): Plan | null {
   const parsed = Plan.safeParse(current);
   if (!parsed.success) return null;
   const plan = parsed.data;
@@ -228,6 +235,8 @@ function revisePlan(current: unknown, after: Record<string, unknown>): Plan | nu
     ...(typeof after.brief === "string" ? { goal: after.brief } : {}),
     ...(Array.isArray(after.criteria) ? { acceptance_criteria: reviseCriteria(plan.acceptance_criteria, after.criteria.map(String)) } : {}),
     ...(Array.isArray(after.assumptions) ? { assumptions: after.assumptions.map(String) } : {}),
+    ...(typeof after.rollback === "string" ? { rollback: after.rollback } : {}),
+    ...(steps ? { steps: steps.map(stepOf) } : {}),
     version: plan.version + 1,
   };
 }
@@ -528,10 +537,8 @@ export class Pipeline {
    *  approved then, but nothing is built yet, so the latest plan approval still moves). Only the
    *  fields given change; the rest (including slices) stay as triage wrote them. Each edit is
    *  kept as a revision on the approval and logged as `plan.edited`. */
-  async editPlan(
-    id: string,
-    patch: { brief?: string; criteria?: string[]; assumptions?: string[] },
-  ): Promise<TaskRow> {
+  async editPlan(id: string, patch: EditPlanInput): Promise<TaskRow> {
+    const approvers = (await this.policyFor((await this.get(id)).repoPath)).factory.plan.approvers;
     const { fields, gate } = await this.store.withTaskLock(id, async (task, tx) => {
       const open = await tx.findOpenApproval(id);
       let plan: ApprovalRow | undefined;
@@ -540,24 +547,47 @@ export class Pipeline {
         plan = (await tx.listApprovals(id)).findLast((a) => a.kind === "awaiting_approval" && a.decision === "approved");
       }
       if (!open || !plan) throw new NoPlanToEditError(id);
+      const requested = plan.requested;
       const before: Record<string, unknown> = {};
       const after: Record<string, unknown> = {};
-      for (const [field, value] of Object.entries(patch)) {
-        if (value === undefined || JSON.stringify(value) === JSON.stringify(plan.requested[field])) continue;
-        if (plan.requested[field] !== undefined) before[field] = plan.requested[field];
+      const change = (field: string, value: unknown) => {
+        if (JSON.stringify(value) === JSON.stringify(requested[field])) return false;
+        if (requested[field] !== undefined) before[field] = requested[field];
         after[field] = value;
+        return true;
+      };
+      for (const field of ["brief", "criteria", "assumptions", "rollback"] as const) if (patch[field] !== undefined) change(field, patch[field]);
+      // Steps: the slices Build, the designer and the scope check read follow them.
+      const stepped = patch.steps ? stepsOfAnswer(patch.steps) : null;
+      if (stepped) change("slices", stepped.slices);
+      // The risk: the machine's level is a floor. A higher level applies at once; a lower one is kept with its reason and shown.
+      const overrides: Record<string, unknown> = { ...(objectOf(requested.overrides) ?? {}) };
+      if (patch.risk) {
+        const current = (objectOf(requested.risk) ?? { level: "low" }) as PlanRisk & { machine?: Risk };
+        const applied = applyRiskOverride(current, patch.risk);
+        const moved = change("risk", applied.risk);
+        if (moved || JSON.stringify(overrides.risk) !== JSON.stringify(applied.override)) overrides.risk = applied.override;
+      }
+      if (patch.map) {
+        const { reason, ...fixes } = patch.map;
+        const current = (objectOf(requested.map) ?? { components: [], files: [], entry_points: [], owners: [], confidence: 0 }) as Record<string, unknown>;
+        if (change("map", { ...current, ...fixes })) overrides.map = { reason };
       }
       const fields = Object.keys(after);
       if (fields.length > 0) {
-        const revisions = Array.isArray(plan.requested.revisions) ? plan.requested.revisions : [];
-        // A changed plan is a new plan: whoever approved the old one has not approved this one.
+        const revisions = Array.isArray(requested.revisions) ? requested.revisions : [];
         // The v2.2 Plan follows the edit and its version rises (a gate from before the Plan has none).
-        const revised = revisePlan(plan.requested.plan, after);
+        const revised = revisePlan(requested.plan, after, stepped?.steps);
+        const level = (after.risk as PlanRisk | undefined)?.level ?? (objectOf(requested.risk)?.level as Risk | undefined) ?? "low";
+        const owners = ownersOf(after.map ?? requested.map);
+        // A changed plan is a new plan: whoever approved the old one has not approved this one.
         await tx.updateApprovalRequested(plan, {
-          ...plan.requested,
+          ...requested,
           ...after,
           ...(revised ? { plan: revised } : {}),
-          ...(Array.isArray(plan.requested.approvers) ? { approvers: [] } : {}),
+          ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
+          ...("risk" in after || "map" in after || requested.approvalRule !== undefined ? { approvalRule: approvalRule(level === "high" || level === "medium" ? level : "low", approvers, owners) } : {}),
+          ...(Array.isArray(requested.approvers) ? { approvers: [] } : {}),
           revisions: [...revisions, { at: new Date().toISOString(), before, after }],
         });
         // Approving the plan adopted its criteria onto the ticket; an edit after that follows them.
@@ -706,38 +736,49 @@ export class Pipeline {
     );
   }
 
-  /** Approves or sends back whatever the task is waiting on, including an escalation. */
+  /** Approves, requests changes (`changes_requested`, which is `sent_back` and stored as such) or rejects whatever the task is waiting on,
+   *  including an escalation. A rejection is the plan gate's alone: the card is archived with reason `rejected`. */
   async decide(
     id: string,
-    decision: "approved" | "sent_back",
+    wanted: "approved" | "changes_requested" | "rejected" | "sent_back",
     reason?: string,
     response?: Record<string, unknown>,
     options: { approver?: string; auto?: boolean } = {},
   ): Promise<TaskRow> {
     const { approver } = options;
+    const decision: "approved" | "sent_back" | "rejected" = wanted === "changes_requested" ? "sent_back" : wanted;
     const task = await this.get(id);
+    if (decision === "rejected") return this.reject(task, reason, options.auto === true);
     // The gate this decision closes, read before it moves: what a decision pack said about it is judged by what the person does here.
     const gate = this.truth && !options.auto ? (await this.approvals(id)).find((a) => a.decision === null) : undefined;
     const open = task.state === "awaiting_approval" ? (await this.approvals(id)).find((a) => a.kind === "awaiting_approval" && a.decision === null) : undefined;
     const outcome = open?.requested.outcome;
-    // A plan of High risk needs two distinct names: the first is kept on the gate, the second closes it.
+    // The plan needs as many distinct names as its level asks (the repo's `plan.approvers`: two for high by default), at least one from outside
+    // the code map's owners on a high-risk plan with known owners. The names so far are kept on the gate; the last one closes it. The level is
+    // `requested.risk.level`: the higher of the machine's and a person's, never lower than the machine's.
     let answered = response;
-    const risk = (open?.requested.risk as { level?: unknown } | undefined)?.level;
-    if (decision === "approved" && open && outcome === undefined && risk === "high") {
+    const riskLevel = (open?.requested.risk as { level?: unknown } | undefined)?.level;
+    const level = riskLevel === "high" || riskLevel === "medium" || riskLevel === "low" ? riskLevel : "low";
+    const rule = approvalRule(level, (await this.policyFor(task.repoPath)).factory.plan.approvers, ownersOf(open?.requested.map));
+    if (decision === "approved" && open && outcome === undefined && rule.needed > 1) {
       const prior = await this.store.withTaskLock(id, async (_task, tx) => {
         const fresh = await tx.findOpenApproval(id);
         if (!fresh || fresh.kind !== "awaiting_approval") return null;
         const names = Array.isArray(fresh.requested.approvers) ? fresh.requested.approvers.map(String) : [];
-        if (!approver) throw new ApproverRequiredError(id);
+        if (!approver) throw new ApproverRequiredError(id, "plan", rule.needed);
         if (names.some((n) => sameName(n, approver))) throw new SameApproverError(id, approver);
-        if (names.length === 0) await tx.updateApprovalRequested(fresh, { ...fresh.requested, approvers: [approver] });
-        return names;
+        if (names.length + 1 < rule.needed) {
+          await tx.updateApprovalRequested(fresh, { ...fresh.requested, approvers: [...names, approver] });
+          return { names, partial: true };
+        }
+        if (rule.outside === "required" && !outsideSatisfied([...names, approver], ownersOf(fresh.requested.map))) throw new OutsideApproverRequiredError(id, approver);
+        return { names, partial: false };
       });
-      if (prior?.length === 0) {
-        await this.log(id, "approval.partial", { approver, needed: 2, have: 1 });
+      if (prior?.partial) {
+        await this.log(id, "approval.partial", { approver, needed: rule.needed, have: prior.names.length + 1 });
         return this.get(id);
       }
-      if (prior) answered = { ...response, approvers: [...prior, approver] };
+      if (prior) answered = { ...response, approvers: [...prior.names, approver] };
     }
     // A High-risk pack ships only after an approver who is none of the plan's: the name is an attestation the monitor reads.
     if (decision === "approved" && task.state === "awaiting_ship" && task.route !== "review" && task.evidence?.risk === "high") {
@@ -772,6 +813,16 @@ export class Pipeline {
     if (decision === "approved" && open && outcome === undefined) await this.keepGroundTruth(moved, open.id);
     if (gate) await this.learnFromGate(id, gate, decision, response);
     return moved;
+  }
+
+  /** A rejection: the plan gate's alone (an open plan, not triage's outcome and not a later gate). The card is archived with reason `rejected`, the comment kept. */
+  private async reject(task: TaskRow, reason: string | undefined, auto: boolean): Promise<TaskRow> {
+    const open = task.state === "awaiting_approval" ? (await this.approvals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null) : undefined;
+    if (!open || auto || open.requested.outcome !== undefined) throw new RejectNotAllowedError(task.id, task.state);
+    const record = { decision: "rejected" as const, ...(reason ? { reason } : {}) };
+    const archived = await this.archive(task.id, "rejected", { onlyFrom: new Set<TaskState>(["awaiting_approval"]), decision: record });
+    if (this.truth) await this.learnFromGate(task.id, open, "sent_back");
+    return archived;
   }
 
   /** `decision.truth` on the task's activity: which decision record a later fact settled, and by what (ids only). */

@@ -593,7 +593,10 @@ export type CodeMapAnswer = z.infer<typeof CodeMapAnswer>;
 
 /** The risk a plan is written for and approved at: the level, and when risk_score ran the three scores (blast radius, reversibility, data sensitivity, each 0 to 2 on the wire), their product and the change's complexity. */
 export const PlanRisk = z.object({
+  /** The level the approvers rule and Ship read: the higher of the machine's and a person's edit. */
   level: Risk,
+  /** The machine's own level (its floor), once a person has edited the level at the gate. */
+  machine: Risk.optional(),
   product: z.number().optional(),
   scores: z.object({ blast_radius: z.number(), reversibility: z.number(), data_sensitivity: z.number() }).partial().optional(),
   complexity: z.enum(["S", "M", "L", "XL"]).optional(),

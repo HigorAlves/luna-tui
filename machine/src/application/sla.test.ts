@@ -85,4 +85,15 @@ describe("SlaClocks and the triage gates' reminder", () => {
     expect((await clocks({ ...triage(1), sla: { gate: 600 } }).for(task("awaiting_answers")))?.gate?.targetSecs).toBe(600);
     expect((await clocks(triage(2)).for(task("awaiting_answers")))?.gate?.targetSecs).toBe(172_800);
   });
+
+  const plan = (reminder_days: number) => ({ factory: { ...DEFAULT_POLICY.factory, plan: { ...DEFAULT_POLICY.factory.plan, sla: { reminder_days, escalate_days: 5 } } } });
+
+  it("reminds at the plan gate after the repo's plan.sla.reminder_days, when its sla block names no gate; the repo's block wins", async () => {
+    expect((await clocks(plan(1)).for(task("awaiting_approval")))?.gate?.targetSecs).toBe(86_400);
+    expect((await clocks(plan(3)).for(task("awaiting_approval")))?.gate?.targetSecs).toBe(259_200);
+    expect((await clocks({ ...plan(1), sla: { gate: 600 } }).for(task("awaiting_approval")))?.gate?.targetSecs).toBe(600);
+    // The plan's days are the plan gate's: they move no other gate.
+    expect((await clocks(plan(1)).for(task("awaiting_ship")))?.gate?.targetSecs).toBe(172_800);
+    expect((await clocks(plan(1)).for(task("awaiting_answers")))?.gate?.targetSecs).toBe(172_800);
+  });
 });

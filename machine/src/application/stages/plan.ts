@@ -34,6 +34,7 @@ import {
 } from "@hardness/contracts";
 
 import type { GraphLocation } from "../graph.ts";
+import { approvalRule } from "../../domain/approvers.ts";
 import { triageVerdicts } from "../../domain/triage-policy.ts";
 import { recordIdOf } from "../decision-truth.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
@@ -54,7 +55,7 @@ export interface PlanDeps {
   /** Runs a decision pack on a plan context and answers its answer; null when no decision can run (agents off, no runtime). Read at call time: main.ts binds it late. */
   decide: ((pack: DecisionPackName, plan: PlanContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null;
   /** Each repo's luna.yaml bars for the decisions. */
-  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { plan: { coverage_rounds: number; plan_check_retries: number; coverage_score_min?: number }; triage?: FactoryConfig["triage"]; graph?: FactoryConfig["graph"] } }> };
+  policies: { for(repoPath: string | null): Promise<{ decisions: Record<string, DecisionOverrides>; graph?: boolean; factory?: { plan: { coverage_rounds: number; plan_check_retries: number; coverage_score_min?: number; approvers?: FactoryConfig["plan"]["approvers"] }; triage?: FactoryConfig["triage"]; graph?: FactoryConfig["graph"] } }> };
   /** The machine's code graphs: a repo with one (and its luna.yaml `policy.graph` on) gets a code map before the plan. */
   graph?: {
     stampOf(repoPath: string): Promise<unknown | null>;
@@ -183,7 +184,7 @@ export function planStage(deps: PlanDeps): StageRunner {
     const graded: Risk = task.record?.risk ?? "medium";
     const scored = answer ? riskOf(answer as Parameters<typeof riskOf>[0]) : null;
     const level: Risk = scored ? maxRisk(scored.level, graded) : graded;
-    const risk: PlanRisk = { level, ...(scored ? { product: scored.product, scores } : { scores }), ...(complexity === "S" || complexity === "M" || complexity === "L" || complexity === "XL" ? { complexity } : {}) };
+    const risk: PlanRisk = { level, machine: level, ...(scored ? { product: scored.product, scores } : { scores }), ...(complexity === "S" || complexity === "M" || complexity === "L" || complexity === "XL" ? { complexity } : {}) };
     const riskPart = { risk };
 
     let lane: "fast" | "full" = task.record?.decision === "fast_lane" ? "fast" : "full";
@@ -340,6 +341,8 @@ export function planStage(deps: PlanDeps): StageRunner {
         // Coverage by criterion id: what each criterion's scenarios are, the score against the repo's bar, and what is still open.
         coverageReport: { score: report.score, bar: coverageBar, gaps: report.gaps, thin: report.thin, untestable: report.untestable, open: notes, per: report.per.map((p) => ({ id: p.criterion.id, text: p.criterion.text, scenarios: p.scenarios, types: p.types })) },
         risk,
+        // Who may approve, from the repo's `plan.approvers` (the diagram's numbers when it says nothing) and the code map's owners, in the gate's words.
+        approvalRule: approvalRule(level, repoPlan?.approvers ?? FACTORY_DEFAULTS.plan.approvers, map?.owners ?? []),
         verdicts,
         // The decisions' records, so the gate's outcome can be written onto them (decision-truth.ts).
         decisions: Object.fromEntries(([["coverage_check", coverage], ["plan_check", planCheck], ["risk_score", riskJudged]] as const).flatMap(([pack, judged]) => (judged.recordId ? [[pack, judged.recordId]] : []))),

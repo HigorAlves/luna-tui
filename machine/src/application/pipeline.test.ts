@@ -15,7 +15,7 @@ import { StubStages } from "./stages/stubs.ts";
 import { withTriageSignals } from "./stages/triage-signals.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, Pipeline, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
+import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, OutsideApproverRequiredError, Pipeline, RejectNotAllowedError, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
@@ -190,6 +190,51 @@ describe("the plan gate", () => {
   });
 });
 
+describe("the plan gate's three decisions", () => {
+  const atGate = async () => {
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], risk: { level: "low", scores: {} } } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    return task.id;
+  };
+
+  it("takes changes_requested as today's sent_back: the card goes back, the comment is its reason, the row says sent_back", async () => {
+    const id = await atGate();
+    await pipeline.decide(id, "changes_requested", "split the migration");
+    // The card went back to triage and came round to a new plan gate.
+    expect((await pipeline.approvals(id)).length).toBe(2);
+    expect((await pipeline.approvals(id))[0]).toMatchObject({ decision: "sent_back", reason: "split the migration" });
+    expect((await pipeline.events(id)).find((e) => e.kind === "transition" && e.payload.event === "sent_back")).toBeDefined();
+  });
+
+  it("still takes sent_back", async () => {
+    const id = await atGate();
+    await pipeline.decide(id, "sent_back", "no");
+    expect((await pipeline.approvals(id))[0]).toMatchObject({ decision: "sent_back", reason: "no" });
+  });
+
+  it("rejects: the card is archived with reason rejected, and the comment is kept", async () => {
+    const id = await atGate();
+    const done = await pipeline.decide(id, "rejected", "we will not build this");
+    expect(done).toMatchObject({ state: "archived", archiveReason: "rejected" });
+    expect((await pipeline.approvals(id))[0]).toMatchObject({ decision: "rejected", reason: "we will not build this" });
+    expect((await pipeline.events(id)).find((e) => e.kind === "transition" && e.payload.archiveReason === "rejected")).toBeDefined();
+  });
+
+  it("refuses to reject anywhere but the plan gate", async () => {
+    stubs.plan("triage", { outcome: "needs_input", detail: { questions: [{ question: "q", recommended: "r" }] } });
+    const asking = await newTask();
+    await pipeline.start(asking.id);
+    await expect(pipeline.decide(asking.id, "rejected")).rejects.toBeInstanceOf(RejectNotAllowedError);
+    expect((await pipeline.get(asking.id)).state).toBe("awaiting_answers");
+    stubs.reset();
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "archive", archiveReason: "duplicate" } });
+    const triaged = await newTask();
+    await pipeline.start(triaged.id);
+    await expect(pipeline.decide(triaged.id, "rejected")).rejects.toBeInstanceOf(RejectNotAllowedError);
+  });
+});
+
 describe("approvers", () => {
   const atGate = async (level: "low" | "high") => {
     stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", risk: { level, scores: {} } } });
@@ -236,6 +281,38 @@ describe("approvers", () => {
     await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" });
     await expect(pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" })).rejects.toBeInstanceOf(SameApproverError);
     expect((await pipeline.get(id)).state).toBe("awaiting_approval");
+  });
+
+  describe("from outside the owning team", () => {
+    const withOwners = async (owners: string[], level: "high" | "low" = "high") => {
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", risk: { level, scores: {} }, map: { components: [], files: [{ path: "a.ts", role: "change" }], entry_points: [], owners, confidence: 0.8 } } });
+      const task = await newTask();
+      await pipeline.start(task.id);
+      return task.id;
+    };
+
+    it("refuses a second approver when both are the code map's owners, and takes one from outside", async () => {
+      const id = await withOwners(["@ana", "@bo"]);
+      await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" });
+      await expect(pipeline.decide(id, "approved", undefined, undefined, { approver: "bo" })).rejects.toBeInstanceOf(OutsideApproverRequiredError);
+      expect((await pipeline.get(id)).state).toBe("awaiting_approval");
+      expect((await pipeline.approvals(id))[0]!.requested.approvers).toEqual(["ana"]);
+      expect((await pipeline.decide(id, "approved", undefined, undefined, { approver: "carla" })).state).toBe("awaiting_ship");
+    });
+
+    it("lets an owner and a person from outside approve in either order", async () => {
+      const id = await withOwners(["@ana"]);
+      await pipeline.decide(id, "approved", undefined, undefined, { approver: "carla" });
+      expect((await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" })).state).toBe("awaiting_ship");
+    });
+
+    it("skips the condition for a repo with no owners, and does not ask it of a plan that is not high", async () => {
+      const none = await withOwners([]);
+      await pipeline.decide(none, "approved", undefined, undefined, { approver: "ana" });
+      expect((await pipeline.decide(none, "approved", undefined, undefined, { approver: "bo" })).state).toBe("awaiting_ship");
+      const low = await withOwners(["@ana"], "low");
+      expect((await pipeline.decide(low, "approved", undefined, undefined, { approver: "ana" })).state).toBe("awaiting_ship");
+    });
   });
 
   it("counts two simultaneous different approvers once each, never losing one", async () => {
@@ -804,6 +881,78 @@ describe("editing the plan before approving", () => {
     await pipeline.editPlan(task.id, { brief: "new brief" });
     approval = (await pipeline.approvals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
     expect((approval?.requested.plan as { version: number }).version).toBe(3);
+  });
+
+  describe("steps, rollback, risk and code map at the gate", () => {
+    const slices = [{ title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }];
+    const plan = { goal: "g", steps: [{ id: "P1", title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }], acceptance_criteria: [{ id: "C1", text: "c1" }], out_of_scope: [], assumptions: [], rollback: "revert", version: 2 };
+    const map = { components: ["c"], files: [{ path: "a.ts", role: "change" }], entry_points: [], owners: ["@ana"], confidence: 0.8 };
+    const atGate = async (level: "low" | "medium" | "high" = "medium") => {
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [], slices, rollback: "revert", plan, map, risk: { level, product: 6, scores: {} } } });
+      const task = await newTask();
+      await pipeline.start(task.id);
+      return task.id;
+    };
+    const gate = async (id: string) => (await pipeline.approvals(id)).find((a) => a.decision === null)!;
+
+    it("edits the steps (the slices Build reads follow, the Plan's steps and version too) and the rollback, keeping revisions", async () => {
+      const id = await atGate();
+      await pipeline.editPlan(id, { steps: [{ description: "Cap a coupon", files: ["a.ts", "b.ts"], done_when: ["c1 holds"], est_loc: 30 }], rollback: "git revert, then run the down migration" });
+      const { requested } = await gate(id);
+      expect(requested.slices).toEqual([{ title: "Cap a coupon", est_loc: 30, touchpoints: ["a.ts", "b.ts"], acceptance: ["c1 holds"] }]);
+      expect(requested.rollback).toBe("git revert, then run the down migration");
+      expect(requested.plan).toMatchObject({ version: 3, rollback: "git revert, then run the down migration", steps: [{ id: "P1", description: "Cap a coupon", files: ["a.ts", "b.ts"], done_when: ["c1 holds"] }] });
+      expect(requested.revisions).toEqual([expect.objectContaining({ before: { slices, rollback: "revert" }, after: expect.objectContaining({ slices: [expect.objectContaining({ title: "Cap a coupon" })], rollback: "git revert, then run the down migration" }) })]);
+    });
+
+    it("applies a raised risk at once: the level the approvers rule reads rises, the machine's own is kept, the reason is ground truth", async () => {
+      const id = await atGate("medium");
+      await pipeline.editPlan(id, { risk: { level: "high", reason: "touches billing" } });
+      const { requested } = await gate(id);
+      expect(requested.risk).toMatchObject({ level: "high", machine: "medium" });
+      expect(requested.overrides).toMatchObject({ risk: { level: "high", reason: "touches billing", applied: true } });
+      expect(requested.approvalRule).toMatchObject({ needed: 2 });
+      // High now: one name no longer approves.
+      expect((await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" })).state).toBe("awaiting_approval");
+    });
+
+    it("keeps a lowered risk with its reason and shows it, while the approvers rule keeps reading the machine's level", async () => {
+      const id = await atGate("high");
+      await pipeline.editPlan(id, { risk: { level: "low", reason: "behind a flag" } });
+      const { requested } = await gate(id);
+      expect(requested.risk).toMatchObject({ level: "high", machine: "high" });
+      expect(requested.overrides).toMatchObject({ risk: { level: "low", reason: "behind a flag", applied: false } });
+      expect(requested.approvalRule).toMatchObject({ needed: 2 });
+      await expect(pipeline.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
+    });
+
+    it("keeps Ship's reading of the risk at the higher of the machine's and the edit", async () => {
+      const id = await atGate("medium");
+      await pipeline.editPlan(id, { risk: { level: "low", reason: "small" } });
+      expect((await gate(id)).requested.risk).toMatchObject({ level: "medium" });
+      await pipeline.editPlan(id, { risk: { level: "high", reason: "on second thought" } });
+      expect((await gate(id)).requested.risk).toMatchObject({ level: "high" });
+      await pipeline.editPlan(id, { risk: { level: "low", reason: "undone" } });
+      expect((await gate(id)).requested.risk).toMatchObject({ level: "medium", machine: "medium" });
+    });
+
+    it("corrects the code map with a reason, recomputes who may approve from the new owners, and forgets the approvers so far", async () => {
+      const id = await atGate("high");
+      await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" });
+      await pipeline.editPlan(id, { map: { files: [{ path: "b.ts", role: "change" }], owners: ["@bo"], reason: "ownership moved" } });
+      const { requested } = await gate(id);
+      expect(requested.map).toMatchObject({ components: ["c"], files: [{ path: "b.ts", role: "change" }], owners: ["@bo"], confidence: 0.8 });
+      expect(requested.overrides).toMatchObject({ map: { reason: "ownership moved" } });
+      expect(requested.approvers).toEqual([]);
+      expect(requested.approvalRule).toMatchObject({ needed: 2, outside: "required" });
+    });
+
+    it("changes nothing and records nothing for an edit that matches what the gate has", async () => {
+      const id = await atGate("medium");
+      await pipeline.editPlan(id, { rollback: "revert" });
+      expect((await gate(id)).requested.revisions).toBeUndefined();
+      expect((await gate(id)).requested.plan).toMatchObject({ version: 2 });
+    });
   });
 
   it("edits a gate written before the v2.2 Plan (no `plan` key) as it always did", async () => {

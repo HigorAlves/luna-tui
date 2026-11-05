@@ -10,6 +10,7 @@ import type { TaskRow } from "../domain/task.ts";
 
 export type SlaAction =
   | { taskId: string; action: "remind"; gate: TaskState; dueAt: string }
+  | { taskId: string; action: "escalate"; gate: TaskState; to: string[]; afterSecs: number }
   | { taskId: string; action: "archive"; reason: SlaArchiveReason; gate: TaskState };
 
 /** Why a card left unattended at an intake gate is archived: nobody set up the repo, nobody answered. */
@@ -31,11 +32,20 @@ export interface SlaRow {
   lastReminderAt: Date | null;
   /** How long a card may wait at an intake gate when the repo's `sla` block says nothing (the diagram's `triage.sla.archive_days`); null or absent: never. */
   defaultArchive?: number | null;
+  /** How long the plan gate may wait before it escalates to a person (the diagram's `plan.sla.escalate_days`), in seconds; null or absent: never. */
+  escalateAfter?: number | null;
+  /** When the last `sla.escalated` event of this task was recorded; null when none. */
+  lastEscalationAt?: Date | null;
+  /** Who the escalation names: the code map's owners, when the plan has them. */
+  escalateTo?: string[];
 }
+
+/** The gate that escalates: the plan's. A gate past it is reminded of and, at the plan, escalated; never archived. */
+const ESCALATING_GATE: TaskState = "awaiting_approval";
 
 export function slaActions(rows: SlaRow[], now: Date): SlaAction[] {
   const actions: SlaAction[] = [];
-  for (const { task, sla, targets, lastReminderAt, defaultArchive } of rows) {
+  for (const { task, sla, targets, lastReminderAt, defaultArchive, escalateAfter, lastEscalationAt, escalateTo } of rows) {
     const gate = task.state as TaskState;
     const since = task.stateSince ?? task.createdAt;
     // The repo's block wins, `sla.archive: off` included; the diagram's five days apply when it says nothing. The clock is the gate's own: an answer moves the card and a new wait starts it again.
@@ -44,6 +54,12 @@ export function slaActions(rows: SlaRow[], now: Date): SlaAction[] {
     const reminded = lastReminderAt !== null && lastReminderAt.getTime() >= since.getTime() && now.getTime() - lastReminderAt.getTime() >= REMINDER_BEFORE_ARCHIVE_MS;
     if (AUTO_ARCHIVE_GATES.has(gate) && typeof archiveAfter === "number" && since && now.getTime() - since.getTime() >= archiveAfter * 1000 && reminded) {
       actions.push({ taskId: task.id, action: "archive", reason: REASON_AT[gate] ?? "no_answer", gate });
+      continue;
+    }
+    // The plan gate escalates once per visit, after a reminder: past `plan.sla.escalate_days` somebody is named.
+    const inThisVisit = (at: Date | null | undefined) => at !== null && at !== undefined && at.getTime() >= since.getTime();
+    if (gate === ESCALATING_GATE && typeof escalateAfter === "number" && now.getTime() - since.getTime() >= escalateAfter * 1000 && inThisVisit(lastReminderAt) && !inThisVisit(lastEscalationAt)) {
+      actions.push({ taskId: task.id, action: "escalate", gate, to: escalateTo ?? [], afterSecs: escalateAfter });
       continue;
     }
     const clock = sla?.gate;
@@ -65,6 +81,7 @@ export async function applySlaActions(rows: SlaRow[], now: Date, effects: SlaEff
   for (const action of actions) {
     try {
       if (action.action === "remind") await effects.record(action.taskId, "sla.reminder", { gate: action.gate, dueAt: action.dueAt });
+      else if (action.action === "escalate") await effects.record(action.taskId, "sla.escalated", { gate: action.gate, afterDays: action.afterSecs / 86_400, to: action.to });
       else await effects.archive(action.taskId, action.reason);
     } catch (error) {
       warn(`sla: ${action.action} of task ${action.taskId} failed: ${error instanceof Error ? error.message : String(error)}`);

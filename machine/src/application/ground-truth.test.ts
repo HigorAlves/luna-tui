@@ -40,6 +40,15 @@ describe("groundTruthOf", () => {
     expect(truth.proposed).toMatchObject({ brief: "first brief", criteria: ["c1", "c2"], assumptions: ["a1"], slices, rollback: "revert", cases: [{ title: "old" }] });
   });
 
+  it("keeps a person's override of the risk or the code map with its reason, and the machine's own level beside a lowered one", () => {
+    const overrides = { risk: { level: "low", reason: "behind a flag", applied: false }, map: { reason: "ownership moved" } };
+    const truth = groundTruthOf(task, approval({ brief: "b", risk: { level: "medium", machine: "medium", product: 6 }, map: { components: [], files: [], entry_points: [], owners: ["@bo"], confidence: 0.8 }, overrides }));
+    expect(truth.overrides).toEqual(overrides);
+    expect(truth.risk).toEqual({ level: "medium", machine: "medium", product: 6 });
+    expect(truth.approved).toMatchObject({ risk: { level: "medium" }, map: { owners: ["@bo"] } });
+    expect(groundTruthOf(task, approval({ brief: "b" })).overrides).toBeNull();
+  });
+
   it("proposes what it approves when nothing was edited, and names one approver or none", () => {
     const plain = groundTruthOf(task, approval({ brief: "b", criteria: ["c1"], assumptions: [], slices }, { response: { approver: "ana" } }));
     expect(plain.proposed).toEqual(plain.approved);

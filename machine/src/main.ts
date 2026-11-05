@@ -568,9 +568,16 @@ const slaTicker = new Ticker(() => {
         // The diagram's `triage.sla.archive_days` (five) when the repo's sla block says nothing; 0 turns it off.
         const defaultArchive = policy.factory.triage.sla.archive_days > 0 ? policy.factory.triage.sla.archive_days * 86_400 : null;
         const archiving = AUTO_ARCHIVE_GATES.has(task.state) && (targets.archive !== undefined ? typeof targets.archive === "number" : defaultArchive !== null);
-        if (!sla?.gate?.overdue && !archiving) continue;
-        const reminders = (await pipeline.events(task.id)).filter((event) => event.kind === "sla.reminder");
-        rows.push({ task, sla, targets, defaultArchive, lastReminderAt: reminders.length ? new Date(Math.max(...reminders.map((event) => event.at.getTime()))) : null });
+        // The plan gate also escalates to a person after the diagram's `plan.sla.escalate_days` (five); 0 turns it off.
+        const escalateAfter = task.state === "awaiting_approval" && policy.factory.plan.sla.escalate_days > 0 ? policy.factory.plan.sla.escalate_days * 86_400 : null;
+        if (!sla?.gate?.overdue && !archiving && escalateAfter === null) continue;
+        const events = await pipeline.events(task.id);
+        const latest = (kind: string) => {
+          const found = events.filter((event) => event.kind === kind);
+          return found.length ? new Date(Math.max(...found.map((event) => event.at.getTime()))) : null;
+        };
+        const owners = escalateAfter === null ? [] : ((await pipeline.approvals(task.id)).find((a) => a.decision === null)?.requested.map as { owners?: unknown } | undefined)?.owners;
+        rows.push({ task, sla, targets, defaultArchive, escalateAfter, lastReminderAt: latest("sla.reminder"), lastEscalationAt: latest("sla.escalated"), escalateTo: Array.isArray(owners) ? owners.map(String) : [] });
       }
       await applySlaActions(rows, new Date(), { record: (id, kind, payload) => pipeline.record(id, kind, payload), archive: (id, reason) => pipeline.archive(id, reason, { onlyFrom: AUTO_ARCHIVE_GATES }) });
     })

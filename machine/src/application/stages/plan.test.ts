@@ -300,6 +300,28 @@ describe("planStage", () => {
     expect(decided[0]!.repo).toBe("/repo");
   });
 
+  describe("who may approve", () => {
+    const owned = { policies: { for: async () => ({ decisions: {}, factory: { plan: { coverage_rounds: 3, plan_check_retries: 2, approvers: { low: 1, medium: 1, high: 3, outside_owning_team: true } } } }) } };
+    const highTask = { ...task, record: { ...record, risk: "high" } } as unknown as TaskRow;
+
+    it("puts the approval rule on the gate: names needed for the level, the outside condition from the map's owners, and the machine's own level", async () => {
+      const result = await setup({}, { ...withGraph, ...owned }).run(context({ task: highTask }));
+      expect(result.detail).toMatchObject({ risk: { level: "high", machine: "high" }, approvalRule: { needed: 3, outside: "required", text: expect.stringMatching(/3 approvers.*@marta.*attestation/s) } });
+    });
+
+    it("says when no owners were found that the outside condition is skipped, and asks one name of a plan that is not high", async () => {
+      const none = await setup({}, owned).run(context({ task: highTask }));
+      expect(none.detail).toMatchObject({ approvalRule: { needed: 3, outside: "skipped", text: expect.stringMatching(/no owners were found/i) } });
+      const medium = await setup({}, owned).run(context());
+      expect(medium.detail).toMatchObject({ approvalRule: { needed: 1, outside: "off", text: "Needs 1 approver." } });
+    });
+
+    it("uses the diagram's numbers when the repo says nothing", async () => {
+      const result = await setup({}, withGraph).run(context({ task: highTask }));
+      expect(result.detail).toMatchObject({ approvalRule: { needed: 2, outside: "required" } });
+    });
+  });
+
   it("keeps the designer blind to the plan on every round and on the fast lane, and tells it only the gaps and its earlier scenarios", async () => {
     const { run, calls } = setup({ test_design: [cased("no panic"), cased("no panic", "stays selected")] }, withGraph);
     await run(context());

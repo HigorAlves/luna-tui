@@ -119,7 +119,7 @@ export interface ArtifactRow {
   createdAt: Date;
 }
 
-export type Decision = "approved" | "sent_back" | "answered";
+export type Decision = "approved" | "sent_back" | "rejected" | "answered";
 
 export interface ApprovalRow {
   id: string;
@@ -209,13 +209,29 @@ export class StageStartedError extends Error {
 
 /** A plan of High risk needs two distinct approvers, and this approval named none. */
 export class ApproverRequiredError extends Error {
-  constructor(id: string, gate: "plan" | "ship" = "plan") {
+  constructor(id: string, gate: "plan" | "ship" = "plan", needed = 2) {
     super(
       gate === "ship"
         ? `task ${id}: a pack of High risk ships only with a ship approver who did not approve the plan; send your name as the approver`
-        : `task ${id}: a plan of High risk needs two named approvers; send your name as the approver`,
+        : `task ${id}: this plan needs ${needed} named approvers; send your name as the approver`,
     );
     this.name = "ApproverRequiredError";
+  }
+}
+
+/** A plan that needs an approver from outside the code map's owners, and the names so far are all owners. */
+export class OutsideApproverRequiredError extends Error {
+  constructor(id: string, approver: string) {
+    super(`task ${id}: ${approver} is among the code map's owners and so are the approvers so far; a High-risk plan needs at least one approver from outside them (an attestation: the names are taken as given)`);
+    this.name = "OutsideApproverRequiredError";
+  }
+}
+
+/** A rejection anywhere but the plan gate: only a plan is rejected, and only while it waits. */
+export class RejectNotAllowedError extends Error {
+  constructor(id: string, state: string) {
+    super(`task ${id} is ${state}: a card is rejected only at the plan gate`);
+    this.name = "RejectNotAllowedError";
   }
 }
 

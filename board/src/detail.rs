@@ -410,8 +410,14 @@ pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'stat
     let approve_plan = match gate {
         Some(a) if a.outcome() == Some("archive") => "a archive the ticket · r send back (triage again)".to_string(),
         Some(a) if a.outcome() == Some("conversation") => "a post the reply and close · r send back (triage again)".to_string(),
-        Some(a) if a.requested["risk"]["level"].as_str() == Some("high") => {
-            let who = if a.approvers().is_empty() { "first of two approvers; set LUNA_APPROVER" } else { "second of two approvers" };
+        Some(a) if a.names_needed() > 1 => {
+            let needed = a.names_needed();
+            let word = if needed == 2 { "two".to_string() } else { needed.to_string() };
+            let who = match a.approvers().len() as u64 {
+                0 => format!("first of {word} approvers; set LUNA_APPROVER"),
+                have if have + 1 == needed => format!("last of {word} approvers"),
+                _ => format!("next of {word} approvers"),
+            };
             format!("a approve ({who}) · r send back · e edit the plan")
         }
         _ => "a approve · r send back · e edit the plan".to_string(),
@@ -534,6 +540,8 @@ fn gate_header(title: &str, stage: &str, approval: Option<&Approval>, detail: Op
         (None, _) => ("waiting for you".to_string(), PEACH),
         (Some("sent_back"), Some(at)) => (format!("sent back {} ago", age(at, now)), PEACH),
         (Some("sent_back"), None) => ("sent back".to_string(), PEACH),
+        (Some("rejected"), Some(at)) => (format!("rejected {} ago", age(at, now)), RED),
+        (Some("rejected"), None) => ("rejected".to_string(), RED),
         (Some(decision), Some(at)) => (format!("{} {} ago", decision.replace('_', " "), age(at, now)), GREEN),
         (Some(decision), None) => (decision.replace('_', " "), GREEN),
     };
@@ -794,6 +802,9 @@ fn gate_facts(approval: &Approval) -> Vec<Line<'static>> {
         let high = approval.requested["risk"]["level"].as_str() == Some("high");
         lines.push(Line::from(vec![label("Risk"), if high { Span::from(risk).fg(c(PEACH)).bold() } else { Span::from(risk) }]));
     }
+    if let Some(line) = approval.risk_override_line() {
+        lines.push(Line::from(vec![label("Override"), Span::from(line).fg(c(YELLOW))]));
+    }
     let checks = approval.checks();
     if !checks.is_empty() {
         let mut spans = vec![label("Checks")];
@@ -810,6 +821,9 @@ fn gate_facts(approval: &Approval) -> Vec<Line<'static>> {
             spans.push(Span::from(format!("{name} {verdict}")).fg(c(color)));
         }
         lines.push(Line::from(spans));
+    }
+    if let Some(rule) = approval.rule_line() {
+        lines.push(Line::from(vec![label("Rule"), Span::from(rule).fg(c(SUBTEXT0))]));
     }
     if let Some(approvals) = approval.approvals_line() {
         lines.push(Line::from(vec![label("Approvals"), Span::from(approvals)]));
@@ -1581,6 +1595,17 @@ mod tests {
     }
 
     #[test]
+    fn the_gate_shows_its_approval_rule_and_a_risk_a_person_set() {
+        let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","risk":{"level":"high","machine":"high"},"overrides":{"risk":{"level":"low","reason":"behind a flag","applied":false}},"approvalRule":{"needed":2,"outside":"required","text":"Needs 2 approvers: at least one must be someone not among the code map's owners (@ana). This is an attestation."}}"#, "awaiting_approval");
+        let text = render(120, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(text.contains("Rule       Needs 2 approvers") && text.contains("attestation"), "{text}");
+        assert!(text.contains("Override   you set low, below the machine's high"), "{text}");
+        let (task, detail) = at_gate(r#"{"brief":"b","lane":"full","risk":{"level":"low"}}"#, "awaiting_approval");
+        let text = render(120, 50, &task, Some(&detail), Section::Plan, 0).join("\n");
+        assert!(!text.contains("Rule ") && !text.contains("Override"), "{text}");
+    }
+
+    #[test]
     fn a_flagged_check_is_highlighted_and_a_plan_with_no_checks_shows_none() {
         let (task, detail) = at_gate(PLAN_GATE, "awaiting_approval");
         let lines = plan_lines(&task, Some(&detail), 0);
@@ -1663,7 +1688,8 @@ mod tests {
         };
         assert!(strip(r#"{"brief":"b","risk":{"level":"low"}}"#).contains("a approve · r send back · e edit the plan"));
         assert!(strip(r#"{"brief":"b","risk":{"level":"high"}}"#).contains("a approve (first of two approvers; set LUNA_APPROVER)"));
-        assert!(strip(PLAN_GATE).contains("a approve (second of two approvers)"), "{}", strip(PLAN_GATE));
+        assert!(strip(PLAN_GATE).contains("a approve (last of two approvers)"), "{}", strip(PLAN_GATE));
+        assert!(strip(r#"{"brief":"b","risk":{"level":"high"},"approvalRule":{"needed":3,"text":"t"},"approvers":["ana"]}"#).contains("a approve (next of 3 approvers)"));
         assert!(strip(r#"{"outcome":"archive","archiveReason":"duplicate"}"#).contains("a archive the ticket · r send back"));
         assert!(strip(r#"{"outcome":"conversation","reply":"x"}"#).contains("a post the reply and close · r send back"));
     }

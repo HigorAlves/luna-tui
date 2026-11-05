@@ -7,7 +7,7 @@ import { join } from "node:path";
 
 import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 
-const PLAN_KEYS = ["brief", "criteria", "assumptions", "slices", "rollback", "cases"] as const;
+const PLAN_KEYS = ["brief", "criteria", "assumptions", "slices", "rollback", "cases", "risk", "map"] as const;
 
 type Plan = Partial<Record<(typeof PLAN_KEYS)[number], unknown>>;
 type Revision = { at?: unknown; before?: Record<string, unknown>; after?: Record<string, unknown> };
@@ -24,6 +24,8 @@ export interface GroundTruth {
   revisions: unknown[];
   verdicts: unknown;
   risk: unknown;
+  /** A person's override of the risk level or the code map, each with its reason; the risk override says whether it applied (a lower one is kept, not applied). */
+  overrides: unknown;
   approvers: string[];
   decidedAt: string | null;
 }
@@ -51,6 +53,7 @@ export function groundTruthOf(task: TaskRow, approval: ApprovalRow): GroundTruth
     revisions,
     verdicts: requested.verdicts ?? null,
     risk: requested.risk ?? null,
+    overrides: requested.overrides ?? null,
     approvers: named,
     decidedAt: approval.decidedAt ? approval.decidedAt.toISOString() : null,
   };

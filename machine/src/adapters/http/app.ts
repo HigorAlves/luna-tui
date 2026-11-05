@@ -56,7 +56,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, OutsideApproverRequiredError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RejectNotAllowedError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -180,6 +180,8 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof NoCasesToEditError) return fail(c, 409, "no_cases", error.message);
     if (error instanceof ApproverRequiredError) return fail(c, 400, "approver_required", error.message);
     if (error instanceof SameApproverError) return fail(c, 409, "same_approver", error.message);
+    if (error instanceof OutsideApproverRequiredError) return fail(c, 409, "outside_approver_required", error.message);
+    if (error instanceof RejectNotAllowedError) return fail(c, 409, "reject_not_allowed", error.message);
     if (error instanceof StageStartedError) return fail(c, 409, "stage_started", error.message);
     if (error instanceof SourceImmutableError) return fail(c, 400, "source_immutable", error.message);
     if (error instanceof RepoPathLockedError) return fail(c, 409, "has_worktree", error.message);
@@ -401,9 +403,9 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   /** Approves or sends back whatever the task is waiting on, including an escalation. */
   app.post("/tasks/:id/decision", async (c) => {
     const id = taskId(c);
-    const { decision, reason, applyRules, approver } = await body(c, DecisionInput);
+    const { decision, reason, comment, applyRules, approver } = await body(c, DecisionInput);
     const response = applyRules === undefined ? undefined : { applyRules };
-    return c.json(await serialize(await pipeline.decide(id, decision, reason ?? undefined, response, approver ? { approver } : {})));
+    return c.json(await serialize(await pipeline.decide(id, decision, reason ?? comment ?? undefined, response, approver ? { approver } : {})));
   });
 
   /** Ends the task as archived with a reason (duplicate, sla_expired, rejected, not_for_agent, pr_closed). */

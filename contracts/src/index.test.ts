@@ -54,6 +54,29 @@ describe("edit plan input", () => {
   it("rejects an empty edit", () => {
     expect(EditPlanInput.safeParse({}).success).toBe(false);
   });
+  it("accepts steps, a rollback, a risk level with its reason and a code map with its reason", () => {
+    const edit = {
+      steps: [{ description: "Cap a coupon", files: ["src/cart.ts"], done_when: ["a second use is rejected"], est_loc: 30 }],
+      rollback: "revert the commit",
+      risk: { level: "high", reason: "touches billing" },
+      map: { components: ["cart"], files: [{ path: "src/cart.ts", role: "change" }], entry_points: [], owners: ["@marta"], reason: "ownership moved" },
+    };
+    expect(EditPlanInput.parse(edit)).toEqual(edit);
+  });
+  it("bounds what a person types: a level from the enum, a reason that is there and short, steps and files capped, roles from the enum", () => {
+    const risk = (r: unknown) => EditPlanInput.safeParse({ risk: r }).success;
+    expect(risk({ level: "huge", reason: "r" })).toBe(false);
+    expect(risk({ level: "high" })).toBe(false);
+    expect(risk({ level: "high", reason: "" })).toBe(false);
+    expect(risk({ level: "high", reason: "x".repeat(501) })).toBe(false);
+    expect(EditPlanInput.safeParse({ rollback: "x".repeat(4001) }).success).toBe(false);
+    const step = { description: "d", files: ["a"], done_when: ["x"], est_loc: 1 };
+    expect(EditPlanInput.safeParse({ steps: Array.from({ length: 31 }, () => step) }).success).toBe(false);
+    expect(EditPlanInput.safeParse({ steps: [{ ...step, files: Array.from({ length: 51 }, () => "a") }] }).success).toBe(false);
+    expect(EditPlanInput.safeParse({ steps: [{ ...step, description: "x".repeat(501) }] }).success).toBe(false);
+    expect(EditPlanInput.safeParse({ map: { files: [{ path: "a", role: "delete" }], reason: "r" } }).success).toBe(false);
+    expect(EditPlanInput.safeParse({ map: { files: [], reason: "" } }).success).toBe(false);
+  });
 });
 
 describe("edit cases input", () => {
@@ -64,6 +87,19 @@ describe("edit cases input", () => {
   it("rejects a case missing its approach, and a body with no cases", () => {
     expect(EditCasesInput.safeParse({ cases: [{ title: "t", criterion: "c" }] }).success).toBe(false);
     expect(EditCasesInput.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("decision input: approve, request changes or reject, each with an optional comment", () => {
+  it("takes the three decisions and the older sent_back", () => {
+    for (const decision of ["approved", "changes_requested", "rejected", "sent_back"]) expect(DecisionInput.safeParse({ decision }).success).toBe(true);
+    expect(DecisionInput.safeParse({ decision: "maybe" }).success).toBe(false);
+  });
+  it("reads the comment as the reason, from either field, bounded", () => {
+    expect(DecisionInput.parse({ decision: "rejected", comment: "not now" })).toEqual({ decision: "rejected", comment: "not now" });
+    expect(DecisionInput.safeParse({ decision: "rejected", comment: "x".repeat(2001) }).success).toBe(false);
+    expect(DecisionInput.safeParse({ decision: "rejected", reason: "x".repeat(2001) }).success).toBe(false);
+    expect(DecisionInput.safeParse({ decision: "rejected", reason: null, comment: null }).success).toBe(true);
   });
 });
 

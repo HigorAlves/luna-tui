@@ -563,7 +563,36 @@ impl Approval {
             .iter()
             .filter_map(|(label, key)| Some(format!("{label} {}", score_text(&risk["scores"][*key])?)))
             .collect();
-        Some(if scores.is_empty() { level.to_string() } else { format!("{level} ({})", scores.join(" · ")) })
+        let mut head = level.to_string();
+        if let Some(product) = risk["product"].as_f64() {
+            head.push_str(&format!(" · product {}", product.round() as i64));
+        }
+        if let Some(complexity) = risk["complexity"].as_str() {
+            head.push_str(&format!(" · complexity {complexity}"));
+        }
+        Some(if scores.is_empty() { head } else { format!("{head} ({})", scores.join(" · ")) })
+    }
+
+    /// What a person set the risk to at the gate, with the reason and whether it applied (a lower level is kept, not applied).
+    pub fn risk_override_line(&self) -> Option<String> {
+        let o = &self.requested["overrides"]["risk"];
+        let level = o["level"].as_str()?;
+        let reason = o["reason"].as_str().unwrap_or("no reason");
+        if o["applied"].as_bool() == Some(true) {
+            return Some(format!("you set {level}: applied ({reason})"));
+        }
+        let machine = self.requested["risk"]["machine"].as_str().or_else(|| self.requested["risk"]["level"].as_str()).unwrap_or("its");
+        Some(format!("you set {level}, below the machine's {machine}: kept as ground truth ({reason}); approvers and Ship read {machine}"))
+    }
+
+    /// How many names the plan needs and who may be among them, in the gate's words (an attestation); absent on a gate from before the rule.
+    pub fn rule_line(&self) -> Option<String> {
+        self.requested["approvalRule"]["text"].as_str().filter(|t| !t.trim().is_empty()).map(String::from)
+    }
+
+    /// Names the plan needs: its rule's, else two for a High-risk plan and one otherwise.
+    pub(crate) fn names_needed(&self) -> u64 {
+        self.requested["approvalRule"]["needed"].as_u64().unwrap_or(if self.requested["risk"]["level"].as_str() == Some("high") { 2 } else { 1 })
     }
 
     /// The plan stage's checks in the order they ran: coverage, plan, risk, each `proceed`, `flag`, `ask` or `skipped`.
@@ -594,8 +623,9 @@ impl Approval {
         if names.is_empty() {
             return None;
         }
-        if self.requested["risk"]["level"].as_str() == Some("high") {
-            return Some(format!("{} of 2 ({})", names.len(), names.join(", ")));
+        let needed = self.names_needed();
+        if needed > 1 {
+            return Some(format!("{} of {needed} ({})", names.len(), names.join(", ")));
         }
         Some(format!("approved by {}", names.join(", ")))
     }
@@ -931,6 +961,7 @@ pub fn plan_history(detail: &TaskDetail) -> Vec<String> {
             let what = match (decision.as_str(), &approval.reason) {
                 ("sent_back", Some(reason)) => format!("sent back · {reason}"),
                 ("sent_back", None) => "sent back".to_string(),
+                ("rejected", Some(reason)) => format!("rejected · {reason}"),
                 (other, _) => other.replace('_', " "),
             };
             lines.push(format!("{}  {what}", clock(at)));
@@ -2942,6 +2973,36 @@ mod detail_tests {
         assert_eq!(full.outcome_line().as_deref(), Some("plan"));
         assert_eq!(full.risk_line().as_deref(), Some("low"));
         assert_eq!(full.approvals_line(), None, "no one has approved a low-risk plan yet, and it needs one name only");
+    }
+
+    #[test]
+    fn the_gate_says_how_many_names_it_needs_from_its_rule_and_the_rule_in_its_own_words() {
+        let g = gate(
+            r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high"},"approvers":["ana"],
+              "approvalRule":{"needed":3,"outside":"required","text":"Needs 3 approvers: at least one must be someone not among the code map's owners (@ana). This is an attestation: the machine takes the names as given and does not check them."}}}"#,
+        );
+        assert_eq!(g.approvals_line().as_deref(), Some("1 of 3 (ana)"));
+        assert!(g.rule_line().unwrap().contains("attestation"));
+        // A gate from before the rule: high needs two, anything else one, and there is no rule text.
+        let old = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high"},"approvers":["ana"]}}"#);
+        assert_eq!((old.approvals_line().as_deref(), old.rule_line()), (Some("1 of 2 (ana)"), None));
+        let medium = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"medium"},"approvalRule":{"needed":1,"outside":"off","text":"Needs 1 approver."},"approvers":["ana"]}}"#);
+        assert_eq!(medium.approvals_line().as_deref(), Some("approved by ana"));
+    }
+
+    #[test]
+    fn a_risk_a_person_set_is_shown_with_its_reason_and_whether_it_applied() {
+        let raised = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high","machine":"medium"},"overrides":{"risk":{"level":"high","reason":"touches billing","applied":true}}}}"#);
+        assert_eq!(raised.risk_override_line().as_deref(), Some("you set high: applied (touches billing)"));
+        let lowered = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"high","machine":"high"},"overrides":{"risk":{"level":"low","reason":"behind a flag","applied":false}}}}"#);
+        assert_eq!(lowered.risk_override_line().as_deref(), Some("you set low, below the machine's high: kept as ground truth (behind a flag); approvers and Ship read high"));
+        assert_eq!(gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"low"}}}"#).risk_override_line(), None);
+    }
+
+    #[test]
+    fn the_risk_line_adds_the_product_and_the_complexity_when_the_plan_stage_gave_them() {
+        let g = gate(r#"{"kind":"awaiting_approval","decision":null,"requested":{"risk":{"level":"medium","product":9,"complexity":"L","scores":{"blast_radius":2,"reversibility":2,"data_sensitivity":0}}}}"#);
+        assert_eq!(g.risk_line().as_deref(), Some("medium · product 9 · complexity L (blast 2 · reversibility 2 · data 0)"));
     }
 
     #[test]

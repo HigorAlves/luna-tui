@@ -80,6 +80,21 @@ export const EditPlanInput = z
     brief: z.string().optional(),
     criteria: z.array(z.string()).optional(),
     assumptions: z.array(z.string()).optional(),
+    /** The plan's steps; the slices Build reads follow them. */
+    steps: z.array(z.object({ description: z.string().min(1).max(500), files: z.array(z.string().min(1).max(300)).max(50), done_when: z.array(z.string().max(500)).max(20), est_loc: z.number().int().min(0).max(100_000) })).max(30).optional(),
+    rollback: z.string().max(4000).optional(),
+    /** The plan's risk level. The machine's own level is a floor: a higher one applies at once, a lower one is kept with its reason and shown. */
+    risk: z.object({ level: z.enum(["low", "medium", "high"]), reason: z.string().min(1).max(500) }).optional(),
+    /** The code map, corrected; kept with its reason as ground truth. */
+    map: z
+      .object({
+        components: z.array(z.string().max(200)).max(50).optional(),
+        files: z.array(z.object({ path: z.string().min(1).max(300), role: z.enum(["change", "read", "test"]) })).max(200),
+        entry_points: z.array(z.string().max(300)).max(50).optional(),
+        owners: z.array(z.string().max(200)).max(50).optional(),
+        reason: z.string().min(1).max(500),
+      })
+      .optional(),
   })
   .refine((input) => Object.keys(input).length > 0, { message: "give at least one field to edit" });
 export type EditPlanInput = z.infer<typeof EditPlanInput>;
@@ -87,8 +102,8 @@ export type EditPlanInput = z.infer<typeof EditPlanInput>;
 /** One plan edit, kept on the approval's `requested.revisions`: only the fields that changed. */
 export interface PlanRevision {
   at: string;
-  before: EditPlanInput;
-  after: EditPlanInput;
+  before: Partial<EditPlanInput>;
+  after: Partial<EditPlanInput>;
 }
 
 /** `PATCH /tasks/:id/record`: a person's correction of the Triage Record while the card waits at a gate. Enum values only, so nothing a
@@ -135,9 +150,12 @@ export const ArchiveInput = z.object({ reason: ArchiveReason });
 export type ArchiveInput = z.infer<typeof ArchiveInput>;
 
 export const DecisionInput = z.object({
-  decision: z.enum(["approved", "sent_back"]),
+  /** `changes_requested` is `sent_back` under its diagram name (both are kept); `rejected` ends the card and is the plan gate's alone. */
+  decision: z.enum(["approved", "changes_requested", "rejected", "sent_back"]),
   // Clients may send `null` for "no reason" rather than omitting the field.
-  reason: z.string().nullable().optional(),
+  reason: z.string().max(2000).nullable().optional(),
+  /** The same thing under the diagram's word: a comment with the decision. `reason` wins when both are given. */
+  comment: z.string().max(2000).nullable().optional(),
   /** At the memory review gate: false approves without writing the proposed rules. */
   applyRules: z.boolean().optional(),
   /** Who is deciding, by name. A plan of High risk needs two distinct names; any decision keeps its own. */
@@ -293,7 +311,7 @@ export interface Approval {
   id: string;
   kind: TaskState;
   requested: Record<string, unknown>;
-  decision: "approved" | "sent_back" | "answered" | null;
+  decision: "approved" | "sent_back" | "rejected" | "answered" | null;
   reason: string | null;
   response: Record<string, unknown> | null;
   createdAt: string;
