@@ -195,6 +195,44 @@ describe("planStage", () => {
     expect(result.detail).not.toHaveProperty("laneNote");
   });
 
+  it("stores the v2.2 Plan on the gate beside today's keys: ids by position, out of scope, migration, flags, a version", async () => {
+    const steps = [{ title: "guard j", description: "guard j", est_loc: 12, files: ["board/src/keys.rs", "board/src/keys_new.rs"], new_files: ["board/src/keys_new.rs"], done_when: ["no panic", "stays selected"], touchpoints: ["board/src/keys.rs", "board/src/keys_new.rs"], acceptance: ["no panic", "stays selected"] }];
+    const { run } = setup({ plan: [planned({ steps, outOfScope: ["the help text"], migration: "none", flags: ["guard_j"], slices: [{ title: "guard j", est_loc: 12, touchpoints: ["board/src/keys.rs", "board/src/keys_new.rs"], acceptance: ["no panic", "stays selected"] }] })] });
+    const result = await run(context());
+    expect(result.detail).toMatchObject({
+      brief: "Guard the empty list", criteria: ["no panic", "stays selected"], rollback: "revert the commit",
+      slices: [{ title: "guard j", touchpoints: ["board/src/keys.rs", "board/src/keys_new.rs"] }],
+      plan: {
+        goal: "Guard the empty list",
+        steps: [{ id: "P1", description: "guard j", files: ["board/src/keys.rs", "board/src/keys_new.rs"], new_files: ["board/src/keys_new.rs"], done_when: ["no panic", "stays selected"] }],
+        acceptance_criteria: [{ id: "C1", text: "no panic" }, { id: "C2", text: "stays selected" }],
+        out_of_scope: ["the help text"], assumptions: ["board only"], rollback: "revert the commit", migration: "none", flags: ["guard_j"], version: 1,
+      },
+    });
+  });
+
+  it("builds the Plan from a v1 planner answer (slices only): steps from the slices, no migration or flags, version 1", async () => {
+    const result = await setup().run(context());
+    expect(result.detail?.plan).toMatchObject({ steps: [{ id: "P1", title: "guard j", files: ["board/src/keys.rs"], done_when: ["no panic", "stays selected"] }], out_of_scope: [], version: 1 });
+    expect(result.detail?.plan).not.toHaveProperty("migration");
+    expect(result.detail?.plan).not.toHaveProperty("flags");
+  });
+
+  it("raises the Plan's version with every planner re-run", async () => {
+    const { run } = setup({ answers: { plan_check: [bad, bad, good.plan_check] } });
+    const result = await run(context());
+    expect(result.detail).toMatchObject({ rounds: { plan: 3 }, plan: { version: 3 } });
+  });
+
+  it("reads a risk_score answer without the complexity question: the level comes from the three scores and the complexity is left out", async () => {
+    const { complexity: _omitted, ...old } = good.risk_score;
+    const { run } = setup({ answers: { risk_score: [{ ...old, blast_radius: { score: 2, confidence: 0.9 }, reversibility: { score: 2, confidence: 0.9 } }] } });
+    const result = await run(context());
+    expect(result.detail).toMatchObject({ risk: { level: "medium", product: 9 }, verdicts: { risk: "proceed" } });
+    expect((result.detail?.risk as Record<string, unknown>).complexity).toBeUndefined();
+    expect(result.detail?.flagged).toEqual([]);
+  });
+
   it("runs each sub-run under a derived run id, not resumable and not pinned to the stage's engine", async () => {
     const { run, calls } = setup();
     await run(context());

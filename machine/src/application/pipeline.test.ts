@@ -791,6 +791,31 @@ describe("editing the plan before approving", () => {
     expect(approval?.requested).toMatchObject({ brief: "new brief", criteria: ["c1", "c2"], assumptions: ["a1"], slices });
   });
 
+  it("keeps the v2.2 Plan in step with an edit: the version rises, the goal, criteria (their ids kept) and assumptions follow, nothing else moves", async () => {
+    const plan = { goal: "old brief", steps: [{ id: "P1", title: "s", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }], acceptance_criteria: [{ id: "C1", text: "c1" }, { id: "C2", text: "c2" }], out_of_scope: ["x"], assumptions: ["a1"], rollback: "revert", version: 2 };
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "old brief", criteria: ["c1", "c2"], assumptions: ["a1"], plan } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+
+    await pipeline.editPlan(task.id, { brief: "new brief", criteria: ["c2", "c3"] });
+    let approval = (await pipeline.approvals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
+    expect(approval?.requested.plan).toEqual({ ...plan, goal: "new brief", acceptance_criteria: [{ id: "C2", text: "c2" }, { id: "C3", text: "c3" }], version: 3 });
+    // An edit that changes nothing is no revision.
+    await pipeline.editPlan(task.id, { brief: "new brief" });
+    approval = (await pipeline.approvals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
+    expect((approval?.requested.plan as { version: number }).version).toBe(3);
+  });
+
+  it("edits a gate written before the v2.2 Plan (no `plan` key) as it always did", async () => {
+    stubs.plan("test_design", { outcome: "pass", detail: { brief: "old", criteria: ["c1"], assumptions: [] } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    await pipeline.editPlan(task.id, { brief: "new" });
+    const approval = (await pipeline.approvals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
+    expect(approval?.requested).toMatchObject({ brief: "new" });
+    expect(approval?.requested).not.toHaveProperty("plan");
+  });
+
   it("is what gets adopted once you approve", async () => {
     stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", criteria: ["c1"], assumptions: [] } });
     const task = await newTask();

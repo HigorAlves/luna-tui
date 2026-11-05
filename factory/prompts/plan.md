@@ -50,8 +50,11 @@ When it is fresh, follow the `code-discovery` skill: query it with `graphify <ve
      - `brief`: what to change, where, how to check it.
      - `criteria[]`: every goal in the record and every ticket criterion, each testable. It replaces the ticket's list.
      - `assumptions[]`: each gap you filled with a default.
-     - `slices[]`: ordered, each `{title, est_loc, touchpoints[], acceptance[]}`. Each slice is a vertical, independently committable change; `touchpoints` are repo-relative paths; every criterion appears in some slice's `acceptance`.
+     - `steps[]`: ordered, each `{description, files[], done_when[], est_loc}`. Each step is a vertical, independently committable change. `files` are repo-relative paths; a file the step creates is written `{path, new: true}` (the plan check holds every other file to the code map). `done_when` lines can fail, and every criterion is named by some step's `done_when`, in its own words. Do not write `slices`: the machine derives them from the steps.
+     - `outOfScope[]`: what a reader might expect that this change does not do.
      - `rollback`: a paragraph a person can follow to undo the change, including what a revert does not undo.
+     - `migration`: only when the change moves data or a schema: how, and in what order. `flags[]`: only when the change ships behind a flag: its names. A high risk plan names a migration or a flag strategy, or says why neither applies in `assumptions`.
+     - The machine gives every step and criterion its id; do not number them.
    - `kind: "questions"`: only when no reasonable default exists. At most 3 items `{question, recommended}`; `recommended` is mandatory.
 3. Earlier answers in the decisions above are binding. Never re-ask them. `mcp__luna__decision_get` returns a settled decision by key.
 

@@ -4,6 +4,18 @@ import { z } from "zod";
 
 import type { Slice } from "./stage.ts";
 
+/** Ids kept across an edit: a text that was in the list keeps its id, a new text takes the next free `C<n>`. */
+export function reviseCriteria(previous: readonly Criterion[], texts: readonly string[]): Criterion[] {
+  const taken = new Set<string>();
+  const kept = texts.map((text) => {
+    const same = previous.find((c) => c.text === text && !taken.has(c.id));
+    if (same) taken.add(same.id);
+    return same ?? null;
+  });
+  let next = previous.reduce((max, c) => Math.max(max, Number(/^C(\d+)$/.exec(c.id)?.[1] ?? 0)), 0);
+  return texts.map((text, i) => kept[i] ?? { id: `C${++next}`, text });
+}
+
 /** One acceptance criterion with a stable id (`C1`...), the handle scenarios refer to. */
 export const Criterion = z.object({ id: z.string(), text: z.string() });
 export type Criterion = z.infer<typeof Criterion>;
@@ -68,9 +80,32 @@ export const PlanStep = z.object({
   id: z.string().optional(),
   description: z.string().optional(),
   files: z.array(z.string()).optional(),
+  /** The files of `files` the step creates: planned, but absent from the code map. */
+  new_files: z.array(z.string()).optional(),
   done_when: z.array(z.string()).optional(),
 });
 export type PlanStep = z.infer<typeof PlanStep>;
+
+/** A step as the planner writes it: a description, its files (a path, or a path declared `new`), what makes it done and its size. */
+export const AnswerStep = z.object({
+  description: z.string(),
+  title: z.string().optional(),
+  files: z.array(z.union([z.string(), z.object({ path: z.string(), new: z.boolean().optional() })])),
+  done_when: z.array(z.string()),
+  est_loc: z.number().int(),
+});
+export type AnswerStep = z.infer<typeof AnswerStep>;
+
+/** The planner's steps as plan steps (`files`, `new_files`, `done_when`) that also carry the slice fields (`title`, `touchpoints`, `acceptance`)
+ *  Build, the test designer and the scope check read, and as those slices. A step's files are its touchpoints; a path is listed once. Pure. */
+export function stepsOfAnswer(answer: readonly AnswerStep[]): { steps: PlanStep[]; slices: Slice[] } {
+  const steps = answer.map((a): PlanStep => {
+    const paths = [...new Set(a.files.map((f) => (typeof f === "string" ? f : f.path)))];
+    const created = [...new Set(a.files.flatMap((f) => (typeof f !== "string" && f.new === true ? [f.path] : [])))];
+    return { title: a.title ?? a.description, description: a.description, est_loc: a.est_loc, files: paths, new_files: created, done_when: a.done_when, touchpoints: paths, acceptance: a.done_when };
+  });
+  return { steps, slices: steps.map((s) => ({ title: s.title, est_loc: s.est_loc, touchpoints: s.touchpoints, acceptance: s.acceptance })) };
+}
 
 /** A slice as a plan step: `P1`... by position, `files` from `touchpoints`, `done_when` from `acceptance`. */
 export function stepOf(slice: Slice | PlanStep, index: number): PlanStep {
@@ -108,6 +143,8 @@ export function planOf(parts: {
   outOfScope?: readonly string[];
   migration?: string;
   flags?: readonly string[];
+  /** Rises on every revision (a planner re-run, a person's edit); 2 when not given. */
+  version?: number;
 }): Plan {
   const plan: Plan = {
     goal: parts.brief ?? "",
@@ -116,7 +153,7 @@ export function planOf(parts: {
     out_of_scope: [...(parts.outOfScope ?? [])],
     assumptions: [...(parts.assumptions ?? [])],
     rollback: parts.rollback ?? "",
-    version: 2,
+    version: parts.version ?? 2,
   };
   if (parts.migration !== undefined) plan.migration = parts.migration;
   if (parts.flags !== undefined) plan.flags = [...parts.flags];

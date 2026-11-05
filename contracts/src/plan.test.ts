@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { PlanAnswer } from "./packs.ts";
-import { Plan, PlanStep, Scenario, criteriaOf, planOf, scenarioOf, stepOf } from "./plan.ts";
+import { Plan, PlanStep, Scenario, criteriaOf, planOf, reviseCriteria, scenarioOf, stepOf, stepsOfAnswer } from "./plan.ts";
 import { Slice, TestCase } from "./stage.ts";
 
 describe("the v2.2 plan contracts", () => {
@@ -78,5 +78,54 @@ describe("the v2.2 plan contracts", () => {
     const plan = planOf({ brief: "g", migration: "add column", flags: ["coupons_v2"], outOfScope: ["refunds"] });
     expect(plan).toMatchObject({ migration: "add column", flags: ["coupons_v2"], out_of_scope: ["refunds"] });
     expect(PlanAnswer.safeParse({ kind: "done", summary: "s", outOfScope: ["x"], migration: "m", flags: ["f"] }).success).toBe(true);
+  });
+
+  describe("the planner's v2.2 answer", () => {
+    const answer = {
+      kind: "done",
+      summary: "s",
+      brief: "Cap coupons",
+      criteria: ["One use per cart"],
+      steps: [
+        { description: "Cap a coupon at one use", files: ["src/cart.ts", { path: "src/coupon-cap.ts", new: true }, { path: "src/cart.ts", new: false }], done_when: ["a second use is rejected", "One use per cart"], est_loc: 40 },
+        { description: "Show the cap in the UI", files: [{ path: "src/ui/cart.tsx" }], done_when: ["the UI says so"], est_loc: 20, title: "UI" },
+      ],
+      outOfScope: ["refunds"],
+      rollback: "revert the commit",
+      migration: "none",
+      flags: ["coupons_cap"],
+    };
+
+    it("accepts steps with a description, files (a path, or a path declared new), done_when and est_loc, beside everything a v1 answer had", () => {
+      expect(PlanAnswer.safeParse(answer).success).toBe(true);
+      expect(PlanAnswer.safeParse({ ...answer, steps: [{ description: "d", files: [], done_when: [], est_loc: -1.5 }] }).success).toBe(false);
+      // A v1 answer, slices only, still parses.
+      expect(PlanAnswer.safeParse({ kind: "done", summary: "s", slices: [{ title: "t", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }] }).success).toBe(true);
+    });
+
+    it("reads each step as a plan step and as the slice Build and the scope check read: files are the touchpoints, a new file is declared once", () => {
+      const { steps, slices } = stepsOfAnswer(PlanAnswer.parse(answer).steps!);
+      expect(steps[0]).toEqual({ title: "Cap a coupon at one use", description: "Cap a coupon at one use", est_loc: 40, files: ["src/cart.ts", "src/coupon-cap.ts"], new_files: ["src/coupon-cap.ts"], done_when: ["a second use is rejected", "One use per cart"], touchpoints: ["src/cart.ts", "src/coupon-cap.ts"], acceptance: ["a second use is rejected", "One use per cart"] });
+      expect(steps[1]).toMatchObject({ title: "UI", description: "Show the cap in the UI", files: ["src/ui/cart.tsx"], new_files: [] });
+      expect(slices[0]).toEqual({ title: "Cap a coupon at one use", est_loc: 40, touchpoints: ["src/cart.ts", "src/coupon-cap.ts"], acceptance: ["a second use is rejected", "One use per cart"] });
+      expect(Slice.safeParse(slices[1]).success).toBe(true);
+      expect(PlanStep.safeParse(steps[0]).success).toBe(true);
+    });
+
+    it("builds the Plan with ids by position, the version it is given, and migration and flags", () => {
+      const parsed = PlanAnswer.parse(answer);
+      const { steps } = stepsOfAnswer(parsed.steps!);
+      const plan = planOf({ brief: parsed.brief, criteria: parsed.criteria, slices: steps, rollback: parsed.rollback, outOfScope: parsed.outOfScope, migration: parsed.migration, flags: parsed.flags, version: 3 });
+      expect(plan).toMatchObject({ goal: "Cap coupons", version: 3, out_of_scope: ["refunds"], migration: "none", flags: ["coupons_cap"], acceptance_criteria: [{ id: "C1", text: "One use per cart" }] });
+      expect(plan.steps.map((s) => s.id)).toEqual(["P1", "P2"]);
+      expect(plan.steps[0]!.new_files).toEqual(["src/coupon-cap.ts"]);
+      expect(planOf({ brief: "g" }).version).toBe(2);
+    });
+
+    it("keeps a criterion's id when a person edits the list: the same text keeps it, a new text takes the next free one", () => {
+      const before = criteriaOf(["a", "b", "c"]);
+      expect(reviseCriteria(before, ["c", "new", "a"])).toEqual([{ id: "C3", text: "c" }, { id: "C4", text: "new" }, { id: "C1", text: "a" }]);
+      expect(reviseCriteria([], ["x"])).toEqual([{ id: "C1", text: "x" }]);
+    });
   });
 });

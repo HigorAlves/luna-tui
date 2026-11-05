@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, RUNNING, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -217,6 +217,20 @@ const sameName = (a: string, b: string): boolean => a.normalize("NFKC").trim().t
 
 /** Stages that only poll GitHub from the host: a restart runs them again. */
 const HOST_POLLERS: ReadonlySet<TaskState> = new Set<TaskState>(["ci_watch", "shipping"]);
+
+/** The gate's v2.2 Plan after a person's edit of the brief, criteria or assumptions: those follow (criteria keep their ids), the version rises. */
+function revisePlan(current: unknown, after: Record<string, unknown>): Plan | null {
+  const parsed = Plan.safeParse(current);
+  if (!parsed.success) return null;
+  const plan = parsed.data;
+  return {
+    ...plan,
+    ...(typeof after.brief === "string" ? { goal: after.brief } : {}),
+    ...(Array.isArray(after.criteria) ? { acceptance_criteria: reviseCriteria(plan.acceptance_criteria, after.criteria.map(String)) } : {}),
+    ...(Array.isArray(after.assumptions) ? { assumptions: after.assumptions.map(String) } : {}),
+    version: plan.version + 1,
+  };
+}
 
 export class Pipeline {
   private readonly store: TaskStore;
@@ -537,9 +551,12 @@ export class Pipeline {
       if (fields.length > 0) {
         const revisions = Array.isArray(plan.requested.revisions) ? plan.requested.revisions : [];
         // A changed plan is a new plan: whoever approved the old one has not approved this one.
+        // The v2.2 Plan follows the edit and its version rises (a gate from before the Plan has none).
+        const revised = revisePlan(plan.requested.plan, after);
         await tx.updateApprovalRequested(plan, {
           ...plan.requested,
           ...after,
+          ...(revised ? { plan: revised } : {}),
           ...(Array.isArray(plan.requested.approvers) ? { approvers: [] } : {}),
           revisions: [...revisions, { at: new Date().toISOString(), before, after }],
         });

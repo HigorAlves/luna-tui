@@ -19,12 +19,14 @@ import {
   PACKS,
   type PlanContext,
   type PlanRisk,
+  type PlanStep,
   type Risk,
   type TestCase,
   type Verdict,
   applyPolicy,
   coverageGaps,
   maxRisk,
+  planOf,
   riskOf,
 } from "@hardness/contracts";
 
@@ -126,7 +128,11 @@ export function planStage(deps: PlanDeps): StageRunner {
       try {
         const answer = await deps.decide(pack, plan, task.repoPath);
         const overrides = (await deps.policies.for(task.repoPath)).decisions[pack];
-        const { overall } = applyPolicy(PACKS[pack], answer, overrides);
+        // An answer stored before a question existed, or from an engine that left an optional one out, is judged on what it has:
+        // risk_score's complexity is advice, and its absence must not cost the card its risk score.
+        const asked = PACKS[pack];
+        const questions = pack === "risk_score" && answer.complexity === undefined ? Object.fromEntries(Object.entries(asked.questions).filter(([name]) => name !== "complexity")) : asked.questions;
+        const { overall } = applyPolicy({ questions, policy: asked.policy }, answer, overrides);
         const problems = problemsOf(pack, answer, Boolean(plan.map));
         const recordId = recordIdOf(answer);
         return { verdict: overall === "proceed" && problems.length > 0 ? "flag" : overall, problems, answer, ...(recordId ? { recordId } : {}) };
@@ -186,11 +192,14 @@ export function planStage(deps: PlanDeps): StageRunner {
       planRunsOnLane = 0;
       review = undefined;
       plan = undefined;
+      extras = { outOfScope: [] };
       flagged.clear();
     };
 
     let review: string[] | undefined;
     let plan: { brief: string; criteria: string[]; assumptions: string[]; slices: PlanContext["slices"]; rollback?: string; summary?: string } | undefined;
+    /** What the v2.2 planner wrote beside the slices: the steps with their files and done-when, out of scope, migration, flags. */
+    let extras: { steps?: PlanStep[]; outOfScope: string[]; migration?: string; flags?: string[] } = { outOfScope: [] };
     let cases: TestCase[] = [];
     let gaps: string[] = [];
     let coverage: Judged = { verdict: "skipped", problems: [], answer: null };
@@ -213,6 +222,12 @@ export function planStage(deps: PlanDeps): StageRunner {
         goFull(`the fast planner asked for the full plan: ${String(d.summary ?? "the ticket is bigger than it looked")}`);
         continue;
       }
+      extras = {
+        ...(Array.isArray(d.steps) ? { steps: d.steps as PlanStep[] } : {}),
+        outOfScope: strings(d.outOfScope),
+        ...(typeof d.migration === "string" ? { migration: d.migration } : {}),
+        ...(Array.isArray(d.flags) ? { flags: strings(d.flags) } : {}),
+      };
       plan = {
         brief: typeof d.brief === "string" && d.brief ? d.brief : String(d.summary ?? ""),
         criteria: strings(d.criteria).length ? strings(d.criteria) : task.criteria,
@@ -280,6 +295,8 @@ export function planStage(deps: PlanDeps): StageRunner {
         assumptions: plan!.assumptions,
         slices: plan!.slices,
         ...(plan!.rollback !== undefined ? { rollback: plan!.rollback } : {}),
+        // The v2.2 Plan, beside the keys an open gate from before this wave carries. Its version is the planner's run count.
+        plan: planOf({ brief: plan!.brief, criteria: plan!.criteria, assumptions: plan!.assumptions, slices: extras.steps ?? plan!.slices, rollback: plan!.rollback, outOfScope: extras.outOfScope, version: planRuns, ...(extras.migration !== undefined ? { migration: extras.migration } : {}), ...(extras.flags !== undefined ? { flags: extras.flags } : {}) }),
         cases,
         risk,
         verdicts,

@@ -310,6 +310,24 @@ describe("agent stages through packs", () => {
     expect(bare.detail).not.toHaveProperty("confidence");
   });
 
+  it("reads the v2.2 plan answer: steps become the slices Build reads (files are the touchpoints) and ride along with out of scope, migration and flags", async () => {
+    const answer = {
+      kind: "done", summary: "s", brief: "b", criteria: ["c1"], assumptions: [], rollback: "revert", outOfScope: ["refunds"], migration: "add a column", flags: ["f1"],
+      steps: [{ description: "Cap a coupon", files: ["src/cart.ts", { path: "src/cap.ts", new: true }], done_when: ["c1 holds"], est_loc: 30 }],
+    };
+    const result = await runAgent(deps(fakeSandbox(output({ answer }))), { ...context("test_design"), runId: "r1-plan" }, "plan", {});
+    expect(result.detail).toMatchObject({
+      slices: [{ title: "Cap a coupon", est_loc: 30, touchpoints: ["src/cart.ts", "src/cap.ts"], acceptance: ["c1 holds"] }],
+      steps: [{ description: "Cap a coupon", files: ["src/cart.ts", "src/cap.ts"], new_files: ["src/cap.ts"], done_when: ["c1 holds"] }],
+      outOfScope: ["refunds"], migration: "add a column", flags: ["f1"],
+    });
+    // A v1 answer (slices only) has no steps, and its slices pass through.
+    const v1 = await runAgent(deps(fakeSandbox(output({ answer: { kind: "done", summary: "s", slices: [{ title: "s1", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }] } }))), { ...context("test_design"), runId: "r1-plan" }, "plan", {});
+    expect(v1.detail).toMatchObject({ slices: [{ title: "s1", touchpoints: ["a.ts"] }] });
+    expect(v1.detail).not.toHaveProperty("steps");
+    expect(v1.detail).not.toHaveProperty("migration");
+  });
+
   it("runs the plan pack in the test_design state: its own pack and limits in the input, its own container, the plan under review in context", async () => {
     const plan = { record: null, brief: "b", criteria: ["c"], assumptions: [], slices: [], round: 2, gaps: ["c"] };
     const answer = { kind: "done", summary: "s", brief: "the brief", criteria: ["c1"], assumptions: ["a1"], slices: [{ title: "s1", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }], rollback: "revert" };

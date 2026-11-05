@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { AnswerStep, type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -604,6 +604,8 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   if (pack === "plan" || pack === "plan_fast") {
     const answer = answerOf(output.answer);
     const list = (value: unknown, fallback: string[]): string[] => (Array.isArray(value) ? value.map(String) : fallback);
+    const parsedSteps = z.array(AnswerStep).safeParse(answer?.steps);
+    const planned = parsedSteps.success && parsedSteps.data.length > 0 ? stepsOfAnswer(parsedSteps.data) : null;
     return merged({
       ...mapped,
       detail: {
@@ -612,7 +614,12 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
         brief: typeof answer?.brief === "string" ? answer.brief : typeof answer?.summary === "string" ? answer.summary : output.summary,
         criteria: list(answer?.criteria, task.criteria),
         assumptions: list(answer?.assumptions, []),
-        slices: Array.isArray(answer?.slices) ? answer.slices : [],
+        // The v2.2 steps first: they become the slices Build, the designer and the scope check read; an answer with slices only keeps them.
+        slices: planned ? planned.slices : Array.isArray(answer?.slices) ? answer.slices : [],
+        ...(planned ? { steps: planned.steps } : {}),
+        ...(Array.isArray(answer?.outOfScope) ? { outOfScope: list(answer.outOfScope, []) } : {}),
+        ...(typeof answer?.migration === "string" ? { migration: answer.migration } : {}),
+        ...(Array.isArray(answer?.flags) ? { flags: list(answer.flags, []) } : {}),
         ...(typeof answer?.rollback === "string" ? { rollback: answer.rollback } : {}),
         // The fast planner refusing the lane: the plan stage plans again in full.
         ...(answer?.kind === "needs_full_plan" ? { needsFullPlan: true } : {}),

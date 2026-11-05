@@ -10,6 +10,7 @@ import { decisionEngines } from "./decision-defaults.ts";
 import { type Access, type LunaTool, NO_ACCESS, access, readOnly } from "./access.ts";
 import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
+import { AnswerStep } from "./plan.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
@@ -136,9 +137,11 @@ export const PlanAnswer = z.object({
   criteria: z.array(z.string()).optional(),
   assumptions: z.array(z.string()).optional(),
   slices: z.array(Slice).optional(),
+  /** v2.2: the steps the plan prompts ask for, in place of `slices` (an answer with only slices still parses; the machine reads steps first). */
+  steps: z.array(AnswerStep).optional(),
   /** A paragraph a person can follow to undo the change. */
   rollback: z.string().optional(),
-  /** v2.2, optional until the plan prompts ask for them (wave 9). */
+  /** v2.2, asked for by the plan prompts. */
   outOfScope: z.array(z.string()).optional(),
   migration: z.string().optional(),
   flags: z.array(z.string()).optional(),
