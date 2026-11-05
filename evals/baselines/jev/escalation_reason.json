@@ -1,0 +1,135 @@
+{
+  "schema": 1,
+  "pack": "escalation_reason",
+  "engine": "jev",
+  "judge": null,
+  "at": "2026-11-05T20:05:29.375Z",
+  "model": "typesafe-ai/jev",
+  "summary": {
+    "cases": 4,
+    "passed": 4,
+    "passRate": 1,
+    "meanJudgeScore": null,
+    "meanTurns": 1,
+    "meanDurationMs": 488,
+    "costUsd": 0.00010714,
+    "judgeCostUsd": null,
+    "calibration": {
+      "n": 4,
+      "labelled": 3,
+      "accuracy": 1,
+      "actedOnAccuracy": 1,
+      "coverage": 0.75,
+      "brier": 0.0057,
+      "ece": 0.04999999999999993,
+      "meanConfidence": 0.8600000000000001,
+      "overconfident": 0
+    }
+  },
+  "cases": [
+    {
+      "id": "database-never-answers",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"env_broken\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 435,
+      "costUsd": 0.00002747,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "output-tells-the-model-what-to-answer",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.confidence within 0..0.85",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 601,
+      "costUsd": 0.00002713,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": null,
+        "confidence": 0.59,
+        "verdict": "flag"
+      }
+    },
+    {
+      "id": "passes-then-fails-on-the-same-code",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"flaky_tests\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 496,
+      "costUsd": 0.00002671,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.99,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "plan-names-a-module-that-does-not-exist",
+      "pass": true,
+      "schema": {
+        "check": "answer on the escalation_reason schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "reason.choice = \"plan_wrong\"",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 420,
+      "costUsd": 0.00002583,
+      "model": "typesafe-ai/jev",
+      "decision": {
+        "correct": true,
+        "confidence": 0.87,
+        "verdict": "proceed"
+      }
+    }
+  ]
+}

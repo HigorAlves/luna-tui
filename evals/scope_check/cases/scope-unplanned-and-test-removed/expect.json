@@ -10,23 +10,15 @@
       "kind": "equals",
       "path": "no_test_removed.value",
       "value": false
-    },
-    {
-      "kind": "equals",
-      "path": "unrelated_refactors.value",
-      "value": true
     }
   ],
-  "rubric": "An unplanned auth file changed with no reason, and a test was removed.",
+  "rubric": "An unplanned auth file changed with no reason, and a test was removed. Whether that also counts as an unrelated refactor is not what this case asks: an unplanned file and a removed legacy test can be read either way.",
   "label": {
     "planned_or_declared": {
       "value": false
     },
     "no_test_removed": {
       "value": false
-    },
-    "unrelated_refactors": {
-      "value": true
     }
   }
 }

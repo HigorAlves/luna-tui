@@ -4,7 +4,7 @@ import { DECISION_ALLOWED, DECISION_DEFAULTS, DecisionDefault, DecisionDefaults,
 
 const allDecisionPacks = Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => p.id);
 /** Decision packs the host has not measured yet: they run on the built-in engines (`decisionEngines`) and have no entry until a scorecard writes one. */
-const UNMEASURED: string[] = ["escalation_reason"];
+const UNMEASURED: string[] = [];
 const decisionPacks = allDecisionPacks.filter((id) => !UNMEASURED.includes(id));
 
 describe("decision-defaults.json", () => {
@@ -13,7 +13,8 @@ describe("decision-defaults.json", () => {
   });
 
   it("gives a pack that has no entry yet the built-in engines", () => {
-    for (const id of UNMEASURED) {
+    // A decision pack added by a later wave has no entry until the host measures it: it runs on the built-in engines meanwhile.
+    for (const id of [...UNMEASURED, "a_pack_not_measured_yet"]) {
       expect(DECISION_DEFAULTS[id]).toBeUndefined();
       expect(decisionEngines(id).default).toBe("jev");
     }

@@ -19,6 +19,9 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | e2e_failure_cause | claude:haiku | 4 | 100% | 100% | 75% | 0.020 | 0.130 | $0.0005 | 3.3s | 2026-11-05 |
 | e2e_failure_cause | codex:luna | 4 | 100% | 100% | 75% | 0.000 | 0.010 | n/a | 2.6s | 2026-11-05 |
 | e2e_failure_cause | jev | 4 | 100% | 100% | 50% | 0.161 | 0.257 | $0.0000 | 0.5s | 2026-11-05 |
+| escalation_reason | claude:haiku | 4 | 100% | 100% | 75% | 0.028 | 0.167 | $0.0004 | 2.2s | 2026-11-05 |
+| escalation_reason | codex:luna | 4 | 100% | 100% | 100% | 0.000 | 0.017 | n/a | 2.8s | 2026-11-05 |
+| escalation_reason | jev | 4 | 100% | 100% | 75% | 0.006 | 0.050 | $0.0000 | 0.5s | 2026-11-05 |
 | event_class | claude:haiku | 4 | 100% | 100% | 50% | 0.057 | 0.180 | $0.0003 | 2.0s | 2026-11-05 |
 | event_class | codex:luna | 4 | 100% | 100% | 100% | 0.000 | 0.010 | n/a | 2.1s | 2026-11-05 |
 | event_class | jev | 4 | 67% | 100% | 75% | 0.045 | 0.147 | $0.0000 | 0.5s | 2026-11-05 |
@@ -37,15 +40,15 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | plan_check | claude:haiku | 4 | 100% | 100% | 75% | 0.037 | 0.180 | $0.0006 | 2.7s | 2026-11-05 |
 | plan_check | codex:luna | 4 | 100% | 100% | 100% | 0.002 | 0.037 | n/a | 2.2s | 2026-11-05 |
 | plan_check | jev | 4 | 100% | 100% | 50% | 0.080 | 0.268 | $0.0000 | 0.5s | 2026-11-05 |
-| red_check | claude:haiku | 4 | 100% | 100% | 50% | 0.023 | 0.142 | $0.0005 | 4.3s | 2026-11-05 |
-| red_check | codex:luna | 4 | 100% | 100% | 100% | 0.000 | 0.010 | n/a | 2.5s | 2026-11-05 |
-| red_check | jev | 4 | 67% | 50% | 50% | 0.244 | 0.298 | $0.0000 | 0.5s | 2026-11-05 |
+| red_check | claude:haiku | 6 | 100% | 100% | 67% | 0.038 | 0.181 | $0.0004 | 2.9s | 2026-11-05 |
+| red_check | codex:luna | 6 | 100% | 100% | 100% | 0.001 | 0.020 | n/a | 2.5s | 2026-11-05 |
+| red_check | jev | 6 | 100% | 100% | 33% | 0.055 | 0.228 | $0.0000 | 0.5s | 2026-11-05 |
 | risk_score | claude:haiku | 4 | 67% | 100% | 25% | 0.221 | 0.186 | $0.0004 | 3.0s | 2026-11-05 |
 | risk_score | codex:luna | 4 | 67% | 67% | 100% | 0.289 | 0.288 | n/a | 3.4s | 2026-11-05 |
 | risk_score | jev | 4 | 67% | 50% | 50% | 0.297 | 0.408 | $0.0000 | 0.5s | 2026-11-05 |
-| scope_check | claude:haiku | 4 | 100% | 100% | 75% | 0.008 | 0.091 | $0.0007 | 3.0s | 2026-11-05 |
-| scope_check | codex:luna | 4 | 100% | 100% | 100% | 0.000 | 0.008 | n/a | 3.3s | 2026-11-05 |
-| scope_check | jev | 4 | 100% | 100% | 100% | 0.015 | 0.123 | $0.0000 | 0.5s | 2026-11-05 |
+| scope_check | claude:haiku | 5 | 100% | 100% | 100% | 0.013 | 0.106 | $0.0006 | 3.2s | 2026-11-05 |
+| scope_check | codex:luna | 5 | 100% | 100% | 100% | 0.001 | 0.023 | n/a | 3.5s | 2026-11-05 |
+| scope_check | jev | 5 | 100% | 100% | 80% | 0.018 | 0.133 | $0.0000 | 0.5s | 2026-11-05 |
 | triage_signals | claude:haiku | 6 | 100% | n/a | 0% | 0.089 | 0.295 | $0.0006 | 3.8s | 2026-11-05 |
 | triage_signals | codex:luna | 6 | 75% | n/a | 17% | 0.210 | 0.095 | n/a | 4.9s | 2026-11-05 |
 | triage_signals | jev | 6 | 50% | n/a | 0% | 0.327 | 0.399 | $0.0001 | 0.6s | 2026-11-05 |
@@ -60,14 +63,15 @@ An engine qualifies with coverage >= 0.6 and n >= 4. The default is the qualifyi
 | comment_intent | jev | jev: acted-on accuracy 1.00 at coverage 1.00 (n 4) |
 | coverage_check | claude:haiku | claude:haiku: acted-on accuracy 0.67 at coverage 1.00 (n 4), a tie within 2 points settled by cost |
 | e2e_failure_cause | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
+| escalation_reason | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), Jev ahead by 0 points, short of the 5 it needs over claude:haiku |
 | event_class | jev | jev: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
 | evidence_format | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), Jev ahead by 0 points, short of the 5 it needs over claude:haiku |
 | evidence_valid | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 4), a tie within 2 points settled by cost |
 | finding_classify | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
 | fix_scope | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
 | plan_check | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), a tie within 2 points settled by cost |
-| red_check | codex:luna | codex:luna: acted-on accuracy 1.00 at coverage 1.00 (n 4) |
+| red_check | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.67 (n 6), a tie within 2 points settled by cost |
 | risk_score | codex:luna | codex:luna: acted-on accuracy 0.67 at coverage 1.00 (n 4) |
-| scope_check | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 0.75 (n 4), Jev ahead by 0 points, short of the 5 it needs over claude:haiku |
+| scope_check | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 5), Jev ahead by 0 points, short of the 5 it needs over claude:haiku |
 | triage_signals | jev | unmeasured: no engine reached coverage 0.6 on 4 cases |
 | worth_learning | claude:haiku | claude:haiku: acted-on accuracy 1.00 at coverage 1.00 (n 4), Jev ahead by 0 points, short of the 5 it needs over claude:haiku |

@@ -4,9 +4,9 @@
     {
       "kind": "between",
       "path": "right_reason.p",
-      "min": 0.25,
-      "max": 0.75
+      "min": 0.55,
+      "max": 0.95
     }
   ],
-  "rubric": "'toCsv is not a function' may be the missing behaviour (the helper does not exist yet) or a broken import: the output alone does not say, so p should stay mid-range."
+  "rubric": "'toCsv is not a function' is most likely the missing behaviour (the test comes first, so the helper may not exist yet), but it could be a broken import inside the code under test: the output alone does not say. The answer leans yes without being certain, so p sits above the middle and below certainty."
 }

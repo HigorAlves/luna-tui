@@ -3,26 +3,26 @@
   "pack": "scope_check",
   "engine": "codex:luna",
   "judge": null,
-  "at": "2026-11-05T12:08:56.178Z",
+  "at": "2026-11-05T20:09:48.213Z",
   "model": "gpt-6-luna-fast",
   "summary": {
-    "cases": 4,
-    "passed": 3,
-    "passRate": 0.75,
+    "cases": 5,
+    "passed": 4,
+    "passRate": 0.8,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 3474.25,
+    "meanDurationMs": 3974,
     "costUsd": null,
     "judgeCostUsd": null,
     "calibration": {
-      "n": 4,
-      "labelled": 3,
+      "n": 5,
+      "labelled": 4,
       "accuracy": 1,
       "actedOnAccuracy": 1,
       "coverage": 1,
-      "brier": 0.00006666666666666679,
-      "ece": 0.008000000000000007,
-      "meanConfidence": 0.9915,
+      "brier": 0.0010055555555555562,
+      "ece": 0.023333333333333317,
+      "meanConfidence": 0.9793333333333333,
       "overconfident": 0
     }
   },
@@ -60,16 +60,21 @@
           "check": "no_todo.value = true",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "unrelated_refactors.value = true",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 4046,
+      "durationMs": 5151,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.99,
+        "confidence": 0.9833333333333334,
         "verdict": "proceed"
       }
     },
@@ -86,16 +91,21 @@
           "check": "no_secret_or_pii.value = false",
           "pass": true,
           "detail": null
+        },
+        {
+          "check": "unrelated_refactors.value = true",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3301,
+      "durationMs": 4444,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.992,
+        "confidence": 0.94,
         "verdict": "proceed"
       }
     },
@@ -121,12 +131,38 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3351,
+      "durationMs": 3451,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": true,
-        "confidence": 0.994,
+        "confidence": 0.9933333333333333,
+        "verdict": "proceed"
+      }
+    },
+    {
+      "id": "scope-unrelated-refactor",
+      "pass": true,
+      "schema": {
+        "check": "answer on the scope_check schema",
+        "pass": true,
+        "detail": null
+      },
+      "checks": [
+        {
+          "check": "unrelated_refactors.value = false",
+          "pass": true,
+          "detail": null
+        }
+      ],
+      "judge": null,
+      "turns": 1,
+      "durationMs": 3296,
+      "costUsd": null,
+      "model": "gpt-6-luna-fast",
+      "decision": {
+        "correct": true,
+        "confidence": 0.9900000000000001,
         "verdict": "proceed"
       }
     },
@@ -143,16 +179,21 @@
           "check": "planned_or_declared.p within 0.25..0.75",
           "pass": false,
           "detail": "found 0.99"
+        },
+        {
+          "check": "unrelated_refactors.value = true",
+          "pass": true,
+          "detail": null
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 3199,
+      "durationMs": 3528,
       "costUsd": null,
       "model": "gpt-6-luna-fast",
       "decision": {
         "correct": null,
-        "confidence": 0.99,
+        "confidence": 0.9900000000000001,
         "verdict": "proceed"
       }
     }
