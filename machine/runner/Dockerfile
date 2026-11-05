@@ -8,7 +8,6 @@ FROM node:24-slim
 ARG GH_VERSION=2.63.2
 ARG GO_VERSION=1.25.1
 ARG RUST_VERSION=1.99.1
-ARG FACTORY_REF=unknown
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends bash git ca-certificates ripgrep curl python3 python3-pip \
@@ -75,6 +74,9 @@ COPY factory factory
 # needs no Docker daemon.
 RUN cd factory && node src/runtimes/eve/build.ts \
  && rm -rf /root/.cache
+# Declared here, not at the top: every RUN after an ARG sees it as environment, so a new commit
+# hash would otherwise rebuild the apt, pip, Go, Rust and Codex layers on every branch.
+ARG FACTORY_REF=unknown
 RUN echo "${FACTORY_REF}" > /factory-src/factory/.ref \
  && chmod -R a+rX /factory-src
 ENV LUNA_FACTORY_ROOT=/factory-src/factory
