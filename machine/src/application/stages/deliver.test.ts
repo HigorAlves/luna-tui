@@ -1,3 +1,4 @@
+import { HOST_GIT } from "../../adapters/git/worktree.ts";
 import { describe, expect, it, vi } from "vitest";
 
 import type { TaskRow } from "../../domain/task.ts";
@@ -37,7 +38,7 @@ describe("delivering", () => {
     expect(result.outcome).toBe("pass");
     expect(result.detail).toMatchObject({ prUrl: "https://github.com/acme/widgets/pull/7", prNumber: 7, draft: true, reused: false });
     expect(result.events).toMatchObject([{ kind: "pr.opened", payload: { url: "https://github.com/acme/widgets/pull/7", number: 7 } }]);
-    expect(calls).toEqual([["git", "-c", "core.hooksPath=/dev/null", "-C", "/wt", "push", "-u", "origin", "hardness/t1"]]);
+    expect(calls).toEqual([["git", ...HOST_GIT, "-C", "/wt", "push", "-u", "origin", "hardness/t1"]]);
     expect(github.openPr).toHaveBeenCalledWith("acme/widgets", expect.objectContaining({ head: "hardness/t1", draft: true, title: "feat: thing" }));
   });
 
@@ -70,7 +71,7 @@ describe("delivering", () => {
 });
 
 describe("delivering a branch that conflicts with the default branch", () => {
-  const G = ["git", "-c", "core.hooksPath=/dev/null", "-C", "/wt"];
+  const G = ["git", ...HOST_GIT, "-C", "/wt"];
   const pr = { url: "https://x/pull/3", number: 3, isDraft: true };
   const facts = (mergeable: string) => async () => ({ mergeable }) as never;
 

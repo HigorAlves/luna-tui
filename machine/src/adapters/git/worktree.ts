@@ -9,9 +9,17 @@ import { exec, execOrThrow } from "../process/exec.ts";
 
 export { slug };
 
-/** Every git command the machine runs on the host carries this: a stage can write into
- *  the shared .git dir, and a hook it left there must never execute as you. */
-export const HOST_GIT = ["-c", "core.hooksPath=/dev/null"] as const;
+/** Every git command the machine runs on the host carries this: a stage can write into a
+ *  workspace's .git dir, so a hook, a file-system monitor, an external diff driver, a submodule
+ *  or an `ext::` transport it left there must never execute as you. */
+export const HOST_GIT = [
+  "--no-optional-locks",
+  "-c", "core.hooksPath=/dev/null",
+  "-c", "core.fsmonitor=",
+  "-c", "diff.external=",
+  "-c", "submodule.recurse=false",
+  "-c", "protocol.ext.allow=never",
+] as const;
 
 export interface Workspace {
   branch: string;
@@ -77,7 +85,7 @@ export async function rebaseOntoDefault(
 ): Promise<RebaseResult> {
   const base = await defaultBranchOf(repoPath);
   if (!base || !isBranchName(base)) return { ok: false, error: `no usable default branch: ${JSON.stringify(base ?? null)}`, conflicts: [] };
-  const git = (...args: string[]) => ["-c", "core.hooksPath=/dev/null", "-C", worktreePath, ...args];
+  const git = (...args: string[]) => [...HOST_GIT, "-C", worktreePath, ...args];
   // `--end-of-options`: whatever the name, it is a ref, never an option.
   const fetched = await run("git", git("fetch", "--quiet", "--end-of-options", "origin", base), { timeoutMs: FETCH_TIMEOUT });
   if (fetched.code !== 0) return { ok: false, error: `git fetch failed: ${(fetched.stderr || fetched.stdout).trim() || `exit code ${fetched.code}`}`, conflicts: [] };

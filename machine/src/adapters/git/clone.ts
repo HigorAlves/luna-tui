@@ -1,7 +1,7 @@
 // A card's workspace is its own clone: nothing in it is shared with the user's repository,
 // so nothing a container does there can move one of the repository's branches or touch its
 // objects, config or hooks. The machine copies in only the settings a push needs.
-import { existsSync, mkdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { exec, execOrThrow } from "../process/exec.ts";
@@ -69,4 +69,44 @@ export async function ensureClone(repoPath: string, workspace: Workspace): Promi
   const settings = await copiedSettings(repoPath);
   for (const key of new Set(settings.map(([k]) => k))) await exec("git", [...HOST_GIT, "-C", workspace.path, "config", "--local", "--unset-all", key]);
   for (const [key, value] of settings) await execOrThrow("git", [...HOST_GIT, "-C", workspace.path, "config", "--local", "--add", key, value]);
+}
+
+/**
+ * What a container must not write inside a clone, relative to the clone: the config, hooks and
+ * info the host's git reads as configuration or code, the object store's `info` (alternates),
+ * and the same in every submodule's git dir. Only paths that exist, since a mount creates what is missing.
+ */
+export function sealedPaths(clonePath: string): string[] {
+  const sealed: string[] = [];
+  const add = (gitDir: string, names: string[]) => {
+    for (const name of names) if (existsSync(join(clonePath, gitDir, name))) sealed.push(`${gitDir}/${name}`);
+  };
+  add(".git", ["config", "hooks", "info", "objects/info"]);
+  const walk = (gitDir: string) => {
+    const modules = join(clonePath, gitDir, "modules");
+    let names: string[] = [];
+    try {
+      names = readdirSync(modules);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const sub = `${gitDir}/modules/${name}`;
+      if (!statSync(join(clonePath, sub)).isDirectory()) continue;
+      add(sub, ["config", "hooks", "info", "objects/info"]);
+      walk(sub);
+    }
+  };
+  walk(".git");
+  return sealed;
+}
+
+/** `device:inode` of the clone's `.git` directory, or null when it is not a directory: a container that moved it aside and made another shows as a different stamp. */
+export function gitDirStamp(clonePath: string): string | null {
+  try {
+    const stat = statSync(join(clonePath, ".git"));
+    return stat.isDirectory() ? `${stat.dev}:${stat.ino}` : null;
+  } catch {
+    return null;
+  }
 }

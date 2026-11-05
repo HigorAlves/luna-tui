@@ -1,3 +1,4 @@
+import { HOST_GIT } from "../adapters/git/worktree.ts";
 import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -59,7 +60,7 @@ describe("closeTask", () => {
     const removed = fakeExec();
     const second = await closeTask(task(path), { exec: removed.exec, worktreeRemove: true });
     expect(removed.calls).toEqual([
-      { command: "git", args: ["-c", "core.hooksPath=/dev/null", "-C", "/repo", "worktree", "remove", "--force", path], cwd: undefined },
+      { command: "git", args: [...HOST_GIT, "-C", "/repo", "worktree", "remove", "--force", path], cwd: undefined },
     ]);
     expect(second.worktreeRemoved).toBe(true);
   });

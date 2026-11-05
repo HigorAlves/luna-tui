@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 
 import { runSandbox } from "../src/adapters/docker/docker.ts";
+import { ensureClone, sealedPaths } from "../src/adapters/git/clone.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixture = join(here, "..", "..", "fixtures", "golden-task");
@@ -22,7 +23,10 @@ git(repo, "init", "-q", "-b", "main");
 git(repo, "add", "-A");
 git(repo, "commit", "-q", "-m", "init");
 const branch = "task/smoke-1";
-git(repo, "checkout", "-q", "-b", branch);
+// The card's workspace is its own clone: the container sees only it, never the repository's git dir.
+const workspace = { branch, path: join(root, "cards", "clone") };
+await ensureClone(repo, workspace);
+const clone = workspace.path;
 
 const stageInput = (pack) => ({
   schema: 1,
@@ -42,15 +46,17 @@ const readJson = (p) => (existsSync(p) ? JSON.parse(readFileSync(p, "utf8")) : n
 const rows = [];
 const check = (name, ok, detail) => rows.push({ name, ok, detail });
 
-async function sandbox(label, pack, writable, extraEnv) {
+async function sandbox(label, pack, writable, extraEnv, entrypoint) {
   const runDir = join(root, label);
   const result = await runSandbox({
     name: `smoke-sandbox-${label}-${process.pid}`,
     image,
     runDir,
-    worktree: repo,
+    worktree: clone,
     writable,
-    gitDir: join(repo, ".git"),
+    gitDir: null,
+    workReadOnly: writable ? sealedPaths(clone) : [],
+    entrypoint,
     input: stageInput(pack),
     timeoutMs: 120000,
     // Dummy: the dry run and the evidence pack never call the API.
@@ -68,7 +74,7 @@ try {
   check("evidence: exit 0", a.result.exitCode === 0, `exit ${a.result.exitCode}`);
   check("evidence: result.json outcome", ["pass", "fail"].includes(resA?.outcome), `outcome ${resA?.outcome}`);
   check("evidence: events.jsonl", existsSync(join(a.out, "events.jsonl")), "");
-  check("evidence: worktree untouched", git(repo, "status", "--porcelain") === "", "git status not clean");
+  check("evidence: worktree untouched", git(clone, "status", "--porcelain") === "", "git status not clean");
 
   const b = await sandbox("implementing", "implementing", true, { LUNA_STAGE_DRY_RUN: "1" });
   const resB = readJson(join(b.out, "result.json"));
@@ -81,6 +87,22 @@ try {
   if (rows.some((r) => !r.ok)) {
     for (const [l, t] of [["evidence", a.transcript], ["implementing", b.transcript]]) console.log(`--- ${l} transcript ---\n${t}`);
   }
+
+  // From inside a writable container: the repository's git dir is not there, and the clone's config, hooks and info refuse a write.
+  const probe = [
+    `[ -e ${repo}/.git ] && echo "repo git dir visible"`,
+    `[ -e ${repo} ] && echo "repo visible"`,
+    ...["config", "hooks/pre-commit", "info/exclude", "objects/info/alternates"].map((f) => `(echo x >> /work/.git/${f}) 2>/dev/null && echo "wrote ${f}"`),
+    "(echo ok > /work/.git/refs/heads/probe) 2>/dev/null && echo \"refs of the clone writable\"",
+    "true",
+  ].join("; ");
+  const configBefore = readFileSync(join(clone, ".git", "config"), "utf8");
+  const c = await sandbox("isolation", "implementing", true, undefined, ["sh", "-c", `{ ${probe}; } > /out/probe.txt 2>&1`]);
+  const probed = existsSync(join(c.out, "probe.txt")) ? readFileSync(join(c.out, "probe.txt"), "utf8") : "(no probe output)";
+  check("isolation: the repository is not mounted", !/repo (git dir )?visible/.test(probed), probed);
+  check("isolation: config, hooks, info and alternates refuse writes", !/wrote /.test(probed), probed);
+  check("isolation: the rest of the clone is writable (the probe ran)", probed.includes("refs of the clone writable"), probed);
+  check("isolation: the clone's config is unchanged on the host", readFileSync(join(clone, ".git", "config"), "utf8") === configBefore, "config changed");
 } finally {
   rmSync(root, { recursive: true, force: true });
 }

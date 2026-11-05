@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { copiedSettings, ensureClone, isClone } from "./clone.ts";
+import { copiedSettings, ensureClone, gitDirStamp, isClone, sealedPaths } from "./clone.ts";
 import { branchBase, changedPaths, commitAll, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
@@ -103,5 +103,32 @@ describe("a clone reaches the repository's remote and nothing else of its config
     git(repo, "commit", "-q", "-m", "later");
     expect(await branchBase(workspace.path, repo)).toBe(fork);
     expect(await changedPaths(workspace.path, repo)).toEqual(["b.txt"]);
+  });
+});
+
+describe("what a container may not write in a clone", () => {
+  it("names the config, hooks, info and object info, and every submodule's config, hooks and info, that exist", async () => {
+    const { repo, dir } = repository("clone-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    mkdirSync(join(workspace.path, ".git", "modules", "lib", "modules", "inner"), { recursive: true });
+    writeFileSync(join(workspace.path, ".git", "modules", "lib", "config"), "");
+    writeFileSync(join(workspace.path, ".git", "modules", "lib", "modules", "inner", "config"), "");
+    mkdirSync(join(workspace.path, ".git", "modules", "lib", "hooks"));
+    const sealed = sealedPaths(workspace.path);
+    expect(sealed).toEqual(expect.arrayContaining([".git/config", ".git/hooks", ".git/info", ".git/objects/info", ".git/modules/lib/config", ".git/modules/lib/hooks", ".git/modules/lib/modules/inner/config"]));
+    expect(sealed.every((p) => existsSync(join(workspace.path, p)))).toBe(true);
+  });
+
+  it("stamps the git directory, so a `.git` moved aside and replaced shows", async () => {
+    const { repo, dir } = repository("clone-");
+    const workspace = workspaceFor(task, repo, dir);
+    await ensureClone(repo, workspace);
+    const before = gitDirStamp(workspace.path);
+    expect(before).toMatch(/^\d+:\d+$/);
+    expect(gitDirStamp(workspace.path)).toBe(before);
+    execFileSync("mv", [join(workspace.path, ".git"), join(workspace.path, ".git-aside")]);
+    mkdirSync(join(workspace.path, ".git"));
+    expect(gitDirStamp(workspace.path)).not.toBe(before);
   });
 });

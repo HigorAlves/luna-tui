@@ -1,3 +1,4 @@
+import { HOST_GIT } from "../adapters/git/worktree.ts";
 import { mkdtempSync, mkdirSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -219,7 +220,7 @@ describe("GitHubPulls.clone", () => {
     const dest = join(root, "b");
     await pulls.clone("o/b", dest);
     await pulls.cloning;
-    expect(calls).toContainEqual(["git", "-c", "core.hooksPath=/dev/null", "clone", "https://github.com/o/b.git", dest]);
+    expect(calls).toContainEqual(["git", ...HOST_GIT, "clone", "https://github.com/o/b.git", dest]);
     expect(remembered).toEqual([]);
     expect(resolved.get("o/b")).toBe(dest);
     expect(pulls.snapshot.prs[0]?.localPath).toBe(dest);

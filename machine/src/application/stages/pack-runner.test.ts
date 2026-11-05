@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +7,7 @@ import { StageInput, type StageOutput } from "@hardness/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CredentialWaitError, type Credentials, NoCredentialError, fixedCredentials } from "../../adapters/credentials/index.ts";
+import { HOST_GIT } from "../../adapters/git/worktree.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
@@ -292,6 +293,26 @@ describe("agent stages through packs", () => {
     expect(seen!.mounts).not.toContainEqual(expect.objectContaining({ container: "/work/.git" }));
     expect(execFileSync("git", ["-C", repo, "worktree", "list"], { encoding: "utf8" }).trim().split("\n")).toHaveLength(1);
     expect(refs()).toBe(before);
+  });
+
+  it("seals the clone's config, hooks, info and object info inside a writable /work, and nothing for a read-only stage", async () => {
+    await runners(fakeSandbox(output())).implementing!(context("implementing"));
+    expect(seen!.writable).toBe(true);
+    expect(seen!.workReadOnly).toEqual(expect.arrayContaining([".git/config", ".git/hooks", ".git/info", ".git/objects/info"]));
+    // The repository's own git dir is nowhere in the mounts.
+    const repoGit = join(repo, ".git");
+    expect(JSON.stringify([seen!.gitDir, seen!.mounts])).not.toContain(repoGit);
+  });
+
+  it("fails the run, without a git command on the workspace, when the container swapped the clone's .git directory", async () => {
+    const swap = (run: SandboxRun) => {
+      renameSync(join(run.worktree, ".git"), join(run.worktree, ".git-aside"));
+      mkdirSync(join(run.worktree, ".git"));
+      writeFileSync(join(run.worktree, ".git", "config"), "[core]\n\tsshCommand = evil\n");
+    };
+    const result = await runners(fakeSandbox(output(), swap)).implementing!(context("implementing"));
+    expect(result.outcome).toBe("fail");
+    expect(JSON.stringify(result.detail)).toContain(".git directory");
   });
 
   it("mounts a card still on a linked worktree as before: its .git file read-only, the admin dir's pointers read-only in a writable stage", async () => {
@@ -1059,9 +1080,10 @@ describe("the engine a stage runs on", () => {
       expect((result.detail as { ledger: { slices: Array<{ status: string }> } }).ledger.slices[0]!.status).toBe("committed");
       const pushes = calls.filter((c) => c.includes("push"));
       expect(pushes).toHaveLength(1);
-      expect(pushes[0]!.slice(0, 4)).toEqual(["git", "-c", "core.hooksPath=/dev/null", "-C"]);
+      const lead = 1 + HOST_GIT.length;
+      expect(pushes[0]!.slice(0, lead + 1)).toEqual(["git", ...HOST_GIT, "-C"]);
       // A checkpoint goes to a ref that triggers no CI and is nobody's PR head; Deliver updates the branch itself.
-      expect(pushes[0]!.slice(5)).toEqual(["push", "--force", "origin", expect.stringMatching(/^HEAD:refs\/luna\/wip\/task\//)]);
+      expect(pushes[0]!.slice(lead + 2)).toEqual(["push", "--force", "origin", expect.stringMatching(/^HEAD:refs\/luna\/wip\/task\//)]);
       expect(pushOptions[0]?.timeoutMs).toBeGreaterThan(0);
       expect(pushOptions[0]?.signal).toBeInstanceOf(AbortSignal);
     });

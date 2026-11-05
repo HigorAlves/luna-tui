@@ -6,7 +6,7 @@ import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
 import { basename, join, relative } from "node:path";
 
-import { ensureClone, isClone } from "../../adapters/git/clone.ts";
+import { ensureClone, gitDirStamp, isClone, sealedPaths } from "../../adapters/git/clone.ts";
 import {
   type Workspace,
   branchBase,
@@ -381,6 +381,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
       },
     });
   };
+  const stampBefore = sharesGitDir ? null : gitDirStamp(workspace.path);
   const sandbox = await (deps.sandbox ?? runSandbox)({
     name: container,
     attach: Boolean(resume),
@@ -392,6 +393,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     writable: limits.writable,
     gitDir,
     gitReadOnly: gitDir ? [...GIT_READ_ONLY, ...adminPointers].filter((sub) => existsSync(join(gitDir, sub))) : [],
+    ...(sharesGitDir ? {} : { workReadOnly: sealedPaths(workspace.path) }),
     gitIdentity: limits.writable ? await gitIdentity(task.repoPath) : null,
     // The repo's services run beside every stage that runs its code; a read-only stage only reads.
     services: limits.writable ? policy.services : {},
@@ -423,6 +425,16 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     credential.release();
   });
 
+  // A container that moved the clone's `.git` aside and made another hides the sealed config and hooks:
+  // no git command may run in that folder, since it would read the config the container wrote.
+  if (stampBefore !== null && gitDirStamp(workspace.path) !== stampBefore) {
+    return {
+      outcome: "fail",
+      detail: { error: "the container replaced the workspace's .git directory; the workspace was left untouched and no git command was run in it" },
+      workspace: { branch: workspace.branch, worktreePath: workspace.path },
+      run: { containerId: container, transcriptPath: sandbox.transcriptPath, inputCommit },
+    };
+  }
   const base: StageResult = {
     outcome: "fail",
     ...(engineEvents.length ? { events: engineEvents } : {}),

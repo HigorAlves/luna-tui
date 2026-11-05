@@ -86,6 +86,16 @@ describe("sandboxArgs", () => {
     expect(mounts).toContain("/g/.git/config:/g/.git/config:ro");
   });
 
+  it("keeps the clone's config, hooks and info read-only inside the writable /work, over the writable mount", () => {
+    const args = sandboxArgs(run({ writable: true, workReadOnly: [".git/config", ".git/hooks", ".git/info"] }), "/i", "/o");
+    const mounts = args.filter((_, i) => args[i - 1] === "-v");
+    expect(mounts.indexOf("/wt:/work")).toBeLessThan(mounts.indexOf("/wt/.git/config:/work/.git/config:ro"));
+    expect(mounts).toContain("/wt/.git/hooks:/work/.git/hooks:ro");
+    expect(mounts).toContain("/wt/.git/info:/work/.git/info:ro");
+    // A read-only /work needs no overlay.
+    expect(sandboxArgs(run({ workReadOnly: [".git/config"] }), "/i", "/o").join(" ")).not.toContain("/work/.git/config");
+  });
+
   it("commits as you, unsigned: the container has no gitconfig and no gpg key", () => {
     const args = sandboxArgs(run({ gitIdentity: { name: "Ada L", email: "ada@x.dev" } }), "/i", "/o").join(" ");
     for (const env of ["GIT_AUTHOR_NAME=Ada L", "GIT_AUTHOR_EMAIL=ada@x.dev", "GIT_COMMITTER_NAME=Ada L", "GIT_COMMITTER_EMAIL=ada@x.dev"]) {
