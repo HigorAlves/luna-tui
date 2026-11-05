@@ -132,7 +132,9 @@ export class JiraSync {
       // Flattened like every outward text, and only onto the ticket the card came from (`jiraOf(task)` is its own link).
       const raw = typeof event.payload.body === "string" ? event.payload.body : "";
       const body = postable(raw);
-      if (policy.comments !== "none" && task.source?.kind === "jira" && body && !carriesSecret(raw)) await this.comment(link, body);
+      const refused = event.payload.secret === true || carriesSecret(raw);
+      // Onto the issue the card came from: its source's key, never a manual link that names another one.
+      if (policy.comments !== "none" && task.source?.kind === "jira" && body && !refused) await this.comment({ ...link, key: task.source.key }, body);
       return;
     }
 

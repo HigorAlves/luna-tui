@@ -294,6 +294,11 @@ impl Machine {
         self.post(&format!("/tasks/{id}/abort"), json!({}))
     }
 
+    /// Posts triage's open questions where the ticket came from (the machine does it once; asking again posts nothing new).
+    pub fn post_questions(&self, id: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/questions/post"), json!({}))
+    }
+
     /// Ends the ticket as archived, with one of `ARCHIVE_REASONS`.
     pub fn archive(&self, id: &str, reason: &str) -> Result<Task, String> {
         self.post(&format!("/tasks/{id}/archive"), json!({ "reason": reason }))

@@ -28,8 +28,8 @@ describe("slaActions", () => {
   });
 
   it("archives a ticket left at intake or triage gates past sla.archive, instead of reminding", () => {
-    expect(slaActions([row("awaiting_answers", 6 * DAY)], NOW)).toEqual([{ taskId: "t1", action: "archive", reason: "no_answer", gate: "awaiting_answers" }]);
-    expect(slaActions([row("awaiting_setup", 6 * DAY)], NOW)).toEqual([{ taskId: "t1", action: "archive", reason: "no_setup", gate: "awaiting_setup" }]);
+    expect(slaActions([row("awaiting_answers", 6 * DAY, { lastReminderAt: ago(3 * DAY) })], NOW)).toEqual([{ taskId: "t1", action: "archive", reason: "no_answer", gate: "awaiting_answers" }]);
+    expect(slaActions([row("awaiting_setup", 6 * DAY, { lastReminderAt: ago(3 * DAY) })], NOW)).toEqual([{ taskId: "t1", action: "archive", reason: "no_setup", gate: "awaiting_setup" }]);
   });
 
   it("never archives a later gate, or without a target: it only reminds", () => {
@@ -39,15 +39,24 @@ describe("slaActions", () => {
   });
 
   it("archives after the diagram's five days when the repo's sla block says nothing, and not before", () => {
-    const quiet = (state: TaskState, waited: number) => row(state, waited, { targets: {}, defaultArchive: 5 * 86_400 });
+    const quiet = (state: TaskState, waited: number) => row(state, waited, { targets: {}, defaultArchive: 5 * 86_400, lastReminderAt: waited >= 5 * DAY ? ago(2 * DAY) : null });
     expect(slaActions([quiet("awaiting_answers", 4 * DAY)], NOW)).toEqual([expect.objectContaining({ action: "remind" })]);
     expect(slaActions([quiet("awaiting_answers", 5 * DAY)], NOW)).toEqual([expect.objectContaining({ action: "archive", reason: "no_answer" })]);
     expect(slaActions([quiet("awaiting_setup", 5 * DAY + 1)], NOW)).toEqual([expect.objectContaining({ action: "archive", reason: "no_setup" })]);
   });
 
   it("lets the repo's block win: its own days, and `sla.archive: off` keeps the card waiting", () => {
-    expect(slaActions([row("awaiting_answers", 2 * DAY, { targets: { gate: 86_400, archive: 86_400 }, defaultArchive: 5 * 86_400 })], NOW)).toEqual([expect.objectContaining({ action: "archive" })]);
+    expect(slaActions([row("awaiting_answers", 2 * DAY, { targets: { gate: 86_400, archive: 86_400 }, defaultArchive: 5 * 86_400, lastReminderAt: ago(1.5 * DAY) })], NOW)).toEqual([expect.objectContaining({ action: "archive" })]);
     expect(slaActions([row("awaiting_answers", 30 * DAY, { targets: { archive: null }, defaultArchive: 5 * 86_400 })], NOW)).toEqual([expect.objectContaining({ action: "remind" })]);
+  });
+
+  it("never archives a visit that has had no reminder a day earlier: after a long downtime the first tick reminds and a later one archives", () => {
+    const late = (over: Partial<SlaRow>) => slaActions([row("awaiting_answers", 9 * DAY, over)], NOW);
+    expect(late({})).toEqual([expect.objectContaining({ action: "remind" })]);
+    expect(late({ lastReminderAt: ago(2 * 3_600_000) })).toEqual([]);
+    // a reminder from an earlier visit to the gate does not count: the card moved and came back
+    expect(late({ lastReminderAt: ago(10 * DAY) })).toEqual([expect.objectContaining({ action: "remind" })]);
+    expect(late({ lastReminderAt: ago(25 * 3_600_000) })).toEqual([expect.objectContaining({ action: "archive" })]);
   });
 
   it("does not archive a card a person has just answered: the answer moves it and the wait starts again", () => {
@@ -65,7 +74,7 @@ describe("applySlaActions", () => {
     const record = vi.fn(async () => {});
     const archive = vi.fn(async () => ({}) as TaskRow);
     const due = row("awaiting_approval", 3 * DAY);
-    const gone = { ...row("awaiting_answers", 6 * DAY), task: { id: "t2", state: "awaiting_answers", stateSince: ago(6 * DAY) } as unknown as TaskRow };
+    const gone = { ...row("awaiting_answers", 6 * DAY, { lastReminderAt: ago(3 * DAY) }), task: { id: "t2", state: "awaiting_answers", stateSince: ago(6 * DAY) } as unknown as TaskRow };
     await applySlaActions([due, gone], NOW, { record, archive });
     expect(record).toHaveBeenCalledWith("t1", "sla.reminder", { gate: "awaiting_approval", dueAt: due.sla!.gate!.dueAt });
     expect(archive).toHaveBeenCalledWith("t2", "no_answer");
@@ -76,7 +85,7 @@ describe("applySlaActions", () => {
       throw new Error("db down");
     });
     const archive = vi.fn(async () => ({}) as TaskRow);
-    const gone = { ...row("awaiting_answers", 6 * DAY), task: { id: "t2", state: "awaiting_answers", stateSince: ago(6 * DAY) } as unknown as TaskRow };
+    const gone = { ...row("awaiting_answers", 6 * DAY, { lastReminderAt: ago(3 * DAY) }), task: { id: "t2", state: "awaiting_answers", stateSince: ago(6 * DAY) } as unknown as TaskRow };
     await applySlaActions([row("awaiting_approval", 3 * DAY), gone], NOW, { record, archive }, () => {});
     expect(archive).toHaveBeenCalledWith("t2", "no_answer");
   });

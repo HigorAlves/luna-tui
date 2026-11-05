@@ -9,7 +9,7 @@ import type { RestartPolicy } from "../config.ts";
 import type { NewTaskRow, TaskChange, TaskStore } from "./task-store.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import type { ApprovalRow, Decision, EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RecordNotEditableError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
+import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, QuestionsCarrySecretError, RecordNotEditableError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError, runFacts, runSummary, sameSource } from "../domain/task.ts";
 import { questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
@@ -39,7 +39,7 @@ import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
 
-export { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, RecordNotEditableError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
+export { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, QuestionsCarrySecretError, RecordNotEditableError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskMovedError, TaskNotFoundError } from "../domain/task.ts";
 
 /** A reset time as epoch seconds: the runner writes a number; older runners wrote a string (epoch or ISO). */
 export function resetSeconds(value: unknown): number | null {
@@ -559,7 +559,7 @@ export class Pipeline {
   async editRecord(id: string, patch: { kind?: string; typeOfWork?: string; size?: string; riskPrelim?: string; priority?: string }): Promise<TaskRow> {
     const { record, classification, fields } = await this.store.withTaskLock(id, async (task, tx) => {
       if (!task.record) throw new RecordNotEditableError(id, "triage has not written one");
-      if (!WAITING_ON_USER.has(task.state)) throw new RecordNotEditableError(id, `the card is ${task.state}, not waiting at a gate`);
+      if (task.state !== "awaiting_answers" && task.state !== "awaiting_approval") throw new RecordNotEditableError(id, `the card is ${task.state}: a record is corrected at triage's questions or at the plan gate`);
       const before = task.record;
       const next: Record<string, unknown> = { ...before };
       const changed: Array<NonNullable<TriageRecord["editedFields"]>[number]> = [];
@@ -572,8 +572,13 @@ export class Pipeline {
       set("typeOfWork", before.typeOfWork, patch.typeOfWork, () => (next.typeOfWork = patch.typeOfWork));
       set("size", before.size, patch.size, () => (next.size = patch.size));
       set("riskPrelim", before.riskPrelim, patch.riskPrelim, () => {
+        // The machine's own grade stays the floor: a person's lower value is kept and shown, but `risk` (what the plan's floor and the
+        // approver and ship rules read) is the higher of the two; a higher value applies at once.
+        const order = ["low", "medium", "high"];
+        const floor = before.riskMachine ?? before.riskPrelim ?? "low";
+        next.riskMachine = floor;
         next.riskPrelim = patch.riskPrelim;
-        next.risk = patch.riskPrelim;
+        next.risk = order.indexOf(patch.riskPrelim!) >= order.indexOf(floor) ? patch.riskPrelim : floor;
       });
       set("priority", before.urgencyDetail?.priority, patch.priority, () => {
         next.urgency = patch.priority;
@@ -1054,6 +1059,8 @@ export class Pipeline {
       if (minutes === null) continue;
       const open = (await this.store.listApprovals(task.id)).find((a) => a.kind === "awaiting_approval" && a.decision === null);
       if (!open) continue;
+      // A reply or an archive waits for a person's tap, whatever else the gate carries: nothing outward is ever sent by a clock.
+      if (open.requested.outcome === "conversation" || open.requested.outcome === "archive") continue;
       // Low risk, every check a clear yes, and nothing asked: the plan stage's own findings are the bar.
       const { risk, verdicts, questions } = open.requested as { risk?: { level?: unknown }; verdicts?: Record<string, unknown>; questions?: unknown };
       const checks = Object.values(verdicts ?? {});
@@ -1605,12 +1612,34 @@ export class Pipeline {
     });
 
     this.onEvent(logged);
-    // Triage's questions, as one comment for the card's own source to post (the thread and ticket replies read this row).
+    // The questions the machine built from the signals (fixed text, enum values, numbers) go out by themselves as one comment for the card's
+    // own source. A question an agent wrote stays on the board until a person taps `p` (`postQuestions`): it may quote what the agent read.
     const asked = extra.detail?.questions;
-    if (step.effect.kind === "wait" && step.effect.gate === "awaiting_answers" && Array.isArray(asked) && asked.length > 0) {
-      await this.log(id, "task.questions", { body: questionsComment(asked as Array<{ question: string; recommended: string | null }>) });
+    if (step.effect.kind === "wait" && step.effect.gate === "awaiting_answers" && Array.isArray(asked) && asked.length > 0 && extra.detail?.questionsBy === "machine") {
+      await this.postQuestionsOnce(id, asked as Array<{ question: string; recommended: string | null }>, "machine");
     }
     return step;
+  }
+
+  /** Logs the `task.questions` row for these questions unless the task already has one for the same texts (a triage re-run after a crash asks the same). */
+  private async postQuestionsOnce(id: string, questions: Array<{ question: string; recommended: string | null }>, by: "machine" | "person"): Promise<boolean> {
+    const { body, secret, hash } = questionsComment(questions);
+    if ((await this.events(id)).some((e) => e.kind === "task.questions" && e.payload.hash === hash)) return false;
+    await this.log(id, "task.questions", { body, secret, hash, by });
+    return true;
+  }
+
+  /** A person's tap: post the open questions at `awaiting_answers` where the card came from. Idempotent: the same questions are posted once.
+   *  Questions that carry a token-shaped string are refused. */
+  async postQuestions(id: string): Promise<{ task: TaskRow; posted: boolean }> {
+    const task = await this.get(id);
+    if (task.state !== "awaiting_answers") throw new NoQuestionsToPostError(id, "the card is not waiting for answers");
+    const open = (await this.approvals(id)).find((a) => a.kind === "awaiting_answers" && a.decision === null);
+    const questions = (Array.isArray(open?.requested.questions) ? open!.requested.questions : []) as Array<{ question?: unknown; recommended?: unknown }>;
+    const clean = questions.flatMap((q) => (typeof q.question === "string" ? [{ question: q.question, recommended: typeof q.recommended === "string" ? q.recommended : null }] : []));
+    if (clean.length === 0) throw new NoQuestionsToPostError(id);
+    if (questionsComment(clean).secret) throw new QuestionsCarrySecretError(id);
+    return { task, posted: await this.postQuestionsOnce(id, clean, "person") };
   }
 
   /** The latest finished run of a stage for a task, with the detail it ended with. */

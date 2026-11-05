@@ -35,7 +35,7 @@ import { pushCheckpoint } from "./deliver.ts";
 const PUSH_TIMEOUT_MS = 60_000;
 import type { TruthSink } from "../decision-truth.ts";
 import { type Decide, buildChecks, buildWatch, cardSearchAnswers } from "./build-watch.ts";
-import type { CardHit } from "../../domain/card-search.ts";
+import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
 import { ingestStageOutput, toStageResult } from "./ingest.ts";
 import { prepareStageCredentials } from "./stage-credentials.ts";
 import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
@@ -294,7 +294,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   // Triage's board search: the same mailbox, answered over this task's own repository only.
   const cardSearch =
     pack === "triage" && deps.cards
-      ? cardSearchAnswers({ outDir: join(runDir, "out"), search: (query) => deps.cards!.search({ repoPath: task.repoPath, selfId: task.id, selfSource: task.source?.kind ?? null, query }) })
+      ? cardSearchAnswers({ outDir: join(runDir, "out"), search: (query) => deps.cards!.search({ repoPath: task.repoPath, selfId: task.id, selfSource: sourceKindOf(task), query }) })
       : null;
   const startWatch = (): void => {
     if ((!checks && !cardSearch) || watch) return;

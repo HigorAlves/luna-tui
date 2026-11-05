@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { searchCards } from "./card-search.ts";
+import { searchCards, sourceKindOf } from "./card-search.ts";
 
 const NOW = new Date("2026-11-05T00:00:00Z");
 const daysAgo = (n: number) => new Date(NOW.getTime() - n * 86_400_000);
@@ -29,6 +29,16 @@ describe("searchCards", () => {
     expect(search(cards, "export csv", { selfSource: "github" }).map((h) => h.id)).toEqual(["g"]);
     expect(search(cards, "export csv", { selfSource: "jira" }).map((h) => h.id)).toEqual(["j"]);
     expect(search(cards, "export csv", { selfSource: "slack" }).map((h) => h.id)).toEqual(["s"]);
+  });
+
+  it("counts a card with no source but a Jira link as Jira's, and only a card with neither sees every source", () => {
+    const cards = [card("j", "Export CSV", { source: { kind: "jira" } }), card("lj", "Export CSV", { source: null, jira: { key: "P-1" } }), card("g", "Export CSV", { source: { kind: "github" } }), card("m", "Export CSV", { source: null })];
+    expect(search(cards, "export csv", { selfSource: "jira" }).map((h) => h.id).sort()).toEqual(["j", "lj"]);
+    expect(search(cards, "export csv", { selfSource: "github" }).map((h) => h.id)).toEqual(["g"]);
+    expect(sourceKindOf({ source: null, jira: { key: "P-1" } })).toBe("jira");
+    expect(sourceKindOf({ source: { kind: "github" }, jira: { key: "P-1" } })).toBe("github");
+    expect(sourceKindOf({ source: null, jira: null })).toBeNull();
+    expect(search(cards, "export csv", { selfSource: null }).map((h) => h.id).sort()).toEqual(["g", "j", "lj", "m"]);
   });
 
   it("lets a card typed in the TUI, with no source, see every source of its own repository", () => {

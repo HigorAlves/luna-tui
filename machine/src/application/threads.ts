@@ -81,7 +81,7 @@ export class ThreadReplies {
       return;
     }
     // A conversation outcome's answer (approved in one tap) and triage's questions: posted where the card came from, and nowhere else.
-    if (event.kind === "task.reply" || event.kind === "task.questions") return typeof event.payload.body === "string" && event.payload.body ? this.toSource(event.taskId, event.payload.body) : undefined;
+    if (event.kind === "task.reply" || event.kind === "task.questions") return typeof event.payload.body === "string" && event.payload.body ? this.toSource(event.taskId, event.payload.body, event.payload.secret === true) : undefined;
     if (event.kind === "sla.reminder") {
       const gate = event.payload.gate as TaskState;
       return this.reply(event.taskId, `Still waiting on you: ${ASKS[gate] ?? gate}.`);
@@ -101,13 +101,13 @@ export class ThreadReplies {
 
   /** Text a model or a person wrote, flattened with `postable`, to the card's own source only: its GitHub issue, or the Slack thread it came
    *  from through your user token. A card with no source gets nothing; a Jira ticket is JiraSync's. Text that carries a token is not posted. */
-  private async toSource(taskId: string, text: string): Promise<void> {
+  private async toSource(taskId: string, text: string, secret = false): Promise<void> {
     const task = await this.options.pipeline.get(taskId);
     if (fromNotch(task)) return;
     const body = postable(text);
     if (!body) return;
     // Flattening redacts a token, but a text that carried one is a drafted answer nobody should post as it stands.
-    if (carriesSecret(text)) {
+    if (secret || carriesSecret(text)) {
       console.warn(`not posting to the source of task ${taskId}: the text carried a secret-shaped token`);
       return;
     }

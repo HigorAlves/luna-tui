@@ -15,7 +15,7 @@ import { StubStages } from "./stages/stubs.ts";
 import { withTriageSignals } from "./stages/triage-signals.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
-import { ApproverRequiredError, type BudgetAlert, Pipeline, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
+import { ApproverRequiredError, type BudgetAlert, NoQuestionsToPostError, Pipeline, QuestionsCarrySecretError, RecordNotEditableError, SameApproverError, SourceImmutableError, TaskMovedError, TaskNotFoundError } from "./pipeline.ts";
 import { DEFAULT_POLICY } from "../domain/policy.ts";
 import { approvedPlan, buildStageInput } from "../domain/stage-input.ts";
 import { ensureWorktree, workspaceFor } from "../adapters/git/worktree.ts";
@@ -395,6 +395,29 @@ describe("the triage record: a correction and its ground truth", () => {
     // The same value again is no edit.
     await p.editRecord(id, { kind: "feature" });
     expect((await p.get(id)).record?.version).toBe(2);
+  });
+
+  it("keeps the machine's grade as the floor: a lower risk is stored and shown, a higher one applies at once", async () => {
+    const { p, id, learned } = await setup();
+    expect((await p.get(id)).record).toMatchObject({ riskPrelim: "medium", riskMachine: "medium", risk: "medium" });
+    const lowered = await p.editRecord(id, { riskPrelim: "low" });
+    expect(lowered.record).toMatchObject({ riskPrelim: "low", riskMachine: "medium", risk: "medium", editedFields: ["riskPrelim"] });
+    expect(learned.at(-1)).toMatchObject({ pack: "triage_signals", label: { risk_prelim: { choice: "low" } }, source: "record_edit" });
+    const raised = await p.editRecord(id, { riskPrelim: "high" });
+    expect(raised.record).toMatchObject({ riskPrelim: "high", riskMachine: "medium", risk: "high" });
+    // and back down: the floor is still the machine's, not the person's last value
+    expect((await p.editRecord(id, { riskPrelim: "low" })).record).toMatchObject({ riskPrelim: "low", risk: "medium" });
+  });
+
+  it("corrects only at triage's questions and at the plan gate", async () => {
+    const { p, id } = await setup();
+    const record = (await p.get(id)).record;
+    for (const state of ["escalated", "reviewing_memory", "awaiting_ship", "awaiting_test_check"] as const) {
+      await new PgTaskStore(db).updateTask(id, { state });
+      await expect(p.editRecord(id, { kind: "chore" }), state).rejects.toBeInstanceOf(RecordNotEditableError);
+    }
+    await new PgTaskStore(db).updateTask(id, { state: "awaiting_answers", record });
+    expect((await p.editRecord(id, { kind: "chore" })).record?.kind).toBe("chore");
   });
 
   it("refuses a correction when there is no record or the card is not at a gate", async () => {
@@ -1619,6 +1642,18 @@ describe("timer-approved plans", () => {
     expect((await pipeline.events(task.id)).map((e) => e.kind)).toContain("plan.auto_approved");
   });
 
+  it("never approves a reply or an archive gate, whatever else it carries", async () => {
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(10) });
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "conversation", reply: "Use pnpm dev.", record: { goal: "g", reason: "r" }, risk: { level: "low", scores: {} }, verdicts: { coverage: "proceed", plan: "proceed", risk: "proceed" } } });
+    const task = await pipeline.createTask({ title: "t", repoPath: "/r/a" });
+    await pipeline.start(task.id);
+    await db.query("update approvals set created_at = now() - interval '11 minutes'");
+    await pipeline.tick();
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_approval");
+    expect((await pipeline.events(task.id)).map((e) => e.kind)).not.toContain("plan.auto_approved");
+    expect((await pipeline.events(task.id)).map((e) => e.kind)).not.toContain("task.reply");
+  });
+
   it("never approves a Luna Notch task's plan: the notch's own AutoApproval decides (RFC 0004)", async () => {
     pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: policies(10) });
     stubs.plan("test_design", confident(), confident());
@@ -2381,10 +2416,45 @@ describe("ingested stage output", () => {
     expect(asking.state).toBe("awaiting_answers");
     const [approval] = await pipeline.approvals(task.id);
     expect(approval?.requested).toMatchObject({ summary: "s", questions: needsInput, actions: requested });
-    // The questions also go out as one flattened comment row, which the source's thread and ticket replies read.
+    // An agent's own questions are not posted by themselves: they wait for a tap.
+    expect((await pipeline.events(task.id)).filter((e) => e.kind === "task.questions")).toEqual([]);
+    const tapped = await pipeline.postQuestions(task.id);
+    expect(tapped.posted).toBe(true);
     const asked = (await pipeline.events(task.id)).filter((e) => e.kind === "task.questions");
     expect(asked).toHaveLength(1);
-    expect(asked[0]!.payload.body).toBe("Luna needs your answers to go on: 1) Which db? (suggested: pg)");
+    expect(asked[0]!.payload).toMatchObject({ body: "Luna needs your answers to go on: 1) Which db? (suggested: pg)", secret: false, by: "person" });
+    // The same questions are posted once, however many taps.
+    expect((await pipeline.postQuestions(task.id)).posted).toBe(false);
+    expect((await pipeline.events(task.id)).filter((e) => e.kind === "task.questions")).toHaveLength(1);
+  });
+
+  it("posts the questions the machine built from the signals by itself, once, and refuses one that carries a token", async () => {
+    const built = [{ question: "Is this a bug or a feature? The model read it as a bug, 0.62", recommended: "bug" }];
+    stubs.plan("triage", { outcome: "needs_input", needsInput: built, detail: { summary: "s", questionsBy: "machine" } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    const asked = (await pipeline.events(task.id)).filter((e) => e.kind === "task.questions");
+    expect(asked).toHaveLength(1);
+    expect(asked[0]!.payload).toMatchObject({ body: expect.stringContaining("Is this a bug or a feature?"), secret: false, by: "machine" });
+    // A triage re-run after a crash asks the same questions: nothing new is posted.
+    const again = await (pipeline as unknown as { postQuestionsOnce(id: string, q: typeof built, by: "machine"): Promise<boolean> }).postQuestionsOnce(task.id, built, "machine");
+    expect(again).toBe(false);
+    expect((await pipeline.events(task.id)).filter((e) => e.kind === "task.questions")).toHaveLength(1);
+
+    const leaky = [{ question: `Is this ${["ghp", "a".repeat(36)].join("_")} a bug?`, recommended: null }];
+    stubs.plan("triage", { outcome: "needs_input", needsInput: leaky, detail: { summary: "s" } });
+    const other = await newTask();
+    await pipeline.start(other.id);
+    await expect(pipeline.postQuestions(other.id)).rejects.toBeInstanceOf(QuestionsCarrySecretError);
+    stubs.plan("triage", { outcome: "needs_input", needsInput: leaky, detail: { summary: "s", questionsBy: "machine" } });
+    const auto = await newTask();
+    await pipeline.start(auto.id);
+    expect((await pipeline.events(auto.id)).find((e) => e.kind === "task.questions")?.payload).toMatchObject({ secret: true });
+  });
+
+  it("answers the tap with no_questions away from the questions gate", async () => {
+    const task = await newTask();
+    await expect(pipeline.postQuestions(task.id)).rejects.toBeInstanceOf(NoQuestionsToPostError);
   });
 });
 

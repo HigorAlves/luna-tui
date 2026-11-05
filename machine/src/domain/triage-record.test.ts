@@ -19,7 +19,7 @@ describe("composeRecord", () => {
       source: "github", goal: "Stop the export crashing", reason: "one function, tests exist", decision: "plan", signals: { kind: { answer: "bug", confidence: 0.9 } },
       qa: [{ question: "Which OS?", answer: "macOS" }], at: "2026-11-05T00:00:00.000Z", model: "claude-opus", summary: "The export crashes on large carts.",
       kind: "bug", typeOfWork: "backend", size: "S", urgency: "P1", risk: "medium", urgencyDetail: { priority: "P1", subScores: { who: 3, what: 2, impact: 2, time: 1, demand: 1 } },
-      riskPrelim: "medium", goalRef: "none", hintsUsed: [], decisionBy: "machine", version: 1,
+      riskPrelim: "medium", riskMachine: "medium", goalRef: "none", hintsUsed: [], decisionBy: "machine", version: 1,
     });
     expect(recordComplete(record)).toEqual({ complete: true, missing: [] });
   });

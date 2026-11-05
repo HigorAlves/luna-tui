@@ -3,8 +3,8 @@
 // committed is handed to `onCommitted` as it lands.
 import { type CheckContext, type DecisionOverrides, type LedgerSlice, Ledger, Slice } from "@hardness/contracts";
 import { constants } from "node:fs";
-import { lstat, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { join, sep } from "node:path";
 
 import { type TruthSink, redCheckTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
@@ -29,6 +29,9 @@ export async function readMailbox(outDir: string, file: string): Promise<string 
     if (!info.isFile() || info.size > MAX_MAILBOX_BYTES) return null;
     const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
     try {
+      // What was opened is what was checked: a file swapped in between the lstat and the open is refused here.
+      const opened = await handle.stat();
+      if (!opened.isFile() || opened.size > MAX_MAILBOX_BYTES) return null;
       const buffer = Buffer.alloc(MAX_MAILBOX_BYTES + 1);
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
       return bytesRead > MAX_MAILBOX_BYTES ? null : buffer.subarray(0, bytesRead).toString("utf8");
@@ -45,6 +48,9 @@ export async function writeMailbox(outDir: string, file: string, content: string
   const dir = join(outDir, "checks");
   await mkdir(dir, { recursive: true });
   if (!(await lstat(dir)).isDirectory()) throw new Error("checks/ is not a directory");
+  // Right before writing: the real path of checks/ is inside the run's folder.
+  const [root, real] = await Promise.all([realpath(outDir), realpath(dir)]);
+  if (!real.startsWith(root + sep)) throw new Error("checks/ is outside the run folder");
   const tmp = join(dir, `.${file}.tmp`);
   await rm(tmp, { force: true });
   await writeFile(tmp, content, { flag: "wx" });

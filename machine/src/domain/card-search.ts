@@ -19,7 +19,12 @@ interface SearchableCard {
   stateSince: Date | null;
   /** Where the card came from (`github`, `jira`, `slack`, `notch`...); null for a card typed in the TUI. */
   source: { kind: string } | null;
+  /** The Jira issue the card is linked to; a card with no source and a link is Jira's. */
+  jira?: unknown | null;
 }
+
+/** The kind of source a card is of: its own, else `jira` when it is linked to an issue, else none (a card typed in the TUI, linked to nothing). */
+export const sourceKindOf = (card: { source: { kind: string } | null; jira?: unknown | null }): string | null => card.source?.kind ?? (card.jira ? "jira" : null);
 
 const ENDED = new Set(["closed", "archived"]);
 export const MAX_CARD_HITS = 10;
@@ -36,7 +41,7 @@ export function searchCards(cards: SearchableCard[], query: string, options: { r
   for (const card of cards) {
     if (card.id === options.selfId || card.repoPath !== options.repoPath) continue;
     // A card sees only cards of its own source kind, unless it has none.
-    if (options.selfSource !== null && card.source?.kind !== options.selfSource) continue;
+    if (options.selfSource !== null && sourceKindOf(card) !== options.selfSource) continue;
     if (ENDED.has(card.state) && (!card.stateSince || card.stateSince.getTime() < since)) continue;
     const have = new Set(tokens(card.title));
     let score = 0;

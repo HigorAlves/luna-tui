@@ -174,6 +174,22 @@ export class RecordNotEditableError extends Error {
   }
 }
 
+/** No questions to post: the card is not waiting for answers, or the open gate holds none. */
+export class NoQuestionsToPostError extends Error {
+  constructor(id: string, why = "the card has no open questions") {
+    super(`task ${id}: ${why}`);
+    this.name = "NoQuestionsToPostError";
+  }
+}
+
+/** The open questions carry a token-shaped string: they are never posted, whoever taps. */
+export class QuestionsCarrySecretError extends Error {
+  constructor(id: string) {
+    super(`task ${id}: a question carries a secret-shaped token and is not posted`);
+    this.name = "QuestionsCarrySecretError";
+  }
+}
+
 /** A work order reused an `Idempotency-Key` with another body. */
 export class IdempotencyConflictError extends Error {
   /** The task the key already made, for the client to follow. */

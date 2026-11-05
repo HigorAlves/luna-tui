@@ -171,8 +171,37 @@ describe("PATCH /tasks/:id/record", () => {
     }
   });
 
+  it("is 409 record_locked away from triage's questions and the plan gate, even while a person is asked", async () => {
+    const task = await atGate();
+    await db.query("update tasks set state = 'escalated' where id = $1", [task.id]);
+    expect(await call(`/tasks/${task.id}/record`, json({ kind: "feature" }))).toMatchObject({ status: 409, body: { error: "record_locked" } });
+  });
+
   it("is 409 record_locked when the card is not at a gate or has no record", async () => {
     const bare = await newTask();
     expect(await call(`/tasks/${bare.id}/record`, json({ kind: "bug" }))).toMatchObject({ status: 409, body: { error: "record_locked" } });
+  });
+});
+
+describe("POST /tasks/:id/questions/post", () => {
+  const post = (id: string) => call(`/tasks/${id}/questions/post`, { method: "POST" });
+
+  it("posts an agent's open questions once, on a tap, and says whether it did", async () => {
+    stubs.plan("triage", { outcome: "needs_input", needsInput: [{ question: "Which db?", recommended: "pg" }], detail: { summary: "s" } });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    expect((await pipeline.events(task.id)).some((e) => e.kind === "task.questions")).toBe(false);
+    expect(await post(task.id)).toMatchObject({ status: 200, body: { id: task.id, posted: true } });
+    expect(await post(task.id)).toMatchObject({ status: 200, body: { posted: false } });
+    expect((await pipeline.events(task.id)).filter((e) => e.kind === "task.questions")).toHaveLength(1);
+  });
+
+  it("is 409 no_questions away from the questions gate and 409 secret for a question carrying a token", async () => {
+    const early = await newTask();
+    expect(await post(early.id)).toMatchObject({ status: 409, body: { error: "no_questions" } });
+    stubs.plan("triage", { outcome: "needs_input", needsInput: [{ question: `Is ${["ghp", "a".repeat(36)].join("_")} yours?`, recommended: null }], detail: { summary: "s" } });
+    const leaky = await newTask();
+    await pipeline.start(leaky.id);
+    expect(await post(leaky.id)).toMatchObject({ status: 409, body: { error: "secret" } });
   });
 });

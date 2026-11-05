@@ -19,6 +19,9 @@ const REASON_AT: Record<string, SlaArchiveReason> = { awaiting_setup: "no_setup"
 /** The gates a ticket may be archived from: before anything was approved. */
 export const AUTO_ARCHIVE_GATES: ReadonlySet<TaskState> = new Set<TaskState>(["awaiting_setup", "awaiting_answers"]);
 
+/** An archive needs a reminder this long behind it, in this visit to the gate. */
+export const REMINDER_BEFORE_ARCHIVE_MS = 24 * 3_600_000;
+
 export interface SlaRow {
   task: TaskRow;
   sla: TaskSla | null;
@@ -37,7 +40,9 @@ export function slaActions(rows: SlaRow[], now: Date): SlaAction[] {
     const since = task.stateSince ?? task.createdAt;
     // The repo's block wins, `sla.archive: off` included; the diagram's five days apply when it says nothing. The clock is the gate's own: an answer moves the card and a new wait starts it again.
     const archiveAfter = targets.archive !== undefined ? targets.archive : (defaultArchive ?? null);
-    if (AUTO_ARCHIVE_GATES.has(gate) && typeof archiveAfter === "number" && since && now.getTime() - since.getTime() >= archiveAfter * 1000) {
+    // Never archive a visit nobody was reminded of at least a day before: after a long downtime the first tick reminds, a later one archives.
+    const reminded = lastReminderAt !== null && lastReminderAt.getTime() >= since.getTime() && now.getTime() - lastReminderAt.getTime() >= REMINDER_BEFORE_ARCHIVE_MS;
+    if (AUTO_ARCHIVE_GATES.has(gate) && typeof archiveAfter === "number" && since && now.getTime() - since.getTime() >= archiveAfter * 1000 && reminded) {
       actions.push({ taskId: task.id, action: "archive", reason: REASON_AT[gate] ?? "no_answer", gate });
       continue;
     }

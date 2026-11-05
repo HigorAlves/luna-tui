@@ -222,3 +222,15 @@ describe("ThreadReplies: a reply and triage's questions go to the card's own sou
     expect(slackPort.postMessage).not.toHaveBeenCalled();
   });
 });
+
+describe("ThreadReplies: a question flagged secret is refused", () => {
+  it("posts nothing for questions whose raw text carried a token, and posts the flattened ones", async () => {
+    const { pipeline, replies, comments } = wire();
+    const task = await pipeline.createTask({ title: "Q", repoPath: "/r/a", source });
+    const event = (payload: Record<string, unknown>) => ({ id: "e", taskId: task.id, kind: "task.questions", payload, at: new Date(), stageRunId: null }) as never;
+    await replies.handle(event({ body: "Luna needs your answers to go on: 1) Is [redacted] yours?", secret: true, hash: "a" }));
+    expect(comments).toEqual([]);
+    await replies.handle(event({ body: "Luna needs your answers to go on: 1) Which one?", secret: false, hash: "b" }));
+    expect(comments).toHaveLength(1);
+  });
+});

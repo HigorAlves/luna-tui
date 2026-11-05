@@ -335,3 +335,31 @@ describe("JiraSync: an escalation's reason", () => {
     expect(body).toContain("[redacted]");
   });
 });
+
+describe("JiraSync: a reply and the questions go to the card's own issue", () => {
+  const source = { kind: "jira" as const, key: "PLAT-123", url: `${SITE}/browse/PLAT-123`, issueType: "Bug" };
+
+  it("comments on the source's key, never on a manual link that names another issue", async () => {
+    const { pipeline, jira, sync } = wire(jiraPolicy({ on: {} }), { issues: [{ key: "PLAT-123", status: "To Do", statusCategory: "new", issueType: "Bug" }, { key: "OTHER-9", status: "To Do", statusCategory: "new", issueType: "Bug" }] });
+    const task = await pipeline.createTask({ title: "Login page", repoPath: "/r/a", source });
+    await pipeline.setJira(task.id, { key: "OTHER-9", url: `${SITE}/browse/OTHER-9`, issueType: null, status: null } as never);
+    await pipeline.record(task.id, "task.reply", { body: "Use pnpm dev." });
+    await pipeline.record(task.id, "task.questions", { body: "Luna needs your answers to go on: 1) Which one?", secret: false, hash: "h" });
+    await sync.idle();
+    expect(jira.comments["PLAT-123"]).toEqual(["Use pnpm dev.", "Luna needs your answers to go on: 1) Which one?"]);
+    expect(jira.comments["OTHER-9"] ?? []).toEqual([]);
+  });
+
+  it("refuses questions flagged secret, flattens links, and says nothing for a card that did not come from Jira", async () => {
+    const { pipeline, jira, sync } = wire(jiraPolicy({ on: {} }));
+    const task = await pipeline.createTask({ title: "Login page", repoPath: "/r/a", source });
+    await pipeline.record(task.id, "task.questions", { body: "1) Which?", secret: true, hash: "s" });
+    await pipeline.record(task.id, "task.reply", { body: "See [the docs](https://evil.example/x)." });
+    await sync.idle();
+    expect(jira.comments["PLAT-123"]).toEqual(["See the docs (https://evil.example/x)."]);
+    const linked = await pipeline.createTask({ title: "PLAT-123 other", repoPath: "/r/a" });
+    await pipeline.record(linked.id, "task.reply", { body: "never posted: no source" });
+    await sync.idle();
+    expect(jira.comments["PLAT-123"]).toEqual(["See the docs (https://evil.example/x)."]);
+  });
+});

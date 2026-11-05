@@ -1682,6 +1682,13 @@ impl App {
                     self.mode = Mode::ArchiveReason { id: id.to_string(), cursor: 0 };
                 }
             }
+            'p' => {
+                if task.state == "awaiting_answers" {
+                    self.act(|m| m.post_questions(id), "questions posted where the ticket came from");
+                } else {
+                    self.notify("no questions are waiting on this ticket", false);
+                }
+            }
             'T' => match record_edit_mode(&task) {
                 Ok(mode) => self.mode = mode,
                 Err(why) => self.notify(why, false),
@@ -2096,7 +2103,7 @@ impl App {
     /// own: the split's approval, not the memory review).
     #[cfg(test)]
     pub(crate) const HANDLED_INBOX: &[&str] =
-        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "X", "w", "Z", "d", "f", "o", "J", "T"];
+        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "X", "w", "Z", "d", "f", "o", "J", "T", "p"];
 
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
     fn handle_inbox(&mut self, key: KeyEvent) -> Outcome {
@@ -2861,7 +2868,7 @@ impl App {
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
         "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "S", "v", "V", "?", ":",
-        "esc", "enter", "R", "a", "A", "e", "r", "X", "w", "Z", "d", "f", "o", "J", "T",
+        "esc", "enter", "R", "a", "A", "e", "r", "X", "w", "Z", "d", "f", "o", "J", "T", "p",
     ];
 
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
@@ -3080,7 +3087,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "X", "w", "Z", "d", "f", "T"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "X", "w", "Z", "d", "f", "T", "p"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -4100,9 +4107,13 @@ mod tests {
         task.waiting_on_you = true;
         assert!(record_edit_mode(&task).is_err(), "no record yet");
         task.record = Some(TriageRecord::default());
-        task.waiting_on_you = false;
-        assert!(record_edit_mode(&task).is_err(), "not at a gate");
-        task.waiting_on_you = true;
+        for state in ["escalated", "reviewing_memory", "awaiting_ship", "implementing"] {
+            task.state = state.to_string();
+            assert!(record_edit_mode(&task).is_err(), "{state}: only triage's questions and the plan gate");
+        }
+        task.state = "awaiting_answers".to_string();
+        assert!(record_edit_mode(&task).is_ok());
+        task.state = "awaiting_approval".to_string();
         assert!(record_edit_mode(&task).is_ok());
     }
 
@@ -6017,8 +6028,8 @@ mod engine_tests {
 /// `T` on a ticket: the picker over its record, starting from what the record says; why not when there is none or it is not at a gate.
 pub fn record_edit_mode(task: &Task) -> Result<Mode, &'static str> {
     let Some(record) = task.record.as_ref() else { return Err("triage has not written a record for this ticket yet") };
-    if !task.waiting_on_you {
-        return Err("the record can be corrected while the ticket waits at a gate");
+    if !matches!(task.state.as_str(), "awaiting_answers" | "awaiting_approval") {
+        return Err("the record is corrected at triage's questions or the plan gate");
     }
     let mut picks = [0usize; 5];
     for (i, (key, _, values)) in RECORD_FIELDS.iter().enumerate() {

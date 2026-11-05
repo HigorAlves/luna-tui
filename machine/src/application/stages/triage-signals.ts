@@ -102,7 +102,7 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
         ...(from ?? {}),
         outcome: "needs_input",
         needsInput: kept,
-        detail: { ...(from?.detail ?? { summary: `${questions.length} signal${questions.length === 1 ? " is" : "s are"} under the confidence bar: ${asked?.map((a) => a.field).join(", ")}` }), askedBy: "triage", ...(asked ? { asked: asked.slice(0, caps.max_questions) } : {}) },
+        detail: { ...(from?.detail ?? { summary: `${questions.length} signal${questions.length === 1 ? " is" : "s are"} under the confidence bar: ${asked?.map((a) => a.field).join(", ")}` }), askedBy: "triage", questionsBy: asked ? "machine" : "agent", ...(asked ? { asked: asked.slice(0, caps.max_questions) } : {}) },
       };
     };
     const enriched = classification ? { ...context, task: { ...task, classification } } : context;

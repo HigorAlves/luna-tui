@@ -550,6 +550,8 @@ export const TriageRecord = z.object({
   decisionBy: z.enum(["machine", "person"]).optional(),
   /** The fields a person corrected (`kind`, `typeOfWork`, `size`, `riskPrelim`, `priority`); the rest are the machine's. */
   editedFields: z.array(z.enum(["kind", "typeOfWork", "size", "riskPrelim", "priority"])).optional(),
+  /** The risk the machine itself composed the record with. A person's lower correction is kept and shown (`riskPrelim`), but `risk`, which the plan's floor and the approver and ship rules read, stays at the higher of the two. */
+  riskMachine: z.enum(["low", "medium", "high"]).optional(),
   /** Why the fast lane was taken without the owners being checked (no graph, a stale one, no CODEOWNERS...); absent when they were. */
   ownersNotChecked: z.string().max(200).optional(),
   version: z.number().int().optional(),

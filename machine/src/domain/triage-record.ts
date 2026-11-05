@@ -49,7 +49,7 @@ export function composeRecord(input: ComposeInput): Partial<TriageRecord> {
     ...(c?.priority ? { urgency: c.priority } : {}),
     ...(c?.riskPrelim ? { risk: c.riskPrelim } : {}),
     ...(c?.priority && c.subScores ? { urgencyDetail: { priority: c.priority, subScores: c.subScores } } : {}),
-    ...(c?.riskPrelim ? { riskPrelim: c.riskPrelim } : {}),
+    ...(c?.riskPrelim ? { riskPrelim: c.riskPrelim, riskMachine: c.riskPrelim } : {}),
     goalRef: input.goalRef,
     hintsUsed: input.hintsUsed ?? [],
     decisionBy: "machine",

@@ -56,7 +56,7 @@ import { EngineBudgetWatch } from "../../application/engine-gates.ts";
 import { type Credentials, machineCredentials } from "../credentials/index.ts";
 import { TransitionError } from "../../domain/transition.ts";
 import type { Watcher } from "../../application/ports.ts";
-import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, type Pipeline, RecordNotEditableError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
+import { ApproverRequiredError, IdempotencyConflictError, NoCasesToEditError, NoPlanToEditError, NoQuestionsToPostError, type Pipeline, QuestionsCarrySecretError, RecordNotEditableError, RepoPathLockedError, SameApproverError, SourceImmutableError, StageStartedError, TaskBusyError, TaskNotFoundError } from "../../application/pipeline.ts";
 import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
@@ -174,6 +174,8 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
+    if (error instanceof NoQuestionsToPostError) return fail(c, 409, "no_questions", error.message);
+    if (error instanceof QuestionsCarrySecretError) return fail(c, 409, "secret", error.message);
     if (error instanceof RecordNotEditableError) return fail(c, 409, "record_locked", error.message);
     if (error instanceof NoCasesToEditError) return fail(c, 409, "no_cases", error.message);
     if (error instanceof ApproverRequiredError) return fail(c, 400, "approver_required", error.message);
@@ -338,6 +340,13 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     const task = await serialize(await pipeline.editRecord(id, patch));
     bus.publish({ type: "task.updated", task, seq: task.seq });
     return c.json(task);
+  });
+
+  /** A person's tap: post the open questions where the card came from. Idempotent. */
+  app.post("/tasks/:id/questions/post", async (c) => {
+    const id = taskId(c);
+    const { task, posted } = await pipeline.postQuestions(id);
+    return c.json({ ...(await serialize(task)), posted });
   });
 
   app.patch("/tasks/:id/cases", async (c) => {

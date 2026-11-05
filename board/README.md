@@ -90,6 +90,7 @@ and a test fails when they drift from the registry.
 |---|---|
 | `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
+| `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
 | `r` | send back with a reason |
 | `x` then `S` | ship: approve and open the PR |
@@ -226,6 +227,7 @@ link is the board's `J`):
 |---|---|
 | `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
+| `p` | post these questions at the source |
 | `A` | memory review: approve, skip the rules |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
@@ -528,6 +530,7 @@ What the ticket shows:
 |---|---|
 | `a` | start; approve the setup; answer triage's questions; approve the plan; archive the ticket (one click); post the reply and close the ticket; approve the tests; ship: approve and open the PR; retry the escalation, with guidance; resume after the usage limit; approve the memory review; advance |
 | `T` | correct the triage record |
+| `p` | post these questions at the source |
 | `r` | send back with a reason |
 | `S` | ship: approve and open the PR |
 
