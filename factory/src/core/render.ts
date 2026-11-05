@@ -8,6 +8,7 @@ import { PACKS, type TaskClassification, answerJsonSchema, classificationLine, c
 import type { TriageRecord } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
+import { DATA_NOTE, foreignBudget, foreignValue } from "./data-block.ts";
 import { callText } from "./transcript.ts";
 
 const NONE = "(none)";
@@ -456,8 +457,16 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
   };
   // One pass over the template: a value is never scanned again, so client text that looks like a
   // placeholder ({{agent}} in a task title) stays as written.
-  const body = template.replace(/\{\{[A-Za-z.]+\}\}/g, (key) => subs[key] ?? key);
-  const header = [`You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1); no person is present. ${escalationLine(pack)}`, ""].join("\n");
+  // Foreign text (a ticket's, a reviewer's, a tool's, a model's) goes in as flattened lines or quoted, capped data blocks.
+  const budget = foreignBudget();
+  const quoted = Object.fromEntries(Object.entries(subs).map(([key, value]) => [key, foreignValue(key.slice(2, -2), value, budget)]));
+  // A data block always starts and ends on a line of its own, so its opening marker is never part of a line the machine wrote.
+  const body = template.replace(/\{\{[A-Za-z.]+\}\}/g, (key, offset: number, whole: string) => {
+    const value = quoted[key] ?? key;
+    if (!value.startsWith("<<<data:")) return value;
+    return `${offset > 0 && whole[offset - 1] !== "\n" ? "\n" : ""}${value}${whole[offset + key.length] !== undefined && whole[offset + key.length] !== "\n" ? "\n" : ""}`;
+  });
+  const header = [`You are the \`${agent}\` role running the \`${pack.id}\` stage in factory mode (LUNA_FACTORY=1); no person is present. ${escalationLine(pack)}`, DATA_NOTE, ""].join("\n");
   return header + body;
 }
 

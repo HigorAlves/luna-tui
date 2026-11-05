@@ -2,6 +2,7 @@
 // in plain words, then the rule that the answer is the JSON the schema asks for, with a confidence
 // per question. Jev gets the questions on its own wire (runtimes/jev/questions.ts); every other
 // runtime renders this text and asks for structured output on `answerJsonSchema(pack)`.
+import { DATA_NOTE, DescriptionCap, dataBlock, flatLine } from "./data-block.ts";
 import { type CheckContext, type EvidenceContext, type PlanContext, type Question, type QuestionSet, type ShipContext, type StageInput, criteriaOf, scenarioText } from "@hardness/contracts";
 
 /** What a decision reads: the issue as intake sent it. */
@@ -219,11 +220,12 @@ function renderQuestion(name: string, q: Question): string {
 }
 
 export function renderDecision(questions: QuestionSet, state: DecisionState): string {
-  const extras = [state.labels?.length ? `Labels: ${state.labels.join(", ")}` : "", state.source ? `Source: ${state.source}` : ""].filter(Boolean);
+  const extras = [state.labels?.length ? `Labels: ${flatLine(state.labels.join(", "))}` : "", state.source ? `Source: ${flatLine(state.source)}` : ""].filter(Boolean);
   return [
     "# State",
-    `**${state.title}**`,
-    state.description,
+    DATA_NOTE,
+    `**${flatLine(state.title)}**`,
+    dataBlock("state.description", state.description, DescriptionCap),
     ...extras,
     "",
     "# Questions",
