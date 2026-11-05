@@ -1,6 +1,6 @@
 # Calibrate the decision packs
 
-The fourteen decision packs answer typed questions with a confidence, and the machine acts on an answer only above the pack's bar. Which engine answers each slot is not a guess: it is read from `contracts/src/decision-defaults.json`, which `pnpm eval defaults --write` writes from the scorecard over every baseline (RFC 0005 wave 7). This runbook is how to produce that evidence and change a default.
+The decision packs answer typed questions with a confidence, and the machine acts on an answer only above the pack's bar. Which engine answers each slot is not a guess: it is read from `contracts/src/decision-defaults.json`, which `pnpm eval defaults --write` writes from the scorecard over every baseline (RFC 0005 wave 7). This runbook is how to produce that evidence and change a default.
 
 ## Run the baselines
 
@@ -14,8 +14,8 @@ MACHINE_TRACES=metadata pnpm eval --pack risk_score --engine jev          --tria
 ```
 
 - Run every decision pack on at least two engines: a pack with one engine measured stays `unmeasured` and keeps its default.
-- `claude:haiku` runs on your Claude subscription token and `codex:luna` on your local Codex login: no meter. **Jev is metered** (`AI_GATEWAY_API_KEY` or `TYPESAFE_API_KEY`): run it deliberately, and keep in mind the rule below makes it earn its place.
-- With a Laminar key (`LMNR_PROJECT_API_KEY`, the `observe` compose profile) each engine's run is an evaluation in group `<pack>`: compare engines side by side in the UI. `--trials 3` shows a model's variance; three trials of fourteen packs on three engines is a few hundred small calls.
+- `claude:haiku` runs on your Claude subscription token and `codex:luna` on your local Codex login: no meter. **Jev is metered** (`AI_GATEWAY_API_KEY` or `TYPESAFE_API_KEY`) and by far the cheapest engine per call: the rule below gives it a tie, and it must still act on enough cases to qualify.
+- With a Laminar key (`LMNR_PROJECT_API_KEY`, the `observe` compose profile) each engine's run is an evaluation in group `<pack>`: compare engines side by side in the UI. `--trials 3` shows a model's variance; three trials of every decision pack on three engines is a few hundred small calls.
 - A decision pack runs without the judge; `--judge` adds it.
 
 ## Read the scorecard and take the defaults
