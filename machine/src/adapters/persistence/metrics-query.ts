@@ -120,7 +120,11 @@ export function flowMetrics(rows: FlowRow[], window: [Date, Date]): FlowMetrics 
   const inWindow = (at: Date) => at.getTime() >= since.getTime() && at.getTime() <= until.getTime();
   const named = rows.map((r) => ({ ...r, names: namesOf(r), at: new Date(r.at) })).sort((a, b) => a.at.getTime() - b.at.getTime());
   const byTask = new Map<string, typeof named>();
-  for (const r of named) byTask.set(r.task_id, [...(byTask.get(r.task_id) ?? []), r]);
+  for (const r of named) {
+    const mine = byTask.get(r.task_id);
+    if (mine) mine.push(r);
+    else byTask.set(r.task_id, [r]);
+  }
   const first = (rs: typeof named, name: string) => rs.find((r) => (r.names as string[]).includes(name));
   const last = (rs: typeof named, name: string) => rs.findLast((r) => (r.names as string[]).includes(name));
   const count = (values: number[]) => ({ value: mean(values), n: values.length });
@@ -207,7 +211,13 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
               'escalation', e.payload->'escalation', 'archiveReason', e.payload->'archiveReason',
               'detail', case when e.kind = 'stage.finished' then jsonb_strip_nulls(jsonb_build_object('rounds', e.payload #> '{detail,rounds}', 'cases', case when e.payload #> '{detail,cases}' is not null then '[]'::jsonb end)) end)) as payload
        from events e join tasks t on t.id = e.task_id
-      where e.kind in ('task.created', 'task.shipped', 'task.closed', 'transition', 'stage.started', 'stage.finished', 'stage.slice.committed', 'stage.pr.opened') and e.at <= $2 and $1::timestamptz is not null and ${inScope}`,
+      where e.kind in ('task.created', 'task.shipped', 'task.closed', 'transition', 'stage.started', 'stage.finished', 'stage.slice.committed', 'stage.pr.opened') and e.at <= $2 and $1::timestamptz is not null and ${inScope}
+        -- only tasks with an ending event inside the window: the numbers never need the history of the rest
+        and e.task_id in (select w.task_id from events w
+                           where w.at >= $1 and w.at <= $2
+                             and (w.kind = 'task.shipped'
+                               or (w.kind = 'transition' and w.payload->>'event' = 'approved' and w.payload->>'from' = 'awaiting_approval')
+                               or (w.kind = 'stage.finished' and w.payload->>'status' = 'passed' and w.payload->>'stage' in ('test_design', 'implementing'))))`,
     params,
   );
   const touched: { retries: { verify: number; e2e: number; ci: number; total: number } }[] = await db.query(

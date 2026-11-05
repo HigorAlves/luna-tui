@@ -71,6 +71,22 @@ describe("the sections in a luna.yaml", () => {
     expect(bad({ ship: { stale_days: "14" } }).success).toBe(false);
   });
 
+  it("cap the loop counts, the stale days and the not-yet-wired limits", () => {
+    expect(bad({ plan: { coverage_rounds: 6 } }).success).toBe(false);
+    expect(bad({ plan: { plan_check_retries: 6 } }).success).toBe(false);
+    expect(bad({ plan: { coverage_rounds: 5, plan_check_retries: 5 } }).success).toBe(true);
+    expect(bad({ ship: { stale_days: 0 } }).success).toBe(false);
+    expect(bad({ ship: { stale_days: 61 } }).success).toBe(false);
+    expect(bad({ ship: { stale_days: 60 } }).success).toBe(true);
+    expect(bad({ build: { max_iterations: 51 } }).success).toBe(false);
+    expect(bad({ build: { max_tokens: 20_000_001 } }).success).toBe(false);
+    expect(bad({ size: { hard_limit_loc: 20_001 } }).success).toBe(false);
+    expect(bad({ size: { max_children: 21 } }).success).toBe(false);
+    expect(bad({ size: { depth: 4 } }).success).toBe(false);
+    for (const sla of ["triage", "plan", "ship"] as const) expect(bad({ [sla]: { sla: { reminder_days: 366 } } }).success).toBe(false);
+    expect(bad({ ship: { sla: { escalate_days: 365 } } }).success).toBe(true);
+  });
+
   it("refuse an unknown key inside a new section, naming it", () => {
     const r = bad({ triage: { confidence: { kind: 0.5, mood: 1 } } });
     expect(r.success).toBe(false);

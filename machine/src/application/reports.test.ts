@@ -94,7 +94,7 @@ describe("verifyReportOf", () => {
       finished("verifying", 2, "passed", { findings: [finding("Race", 9)] }),
     ];
     const byTitle = Object.fromEntries((verifyReportOf(task, runs, events)?.findings ?? []).map((f) => [f.title, f]));
-    expect(byTitle["Null deref"]?.resolution).toEqual({ status: "fixed", by: "implementer", commit: "fixsha" });
+    expect(byTitle["Null deref"]?.resolution).toEqual({ status: "fixed", by: "implementer", inferred: true, commit: "fixsha" });
     expect(byTitle["Race"]?.resolution).toBeUndefined();
   });
 

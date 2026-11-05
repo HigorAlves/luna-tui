@@ -4,13 +4,18 @@ import type { Finding } from "./stage.ts";
 
 export type SeverityLevel = "blocker" | "should_fix" | "nit";
 
-/** The table wave 4 used for calibration: `bug|security|blocker` block, `test|perf|question|should_fix`
- *  should be fixed, anything else is a nit. `severity` stays a free string on the wire. */
+const BLOCKER = new Set(["bug", "security", "blocker", "critical", "high", "major", "error"]);
+const SHOULD_FIX = new Set(["test", "perf", "question", "should_fix", "medium", "moderate", "warning"]);
+const NIT = new Set(["nit", "low", "minor", "style", "info", "nitpick", "suggestion"]);
+
+/** The table wave 4 used for calibration, widened: blocking words block, `test|perf|question|should_fix|medium|moderate|warning` should be
+ *  fixed, `nit|low|minor|style|info|nitpick|suggestion` are nits. Text the table does not know reads as `should_fix`, never `nit`:
+ *  a severity nobody recognised must not be quietly waved through. `severity` stays a free string on the wire. */
 export function severityOf(text: string): SeverityLevel {
   const s = text.trim().toLowerCase();
-  if (s === "bug" || s === "security" || s === "blocker") return "blocker";
-  if (s === "test" || s === "perf" || s === "question" || s === "should_fix") return "should_fix";
-  return "nit";
+  if (BLOCKER.has(s)) return "blocker";
+  if (SHOULD_FIX.has(s)) return "should_fix";
+  return NIT.has(s) ? "nit" : "should_fix";
 }
 
 const RANK: Record<SeverityLevel, number> = { blocker: 2, should_fix: 1, nit: 0 };

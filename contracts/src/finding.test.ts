@@ -7,9 +7,13 @@ const base = { path: "src/a.ts", line: 10, severity: "bug", title: "Null deref",
 
 describe("finding v2", () => {
   it("maps a severity string to a level by the calibration table", () => {
-    for (const s of ["bug", "security", "blocker", "BLOCKER", " Bug "]) expect(severityOf(s)).toBe("blocker");
-    for (const s of ["test", "perf", "question", "should_fix"]) expect(severityOf(s)).toBe("should_fix");
-    for (const s of ["nit", "style", "", "whatever"]) expect(severityOf(s)).toBe("nit");
+    for (const s of ["bug", "security", "blocker", "BLOCKER", " Bug ", "critical", "high", "major", "error"]) expect(severityOf(s)).toBe("blocker");
+    for (const s of ["test", "perf", "question", "should_fix", "medium", "moderate", "warning"]) expect(severityOf(s)).toBe("should_fix");
+    for (const s of ["nit", "low", "minor", "style", "info", "nitpick", "suggestion", "NIT"]) expect(severityOf(s)).toBe("nit");
+  });
+
+  it("reads a severity it does not know as should_fix, never as a nit", () => {
+    for (const s of ["", "whatever", "scope", "catastrophic"]) expect(severityOf(s)).toBe("should_fix");
   });
 
   it("gives a finding a short stable id from path, line and title", () => {
@@ -47,6 +51,14 @@ describe("finding v2", () => {
     expect(out[0]).toMatchObject({ path: "src/a.ts", line: 10, severity: "bug", confidence: 0.9, merged: [findingId(b)] });
     expect(out[1]).toMatchObject({ path: "src/z.ts" });
     expect(out[1]?.merged).toBeUndefined();
+  });
+
+  it("keeps a blocker a blocker when it is merged with a nit, in either order", () => {
+    const blocker = { ...base, severity: "critical", line: 10 };
+    const nit = { ...base, severity: "nit", line: 11 };
+    expect(mergeDuplicateFindings([blocker, nit])[0]?.severity).toBe("critical");
+    expect(mergeDuplicateFindings([nit, blocker])[0]?.severity).toBe("critical");
+    expect(severityOf(mergeDuplicateFindings([nit, blocker])[0]!.severity)).toBe("blocker");
   });
 
   it("does not merge across paths, beyond 3 lines, or with different titles; a title match ignores case and spacing", () => {

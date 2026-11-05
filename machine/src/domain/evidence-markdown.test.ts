@@ -161,3 +161,21 @@ describe("redacting secret-shaped tokens", () => {
     expect(redact("a sk-short and ghp_short and plain AKIA text")).toBe("a sk-short and ghp_short and plain AKIA text");
   });
 });
+
+describe("the v2 pack fields stay off the published text", () => {
+  it("never carries a media localPath, the results or the findings detail into the section or the comment", () => {
+    const v2 = pack({
+      media: [{ kind: "screenshot", label: "cart.png", url: "https://github.com/o/a/releases/download/luna-evidence/t1-cart.png", localPath: "/Users/someone/state/evidence/t1/abc/cart.png" }],
+      results: { unit: { passed: 3, total: 3 }, integration: null, e2e: null, coverageDelta: null },
+      findingsDetail: [{ id: "Fdeadbeef", title: "t", severity: "bug", resolution: "fixed", inferred: true }],
+      previewUrl: "https://preview.internal/secret",
+      version: 2,
+    });
+    for (const text of [renderEvidenceSection(v2), renderEvidenceComment(v2)]) {
+      expect(text).not.toContain("/Users/someone");
+      expect(text).not.toContain("localPath");
+      expect(text).not.toContain("Fdeadbeef");
+      expect(text).not.toContain("preview.internal");
+    }
+  });
+});

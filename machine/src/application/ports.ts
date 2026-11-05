@@ -11,6 +11,10 @@ import type {
 import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 import type { StageOutcome } from "../domain/transition.ts";
 
+/** The rows a running stage may log through `emit`: the diagram's names for facts only it knows. Never a kind other code acts on (`transition`, `task.reply`...). */
+export const EMITTABLE = ["ship.event", "ship.ready", "ship.approval_needed", "evidence.published"] as const;
+export type EmittableKind = (typeof EMITTABLE)[number];
+
 export interface StageContext {
   task: TaskRow;
   stage: TaskState;
@@ -33,7 +37,7 @@ export interface StageContext {
   /** Puts a line on the task's activity while the stage runs (`stage.note`): a wait, a fallback, anything the run should say before it ends. */
   note?: (text: string) => Promise<void>;
   /** Logs a row the v2.2 diagram names (`ship.ready`, `ship.event`...) while the stage runs; the payload is ids, counts and enum values only. */
-  emit?: (kind: string, payload: Record<string, unknown>) => Promise<void>;
+  emit?: (kind: EmittableKind, payload: Record<string, unknown>) => Promise<void>;
   /** What the stage container needs in its environment to continue this run's trace (the
    *  telemetry's `childEnv()`); empty when nothing is traced. The pack runner passes it as the
    *  sandbox's `extraEnv`. */

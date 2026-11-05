@@ -86,7 +86,7 @@ export function verifyReportOf(task: TaskRow, runs: readonly StageRunRow[], even
     const commit = fixer ? runs.find((r) => r.stage === "implementing" && r.attempt === fixer.attempt && r.status === "passed")?.outputCommit : null;
     for (const found of findingsOf(f.detail)) {
       if (still.has(found.id) || !fixer) continue;
-      earlier.push({ ...found, resolution: { status: "fixed", by: "implementer", ...(commit ? { commit } : {}) } });
+      earlier.push({ ...found, resolution: { status: "fixed", by: "implementer", inferred: true, ...(commit ? { commit } : {}) } });
     }
   }
   const findings = mergeDuplicateFindings([...earlier, ...findingsOf(last?.detail)]);

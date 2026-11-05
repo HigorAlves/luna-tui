@@ -8,7 +8,7 @@ import { z } from "zod";
 const unit = z.number().min(0).max(1);
 const count = (max: number) => z.number().int().min(0).max(max);
 const minutes = (max: number) => z.number().positive().max(max);
-const days = z.number().int().min(0).max(3650);
+const days = z.number().int().min(0).max(365);
 /** A command or a template: stored, never run or rendered here. Bounded so a file cannot park megabytes in the policy. */
 const opaque = z.string().max(2000);
 const section = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict();
@@ -35,21 +35,21 @@ export const FactoryConfigInput = {
   fast_lane: section({ max_risk: Risk3.optional(), max_size: SizeBucket.optional(), excluded_types: z.array(z.string().max(40)).max(20).optional(), cross_team: z.boolean().optional() }).optional(),
   plan: section({
     coverage_score_min: unit.optional(),
-    coverage_rounds: count(10).optional(),
-    plan_check_retries: count(10).optional(),
+    coverage_rounds: count(5).optional(),
+    plan_check_retries: count(5).optional(),
     approvers: section({ low: count(5).optional(), medium: count(5).optional(), high: count(5).optional(), outside_owning_team: z.boolean().optional() }).optional(),
     sla: Sla.optional(),
   }).optional(),
   size: section({
     target_loc: z.tuple([count(100_000), count(100_000)]).optional(),
-    hard_limit_loc: count(100_000).optional(),
-    max_children: count(50).optional(),
+    hard_limit_loc: count(20_000).optional(),
+    max_children: count(20).optional(),
     max_rounds: count(10).optional(),
-    depth: count(5).optional(),
+    depth: count(3).optional(),
   }).optional(),
   build: section({
-    max_iterations: count(1000).optional(),
-    max_tokens: count(100_000_000).optional(),
+    max_iterations: count(50).optional(),
+    max_tokens: count(20_000_000).optional(),
     max_minutes: minutes(1440).optional(),
     backoff_minutes: z.tuple([minutes(1440), minutes(1440)]).optional(),
     regression_full_suite_minutes: minutes(1440).optional(),
@@ -69,7 +69,7 @@ export const FactoryConfigInput = {
     auto_merge: z.enum(["off", "low", "medium_when_review_required", "medium"]).optional(),
     merge: section({ method: z.enum(["squash", "merge", "rebase"]).optional(), queue: z.boolean().optional(), delete_branch: z.boolean().optional(), commit_template: opaque.nullable().optional() }).optional(),
     release_owners: z.array(z.string().max(80)).max(50).optional(),
-    stale_days: days.optional(),
+    stale_days: z.number().int().min(1).max(60).optional(),
     sla: Sla.optional(),
     poll_minutes: minutes(1440).optional(),
   }).optional(),

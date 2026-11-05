@@ -2422,3 +2422,24 @@ describe("the rows the diagram names that had none", () => {
     expect((await kinds(fast.id)).filter((k) => k === "card.fast_lane")).toHaveLength(1);
   });
 });
+
+describe("what a running stage may emit", () => {
+  it("logs an allowlisted row and drops any other kind with a warning, never logging it", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const emitting: StageRunner = async (context) => {
+      await context.emit?.("ship.ready", {});
+      await (context.emit as unknown as (kind: string, payload: object) => Promise<void>)("transition", { event: "approved", from: "awaiting_approval", to: "implementing" });
+      await (context.emit as unknown as (kind: string, payload: object) => Promise<void>)("task.reply", { text: "hi" });
+      return { outcome: "pass", detail: { outcome: "plan", record: { kind: "feature", goal: "g", size: "small", urgency: "normal", risk: "low", reason: "r" }, criteria: [] } };
+    };
+    pipeline = new Pipeline(db, (stage) => (stage === "triage" ? emitting : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const task = await newTask();
+    await pipeline.start(task.id);
+    const kinds = (await pipeline.events(task.id)).map((e) => e.kind);
+    expect(kinds).toContain("ship.ready");
+    expect(kinds.filter((k) => k === "task.reply")).toEqual([]);
+    expect((await pipeline.events(task.id)).filter((e) => e.kind === "transition" && e.payload.event === "approved")).toEqual([]);
+    expect(warn).toHaveBeenCalledTimes(2);
+    warn.mockRestore();
+  });
+});

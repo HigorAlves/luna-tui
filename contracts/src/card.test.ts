@@ -63,6 +63,19 @@ describe("the create_card entry contract", () => {
     expect(CardHints.safeParse({ confidence: 1.5 }).success).toBe(false);
   });
 
+  it("caps every string and list, and takes only http or https attachment urls", () => {
+    const long = (n: number) => "x".repeat(n);
+    expect(NewTaskInput.safeParse({ title: "t", reporter: { id: long(201) } }).success).toBe(false);
+    expect(NewTaskInput.safeParse({ title: "t", reporter: { id: long(200) } }).success).toBe(true);
+    expect(NewTaskInput.safeParse({ title: "t", hints: { kind: long(201) } }).success).toBe(false);
+    expect(NewTaskInput.safeParse({ title: "t", sources: [{ type: "slack", permalink: long(2001) }] }).success).toBe(false);
+    expect(NewTaskInput.safeParse({ title: "t", sources: Array.from({ length: 21 }, () => ({ type: "slack" })) }).success).toBe(false);
+    expect(NewTaskInput.safeParse({ title: "t", sources: Array.from({ length: 20 }, () => ({ type: "slack" })) }).success).toBe(true);
+    expect(NewTaskInput.safeParse({ title: "t", attachments: Array.from({ length: 21 }, () => ({ name: "a", url: "https://x/a" })) }).success).toBe(false);
+    for (const url of ["file:///etc/passwd", "javascript:alert(1)", "data:text/html,x", "/etc/passwd"]) expect(NewTaskInput.safeParse({ title: "t", attachments: [{ name: "a", url }] }).success).toBe(false);
+    expect(NewTaskInput.safeParse({ title: "t", attachments: [{ name: "a", url: "http://x/a" }] }).success).toBe(true);
+  });
+
   it("weighs a hint at half", () => {
     expect(HINT_WEIGHT).toBe(0.5);
   });

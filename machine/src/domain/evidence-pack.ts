@@ -51,7 +51,7 @@ function v2Of(report: VerifyReport, media: EvidencePack["media"]): Pick<Evidence
       e2e: report.e2e.verdict === null && report.e2e.scenarios.length === 0 ? null : { verdict: report.e2e.verdict, passed, total: report.e2e.scenarios.length },
       coverageDelta: report.coverageDelta ? { added: report.coverageDelta.total.added, covered: report.coverageDelta.total.covered } : null,
     },
-    findingsDetail: report.findings.map((f) => ({ id: f.id ?? "", title: f.title, severity: f.severity, resolution: f.resolution?.status ?? null })),
+    findingsDetail: report.findings.map((f) => ({ id: f.id ?? "", title: f.title, severity: f.severity, resolution: f.resolution?.status ?? null, ...(f.resolution?.inferred ? { inferred: true } : {}) })),
     media: media.map((m) => (/^https?:\/\//i.test(m.url) ? m : { ...m, localPath: m.url })),
     version: 2,
   };

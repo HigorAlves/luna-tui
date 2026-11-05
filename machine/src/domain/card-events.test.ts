@@ -55,6 +55,16 @@ describe("namesOf", () => {
     expect(namesOf(row("stage.verify.findings", { count: 1 }))).toEqual(["verify.findings"]);
   });
 
+  it("never lets a row a stage reported carry a name only the machine may say", () => {
+    for (const name of ["ship.merged", "card.closed", "card.approved", "card.rejected", "card.archived", "card.created", "card.triaged", "build.done", "card.learned"]) {
+      expect(namesOf(row(`stage.${name}`, {}))).toEqual([]);
+    }
+    // what a stage may report still reads
+    for (const name of ["pr.opened", "ship.event", "ship.ready", "ship.approval_needed", "evidence.published", "verify.findings", "ci.status", "evidence.media_ready"]) {
+      expect(namesOf(row(`stage.${name}`, {}))).toEqual([name]);
+    }
+  });
+
   it("names nothing the diagram has no name for, and nothing for a failed stage", () => {
     for (const e of [row("stage.note", { note: "x" }), row("stage.engine", {}), row("plan.edited", {}), row("jira.moved", {}), finished("triage", "failed"), finished("implementing", "failed"), moved("triage", "plan"), row("stage.started", { stage: "triage" })]) {
       expect(namesOf(e)).toEqual([]);

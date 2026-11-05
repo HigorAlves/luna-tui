@@ -11,6 +11,9 @@ export const PENDING_EVENTS: Readonly<Partial<Record<CardEventName, number>>> = 
 
 const KNOWN: ReadonlySet<string> = new Set(CARD_EVENT_NAMES);
 
+/** The names a row a stage reported (`stage.<kind>`) may carry: only facts a stage knows. A stage never says a card was approved, merged, closed, rejected or archived. */
+const STAGE_REPORTS: ReadonlySet<string> = new Set(["pr.opened", "build.checkpoint", "ship.event", "ship.ready", "ship.approval_needed", "evidence.published", "verify.findings", "ci.status", "evidence.media_ready"]);
+
 /** The stage whose run is the Build panel's. */
 const BUILD = "implementing";
 
@@ -20,7 +23,7 @@ const str = (value: unknown): string | undefined => (typeof value === "string" ?
 export function namesOf(event: { kind: string; payload: Record<string, unknown> }): CardEventName[] {
   const { kind, payload } = event;
   const self = kind.startsWith("stage.") ? kind.slice("stage.".length) : kind;
-  if (KNOWN.has(self)) return [self as CardEventName];
+  if (KNOWN.has(self) && (self === kind || STAGE_REPORTS.has(self))) return [self as CardEventName];
 
   switch (kind) {
     case "task.created":

@@ -22,7 +22,7 @@ import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
-import type { StageResult, StageRunner } from "./ports.ts";
+import { EMITTABLE, type StageResult, type StageRunner } from "./ports.ts";
 import { shippedEvent } from "./ship-loop.ts";
 import { buildReportOf, verifyReportOf } from "./reports.ts";
 import { stageFactRows } from "./stage-facts.ts";
@@ -1669,7 +1669,11 @@ export class Pipeline {
           return this.store.markStageRunStarted(runId, { containerId: facts.container, inputCommit: facts.inputCommit, ...(facts.engine ? { engine: facts.engine } : {}) });
         },
         note: (text) => this.log(id, "stage.note", { stage, note: text }, runId),
-        emit: (kind, payload) => this.log(id, kind, payload, runId),
+        emit: async (kind, payload) => {
+          // Checked at run time too: the type is no guard against a caller that casts.
+          if (!(EMITTABLE as readonly string[]).includes(kind)) return console.warn(`stage ${stage} tried to log "${String(kind).slice(0, 60)}": not an event a stage may emit; dropped`);
+          await this.log(id, kind, payload, runId);
+        },
         traceEnv: span.childEnv(),
       });
     } catch (thrown) {

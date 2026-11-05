@@ -98,7 +98,7 @@ export const Finding = z.object({
   suggested_fix: z.string().nullable().optional(),
   description: z.string().optional(),
   /** How the finding ended: fixed in a commit, kept by the author, or dismissed by a person. */
-  resolution: z.object({ status: z.enum(["fixed", "kept", "dismissed"]), by: z.string(), commit: z.string().optional() }).optional(),
+  resolution: z.object({ status: z.enum(["fixed", "kept", "dismissed"]), by: z.string(), commit: z.string().optional(), /** True when the machine worked the resolution out (a finding that stopped being raised), rather than a person or a stage saying so. */ inferred: z.boolean().optional() }).optional(),
   /** Ids of the duplicates folded into this finding by `mergeDuplicateFindings`. */
   merged: z.array(z.string()).optional(),
 });
@@ -651,7 +651,7 @@ export const EvidencePack = z.object({
       coverageDelta: z.object({ added: z.number().int(), covered: z.number().int() }).nullable(),
     })
     .optional(),
-  findingsDetail: z.array(z.object({ id: z.string(), title: z.string(), severity: z.string(), resolution: z.string().nullable() })).optional(),
+  findingsDetail: z.array(z.object({ id: z.string(), title: z.string(), severity: z.string(), resolution: z.string().nullable(), inferred: z.boolean().optional() })).optional(),
   previewUrl: z.string().optional(),
   version: z.number().int().optional(),
 });
