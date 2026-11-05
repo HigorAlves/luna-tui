@@ -2,13 +2,54 @@
 // cannot push and the machine reads the ledger only after the run, so a slice that turned
 // committed is handed to `onCommitted` as it lands.
 import { type CheckContext, type DecisionOverrides, type LedgerSlice, Ledger, Slice } from "@hardness/contracts";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { type TruthSink, redCheckTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import type { CardHit } from "../../domain/card-search.ts";
 import { type AddedLine, type ScopeFacts, addedLinesOf, scopeFacts } from "../../domain/scope.ts";
+
+/** The most a request file the container writes may hold: a request is a few lines of JSON. */
+export const MAX_MAILBOX_BYTES = 64 * 1024;
+
+/**
+ * One request file of the mailbox (`checks/<file>` under the run's `/out`), as text: the container writes there and is not trusted.
+ * `checks/` must be a real directory (not a link out), the file a regular file of at most 64 KiB, and it is opened with
+ * `O_NOFOLLOW | O_NONBLOCK` so a link swapped in after the check, or a FIFO, is refused rather than followed or waited on.
+ * Null for anything else, and for a file that is not there yet.
+ */
+export async function readMailbox(outDir: string, file: string): Promise<string | null> {
+  try {
+    const dir = join(outDir, "checks");
+    if (!(await lstat(dir)).isDirectory()) return null;
+    const path = join(dir, file);
+    const info = await lstat(path);
+    if (!info.isFile() || info.size > MAX_MAILBOX_BYTES) return null;
+    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    try {
+      const buffer = Buffer.alloc(MAX_MAILBOX_BYTES + 1);
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+      return bytesRead > MAX_MAILBOX_BYTES ? null : buffer.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    return null;
+  }
+}
+
+/** An answer into the mailbox: `checks/` made if missing but never followed if it is a link, the temp file made new (a leftover, or a link the container planted there, removed first) and renamed over the answer. */
+export async function writeMailbox(outDir: string, file: string, content: string): Promise<void> {
+  const dir = join(outDir, "checks");
+  await mkdir(dir, { recursive: true });
+  if (!(await lstat(dir)).isDirectory()) throw new Error("checks/ is not a directory");
+  const tmp = join(dir, `.${file}.tmp`);
+  await rm(tmp, { force: true });
+  await writeFile(tmp, content, { flag: "wx" });
+  await rename(tmp, join(dir, file));
+}
 
 export interface BuildWatchOptions {
   /** The run's `/out` folder on the host. */
@@ -94,12 +135,8 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
 
   const requests = async (): Promise<void> => {
     if (!options.onScopeRequest) return;
-    let text: string;
-    try {
-      text = await readFile(join(options.outDir, "checks", "scope-request.json"), "utf8");
-    } catch {
-      return;
-    }
+    const text = await readMailbox(options.outDir, "scope-request.json");
+    if (text === null) return;
     if (text === lastRequest) return;
     let request: ScopeRequest;
     try {
@@ -120,12 +157,8 @@ export function buildWatch(options: BuildWatchOptions): BuildWatch {
 
   const searches = async (): Promise<void> => {
     if (!options.onCardSearch) return;
-    let text: string;
-    try {
-      text = await readFile(join(options.outDir, "checks", "card-search-request.json"), "utf8");
-    } catch {
-      return;
-    }
+    const text = await readMailbox(options.outDir, "card-search-request.json");
+    if (text === null) return;
     if (text === lastSearch) return;
     let query: string;
     try {
@@ -218,13 +251,7 @@ function problemsOf(pack: "red_check" | "scope_check", answer: Record<string, un
  *  luna tools wait on, and computes the facts once more over the final diff. */
 export function buildChecks(deps: BuildChecksDeps) {
   const log = deps.log ?? (() => {});
-  const checksDir = join(deps.outDir, "checks");
-  const write = async (file: string, answer: CheckAnswer): Promise<void> => {
-    await mkdir(checksDir, { recursive: true });
-    const tmp = join(checksDir, `.${file}.tmp`);
-    await writeFile(tmp, JSON.stringify(answer));
-    await rename(tmp, join(checksDir, file));
-  };
+  const write = (file: string, answer: CheckAnswer): Promise<void> => writeMailbox(deps.outDir, file, JSON.stringify(answer));
   /** The records of each slice's judged reds, in order: when the slice commits, they say whether the test was rewritten. */
   const redRecords = new Map<number, string[]>();
   let lastRecord: string | undefined;
@@ -288,11 +315,7 @@ export function cardSearchAnswers(deps: { outDir: string; search: (query: string
   return {
     async onCardSearch(query: string): Promise<void> {
       const cards = await deps.search(query);
-      const dir = join(deps.outDir, "checks");
-      await mkdir(dir, { recursive: true });
-      const tmp = join(dir, ".card-search.json.tmp");
-      await writeFile(tmp, JSON.stringify({ verdict: "ok", problems: [], cards }));
-      await rename(tmp, join(dir, "card-search.json"));
+      await writeMailbox(deps.outDir, "card-search.json", JSON.stringify({ verdict: "ok", problems: [], cards }));
     },
   };
 }

@@ -4,8 +4,7 @@
 // says so, and triage goes on.
 import { type ClassifyOptions, type DecisionOverrides, FACTORY_DEFAULTS, type FactoryConfig, type IssueContext, type NeedsInputItem, RecordDraft, type TaskClassification, TriageOutcome, TriageRecord } from "@hardness/contracts";
 
-import type { RequiredOwners } from "../../domain/codeowners.ts";
-import { fastLane } from "../../domain/fast-lane.ts";
+import { type Located, fastLane, ownersCheck } from "../../domain/fast-lane.ts";
 import { goalRefOf } from "../../domain/goal-ref.ts";
 import { composeRecord, recordComplete } from "../../domain/triage-record.ts";
 import { askedQuestions, triageVerdicts } from "../../domain/triage-policy.ts";
@@ -19,7 +18,7 @@ export interface TriageSignalDeps {
   /** The repo's policy: its scoring weights and bands turn the sub-scores into a priority, its confidence bars decide what is asked. Absent: the diagram's. */
   policy?: (repoPath: string) => Promise<{ factory: FactoryConfig; decisions?: Record<string, DecisionOverrides> }>;
   /** The code graph, for the owners the fast-lane rule reads; absent (or a repo without one) skips that condition. */
-  graph?: { locate(repoPath: string, text: string, options?: { staleCommits?: number }): Promise<{ owners: RequiredOwners[] } | null> };
+  graph?: { locate(repoPath: string, text: string, options?: { staleCommits?: number }): Promise<Exclude<Located, "failed" | null> | null> };
   save: (id: string, patch: Partial<TaskRow>) => Promise<void>;
   log?: (line: string) => void;
 }
@@ -47,7 +46,7 @@ function answersOf(approvals: StageContext["approvals"]): NonNullable<IssueConte
 }
 
 /** The record the machine composes around triage's words: null only when there is no valid draft. A record missing a field is returned as it is; `recordComplete` says what. */
-function recordOf(context: StageContext, result: StageResult, task: TaskRow, decision: TriageOutcome): Partial<TriageRecord> | null {
+function recordOf(context: StageContext, result: StageResult, task: TaskRow, decision: TriageOutcome, ownersNotChecked?: string): Partial<TriageRecord> | null {
   const draft = RecordDraft.safeParse(result.detail?.record);
   if (!draft.success) return null;
   const qa = context.approvals.flatMap((a) => {
@@ -64,6 +63,7 @@ function recordOf(context: StageContext, result: StageResult, task: TaskRow, dec
     qa,
     goalRef: goalRefOf({ text: `${task.title}\n${task.description}` }),
     previous: task.record,
+    ...(decision === "fast_lane" && ownersNotChecked ? { ownersNotChecked } : {}),
     model: result.run?.info?.modelId ?? "unknown",
     at: new Date().toISOString(),
   });
@@ -114,20 +114,21 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
       if (asked.length > 0) return ask(asked.map(({ question, recommended }) => ({ question, recommended })), asked.map(({ field, guess, confidence }) => ({ field, guess, confidence })));
     }
     /** The decision: the agent's own for a reply or an archive; otherwise `fast_lane` only when the machine's rule says so, else `plan`. */
-    const laneOf = async (ctx: StageContext, res: StageResult): Promise<{ decision: TriageOutcome; note?: string | undefined }> => {
+    const laneOf = async (ctx: StageContext, res: StageResult): Promise<{ decision: TriageOutcome; note?: string | undefined; ownersNotChecked?: string | undefined }> => {
       const said = TriageOutcome.safeParse(res.detail?.outcome);
       if (said.success && (said.data === "conversation" || said.data === "archive")) return { decision: said.data };
       const c = ctx.task.classification;
       if (!c?.sizeBucket || !c.riskPrelim || !c.typeOfWork) return { decision: "plan" };
       const fastConfig = (repo?.factory ?? FACTORY_DEFAULTS).fast_lane;
       const verdicts = triageVerdicts(c, caps, { ...(repo?.decisions?.triage_signals ? { overrides: repo.decisions.triage_signals } : {}) });
-      let owners: RequiredOwners[] | null = null;
+      let located: Located = null;
       if (deps.graph && task.repoPath) {
-        const located = await deps.graph.locate(task.repoPath, `${task.title}\n${task.description}`, { staleCommits: (repo?.factory ?? FACTORY_DEFAULTS).graph.stale_commits }).catch(() => null);
-        owners = located?.owners ?? null;
+        located = await deps.graph.locate(task.repoPath, `${task.title}\n${task.description}`, { staleCommits: (repo?.factory ?? FACTORY_DEFAULTS).graph.stale_commits }).catch((): Located => "failed");
       }
-      const lane = fastLane({ riskPrelim: c.riskPrelim, size: c.sizeBucket, typeOfWork: c.typeOfWork }, owners, fastConfig, verdicts);
-      return lane.fast ? { decision: "fast_lane", ...(lane.skipped ? { note: lane.skipped } : {}) } : { decision: "plan", note: `not the fast lane: ${lane.failing}` };
+      const lane = fastLane({ riskPrelim: c.riskPrelim, size: c.sizeBucket, typeOfWork: c.typeOfWork }, ownersCheck(located), fastConfig, verdicts);
+      return lane.fast
+        ? { decision: "fast_lane", ...(lane.ownersNotChecked ? { note: `owners not checked: ${lane.ownersNotChecked}`, ownersNotChecked: lane.ownersNotChecked } : {}) }
+        : { decision: "plan", note: `not the fast lane: ${lane.failing}` };
     };
     /** One run of the agent, its questions held to the bounds. */
     const runAgent = async (ctx: StageContext): Promise<StageResult> => {
@@ -139,7 +140,7 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
     if (result.outcome === "pass") {
       // The machine composes the record and checks it: an incomplete one sends the agent round once with what is missing, then a person decides.
       const lane = await laneOf(finalContext, result);
-      let record = recordOf(finalContext, result, finalContext.task, lane.decision);
+      let record = recordOf(finalContext, result, finalContext.task, lane.decision, lane.ownersNotChecked);
       let check = recordComplete(record);
       if (!check.complete) {
         const guidance = { id: "triage-record", taskId: task.id, kind: "triage", requested: {}, decision: "sent_back", reason: `The record you wrote is incomplete: ${check.missing.join(", ")}. Write the summary (at most 120 words), the goal sentence, the decision and the reason in full.`, response: null, createdAt: new Date(), decidedAt: new Date() } as unknown as StageContext["approvals"][number];
@@ -149,7 +150,8 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
           const again = await laneOf(finalContext, result);
           lane.decision = again.decision;
           lane.note = again.note;
-          record = recordOf(finalContext, result, finalContext.task, lane.decision);
+          lane.ownersNotChecked = again.ownersNotChecked;
+          record = recordOf(finalContext, result, finalContext.task, lane.decision, lane.ownersNotChecked);
           check = recordComplete(record);
           if (!check.complete) return { ...result, outcome: "escalated", detail: { ...result.detail, reason: `triage could not write a complete Triage Record: missing ${check.missing.join(", ")}`, escalation: "other" } };
         }

@@ -37,6 +37,16 @@ describe("composeRecord", () => {
   });
 });
 
+describe("composeRecord's caps", () => {
+  it("cuts the goal, the reason and the summary at 2000 characters, and keeps why the owners were not checked", () => {
+    const long = "x".repeat(5000);
+    const record = composeRecord({ ...base, draft: { goal: long, reason: long, summary: long }, ownersNotChecked: "no code graph" });
+    expect([record.goal?.length, record.reason?.length, record.summary?.length]).toEqual([2000, 2000, 2000]);
+    expect(record.ownersNotChecked).toBe("no code graph");
+    expect(composeRecord(base)).not.toHaveProperty("ownersNotChecked");
+  });
+});
+
 describe("recordComplete", () => {
   it("names what is missing", () => {
     const { complete, missing } = recordComplete(composeRecord({ ...base, classification: null, summary: "" }));

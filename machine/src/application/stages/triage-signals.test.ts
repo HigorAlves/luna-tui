@@ -272,7 +272,7 @@ describe("withTriageSignals and the fast lane", () => {
   it("takes the fast lane by the rule: low risk, small, not infra or data, with no owner clash", async () => {
     const { result, decision } = await lane(reading());
     expect(decision).toBe("fast_lane");
-    expect(result.detail).toMatchObject({ outcome: "fast_lane", laneNote: expect.stringContaining("no code graph") });
+    expect(result.detail).toMatchObject({ outcome: "fast_lane", laneNote: "owners not checked: no code graph" });
   });
 
   it("does not take it because the agent says so, when the card is medium risk", async () => {
@@ -289,11 +289,30 @@ describe("withTriageSignals and the fast lane", () => {
   });
 
   it("reads the owners from the code graph: one team is fine, two are not", async () => {
-    const graph = (owners: Array<{ path: string; owners: string[] }>) => ({ locate: async () => ({ owners }) });
-    expect((await lane(reading(), agentPass(), graph([{ path: "a", owners: ["@acme/cart"] }]))).decision).toBe("fast_lane");
-    const clash = await lane(reading(), agentPass(), graph([{ path: "a", owners: ["@acme/cart"] }, { path: "b", owners: ["@acme/auth"] }]));
+    const found = (owners: Array<{ path: string; owners: string[] }>, over: Record<string, unknown> = {}) => ({ locate: async () => ({ files: owners.map((o) => o.path), owners, stale: false, behind: 0, codeowners: true, ...over }) });
+    const one = await lane(reading(), agentPass(), found([{ path: "a", owners: ["@acme/cart"] }]));
+    expect(one.decision).toBe("fast_lane");
+    expect(one.result.detail).not.toHaveProperty("laneNote");
+    const clash = await lane(reading(), agentPass(), found([{ path: "a", owners: ["@acme/cart"] }, { path: "b", owners: ["@acme/auth"] }]));
     expect(clash.decision).toBe("plan");
     expect(clash.result.detail).toMatchObject({ laneNote: expect.stringContaining("2 owning teams") });
+  });
+
+  it("keeps the lane but records why the owners were not checked: no graph, a failed call, a stale graph, no match, no CODEOWNERS", async () => {
+    const asks = async (graph: Parameters<typeof lane>[2]) => {
+      const saved: Array<{ record?: { ownersNotChecked?: string } }> = [];
+      const result = await withTriageSignals(async () => agentPass(), { classify: null, ...(graph ? { graph } : {}), save: async (_id, patch) => void saved.push(patch as never) })(context({ task: task({ classification: reading() }) }));
+      return { reason: saved.find((p) => p.record)?.record?.ownersNotChecked, detail: result.detail };
+    };
+    const located = (over: Record<string, unknown>) => ({ locate: async () => ({ files: ["a"], owners: [{ path: "a", owners: ["@x/y"] }], stale: false, behind: 0, codeowners: true, ...over }) });
+    expect((await asks(undefined)).reason).toBe("no code graph");
+    expect((await asks({ locate: async () => null })).reason).toBe("no code graph");
+    expect((await asks({ locate: async () => Promise.reject(new Error("graph file corrupt")) })).reason).toBe("the code graph could not be asked");
+    expect((await asks(located({ stale: true, behind: 80 }))).reason).toBe("the code graph is stale (80 commits behind)");
+    expect((await asks(located({ files: [], owners: [] }))).reason).toBe("no file matched the card's words");
+    expect((await asks(located({ codeowners: false, owners: [] }))).reason).toBe("the repository has no CODEOWNERS");
+    expect((await asks(located({}))).reason).toBeUndefined();
+    expect((await asks(undefined)).detail).toMatchObject({ outcome: "fast_lane", laneNote: "owners not checked: no code graph" });
   });
 
   it("leaves a reply or an archive as the agent decided it", async () => {

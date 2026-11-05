@@ -83,7 +83,7 @@ export interface AgentDeps {
   /** How often the build watch looks at the run's ledger, in ms. */
   watchEvery?: number;
   /** The board search triage's agent asks for (`card_search`): read-only, the task's own repository only. Absent: the tool answers nothing. */
-  cards?: { search(request: { repoPath: string | null; selfId: string; query: string }): Promise<CardHit[]> };
+  cards?: { search(request: { repoPath: string | null; selfId: string; selfSource: string | null; query: string }): Promise<CardHit[]> };
 }
 
 /** Every branch the pipeline writes starts with this; see `workspaceFor`. */
@@ -294,7 +294,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   // Triage's board search: the same mailbox, answered over this task's own repository only.
   const cardSearch =
     pack === "triage" && deps.cards
-      ? cardSearchAnswers({ outDir: join(runDir, "out"), search: (query) => deps.cards!.search({ repoPath: task.repoPath, selfId: task.id, query }) })
+      ? cardSearchAnswers({ outDir: join(runDir, "out"), search: (query) => deps.cards!.search({ repoPath: task.repoPath, selfId: task.id, selfSource: task.source?.kind ?? null, query }) })
       : null;
   const startWatch = (): void => {
     if ((!checks && !cardSearch) || watch) return;

@@ -235,6 +235,8 @@ export function planStage(deps: PlanDeps): StageRunner {
 
     const verdicts = { coverage: coverage.verdict, plan: planCheck.verdict, risk: riskJudged.verdict };
     for (const [name, verdict] of Object.entries(verdicts)) if (verdict === "flag" || verdict === "ask") flagged.add(name);
+    // A fast lane taken without the owners looked at says so at the gate.
+    if (task.record?.decision === "fast_lane" && task.record.ownersNotChecked) flagged.add(`owners not checked: ${task.record.ownersNotChecked}`);
     // The triage signals the person did not settle and the machine let through: shown at this gate as `triage.<field>`.
     if (task.classification) {
       const repo = await deps.policies.for(task.repoPath);

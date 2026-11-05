@@ -46,7 +46,7 @@ export const LUNA_TOOLS = {
   },
   card_search: {
     description:
-      "Search the cards of this repository (open ones and those closed in the last 90 days) for a topic, so you can say \"related to card X\". Read-only: returns at most 10 of { id, title, state, summary } and nothing from another repository. An empty list or a verdict of skipped means nothing matched or no one answered; go on.",
+      "Search the titles of this repository's cards (open ones and those closed in the last 90 days) for a topic, so you can say \"related to card X\". Read-only: returns at most 10 of { id, title, state }, only cards that came from the same source as this one (a GitHub card sees GitHub cards), and nothing from another repository; never a summary or a description. An empty list or a verdict of skipped means nothing matched or no one answered; go on.",
     input: { query: z.string().min(1).max(300) },
   },
   slice_list: { description: "The slice ledger as it stands.", input: {} },

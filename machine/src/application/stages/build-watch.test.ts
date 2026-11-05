@@ -1,6 +1,6 @@
 // The build watch follows an implementing run's /out while the container runs: a slice turned
 // committed is pushed as it lands, so a killed container never loses a green slice.
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import type { CheckContext } from "@hardness/contracts";
 
 import { type Learned, tagged } from "../decision-truth.ts";
-import { type Decide, MAX_CARD_SEARCHES, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers } from "./build-watch.ts";
+import { type Decide, MAX_CARD_SEARCHES, MAX_MAILBOX_BYTES, MAX_REDS_PER_SLICE, MAX_SCOPE_REQUESTS, NOTE_TAIL, buildChecks, buildWatch, cardSearchAnswers, readMailbox, writeMailbox } from "./build-watch.ts";
 
 const ledger = (slices: Array<{ id: number; status: string; commit?: string | null }>) =>
   JSON.stringify({ schema: 1, slices: slices.map((s) => ({ id: s.id, title: `slice ${s.id}`, status: s.status, commit: s.commit ?? null })) });
@@ -201,14 +201,14 @@ describe("the board search mailbox", () => {
   it("answers each query the triage agent writes with the cards of the task's own repository, as ids and titles only", async () => {
     const out = mkdtempSync(join(tmpdir(), "card-search-"));
     const asked: string[] = [];
-    const answers = cardSearchAnswers({ outDir: out, search: async (query) => (asked.push(query), [{ id: "c1", title: "Export CSV", state: "triage", summary: "export" }]) });
+    const answers = cardSearchAnswers({ outDir: out, search: async (query) => (asked.push(query), [{ id: "c1", title: "Export CSV", state: "triage" }]) });
     const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onCardSearch: answers.onCardSearch });
     mkdirSync(join(out, "checks"), { recursive: true });
     writeFileSync(join(out, "checks", "card-search-request.json"), JSON.stringify({ query: "csv export", repoPath: "/some/other/repo" }));
     const answer = await waitFor(join(out, "checks", "card-search.json"));
     await watch.stop();
     expect(asked).toEqual(["csv export"]);
-    expect(answer).toEqual({ verdict: "ok", problems: [], cards: [{ id: "c1", title: "Export CSV", state: "triage", summary: "export" }] });
+    expect(answer).toEqual({ verdict: "ok", problems: [], cards: [{ id: "c1", title: "Export CSV", state: "triage" }] });
   });
 
   it("answers at most MAX_CARD_SEARCHES queries per run and ignores a request with no text query", async () => {
@@ -225,5 +225,66 @@ describe("the board search mailbox", () => {
     await watch.stop();
     expect(queries).toHaveLength(MAX_CARD_SEARCHES);
     expect(queries[0]).toBe("q1");
+  });
+});
+
+describe("the mailbox is read and written as the container's, not the machine's", () => {
+  const out = () => {
+    const dir = mkdtempSync(join(tmpdir(), "mailbox-"));
+    mkdirSync(join(dir, "checks"));
+    return dir;
+  };
+
+  it("reads a regular file of a request, and nothing for a file that is not there", async () => {
+    const dir = out();
+    writeFileSync(join(dir, "checks", "scope-request.json"), '{"diffSummary":"x"}');
+    expect(await readMailbox(dir, "scope-request.json")).toBe('{"diffSummary":"x"}');
+    expect(await readMailbox(dir, "card-search-request.json")).toBeNull();
+  });
+
+  it("refuses a request that is a symlink, even to a file with real content", async () => {
+    const dir = out();
+    const secret = join(dir, "secret.json");
+    writeFileSync(secret, '{"query":"credential"}');
+    symlinkSync(secret, join(dir, "checks", "card-search-request.json"));
+    expect(await readMailbox(dir, "card-search-request.json")).toBeNull();
+    // and the watch never hands it to a handler
+    const asked: string[] = [];
+    const watch = buildWatch({ outDir: dir, every: 5, onCommitted: async () => {}, onCardSearch: async (q) => void asked.push(q) });
+    await settle(40);
+    await watch.stop();
+    expect(asked).toEqual([]);
+  });
+
+  it("refuses a request over 64 KiB, and takes one right at the limit", async () => {
+    const dir = out();
+    writeFileSync(join(dir, "checks", "scope-request.json"), "x".repeat(MAX_MAILBOX_BYTES + 1));
+    expect(await readMailbox(dir, "scope-request.json")).toBeNull();
+    writeFileSync(join(dir, "checks", "scope-request.json"), "x".repeat(MAX_MAILBOX_BYTES));
+    expect((await readMailbox(dir, "scope-request.json"))?.length).toBe(MAX_MAILBOX_BYTES);
+  });
+
+  it("reads nothing when checks/ is itself a link out of the run folder", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "mailbox-link-"));
+    const elsewhere = mkdtempSync(join(tmpdir(), "mailbox-elsewhere-"));
+    writeFileSync(join(elsewhere, "scope-request.json"), "{}");
+    symlinkSync(elsewhere, join(dir, "checks"));
+    expect(await readMailbox(dir, "scope-request.json")).toBeNull();
+    await expect(writeMailbox(dir, "scope.json", "{}")).rejects.toThrow(/not a directory/);
+    expect(existsSync(join(elsewhere, "scope.json"))).toBe(false);
+  });
+
+  it("writes an answer over a leftover temp file, and never through a link the container left in its place", async () => {
+    const dir = out();
+    const target = join(dir, "victim.txt");
+    writeFileSync(target, "untouched");
+    symlinkSync(target, join(dir, "checks", ".scope.json.tmp"));
+    await writeMailbox(dir, "scope.json", '{"verdict":"proceed"}');
+    expect(readFileSync(target, "utf8")).toBe("untouched");
+    expect(readFileSync(join(dir, "checks", "scope.json"), "utf8")).toBe('{"verdict":"proceed"}');
+    expect(lstatSync(join(dir, "checks", "scope.json")).isFile()).toBe(true);
+    writeFileSync(join(dir, "checks", ".scope.json.tmp"), "leftover");
+    await writeMailbox(dir, "scope.json", '{"verdict":"flag"}');
+    expect(readFileSync(join(dir, "checks", "scope.json"), "utf8")).toBe('{"verdict":"flag"}');
   });
 });

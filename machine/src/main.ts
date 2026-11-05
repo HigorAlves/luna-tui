@@ -245,7 +245,7 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   },
   decisionTruth,
   // Triage's card_search: the task's own repository's cards, from the board the pipeline keeps.
-  { search: async ({ repoPath, selfId, query }) => searchCards(await pipeline.list(), query, { repoPath, selfId, now: new Date() }) },
+  { search: async ({ repoPath, selfId, selfSource, query }) => searchCards(await pipeline.list(), query, { repoPath, selfId, selfSource, now: new Date() }) },
 );
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review

@@ -5,6 +5,8 @@
 import { type RecordDraft, type TaskClassification, TriageRecord, type TriageOutcome } from "@hardness/contracts";
 
 export const MAX_SUMMARY_WORDS = 120;
+/** What the agent writes is capped when the machine composes the record: a model's text is not trusted to be short. */
+export const MAX_FIELD_CHARS = 2000;
 
 export interface ComposeInput {
   /** What the agent wrote: the goal sentence and its reason; the summary may ride in the draft or come from the answer. */
@@ -18,6 +20,8 @@ export interface ComposeInput {
   qa: Array<{ question: string; answer: string | null }>;
   goalRef: string;
   hintsUsed?: string[];
+  /** Why the fast lane was taken without looking at the owners (no graph, a stale one...); the plan gate lists it. */
+  ownersNotChecked?: string;
   /** The record this one replaces, when triage ran before. */
   previous?: { version?: number | undefined } | null;
   model: string;
@@ -27,12 +31,12 @@ export interface ComposeInput {
 /** The record as far as the facts reach: fields the machine could not fill are left out, and `recordComplete` names them. */
 export function composeRecord(input: ComposeInput): Partial<TriageRecord> {
   const c = input.classification;
-  const summary = (input.draft.summary ?? input.summary ?? "").trim();
+  const summary = (input.draft.summary ?? input.summary ?? "").trim().slice(0, MAX_FIELD_CHARS);
   const version = input.previous ? (input.previous.version ?? 1) + 1 : 1;
   return {
     source: input.source,
-    goal: input.draft.goal.trim(),
-    reason: input.draft.reason.trim(),
+    goal: input.draft.goal.trim().slice(0, MAX_FIELD_CHARS),
+    reason: input.draft.reason.trim().slice(0, MAX_FIELD_CHARS),
     decision: input.decision,
     signals: c?.signals ?? {},
     qa: input.qa,
@@ -49,6 +53,7 @@ export function composeRecord(input: ComposeInput): Partial<TriageRecord> {
     goalRef: input.goalRef,
     hintsUsed: input.hintsUsed ?? [],
     decisionBy: "machine",
+    ...(input.ownersNotChecked ? { ownersNotChecked: input.ownersNotChecked.slice(0, 200) } : {}),
     version,
   };
 }

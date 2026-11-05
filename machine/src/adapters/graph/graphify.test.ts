@@ -204,7 +204,7 @@ describe("graphifyGraph.locate and impact", () => {
   it("ranks the file a text points at, with its owners and component", async () => {
     const { graph, repo } = await built();
     const found = await graph.locate(repo, "applyCoupon charges twice");
-    expect(found).toMatchObject({ files: ["src/cart/coupon.ts", "src/cart/coupon.test.ts"], symbols: ["applyCoupon", "couponTest"], components: ["1"], owners: [{ path: "src/cart/coupon.ts", owners: ["@acme/cart"] }, { path: "src/cart/coupon.test.ts", owners: ["@acme/cart"] }], stale: false, behind: 0 });
+    expect(found).toMatchObject({ files: ["src/cart/coupon.ts", "src/cart/coupon.test.ts"], symbols: ["applyCoupon", "couponTest"], components: ["1"], owners: [{ path: "src/cart/coupon.ts", owners: ["@acme/cart"] }, { path: "src/cart/coupon.test.ts", owners: ["@acme/cart"] }], codeowners: true, stale: false, behind: 0 });
     expect(found!.confidence).toBeGreaterThan(0);
   });
 
@@ -218,7 +218,7 @@ describe("graphifyGraph.locate and impact", () => {
 
   it("has no owners when the repo has no CODEOWNERS, and no answer when the repo has no graph", async () => {
     const { graph, repo } = await built({ codeowners: null });
-    expect((await graph.locate(repo, "applyCoupon"))!.owners).toEqual([]);
+    expect(await graph.locate(repo, "applyCoupon")).toMatchObject({ owners: [], codeowners: false });
     const none = setup();
     expect(await none.graph.locate(none.repo, "applyCoupon")).toBeNull();
     expect(await none.graph.impact(none.repo, ["src/cart/coupon.ts"])).toBeNull();

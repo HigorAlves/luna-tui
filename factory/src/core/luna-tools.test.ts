@@ -87,7 +87,7 @@ describe("the build checks", () => {
 
   it("card_search writes the query for the machine and returns its answer, or skipped; a query is bounded", async () => {
     const { checksDir, luna } = setup(2000);
-    setTimeout(() => writeFileSync(join(checksDir, "card-search.json"), JSON.stringify({ verdict: "ok", cards: [{ id: "c1", title: "Export CSV", state: "triage", summary: "export" }] })), 20);
+    setTimeout(() => writeFileSync(join(checksDir, "card-search.json"), JSON.stringify({ verdict: "ok", cards: [{ id: "c1", title: "Export CSV", state: "triage" }] })), 20);
     expect(await luna.call("card_search", { query: "export csv" })).toMatchObject({ verdict: "ok", cards: [{ id: "c1" }] });
     expect(JSON.parse(readFileSync(join(checksDir, "card-search-request.json"), "utf8"))).toEqual({ query: "export csv" });
     expect(await setup(0).luna.call("card_search", { query: "x" })).toMatchObject({ verdict: "skipped" });

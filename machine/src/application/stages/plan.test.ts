@@ -333,4 +333,12 @@ describe("planStage", () => {
     const flagged = await setup({}).run(context({ task: { ...task, classification } as never }));
     expect(flagged.detail).toMatchObject({ flagged: ["triage.kind"] });
   });
+
+  it("lists a fast lane taken without the owners checked on the gate, with why", async () => {
+    const record = { source: "manual", kind: "bug", goal: "g", size: "S", urgency: "P3", risk: "low", signals: {}, qa: [], decision: "fast_lane", reason: "r", at: "2026-11-05T00:00:00.000Z", model: "m", ownersNotChecked: "the code graph is stale (80 commits behind)" };
+    const flagged = await setup({}).run(context({ task: { ...task, record } as never }));
+    expect(flagged.detail?.flagged).toContain("owners not checked: the code graph is stale (80 commits behind)");
+    const planned = await setup({}).run(context({ task: { ...task, record: { ...record, decision: "plan" } } as never }));
+    expect(planned.detail?.flagged).not.toContain("owners not checked: the code graph is stale (80 commits behind)");
+  });
 });

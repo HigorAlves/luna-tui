@@ -22,6 +22,8 @@ export interface GraphStamp {
 export interface GraphLocation extends Located {
   /** CODEOWNERS at the default branch, for the located files that have owners. */
   owners: RequiredOwners[];
+  /** Whether the repo has a CODEOWNERS at the default branch: no owners found means nothing without it. */
+  codeowners: boolean;
   /** More than the repo's `graph.stale_commits` commits behind the default branch. */
   stale: boolean;
   /** Commits the default branch has over the graph's; null when it cannot be counted. */

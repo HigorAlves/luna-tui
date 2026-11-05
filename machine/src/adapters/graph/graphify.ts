@@ -167,9 +167,10 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       const found = locate(graph, text);
       const stamp = await readStamp(dir);
       const behind = stamp ? await behindOf(repoPath, stamp.commit).catch(() => null) : null;
-      const rules = found.files.length > 0 ? parseCodeowners((await ownersText(repoPath).catch(() => null)) ?? "") : [];
+      const owners = found.files.length > 0 ? await ownersText(repoPath).catch(() => null) : null;
+      const rules = parseCodeowners(owners ?? "");
       const bar = options?.staleCommits ?? FACTORY_DEFAULTS.graph.stale_commits;
-      return { ...found, owners: requiredOwners(found.files, rules), stale: behind !== null && behind > bar, behind };
+      return { ...found, owners: requiredOwners(found.files, rules), codeowners: owners !== null, stale: behind !== null && behind > bar, behind };
     },
 
     async impact(repoPath, files) {
