@@ -9,6 +9,7 @@ export * from "./plan.ts";
 export * from "./entry-contract.ts";
 export * from "./card.ts";
 export * from "./backlog.ts";
+export * from "./ticket.ts";
 export * from "./context-complete.ts";
 export * from "./finding.ts";
 export * from "./reports.ts";
