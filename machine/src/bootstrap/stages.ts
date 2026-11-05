@@ -1,3 +1,4 @@
+import { dirname } from "node:path";
 // Wires up which StageRunner serves which TaskState: the real agent packs (when a
 // credential and the runner image are available), the host-only runners that always run
 // for real, and the stub fallback.
@@ -30,6 +31,9 @@ import { type ShipDecide } from "../application/stages/ship-fixes.ts";
 import { shipMonitor } from "../application/stages/ship-monitor.ts";
 import { verifyRunner } from "../application/stages/verify.ts";
 import { loadCredential } from "../adapters/credentials/claude.ts";
+import { dockerImages } from "../adapters/docker/image-build.ts";
+import { repoSlug } from "../adapters/graph/slug.ts";
+import { repoImages as makeRepoImages } from "../application/repo-images.ts";
 import { imageExists, imageId, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
@@ -53,7 +57,7 @@ export interface RealStagesResult {
   checksExec: ReturnType<typeof sandboxExecutor> | null;
   /** What any pack run outside the pipeline needs (the Slack inbox's triage, Jira intake): the image,
    *  the credentials, the state dir, the worktrees dir and each repo's luna.yaml; null when agents are off or something is missing. */
-  agentDeps: { image: string; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
+  agentDeps: { image: string; imageOfWorkFolder: (folder: string) => string; credentials: Credentials; stateDir: string; worktreesDir: string; policies: PolicyStore } | null;
 }
 
 /** Real agents for Triage and Implementer when everything they need is there; stubs otherwise. */
@@ -122,11 +126,24 @@ export async function buildRealStages(
   if (!videoImage) console.warn(`image ${config.runnerVideoImage} is missing (pnpm runner-video:build): Evidence will not make a video`);
   // A project's own checks run in the stage image too: what implementing installed there
   // (node_modules with Linux binaries, a Go cache) does not run on the host.
-  const checksExec = sandboxExecutor(config.runnerImage);
+  // Each repository's image: the machine's, or one built from the base its own luna.yaml names. The checks runner knows only the
+  // work folder (`<worktreesDir>/<repo name>/task-...`), so it takes the image last resolved for that name.
+  const nameKey = (path: string) => path.replace(/\/+$/, "").split("/").pop()?.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "repo";
+  const repoImages = makeRepoImages({
+    machineImage: config.runnerImage,
+    imageOf: async (repoPath) => (await policies.for(repoPath)).factory.sandbox.image,
+    slugOf: repoSlug,
+    workKeyOf: nameKey,
+    docker: dockerImages(),
+    onEvent: (event) => console.warn(`repository image: ${JSON.stringify(event)}`),
+  });
+  const imageOfWorkFolder = (folder: string) => repoImages.knownFor(nameKey(dirname(folder))) ?? config.runnerImage;
+  const checksExec = sandboxExecutor(imageOfWorkFolder);
   // Each stage gets only its own engine's credential, read when the stage starts.
   const credentials = engineCredentials;
   const deps = {
     image: config.runnerImage,
+    repoImages,
     imageId,
     qaImage: config.runnerQaImage,
     ...(videoImage ? { videoImage: config.runnerVideoImage } : {}),
@@ -319,7 +336,7 @@ export async function buildRealStages(
       }),
     ),
   };
-  return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
+  return { real, verifyPack, checksExec, agentDeps: { image: config.runnerImage, imageOfWorkFolder, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };
 }
 
 /** Packs on demand (`POST /runs`): on whenever agents are, off (undefined, the route's 503) only

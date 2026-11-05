@@ -279,7 +279,7 @@ const realVerifyRunner = verifyRunner({
     const env = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.env as EnvRecord | undefined;
     return env && typeof env.hash === "string" ? env : null;
   },
-  envOf: async (path, commit) => envOf({ image: await imageId(config.runnerImage), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
+  envOf: async (path, commit) => envOf({ image: await imageId(agentDeps?.imageOfWorkFolder(path) ?? config.runnerImage), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
   graph,
   stateDir: config.stateDir,
   get decide() {

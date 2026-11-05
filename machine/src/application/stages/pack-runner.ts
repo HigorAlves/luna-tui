@@ -50,6 +50,7 @@ import { PACK_LIMITS, buildStageInput } from "../../domain/stage-input.ts";
 import { pickEngine } from "../engine.ts";
 import type { Graph } from "../graph.ts";
 import { PolicyStore } from "../policy.ts";
+import { RepoImageError } from "../repo-images.ts";
 import type { StageContext, StageResult, StageRunner, Watcher } from "../ports.ts";
 
 export interface AgentDeps {
@@ -57,6 +58,8 @@ export interface AgentDeps {
   imageId?: (image: string) => Promise<string>;
   /** The base stage image. */
   image: string;
+  /** Resolves the image a repository's stages run in (its own, built from its base, or `image`); absent, every repository runs in `image`. */
+  repoImages?: { ensure(repoPath: string, signal?: AbortSignal): Promise<{ image: string }> };
   /** The image with browsers, used by the e2e pack. */
   qaImage: string;
   /** The image with the video tools, used by the recording pack; absent falls back to the QA image. */
@@ -189,7 +192,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
   if (pack !== "implementing" || result.outcome !== "pass" || !path || !deps.imageId) return result;
   try {
     const commit = await headCommit(path);
-    return { ...result, detail: { ...result.detail, env: envOf({ image: await deps.imageId(deps.image), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }) } };
+    return { ...result, detail: { ...result.detail, env: envOf({ image: await deps.imageId(deps.repoImages && context.task.repoPath ? (await deps.repoImages.ensure(context.task.repoPath)).image : deps.image), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }) } };
   } catch (error) {
     console.warn(`could not record the Build's environment: ${(error as Error).message}`);
     return result;
@@ -204,6 +207,16 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const limits = PACK_LIMITS[pack];
   if (extra.checkout && limits.writable) throw new Error(`${pack} is writable; a checkout run must be read-only`);
   const policy = await (deps.policies ?? sharedPolicies).for(task.repoPath);
+  // The repository's own image, built from the base its luna.yaml names; a build that fails is an environment problem with the reason.
+  let stageImage = deps.image;
+  if (deps.repoImages && !extra.checkout) {
+    try {
+      stageImage = (await deps.repoImages.ensure(task.repoPath, context.signal)).image;
+    } catch (error) {
+      if (!(error instanceof RepoImageError)) throw error;
+      return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "image", reason: `the repository's image could not be built: ${error.reason}`, options: ["fix sandbox.image.base in luna.yaml, or remove it to use the machine's image, then resume"] } };
+    }
+  }
   // The branch the pipeline would give this task today: `task/<id>-<slug>`, or the repo's
   // `jira.branch` pattern for a linked task (with the id appended when the repo already has
   // that branch). A task that already works somewhere keeps that branch: it was named and
@@ -423,7 +436,7 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     attach: Boolean(resume),
     sessionMount,
     cacheVolume: cacheVolumeFor(task.repoPath),
-    image: pack === "e2e" ? deps.qaImage : pack === "recording" ? (deps.videoImage ?? deps.qaImage) : deps.image,
+    image: pack === "e2e" ? deps.qaImage : pack === "recording" ? (deps.videoImage ?? deps.qaImage) : stageImage,
     runDir,
     worktree: workspace.path,
     writable: limits.writable,

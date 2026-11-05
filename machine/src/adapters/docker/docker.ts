@@ -340,7 +340,7 @@ export async function execInSandbox(
  *  `cwd` is the worktree, and only HARDNESS_* env and the git identity (GIT_AUTHOR_*,
  *  GIT_COMMITTER_*) reach the container. The cache volume is the repo's: task worktrees live
  *  at `<worktreesDir>/<repo>/task-…`, so the parent names it. */
-export function sandboxExecutor(image: string) {
+export function sandboxExecutor(image: string | ((worktree: string) => string)) {
   return (
     command: string,
     args: string[],
@@ -359,7 +359,7 @@ export function sandboxExecutor(image: string) {
     return execInSandbox(
       {
         name: `hardness-check-${randomUUID().slice(0, 8)}`,
-        image,
+        image: typeof image === "function" ? image(options.cwd) : image,
         worktree: options.cwd,
         ...(isFile(join(options.cwd, ".git")) ? { gitFile: join(options.cwd, ".git") } : {}),
         argv: [command, ...args],

@@ -1,3 +1,4 @@
+import { RepoImageError } from "../repo-images.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -533,6 +534,30 @@ describe("agent stages through packs", () => {
     expect(result.outcome).toBe("pass");
     expect(result.run?.outputCommit).toBe(made);
     expect(git(seen!.worktree, "log", "--format=%s")).toBe("slice 1\ninit");
+  });
+
+  it("runs the stage in the repository's own image, and records that image's id", async () => {
+    let made = "";
+    let seen: SandboxRun | undefined;
+    const d = { ...deps(fakeSandbox(() => output({ commit: made }), (r) => {
+      seen = r;
+      writeFileSync(join(r.worktree, "pnpm-lock.yaml"), "lock\n");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice 1");
+      made = agent(r.worktree, "rev-parse", "HEAD");
+    })), imageId: async (image: string) => `sha256:id-of-${image}`, repoImages: { ensure: async () => ({ image: "hardness-runner-shop:abc" }) } };
+    const result = await agentRunners(d).implementing!(context("implementing"));
+    expect(seen?.image).toBe("hardness-runner-shop:abc");
+    expect((result.detail?.env as { image: string }).image).toBe("sha256:id-of-hardness-runner-shop:abc");
+  });
+
+  it("escalates as an environment problem, with the reason, when the repository's image cannot be built", async () => {
+    const sandbox = vi.fn();
+    const d = { ...deps(sandbox), repoImages: { ensure: async () => { throw new RepoImageError("step 3 failed: no such package"); } } };
+    const result = await agentRunners(d).implementing!(context("implementing"));
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, reason: expect.stringContaining("no such package") });
+    expect(sandbox).not.toHaveBeenCalled();
   });
 
   it("records the environment a passing Build ran in: the image id, the lockfiles at the head, the head, and their hash", async () => {
