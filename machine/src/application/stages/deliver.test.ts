@@ -89,6 +89,37 @@ describe("delivering", () => {
   });
 });
 
+describe("the draft PR's body", () => {
+  const withBody = (github: ReturnType<typeof fakeGitHub>) => {
+    const { context } = setup(github, { task: { record: { goal: "Readers export a CSV" } } });
+    const run = deliverRunner({ exec: async () => ok(), github, slugOf: async () => "acme/widgets", defaultBranch: async () => "main", commitsOf: async () => ({ base: "a".repeat(40), head: "b".repeat(40) }) });
+    return { run, context };
+  };
+
+  it("carries the record's goal and the base and head commits between the machine's markers", async () => {
+    const github = fakeGitHub({ findPr: async () => null, openPr: async () => ({ url: "u", number: 7, isDraft: true }) });
+    const { run, context } = withBody(github);
+    await run(context);
+    const body = (github.openPr as ReturnType<typeof vi.fn>).mock.calls[0]![1].body as string;
+    expect(body.startsWith("<!-- luna:pr:start -->")).toBe(true);
+    expect(body).toContain("- Readers export a CSV");
+    expect(body).toContain(`Base ${"a".repeat(7)}, head ${"b".repeat(7)}`);
+  });
+
+  it("on a PR that exists, replaces only what is between the markers and keeps a person's own text", async () => {
+    const updatePrBody = vi.fn(async () => {});
+    const old = "My note\n\n<!-- luna:pr:start -->\nold\n<!-- luna:pr:end -->\n\nafter";
+    const github = fakeGitHub({ findPr: async () => ({ url: "u", number: 3, isDraft: true }), prFacts: async () => ({ body: old, mergeable: "MERGEABLE" }) as never, updatePrBody });
+    const { run, context } = withBody(github);
+    await run(context);
+    const written = (updatePrBody.mock.calls[0] as unknown as [string, number, string])[2];
+    expect(written.startsWith("My note\n\n<!-- luna:pr:start -->\n")).toBe(true);
+    expect(written.endsWith("<!-- luna:pr:end -->\n\nafter")).toBe(true);
+    expect(written).not.toContain("\nold\n");
+    expect(written).toContain("Readers export a CSV");
+  });
+});
+
 describe("delivering a branch that conflicts with the default branch", () => {
   const G = ["git", ...HOST_GIT, ...at("/wt")];
   const pr = { url: "https://x/pull/3", number: 3, isDraft: true };
