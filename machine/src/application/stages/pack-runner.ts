@@ -30,11 +30,9 @@ import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
 import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
-import { pushCheckpoint } from "./deliver.ts";
+import { checkpointPush } from "./checkpoint.ts";
 import { readScenarioReds } from "./scenario-reds.ts";
 
-/** A checkpoint push that takes longer than this is given up (the final Deliver push is authoritative). */
-const PUSH_TIMEOUT_MS = 60_000;
 import type { TruthSink } from "../decision-truth.ts";
 import { type Decide, buildChecks, buildWatch, cardSearchAnswers } from "./build-watch.ts";
 import { type CardHit, sourceKindOf } from "../../domain/card-search.ts";
@@ -84,6 +82,8 @@ export interface AgentDeps {
   truth?: TruthSink | null;
   /** How often the build watch looks at the run's ledger, in ms. */
   watchEvery?: number;
+  /** Replaces the wait between checkpoint push tries (tests). */
+  pushSleep?: (ms: number) => Promise<void>;
   /** The board search triage's agent asks for (`card_search`): read-only, the task's own repository only. Absent: the tool answers nothing. */
   cards?: { search(request: { repoPath: string | null; selfId: string; selfSource: string | null; query: string }): Promise<CardHit[]> };
 }
@@ -321,14 +321,24 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           const tip = await headCommit(workspace.path).catch(() => null);
           if (tip && tip === lastPushed) return;
           pushes.attempted += 1;
-          const error = await pushCheckpoint(hostExec, workspace.branch, workspace.path, { timeoutMs: PUSH_TIMEOUT_MS, signal: context.signal }).catch((e: Error) => e.message);
-          if (error === null) {
+          const landed = await checkpointPush({
+            exec: hostExec,
+            branch: workspace.branch,
+            cwd: workspace.path,
+            follows: "green",
+            signal: context.signal,
+            tip: async () => tip,
+            alreadyPushed: lastPushed,
+            ...(deps.pushSleep ? { sleep: deps.pushSleep } : {}),
+            ...(context.emit ? { emit: context.emit } : {}),
+            note: async (text) => {
+              pushErrors.push(text);
+              await context.note?.(`slice ${slice.id}: ${text}`).catch(() => {});
+            },
+          });
+          if (landed) {
             pushes.ok += 1;
-            lastPushed = tip;
-          }
-          else {
-            pushErrors.push(error);
-            await context.note?.(`slice ${slice.id} not pushed: ${error}`).catch(() => {});
+            lastPushed = landed;
           }
         });
         return pushing;

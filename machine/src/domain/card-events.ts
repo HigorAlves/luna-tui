@@ -34,8 +34,6 @@ export function namesOf(event: { kind: string; payload: Record<string, unknown> 
       return ["card.closed"];
     case "stage.pr.opened":
       return ["pr.opened"];
-    case "stage.slice.committed":
-      return ["build.checkpoint"];
     case "stage.started":
       return payload.stage === BUILD ? ["build.started"] : payload.stage === "verifying" ? ["verify.started"] : payload.stage === "evidence" ? ["evidence.started"] : [];
     case "stage.finished":

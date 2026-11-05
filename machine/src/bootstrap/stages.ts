@@ -34,6 +34,7 @@ import { imageExists, removeLeftoverContainers, runSandbox, sandboxExecutor } fr
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
 import { HOST_GIT, commitAll, discardPending, findCommitBySubject, headCommit, stagePending } from "../adapters/git/worktree.ts";
+import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
 import { buildTestsStep } from "../application/stages/build-tests.ts";
 import { exec } from "../adapters/process/exec.ts";
@@ -169,6 +170,10 @@ export async function buildRealStages(
       judgeRed: async (check, repoPath) => {
         const policy = repoPath ? await policies.for(repoPath) : null;
         return judgeRedCheck(buildDecisions?.decide ?? null, check, repoPath, policy?.decisions ?? {});
+      },
+      checkpoint: async (context, worktree, follows) => {
+        if (!context.task.branch) return;
+        await checkpointPush({ exec, branch: context.task.branch, cwd: worktree, follows, signal: context.signal, tip: () => headCommit(worktree), ...(context.emit ? { emit: context.emit } : {}), ...(context.note ? { note: context.note } : {}) });
       },
       holdout: async (repoPath) => (await policies.for(repoPath)).holdoutCases,
       git: {

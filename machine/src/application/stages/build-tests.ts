@@ -21,6 +21,8 @@ export interface BuildTestsDeps {
   runWriter: (context: StageContext, extra: { plan?: PlanContext }) => Promise<StageResult>;
   /** The red_check decision for one scenario's test; `skipped` when it did not answer in time (it never blocks). `problems` are what a confident no said is wrong. */
   judgeRed: (check: CheckContext, repoPath: string | null) => Promise<{ verdict: string; problems: string[] }>;
+  /** Pushes the tests commit to the checkpoint ref before the implementer runs (a push that fails is a note, never a failure). */
+  checkpoint: (context: StageContext, worktree: string, follows: "red" | "green") => Promise<void>;
   /** The repo's `holdout_cases`: the implementer must not see the scenarios, so no test is written for it to read. */
   holdout: (repoPath: string) => Promise<boolean>;
   git: {
@@ -110,6 +112,7 @@ export function buildTestsStep(deps: BuildTestsDeps): StageRunner {
       }
       for (const j of judged) await context.emit?.("scenario.red", { scenario: j.id });
       const sha = await deps.git.commit(where, subject, `plan version ${plan.success ? plan.data.version : 2}`);
+      await deps.checkpoint(context, where, "red").catch(() => {});
       const result = await deps.implement(context, { scenarioTests: testsOf(facts) });
       const skipped = judged.some((j) => j.verdict === "skipped");
       return withStep(result, { status: "committed", commit: sha, tests: Object.keys(facts.tagged).length, ...(skipped ? { redCheck: "skipped" } : {}) });

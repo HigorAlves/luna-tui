@@ -983,9 +983,11 @@ describe("the engine a stage runs on", () => {
     it("never fails the stage on a failed push, and counts it", async () => {
       const hostExec = vi.fn(async () => ({ code: 1, stdout: "", stderr: "no remote" }));
       const sandbox = fakeSandbox(output(), killed);
-      const result = await runAgent({ ...deps(sandbox), hostExec, watchEvery: 5 }, context("implementing"), "implementing");
+      const result = await runAgent({ ...deps(sandbox), hostExec, watchEvery: 5, pushSleep: async () => {} }, context("implementing"), "implementing");
       expect(result.outcome).toBe("pass");
       expect((result.detail as { pushes: unknown }).pushes).toEqual({ attempted: 1, ok: 0 });
+      // The first try and one retry after each of 1 s, 5 s and 25 s.
+      expect(hostExec).toHaveBeenCalledTimes(4);
     });
   });
 });

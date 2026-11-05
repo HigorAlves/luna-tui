@@ -13,7 +13,7 @@ import type { ApprovalRow, TaskRow } from "../domain/task.ts";
 import type { StageOutcome } from "../domain/transition.ts";
 
 /** The rows a running stage may log through `emit`: the diagram's names for facts only it knows. Never a kind other code acts on (`transition`, `task.reply`...). */
-export const EMITTABLE = ["ship.event", "ship.ready", "ship.approval_needed", "evidence.published", "scenario.red"] as const;
+export const EMITTABLE = ["ship.event", "ship.ready", "ship.approval_needed", "evidence.published", "scenario.red", "build.checkpoint"] as const;
 export type EmittableKind = (typeof EMITTABLE)[number];
 
 export interface StageContext {
