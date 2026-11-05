@@ -247,6 +247,33 @@ describe("retry loops", () => {
     expect(step.resumeTo).toBe("implementing");
   });
 
+  describe("one Build round per set of blocker findings", () => {
+    const failing = (findingSet: string, buildRounds?: number): PipelineEvent => ({ type: "stage_done", outcome: "fail", findingSet, ...(buildRounds ? { buildRounds } : {}) });
+
+    it("sends a first set to Build and remembers it", () => {
+      const step = transition(at("verifying"), failing("k1"));
+      expect(step.state).toBe("implementing");
+      expect(step.retries.findingSet).toEqual({ key: "k1", rounds: 1 });
+    });
+
+    it("asks a person when the same set comes back after its rounds, with the findings named in the reason", () => {
+      const step = transition(at("verifying", { retries: { ...NO_RETRIES, verify: 1, total: 2, findingSet: { key: "k1", rounds: 1 } } }), failing("k1"));
+      expect(step.state).toBe("escalated");
+      expect(step.reason).toMatch(/same findings came back after 1 round/);
+      expect(step.resumeTo).toBe("implementing");
+    });
+
+    it("lets Build have more rounds when the config says so, and starts a new count for a new set", () => {
+      const again = at("verifying", { retries: { ...NO_RETRIES, verify: 1, total: 2, findingSet: { key: "k1", rounds: 1 } } });
+      expect(transition(again, failing("k1", 2)).state).toBe("implementing");
+      expect(transition(again, failing("k2")).retries.findingSet).toEqual({ key: "k2", rounds: 1 });
+    });
+
+    it("keeps the loop cap for a failure with no blocker set", () => {
+      expect(transition(at("verifying"), fail).retries.verify).toBe(1);
+    });
+  });
+
   it(`escalates when the implementer has used all ${IMPLEMENTER_CAP} runs`, () => {
     const start = at("verifying", { retries: { ...NO_RETRIES, total: IMPLEMENTER_CAP } });
     const step = transition(start, fail);

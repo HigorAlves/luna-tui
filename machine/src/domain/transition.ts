@@ -1,7 +1,8 @@
 // The pipeline as a pure function: given a task's state and an event, return the next
 // state and what the machine should do next. No database, no I/O, so every path is
 // unit tested. The graph is documented in docs/architecture.md.
-import { type ArchiveReason, type EscalationReason, PACKS, RUNNING, TERMINAL, type TaskRoute, type TaskState, type TriageOutcome, stronger } from "@hardness/contracts";
+import { nextRound, type FindingSetRounds } from "./finding-sets.ts";
+import { type ArchiveReason, type EscalationReason, FACTORY_DEFAULTS, PACKS, RUNNING, TERMINAL, type TaskRoute, type TaskState, type TriageOutcome, stronger } from "@hardness/contracts";
 
 /** Failures allowed in one retry loop (verify, e2e, ci) before asking you. */
 export const LOOP_CAP = 3;
@@ -22,6 +23,8 @@ export interface Retries {
   strongerNext?: boolean;
   /** Times a plan found wrong in Build, Verify or review went back to the planner: the second goes to a person. */
   planWrong?: number;
+  /** The set of blocker findings Build was last sent from Verify, and the rounds it has had on it. */
+  findingSet?: FindingSetRounds;
 }
 
 export const NO_RETRIES: Retries = { verify: 0, e2e: 0, ci: 0, total: 0, stronger: 0 };
@@ -41,7 +44,7 @@ export type PipelineEvent =
   /** `setup` when the repo has no luna.yaml yet: the setup gate runs before triage. */
   | { type: "start"; setup?: boolean }
   /** `triage` is the outcome triage picked; absent means `plan`. */
-  | { type: "stage_done"; outcome: StageOutcome; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
+  | { type: "stage_done"; outcome: StageOutcome; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
   | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
@@ -126,8 +129,13 @@ function enterImplementing(retries: Retries): Move {
   return run("implementing", { ...retries, total: retries.total + 1 });
 }
 
-function loopFailed(task: Snapshot, loop: Loop): Move {
-  const retries = { ...task.retries, [loop]: task.retries[loop] + 1 };
+function loopFailed(task: Snapshot, loop: Loop, set?: { key: string; buildRounds: number }): Move {
+  const retries: Retries = { ...task.retries, [loop]: task.retries[loop] + 1 };
+  if (set) {
+    const round = nextRound(task.retries.findingSet, set.key, set.buildRounds);
+    retries.findingSet = round.set;
+    if (round.escalate) return escalate(`the same findings came back after ${round.set.rounds} round${round.set.rounds === 1 ? "" : "s"} of Build`, "implementing", retries);
+  }
   if (retries[loop] >= LOOP_CAP) {
     return escalate(`${loop} failed ${retries[loop]} times`, "implementing", retries);
   }
@@ -357,7 +365,7 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       break;
     case "verifying":
       if (outcome === "pass") return run("e2e", retries);
-      if (outcome === "fail") return loopFailed(task, "verify");
+      if (outcome === "fail") return loopFailed(task, "verify", event.findingSet ? { key: event.findingSet, buildRounds: event.buildRounds ?? FACTORY_DEFAULTS.verify.build_rounds } : undefined);
       break;
     case "e2e":
       if (outcome === "pass") return run("delivering", retries);

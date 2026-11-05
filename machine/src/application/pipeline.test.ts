@@ -1635,6 +1635,15 @@ describe("the implementing findings loop", () => {
 });
 
 describe("retries and escalation", () => {
+  it("asks a person when Verify sends Build the same set of blocker findings twice (verify.build_rounds is 1)", async () => {
+    const blocked = { outcome: "fail" as const, detail: {}, findings: [{ path: "a.ts", line: 3, severity: "blocker", title: "off by one", body: "b", confidence: 0.9 }] };
+    stubs.plan("verifying", blocked, blocked);
+    const task = await newTask();
+    const escalated = await startAndApprove(task.id);
+    expect(escalated).toMatchObject({ state: "escalated", reason: expect.stringMatching(/same findings came back after 1 round/) });
+    expect(escalated.retries).toMatchObject({ verify: 2 });
+  });
+
   it("escalates after three verify failures, then resumes with your guidance", async () => {
     stubs.plan("verifying", fail, fail, fail);
     const task = await newTask();

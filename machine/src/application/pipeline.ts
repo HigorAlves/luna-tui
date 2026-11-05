@@ -25,6 +25,7 @@ import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
+import { blockerSetKey } from "../domain/finding-sets.ts";
 import { EMITTABLE, type StageResult, type StageRunner } from "./ports.ts";
 import { shippedEvent } from "./ship-loop.ts";
 import { buildProgressOf, buildReportOf, verifyReportOf } from "./reports.ts";
@@ -1678,6 +1679,7 @@ export class Pipeline {
                 ...(typeof result.detail?.reason === "string" ? { reason: result.detail.reason } : {}),
                 ...(stage === "triage" && TriageOutcome.safeParse(result.detail?.outcome).success ? { triage: result.detail!.outcome as TriageOutcome } : {}),
                 ...(EscalationReason.safeParse(result.detail?.escalation).success ? { escalation: result.detail!.escalation as EscalationReason } : {}),
+                ...(await this.blockerSet(id, stage, result)),
               };
         // An escalation from Build, the machine's own included, carries a decided reason: a fact where one decides, else the typed decision.
         const decided = stage === "implementing" ? await this.decideBuildEscalation(id, result, planned, { secondScopeRed, stuck: stuck ?? null }) : null;
@@ -1939,6 +1941,14 @@ export class Pipeline {
       const message = error instanceof Error ? error.message : String(error);
       return `could not revert verifying's tests ${verifying.outputCommit}: ${message}`;
     }
+  }
+
+  /** What Verify's failure tells the transition about its blocker findings: their set, and the rounds Build may have on one set (`verify.build_rounds`). */
+  private async blockerSet(id: string, stage: TaskState, result: StageResult): Promise<{ findingSet?: string; buildRounds?: number }> {
+    if (stage !== "verifying" || result.outcome !== "fail") return {};
+    const key = blockerSetKey(result.findings ?? []);
+    if (!key) return {};
+    return { findingSet: key, buildRounds: (await this.policyFor((await this.get(id)).repoPath)).factory.verify.build_rounds };
   }
 
   /** The stuck detector's attempt-level rule: a stage that just failed for the third time in a
