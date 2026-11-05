@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { type EngineId, PACKS, StageInput, type StageOutput, resolveEngine } from "@hardness/contracts";
+import { type DecisionRecord, type EngineId, PACKS, StageInput, type StageOutput, resolveEngine } from "@hardness/contracts";
 import { beforeEach, describe, expect, it } from "vitest";
 import { ZodError } from "zod";
 
@@ -359,9 +359,9 @@ describe("decision records", () => {
   const answered = output({ answer: { worth: { value: true, p: 0.93 } } });
 
   it("appends one record per decision pack call: the context, the validated answer, its verdicts, the engine, the model and the span's trace id", async () => {
-    const appended: Record<string, unknown>[] = [];
+    const appended: DecisionRecord[] = [];
     const { telemetry } = recordingTelemetry();
-    const r = runs(fakeSandbox(answered), { telemetry, decisions: { append: async (record: Record<string, unknown>) => void appended.push(record) } } as never);
+    const r = runs(fakeSandbox(answered), { telemetry, decisions: { append: async (record) => void appended.push(record) } });
     await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "ship");
     expect(appended).toHaveLength(1);
     expect(appended[0]).toMatchObject({
@@ -382,10 +382,34 @@ describe("decision records", () => {
 
   it("appends nothing for an agent pack, and nothing for a decision run that gave no valid answer", async () => {
     const appended: unknown[] = [];
-    const decisions = { append: async (record: unknown) => void appended.push(record) };
-    await runs(fakeSandbox(output()), { decisions } as never).run({ pack: "chat_triage", context: { chat } }, "notch");
-    await expect(runs(fakeSandbox(output({ answer: { worth: { value: "yes" } } })), { decisions } as never).run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "ship")).rejects.toThrow(RunFailedError);
+    const decisions = { append: async (record: DecisionRecord) => void appended.push(record) };
+    await runs(fakeSandbox(output()), { decisions }).run({ pack: "chat_triage", context: { chat } }, "notch");
+    await expect(runs(fakeSandbox(output({ answer: { worth: { value: "yes" } } })), { decisions }).run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "ship")).rejects.toThrow(RunFailedError);
     expect(appended).toEqual([]);
+  });
+  it("carries the task and stage a pipeline call names, and answers the record's id", async () => {
+    const appended: DecisionRecord[] = [];
+    const r = runs(fakeSandbox(answered), { decisions: { append: async (record) => void appended.push(record) } });
+    const result = await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro }, taskId: "task-9", stage: "ship" }, "ship");
+    expect(appended[0]).toMatchObject({ taskId: "task-9", stage: "ship" });
+    expect(result.recordId).toBe(appended[0]!.id);
+  });
+
+  it("puts the context and answer on the span for a pipeline call only, never for a call that names no stage", async () => {
+    const { telemetry, spans } = recordingTelemetry();
+    const r = runs(fakeSandbox(answered), { telemetry });
+    await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro }, stage: "ship" }, "ship");
+    await r.run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "someone-else");
+    expect(spans[0]!.end).toMatchObject({ input: { context: { ship: retro } }, output: { answer: { worth: { value: true, p: 0.93 } }, verdicts: { worth: "proceed" }, overall: "proceed" } });
+    expect(spans[1]!.end).not.toHaveProperty("input");
+    expect(spans[1]!.end).not.toHaveProperty("output");
+  });
+
+  it("answers anyway when the log cannot write", async () => {
+    const decisions = { append: async () => Promise.reject(new Error("disk full")) };
+    const result = await runs(fakeSandbox(answered), { decisions }).run({ pack: "worth_learning", engine: "claude:haiku", context: { ship: retro } }, "ship");
+    expect(result.answer).toEqual({ worth: { value: true, p: 0.93 } });
+    expect(result.recordId).toBeUndefined();
   });
 });
 

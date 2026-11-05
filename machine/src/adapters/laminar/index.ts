@@ -7,7 +7,8 @@
 // here with a dynamic import, so a machine without a key never loads it; tests pass a fake.
 //
 // What is sent: the facts a run row keeps (pack, engine, model, turns, cost, duration, outcome,
-// the fingerprint); never a client's context nor a pack's answer. In `full` mode only, the
+// the fingerprint); never a client's context nor a pack's answer. In `full` mode only, a decision
+// call the pipeline made itself also carries its context and answer (`RunEnd.input/output`), and the
 // transcript on the host as well, and the stage container is handed the key and the span
 // (`childEnv`) so its model calls nest under it: a project key reads every trace of the project,
 // so `metadata` keeps it on the host.
@@ -60,6 +61,8 @@ const STATUS_ERROR = 2;
 const ATTR_RESPONSE_MODEL = "gen_ai.response.model";
 const ATTR_TOTAL_COST = "gen_ai.usage.cost";
 const ATTR_PROVIDER = "gen_ai.system";
+/** The span's input attribute (`LaminarAttributes.SPAN_INPUT`): a decision call's context, in full mode. */
+const ATTR_SPAN_INPUT = "lmnr.span.input";
 /** A transcript longer than this is cut to its tail: the end of a run is what explains it. */
 export const TRANSCRIPT_MAX_CHARS = 200_000;
 const CUT_MARK = "[… earlier output cut]\n";
@@ -77,7 +80,7 @@ async function transcriptText(path: string): Promise<string | null> {
 
 /** The run's facts as the span's output: every defined field of `end`, the result's `run` flattened. */
 function outputOf(end: RunEnd): Record<string, unknown> {
-  const { info, transcriptPath: _path, ...rest } = end;
+  const { info, transcriptPath: _path, input: _input, output: _output, ...rest } = end;
   const output: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(rest)) if (value !== undefined) output[key] = value;
   if (info) Object.assign(output, { runtime: info.runtime, modelId: info.modelId, sdkVersion: info.sdk.version, fingerprint: info.fingerprint });
@@ -135,6 +138,10 @@ export async function createLaminarTelemetry(options: LaminarOptions, sdk?: Lami
           const transcript = await transcriptText(end.transcriptPath);
           if (transcript !== null) output.transcript = transcript;
         }
+        // A decision call of the pipeline's own: its context as the span's input and its answer in the
+        // output, full mode only (the machine's own data; an HTTP client's call never carries them).
+        const spanInput = options.mode === "full" ? end.input : undefined;
+        if (options.mode === "full" && end.output) Object.assign(output, end.output);
         // Whatever fails on the way out, the span ends: an unended span leaks in the SDK's batch.
         await safe("span end failed", async () => {
           try {
@@ -142,6 +149,7 @@ export async function createLaminarTelemetry(options: LaminarOptions, sdk?: Lami
             if (end.model) attributes[ATTR_RESPONSE_MODEL] = end.model;
             if (typeof end.costUsd === "number") attributes[ATTR_TOTAL_COST] = end.costUsd;
             if (end.info?.runtime) attributes[ATTR_PROVIDER] = end.info.runtime;
+            if (spanInput) attributes[ATTR_SPAN_INPUT] = JSON.stringify(spanInput);
             if (Object.keys(attributes).length > 0) span.setAttributes(attributes);
             if (end.error || end.outcome === "fail") span.setStatus({ code: STATUS_ERROR, ...(end.error ? { message: end.error } : {}) });
             Laminar.withSpan(span, () => Laminar.setSpanOutput(output));

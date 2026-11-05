@@ -42,6 +42,8 @@ export type RunInput = z.infer<typeof RunInput>;
 export interface RunResult {
   answer: Record<string, unknown>;
   usage: { model: string; engine: EngineId; turns: number; durationMs: number; costUsd: number | null };
+  /** The decision record this call left (a decision pack with records on), so a later fact can name it. Host use. */
+  recordId?: string;
 }
 
 /** `POST /repos/setup`: have the setup pack propose a luna.yaml for the checkout at `repoPath`. */

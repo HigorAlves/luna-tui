@@ -9,6 +9,7 @@ export * from "./models.ts";
 export * from "./engines.ts";
 export * from "./access.ts";
 export * from "./questions.ts";
+export * from "./decisions.ts";
 export * from "./github.ts";
 export * from "./slack.ts";
 export * from "./jira.ts";

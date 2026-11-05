@@ -187,6 +187,19 @@ describe("createLaminarTelemetry", () => {
     expect(spans[2]!.ended).toBe(true);
   });
 
+  it("puts a decision call's context and answer on its span in full mode only, and never in metadata mode", async () => {
+    const end = { outcome: "pass", input: { context: { ship: { kind: "retro" } } }, output: { answer: { worth: { value: true, p: 0.9 } }, verdicts: { worth: "proceed" }, overall: "proceed" } };
+    const start = { kind: "pack", pack: "worth_learning", engine: "claude:haiku", client: "ship" } as const;
+    const metadata = await createLaminarTelemetry({ ...options, mode: "metadata" }, fakeSdk());
+    await metadata.run(start).end(end);
+    const full = await createLaminarTelemetry({ ...options, mode: "full" }, fakeSdk());
+    await full.run(start).end(end);
+    expect(JSON.stringify([spans[0]!.attributes, spans[0]!.output])).not.toMatch(/retro|"p":0\.9|answer/);
+    expect(JSON.parse(spans[1]!.attributes["lmnr.span.input"] as string)).toEqual({ context: { ship: { kind: "retro" } } });
+    expect(spans[1]!.output).toMatchObject({ outcome: "pass", answer: { worth: { value: true, p: 0.9 } }, verdicts: { worth: "proceed" }, overall: "proceed" });
+    expect(spans[1]!.output).not.toHaveProperty("input");
+  });
+
   it("keeps a transcript to its last 200k characters", async () => {
     const dir = mkdtempSync(join(tmpdir(), "laminar-"));
     const transcript = join(dir, "transcript.log");

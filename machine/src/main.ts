@@ -19,6 +19,7 @@ import { AUTO_ARCHIVE_GATES, type SlaRow, applySlaActions } from "./application/
 import { sweepEvidenceStore } from "./application/evidence-store.ts";
 import { sweepImages, sweepJiraIntakeRuns, sweepRunFolders, sweepSlackTriageRuns, sweepTaskState, sweepWorktrees } from "./application/sweep.ts";
 import type { EventRow } from "./domain/task.ts";
+import { DecisionLog } from "./application/decision-log.ts";
 import { groundTruthWriter } from "./application/ground-truth.ts";
 import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
@@ -83,6 +84,8 @@ const policies = new PolicyStore();
 /** Run traces: a local Laminar (`MACHINE_TRACES`, `LMNR_*`); the no-op without a key. Built before
  *  the pipeline so the first stage run after boot is traced. */
 const telemetry = await buildTelemetry(config.traces);
+/** What each decision pack call leaves (context, answer, verdicts), for evals; off with MACHINE_DECISIONS=off. */
+const decisionLog = new DecisionLog({ stateDir: config.stateDir, enabled: config.decisions.enabled });
 if (config.traces.mode !== "off") {
   console.log(`traces ${telemetry.mode === "off" ? "off (backend unavailable)" : telemetry.mode} · Laminar at ${config.traces.laminar.baseUrl}:${config.traces.laminar.httpPort}`);
 }
@@ -132,6 +135,10 @@ async function sweep(): Promise<void> {
     };
     const removed = await sweepEvidenceStore(config.stateDir, retention, new Date());
     return removed > 0 ? `removed ${removed} evidence pack copy(ies) past retention` : null;
+  });
+  await step("decision records", async () => {
+    const removed = await decisionLog.sweep(config.decisions.retentionDays);
+    return removed > 0 ? `removed ${removed} decision record(s) past ${config.decisions.retentionDays} days` : null;
   });
   await step("slack triage runs", async () => {
     const removed = await sweepSlackTriageRuns(config.stateDir, config.retentionDays);
@@ -392,6 +399,7 @@ const packRuns = buildPackRuns(config, {
   budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },
   engineBudgets,
   telemetry,
+  decisions: decisionLog,
   // A usage limit moves a call to a fallback engine, never to one whose window the pipeline holds.
   latched: () => pipeline.slots.latched.map((latch) => latch.owner),
 });
@@ -401,11 +409,11 @@ await packRuns?.clearLeftovers();
  *  as the `intake` client. Without a Jev credential it answers nothing and intake runs as before. */
 const classifier = packRuns ? createIssueClassifier({ runs: packRuns }) : null;
 if (classifier) triageSignals.classify = (issue) => classifier.classify(issue);
-if (packRuns) planDecisions.decide = async (pack, plan) => (await packRuns.run({ pack, context: { plan } }, "plan")).answer;
-if (packRuns) verifyDecisions.decide = async (pack, check) => (await packRuns.run({ pack, context: { check } }, "verify")).answer;
-if (packRuns) evidenceDecisions.decide = async (evidence) => (await packRuns.run({ pack: "evidence_format", context: { evidence } }, "evidence")).answer;
-if (packRuns) shipDecisions.decide = async (pack, ship) => (await packRuns.run({ pack, context: { ship } }, "ship")).answer;
-if (packRuns) buildDecisions.decide = async (pack, check) => (await packRuns.run({ pack, context: { check } }, "build")).answer;
+if (packRuns) planDecisions.decide = async (pack, plan) => (await packRuns.run({ pack, context: { plan }, stage: "plan" }, "plan")).answer;
+if (packRuns) verifyDecisions.decide = async (pack, check) => (await packRuns.run({ pack, context: { check }, stage: "verify" }, "verify")).answer;
+if (packRuns) evidenceDecisions.decide = async (evidence) => (await packRuns.run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence")).answer;
+if (packRuns) shipDecisions.decide = async (pack, ship) => (await packRuns.run({ pack, context: { ship }, stage: "ship" }, "ship")).answer;
+if (packRuns) buildDecisions.decide = async (pack, check) => (await packRuns.run({ pack, context: { check }, stage: "build" }, "build")).answer;
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 const app = createApp({
   db,

@@ -25,7 +25,7 @@
 // Spend: a call's cost is a pack_runs row the day's budget counts (spendSinceUsd), and a call
 // while the day is at its ceiling is refused before it runs. There is no monthly ceiling here:
 // that one is per repo (luna.yaml), and a call has no repo.
-import { type CredentialOwner, type EngineId, PACKS, type PackId, type RunInfo, type RunInput, type RunResult, credentialOwner, resolveEngine } from "@hardness/contracts";
+import { type CredentialOwner, type DecisionRecord, type EngineId, PACKS, type PackId, type RunInfo, type RunInput, type RunResult, credentialOwner, resolveEngine } from "@hardness/contracts";
 import { randomUUID } from "node:crypto";
 import { mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
@@ -37,6 +37,8 @@ import { engineProblem, fallbackCandidates } from "../domain/engine-choice.ts";
 import type { EngineBudgetWatch } from "./engine-gates.ts";
 import { buildContextPackInput } from "../domain/stage-input.ts";
 import { type RunFacts, runFacts } from "../domain/task.ts";
+import { applyPolicy } from "@hardness/contracts";
+import type { DecisionAppender } from "./decision-log.ts";
 import { outputError, runPackOnce } from "./stages/run-once.ts";
 import { type Telemetry, noTelemetry } from "./telemetry.ts";
 
@@ -96,9 +98,14 @@ export class RunRateLimitedError extends Error {
   }
 }
 
+/** A call as the host makes it: `RunInput` plus where in the pipeline it comes from. `taskId` and `stage`
+ *  are never read from a request body (the route parses `RunInput`, which has neither); a call that
+ *  names a `stage` is the pipeline's own, the only kind whose context and answer a span may carry. */
+export type HostRunInput = RunInput & { taskId?: string; stage?: string };
+
 export interface PackRunsPort {
   /** `signal` is the request's: when it aborts, a waiting call is dropped and a running one stopped. */
-  run(input: RunInput, client: string | null, signal?: AbortSignal): Promise<RunResult>;
+  run(input: HostRunInput, client: string | null, signal?: AbortSignal): Promise<RunResult>;
 }
 
 export interface PackRunsDeps {
@@ -124,6 +131,8 @@ export interface PackRunsDeps {
   log?: (line: string) => void;
   /** Where each call is reported as a span; the no-op without a backend. */
   telemetry?: Telemetry;
+  /** Where a decision pack's validated answer is kept with its context (RFC 0005 wave 7); none keeps nothing. */
+  decisions?: DecisionAppender;
 }
 
 /** `resetsAt` as the run reported it (epoch seconds, or a string from an older runner), as ISO. */
@@ -166,7 +175,7 @@ export class PackRuns implements PackRunsPort {
     await rm(join(this.deps.stateDir, PACK_RUNS_DIR), { recursive: true, force: true });
   }
 
-  async run(request: RunInput, client: string | null, signal?: AbortSignal): Promise<RunResult> {
+  async run(request: HostRunInput, client: string | null, signal?: AbortSignal): Promise<RunResult> {
     const { pack } = request;
     if (!isContextPack(pack)) throw new NotOnDemandError(`${pack} is not run on demand: only ${Object.keys(PACKS).filter((id) => isContextPack(id as PackId)).join(", ")} are`);
     let engine = request.engine ?? PACKS[pack].engines.default;
@@ -196,7 +205,7 @@ export class PackRuns implements PackRunsPort {
       let limit: RunRateLimitedError | null = null;
       for (;;) {
         try {
-          return await this.once(pack, context, engine, client, signal, movedFrom);
+          return await this.once(pack, context, engine, client, signal, movedFrom, { taskId: request.taskId, stage: request.stage });
         } catch (thrown) {
           if (!(thrown instanceof RunRateLimitedError)) throw thrown;
           tried.push(engine);
@@ -242,7 +251,7 @@ export class PackRuns implements PackRunsPort {
   }
 
   /** One run of the pack on one engine, in a place already taken: its answer, or the error that ended it. */
-  private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal, movedFrom: EngineId | null = null): Promise<RunResult> {
+  private async once(pack: ContextPackId, context: PackContext, engine: EngineId, client: string | null, signal?: AbortSignal, movedFrom: EngineId | null = null, origin: { taskId?: string; stage?: string } = {}): Promise<RunResult> {
     const startedAt = this.now();
     const t0 = Date.now();
     const span = this.telemetry.run({ kind: "pack", pack, engine, client });
@@ -254,6 +263,7 @@ export class PackRuns implements PackRunsPort {
     let failure: Error | null = null;
     let facts: RunFacts = {};
     let info: RunInfo | null = null;
+    let decided: ReturnType<typeof applyPolicy> | null = null;
     try {
       await mkdir(work, { recursive: true });
       const input = buildContextPackInput(pack, context, engine);
@@ -270,8 +280,11 @@ export class PackRuns implements PackRunsPort {
         if (!out.ok) failure = out.rateLimited ? new RunRateLimitedError(outputError(out), resetsIso(out.resetsAt)) : new RunFailedError(outputError(out));
         else {
           const parsed = PACKS[pack].answer.safeParse(out.answer);
-          if (parsed.success) answer = parsed.data as Record<string, unknown>;
-          else failure = new RunFailedError(`the answer did not match the schema: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
+          if (parsed.success) {
+            answer = parsed.data as Record<string, unknown>;
+            const found = PACKS[pack];
+            if (found.kind === "decision") decided = applyPolicy(found, answer);
+          } else failure = new RunFailedError(`the answer did not match the schema: ${parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ")}`);
         }
       }
     } catch (thrown) {
@@ -294,15 +307,46 @@ export class PackRuns implements PackRunsPort {
         durationMs: usage.durationMs,
         info,
         transcriptPath: join(runDir, "transcript.log"),
+        ...(decided && origin.stage !== undefined ? { input: { context }, output: { answer: answer!, verdicts: decided.verdicts, overall: decided.overall } } : {}),
       });
       await rm(runDir, { recursive: true, force: true }).catch(() => {});
     }
+    const recordId = decided && answer ? await this.keep({ pack, engine, model: usage.model, client, ...origin, context, answer, decided, traceId: span.traceId() }) : undefined;
     if (!(failure instanceof RunNoCredentialError)) await this.record({ pack, engine, model: usage.model, client, ok: failure === null, error: failure?.message ?? null, turns: usage.turns, durationMs: usage.durationMs, costUsd: usage.costUsd, startedAt: startedAt.toISOString(), endedAt: this.now().toISOString(), ...facts });
     if (usage.costUsd) await this.deps.engineBudgets?.afterRun(engine, { taskId: null, repo: null }).catch((thrown: unknown) => console.warn(`run: could not check the engine's cap: ${thrown instanceof Error ? thrown.message : String(thrown)}`));
     const cost = usage.costUsd === null ? "" : ` · $${usage.costUsd.toFixed(4)}`;
     this.log(failure ? `run: ${pack} on ${engine}${client ? ` for ${client}` : ""} failed: ${failure.message}` : `run: ${pack} on ${engine}${client ? ` for ${client}` : ""}, ${usage.turns} turn(s)${cost}`);
     if (failure) throw failure;
-    return { answer: answer!, usage };
+    return { answer: answer!, usage, ...(recordId ? { recordId } : {}) };
+  }
+
+  /** Keeps a decision pack's validated answer with its context; the record's id, or undefined when none was kept.
+   *  A log that cannot write never fails the call. */
+  private async keep(call: { pack: PackId; engine: EngineId; model: string; client: string | null; taskId?: string; stage?: string; context: PackContext; answer: Record<string, unknown>; decided: ReturnType<typeof applyPolicy>; traceId: string | null }): Promise<string | undefined> {
+    if (!this.deps.decisions) return undefined;
+    const record: DecisionRecord = {
+      schema: 1,
+      id: randomUUID(),
+      pack: call.pack,
+      engine: call.engine,
+      model: call.model,
+      at: this.now().toISOString(),
+      client: call.client,
+      ...(call.taskId !== undefined ? { taskId: call.taskId } : {}),
+      ...(call.stage !== undefined ? { stage: call.stage } : {}),
+      context: call.context as Record<string, unknown>,
+      answer: call.answer,
+      verdicts: call.decided.verdicts,
+      overall: call.decided.overall,
+      traceId: call.traceId,
+    };
+    try {
+      await this.deps.decisions.append(record);
+      return record.id;
+    } catch (thrown) {
+      console.warn(`run: could not keep the decision record: ${thrown instanceof Error ? thrown.message : String(thrown)}`);
+      return undefined;
+    }
   }
 
   private async record(run: PackRunRecord): Promise<void> {

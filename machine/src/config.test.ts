@@ -46,6 +46,7 @@ describe("loadConfig", () => {
       reposDir: "/home/me/Developer",
       threadReplies: true,
       groundTruth: true,
+      decisions: { enabled: true, retentionDays: 90 },
       slack: null,
       slackInbox: { enabled: true, userToken: null, appToken: null, intervalMs: 60_000, markRead: false, rulesPath: expect.stringMatching(/\/\.local\/state\/hardness\/slack-triage\.md$/) as string, digestAt: null },
       jira: null,
@@ -79,6 +80,9 @@ describe("loadConfig", () => {
     expect(loadConfig({ HOME: "/h", MACHINE_THREAD_REPLIES: "off" }).threadReplies).toBe(false);
     expect(loadConfig({ HOME: "/h" }).groundTruth).toBe(true);
     expect(loadConfig({ HOME: "/h", MACHINE_GROUND_TRUTH: "off" }).groundTruth).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS: "off" }).decisions.enabled).toBe(false);
+    expect(loadConfig({ HOME: "/h", MACHINE_DECISIONS_RETENTION_DAYS: "7" }).decisions.retentionDays).toBe(7);
+    expect(() => loadConfig({ HOME: "/h", MACHINE_DECISIONS_RETENTION_DAYS: "-1" })).toThrow(/MACHINE_DECISIONS_RETENTION_DAYS/);
     expect(loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb", MACHINE_SLACK_CHANNEL: "C1" }).slack).toEqual({ token: "xoxb", channel: "C1" });
     expect(() => loadConfig({ HOME: "/h", MACHINE_SLACK_TOKEN: "xoxb" })).toThrow(/MACHINE_SLACK_CHANNEL/);
   });

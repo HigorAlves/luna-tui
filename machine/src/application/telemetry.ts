@@ -24,7 +24,7 @@ export interface RunStart {
   client?: string | null;
 }
 
-/** What a run came to. Never the answer nor a client's context: a summary at most. */
+/** What a run came to. Never the answer nor a client's context: a summary at most (bar `input`/`output` below). */
 export interface RunEnd {
   outcome: string;
   /** The run row's status (`passed`, `failed`, `paused`, `aborted`), when there is one. */
@@ -39,6 +39,10 @@ export interface RunEnd {
   durationMs?: number | null;
   /** The result's `run`: runtime, pinned model, SDK version, fingerprint (RFC 0003 §7). */
   info?: RunInfo | null;
+  /** A decision pack call's context, and its answer with the verdicts: set only for the pipeline's own
+   *  calls (never an HTTP client's), and put on the span only in `full` mode. */
+  input?: Record<string, unknown>;
+  output?: Record<string, unknown>;
   /** The transcript on the host. Read, and only in `full` mode, by the adapter; never by callers. */
   transcriptPath?: string | null;
 }
