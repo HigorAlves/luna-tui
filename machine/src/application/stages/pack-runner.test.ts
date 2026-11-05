@@ -921,6 +921,29 @@ describe("the engine a stage runs on", () => {
       owners: async () => null,
     });
 
+    const commitContent = (files: Record<string, string>) => (r: SandboxRun) => {
+      for (const [name, text] of Object.entries(files)) writeFileSync(join(r.worktree, name), text);
+      git(r.worktree, "add", "-A");
+      git(r.worktree, "commit", "-q", "-m", "slice");
+    };
+
+    it("fails the stage on a test switched off in place (a blocker), marks the run as a scope red and lists the issue with its severity", async () => {
+      const result = await runners(fakeSandbox(output(), commitContent({ "b.txt": "it.skip('x', () => {})\n" }))).implementing!(planned());
+      expect(result.outcome).toBe("fail");
+      expect(result.detail).toMatchObject({ scopeRed: true, scope: { issues: [expect.objectContaining({ severity: "blocker", kind: "switched_off_test" })] } });
+      expect(result.findings).toEqual([expect.objectContaining({ severity: "scope", title: expect.stringMatching(/switched off/) })]);
+    });
+
+    it("passes with a dependency the plan did not name (should_fix) and a TODO (nit): they ride along as findings and do not fail the stage", async () => {
+      const answer = { kind: "done", summary: "x", outOfMap: [{ path: "package.json", reason: "the export needs it" }] };
+      const files = { "b.txt": "// TODO later\n", "package.json": '{\n  "dependencies": {\n    "left-pad": "^1.0.0"\n  }\n}\n' };
+      const result = await runners(fakeSandbox(output({ answer } as Partial<StageOutput>), commitContent(files))).implementing!(planned());
+      expect(result.outcome).toBe("pass");
+      expect(result.detail).toMatchObject({ scope: { issues: expect.arrayContaining([expect.objectContaining({ severity: "should_fix", kind: "new_dependency" }), expect.objectContaining({ severity: "nit", kind: "todo" })]) } });
+      expect(result.detail).not.toHaveProperty("scopeRed");
+      expect(result.findings).toEqual(expect.arrayContaining([expect.objectContaining({ severity: "should_fix" }), expect.objectContaining({ severity: "nit" })]));
+    });
+
     it("fails the stage on a changed file the plan does not name and the answer does not declare, one finding per file", async () => {
       const result = await runners(fakeSandbox(output(), commitFiles("b.txt", "extra.txt"))).implementing!(planned());
       expect(result.outcome).toBe("fail");

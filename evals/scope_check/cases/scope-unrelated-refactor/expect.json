@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "unrelated_refactors.value",
+      "value": false
+    }
+  ],
+  "rubric": "The summary admits a rename and a reflow of code the export does not touch.",
+  "label": {
+    "unrelated_refactors": {
+      "value": false
+    }
+  }
+}

@@ -9,7 +9,7 @@ import { join, sep } from "node:path";
 import { type TruthSink, redCheckTruth } from "../decision-truth.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
 import type { CardHit } from "../../domain/card-search.ts";
-import { type AddedLine, type ScopeFacts, addedLinesOf, scopeFacts } from "../../domain/scope.ts";
+import { type AddedLine, type ScopeFacts, addedLinesOf, removedLinesOf, scopeFacts } from "../../domain/scope.ts";
 
 /** The most a request file the container writes may hold: a request is a few lines of JSON. */
 export const MAX_MAILBOX_BYTES = 64 * 1024;
@@ -252,6 +252,7 @@ function problemsOf(pack: "red_check" | "scope_check", answer: Record<string, un
     ...no("no_secret_or_pii", "the change adds something that looks like a secret or personal data"),
     ...no("no_test_removed", "the change removes a test"),
     ...no("no_todo", "the change leaves a TODO in place of work"),
+    ...no("unrelated_refactors", "the change carries an unrelated refactor: code the plan does not touch was renamed, moved or tidied"),
   ];
 }
 
@@ -282,11 +283,13 @@ export function buildChecks(deps: BuildChecksDeps) {
   const factsFor = async (declared: { path: string }[]): Promise<ScopeFacts> => {
     const [nameStatus, diff] = await Promise.all([deps.git.nameStatus(deps.inputCommit, "HEAD"), deps.git.diff(deps.inputCommit, "HEAD")]);
     const addedLines: AddedLine[] = addedLinesOf(diff);
-    return scopeFacts({ nameStatus, addedLines, planned: deps.planned, declared, planPresent: deps.planPresent === true });
+    return scopeFacts({ nameStatus, addedLines, removedLines: removedLinesOf(diff), planned: deps.planned, declared, planPresent: deps.planPresent === true });
   };
 
   /** The verdict the last scope_check came to, kept here: the answer file lives under /out, which the container can rewrite. */
   let verdict = "skipped";
+  /** What the last scope_check's answers found beyond the facts: `unrelated_refactor`. */
+  let judgedKinds: string[] = [];
 
   return {
     async onRed(slice: LedgerSlice): Promise<void> {
@@ -314,10 +317,15 @@ export function buildChecks(deps: BuildChecksDeps) {
         ? await judge("scope_check", { kind: "scope", planned: deps.planned, ...facts, declared: request.outOfMap, diffSummary: request.diffSummary })
         : { verdict: "skipped", problems: [] };
       verdict = answer.verdict;
+      judgedKinds = answer.problems.some((p) => p.includes("unrelated refactor")) ? ["unrelated_refactor"] : [];
       await write("scope.json", { ...answer, ...(facts ? { facts } : {}) });
     },
     /** The authoritative facts, over the final diff, with the files the answer declared. */
     finalFacts: factsFor,
+    /** What the last scope_check's answers found beyond the facts, for the issues' severities. */
+    async lastJudged(): Promise<string[]> {
+      return judgedKinds;
+    },
     /** The verdict the last scope_check came to, or "skipped" when the implementer never asked. */
     async lastVerdict(): Promise<string> {
       return verdict;

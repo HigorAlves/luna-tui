@@ -115,10 +115,10 @@ describe("the plan stage's decision packs", () => {
     expect(Object.keys(pack.policy).sort()).toEqual(["fits_record", "risk_appropriate"]);
   });
 
-  it("red_check asks whether the red is for the right reason and the test asserts the behaviour; scope_check asks five yes/no questions over the facts", () => {
+  it("red_check asks whether the red is for the right reason and the test asserts the behaviour; scope_check asks six yes/no questions over the facts", () => {
     expect(Object.keys(PACKS.red_check.questions)).toEqual(["right_reason", "not_tautological"]);
     expect(PACKS.red_check.questions.right_reason).toMatchObject({ type: "yesno", instructions: expect.stringContaining("missing import") });
-    expect(Object.keys(PACKS.scope_check.questions)).toEqual(["planned_or_declared", "no_new_dependency", "no_secret_or_pii", "no_test_removed", "no_todo"]);
+    expect(Object.keys(PACKS.scope_check.questions)).toEqual(["planned_or_declared", "no_new_dependency", "no_secret_or_pii", "no_test_removed", "no_todo", "unrelated_refactors"]);
     for (const q of Object.values(PACKS.scope_check.questions)) expect(q.type).toBe("yesno");
     for (const pack of [PACKS.red_check, PACKS.scope_check]) {
       expect(pack.engines).toEqual({ ...decisionEngines(pack.id), allowed: ["jev", "claude:haiku", "codex:luna"] });

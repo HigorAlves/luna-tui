@@ -278,6 +278,33 @@ describe("a plan found wrong comes back to the planner with its evidence", () =>
   });
 });
 
+describe("a scope problem gets one fix pass, then a person", () => {
+  const red = { outcome: "fail" as const, detail: { scopeRed: true, error: "scope check failed" }, findings: [{ path: "x.ts", line: 0, start_line: null, severity: "scope", title: "file outside the plan, not declared", body: "revert it", suggestion_code: null, confidence: 1 }] };
+
+  it("runs the implementer once more after the first scope red, with the issues as findings, and escalates the second with the reason undeclared_scope", async () => {
+    const ran: Array<number> = [];
+    const seenFindings: unknown[] = [];
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async (context) => (ran.push(1), seenFindings.push(context.priorFindings), red) : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(ran).toHaveLength(2);
+    expect(seenFindings[1]).toEqual([expect.objectContaining({ severity: "scope" })]);
+    expect((await p.get(task.id)).state).toBe("escalated");
+    const moved = (await p.events(task.id)).findLast((e) => e.kind === "transition" && e.payload.to === "escalated");
+    expect(moved?.payload).toMatchObject({ escalation: "undeclared_scope" });
+  });
+
+  it("does not count a red that is not a scope red (a failing run of any other kind) against the one fix pass", async () => {
+    const ran: Array<number> = [];
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async () => (ran.push(1), ran.length === 1 ? red : { outcome: "fail" as const }) : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(ran.length).toBeGreaterThan(2);
+  });
+});
+
 describe("Build's budget", () => {
   const events = (n: number) => Array.from({ length: n }, (_, i) => ({ at: new Date(i).toISOString(), kind: i % 2 ? "slice.green" : "slice.red", payload: { id: 1 } }));
 

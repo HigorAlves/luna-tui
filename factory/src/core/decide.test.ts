@@ -140,6 +140,13 @@ describe("a check context", () => {
     expect(state.description).toContain("TypeError: applyCoupon is not a function");
   });
 
+  it("renders the tests switched off in place and the scenario tests the change weakened", () => {
+    const check = { kind: "scope", planned: ["a.ts"], changed: ["a.test.ts"], switchedOff: ["a.test.ts: it.skip(x)"], weakened: ["S2"], diffSummary: "d" };
+    const text = stateOf({ ...base, context: { projectContext: null, check } } as never).description;
+    expect(text).toContain("Tests switched off in place:\n- a.test.ts: it.skip(x)");
+    expect(text).toContain("Scenario tests changed after the tests commit:\n- S2");
+  });
+
   it("renders a scope's planned, changed, undeclared, declared, removed, dependency, TODO and secret facts", () => {
     const check = { kind: "scope", planned: ["a.ts"], changed: ["a.ts", "b.ts"], undeclared: ["b.ts"], declared: [{ path: "c.ts", reason: "shared helper" }], removedTests: ["a.test.ts"], newDependencies: ["left-pad"], todos: ["a.ts: TODO fix"], secrets: [".env"], diffSummary: "two files" };
     const text = stateOf({ ...base, context: { projectContext: null, check } } as never).description;

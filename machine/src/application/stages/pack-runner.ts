@@ -28,6 +28,7 @@ import { safe } from "../../domain/evidence-markdown.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import { PROTECTED_BRANCHES, branchLinkOf } from "../../domain/jira-link.ts";
 import { lockedFilesRemoved, lockedFilesTouched } from "../../domain/locked-files.ts";
+import { type ScopeIssue, scopeIssues } from "../../domain/scope.ts";
 import { diffSummaryOf } from "../../domain/diff-summary.ts";
 import { StuckDetector } from "../../domain/stuck.ts";
 import { type ExecResult, exec } from "../../adapters/process/exec.ts";
@@ -150,6 +151,24 @@ function plannedFiles(plan: StageInput["plan"]): string[] {
   });
   return [...new Set([...touched, ...(plan?.map?.files ?? []).filter((f) => f.role !== "read").map((f) => f.path)])];
 }
+
+const SCOPE_TITLES: Record<ScopeIssue["kind"], string> = {
+  undeclared_file: "file outside the plan, not declared",
+  test_removed: "test removed",
+  switched_off_test: "test switched off in place",
+  test_weakened: "scenario test changed after the tests commit",
+  secret: "secret-looking addition",
+  new_dependency: "dependency the plan did not name",
+  unrelated_refactor: "unrelated refactor",
+  todo: "TODO left in place",
+};
+const SCOPE_ADVICE: Partial<Record<ScopeIssue["kind"], string>> = {
+  undeclared_file: "The plan's slices and the code map do not name this file and the answer did not declare it. Revert it, or declare it in outOfMap with the reason the slice needs it.",
+  test_removed: "The change removes this test; restore it.",
+  switched_off_test: "A test was switched off in place (skip, only, ignore, disabled). Turn it back on and fix the code instead.",
+  test_weakened: "A scenario's tagged test was changed or dropped after the tests commit. Restore it and make it pass.",
+  secret: "The change adds something that looks like a secret. Remove it.",
+};
 
 const OutOfMap = z.array(z.object({ path: z.string(), reason: z.string() }));
 
@@ -582,29 +601,31 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
           // The agent's own summary of its diff, with git's facts over it.
           diffSummary: diffSummaryOf(answerOf(output.answer)?.diffSummary, { changed: facts.changed, newDependencies: facts.newDependencies, todos: facts.todos, mapFiles: (input.plan?.map?.files ?? []).map((f) => f.path) }),
         };
-        const wrong = [...facts.undeclared, ...facts.removedTests.filter((t) => !facts.undeclared.includes(t))];
-        if (wrong.length > 0) {
+        // Every issue has a severity: a blocker fails the stage (one fix pass, then a person: the pipeline counts scope reds); a should_fix or a nit
+        // rides along as a finding and does not fail it.
+        const issues = scopeIssues(facts, await checks.lastJudged());
+        mapped.detail = { ...mapped.detail, scope: { ...(mapped.detail?.scope as object), issues } };
+        const asFinding = (issue: ScopeIssue) => ({
+          path: issue.kind === "undeclared_file" || issue.kind === "test_removed" ? issue.text.split(":")[0]! : "",
+          line: 0,
+          start_line: null,
+          severity: issue.severity === "blocker" ? "scope" : issue.severity,
+          title: SCOPE_TITLES[issue.kind],
+          body: issue.text,
+          suggestion_code: null,
+          confidence: 1,
+        });
+        const blockers = issues.filter((i) => i.severity === "blocker");
+        if (blockers.length > 0) {
           return merged({
             ...mapped,
             outcome: "fail",
-            detail: {
-              ...mapped.detail,
-              error: `${facts.undeclared.length > 0 ? `changed files outside the plan and not declared: ${facts.undeclared.join(", ")}` : ""}${facts.undeclared.length > 0 && facts.removedTests.length > 0 ? "; " : ""}${facts.removedTests.length > 0 ? `removed tests: ${facts.removedTests.join(", ")}` : ""}`,
-            },
-            findings: wrong.map((path) => ({
-              path,
-              line: 0,
-              start_line: null,
-              severity: "scope",
-              title: facts.removedTests.includes(path) ? "test removed" : "file outside the plan, not declared",
-              body: facts.removedTests.includes(path)
-                ? "The change removes this test; restore it."
-                : "The plan's slices and the code map do not name this file and the answer did not declare it. Revert it, or declare it in outOfMap with the reason the slice needs it.",
-              suggestion_code: null,
-              confidence: 1,
-            })),
+            detail: { ...mapped.detail, scopeRed: true, error: `scope check failed: ${blockers.map((i) => i.text).join("; ").slice(0, 1500)}` },
+            findings: blockers.map((i) => ({ ...asFinding(i), body: SCOPE_ADVICE[i.kind] ?? i.text })),
           });
         }
+        const rides = issues.filter((i) => i.severity !== "blocker").map(asFinding);
+        if (rides.length > 0) mapped.findings = [...(mapped.findings ?? []), ...rides];
         const accepted = declared.filter((d) => facts.changed.includes(d.path)).map((d) => d.path);
         if (accepted.length > 0 && deps.graph && task.repoPath) {
           await deps.graph.recordMisses(task.repoPath, { task: task.id, at: new Date().toISOString(), files: accepted }).catch((e: Error) => void context.note?.(`graph misses not recorded: ${e.message}`).catch(() => {}));

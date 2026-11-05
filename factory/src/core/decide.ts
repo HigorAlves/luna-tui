@@ -74,6 +74,8 @@ export function renderCheck(check: CheckContext): string {
     ...bullets("New dependencies", check.newDependencies),
     ...bullets("Added TODOs", check.todos),
     ...bullets("Secret-looking additions", check.secrets),
+    ...bullets("Tests switched off in place", check.switchedOff),
+    ...bullets("Scenario tests changed after the tests commit", check.weakened),
     ...(check.diffSummary ? [`Summary: ${check.diffSummary}`] : []),
   ].join("\n");
 }

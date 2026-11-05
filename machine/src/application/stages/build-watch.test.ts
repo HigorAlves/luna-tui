@@ -133,7 +133,7 @@ describe("build checks", () => {
     const seen: unknown[] = [];
     const decide: Decide = async (_pack, check) => {
       seen.push(check);
-      return { planned_or_declared: no(), no_new_dependency: yes(), no_secret_or_pii: yes(), no_test_removed: yes(), no_todo: no() };
+      return { planned_or_declared: no(), no_new_dependency: yes(), no_secret_or_pii: yes(), no_test_removed: yes(), no_todo: no(), unrelated_refactors: yes() };
     };
     const c = checks(out, decide);
     const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onScopeRequest: c.onScopeRequest });
@@ -145,6 +145,19 @@ describe("build checks", () => {
     expect(answer.problems).toHaveLength(2);
     expect(answer.verdict).not.toBe("proceed");
     expect(seen).toEqual([expect.objectContaining({ kind: "scope", planned: ["src/a.ts"], declared: [{ path: "src/util.ts", reason: "helper" }], diffSummary: "adds export", undeclared: ["src/extra.ts"] })]);
+  });
+
+  it("says an unrelated refactor the check found, apart from the facts, and keeps what was judged for the final severity", async () => {
+    const out = mkdtempSync(join(tmpdir(), "build-checks-"));
+    const decide: Decide = async () => ({ planned_or_declared: yes(), no_new_dependency: yes(), no_secret_or_pii: yes(), no_test_removed: yes(), no_todo: yes(), unrelated_refactors: no() });
+    const c = checks(out, decide);
+    const watch = buildWatch({ outDir: out, every: 5, onCommitted: async () => {}, onScopeRequest: c.onScopeRequest });
+    mkdirSync(join(out, "checks"), { recursive: true });
+    writeFileSync(join(out, "checks", "scope-request.json"), JSON.stringify({ diffSummary: "adds export and renames helpers", outOfMap: [] }));
+    const answer = await waitFor(join(out, "checks", "scope.json"));
+    await watch.stop();
+    expect(answer.problems).toEqual([expect.stringContaining("unrelated refactor")]);
+    expect(await c.lastJudged()).toEqual(["unrelated_refactor"]);
   });
 
   it("answers skipped when no decision can run, or the decision throws", async () => {
@@ -201,7 +214,7 @@ describe("bounds a run's checks", () => {
         seen.push(check);
         return pack === "red_check"
           ? { right_reason: { value: true, p: 0.9 }, not_tautological: { value: true, p: 0.9 } }
-          : { planned_or_declared: { value: true, p: 0.9 }, no_new_dependency: { value: true, p: 0.9 }, no_secret_or_pii: { value: true, p: 0.9 }, no_test_removed: { value: true, p: 0.9 }, no_todo: { value: false, p: 0.1 } };
+          : { planned_or_declared: { value: true, p: 0.9 }, no_new_dependency: { value: true, p: 0.9 }, no_secret_or_pii: { value: true, p: 0.9 }, no_test_removed: { value: true, p: 0.9 }, no_todo: { value: false, p: 0.1 }, unrelated_refactors: { value: true, p: 0.9 } };
       },
       overrides: {},
       git: { nameStatus: async () => "M\ta.ts", diff: async () => "+++ b/a.ts\n+// TODO later\n" },

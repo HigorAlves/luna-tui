@@ -10,6 +10,11 @@
       "kind": "equals",
       "path": "no_test_removed.value",
       "value": false
+    },
+    {
+      "kind": "equals",
+      "path": "unrelated_refactors.value",
+      "value": true
     }
   ],
   "rubric": "An unplanned auth file changed with no reason, and a test was removed.",
@@ -19,6 +24,9 @@
     },
     "no_test_removed": {
       "value": false
+    },
+    "unrelated_refactors": {
+      "value": true
     }
   }
 }

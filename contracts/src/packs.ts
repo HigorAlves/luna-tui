@@ -538,6 +538,7 @@ const SCOPE_CHECK_QUESTIONS: QuestionSet = {
   no_secret_or_pii: { type: "yesno", instructions: "Do the secret-looking additions contain no real secret or personal data? Answer yes when the list is empty or holds only obvious placeholders." },
   no_test_removed: { type: "yesno", instructions: "Does the change remove no test? The removed tests are listed; a test removed with the code it covered still counts as removed unless a declared reason explains it." },
   no_todo: { type: "yesno", instructions: "Does the change leave no TODO, FIXME or XXX that stands in for work the slice should have done? The added ones are listed." },
+  unrelated_refactors: { type: "yesno", instructions: "Is every change in service of the plan: no renames, reformatting, moves or clean-ups of code the plan's steps do not touch? Read the summary and the changed files; a change that only tidies code beside the work is a no." },
 };
 
 /** What finding_classify asks of one review finding and the code around it. */

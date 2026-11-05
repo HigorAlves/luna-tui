@@ -25,6 +25,11 @@
       "kind": "equals",
       "path": "no_todo.value",
       "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "unrelated_refactors.value",
+      "value": true
     }
   ],
   "rubric": "Every changed file is planned and nothing risky was added.",
@@ -42,6 +47,9 @@
       "value": true
     },
     "no_todo": {
+      "value": true
+    },
+    "unrelated_refactors": {
       "value": true
     }
   }

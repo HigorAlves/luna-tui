@@ -1584,12 +1584,16 @@ export class Pipeline {
           if (fallback) continue;
         }
         tried.clear();
-        const stuck = result.outcome === "fail" ? await this.stuckReason(id, stage) : null;
+        // A second scope red on the same card escalates with the reason the machine knows (undeclared_scope); the first got one fix pass.
+        const secondScopeRed = stage === "implementing" && result.outcome === "fail" && result.detail?.scopeRed === true && (await this.scopeReds(id)) >= 2;
+        const stuck = result.outcome === "fail" && !secondScopeRed ? await this.stuckReason(id, stage) : null;
         // A test_change sends the task back to test_design; verifying's tests, the ones
         // implementing says are wrong, must not stay locked in the branch meanwhile.
         const revertFailed = stage === "implementing" && result.outcome === "test_change" ? await this.undoVerifyingTests(id) : null;
         const next: PipelineEvent = result.rateLimited
           ? { type: "rate_limited" }
+          : secondScopeRed
+            ? { type: "stage_done", outcome: "escalated", reason: `the scope check failed twice on this card: ${typeof result.detail?.error === "string" ? result.detail.error.slice(0, 300) : "files or tests outside the plan"}`, escalation: "undeclared_scope" }
           : (stuck ?? revertFailed)
             ? { type: "stage_done", outcome: "escalated", reason: (stuck ?? revertFailed)! }
             : {
@@ -1892,6 +1896,11 @@ export class Pipeline {
     const detail = latest?.payload.detail as { findings?: unknown } | undefined;
     const findings = latest?.payload.findings ?? detail?.findings;
     return Array.isArray(findings) ? (findings as Finding[]) : [];
+  }
+
+  /** How many implementing runs of the card ended in a scope red (a blocker the scope check found). */
+  private async scopeReds(id: string): Promise<number> {
+    return (await this.store.findFinishedEvents(id)).filter((e) => e.payload.stage === "implementing" && objectOf(e.payload.detail)?.scopeRed === true).length;
   }
 
   /** The minutes of Build's budget the card has left. */

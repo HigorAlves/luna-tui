@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addedLinesOf, scopeFacts } from "./scope.ts";
+import { addedLinesOf, removedLinesOf, scopeFacts, scopeIssues } from "./scope.ts";
 
 const status = (...lines: string[]) => lines.join("\n");
 const none = { planned: [], declared: [], addedLines: [] };
@@ -126,5 +126,49 @@ describe("secret patterns", () => {
     const facts = scopeFacts({ nameStatus: "A\tsrc/x.ts\nA\t.ssh/id_rsa\nA\t.npmrc\nA\tcerts/a.p12\nA\t.envrc", addedLines: lines, planned: [], declared: [] });
     expect(facts.secrets).toEqual([".ssh/id_rsa", ".npmrc", "certs/a.p12", ".envrc", "src/x.ts: sk_l\u2026", "src/x.ts: gho_\u2026", "src/x.ts: AIza\u2026", "src/x.ts: ----\u2026", "src/x.ts: npm_\u2026"]);
     expect(JSON.stringify(facts)).not.toContain("abcdefghijklmnopqrstuvwxyz");
+  });
+});
+
+describe("tests switched off in place", () => {
+  const line = (text: string) => [{ path: "src/cart.test.ts", line: text }];
+  it.each([
+    ["it.skip('x', () => {})"], ["describe.only('x', () => {})"], ["xit('x', () => {})"], ["xdescribe('x', () => {})"], ["@Ignore"], ["@Disabled(\"later\")"], ["t.Skip(\"flaky\")"], ["#[ignore]"], ["@pytest.mark.skip(reason='x')"], ["pytest.mark.skip"],
+  ])("lists %s on an added line of a file", (text) => {
+    expect(scopeFacts({ ...none, nameStatus: "M\tsrc/cart.test.ts", addedLines: line(text) }).switchedOff).toEqual([`src/cart.test.ts: ${text}`]);
+  });
+  it("leaves an ordinary test and a word that only contains skip alone", () => {
+    expect(scopeFacts({ ...none, nameStatus: "M\tsrc/a.ts", addedLines: [{ path: "src/a.ts", line: "const skipped = true; it('x', () => {})" }] }).switchedOff).toEqual([]);
+  });
+});
+
+describe("weakened scenario tests", () => {
+  const removed = [{ path: "web/cart.test.ts", line: "it('exports two rows @scenario:S1', () => {" }];
+  it("lists a scenario whose tag the change removed from a test and did not put back", () => {
+    expect(scopeFacts({ ...none, nameStatus: "M\tweb/cart.test.ts", removedLines: removed }).weakened).toEqual(["S1"]);
+  });
+  it("is empty when the tag is still on an added line (the test was reworded, not dropped)", () => {
+    const added = [{ path: "web/cart.test.ts", line: "it('exports rows @scenario:S1', () => {" }];
+    expect(scopeFacts({ ...none, nameStatus: "M\tweb/cart.test.ts", removedLines: removed, addedLines: added }).weakened).toEqual([]);
+  });
+});
+
+describe("removedLinesOf", () => {
+  it("lists each removed line with its file", () => {
+    const diff = ["diff --git a/a.ts b/a.ts", "--- a/a.ts", "+++ b/a.ts", "@@ -1,2 +1 @@", "-gone", " kept"].join("\n");
+    expect(removedLinesOf(diff)).toEqual([{ path: "a.ts", line: "gone" }]);
+  });
+});
+
+describe("scopeIssues", () => {
+  const facts = { changed: [], undeclared: ["b.ts"], removedTests: ["a.test.ts"], newDependencies: ["package.json: left-pad ^1"], todos: ["a.ts: TODO later"], secrets: ["x: ghp_\u2026"], switchedOff: ["a.test.ts: it.skip(x)"], weakened: ["S2"] };
+  it("is a blocker for an undeclared file, a removed or switched-off or weakened test and a secret; should_fix for a dependency; nit for a TODO", () => {
+    const bySeverity = (s: string) => scopeIssues(facts, []).filter((i) => i.severity === s).map((i) => i.kind).sort();
+    expect(bySeverity("blocker")).toEqual(["secret", "switched_off_test", "test_removed", "test_weakened", "undeclared_file"]);
+    expect(bySeverity("should_fix")).toEqual(["new_dependency"]);
+    expect(bySeverity("nit")).toEqual(["todo"]);
+  });
+  it("adds an unrelated refactor the scope check judged as should_fix", () => {
+    const issues = scopeIssues({ ...facts, undeclared: [], removedTests: [], secrets: [], switchedOff: [], weakened: [], newDependencies: [], todos: [] }, ["unrelated_refactor"]);
+    expect(issues).toEqual([expect.objectContaining({ severity: "should_fix", kind: "unrelated_refactor" })]);
   });
 });

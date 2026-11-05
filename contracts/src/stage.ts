@@ -651,6 +651,9 @@ export const CheckContext = z.object({
   newDependencies: z.array(z.string()).optional(),
   todos: z.array(z.string()).optional(),
   secrets: z.array(z.string()).optional(),
+  /** scope: tests switched off in place on an added line, and scenario ids whose tag the change removed. */
+  switchedOff: z.array(z.string()).optional(),
+  weakened: z.array(z.string()).optional(),
   diffSummary: z.string().optional(),
   /** finding: the finding to classify, and the file around its line as the machine read it. */
   finding: Finding.optional(),
