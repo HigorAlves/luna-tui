@@ -46,7 +46,7 @@ export function renderCheck(check: CheckContext): string {
   if (check.kind === "red") {
     return [
       ...(check.scenario
-        ? [`Scenario ${check.scenario.id}: ${check.scenario.given && check.scenario.when && check.scenario.then ? `given ${check.scenario.given}, when ${check.scenario.when}, then ${check.scenario.then}` : (check.scenario.approach ?? check.scenario.title)}`, `The tagged test exists in the diff: ${check.exists ? "yes" : "no"}`]
+        ? [`Scenario ${check.scenario.id}: ${check.scenario.given && check.scenario.when && check.scenario.then ? `given ${check.scenario.given}, when ${check.scenario.when}, then ${check.scenario.then}` : (check.scenario.approach ?? check.scenario.title)}`, `The tagged test exists in the diff: ${check.exists ? "yes" : "no"}`, "This test was written before the production code: what it exercises may not exist yet."]
         : []),
       ...(check.slice ? [`Slice ${check.slice.id}: ${check.slice.title}`, ...bullets("Acceptance", check.slice.acceptance)] : []),
       `Failing output:\n${check.output ?? "(none)"}`,

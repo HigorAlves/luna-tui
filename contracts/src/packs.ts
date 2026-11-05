@@ -527,7 +527,7 @@ const PLAN_CHECK_QUESTIONS: QuestionSet = {
 
 /** What red_check asks of a slice's failing test. */
 const RED_CHECK_QUESTIONS: QuestionSet = {
-  right_reason: { type: "yesno", instructions: "Does the output show the test failing because the behaviour is missing, not because of a typo, a missing import, a wrong path or a broken fixture?" },
+  right_reason: { type: "yesno", instructions: "Does the output show the test failing because the behaviour it tests is missing? The test is written before the code: a function, module or route under test that does not exist yet is the behaviour missing, and is a yes. A no is a failure that has nothing to do with the behaviour: a syntax error or a typo in the test itself, a test helper or dependency that cannot be loaded, a wrong path to something that exists, or a broken fixture." },
   not_tautological: { type: "yesno", instructions: "Would this test still fail if the behaviour were absent: it asserts the behaviour, not its own setup?" },
 };
 

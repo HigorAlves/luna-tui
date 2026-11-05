@@ -138,6 +138,8 @@ describe("a check context", () => {
     expect(state.description).toContain("Scenario S2: given an expired coupon, when it is applied, then the error is shown");
     expect(state.description).toContain("The tagged test exists in the diff: yes");
     expect(state.description).toContain("TypeError: applyCoupon is not a function");
+    // Tests come first: the decision is told the code under test is not there yet, so "is not a function" is not read as a broken import.
+    expect(state.description).toContain("written before the production code");
   });
 
   it("renders an escalation: the stage, the summary, the agent's own word, the machine's facts and the output's tail, each as data", () => {

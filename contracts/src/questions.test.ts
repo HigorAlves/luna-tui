@@ -127,7 +127,8 @@ describe("the plan stage's decision packs", () => {
 
   it("red_check asks whether the red is for the right reason and the test asserts the behaviour; scope_check asks six yes/no questions over the facts", () => {
     expect(Object.keys(PACKS.red_check.questions)).toEqual(["right_reason", "not_tautological"]);
-    expect(PACKS.red_check.questions.right_reason).toMatchObject({ type: "yesno", instructions: expect.stringContaining("missing import") });
+    // A test written first fails because what it tests is not there: that is the behaviour missing, not a broken import.
+    expect(PACKS.red_check.questions.right_reason).toMatchObject({ type: "yesno", instructions: expect.stringContaining("does not exist yet") });
     expect(Object.keys(PACKS.scope_check.questions)).toEqual(["planned_or_declared", "no_new_dependency", "no_secret_or_pii", "no_test_removed", "no_todo", "unrelated_refactors"]);
     for (const q of Object.values(PACKS.scope_check.questions)) expect(q.type).toBe("yesno");
     for (const pack of [PACKS.red_check, PACKS.scope_check]) {
