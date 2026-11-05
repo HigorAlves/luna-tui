@@ -10,6 +10,8 @@
 import { type IssueContext, type JiraIntakeAnswer, type TaskClassification, classificationLine } from "@hardness/contracts";
 
 import type { Policy } from "../domain/policy.ts";
+import { canonicalTicketOf } from "../domain/ticket.ts";
+import { inScope, scopeConfigured, settled } from "../domain/ticket-scope.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { type IssueClassifier, confidentQuestion } from "./classify.ts";
 import { parseChecklist } from "./intake.ts";
@@ -36,6 +38,12 @@ export interface JiraIntakeOptions {
   tickMs?: number;
   now?: () => Date;
   log?: (line: string) => void;
+}
+
+/** The ticket machine's scope for one repo's pass, set when `tickets.assignees` or `tickets.teams` is configured. */
+export interface ScopeRule {
+  tickets: Policy["factory"]["tickets"];
+  now: Date;
 }
 
 /** The most issues one pass reads per repo. */
@@ -89,10 +97,14 @@ export class JiraIntake {
     for (const repoPath of repos) {
       let intake: NonNullable<Policy["jira"]>["intake"];
       let comments: NonNullable<Policy["jira"]>["comments"] = "milestones";
+      let scope: ScopeRule | null = null;
       try {
-        const policy = (await this.options.policies.for(repoPath)).jira;
+        const whole = await this.options.policies.for(repoPath);
+        const policy = whole.jira;
         intake = policy?.intake ?? null;
         comments = policy?.comments ?? "milestones";
+        const tickets = whole.factory?.tickets;
+        if (tickets && scopeConfigured(tickets)) scope = { tickets, now: this.now() };
       } catch {
         continue;
       }
@@ -102,7 +114,7 @@ export class JiraIntake {
       if (last !== undefined && now - last < intake.everySecs * 1000) continue;
       this.lastPoll.set(repoPath, now);
       try {
-        await this.pollRepo(repoPath, intake.jql, comments);
+        await this.pollRepo(repoPath, intake.jql, comments, scope);
       } catch (error) {
         if (error instanceof JiraAuthError) {
           if (!this.warnedAuth) console.warn(`jira intake: ${error.message}`);
@@ -115,10 +127,13 @@ export class JiraIntake {
   }
 
   /** Polls one repo's JQL now, whatever its schedule says (tests, and a refresh). */
-  async pollRepo(repoPath: string, jql: string, comments: "none" | "milestones" | "gates" = "milestones"): Promise<void> {
+  async pollRepo(repoPath: string, jql: string, comments: "none" | "milestones" | "gates" = "milestones", scope: ScopeRule | null = null): Promise<void> {
     const page = await this.options.jira.search(jql, { maxResults: INTAKE_PAGE });
     this.warnedAuth = false;
     for (const issue of page.issues) {
+      // The ticket machine's scope narrows the repo's JQL: an issue that is not assigned to me or my team is ignored, silently.
+      if (scope && !inScope(canonicalTicketOf({ tool: "jira", issue }), scope.tickets)) continue;
+      if (scope && !settled(issue.updated, scope.now, scope.tickets.debounce_seconds)) continue;
       if (await this.options.pipeline.findByJiraKey(issue.key)) continue;
       if (this.answered.has(issue.key) && this.answered.get(issue.key) === issue.updated) continue;
       if (await this.spokeLast(issue)) {

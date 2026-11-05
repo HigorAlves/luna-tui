@@ -16,6 +16,15 @@ describe("the diagram's config defaults", () => {
     expect(FACTORY_DEFAULTS.ship).toMatchObject({ preview: "off", auto_merge: "medium_when_review_required", merge: { method: "squash", queue: true, delete_branch: true, commit_template: null }, stale_days: 14, poll_minutes: 5 });
   });
 
+  it("scope the ticket machine to nobody until a repo says whose tickets are its own, and settle a burst of edits for a minute", () => {
+    expect(FACTORY_DEFAULTS.tickets).toEqual({ assignees: [], teams: [], debounce_seconds: 60 });
+    expect(factoryConfigOf({ tickets: { assignees: ["ana"] } }).tickets).toEqual({ assignees: ["ana"], teams: [], debounce_seconds: 60 });
+    expect(LunaConfig.safeParse({ tickets: { teams: ["payments"], debounce_seconds: 30 } }).success).toBe(true);
+    expect(LunaConfig.safeParse({ tickets: { debounce_seconds: -1 } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ tickets: { assignees: Array(500).fill("x") } }).success).toBe(false);
+    expect(LunaConfig.safeParse({ tickets: { nope: 1 } }).success).toBe(false);
+  });
+
   it("carry the scoring module's weights and bands", () => {
     expect(FACTORY_DEFAULTS.scoring.weights).toEqual(SCORING_DEFAULTS.weights);
     expect(FACTORY_DEFAULTS.scoring.bands).toEqual(SCORING_DEFAULTS.bands);
@@ -26,7 +35,7 @@ describe("the diagram's config defaults", () => {
     expect(keys.length).toBeGreaterThan(60);
     expect(keys.filter((k) => CONSUMED_FROM[k] === undefined)).toEqual([]);
     expect(Object.keys(CONSUMED_FROM).filter((k) => !keys.includes(k))).toEqual([]);
-    expect(new Set(Object.values(CONSUMED_FROM))).toEqual(new Set([8, 9, 10, 11, 12, 13, 14, 15]));
+    expect(new Set(Object.values(CONSUMED_FROM))).toEqual(new Set([8, 9, 10, 11, 12, 13, 14, 15, 16]));
   });
 
   it("mark exactly the keys whose default already equals today's constant as wave 8", () => {

@@ -62,6 +62,22 @@ function wire(over: { triager?: boolean; comments?: JiraPolicy["comments"]; clas
   return { jira, pipeline, intake, triaged, hints, read, logs, setNow: (d: Date) => (now = d) };
 }
 
+describe("JiraIntake with the ticket machine's scope", () => {
+  it("with a scope configured, ignores what is not assigned to it: no read, no comment, no ticket", async () => {
+    const jira = fakeJira({ issues: [{ key: "PLAT-1", summary: "mine", assignee: { id: "a1", name: "Ana" } }, { key: "PLAT-2", summary: "theirs", assignee: { id: "a2", name: "Carla" } }, { key: "PLAT-3", summary: "nobody's" }] });
+    const triaged: string[] = [];
+    const triager = { triage: async (issue: JiraIssue) => (triaged.push(issue.key), verdicts["PLAT-3"]!) };
+    const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, jiraSite: "https://acme.atlassian.net" });
+    const factory = { ...DEFAULT_POLICY.factory, tickets: { assignees: ["ana"], teams: [], debounce_seconds: 60 } };
+    const intake = new JiraIntake({ pipeline, jira, policies: { for: async () => ({ ...DEFAULT_POLICY, factory, jira: { ...policy } }) }, repos: async () => ["/r/a"], triager, now: () => new Date("2026-10-28T12:00:00Z"), log: () => {} });
+    await intake.tick();
+    expect(triaged).toEqual(["PLAT-1"]);
+    expect(jira.comments["PLAT-2"]).toBeUndefined();
+    expect(jira.comments["PLAT-3"]).toBeUndefined();
+    expect(await pipeline.findByJiraKey("PLAT-2")).toBeNull();
+  });
+});
+
 describe("JiraIntake with triage_signals", () => {
   it("reads each new issue first, declines a question Jev is sure of without jira_intake, saying why once with the classification", async () => {
     const { jira, pipeline, intake, triaged, read, logs } = wire({ classify: (issue) => classified(issue.title === "Rotate the prod password" ? "question" : "feature") });

@@ -79,6 +79,10 @@ export interface JiraIssue {
   updated: string | null;
   /** Who filed it; absent when the adapter did not read it. */
   reporter?: { id: string; name?: string } | null;
+  /** Who it is assigned to; absent when the adapter did not read it, null when nobody. */
+  assignee?: { id: string; name?: string } | null;
+  /** Its components' names. */
+  components?: string[];
   comments: JiraComment[];
 }
 

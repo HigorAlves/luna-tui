@@ -31,6 +31,13 @@ describe("canonicalTicketOf", () => {
     expect(t.description).toContain("1. pay");
   });
 
+  it("takes the assignee's name (else id) and the components from a Jira issue", () => {
+    const t = canonicalTicketOf({ tool: "jira", issue: jiraIssue({ assignee: { id: "acc-3", name: "Bo" }, components: ["payments", "api"] }) });
+    expect(t.assignee).toBe("Bo");
+    expect(t.components).toEqual(["payments", "api"]);
+    expect(canonicalTicketOf({ tool: "jira", issue: jiraIssue({ assignee: { id: "acc-3" } }) }).assignee).toBe("acc-3");
+  });
+
   it("builds a ticket from a GitHub issue, keyed by repository and number", () => {
     const issue: GhIssue = { number: 7, title: "Crash on start", body: "stack", url: "https://github.com/o/r/issues/7", labels: ["bug"], author: "ana" };
     const t = canonicalTicketOf({ tool: "github", slug: "o/r", issue });
