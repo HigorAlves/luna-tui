@@ -24,6 +24,38 @@ describe("buildStageInput's task", () => {
   });
 });
 
+describe("what triage receives of what Intake gathered", () => {
+  const card = {
+    sources: [],
+    reporter: { id: "alice", channel: "slack", name: "Alice <b>" },
+    hints: { urgency: "high" },
+    originMachine: null,
+    attachments: [{ name: "trace.txt", url: "https://f.example/t.txt", mediaType: "text/plain", size: 9 }],
+    project: "PAY",
+    owners: ["@team-a"],
+    followers: ["bob"],
+    links: {},
+    history: [{ author: "carol", text: "it fails\nevery time", at: null }],
+  };
+  const build = (stage: "triage" | "test_design", t: unknown = { ...task, card }) => buildStageInput({ task: t as TaskRow, stage, attempt: 1, approvals: [], priorFindings: [] });
+
+  it("carries the project, owners, reporter, history, attachment references and hints to triage", () => {
+    const input = build("triage");
+    expect(StageInput.parse(input).context.intake).toEqual({
+      project: "PAY",
+      owners: ["@team-a"],
+      reporter: { id: "alice", channel: "slack", name: "Alice &lt;b&gt;" },
+      history: [{ author: "carol", text: "it fails every time" }],
+      attachments: [{ name: "trace.txt", url: "https://f.example/t.txt", mediaType: "text/plain", size: 9 }],
+      hints: { urgency: "high" },
+    });
+  });
+  it("gives it to no other pack, and a card from before has empty lists", () => {
+    expect(build("test_design").context.intake).toBeUndefined();
+    expect(build("triage", task).context.intake).toEqual({ project: null, owners: [], reporter: null, history: [], attachments: [], hints: null });
+  });
+});
+
 const approval = (over: Partial<ApprovalRow>): ApprovalRow =>
   ({
     id: "a",

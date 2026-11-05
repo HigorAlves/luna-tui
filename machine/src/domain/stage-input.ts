@@ -1,8 +1,9 @@
 // Builds the /in/stage.json a stage pack reads. The shape is the StageInput contract.
-import { type ChatTriageContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
+import { type ChatTriageContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, criteriaOf, scenarioOf, type CheckContext, type CheckSpec, type DedupContext, type IntakeContext, type CiContext, type CoverageSummary, type EngineId, type EvidenceContext, type Finding, type GraphContext, type IssueContext, type JiraIntakeContext, type Ledger, type PlanContext, PACK_LIMITS, type PackId, type QaTarget, type ReviewContext, type RunSummary, type ShipContext, type SlackTriageContext, type StageInput, TestCase, type TaskState, type ThreadsContext, type VideoContext } from "@hardness/contracts";
 
 export { PACK_LIMITS };
 
+import { cardOf } from "./card-fields.ts";
 import { safe } from "./evidence-markdown.ts";
 import type { ContextPackId, PackContext } from "./context-packs.ts";
 import type { ApprovalRow, TaskRow } from "./task.ts";
@@ -92,6 +93,20 @@ export function approvedScenarios(approvals: ApprovalRow[]): Scenario[] {
   const criteria = criteriaOf(strings(approved?.requested.criteria));
   const plan = Plan.safeParse(approved?.requested.plan);
   return approvedCases(approvals).map((c, i) => scenarioOf(c, i, plan.success ? plan.data.acceptance_criteria : criteria));
+}
+
+/** What Intake gathered, as triage reads it: each stranger's text flattened again and capped, every list bounded, attachments as references only. */
+export function intakeOf(task: TaskRow): IntakeContext {
+  const card = cardOf(task);
+  const hints = card.hints ? Object.fromEntries(Object.entries(card.hints).map(([k, v]) => [k, typeof v === "string" ? safe(v).slice(0, 120) : v])) : null;
+  return {
+    project: card.project ?? null,
+    owners: (card.owners ?? []).slice(0, 20),
+    reporter: card.reporter ? { id: card.reporter.id, ...(card.reporter.channel ? { channel: card.reporter.channel } : {}), ...(card.reporter.name ? { name: safe(card.reporter.name).slice(0, 120) } : {}) } : null,
+    history: (card.history ?? []).slice(0, 50).map((h) => ({ author: h.author ? safe(h.author).slice(0, 60) : null, text: safe(h.text).slice(0, 500) })),
+    attachments: (card.attachments ?? []).slice(0, 20).map((a) => ({ name: safe(a.name).slice(0, 120), url: a.url, ...(a.mediaType ? { mediaType: safe(a.mediaType).slice(0, 80) } : {}), ...(a.size !== undefined ? { size: a.size } : {}) })),
+    hints: hints && Object.keys(hints).length ? (hints as IntakeContext["hints"]) : null,
+  };
 }
 
 export function buildStageInput(opts: {
@@ -195,6 +210,7 @@ export function buildStageInput(opts: {
       ...(pack === "implementing" && opts.scenarioTests?.length ? { scenarioTests: opts.scenarioTests } : {}),
       ...(pack === "implementing" && opts.sweepFailures?.length ? { sweepFailures: opts.sweepFailures.slice(0, SWEEP_FAILURES_MAX).map((f) => ({ name: safe(f.name).slice(0, 60), tail: safe(f.tail.slice(-SWEEP_TAIL_CAP)).slice(-SWEEP_TAIL_CAP) })) } : {}),
       baseCommit: opts.baseCommit ?? null,
+      ...(pack === "triage" ? { intake: intakeOf(task) } : {}),
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,
       ...(opts.plan ? { plan: reviewed ?? opts.plan } : {}),

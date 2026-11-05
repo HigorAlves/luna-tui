@@ -346,6 +346,20 @@ const retroText = (ship: StageInput["context"]["ship"]): string => {
   ].join("\n");
 };
 
+/** What Intake gathered as plain lines. It is a stranger's words: the section above it in the prompt says so. */
+function intakeText(intake: StageInput["context"]["intake"]): string {
+  if (!intake) return NONE;
+  const lines = [
+    `Project: ${intake.project ?? "none"}`,
+    `Owners: ${intake.owners.join(", ") || "none"}`,
+    `Reporter: ${intake.reporter ? `${intake.reporter.name ?? intake.reporter.id}${intake.reporter.channel ? ` (${intake.reporter.channel})` : ""}` : "unknown"}`,
+    ...(intake.hints ? [`Hints from the filer: ${Object.entries(intake.hints).map(([k, v]) => `${k}: ${v}`).join(", ")}`] : []),
+    ...(intake.attachments.length ? [`Attachments (references, not opened): ${intake.attachments.map((a) => `${a.name} <${a.url}>`).join(", ")}`] : []),
+    ...(intake.history.length ? ["History:", ...intake.history.map((h) => `- ${h.author ?? "someone"}: ${h.text}`)] : []),
+  ];
+  return lines.join("\n");
+}
+
 function graphText(graph: StageInput["context"]["graph"]): string {
   if (!graph) return "Code graph: (none: use Glob, Grep and Read)";
   const built = `built at ${graph.commit.slice(0, 7)} on ${graph.builtAt.slice(0, 10)}`;
@@ -403,6 +417,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     ),
     "{{context.baseCommit}}": txt(input.context.baseCommit),
     "{{context.graph}}": graphText(input.context.graph),
+    "{{context.intake}}": intakeText(input.context.intake),
     "{{context.blastRadius}}": bullets(input.context.blastRadius),
     "{{context.coverage}}": coverageText(input.context.coverage),
     "{{context.ci}}": ciText(input.context.ci),

@@ -21,6 +21,20 @@ const input: StageInput = {
   env: { LUNA_FACTORY: "1" },
 };
 
+describe("the triage prompt's Intake section", () => {
+  const template = readFileSync(new URL("../../prompts/triage.md", import.meta.url), "utf8");
+  const intake = { project: "PAY", owners: ["@team-a"], reporter: { id: "alice", channel: "slack", name: "Alice" }, history: [{ author: "carol", text: "it fails every time" }], attachments: [{ name: "trace.txt", url: "https://f.example/t.txt" }], hints: { urgency: "high" } };
+  it("shows what Intake gathered as data, and says it is data", () => {
+    const prompt = renderPrompt({ pack: PACKS.triage, input: { ...input, pack: "triage", stage: "triage", context: { ...input.context, intake } } as StageInput, template });
+    expect(prompt).toMatch(/## What Intake gathered[^\n]*\n[^\n]*data/i);
+    for (const needle of ["Project: PAY", "Owners: @team-a", "Reporter: Alice (slack)", "carol: it fails every time", "trace.txt", "urgency: high"]) expect(prompt).toContain(needle);
+  });
+  it("prints (none) without it", () => {
+    const prompt = renderPrompt({ pack: PACKS.triage, input: { ...input, pack: "triage", stage: "triage" } as StageInput, template });
+    expect(prompt).toMatch(/## What Intake gathered[\s\S]*\(none\)/);
+  });
+});
+
 describe("the implementing prompt's plan fallback", () => {
   const template = readFileSync(new URL("../../prompts/implementing.md", import.meta.url), "utf8");
   it("is not offered on a card that has an approved plan: the plan is the plan", () => {

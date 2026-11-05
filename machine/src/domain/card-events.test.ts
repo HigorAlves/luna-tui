@@ -13,6 +13,7 @@ const FIXTURES: Array<[string, ReturnType<typeof row>, CardEventName[]]> = [
   ["a task made", row("task.created", { title: "t" }), ["card.created"]],
   ["setup asked", moved("setup", "awaiting_setup"), ["card.setup_needed"]],
   ["setup confirmed", row("transition", { event: "approved", from: "awaiting_setup", to: "triage" }), ["card.setup_done"]],
+  ["context given at Intake", row("transition", { event: "context_given", from: "awaiting_setup", to: "triage" }), ["card.setup_done"]],
   ["triage passed", finished("triage", "passed"), ["card.triaged"]],
   ["questions asked", moved("triage", "awaiting_answers"), ["card.answers_needed"]],
   ["questions answered", row("transition", { event: "answered", from: "awaiting_answers", to: "triage" }), ["card.answered"]],

@@ -70,7 +70,7 @@ function transition(payload: Record<string, unknown>): CardEventName[] {
   const to = str(payload.to);
   const names: CardEventName[] = [];
   if (to === "awaiting_setup") names.push("card.setup_needed");
-  if (from === "awaiting_setup" && payload.event === "approved") names.push("card.setup_done");
+  if (from === "awaiting_setup" && (payload.event === "approved" || payload.event === "context_given")) names.push("card.setup_done");
   if (to === "awaiting_answers") names.push("card.answers_needed");
   if (from === "awaiting_answers" && payload.event === "answered") names.push("card.answered");
   if (to === "awaiting_approval") names.push("card.approval_needed");

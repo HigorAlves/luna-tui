@@ -846,6 +846,18 @@ export const IssueContext = z.object({
 });
 export type IssueContext = z.infer<typeof IssueContext>;
 
+/** What triage reads of what Intake gathered: the project, the owners, who reported it, the history of its sources, its attachments as references, and the filer's hints.
+ *  Every text is a stranger's: the machine flattens and caps it, and the prompt says it is data. */
+export const IntakeContext = z.object({
+  project: z.string().nullable(),
+  owners: z.array(z.string()).max(20),
+  reporter: z.object({ id: z.string(), channel: z.string().optional(), name: z.string().optional() }).nullable(),
+  history: z.array(z.object({ author: z.string().nullable(), text: z.string() })).max(50),
+  attachments: z.array(z.object({ name: z.string(), url: z.string(), mediaType: z.string().optional(), size: z.number().optional() })).max(20),
+  hints: z.record(z.string(), z.union([z.string(), z.number()])).nullable(),
+});
+export type IntakeContext = z.infer<typeof IntakeContext>;
+
 /** What intake_dedup reads: the new report and the shortlist's titles and summaries, flattened and capped by the machine. At most five slots. */
 export const DedupContext = z.object({
   title: z.string().max(500),
@@ -1013,6 +1025,8 @@ export const StageInput = z.object({
     coverage: CoverageSummary.optional(),
     /** The repo's Graphify code graph, read-only at /graph; null or absent when it has none. */
     graph: GraphContext.nullable().optional(),
+    /** For triage: what Intake gathered (project, owners, reporter, history, attachment references, hints). */
+    intake: IntakeContext.nullable().optional(),
   }),
   limits: z.object({
     maxTurns: z.number().int(),
