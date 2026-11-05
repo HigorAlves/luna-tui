@@ -1,4 +1,4 @@
-import { TriageRecord } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, TriageRecord } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { TaskRow } from "../../domain/task.ts";
@@ -65,8 +65,39 @@ describe("withTriageSignals", () => {
     expect(seen?.classification).toEqual(classification);
   });
 
-  it("leaves a classified ticket alone and survives a classifier that throws or answers nothing", async () => {
+  it("runs the signals on every entry, even for a card that has some, and the new reading replaces the old", async () => {
+    const saved: unknown[] = [];
+    const seen: Array<TaskRow["classification"]> = [];
+    const inner: StageRunner = async (c) => {
+      seen.push(c.task.classification);
+      return { outcome: "pass" };
+    };
+    const fresh = { ...classification, kind: "feature", confidence: 0.95 };
     let calls = 0;
+    const runner = withTriageSignals(inner, { classify: async () => (calls++, fresh), save: async (id, patch) => void saved.push([id, patch]) });
+    await runner(context({ task: task({ classification }) }));
+    expect(calls).toBe(1);
+    expect(seen).toEqual([fresh]);
+    expect(saved).toEqual([["t1", { classification: fresh }]]);
+  });
+
+  it("puts the answers so far in the issue the signals read, oldest first, and the repo's scoring in the options", async () => {
+    const approvals = [
+      { kind: "awaiting_answers", decision: "answered", response: { answers: { "Which OS?": "macOS", "Which version?": "14.2" } }, requested: {} },
+      { kind: "awaiting_approval", decision: "approved", response: null, requested: {} },
+    ] as never;
+    const asked: Array<[unknown, unknown]> = [];
+    const factory = { ...FACTORY_DEFAULTS, scoring: { weights: { who: 1, what: 1, impact: 1, time: 1, demand: 1 }, bands: { P0: 14, P1: 10, P2: 6 } } };
+    const runner = withTriageSignals(async () => ({ outcome: "pass" }), {
+      classify: async (issue, _repo, options) => (asked.push([issue, options]), classification),
+      policy: async () => ({ factory }),
+      save: async () => {},
+    });
+    await runner(context({ approvals }));
+    expect(asked).toEqual([[expect.objectContaining({ answers: [{ question: "Which OS?", answer: "macOS" }, { question: "Which version?", answer: "14.2" }] }), { weights: factory.scoring.weights, bands: factory.scoring.bands }]]);
+  });
+
+  it("keeps the previous classification, says so and goes on when the signals fail or answer nothing", async () => {
     const seen: Array<TaskRow["classification"]> = [];
     const inner: StageRunner = async (c) => {
       seen.push(c.task.classification);
@@ -74,20 +105,16 @@ describe("withTriageSignals", () => {
     };
     const saved: unknown[] = [];
     const save = async (id: string, patch: unknown) => void saved.push([id, patch]);
-    const classify = async () => {
-      calls++;
-      return classification;
-    };
-    await withTriageSignals(inner, { classify, save })(context({ task: task({ classification }) }));
-    expect(calls).toBe(0);
-    expect(seen[0]).toEqual(classification);
-
+    const notes: string[] = [];
+    const note = async (text: string) => void notes.push(text);
     const lines: string[] = [];
-    await withTriageSignals(inner, { classify: async () => Promise.reject(new Error("boom")), save, log: (l) => lines.push(l) })(context());
-    await withTriageSignals(inner, { classify: async () => null, save })(context());
+    const old = task({ classification });
+    await withTriageSignals(inner, { classify: async () => Promise.reject(new Error("boom")), save, log: (l) => lines.push(l) })(context({ task: old, note }));
+    await withTriageSignals(inner, { classify: async () => null, save })(context({ task: old, note }));
     await withTriageSignals(inner, { classify: null, save })(context());
-    expect(seen.slice(1)).toEqual([null, null, null]);
+    expect(seen).toEqual([classification, classification, null]);
     expect(saved).toEqual([]);
     expect(lines).toEqual([expect.stringContaining("boom")]);
+    expect(notes).toEqual([expect.stringContaining("boom"), expect.stringContaining("kept")]);
   });
 });

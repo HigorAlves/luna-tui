@@ -99,7 +99,7 @@ describe("GitHubIntake with triage_signals", () => {
   const classified = (kind: string, confidence = 0.9) => ({ kind, area: "machine", ready: kind !== "question", size: 1, confidence, at: "2026-11-03T12:00:00.000Z", model: "typesafe-ai/jev" });
   const labelled = [{ ...issues[0]!, labels: ["enhancement"] }, { ...issues[1]!, title: "How do I turn on dark mode?", labels: [] }];
 
-  it("reads each new issue first; a question Jev is sure of becomes no task and hears why once, the rest become tasks with their classification", async () => {
+  it("reads each new issue first; a question Jev is sure of becomes no task and hears why once, the rest become tasks with no classification of intake's (triage reads its own)", async () => {
     const github = fakeGitHub({ listReadyIssues: async () => labelled });
     const read: unknown[] = [];
     const classifier = { classify: async (issue: { title: string }) => (read.push(issue), classified(issue.title.startsWith("How") ? "question" : "feature")) };
@@ -110,7 +110,7 @@ describe("GitHubIntake with triage_signals", () => {
       { title: "How do I turn on dark mode?", description: "", labels: [], source: issues[1]!.url },
     ]);
     const tasks = await pipeline.list();
-    expect(tasks.map((t) => [t.title, t.classification])).toEqual([["Export CSV", classified("feature")]]);
+    expect(tasks.map((t) => [t.title, t.classification])).toEqual([["Export CSV", null]]);
     expect(github.commentOnIssue).toHaveBeenCalledTimes(1);
     expect(github.commentOnIssue).toHaveBeenCalledWith("o/a", 8, "Not for an agent: it reads as a question, not a change (question · machine · not ready · size small · lowest confidence 0.90 (typesafe-ai/jev)).");
     await intake.pollOnce();
@@ -122,7 +122,7 @@ describe("GitHubIntake with triage_signals", () => {
     const github = fakeGitHub({ listReadyIssues: async () => labelled });
     const unsure = new GitHubIntake({ pipeline, github, repos: ["o/a"], label: "x", intervalMs: 1000, classifier: { classify: async () => classified("question", 0.6) } });
     await unsure.pollOnce();
-    expect((await pipeline.list()).map((t) => t.classification?.kind)).toEqual(["question", "question"]);
+    expect((await pipeline.list()).map((t) => [t.title, t.classification])).toEqual([["Export CSV", null], ["How do I turn on dark mode?", null]]);
     await db.query("truncate tasks cascade");
     const none = new GitHubIntake({ pipeline, github, repos: ["o/a"], label: "x", intervalMs: 1000, classifier: { classify: async () => null } });
     await none.pollOnce();

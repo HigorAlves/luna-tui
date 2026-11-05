@@ -78,7 +78,7 @@ describe("JiraIntake with triage_signals", () => {
     expect(await pipeline.list()).toHaveLength(1);
   });
 
-  it("runs jira_intake as before on anything less, the classification passed as a hint and kept on the ticket", async () => {
+  it("runs jira_intake as before on anything less, the classification passed as a hint and not kept on the ticket (triage reads its own)", async () => {
     const unsure = classified("question", 0.6);
     const { jira, pipeline, intake, triaged, hints } = wire({ classify: (issue) => (issue.source === "jira:PLAT-3" ? unsure : classified("feature")) });
     await intake.tick();
@@ -86,7 +86,7 @@ describe("JiraIntake with triage_signals", () => {
     expect(hints).toEqual([classified("feature"), classified("feature"), unsure]);
     expect(jira.comments["PLAT-3"]).toEqual(["Not for an agent: needs production credentials"]);
     const [task] = await pipeline.list();
-    expect(task).toMatchObject({ title: "Add the login page", classification: classified("feature") });
+    expect(task).toMatchObject({ title: "Add the login page", classification: null });
   });
 
   it("without a classification (no Jev credential, a failed run) behaves exactly as without the classifier", async () => {

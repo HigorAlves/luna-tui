@@ -27,6 +27,8 @@ describe("stateOf", () => {
     const base = { task: { title: "T", description: "D" }, context: {} } as unknown as StageInput;
     expect(stateOf(base)).toEqual({ title: "T", description: "D" });
     expect(stateOf({ ...base, context: { issue: { title: "I", description: "E" } } } as unknown as StageInput)).toEqual({ title: "I", description: "E" });
+    const answered = { ...base, context: { issue: { title: "I", description: "E", answers: [{ question: "Which OS?", answer: "macOS" }] } } } as unknown as StageInput;
+    expect(stateOf(answered)).toEqual({ title: "I", description: "E\n\nAnswers so far:\n- Which OS?: macOS" });
   });
 });
 

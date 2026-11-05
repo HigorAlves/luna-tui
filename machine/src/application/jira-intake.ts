@@ -165,7 +165,7 @@ export class JiraIntake {
         criteria: answer.criteria?.length ? answer.criteria : parseChecklist(issue.description),
         repoPath,
         source: { kind: "jira", key: issue.key, url: issue.url, issueType: issue.issueType },
-        classification,
+        // The card's classification is triage's: intake's reading only routed a report (and rode into jira_intake as a hint).
       });
       await this.options.pipeline.record(task.id, "jira.intake", { key: issue.key, verdict: "ready", reason: answer.reason });
       if (comments !== "none") await this.comment(issue, `Picked up as task #${task.id.slice(0, 8)} on the Luna board. ${answer.reason}`.trim());

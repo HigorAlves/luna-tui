@@ -1,25 +1,39 @@
-// Triage reads the ticket's signals: the triage_signals decision, run before triage for a ticket
-// that arrived without them (a task made in the TUI, from Slack or by hand; GitHub and Jira
-// intake classify theirs on the way in). The classification is saved on the task and rides
-// into triage's stage input; a classifier that is absent, fails or answers nothing leaves triage
-// to run as it did.
-import { type IssueContext, RecordDraft, type TaskClassification, TriageRecord } from "@hardness/contracts";
+// Triage's first step for every source: the triage_signals decision, run on each entry to the stage (the first
+// run and each return from awaiting_answers) with the answers so far in the issue it reads. The reading replaces
+// the card's classification; a classifier that is absent, fails or answers nothing leaves the previous one and
+// says so, and triage goes on.
+import { type ClassifyOptions, type FactoryConfig, type IssueContext, RecordDraft, type TaskClassification, TriageRecord } from "@hardness/contracts";
 
 import type { TaskRow } from "../../domain/task.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 
 export interface TriageSignalDeps {
   /** The classifier, once it exists (late-bound in main.ts); null when there is no Jev or fallback credential or agents are off. */
-  classify: ((issue: IssueContext, repoPath: string | null) => Promise<TaskClassification | null>) | null;
+  classify: ((issue: IssueContext, repoPath: string | null, options?: ClassifyOptions) => Promise<TaskClassification | null>) | null;
+  /** The repo's policy: its scoring weights and bands turn the sub-scores into a priority. Absent: the diagram's. */
+  policy?: (repoPath: string) => Promise<{ factory: FactoryConfig }>;
   save: (id: string, patch: Partial<TaskRow>) => Promise<void>;
   log?: (line: string) => void;
 }
 
-const issueOf = (task: TaskRow): IssueContext => {
+const MAX_ANSWERS = 20;
+const MAX_ANSWER_CHARS = 2000;
+
+const issueOf = (task: TaskRow, answers: NonNullable<IssueContext["answers"]>): IssueContext => {
   const source = task.source;
   const ref = source && "url" in source ? source.url : source?.kind === "slack" ? source.permalink : undefined;
-  return { title: task.title, description: task.description, labels: [], ...(ref ? { source: ref } : {}) };
+  return { title: task.title, description: task.description, labels: [], ...(ref ? { source: ref } : {}), ...(answers.length > 0 ? { answers } : {}) };
 };
+
+/** What the person answered at the questions gates so far, oldest first; an answer that is not text is dropped. */
+function answersOf(approvals: StageContext["approvals"]): NonNullable<IssueContext["answers"]> {
+  return approvals
+    .flatMap((a) => {
+      if (a.decision !== "answered") return [];
+      return Object.entries((a.response?.answers ?? {}) as Record<string, unknown>).flatMap(([question, answer]) => (typeof answer === "string" ? [{ question: question.slice(0, MAX_ANSWER_CHARS), answer: answer.slice(0, MAX_ANSWER_CHARS) }] : []));
+    })
+    .slice(0, MAX_ANSWERS);
+}
 
 /** The record triage's draft becomes: the machine's own facts around the draft's words. Null when there is no valid draft. */
 function recordOf(context: StageContext, result: StageResult, task: TaskRow): TriageRecord | null {
@@ -48,12 +62,18 @@ export function withTriageSignals(triage: StageRunner, deps: TriageSignalDeps): 
   return async (context) => {
     const { task } = context;
     let classification: TaskClassification | null = null;
-    if (!task.classification && deps.classify) {
+    if (deps.classify) {
+      const kept = task.classification ? "the previous reading is kept" : "going on without one";
       try {
-        classification = await deps.classify(issueOf(task), task.repoPath);
+        const repo = task.repoPath ? await deps.policy?.(task.repoPath).catch(() => null) : null;
+        const options: ClassifyOptions = repo ? { weights: repo.factory.scoring.weights, bands: repo.factory.scoring.bands } : {};
+        classification = await deps.classify(issueOf(task, answersOf(context.approvals)), task.repoPath, options);
         if (classification) await deps.save(task.id, { classification });
+        else await context.note?.(`triage signals gave no reading; ${kept}`).catch(() => {});
       } catch (error) {
-        log(`triage signals for task ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
+        const why = error instanceof Error ? error.message : String(error);
+        log(`triage signals for task ${task.id}: ${why}`);
+        await context.note?.(`triage signals failed (${why}); ${kept}`).catch(() => {});
         classification = null;
       }
     }

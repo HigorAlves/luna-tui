@@ -100,7 +100,7 @@ export class GitHubIntake {
         criteria: parseChecklist(body),
         repoPath,
         source: { kind: "github", repo, number: issue.number, url: issue.url },
-        classification,
+        // The card's classification is triage's: intake's reading only routed a report.
       });
       console.log(`github intake: ${repo}#${issue.number} -> task ${task.id}`);
     }

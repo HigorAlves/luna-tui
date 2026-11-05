@@ -163,8 +163,10 @@ export function stateOf(input: StageInput): DecisionState {
   if (evidence) return { title: evidence.record ? `Evidence format: ${evidence.record.goal}` : "Evidence format", description: renderEvidence(evidence) };
   if (check) return { title: checkTitle(check), description: renderCheck(check) };
   if (plan) return { title: plan.brief.split("\n")[0]!, description: renderPlan(plan) };
-  const { title, description, labels, source } = input.context.issue ?? { title: input.task.title, description: input.task.description };
-  return { title, description, ...(labels && { labels }), ...(source && { source }) };
+  const { title, description, labels, source, answers } = input.context.issue ?? { title: input.task.title, description: input.task.description };
+  // What the person has answered so far reads as part of the ticket: the signals are read again with it.
+  const said = answers?.length ? `\n\nAnswers so far:\n${answers.map((a) => `- ${a.question}: ${a.answer}`).join("\n")}` : "";
+  return { title, description: description + said, ...(labels && { labels }), ...(source && { source }) };
 }
 
 function renderQuestion(name: string, q: Question): string {

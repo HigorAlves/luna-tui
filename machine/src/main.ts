@@ -193,7 +193,7 @@ const credentials = gatedCredentials(machineCredentials(), [
 ]);
 if (config.disabledRuntimes.length > 0) console.log(`runtimes off (MACHINE_DISABLE_RUNTIMES): ${config.disabledRuntimes.join(", ")}`);
 /** Triage's signals: the classifier is built after the stages (it needs PackRuns), so it is bound below. */
-const triageSignals: TriageSignalDeps = { classify: null, save: (id, patch) => engineSpend.updateTask(id, patch) };
+const triageSignals: TriageSignalDeps = { classify: null, policy: (repoPath) => policies.for(repoPath), save: (id, patch) => engineSpend.updateTask(id, patch) };
 /** The plan stage's decisions run through PackRuns, which is built below: bound once it exists. */
 const planDecisions: { decide: PlanDeps["decide"] } = { decide: null };
 /** Build's red and scope checks run through PackRuns too: bound once it exists. */
@@ -413,7 +413,7 @@ await packRuns?.clearLeftovers();
 /** Intake's first read of a new issue: triage_signals on Jev through the same PackRuns, recorded
  *  as the `intake` client. Without a Jev credential it answers nothing and intake runs as before. */
 const classifier = packRuns ? createIssueClassifier({ runs: packRuns }) : null;
-if (classifier) triageSignals.classify = (issue) => classifier.classify(issue);
+if (classifier) triageSignals.classify = (issue, _repoPath, options) => classifier.classify(issue, options);
 if (packRuns) planDecisions.decide = async (pack, plan) => tagged(await packRuns.run({ pack, context: { plan }, stage: "plan" }, "plan"));
 if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "verify" }, "verify"));
 if (packRuns) evidenceDecisions.decide = async (evidence) => tagged(await packRuns.run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence"));

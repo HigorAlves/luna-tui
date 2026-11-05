@@ -766,6 +766,8 @@ export const IssueContext = z.object({
   description: z.string(),
   labels: z.array(z.string()).optional(),
   source: z.string().optional(),
+  /** What the person answered at triage's questions so far, for the signals' next reading. */
+  answers: z.array(z.object({ question: z.string().max(2000), answer: z.string().max(2000) })).max(20).optional(),
 });
 export type IssueContext = z.infer<typeof IssueContext>;
 
