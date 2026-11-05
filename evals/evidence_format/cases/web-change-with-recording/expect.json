@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "format.choice",
+      "value": "video"
+    }
+  ],
+  "rubric": "A user-visible web change, the browser run left a recording and steps, and the video image exists.",
+  "label": {
+    "format": {
+      "choice": "video"
+    }
+  }
+}

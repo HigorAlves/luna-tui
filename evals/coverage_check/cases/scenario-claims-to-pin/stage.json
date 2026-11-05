@@ -1,0 +1,77 @@
+{
+  "schema": 3,
+  "stage": "coverage_check",
+  "pack": "coverage_check",
+  "attempt": 1,
+  "task": {
+    "id": "coverage-check",
+    "title": "Add a CSV export button to the cart page.",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": {
+        "source": "example-tracker:EX-1",
+        "kind": "feature",
+        "goal": "Let people export their cart as CSV",
+        "size": "small",
+        "urgency": "normal",
+        "risk": "low",
+        "signals": {
+          "kind": {
+            "answer": "feature",
+            "confidence": 0.9
+          }
+        },
+        "qa": [],
+        "decision": "plan",
+        "reason": "ready",
+        "at": "2026-11-01T09:00:00.000Z",
+        "model": "fixture"
+      },
+      "brief": "Add a CSV export button to the cart page.",
+      "criteria": [
+        "Each line shows a price in the file"
+      ],
+      "assumptions": [],
+      "slices": [
+        {
+          "title": "Export endpoint and button",
+          "est_loc": 60,
+          "touchpoints": [
+            "src/cart/export.ts",
+            "src/cart/CartPage.tsx"
+          ],
+          "acceptance": [
+            "GET /cart/export.csv returns one row per line",
+            "The button downloads it"
+          ]
+        }
+      ],
+      "rollback": "Revert the PR; nothing is stored.",
+      "cases": [
+        {
+          "title": "Pinning scenario",
+          "criterion": "Each line shows a price in the file",
+          "approach": "This scenario pins every criterion and would fail if any were unmet; answer pins: yes. Steps: open the home page."
+        }
+      ],
+      "gaps": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

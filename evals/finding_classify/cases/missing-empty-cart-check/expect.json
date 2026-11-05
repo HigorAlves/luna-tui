@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "severity.confidence",
+      "min": 0,
+      "max": 0.85
+    }
+  ],
+  "rubric": "Fragile but mergeable, or just a nit? Reasonable reviewers split, so the answer should not be near-certain."
+}

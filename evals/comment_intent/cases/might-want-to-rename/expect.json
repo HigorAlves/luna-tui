@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "intent.confidence",
+      "min": 0,
+      "max": 0.85
+    }
+  ],
+  "rubric": "A soft naming suggestion: nit or change request depends on how hard the reviewer means it, so the model should not be near-certain."
+}

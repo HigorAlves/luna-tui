@@ -1,0 +1,48 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "planned_or_declared.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "no_new_dependency.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "no_secret_or_pii.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "no_test_removed.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "no_todo.value",
+      "value": true
+    }
+  ],
+  "rubric": "Every changed file is planned and nothing risky was added.",
+  "label": {
+    "planned_or_declared": {
+      "value": true
+    },
+    "no_new_dependency": {
+      "value": true
+    },
+    "no_secret_or_pii": {
+      "value": true
+    },
+    "no_test_removed": {
+      "value": true
+    },
+    "no_todo": {
+      "value": true
+    }
+  }
+}

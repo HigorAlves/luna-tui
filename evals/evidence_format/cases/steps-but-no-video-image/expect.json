@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "format.confidence",
+      "min": 0,
+      "max": 0.85
+    }
+  ],
+  "rubric": "A web change with replayable steps but no video image on this machine: captures is likely, video impossible, text arguable; the model should not be near-certain."
+}

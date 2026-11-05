@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "severity.choice",
+      "value": "nit"
+    }
+  ],
+  "rubric": "A naming suggestion the author may ignore, even though the reviewer labelled it a blocker.",
+  "label": {
+    "severity": {
+      "choice": "nit"
+    }
+  }
+}

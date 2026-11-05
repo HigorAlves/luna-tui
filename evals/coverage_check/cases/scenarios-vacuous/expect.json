@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "pins.value",
+      "value": false
+    },
+    {
+      "kind": "equals",
+      "path": "untestable.value",
+      "value": true
+    }
+  ],
+  "rubric": "'Exports are fast' has no threshold, so no scenario could prove it, and the scenarios would pass whatever the file held: they do not pin.",
+  "label": {
+    "pins": {
+      "value": false
+    },
+    "untestable": {
+      "value": true
+    }
+  }
+}

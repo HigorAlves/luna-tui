@@ -1,4 +1,5 @@
-import { PACK_LIMITS, StageInput } from "@hardness/contracts";
+import { PACKS, PACK_LIMITS, StageInput } from "@hardness/contracts";
+import { contextSchema } from "@hardness/machine/decisions";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -134,6 +135,33 @@ describe("the seed cases", () => {
       const text = JSON.stringify(evalCase);
       expect(text, evalCase.id).not.toMatch(/xox[abposr]-|ghp_|github_pat_|\bsk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{12}|eyJ[A-Za-z0-9_-]{20,}/);
       expect(text, evalCase.id).not.toMatch(/@(?!example)[a-z0-9-]+\.(com|io|dev|net|org)\b/i);
+    }
+  });
+
+  const decisions = Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => p.id);
+
+  it("has a case for each of the fourteen decision packs' four kinds: two clear, one borderline checked on confidence, one adversarial", () => {
+    expect(decisions).toHaveLength(14);
+    for (const pack of decisions) {
+      const cases = loadCases(EVALS, pack as "triage");
+      expect(cases.length, pack).toBeGreaterThanOrEqual(4);
+      const labelled = cases.filter((c) => c.expect.label);
+      const borderline = cases.filter((c) => !c.expect.label && c.expect.checks.some((k) => k.kind === "between" && /\.(p|confidence)$/.test(k.path)));
+      expect(labelled.length, `${pack}: labelled`).toBeGreaterThanOrEqual(pack === "triage_signals" ? 1 : 3);
+      expect(borderline.length, `${pack}: borderline`).toBeGreaterThanOrEqual(1);
+      // A label that names an answer's key must name one of the pack's questions, and a case is never left for review once committed.
+      for (const c of cases) {
+        for (const question of Object.keys(c.expect.label ?? {})) expect(Object.keys(PACKS[pack as "worth_learning"].questions), `${pack}/${c.id}`).toContain(question);
+        expect(c.expect.review, `${pack}/${c.id}`).toBeUndefined();
+      }
+    }
+  });
+
+  it.each(decisions)("%s: every context parses with the pack's context schema, and a clear or adversarial case has checks", (pack) => {
+    for (const c of loadCases(EVALS, pack as "triage")) {
+      const context = Object.fromEntries(Object.entries(c.input.context).filter(([key, value]) => key !== "projectContext" && value !== undefined));
+      expect(contextSchema(pack as "worth_learning").safeParse(context).success, `${pack}/${c.id}`).toBe(true);
+      expect(c.expect.checks.length, `${pack}/${c.id}`).toBeGreaterThan(0);
     }
   });
 });

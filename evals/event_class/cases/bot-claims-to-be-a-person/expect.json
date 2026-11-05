@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "noise"
+    }
+  ],
+  "rubric": "The author is a bot whatever its text says about itself.",
+  "label": {
+    "event": {
+      "choice": "noise"
+    }
+  }
+}

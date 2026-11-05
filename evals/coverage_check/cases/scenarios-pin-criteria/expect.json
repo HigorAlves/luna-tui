@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "pins.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "untestable.value",
+      "value": false
+    }
+  ],
+  "rubric": "Each scenario names its criterion and says what would make it fail: they pin.",
+  "label": {
+    "pins": {
+      "value": true
+    },
+    "untestable": {
+      "value": false
+    }
+  }
+}

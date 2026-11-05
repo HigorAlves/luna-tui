@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "worth.p",
+      "min": 0.25,
+      "max": 0.75
+    }
+  ],
+  "rubric": "Sixty percent over on size and one retry: a mild surprise that a retro might or might not teach from, so p should stay near the middle."
+}

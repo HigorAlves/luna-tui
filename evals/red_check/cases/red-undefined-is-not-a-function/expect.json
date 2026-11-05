@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "right_reason.p",
+      "min": 0.25,
+      "max": 0.75
+    }
+  ],
+  "rubric": "'toCsv is not a function' may be the missing behaviour (the helper does not exist yet) or a broken import: the output alone does not say, so p should stay mid-range."
+}

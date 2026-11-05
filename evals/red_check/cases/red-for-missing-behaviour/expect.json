@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "right_reason.value",
+      "value": true
+    },
+    {
+      "kind": "equals",
+      "path": "not_tautological.value",
+      "value": true
+    }
+  ],
+  "rubric": "The test asks for the route and gets a 404: it fails because the behaviour is missing.",
+  "label": {
+    "right_reason": {
+      "value": true
+    },
+    "not_tautological": {
+      "value": true
+    }
+  }
+}

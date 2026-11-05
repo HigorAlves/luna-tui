@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "blast_radius.score",
+      "min": 1.5,
+      "max": 2.5
+    },
+    {
+      "kind": "between",
+      "path": "reversibility.score",
+      "min": 1.5,
+      "max": 2.5
+    },
+    {
+      "kind": "between",
+      "path": "data_sensitivity.score",
+      "min": 1.5,
+      "max": 2.5
+    }
+  ],
+  "rubric": "A payments data migration that drops a column: wide, not undone by a revert, and the data is card tokens (all three at the top level).",
+  "label": {
+    "blast_radius": {
+      "score": 2
+    },
+    "reversibility": {
+      "score": 2
+    },
+    "data_sensitivity": {
+      "score": 2
+    }
+  }
+}

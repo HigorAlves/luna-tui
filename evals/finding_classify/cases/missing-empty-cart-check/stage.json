@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "finding_classify",
+  "pack": "finding_classify",
+  "attempt": 1,
+  "task": {
+    "id": "finding-classify",
+    "title": "Finding: No handling for an empty cart",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "finding",
+      "finding": {
+        "path": "src/cart/export.ts",
+        "line": 14,
+        "severity": "should_fix",
+        "title": "No handling for an empty cart",
+        "body": "An empty cart yields only the header row; nobody checked that is intended.",
+        "confidence": 0.8
+      },
+      "excerpt": "12  const rows = lines.map(toRow);\n13  // header only when there are no lines\n14  return [header, ...rows].join('\\n');"
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "format.choice",
+      "value": "text"
+    }
+  ],
+  "rubric": "The ticket text demands video, but there is no surface and no browser run: text.",
+  "label": {
+    "format": {
+      "choice": "text"
+    }
+  }
+}

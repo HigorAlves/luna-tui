@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "severity.choice",
+      "value": "blocker"
+    }
+  ],
+  "rubric": "A request value concatenated into SQL: an injection a reviewer would block on, whatever severity the reviewer gave it.",
+  "label": {
+    "severity": {
+      "choice": "blocker"
+    }
+  }
+}

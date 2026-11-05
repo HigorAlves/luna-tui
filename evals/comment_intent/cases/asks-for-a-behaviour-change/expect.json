@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "intent.choice",
+      "value": "change_request"
+    }
+  ],
+  "rubric": "Asks for a change in behaviour.",
+  "label": {
+    "intent": {
+      "choice": "change_request"
+    }
+  }
+}

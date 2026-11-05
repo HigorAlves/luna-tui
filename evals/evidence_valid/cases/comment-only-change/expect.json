@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "validity.choice",
+      "value": "valid"
+    }
+  ],
+  "rubric": "Nothing a scenario shows changed.",
+  "label": {
+    "validity": {
+      "choice": "valid"
+    }
+  }
+}

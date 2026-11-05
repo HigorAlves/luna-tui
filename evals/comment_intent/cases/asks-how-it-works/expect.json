@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "intent.choice",
+      "value": "question"
+    }
+  ],
+  "rubric": "A question the pack's scenarios or the diff can answer.",
+  "label": {
+    "intent": {
+      "choice": "question"
+    }
+  }
+}

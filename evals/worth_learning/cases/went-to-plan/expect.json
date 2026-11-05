@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "worth.value",
+      "value": false
+    }
+  ],
+  "rubric": "On plan in size, no retries, no escalation: nothing to learn.",
+  "label": {
+    "worth": {
+      "value": false
+    }
+  }
+}

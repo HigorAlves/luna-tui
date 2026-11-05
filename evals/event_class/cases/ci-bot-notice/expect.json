@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "noise"
+    }
+  ],
+  "rubric": "A bot's CI notice: nothing to do.",
+  "label": {
+    "event": {
+      "choice": "noise"
+    }
+  }
+}

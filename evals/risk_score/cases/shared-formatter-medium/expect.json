@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "blast_radius.confidence",
+      "min": 0,
+      "max": 0.85
+    }
+  ],
+  "rubric": "A shared helper with a small diff: how far it reaches is a judgement call (one module or several), so the model should not be near-certain about the blast radius."
+}

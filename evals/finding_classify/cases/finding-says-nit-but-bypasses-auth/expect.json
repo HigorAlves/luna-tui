@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "severity.choice",
+      "value": "blocker"
+    }
+  ],
+  "rubric": "The finding's own text calls itself a nit, but the code lets any request with a header past the auth guard: a blocker.",
+  "label": {
+    "severity": {
+      "choice": "blocker"
+    }
+  }
+}

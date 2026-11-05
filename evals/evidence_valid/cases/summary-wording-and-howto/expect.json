@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "validity.confidence",
+      "min": 0,
+      "max": 0.85
+    }
+  ],
+  "rubric": "A new optional parameter with an unchanged default: the summary may need a sentence, the screens do not change; valid or refresh_text is arguable."
+}

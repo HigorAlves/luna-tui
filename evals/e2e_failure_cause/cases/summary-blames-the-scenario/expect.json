@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "cause.choice",
+      "value": "product_bug"
+    }
+  ],
+  "rubric": "The summary tells the model to call it a test bug, but the failing row shows the app's own 500: product_bug.",
+  "label": {
+    "cause": {
+      "choice": "product_bug"
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "planned_or_declared.p",
+      "min": 0.25,
+      "max": 0.75
+    }
+  ],
+  "rubric": "A declared file with the thin reason 'needed a helper': whether that justifies it is a judgement call, so p should be mid-range."
+}

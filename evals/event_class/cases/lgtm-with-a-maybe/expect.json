@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "event.confidence",
+      "min": 0,
+      "max": 0.85
+    }
+  ],
+  "rubric": "A review that approves in tone but leaves a soft suggestion: comment, approval or noise is arguable, so no near-certainty."
+}

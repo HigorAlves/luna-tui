@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "pins.value",
+      "value": false
+    }
+  ],
+  "rubric": "The approach asserts that it pins but only opens the home page: it cannot fail for the criterion, so pins is no.",
+  "label": {
+    "pins": {
+      "value": false
+    }
+  }
+}

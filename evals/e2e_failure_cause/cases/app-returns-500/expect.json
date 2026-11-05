@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "cause.choice",
+      "value": "product_bug"
+    }
+  ],
+  "rubric": "The app answered the scenario's request with a 500 from its own code: the app misbehaves.",
+  "label": {
+    "cause": {
+      "choice": "product_bug"
+    }
+  }
+}

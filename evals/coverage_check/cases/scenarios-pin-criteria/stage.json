@@ -1,0 +1,83 @@
+{
+  "schema": 3,
+  "stage": "coverage_check",
+  "pack": "coverage_check",
+  "attempt": 1,
+  "task": {
+    "id": "coverage-check",
+    "title": "Add a CSV export button to the cart page.",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": {
+        "source": "example-tracker:EX-1",
+        "kind": "feature",
+        "goal": "Let people export their cart as CSV",
+        "size": "small",
+        "urgency": "normal",
+        "risk": "low",
+        "signals": {
+          "kind": {
+            "answer": "feature",
+            "confidence": 0.9
+          }
+        },
+        "qa": [],
+        "decision": "plan",
+        "reason": "ready",
+        "at": "2026-11-01T09:00:00.000Z",
+        "model": "fixture"
+      },
+      "brief": "Add a CSV export button to the cart page.",
+      "criteria": [
+        "The cart page has an Export button",
+        "The file lists each line with its price"
+      ],
+      "assumptions": [],
+      "slices": [
+        {
+          "title": "Export endpoint and button",
+          "est_loc": 60,
+          "touchpoints": [
+            "src/cart/export.ts",
+            "src/cart/CartPage.tsx"
+          ],
+          "acceptance": [
+            "GET /cart/export.csv returns one row per line",
+            "The button downloads it"
+          ]
+        }
+      ],
+      "rollback": "Revert the PR; nothing is stored.",
+      "cases": [
+        {
+          "title": "Button is visible",
+          "criterion": "The cart page has an Export button",
+          "approach": "Open /cart with two items and assert a button named Export is present; remove the feature flag and assert it is absent."
+        },
+        {
+          "title": "CSV has a row per line",
+          "criterion": "The file lists each line with its price",
+          "approach": "Click Export on a cart with items A (2.50) and B (4.00); parse the download and assert exactly two rows with those prices."
+        }
+      ],
+      "gaps": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

@@ -1,0 +1,69 @@
+{
+  "schema": 3,
+  "stage": "risk_score",
+  "pack": "risk_score",
+  "attempt": 1,
+  "task": {
+    "id": "risk-score",
+    "title": "Change the shared price formatter to round to the currency's minor unit; the cart, the invoice PDF and the emails use it.",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": {
+        "source": "example-tracker:EX-1",
+        "kind": "feature",
+        "goal": "Round prices to the shop's currency",
+        "size": "small",
+        "urgency": "normal",
+        "risk": "low",
+        "signals": {
+          "kind": {
+            "answer": "feature",
+            "confidence": 0.9
+          }
+        },
+        "qa": [],
+        "decision": "plan",
+        "reason": "ready",
+        "at": "2026-11-01T09:00:00.000Z",
+        "model": "fixture"
+      },
+      "brief": "Change the shared price formatter to round to the currency's minor unit; the cart, the invoice PDF and the emails use it.",
+      "criteria": [
+        "Prices round to the currency's minor unit everywhere"
+      ],
+      "assumptions": [],
+      "slices": [
+        {
+          "title": "Round in formatPrice",
+          "est_loc": 40,
+          "touchpoints": [
+            "src/shared/formatPrice.ts",
+            "src/shared/formatPrice.test.ts"
+          ],
+          "acceptance": [
+            "formatPrice(1.005, 'USD') is '$1.01'"
+          ]
+        }
+      ],
+      "rollback": "Revert; no data changes.",
+      "cases": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

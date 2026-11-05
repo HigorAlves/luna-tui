@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "blast_radius.score",
+      "min": -0.5,
+      "max": 0.5
+    },
+    {
+      "kind": "between",
+      "path": "reversibility.score",
+      "min": -0.5,
+      "max": 0.5
+    },
+    {
+      "kind": "between",
+      "path": "data_sensitivity.score",
+      "min": -0.5,
+      "max": 0.5
+    }
+  ],
+  "rubric": "A one-line copy change in one module: blast radius one module (0), a revert restores everything (0), no user or secret data (0).",
+  "label": {
+    "blast_radius": {
+      "score": 0
+    },
+    "reversibility": {
+      "score": 0
+    },
+    "data_sensitivity": {
+      "score": 0
+    }
+  }
+}

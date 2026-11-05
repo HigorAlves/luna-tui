@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "worth.value",
+      "value": true
+    }
+  ],
+  "rubric": "Five times the planned size, five retries and an escalation: a retro would teach the next one something.",
+  "label": {
+    "worth": {
+      "value": true
+    }
+  }
+}

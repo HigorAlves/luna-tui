@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "format.choice",
+      "value": "text"
+    }
+  ],
+  "rubric": "An API with no user-visible surface: text.",
+  "label": {
+    "format": {
+      "choice": "text"
+    }
+  }
+}

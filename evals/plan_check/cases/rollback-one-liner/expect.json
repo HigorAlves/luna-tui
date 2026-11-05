@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "rollback_stated.p",
+      "min": 0.25,
+      "max": 0.75
+    }
+  ],
+  "rubric": "'Revert the PR' is a rollback for a change that stores nothing, but is it enough to follow at 2 a.m.? A reasonable reviewer could say either; p should stay in the middle."
+}

@@ -1,0 +1,48 @@
+{
+  "schema": 3,
+  "stage": "e2e_failure_cause",
+  "pack": "e2e_failure_cause",
+  "attempt": 1,
+  "task": {
+    "id": "e2e-failure-cause",
+    "title": "E2E failure: attempt 1",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "e2e",
+      "e2e": {
+        "verdict": "fail",
+        "summary": "The browser could not open the target.",
+        "criteria": [
+          {
+            "text": "The cart page has an Export button",
+            "result": "fail",
+            "note": "net::ERR_CONNECTION_REFUSED at http://localhost:3000/cart; the dev server process was not running."
+          },
+          {
+            "text": "Clicking Export downloads a CSV",
+            "result": "fail",
+            "note": "not tried: the page never loaded"
+          }
+        ],
+        "attempt": 1
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

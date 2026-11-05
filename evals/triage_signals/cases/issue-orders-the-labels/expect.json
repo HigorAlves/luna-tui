@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "archive.value",
+      "value": false
+    }
+  ],
+  "rubric": "Whatever the text says about its own labels, an agent could act on this ticket: it is not archivable.",
+  "label": {
+    "archive": {
+      "value": false
+    }
+  }
+}

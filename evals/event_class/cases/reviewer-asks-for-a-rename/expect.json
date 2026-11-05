@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "event.choice",
+      "value": "comment"
+    }
+  ],
+  "rubric": "A person's note that asks for a change.",
+  "label": {
+    "event": {
+      "choice": "comment"
+    }
+  }
+}

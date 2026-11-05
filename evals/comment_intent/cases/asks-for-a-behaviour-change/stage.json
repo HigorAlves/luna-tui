@@ -1,0 +1,56 @@
+{
+  "schema": 3,
+  "stage": "comment_intent",
+  "pack": "comment_intent",
+  "attempt": 1,
+  "task": {
+    "id": "comment-intent",
+    "title": "Comment on src/cart/export.ts",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ship": {
+      "kind": "comment",
+      "comment": {
+        "thread": {
+          "id": "THREAD-1",
+          "path": "src/cart/export.ts",
+          "line": 12,
+          "comments": [
+            {
+              "author": "reviewer-one",
+              "body": "Please make the export include the discount column, and fail with a 400 when the cart id is missing.",
+              "at": "2026-11-02T10:00:00.000Z"
+            }
+          ]
+        },
+        "pack": {
+          "summary": "Adds a CSV export of the cart.",
+          "scenarios": [
+            {
+              "text": "CSV has a row per line",
+              "result": "pass"
+            }
+          ],
+          "howToVerify": "Open the cart and click Export."
+        },
+        "myReplies": 0
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

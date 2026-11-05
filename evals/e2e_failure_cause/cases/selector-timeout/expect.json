@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "cause.confidence",
+      "min": 0,
+      "max": 0.8
+    }
+  ],
+  "rubric": "A timeout on a selector could be a missing button (app), a renamed one (scenario) or a slow page (environment): the rows do not decide it, so the model should hedge."
+}

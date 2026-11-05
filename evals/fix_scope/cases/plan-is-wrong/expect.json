@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "scope.choice",
+      "value": "re_plan"
+    }
+  ],
+  "rubric": "The reviewer says the approach is wrong: back to triage with the thread.",
+  "label": {
+    "scope": {
+      "choice": "re_plan"
+    }
+  }
+}

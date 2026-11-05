@@ -1,0 +1,68 @@
+{
+  "schema": 3,
+  "stage": "risk_score",
+  "pack": "risk_score",
+  "attempt": 1,
+  "task": {
+    "id": "risk-score",
+    "title": "Correct 'Your cart is emtpy' to 'Your cart is empty' in the cart page copy.",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "plan": {
+      "record": {
+        "source": "example-tracker:EX-1",
+        "kind": "feature",
+        "goal": "Fix a typo in the empty-cart message",
+        "size": "tiny",
+        "urgency": "normal",
+        "risk": "none",
+        "signals": {
+          "kind": {
+            "answer": "feature",
+            "confidence": 0.9
+          }
+        },
+        "qa": [],
+        "decision": "plan",
+        "reason": "ready",
+        "at": "2026-11-01T09:00:00.000Z",
+        "model": "fixture"
+      },
+      "brief": "Correct 'Your cart is emtpy' to 'Your cart is empty' in the cart page copy.",
+      "criteria": [
+        "The empty-cart message reads correctly"
+      ],
+      "assumptions": [],
+      "slices": [
+        {
+          "title": "Fix the typo",
+          "est_loc": 2,
+          "touchpoints": [
+            "src/cart/messages.ts"
+          ],
+          "acceptance": [
+            "The message reads 'Your cart is empty'"
+          ]
+        }
+      ],
+      "rollback": "Revert the one-line change.",
+      "cases": []
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

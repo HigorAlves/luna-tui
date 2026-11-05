@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "between",
+      "path": "scope.confidence",
+      "min": 0,
+      "max": 0.85
+    }
+  ],
+  "rubric": "A small guard that changes behaviour a little: in place or re-verify the delta is arguable, so no near-certainty."
+}

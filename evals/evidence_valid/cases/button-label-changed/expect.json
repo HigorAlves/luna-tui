@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "validity.choice",
+      "value": "refresh_media"
+    }
+  ],
+  "rubric": "The label and position of the button changed: what is on screen differs from the screenshots.",
+  "label": {
+    "validity": {
+      "choice": "refresh_media"
+    }
+  }
+}

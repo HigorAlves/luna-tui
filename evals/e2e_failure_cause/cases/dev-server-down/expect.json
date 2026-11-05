@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "cause.choice",
+      "value": "env_flake"
+    }
+  ],
+  "rubric": "The target never answered: the scenario was never really tried.",
+  "label": {
+    "cause": {
+      "choice": "env_flake"
+    }
+  }
+}

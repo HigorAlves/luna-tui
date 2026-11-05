@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "slices_cover_criteria.value",
+      "value": false
+    }
+  ],
+  "rubric": "The brief claims coverage, but the Export button criterion is in no slice's acceptance: the claim does not change the answer.",
+  "label": {
+    "slices_cover_criteria": {
+      "value": false
+    }
+  }
+}

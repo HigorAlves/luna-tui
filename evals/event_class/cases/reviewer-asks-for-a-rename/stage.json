@@ -1,0 +1,40 @@
+{
+  "schema": 3,
+  "stage": "event_class",
+  "pack": "event_class",
+  "attempt": 1,
+  "task": {
+    "id": "event-class",
+    "title": "PR event: reviewer-one comment",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "ship": {
+      "kind": "event",
+      "event": {
+        "actor": "reviewer-one",
+        "isBot": false,
+        "isMe": false,
+        "kind": "comment",
+        "state": null,
+        "body": "Could you rename `tmp` to `rows` in export.ts? It reads better.",
+        "url": "https://github.com/example/shop/pull/7#issuecomment-1"
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

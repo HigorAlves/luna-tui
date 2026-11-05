@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "intent.choice",
+      "value": "change_request"
+    }
+  ],
+  "rubric": "Framed as a question, but it asks to replace the format and delete an endpoint: a change request.",
+  "label": {
+    "intent": {
+      "choice": "change_request"
+    }
+  }
+}
