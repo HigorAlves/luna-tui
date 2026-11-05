@@ -583,6 +583,20 @@ const E2E_FAILURE_QUESTIONS: QuestionSet = {
   },
 };
 
+/** What ci_failure_class asks of a red CI job. */
+const CI_FAILURE_QUESTIONS: QuestionSet = {
+  class: {
+    type: "choice",
+    instructions: "What kind of failure is this red CI job? Judge from the job's name and the tail of its log: did the change break something, did something flaky or timing-dependent fail, did the infrastructure or the environment fail, or did the base branch move under the change?",
+    criteria: {
+      real: "the change broke a test, a build or a lint rule; a fix in the code is needed",
+      flake: "a flaky or timing-dependent failure, likely to pass on a re-run",
+      infra: "the runner, a registry, the network, a quota or a service the job needs failed; nothing in the change can fix it",
+      drift: "the base branch moved: a conflict, a stale lockfile or a base commit the change no longer fits",
+    },
+  },
+};
+
 /** What evidence_format asks of a change and the browser run behind it. */
 const EVIDENCE_FORMAT_QUESTIONS: QuestionSet = {
   format: {
@@ -660,11 +674,11 @@ const WORTH_LEARNING_QUESTIONS: QuestionSet = {
 };
 
 /** The packs a decision model answers; every other pack is a role's or a script's. */
-type DecisionPackId = "triage_signals" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "escalation_reason" | "finding_classify" | "e2e_failure_cause" | "evidence_format" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning";
+type DecisionPackId = "triage_signals" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "escalation_reason" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class" | "evidence_format" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning";
 
 // The engines of a decision pack come from decision-defaults.ts: the file the scorecard writes, else Jev with a small Claude model behind it.
 
-const planDecision = (id: "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "escalation_reason" | "finding_classify" | "e2e_failure_cause" | "evidence_format" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning", questions: QuestionSet): DecisionPack => ({
+const planDecision = (id: "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "escalation_reason" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class" | "evidence_format" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning", questions: QuestionSet): DecisionPack => ({
   id,
   kind: "decision",
   questions,
@@ -1116,6 +1130,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
   // Verify's decisions: each reads a check context, one call, no worktree.
   finding_classify: { ...planDecision("finding_classify", FINDING_CLASSIFY_QUESTIONS) },
   e2e_failure_cause: { ...planDecision("e2e_failure_cause", E2E_FAILURE_QUESTIONS) },
+  ci_failure_class: { ...planDecision("ci_failure_class", CI_FAILURE_QUESTIONS) },
   // Evidence's decision: reads an evidence context, one call, no worktree.
   evidence_format: { ...planDecision("evidence_format", EVIDENCE_FORMAT_QUESTIONS) },
   // Ship's decisions: each reads a ship context, one call, no worktree.

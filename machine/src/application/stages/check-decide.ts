@@ -3,7 +3,7 @@
 import { recordIdOf } from "../decision-truth.ts";
 import { type CheckContext, type DecisionOverrides, PACKS, type Verdict, applyPolicy } from "@hardness/contracts";
 
-export type CheckPack = "red_check" | "scope_check" | "escalation_reason" | "finding_classify" | "e2e_failure_cause";
+export type CheckPack = "red_check" | "scope_check" | "escalation_reason" | "finding_classify" | "e2e_failure_cause" | "ci_failure_class";
 
 /** Runs a decision pack on a check context and returns its answer; bound late, once PackRuns exists. */
 export type Decide = (pack: CheckPack, check: CheckContext, repoPath: string | null) => Promise<Record<string, unknown>>;

@@ -73,6 +73,9 @@ export function renderCheck(check: CheckContext): string {
       `Excerpt:\n${check.excerpt ?? "(none)"}`,
     ].join("\n");
   }
+  if (check.kind === "ci") {
+    return check.ci ? [`Failing job: ${check.ci.job}`, `Tail of its log:\n${check.ci.log || "(none)"}`].join("\n") : "CI failure: (none)";
+  }
   if (check.kind === "e2e") {
     const e = check.e2e;
     return e
@@ -168,6 +171,8 @@ function checkTitle(check: CheckContext): string {
       return `Finding: ${check.finding?.title ?? "?"}`;
     case "escalation":
       return `Escalation from ${check.escalation?.stage ?? "?"}`;
+    case "ci":
+      return `CI failure: ${check.ci?.job ?? "?"}`;
     case "e2e":
       return `E2E failure: attempt ${check.e2e?.attempt ?? "?"}`;
     default:

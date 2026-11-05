@@ -19,6 +19,7 @@ export const CONTEXT_OF = {
   escalation_reason: { key: "check", schema: CheckContext },
   finding_classify: { key: "check", schema: CheckContext },
   e2e_failure_cause: { key: "check", schema: CheckContext },
+  ci_failure_class: { key: "check", schema: CheckContext },
   evidence_format: { key: "evidence", schema: EvidenceContext },
   event_class: { key: "ship", schema: ShipContext },
   comment_intent: { key: "ship", schema: ShipContext },

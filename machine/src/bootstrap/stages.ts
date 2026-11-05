@@ -234,7 +234,18 @@ export async function buildRealStages(
     // Setup reads the repo checkout itself (no worktree yet) and proves what it proposes in the image.
     setup: setupRunner({ runPack: (context) => runAgent(deps, context, "setup", { checkout: true }), exec: checksExec, stateDir: config.stateDir }),
     // ci_watch polls the PR's checks on the host and only calls its pack when one is red.
-    ci_watch: ciWatchRunner({ github, runPack: (context, ci) => runAgent(deps, context, "ci_watch", { ci }) }),
+    ci_watch: ciWatchRunner({
+      github,
+      runPack: (context, ci) => runAgent(deps, context, "ci_watch", { ci }),
+      // What kind of red it is is a typed decision (ci_failure_class), bound late like the other decisions; the investigator is asked for the fix only for a real failure.
+      get decide() {
+        return verifyDecisions?.decide ?? null;
+      },
+      policy: async (repoPath) => {
+        const { factory, decisions } = await policies.for(repoPath);
+        return { reruns: factory.verify.ci_flaky_reruns, autoRebase: factory.verify.auto_rebase, decisions };
+      },
+    }),
     // e2e skips repos with no web surface; without the QA image it passes with a note.
     e2e: qaImage
       ? e2eRunner({

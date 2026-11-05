@@ -142,6 +142,8 @@ export const PackId = z.enum([
   // Decisions on Verify's own work (a check context, run on demand): how severe a review finding is, why a browser run failed.
   "finding_classify",
   "e2e_failure_cause",
+  // A decision on what kind of CI failure a red job is (a check context, run on demand): a real failure, a flake, an environment failure, a drift from the base.
+  "ci_failure_class",
   // Not a task stage: the replay evals' judge, grading another pack's answer to an eval case.
   "eval_judge",
   // Not a task stage: triages a batch of chat items (Slack or Teams) a client sends to POST /runs.
@@ -638,7 +640,9 @@ export type PlanContext = z.infer<typeof PlanContext>;
 
 /** What the checks (red_check, scope_check, finding_classify, e2e_failure_cause) judge: a red slice's failing output, the facts of a change's scope, a review finding, or a failed browser run. */
 export const CheckContext = z.object({
-  kind: z.enum(["red", "scope", "finding", "e2e", "escalation"]),
+  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci"]),
+  /** ci: the failing job and the tail of its log, flattened and capped by the machine: data for ci_failure_class. */
+  ci: z.object({ job: z.string(), log: z.string() }).optional(),
   slice: z.object({ id: z.number().int(), title: z.string(), acceptance: z.array(z.string()) }).optional(),
   /** escalation: why Build stopped, as data for escalation_reason: all text flattened and capped before it gets here. */
   escalation: z

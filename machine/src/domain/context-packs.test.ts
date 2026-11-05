@@ -16,7 +16,7 @@ describe("context-only packs", () => {
     const none = PackId.options.filter((id) => packStates(id).length === 0);
     // A new context-only pack must be given a context key or be denied: never on demand by accident.
     expect(none.filter((id) => !NOT_ON_DEMAND.includes(id)).sort()).toEqual(Object.keys(CONTEXT_OF).sort());
-    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "comment_intent", "coverage_check", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "finding_classify", "fix_scope", "jira_intake", "plan_check", "red_check", "risk_score", "scope_check", "slack_triage", "triage_signals", "worth_learning"]);
+    expect(Object.keys(CONTEXT_OF).sort()).toEqual(["chat_triage", "ci_failure_class", "comment_intent", "coverage_check", "e2e_failure_cause", "escalation_reason", "event_class", "evidence_format", "evidence_valid", "finding_classify", "fix_scope", "jira_intake", "plan_check", "red_check", "risk_score", "scope_check", "slack_triage", "triage_signals", "worth_learning"]);
     expect(isContextPack("triage")).toBe(false);
     expect(isContextPack("reviewing_memory")).toBe(false);
     expect(isContextPack("chat_triage")).toBe(true);
