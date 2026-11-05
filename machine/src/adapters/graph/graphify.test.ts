@@ -182,6 +182,23 @@ describe("graphifyGraph.isFresh", () => {
   });
 });
 
+describe("graphifyGraph.pastMisses", () => {
+  it("lists the files accepted outside the map, most frequent first, at most twenty, plain repository paths only", async () => {
+    const { graph, repo } = setup();
+    await graph.recordMisses(repo, { task: "t1", at: "2026-11-04T10:00:00Z", files: ["b.ts", "a.ts", "../escape", "/abs", "c d\ne", "src/x.ts"] });
+    await graph.recordMisses(repo, { task: "t2", at: "2026-11-04T11:00:00Z", files: ["a.ts", "src/x.ts", "a.ts"] });
+    await graph.recordMisses(repo, { task: "t3", at: "2026-11-04T12:00:00Z", files: ["a.ts"] });
+    expect(await graph.pastMisses!(repo)).toEqual(["a.ts", "src/x.ts", "b.ts"]);
+    for (let i = 0; i < 30; i++) await graph.recordMisses(repo, { task: `n${i}`, at: "t", files: [`f${i}.ts`] });
+    expect((await graph.pastMisses!(repo)).length).toBe(20);
+  });
+
+  it("is empty for a repository with no misses file", async () => {
+    const { graph, repo } = setup();
+    expect(await graph.pastMisses!(repo)).toEqual([]);
+  });
+});
+
 describe("graphifyGraph.recordMisses", () => {
   it("appends one JSON line per call to graphs/<slug>/misses.jsonl", async () => {
     const { graph, repo, stateDir } = setup();

@@ -128,6 +128,16 @@ describe("planStage's code map", () => {
     expect(broken.calls).toHaveLength(0);
   });
 
+  it("seeds the mapper's shortlist with the files earlier cards declared outside the map, after what the goal located", async () => {
+    const graph = { stampOf: async () => ({ commit: "c" }), locate: async () => located(), pastMisses: async () => ["board/src/keys.rs", "docs/extra.md"] };
+    const { calls } = await (async () => { const t = setup({}, { graph }); await t.run(context()); return t; })();
+    expect(calls[0]!.plan?.shortlist?.files).toEqual(["board/src/keys.rs", "docs/extra.md"]);
+    const none = { stampOf: async () => ({ commit: "c" }), locate: async () => null, pastMisses: async () => ["only/misses.ts"] };
+    const t2 = setup({}, { graph: none });
+    await t2.run(context());
+    expect(t2.calls[0]!.plan?.shortlist).toMatchObject({ files: ["only/misses.ts"], symbols: [], components: [], owners: [] });
+  });
+
   it("flags a stale map on the gate with how far behind the graph is", async () => {
     const { run } = setup({}, locating({ stale: true, behind: 120 }));
     const result = await run(context());

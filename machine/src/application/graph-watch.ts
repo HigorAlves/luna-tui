@@ -50,6 +50,18 @@ export class GraphWatch {
     void starting.finally(() => this.starting.delete(starting));
   }
 
+  /** A card of this repository merged (RFC 0006 D8): rebuild its graph now, whatever the poll has seen; the poll stays as the fallback.
+   *  Not tried again until the head moves does not apply here: a merge is new news, so an earlier failure is forgotten. */
+  requestRebuild(repoPath: string): void {
+    const starting = (async () => {
+      if (!(await this.options.policies.for(repoPath)).graph) return;
+      this.failed.delete(repoPath);
+      await this.build(repoPath, "");
+    })().catch((error: unknown) => this.log(`graph: ${repoPath}: ${error instanceof Error ? error.message : String(error)}`));
+    this.starting.add(starting);
+    void starting.finally(() => this.starting.delete(starting));
+  }
+
   /** Resolves once the builds scheduled so far are done. */
   async idle(): Promise<void> {
     await Promise.all(this.starting);

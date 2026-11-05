@@ -56,6 +56,8 @@ export interface Graph {
   owners(repoPath: string, paths: string[]): Promise<{ owners: RequiredOwners[]; codeowners: boolean; dropped?: number } | null>;
   /** What a change to `files` reaches (importers, dependents, tests), from the current graph; null when there is none. */
   impact(repoPath: string, files: string[]): Promise<Impact | null>;
+  /** The files earlier cards declared outside the map and the machine accepted, most frequent first, at most twenty, plain repository paths. */
+  pastMisses?(repoPath: string): Promise<string[]>;
   /** Appends the files a task changed that its plan and the code map did not name (accepted by scope_check), one JSON line per call. */
   recordMisses(repoPath: string, miss: GraphMiss): Promise<void>;
 }

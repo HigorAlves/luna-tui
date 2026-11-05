@@ -248,7 +248,7 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   credentials,
   triageSignals,
   planDecisions,
-  { graph, ensure: (repoPath) => graphWatch?.ensure(repoPath) },
+  { graph, ensure: (repoPath) => graphWatch?.ensure(repoPath), rebuild: (repoPath) => graphWatch?.requestRebuild(repoPath) },
   buildDecisions,
   verifyDecisions,
   {

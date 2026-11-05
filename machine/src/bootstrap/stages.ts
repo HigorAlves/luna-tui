@@ -83,7 +83,7 @@ export async function buildRealStages(
   /** The plan stage's decisions (coverage, plan check, risk): `decide` is bound late, once PackRuns exists; null runs the stage without them. */
   planDecisions?: { decide: PlanDeps["decide"] },
   /** The machine's code graphs, mounted read-only in every stage; `ensure` asks for a first build of a repo with none. */
-  graphs?: { graph: Graph; ensure: (repoPath: string) => void },
+  graphs?: { graph: Graph; ensure: (repoPath: string) => void; rebuild?: (repoPath: string) => void },
   /** Build's checks (red_check, scope_check): `decide` is bound late, once PackRuns exists; null runs Build without them. */
   buildDecisions?: { decide: Decide | null; /** Build's budget now, read between a failed sweep's fix runs: bound once the pipeline exists. */ budget?: (taskId: string) => Promise<{ spent: boolean; minutesLeft: number }> },
   /** Verify's decisions (finding_classify, e2e_failure_cause), bound late like the others; null runs e2e without the failure cause. */
@@ -307,6 +307,8 @@ export async function buildRealStages(
         stateDir: config.stateDir,
         monitor: shipMonitor({
           github,
+          // A merged card's repository gets its graph rebuilt at once (D8).
+          ...(graphs?.rebuild ? { onMerged: graphs.rebuild } : {}),
           truth: truth ?? null,
           policies,
           evidence: { load: evidenceDeps.load, save: saveEvidence, publish: publishEvidence, store: evidenceStore },

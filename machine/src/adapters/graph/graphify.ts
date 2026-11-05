@@ -20,6 +20,9 @@ import { repoSlug } from "./slug.ts";
 
 /** Where a repo's misses file is mounted in the build container. */
 const MISSES_MOUNT = "/graph-misses.jsonl";
+/** The misses file is the machine's own, but a card declares what goes in it: it is read only up to this size, and at most this many paths seed a shortlist. */
+const MAX_MISSES_BYTES = 2 * 1024 * 1024;
+export const MAX_PAST_MISSES = 20;
 const BUILD_TIMEOUT_MS = 15 * 60_000;
 /** Commit folders kept per repo: the current graph and two older ones a running stage may still mount. */
 export const KEEP_GRAPHS = 3;
@@ -207,6 +210,28 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
 
     async behind(repoPath, commit) {
       return behindOf(repoPath, commit).catch(() => null);
+    },
+
+    async pastMisses(repoPath) {
+      const file = join(dirOf(repoPath), "misses.jsonl");
+      try {
+        const info = await lstat(file);
+        if (!info.isFile() || info.size > MAX_MISSES_BYTES) return [];
+        const counts = new Map<string, number>();
+        for (const line of (await readFile(file, "utf8")).split("\n")) {
+          let row: { files?: unknown };
+          try {
+            row = JSON.parse(line) as { files?: unknown };
+          } catch {
+            continue;
+          }
+          if (!Array.isArray(row.files)) continue;
+          for (const f of row.files) if (typeof f === "string" && isPlainRepoPath(f)) counts.set(f, (counts.get(f) ?? 0) + 1);
+        }
+        return [...counts].sort((a, b) => b[1] - a[1]).slice(0, MAX_PAST_MISSES).map(([f]) => f);
+      } catch {
+        return [];
+      }
     },
 
     async isFresh(repoPath, stamp, baseCommit) {

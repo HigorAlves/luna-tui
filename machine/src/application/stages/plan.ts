@@ -66,6 +66,8 @@ export interface PlanDeps {
     /** Where the goal's words point in the graph, with who owns it and how stale the graph is; null when there is none. Seeds the mapper and marks the map. */
     locate?(repoPath: string, text: string, options?: { staleCommits?: number }): Promise<GraphLocation | null>;
     /** Who owns these paths at the default branch (CODEOWNERS); null when the repo has no graph. The fast lane asks it about the plan's own files. */
+    /** The files earlier cards declared outside the map, most frequent first (at most twenty); seeds the mapper's shortlist. */
+    pastMisses?(repoPath: string): Promise<string[]>;
     owners?(repoPath: string, paths: string[]): Promise<{ owners: RequiredOwners[]; codeowners: boolean; dropped?: number } | null>;
   };
   /** Waits for the repository's code graph (building it when it has none or a stale one); absent, no stage waits. */
@@ -191,7 +193,11 @@ export function planStage(deps: PlanDeps): StageRunner {
       return { ...m, files: files.slice(0, MAP_CAP), entry_points: entry.slice(0, MAP_CAP), ...(dropped.length || m.dropped?.length ? { dropped: [...new Set([...(m.dropped ?? []), ...dropped])] } : {}) };
     };
     const mapWithAgent = async (found: GraphLocation | null) => {
-      const shortlist = found ? { files: found.files, symbols: found.symbols, components: found.components, owners: [...new Set(found.owners.flatMap((o) => o.owners))] } : undefined;
+      const missed = (await deps.graph?.pastMisses?.(task.repoPath!).catch(() => [])) ?? [];
+      const shortlist =
+        found || missed.length > 0
+          ? { files: [...new Set([...(found?.files ?? []), ...missed])], symbols: found?.symbols ?? [], components: found?.components ?? [], owners: found ? [...new Set(found.owners.flatMap((o) => o.owners))] : [] }
+          : undefined;
       const mapped = await deps.runPack("code_map", sub("map"), shortlist ? { plan: { record: task.record ?? null, brief: "", criteria: task.criteria, assumptions: [], slices: [], shortlist } } : {});
       results.push(mapped);
       const parsed = CodeMapAnswer.safeParse(mapped.detail?.map);
