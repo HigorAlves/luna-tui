@@ -189,6 +189,51 @@ describe("e2eRunner", () => {
   });
 });
 
+describe("the browser run judged scenario by scenario", () => {
+  const cases = [
+    { title: "export downloads a file", criterion: null, approach: "Given a report, When exported, Then a file downloads" },
+    { title: "empty report", criterion: null, approach: "Given nothing, When exported, Then a notice shows" },
+  ];
+  const approved = (): StageContext => ({ ...context(), approvals: [{ kind: "awaiting_approval", decision: "approved", requested: { cases } }] }) as unknown as StageContext;
+  const cause = (choice: string, confidence = 0.9) => ({ cause: { choice, confidence } });
+
+  it("writes one manifest row per approved scenario, and a scenario with no row is not run and fails a passing verdict", async () => {
+    const runPack = vi.fn().mockResolvedValue(answered({ verdict: "pass", summary: "ok", criteria: [{ text: "export downloads a file", result: "pass", evidence: [] }] }));
+    const result = await e2eRunner({ runPack, detectWeb: async () => true })(approved());
+    expect(result.outcome).toBe("fail");
+    expect(result.detail).toMatchObject({ verdict: "partial" });
+    const rows = (result.detail as { manifest: Array<{ scenario: string; result: string }> }).manifest;
+    expect(rows.map((r) => [r.scenario, r.result])).toEqual([["S1", "pass"], ["S2", "not_run"]]);
+    expect(result.findings).toEqual([expect.objectContaining({ title: "scenario failed: empty report" })]);
+  });
+
+  it("asks e2e_failure_cause once per failed scenario, five at most, and each cause rides on its own finding", async () => {
+    const many = Array.from({ length: 7 }, (_, i) => ({ title: `scenario ${i}`, criterion: null, approach: "a" }));
+    const rows = many.map((c, i) => ({ text: c.title, result: "fail", note: `broke ${i}`, evidence: [] }));
+    const ctx = { ...context(), approvals: [{ kind: "awaiting_approval", decision: "approved", requested: { cases: many } }] } as unknown as StageContext;
+    const decide = vi.fn<Decide>(async (_p, check) => cause(check.e2e!.criteria[0]!.text === "scenario 1" ? "test_bug" : "product_bug"));
+    const result = await e2eRunner({ runPack: vi.fn().mockResolvedValue(answered({ verdict: "fail", summary: "s", criteria: rows })), detectWeb: async () => true, decide, overrides: async () => ({}) })(ctx);
+    expect(decide).toHaveBeenCalledTimes(5);
+    expect(decide.mock.calls.every(([, check]) => check.e2e!.criteria.length === 1)).toBe(true);
+    const findings = result.findings as Array<{ title: string; body: string }>;
+    expect(findings.find((f) => f.title.endsWith("scenario 1"))!.body).toContain("cause: test_bug");
+    expect(findings.find((f) => f.title.endsWith("scenario 0"))!.body).toContain("cause: product_bug");
+    expect(findings.find((f) => f.title.endsWith("scenario 6"))!.body).not.toContain("cause:");
+  });
+
+  it("keeps only the artifacts that are plain-named regular files in the run's folder", async () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "e2e-state-"));
+    const qa = join(stateDir, "runs", "r", "files", "qa");
+    mkdirSync(qa, { recursive: true });
+    writeFileSync(join(qa, "shot.png"), "x");
+    const runPack = vi.fn().mockResolvedValue(answered({ verdict: "fail", summary: "s", criteria: [{ text: "export downloads a file", result: "fail", evidence: ["shot.png", "../../secret", "gone.png"] }, { text: "empty report", result: "pass", evidence: [] }] }));
+    const result = await e2eRunner({ runPack, detectWeb: async () => true, stateDir })(approved());
+    const rows = (result.detail as { manifest: Array<{ artifacts: string[] }> }).manifest;
+    expect(rows[0]!.artifacts).toEqual(["shot.png"]);
+    expect((result.findings as Array<{ body: string }>)[0]!.body).toContain("artifacts: shot.png");
+  });
+});
+
 describe("e2e_failure_cause", () => {
   const criteria = [
     { text: "login works", result: "fail", evidence: [] },

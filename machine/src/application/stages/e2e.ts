@@ -7,6 +7,8 @@ import { branchBase, diffNameStatus } from "../../adapters/git/worktree.ts";
 import type { DecisionOverrides } from "@hardness/contracts";
 
 import type { Policy } from "../../domain/policy.ts";
+import { type ManifestRow, boundedArtifacts, manifestRows } from "../../domain/e2e-manifest.ts";
+import { approvedScenarios } from "../../domain/stage-input.ts";
 import { type ScenarioRow, scenarioFindings } from "../../domain/send-back.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type TruthSink, e2eCauseTruth } from "../decision-truth.ts";
@@ -32,6 +34,8 @@ export interface E2eDeps {
   stateDir?: string;
 }
 
+/** How many failed scenarios the cause decision is asked about. */
+const CAUSE_MAX = 5;
 type Cause = "product_bug" | "test_bug" | "env_flake";
 
 const WEB_SCRIPTS = ["dev", "start", "preview"];
@@ -152,55 +156,83 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
         },
       };
     };
-    /** Why a browser run failed, from the decision pack: an `env_flake` only when it is confident, else the app's fault. */
-    let causeRecord: string | undefined;
-    const causeOf = async (result: StageResult): Promise<Cause | null> => {
-      const decide = deps.decide ?? null;
-      const detail = result.detail as { verdict?: string; summary?: string; criteria?: unknown[] };
-      if (!decide || (detail.verdict !== "fail" && detail.verdict !== "partial")) return null;
-      const repoPath = context.task.repoPath ?? null;
-      // The rows are the pack's own answer: only a well-formed one that did not pass is a fact for the decision.
-      const rows = (detail.criteria ?? []).flatMap((c): Array<{ text: string; result: "fail" | "partial" }> => {
-        const row = c as { text?: unknown; result?: unknown } | null;
-        return row && typeof row === "object" && typeof row.text === "string" && (row.result === "fail" || row.result === "partial") ? [{ text: row.text, result: row.result }] : [];
-      });
-      const { verdict, answer, recordId } = await judgeCheck(
-        decide,
-        "e2e_failure_cause",
-        { kind: "e2e", e2e: { verdict: detail.verdict, summary: detail.summary ?? "", criteria: rows, attempt: context.attempt } },
-        repoPath,
-        (await deps.overrides?.(repoPath)) ?? {},
-      );
-      causeRecord = recordId;
-      const choice = (answer?.cause as { choice?: unknown } | undefined)?.choice;
-      return (verdict === "proceed" || verdict === "flag") && (choice === "env_flake" || choice === "test_bug") ? choice : verdict === "skipped" ? null : "product_bug";
+    const scenarios = approvedScenarios(context.approvals).map((sc) => ({ id: sc.id ?? "", title: sc.title, criterion_ref: sc.criterion_ref ?? null }));
+    const qaDir = deps.stateDir ? join(deps.stateDir, "runs", context.runId, "files", "qa") : null;
+    /** The manifest the machine checks by script: one row per approved scenario, artifacts only when they are plain-named regular files in the run's folder; a scenario with no row is not run, which fails a passing verdict. */
+    const judged = async (r: StageResult): Promise<StageResult> => {
+      const d = r.detail as { criteria?: unknown[]; summary?: unknown; verdict?: string; skipped?: boolean } | undefined;
+      if (scenarios.length === 0 || d?.skipped === true || (r.outcome !== "pass" && r.outcome !== "fail")) return r;
+      const rows = manifestRows(scenarios, d?.criteria ?? [], typeof d?.summary === "string" ? d.summary : "");
+      for (const row of rows) row.artifacts = await boundedArtifacts(row.artifacts, qaDir);
+      const incomplete = rows.some((row) => row.result === "not_run");
+      return incomplete && r.outcome === "pass"
+        ? { ...r, outcome: "fail", detail: { ...r.detail, verdict: "partial", manifest: rows } }
+        : { ...r, detail: { ...r.detail, manifest: rows } };
     };
-
-    /** What Build is given when the card goes back: one finding per scenario that did not pass, with the judged cause. */
-    const withFindings = (r: StageResult, cause: string | null): StageResult => {
-      if (r.outcome === "pass") return r;
-      const d = r.detail as { summary?: unknown; criteria?: unknown[] } | undefined;
-      const rows = (d?.criteria ?? []).flatMap((c): ScenarioRow[] => {
+    const manifestOf = (r: StageResult): ManifestRow[] | null => ((r.detail as { manifest?: ManifestRow[] } | undefined)?.manifest) ?? null;
+    /** The scenarios that did not pass, from the manifest when there is one, else from the run's own rows. */
+    const failedRows = (r: StageResult): ScenarioRow[] => {
+      const manifest = manifestOf(r);
+      if (manifest) {
+        return manifest
+          .filter((row) => row.result !== "pass")
+          .map((row) => ({ text: row.title, criterion: row.criterion, result: row.result === "not_run" ? "fail" : row.result, evidence: row.artifacts, seen: row.result === "not_run" ? "the scenario was not run" : row.seen }));
+      }
+      const d = r.detail as { criteria?: unknown[] } | undefined;
+      return (d?.criteria ?? []).flatMap((c): ScenarioRow[] => {
         const row = c as { text?: unknown; criterion?: unknown; result?: unknown; evidence?: unknown } | null;
         return row && typeof row === "object" && typeof row.text === "string" && typeof row.result === "string"
           ? [{ text: row.text, criterion: typeof row.criterion === "string" ? row.criterion : null, result: row.result, evidence: Array.isArray(row.evidence) ? row.evidence.filter((e): e is string => typeof e === "string") : [] }]
           : [];
       });
-      const findings = scenarioFindings(rows, typeof d?.summary === "string" ? d.summary : "", cause);
+    };
+    /** Why a browser run failed, from the decision pack asked once per failed scenario (five at most): an `env_flake` only when every one is, a product bug when any is, else a test bug. */
+    let causeRecord: string | undefined;
+    const causeOf = async (result: StageResult): Promise<{ overall: Cause; per: Map<string, Cause> } | null> => {
+      const decide = deps.decide ?? null;
+      const detail = result.detail as { verdict?: string; summary?: string };
+      if (!decide || (detail.verdict !== "fail" && detail.verdict !== "partial")) return null;
+      const repoPath = context.task.repoPath ?? null;
+      const failed = failedRows(result).filter((row): row is ScenarioRow & { result: "fail" | "partial" } => row.result === "fail" || row.result === "partial").slice(0, CAUSE_MAX);
+      const per = new Map<string, Cause>();
+      for (const row of failed) {
+        const { verdict, answer, recordId } = await judgeCheck(
+          decide,
+          "e2e_failure_cause",
+          { kind: "e2e", e2e: { verdict: detail.verdict, summary: detail.summary ?? "", criteria: [{ text: row.text, result: row.result }], attempt: context.attempt } },
+          repoPath,
+          (await deps.overrides?.(repoPath)) ?? {},
+        );
+        causeRecord ??= recordId;
+        const choice = (answer?.cause as { choice?: unknown } | undefined)?.choice;
+        const cause: Cause | null = (verdict === "proceed" || verdict === "flag") && (choice === "env_flake" || choice === "test_bug") ? choice : verdict === "skipped" ? null : "product_bug";
+        if (cause) per.set(row.text, cause);
+      }
+      if (per.size === 0) return null;
+      const all = [...per.values()];
+      return { overall: all.every((c) => c === "env_flake") ? "env_flake" : all.includes("product_bug") ? "product_bug" : "test_bug", per };
+    };
+    /** What Build is given when the card goes back: one finding per scenario that did not pass, each with its own judged cause. */
+    const withFindings = (r: StageResult, causes: ReadonlyMap<string, string> | null): StageResult => {
+      if (r.outcome === "pass") return r;
+      const d = r.detail as { summary?: unknown } | undefined;
+      const findings = scenarioFindings(failedRows(r), typeof d?.summary === "string" ? d.summary : "", causes ?? null);
       return findings.length > 0 ? { ...r, findings } : r;
     };
-    let result = settle(await deps.runPack(context));
+
+    let result = await judged(settle(await deps.runPack(context)));
     if (result.outcome !== "fail") return result;
-    const cause = await causeOf(result);
-    if (cause === null) return withFindings(result, null);
-    if (cause !== "env_flake" || flakeRetries === 0) return withFindings({ ...result, detail: { ...result.detail, cause } }, cause);
+    const judgedCause = await causeOf(result);
+    if (judgedCause === null) return withFindings(result, null);
+    const cause = judgedCause.overall;
+    if (cause !== "env_flake" || flakeRetries === 0) return withFindings({ ...result, detail: { ...result.detail, cause } }, judgedCause.per);
     // An environment flake: the scenario was never really tried, so once more before a person is asked.
     // The re-run writes into the same run folder: what the first attempt left there must not be read as its packet.
     if (deps.stateDir) await rm(join(deps.stateDir, "runs", context.runId, "out"), { recursive: true, force: true });
-    result = settle(await deps.runPack(context));
+    result = await judged(settle(await deps.runPack(context)));
     for (let more = 1; more < flakeRetries && result.outcome === "fail"; more++) {
       if (deps.stateDir) await rm(join(deps.stateDir, "runs", context.runId, "out"), { recursive: true, force: true });
-      result = settle(await deps.runPack(context));
+      result = await judged(settle(await deps.runPack(context)));
     }
     // The re-run is the fact: a pass says it was the environment, a second failure says it was not.
     if (causeRecord) await deps.truth?.learned({ pack: "e2e_failure_cause", recordId: causeRecord, label: e2eCauseTruth(result.outcome !== "fail"), source: "e2e_rerun", taskId: context.task.id });
@@ -217,7 +249,7 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
         reason: `e2e failed ${flakeRetries === 1 ? "twice" : `${flakeRetries + 1} times`} on what looks like an environment flake: ${summary}`,
         options: ["check the QA target or the dev server, then retry the task", "mark the scenario partial by hand"],
       },
-    }, cause);
+    }, judgedCause.per);
   };
 }
 

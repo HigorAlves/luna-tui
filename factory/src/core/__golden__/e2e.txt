@@ -29,7 +29,7 @@ QA targets the repo declares (name: base URL; a credential is a reference you re
 3. Drive every scenario with the `agent-browser` CLI or Playwright, per `browser-qa` and `playwright-qa`.
 4. Write the packet to `/out/files/qa/`: `qa-manifest.json` (top-level `verdict`, plus one `acceptance[]` row per scenario: `text` is the scenario title verbatim, `criterion` its criterion, `result` `pass`, `fail` or `partial`), `video.chapters[]` with one `{ title, start, acIds }` per scenario when a recording exists, `steps.jsonl` (one JSON object per line: `{ scenario, step, action, selector?, value?, url?, screenshot? }`, so the walk can be replayed), screenshots, a console log, a HAR, and a video when `ffmpeg` exists.
 5. Set `verdict` mechanically, from the rows and never from prose: any scenario `fail` gives `"fail"`; else any `partial` gives `"partial"`; else `"pass"`.
-6. Answer `{verdict, summary, criteria:[{text, criterion, result, evidence[]}]}`, one row per scenario (`text` verbatim, `criterion` the scenario's criterion); `evidence[]` holds paths relative to `/out`.
+6. Answer `{verdict, summary, criteria:[{text, criterion, result, note, evidence[]}]}`, one row per scenario (`text` verbatim, `criterion` the scenario's criterion); `note` is what you saw (on every row that is not a pass); `evidence[]` names the files you wrote in `/out/files/qa/` (a screenshot, a clip, the console and network logs), by file name only. The machine checks your rows against the approved scenarios: a scenario with no row is counted as not run, and a name that is not a plain file in that folder is dropped.
 
 ## Rules
 - A blocked scenario is `partial` with the reason in `summary`: nobody answers a question during the run.
