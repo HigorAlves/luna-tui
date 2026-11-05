@@ -265,6 +265,8 @@ pub enum Mode {
         approve: bool,
         text: String,
     },
+    /// `N` at the plan gate: the comment a rejection carries (required: the card ends, archived as rejected).
+    Reject { id: String, text: String },
     /// `Z` on a ticket: pick why it is archived; enter archives it.
     ArchiveReason { id: String, cursor: usize },
     /// `T`: correct the Triage Record. `field` is the row, `picks` the value index of each `RECORD_FIELDS` row.
@@ -1648,6 +1650,13 @@ impl App {
                 }
             }
             'R' => self.open_repo_picker(id),
+            'N' => {
+                if crate::keys::rejectable(self, &task) {
+                    self.mode = Mode::Reject { id: id.to_string(), text: String::new() };
+                } else {
+                    self.notify("only the plan gate rejects", false);
+                }
+            }
             'r' => {
                 if crate::keys::sendable_back(&task) {
                     self.mode = Mode::Reason {
@@ -1880,6 +1889,7 @@ impl App {
             Mode::Filter => self.handle_filter(key),
             Mode::Command { .. } => self.handle_command(key),
             Mode::Reason { .. } => self.handle_reason(key),
+            Mode::Reject { .. } => self.handle_reject(key),
             Mode::ConfirmDelete(id) | Mode::ConfirmAbort(id) | Mode::ConfirmWorktree(id) => {
                 let id = id.clone();
                 self.handle_confirm(key, &id)
@@ -2103,7 +2113,7 @@ impl App {
     /// own: the split's approval, not the memory review).
     #[cfg(test)]
     pub(crate) const HANDLED_INBOX: &[&str] =
-        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "X", "w", "Z", "d", "f", "o", "J", "T", "p"];
+        &["esc", "I", "q", "?", "j", "k", "l", "h", "1-5", "enter", "A", "a", "S", "e", "R", "r", "N", "X", "w", "Z", "d", "f", "o", "J", "T", "p"];
 
     /// The Inbox's keys: move, switch split, act in place, open, approve the split.
     fn handle_inbox(&mut self, key: KeyEvent) -> Outcome {
@@ -2868,7 +2878,7 @@ impl App {
     #[cfg(test)]
     pub(crate) const HANDLED_BOARD: &[&str] = &[
         "q", "h", "l", "j", "k", "n", "x", "/", "=", "!", "@", "zc", "zo", "zz", "gg", "gs", "gr", "ga", "G", "1-8", "]", "[", "F", "I", "D", "P", "S", "v", "V", "?", ":",
-        "esc", "enter", "R", "a", "A", "e", "r", "X", "w", "Z", "d", "f", "o", "J", "T", "p",
+        "esc", "enter", "R", "a", "A", "e", "r", "N", "X", "w", "Z", "d", "f", "o", "J", "T", "p",
     ];
 
     fn handle_normal(&mut self, key: KeyEvent) -> Outcome {
@@ -3087,7 +3097,7 @@ impl App {
     /// scrolls here, so the Jira link is not among them).
     #[cfg(test)]
     pub(crate) const HANDLED_DETAIL: &[&str] =
-        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "X", "w", "Z", "d", "f", "T", "p"];
+        &["esc", "enter", "q", "j", "k", "J", "K", "ctrl+d", "ctrl+u", "l", "h", "1-9", "+", "?", "o", "a", "A", "S", "e", "E", "R", "r", "N", "X", "w", "Z", "d", "f", "T", "p"];
 
     fn handle_detail(&mut self, key: KeyEvent, id: &str) -> Outcome {
         let half_page = (self.detail_viewport.get() / 2).max(1) as i16;
@@ -3590,6 +3600,31 @@ impl App {
                 let reason = (!reason.is_empty()).then_some(reason);
                 let done = if approve { "continuing with your guidance" } else { "sent back" };
                 self.act(|m| m.decide(&id, approve, reason.as_deref()), done);
+            }
+            _ => {}
+        }
+        Outcome::Continue
+    }
+
+    /// `N`'s prompt: the comment is required; enter rejects the plan (the card is archived as rejected), esc cancels.
+    fn handle_reject(&mut self, key: KeyEvent) -> Outcome {
+        let Mode::Reject { id, text } = &mut self.mode else {
+            return Outcome::Continue;
+        };
+        match key.code {
+            KeyCode::Char(c) => text.push(c),
+            KeyCode::Backspace => {
+                text.pop();
+            }
+            KeyCode::Esc => self.mode = Mode::Normal,
+            KeyCode::Enter => {
+                let (id, comment) = (id.clone(), text.trim().to_string());
+                if comment.is_empty() {
+                    self.notify("say why the plan is rejected; the card ends and the comment is kept", true);
+                    return Outcome::Continue;
+                }
+                self.mode = Mode::Normal;
+                self.act(|m| m.reject(&id, &comment), "rejected");
             }
             _ => {}
         }
@@ -5603,6 +5638,33 @@ mod workspace_key_tests {
         assert_eq!(app.detail_scroll.get(), 0);
         press(&mut app, KeyCode::Char('='));
         assert!(!app.detail_full, "= is the board's density key, not the popup's size");
+    }
+
+    #[test]
+    fn n_at_the_plan_gate_asks_why_before_rejecting_and_refuses_an_empty_comment() {
+        let mut app = open("awaiting_approval");
+        press(&mut app, KeyCode::Char('N'));
+        assert!(matches!(&app.mode, Mode::Reject { text, .. } if text.is_empty()));
+        press(&mut app, KeyCode::Enter);
+        assert!(matches!(&app.mode, Mode::Reject { .. }), "an empty comment keeps the prompt open");
+        assert!(app.toast.as_ref().is_some_and(|t| t.text.contains("say why")), "{:?}", app.toast.as_ref().map(|t| t.text.clone()));
+        for c in "no".chars() {
+            press(&mut app, KeyCode::Char(c));
+        }
+        assert!(matches!(&app.mode, Mode::Reject { text, .. } if text == "no"));
+        press(&mut app, KeyCode::Backspace);
+        assert!(matches!(&app.mode, Mode::Reject { text, .. } if text == "n"));
+        press(&mut app, KeyCode::Esc);
+        assert!(matches!(app.mode, Mode::Detail(_)) || matches!(app.mode, Mode::Normal), "esc cancels");
+    }
+
+    #[test]
+    fn n_elsewhere_rejects_nothing() {
+        for state in ["awaiting_ship", "awaiting_answers", "implementing"] {
+            let mut app = open(state);
+            press(&mut app, KeyCode::Char('N'));
+            assert!(!matches!(app.mode, Mode::Reject { .. }), "{state}");
+        }
     }
 
     #[test]

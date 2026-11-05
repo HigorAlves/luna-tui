@@ -274,6 +274,11 @@ impl Machine {
         self.post(&format!("/tasks/{id}/decision"), decision_body(approve, reason, approver().as_deref()))
     }
 
+    /// Rejects the plan the task waits on: the card ends archived as rejected and the comment is kept. Only the plan gate takes it.
+    pub fn reject(&self, id: &str, comment: &str) -> Result<Task, String> {
+        self.post(&format!("/tasks/{id}/decision"), reject_body(comment, approver().as_deref()))
+    }
+
     /// Approves the memory review without writing its proposed rules to project-context.md.
     pub fn approve_skipping_rules(&self, id: &str) -> Result<Task, String> {
         self.post(
@@ -588,6 +593,15 @@ fn decision_body(approve: bool, reason: Option<&str>, approver: Option<&str>) ->
     body
 }
 
+/// The body of a rejection: `rejected` with its comment (the machine reads it as the reason), and the approver when there is one.
+fn reject_body(comment: &str, approver: Option<&str>) -> Value {
+    let mut body = json!({ "decision": "rejected", "reason": comment });
+    if let Some(name) = approver {
+        body["approver"] = json!(name);
+    }
+    body
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -596,6 +610,12 @@ mod tests {
     fn a_decision_names_its_approver_when_there_is_one_and_stays_as_it_was_when_not() {
         assert_eq!(decision_body(true, None, None), json!({ "decision": "approved", "reason": null }));
         assert_eq!(decision_body(false, Some("split it"), Some("ana")), json!({ "decision": "sent_back", "reason": "split it", "approver": "ana" }));
+    }
+
+    #[test]
+    fn a_rejection_is_the_rejected_decision_with_its_comment_and_the_approver_when_there_is_one() {
+        assert_eq!(reject_body("not now", None), json!({ "decision": "rejected", "reason": "not now" }));
+        assert_eq!(reject_body("not now", Some("ana")), json!({ "decision": "rejected", "reason": "not now", "approver": "ana" }));
     }
 
     #[test]

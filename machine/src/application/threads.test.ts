@@ -87,16 +87,18 @@ describe("ThreadReplies", () => {
     expect(comments.at(-1)![2]).toBe("Archived: sla_expired.");
   });
 
-  it("says where the card came from that the plan gate escalated, naming the owners, or nobody when it has none", async () => {
+  it("says at the source that the plan waited and was escalated to the code owners, naming no one and counting none", async () => {
     const { pipeline, replies, comments } = wire();
     const task = await pipeline.createTask({ title: "Export CSV", repoPath: "/r/a", source });
     await pipeline.start(task.id);
-    await pipeline.record(task.id, "sla.escalated", { gate: "awaiting_approval", afterDays: 5, to: ["@marta", "@lee"] });
+    await pipeline.record(task.id, "sla.escalated", { gate: "awaiting_approval", afterDays: 5, to: ["@marta", "@lee", "payments-team"] });
     await replies.idle();
-    expect(comments.at(-1)![2]).toBe("Waiting on you for 5 days: approve the plan. Escalated to @marta, @lee.");
+    expect(comments.at(-1)![2]).toBe("The plan has waited too long for approval and was escalated to the code owners.");
+    for (const name of ["marta", "lee", "payments-team"]) expect(comments.at(-1)![2]).not.toContain(name);
+    expect(comments.at(-1)![2]).not.toMatch(/\d/);
     await pipeline.record(task.id, "sla.escalated", { gate: "awaiting_approval", afterDays: 5, to: [] });
     await replies.idle();
-    expect(comments.at(-1)![2]).toBe("Waiting on you for 5 days: approve the plan. Escalated to a maintainer: the code map named no owners.");
+    expect(comments.at(-1)![2]).toBe("The plan has waited too long for approval and was escalated to the code owners.");
   });
 
   it("says why when the task escalates, and that it paused on a usage limit", async () => {

@@ -86,12 +86,8 @@ export class ThreadReplies {
       const gate = event.payload.gate as TaskState;
       return this.reply(event.taskId, `Still waiting on you: ${ASKS[gate] ?? gate}.`);
     }
-    if (event.kind === "sla.escalated") {
-      const gate = event.payload.gate as TaskState;
-      const to = Array.isArray(event.payload.to) ? event.payload.to.map(String).slice(0, 10) : [];
-      const days = Number(event.payload.afterDays);
-      return this.reply(event.taskId, `Waiting on you for ${Number.isFinite(days) ? days : "several"} days: ${ASKS[gate] ?? gate}. Escalated to ${to.length ? to.join(", ") : "a maintainer: the code map named no owners"}.`);
-    }
+    // The names stay on the event and the board: nothing outward says who the owners are, or how many.
+    if (event.kind === "sla.escalated") return this.reply(event.taskId, "The plan has waited too long for approval and was escalated to the code owners.");
     if (event.kind === "task.shipped") return this.shipped(event);
     if (event.kind === "stage.finished") {
       const detail = event.payload.detail as { prUrl?: unknown } | undefined;

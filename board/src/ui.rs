@@ -473,6 +473,11 @@ fn footer_line(app: &App) -> Line<'static> {
                 Span::from("   enter send · esc cancel").fg(c(SUBTEXT0)),
             ])
         }
+        Mode::Reject { text, .. } => Line::from(vec![
+            Span::from(" reject because: ").fg(c(RED)).bold(),
+            Span::from(format!("{text}▏")),
+            Span::from("   enter reject (the card ends) · esc cancel").fg(c(SUBTEXT0)),
+        ]),
         Mode::ConfirmDelete(_) | Mode::ConfirmAbort(_) | Mode::ConfirmWorktree(_) => {
             hint(&[("y", "yes"), ("n", "no")])
         }

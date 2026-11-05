@@ -241,6 +241,11 @@ pub(crate) fn sendable_back(t: &Task) -> bool {
     }
 }
 
+/// Whether `task` waits at the plan stage's own gate (not triage's reply or archive): the only gate a plan is rejected at.
+pub(crate) fn rejectable(app: &App, task: &Task) -> bool {
+    task.state == "awaiting_approval" && app.detail.as_ref().filter(|d| d.task.id == task.id).and_then(|d| d.open_approval()).and_then(|a| a.outcome()).is_none()
+}
+
 fn with_task(app: &App, f: fn(&Task) -> Avail) -> Avail {
     match task_of(app) {
         Some(task) => f(task),
@@ -374,6 +379,7 @@ const SHARED: &[Binding] = &[
         |app| with_task(app, |t| if t.state == "reviewing_memory" { Avail::On } else { Avail::Off("no memory review waiting") }),
         40,
     ),
+    b("N", "reject the plan, with a comment", Group::Gate, Scope::Board, |app| plan_gate(app, None), 80),
     b(
         "r",
         "send back with a reason",
@@ -1214,6 +1220,18 @@ mod tests {
         let none = app_with(Vec::new());
         assert_eq!(find(&none, "a"), Avail::Off("no ticket selected"));
         assert_eq!(find(&none, "enter"), Avail::Off("no ticket selected"));
+    }
+
+    #[test]
+    fn n_rejects_at_the_plan_stage_gate_and_nowhere_else() {
+        let find = |app: &App, key: &str| bindings_for(app, Scope::Board).into_iter().find(|(b, _)| b.keys == key).map(|(_, a)| a);
+        assert_eq!(find(&app_with(vec![task("t1", "awaiting_approval", true, false, true)]), "N"), Some(Avail::On));
+        for state in ["awaiting_ship", "awaiting_answers", "awaiting_test_check", "implementing", "draft", "escalated"] {
+            assert_eq!(find(&app_with(vec![task("t1", state, true, false, true)]), "N"), None, "{state}");
+        }
+        assert_eq!(find(&app_with(vec![]), "N"), None);
+        let names = footer_keys(&app_with(vec![task("t1", "awaiting_approval", true, false, true)]), Scope::Board, 9).into_iter().map(|b| format!("{} {}", b.keys, b.label)).collect::<Vec<_>>();
+        assert!(names.contains(&"N reject the plan, with a comment".to_string()), "{names:?}");
     }
 
     #[test]
