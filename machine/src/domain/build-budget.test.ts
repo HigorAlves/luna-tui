@@ -40,7 +40,7 @@ describe("buildBudget", () => {
   });
 
   it("counts a failed regression sweep as an iteration", () => {
-    expect(buildBudget([run("implementing", 0, 1)], [row("stage.build.sweep_failed"), row("stage.build.sweep_failed")], limits).iterations).toBe(2);
+    expect(buildBudget([run("implementing", 0, 1)], [row("build.sweep_failed"), row("build.sweep_failed")], limits).iterations).toBe(2);
   });
 });
 

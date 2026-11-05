@@ -44,7 +44,7 @@ export function buildBudget(runs: readonly RunFacts[], events: readonly { kind: 
       consecutiveReds = 0;
     } else if (kind === "stage.slice.committed") {
       consecutiveReds = 0;
-    } else if (kind === "stage.build.sweep_failed") {
+    } else if (kind === "build.sweep_failed") {
       iterations += 1;
     } else if (kind === "stage.finished" && payload.stage === "implementing") {
       const t = payload.tokens as { input?: unknown; output?: unknown } | undefined;

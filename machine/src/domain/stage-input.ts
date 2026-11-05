@@ -3,6 +3,7 @@ import { type ChatTriageContext, CodeMapAnswer, Plan, PlanRisk, type Scenario, c
 
 export { PACK_LIMITS };
 
+import { safe } from "./evidence-markdown.ts";
 import type { ContextPackId, PackContext } from "./context-packs.ts";
 import type { ApprovalRow, TaskRow } from "./task.ts";
 
@@ -41,6 +42,10 @@ export function budgetFor(pack: PackId, slices: number): { maxTurns: number; tim
   const factor = Math.min(BUDGET_SCALE_MAX, Math.max(1, slices));
   return { maxTurns: maxTurns * factor, timeoutMs: timeoutMs * factor };
 }
+
+/** A failed sweep reaches the implementer as at most this many checks, each output cut to this many characters from the end. */
+const SWEEP_FAILURES_MAX = 5;
+const SWEEP_TAIL_CAP = 2000;
 
 /** Findings below this are not fed back to the implementer. */
 export const PRIOR_FINDING_CONFIDENCE = 0.8;
@@ -109,6 +114,8 @@ export function buildStageInput(opts: {
   /** The repo's PIPELINE.md holds test_design's cases out of implementing's input, so the
    *  implementer cannot overfit to them; verifying still judges by them. */
   holdoutCases?: boolean;
+  /** For implementing: the checks Build's regression sweep saw fail, with the tail of each one's output. */
+  sweepFailures?: { name: string; tail: string }[];
   /** For implementing: the minutes Build's budget has left; the run's time limit is the smaller of its own and this. */
   budgetMinutes?: number;
   /** For implementing: the tests Build's tests step wrote, one entry per scenario. */
@@ -186,6 +193,7 @@ export function buildStageInput(opts: {
             ? approvedScenarios(approvals)
             : [],
       ...(pack === "implementing" && opts.scenarioTests?.length ? { scenarioTests: opts.scenarioTests } : {}),
+      ...(pack === "implementing" && opts.sweepFailures?.length ? { sweepFailures: opts.sweepFailures.slice(0, SWEEP_FAILURES_MAX).map((f) => ({ name: safe(f.name).slice(0, 60), tail: safe(f.tail.slice(-SWEEP_TAIL_CAP)).slice(-SWEEP_TAIL_CAP) })) } : {}),
       baseCommit: opts.baseCommit ?? null,
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,

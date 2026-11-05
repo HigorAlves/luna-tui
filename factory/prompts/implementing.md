@@ -26,6 +26,8 @@ Slices (in order; seed the ledger from these):
 
 {{context.scenarioTests}}
 
+{{context.sweepFailures}}
+
 {{plan.fallback}}
 
 ## Decisions so far

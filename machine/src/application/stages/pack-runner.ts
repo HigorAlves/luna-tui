@@ -135,6 +135,8 @@ export interface AgentExtra {
   ship?: ShipContext;
   /** implementing: the tests Build's tests step made, one per scenario. */
   scenarioTests?: { scenario: string; file: string }[];
+  /** implementing, after a failed regression sweep: the failing checks and their output tails. */
+  sweepFailures?: { name: string; tail: string }[];
   /** Extra mounts for the container, after the worktree's own (the critic's /evidence, read-only). */
   mounts?: CredentialMount[];
 }
@@ -240,6 +242,7 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     holdoutCases: policy.holdoutCases,
     ...(context.budgetMinutes !== undefined ? { budgetMinutes: context.budgetMinutes } : {}),
     ...(extra.scenarioTests?.length ? { scenarioTests: extra.scenarioTests } : {}),
+    ...(extra.sweepFailures?.length ? { sweepFailures: extra.sweepFailures } : {}),
     // The recorder drives the one target the film is recorded against; the e2e pack picks from the repo's list.
     qaTargets: pack === "recording" ? (extra.video?.target ? [extra.video.target] : []) : policy.qaTargets,
     ...(extra.video ? { video: extra.video } : {}),

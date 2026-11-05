@@ -87,6 +87,16 @@ describe("buildStageInput's pack and plan", () => {
     expect(buildStageInput({ task, stage: "implementing", attempt: 1, approvals, priorFindings: [], scenarioTests }).context.scenarioTests).toEqual(scenarioTests);
   });
 
+  it("hands the implementer a failed sweep's check names and output tails: flattened of control characters and capped at 2000, at most five checks", () => {
+    const long = `${"x".repeat(5000)}THE TAIL`;
+    const sweepFailures = Array.from({ length: 7 }, (_, i) => ({ name: `check-${i}`, tail: i === 0 ? long : "boom" }));
+    const input = buildStageInput({ task, stage: "implementing", attempt: 1, approvals: [], priorFindings: [], sweepFailures });
+    expect(input.context.sweepFailures).toHaveLength(5);
+    expect(input.context.sweepFailures![0]!.tail.length).toBeLessThanOrEqual(2000);
+    expect(input.context.sweepFailures![0]!.tail.endsWith("THE TAIL")).toBe(true);
+    expect(buildStageInput({ task, stage: "verifying", attempt: 1, approvals: [], priorFindings: [], sweepFailures }).context.sweepFailures).toBeUndefined();
+  });
+
   it("reads rollback and the cases from the approved plan, and the cases reach implementing without a test check", () => {
     const cases = [{ title: "t", criterion: "c1", approach: "run a.test.ts" }];
     const approvals = [approval({ requested: { brief: "b", criteria: ["c1"], assumptions: [], slices, rollback: "revert it", cases } })];

@@ -336,6 +336,8 @@ export const CheckSpec = z.object({
   paths: z.array(z.string().min(1)).optional(),
   /** An lcov report the run writes, relative to `cwd`: Verify measures the change's added lines against it. */
   coverage: z.string().min(1).optional(),
+  /** How long the check takes, in minutes: a check with no `paths` (the whole suite) runs in Build's regression sweep when this is within `build.regression_full_suite_minutes`. */
+  minutes: z.number().positive().optional(),
 });
 export type CheckSpec = z.infer<typeof CheckSpec>;
 
@@ -934,6 +936,8 @@ export const StageInput = z.object({
     testCases: z.array(z.union([TestCase, LegacyTestCase])).optional(),
     /** Build's tests step: the test each scenario got (its id and the test file), for the implementer to build against and never weaken. */
     scenarioTests: z.array(z.object({ scenario: z.string(), file: z.string() })).optional(),
+    /** Build's regression sweep failed: each failing check's name and the tail of its output, flattened and capped (data, never instruction). */
+    sweepFailures: z.array(z.object({ name: z.string(), tail: z.string() })).optional(),
     /** Where the task branch forked from the repo; verifying diffs against it. */
     baseCommit: z.string().nullable().optional(),
     /** For ci_watch: what the host fetched, since the sandbox has no gh credential. */

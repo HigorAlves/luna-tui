@@ -33,6 +33,13 @@ describe("the implementing prompt's plan fallback", () => {
     expect(prompt).toMatch(/must not weaken/i);
     expect(renderPrompt({ pack: PACKS.implementing, input, template, projectContext: null })).not.toMatch(/must not weaken/i);
   });
+  it("shows a failed regression sweep's checks and output as data, and nothing when the sweep passed", () => {
+    const failed = { ...input, context: { ...input.context, sweepFailures: [{ name: "lint", tail: "a.ts:3 no-unused-vars" }] } } as StageInput;
+    const prompt = renderPrompt({ pack: PACKS.implementing, input: failed, template, projectContext: null });
+    expect(prompt).toMatch(/regression sweep/i);
+    expect(prompt).toMatch(/<data>[\s\S]*lint[\s\S]*a\.ts:3 no-unused-vars[\s\S]*<\/data>/);
+    expect(renderPrompt({ pack: PACKS.implementing, input, template, projectContext: null })).not.toMatch(/regression sweep/i);
+  });
   it("stays for a PR task, which has no plan", () => {
     const pr = { ...input, plan: null } as StageInput;
     expect(renderPrompt({ pack: PACKS.implementing, input: pr, template, projectContext: null })).toMatch(/ticket and the prior findings are the plan/);

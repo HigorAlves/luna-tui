@@ -33,9 +33,10 @@ import { loadCredential } from "../adapters/credentials/claude.ts";
 import { imageExists, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { PackRuns, type PackRunsDeps } from "../application/pack-runs.ts";
 import { PolicyStore } from "../application/policy.ts";
-import { HOST_GIT, commitAll, discardPending, findCommitBySubject, headCommit, stagePending } from "../adapters/git/worktree.ts";
+import { HOST_GIT, changedPaths, gitIdentity, commitAll, discardPending, findCommitBySubject, headCommit, stagePending } from "../adapters/git/worktree.ts";
 import { checkpointPush } from "../application/stages/checkpoint.ts";
 import { judgeRedCheck } from "../application/stages/build-watch.ts";
+import { runSweep } from "../application/stages/sweep.ts";
 import { buildTestsStep } from "../application/stages/build-tests.ts";
 import { exec } from "../adapters/process/exec.ts";
 import { type GitHub, noTokenGitHub } from "../application/github.ts";
@@ -170,6 +171,27 @@ export async function buildRealStages(
       judgeRed: async (check, repoPath) => {
         const policy = repoPath ? await policies.for(repoPath) : null;
         return judgeRedCheck(buildDecisions?.decide ?? null, check, repoPath, policy?.decisions ?? {});
+      },
+      sweep: async (context) => {
+        const { task } = context;
+        if (!task.worktreePath || !task.repoPath) return { status: "skipped", ran: [], failed: [], note: "there was no worktree to sweep" };
+        const identity = await gitIdentity(task.repoPath);
+        const env = { ...process.env, ...(identity ? { GIT_AUTHOR_NAME: identity.name, GIT_AUTHOR_EMAIL: identity.email, GIT_COMMITTER_NAME: identity.name, GIT_COMMITTER_EMAIL: identity.email } : {}) };
+        return runSweep(
+          {
+            exec: checksExec,
+            changedPaths: changedPaths,
+            impact: async (repoPath, files) => {
+              const found = graphs ? await graphs.graph.impact(repoPath, files) : null;
+              return found ? [...found.importers, ...found.dependents, ...found.tests] : [];
+            },
+            policy: async (repoPath) => {
+              const policy = await policies.for(repoPath);
+              return { checks: policy.checks, services: policy.services, wholeSuiteMinutes: policy.factory.build.regression_full_suite_minutes };
+            },
+          },
+          { worktree: task.worktreePath, repoPath: task.repoPath, signal: context.signal, env },
+        );
       },
       checkpoint: async (context, worktree, follows) => {
         if (!context.task.branch) return;
