@@ -811,7 +811,11 @@ export class Pipeline {
       const ruleOf = async (requested: Record<string, unknown>) => {
         const lv = (requested.risk as { level?: unknown } | undefined)?.level;
         const level: Risk = lv === "high" || lv === "medium" ? lv : "low";
-        const owners: OwnersState = level === "high" ? await this.ruleOwnersOf(task.repoPath, requested) : { state: "skipped" };
+        let owners: OwnersState = level === "high" ? await this.ruleOwnersOf(task.repoPath, requested) : { state: "skipped" };
+        // CODEOWNERS could not be read just now: the owners the gate was opened with (the machine's own reading, kept on the gate) still hold,
+        // so a lookup that fails at the moment of approval does not switch the condition off.
+        const kept = requested.ruleOwners as { state?: unknown; owners?: unknown } | undefined;
+        if (owners.state === "not_checked" && kept?.state === "ok" && Array.isArray(kept.owners) && kept.owners.length > 0) owners = { state: "ok", owners: kept.owners.map(String) };
         return { rule: approvalRule(level, configured, owners), owners: owners.state === "ok" ? owners.owners : [] };
       };
       const prior = await this.store.withTaskLock(id, async (_task, tx) => {

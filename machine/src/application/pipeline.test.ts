@@ -337,9 +337,9 @@ describe("approvers", () => {
     /** A pipeline whose CODEOWNERS says who owns what; the code map's own `owners` is whatever the mapper wrote. */
     const withCodeowners = (owners: string[] | null, codeowners = true, calls?: string[][]) =>
       new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, owners: async (_repo, paths) => (calls?.push(paths), owners === null ? null : { owners: owners.length ? [{ path: paths[0] ?? "a.ts", owners }] : [], codeowners }) });
-    const atHigh = async (p: Pipeline, mapOwners: string[] = [], level: "high" | "low" = "high") => {
+    const atHigh = async (p: Pipeline, mapOwners: string[] = [], level: "high" | "low" = "high", extra: Record<string, unknown> = {}) => {
       stubs.reset();
-      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", risk: { level, scores: {} }, map: { components: [], files: [{ path: "a.ts", role: "change" }, { path: "r.ts", role: "read" }], entry_points: [], owners: mapOwners, confidence: 0.8 } } });
+      stubs.plan("test_design", { outcome: "pass", detail: { brief: "b", risk: { level, scores: {} }, map: { components: [], files: [{ path: "a.ts", role: "change" }, { path: "r.ts", role: "read" }], entry_points: [], owners: mapOwners, confidence: 0.8 }, ...extra } });
       const task = await p.createTask({ title: "Billing", repoPath: "/r/a" });
       await p.start(task.id);
       return task.id;
@@ -388,6 +388,14 @@ describe("approvers", () => {
       const low = withCodeowners(["@ana"]);
       const id = await atHigh(low, [], "low");
       expect((await low.decide(id, "approved", undefined, undefined, { approver: "ana" })).state).toBe("awaiting_ship");
+    });
+
+    it("keeps the owners the gate was opened with when CODEOWNERS cannot be read at approval time", async () => {
+      const throwing = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, owners: async () => { throw new Error("boom"); } });
+      const id = await atHigh(throwing, [], "high", { ruleOwners: { state: "ok", owners: ["@ana", "@bo"] } });
+      await throwing.decide(id, "approved", undefined, undefined, { approver: "ana" });
+      await expect(throwing.decide(id, "approved", undefined, undefined, { approver: "bo" })).rejects.toBeInstanceOf(OutsideApproverRequiredError);
+      expect((await throwing.decide(id, "approved", undefined, undefined, { approver: "carla" })).state).toBe("awaiting_ship");
     });
 
     it("does not enforce the condition when the owners could not be read (no port, a null answer, a throw): two names still close it", async () => {
