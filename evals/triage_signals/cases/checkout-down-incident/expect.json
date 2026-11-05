@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "outcome": "pass",
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "kind.choice",
+      "value": "incident"
+    },
+    {
+      "kind": "oneOf",
+      "path": "type_of_work.choice",
+      "values": [
+        "backend",
+        "mixed"
+      ]
+    },
+    {
+      "kind": "between",
+      "path": "impact.score",
+      "min": 1.5,
+      "max": 2
+    },
+    {
+      "kind": "between",
+      "path": "time.score",
+      "min": 1.5,
+      "max": 2
+    },
+    {
+      "kind": "oneOf",
+      "path": "risk_prelim.choice",
+      "values": [
+        "medium",
+        "high"
+      ]
+    },
+    {
+      "kind": "equals",
+      "path": "archive.value",
+      "value": false
+    }
+  ],
+  "rubric": "Production is down for every customer: the kind is incident, impact and time sensitivity are at the top of their rubrics, and the risk is not low (a payment path). Calling it a bug with normal urgency, or suggesting to archive it, is a real error."
+}
