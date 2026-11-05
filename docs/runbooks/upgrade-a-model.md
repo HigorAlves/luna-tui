@@ -68,3 +68,5 @@ Rollback is reverting the alias line; a stage already running keeps its engine, 
 ## 7. Retire
 
 Mark the old entry `status: "deprecated"` with `retireAfter: "YYYY-MM-DD"`. From the day after, the contract test fails while any pack's engines still reach it. Once nothing does, delete the entry.
+
+A decision pack's engine default is measured, not assumed: after the upgrade, re-run the baselines of the packs on that model and re-take the defaults ([calibrate-decisions](calibrate-decisions.md)).

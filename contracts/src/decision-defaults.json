@@ -1,0 +1,16 @@
+{
+  "triage_signals": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" },
+  "risk_score": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" },
+  "coverage_check": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" },
+  "plan_check": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" },
+  "red_check": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" },
+  "scope_check": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" },
+  "finding_classify": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" },
+  "e2e_failure_cause": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" },
+  "evidence_format": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" },
+  "event_class": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" },
+  "comment_intent": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" },
+  "fix_scope": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" },
+  "evidence_valid": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" },
+  "worth_learning": { "default": "jev", "fallback": ["claude:haiku"], "reason": "unmeasured: RFC 0005 wave 0 default", "measuredAt": "2026-11-04" }
+}

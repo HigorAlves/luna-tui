@@ -35,8 +35,17 @@ describe("facts", () => {
     expect(diffFacts({ states: 1, columns: 3 }, { states: 2, columns: 3, packs: 4 })).toEqual(["packs: undefined → 4", "states: 1 → 2"])
   })
 
-  it("committed facts.json has the factory numbers", () => {
-    expect(facts).toEqual({ states: 23, columns: 8, packs: 38, images: 3 })
+  it("lists each decision slot's default engine when the contracts carry the defaults file, and compares it by value", () => {
+    const root = fixtureRepo()
+    writeFileSync(join(root, "contracts/src/decision-defaults.json"), JSON.stringify({ risk_score: { default: "jev" }, event_class: { default: "claude:haiku" } }))
+    expect(collectFacts(root)).toMatchObject({ packs: 4, decisionDefaults: { event_class: "claude:haiku", risk_score: "jev" } })
+    expect(diffFacts({ decisionDefaults: { a: "jev" } }, { decisionDefaults: { a: "jev" } })).toEqual([])
+    expect(diffFacts({ decisionDefaults: { a: "jev" } }, { decisionDefaults: { a: "claude:haiku" } })).toEqual(['decisionDefaults: {"a":"jev"} → {"a":"claude:haiku"}'])
+  })
+
+  it("committed facts.json has the factory numbers, and a default engine for each of the 14 decision slots", () => {
+    expect(facts).toMatchObject({ states: 23, columns: 8, packs: 38, images: 3 })
+    expect(Object.keys(facts.decisionDefaults)).toHaveLength(14)
   })
 
   it("--check passes against the real repo", () => {

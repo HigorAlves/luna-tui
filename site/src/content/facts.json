@@ -2,5 +2,21 @@
   "states": 23,
   "columns": 8,
   "packs": 38,
-  "images": 3
+  "images": 3,
+  "decisionDefaults": {
+    "comment_intent": "jev",
+    "coverage_check": "jev",
+    "e2e_failure_cause": "jev",
+    "event_class": "jev",
+    "evidence_format": "jev",
+    "evidence_valid": "jev",
+    "finding_classify": "jev",
+    "fix_scope": "jev",
+    "plan_check": "jev",
+    "red_check": "jev",
+    "risk_score": "jev",
+    "scope_check": "jev",
+    "triage_signals": "jev",
+    "worth_learning": "jev"
+  }
 }

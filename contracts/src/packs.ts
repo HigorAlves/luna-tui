@@ -5,6 +5,7 @@
 // may give is one the machine ingests.
 import { z } from "zod";
 
+import { decisionEngines } from "./decision-defaults.ts";
 import { type Access, type LunaTool, NO_ACCESS, access, readOnly } from "./access.ts";
 import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
@@ -579,8 +580,7 @@ const WORTH_LEARNING_QUESTIONS: QuestionSet = {
 /** The packs a decision model answers; every other pack is a role's or a script's. */
 type DecisionPackId = "triage_signals" | "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "evidence_format" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning";
 
-/** The engines a decision pack on the plan context runs on: Jev, else a small Claude or Codex model. */
-const DECISION_ENGINES = { default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] } satisfies AgentPack["engines"];
+// The engines of a decision pack come from decision-defaults.ts: the file the scorecard writes, else Jev with a small Claude model behind it.
 
 const planDecision = (id: "risk_score" | "coverage_check" | "plan_check" | "red_check" | "scope_check" | "finding_classify" | "e2e_failure_cause" | "evidence_format" | "event_class" | "comment_intent" | "fix_scope" | "evidence_valid" | "worth_learning", questions: QuestionSet): DecisionPack => ({
   id,
@@ -590,7 +590,7 @@ const planDecision = (id: "risk_score" | "coverage_check" | "plan_check" | "red_
   writable: false,
   maxTurns: 1,
   timeoutMs: 1 * MINUTE,
-  engines: DECISION_ENGINES,
+  engines: decisionEngines(id),
   answer: answerSchema(questions),
 });
 
@@ -1003,7 +1003,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     timeoutMs: 1 * MINUTE,
     // Jev by default; a small Claude or Codex model behind the same questions and schema when Jev
     // has no credential (RFC 0005 rule 1). Only calibration quality differs.
-    engines: { default: "jev", allowed: ["jev", "claude:haiku", "codex:luna"], fallback: ["claude:haiku"] },
+    engines: decisionEngines("triage_signals"),
     answer: answerSchema(TRIAGE_SIGNALS),
   },
   // The plan stage's decisions: each reads a plan context, one call, no worktree.

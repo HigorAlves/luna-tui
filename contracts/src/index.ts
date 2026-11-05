@@ -10,6 +10,7 @@ export * from "./engines.ts";
 export * from "./access.ts";
 export * from "./questions.ts";
 export * from "./decisions.ts";
+export { DECISION_ALLOWED, DECISION_DEFAULTS, DecisionDefault, DecisionDefaults, decisionEngines } from "./decision-defaults.ts";
 export * from "./github.ts";
 export * from "./slack.ts";
 export * from "./jira.ts";

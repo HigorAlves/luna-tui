@@ -4,17 +4,22 @@
 //   pnpm eval harvest --pack <decision> [--since <date>] [--with-truth]
 //   pnpm eval dataset push --pack <decision> [--queue <name>] [--records]
 //   pnpm eval dataset pull --pack <decision>
-import { PackId } from "@hardness/contracts";
+//   pnpm eval scorecard                       evals/scorecard.md over every decision baseline
+//   pnpm eval defaults [--write]              the default per slot by the scorecard's rule; --write updates contracts/src/decision-defaults.json
+import { DECISION_DEFAULTS, PACKS, PackId, decisionEngines } from "@hardness/contracts";
 import { DecisionLog, machineStateDir } from "@hardness/machine/decisions";
 import { buildTelemetry, tracesFromEnv } from "@hardness/machine/telemetry";
-import { dirname } from "node:path";
+import { writeFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { decisionPack } from "./src/labels.ts";
 import { runHarvest, runPull, runPush } from "./src/loop.ts";
+import { type Proposal, buildDefaultsFile, loadBaselines, proposeDefaults, renderScorecard } from "./src/scorecard.ts";
 
 const EVALS = dirname(fileURLToPath(import.meta.url));
+const DEFAULTS_FILE = resolve(EVALS, "..", "contracts", "src", "decision-defaults.json");
 const [command, sub] = process.argv.slice(2);
 
 function fail(message: string): never {
@@ -60,6 +65,26 @@ if (command === "harvest") {
     for (const s of out.skipped) console.log(`skipped ${s.taskId}: ${s.reason}`);
   }
   await t.flush();
+} else if (command === "scorecard" || command === "defaults") {
+  const { values } = parseArgs({ args: process.argv.slice(3), options: { write: { type: "boolean", default: false } } });
+  const cards = loadBaselines(EVALS);
+  if (cards.length === 0) fail("no decision baselines under evals/baselines: run `pnpm eval --pack <p> --engine <e> --save-baseline` first");
+  const current = (pack: PackId) => decisionEngines(pack);
+  const proposals = Object.fromEntries(
+    Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => [p.id, proposeDefaults(p.id, cards, { default: current(p.id).default, fallback: current(p.id).fallback })]),
+  ) as Partial<Record<PackId, Proposal>>;
+  const text = renderScorecard(cards, proposals, new Date());
+  if (command === "scorecard") {
+    writeFileSync(join(EVALS, "scorecard.md"), text);
+    console.log(`evals/scorecard.md written: ${cards.length} baseline(s)`);
+  } else {
+    const next = buildDefaultsFile(DECISION_DEFAULTS, proposals);
+    for (const [pack, p] of Object.entries(proposals)) console.log(`${pack}: ${p!.default}${p!.measured ? "" : " (unmeasured, kept)"} · ${p!.reason}`);
+    if (values.write) {
+      writeFileSync(DEFAULTS_FILE, `${JSON.stringify(next, null, 2)}\n`);
+      console.log(`contracts/src/decision-defaults.json written`);
+    } else console.log("dry run: --write writes contracts/src/decision-defaults.json");
+  }
 } else {
   await import("./run.ts");
 }
