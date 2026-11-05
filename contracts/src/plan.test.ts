@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { PlanAnswer } from "./packs.ts";
-import { Plan, PlanStep, Scenario, criteriaOf, planOf, reviseCriteria, scenarioOf, stepOf, stepsOfAnswer } from "./plan.ts";
+import { PlanAnswer, TestDesignAnswer } from "./packs.ts";
+import { Plan, PlanStep, Scenario, criteriaOf, planOf, reviseCriteria, scenarioOf, scenarioText, scenariosOfAnswer, stepOf, stepsOfAnswer } from "./plan.ts";
 import { Slice, TestCase } from "./stage.ts";
 
 describe("the v2.2 plan contracts", () => {
@@ -126,6 +126,45 @@ describe("the v2.2 plan contracts", () => {
       const before = criteriaOf(["a", "b", "c"]);
       expect(reviseCriteria(before, ["c", "new", "a"])).toEqual([{ id: "C3", text: "c" }, { id: "C4", text: "new" }, { id: "C1", text: "a" }]);
       expect(reviseCriteria([], ["x"])).toEqual([{ id: "C1", text: "x" }]);
+    });
+  });
+
+  describe("the designer's v2.2 answer", () => {
+    const criteria = criteriaOf(["A coupon applies once", "An expired coupon is refused"]);
+    const answer = {
+      kind: "done",
+      summary: "s",
+      scenarios: [
+        { criterion_ref: "C1", type: "happy", given: "a cart with one coupon", when: "the coupon is applied twice", then: "the discount counts once", data_needs: ["a coupon fixture"], layer: "unit" },
+        { criterion_ref: "C2", type: "failure", given: "an expired coupon", when: "it is applied", then: "the cart shows the expiry error", layer: "integration" },
+        { criterion_ref: "C9", type: "edge", given: "x", when: "y", then: "the discount counts once", layer: "e2e" },
+      ],
+    };
+
+    it("accepts scenarios with a criterion ref, a type, given/when/then and a layer, and still accepts v1 cases", () => {
+      expect(TestDesignAnswer.safeParse(answer).success).toBe(true);
+      expect(TestDesignAnswer.safeParse({ kind: "done", summary: "s", cases: [{ title: "t", criterion: "c", approach: "run it" }] }).success).toBe(true);
+      expect(TestDesignAnswer.safeParse({ ...answer, scenarios: [{ ...answer.scenarios[0], type: "sunny" }] }).success).toBe(false);
+      expect(TestDesignAnswer.safeParse({ ...answer, scenarios: [{ ...answer.scenarios[0], layer: "manual" }] }).success).toBe(false);
+    });
+
+    it("turns them into scenarios the later stages key on: S ids, the criterion's text, a title from `then`, the round as version", () => {
+      const scenarios = scenariosOfAnswer(TestDesignAnswer.parse(answer).scenarios!, criteria, 2);
+      expect(scenarios[0]).toEqual({
+        id: "S1", title: "the discount counts once", criterion: "A coupon applies once", criterion_ref: "C1", type: "happy",
+        given: "a cart with one coupon", when: "the coupon is applied twice", then: "the discount counts once",
+        approach: "Given a cart with one coupon, when the coupon is applied twice, then the discount counts once (unit)", data_needs: ["a coupon fixture"], layer: "unit", version: 2,
+      });
+      expect(scenarios[1]).toMatchObject({ id: "S2", criterion: "An expired coupon is refused", type: "failure", data_needs: [] });
+      // An unknown criterion ref ties to nothing; a title another scenario already has is told apart by its id.
+      expect(scenarios[2]).toMatchObject({ id: "S3", criterion: null, criterion_ref: null, title: "the discount counts once (S3)" });
+      expect(scenarios.every((s) => Scenario.safeParse(s).success)).toBe(true);
+    });
+
+    it("says a scenario as given/when/then, or by its approach when it has none (a v1 case)", () => {
+      expect(scenarioText({ approach: "a", given: "g", when: "w", then: "th" })).toBe("given g, when w, then th");
+      expect(scenarioText({ approach: "run the unit test" })).toBe("run the unit test");
+      expect(scenarioText({ approach: "a", given: "g", when: null, then: null })).toBe("a");
     });
   });
 });

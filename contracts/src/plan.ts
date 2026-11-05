@@ -50,6 +50,52 @@ export const Scenario = z.object({
 });
 export type Scenario = z.infer<typeof Scenario>;
 
+/** A scenario as the designer writes it: the criterion it proves by id, its type, given/when/then, the data it needs and the layer that proves it. */
+export const AnswerScenario = z.object({
+  criterion_ref: z.string(),
+  type: ScenarioType,
+  given: z.string(),
+  when: z.string(),
+  then: z.string(),
+  data_needs: z.array(z.string()).optional(),
+  layer: ScenarioLayer,
+});
+export type AnswerScenario = z.infer<typeof AnswerScenario>;
+
+/** A scenario as the line a later stage reads: given/when/then when it has all three, else its approach (a v1 case). */
+export function scenarioText(s: { approach: string; given?: string | null; when?: string | null; then?: string | null }): string {
+  return s.given && s.when && s.then ? `given ${s.given}, when ${s.when}, then ${s.then}` : s.approach;
+}
+
+const TITLE_MAX = 120;
+
+/** The designer's scenarios as the scenarios the machine stores: `S1`... by position, the criterion's text by its ref (an unknown ref ties to nothing),
+ *  a title from `then` (told apart by the id when another scenario has it) for the places that key on one, an approach that says the scenario in
+ *  full, and the designer round as `version`. Pure. */
+export function scenariosOfAnswer(answer: readonly AnswerScenario[], criteria: readonly Criterion[], version: number): Scenario[] {
+  const seen = new Map<string, number>();
+  return answer.map((a, i) => {
+    const id = `S${i + 1}`;
+    const criterion = criteria.find((c) => c.id === a.criterion_ref) ?? null;
+    const base = a.then.replace(/\s+/g, " ").trim().slice(0, TITLE_MAX) || id;
+    seen.set(base, (seen.get(base) ?? 0) + 1);
+    return {
+      id,
+      title: seen.get(base)! > 1 ? `${base} (${id})` : base,
+      criterion: criterion?.text ?? null,
+      criterion_ref: criterion?.id ?? null,
+      type: a.type,
+      given: a.given,
+      when: a.when,
+      then: a.then,
+      approach: `Given ${a.given}, when ${a.when}, then ${a.then} (${a.layer})`,
+      data_needs: a.data_needs ?? [],
+      layer: a.layer,
+      version,
+    };
+  });
+}
+
 /** A v1 case becomes a v2 scenario: `id` from its position, `criterion_ref` by matching the criterion
  *  text to a criterion id, type `happy`, layer and given/when/then null. A scenario that has an id
  *  passes through. Pure. */

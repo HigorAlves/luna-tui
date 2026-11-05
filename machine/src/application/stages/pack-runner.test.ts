@@ -328,6 +328,22 @@ describe("agent stages through packs", () => {
     expect(v1.detail).not.toHaveProperty("migration");
   });
 
+  it("stores the designer's v2 scenarios as cases (S ids, the criterion's text by its id, the round as version) and a v1 answer's cases as they are", async () => {
+    const plan = { record: null, brief: "", criteria: ["A coupon applies once", "An expired coupon is refused"], assumptions: [], slices: [], round: 2 };
+    const scenarios = [
+      { criterion_ref: "C2", type: "failure", given: "an expired coupon", when: "it is applied", then: "the cart shows the expiry error", layer: "integration" },
+      { criterion_ref: "C1", type: "happy", given: "a cart", when: "applied twice", then: "the discount counts once", data_needs: ["a coupon"], layer: "unit" },
+    ];
+    const result = await runAgent(deps(fakeSandbox(output({ answer: { kind: "done", summary: "s", scenarios } }))), { ...context("test_design"), runId: "r1-tests-2" }, "test_design", { plan });
+    expect(result.detail?.cases).toEqual([
+      expect.objectContaining({ id: "S1", title: "the cart shows the expiry error", criterion: "An expired coupon is refused", criterion_ref: "C2", type: "failure", layer: "integration", version: 2 }),
+      expect.objectContaining({ id: "S2", title: "the discount counts once", criterion: "A coupon applies once", criterion_ref: "C1", data_needs: ["a coupon"], given: "a cart", when: "applied twice", then: "the discount counts once" }),
+    ]);
+    const v1 = [{ title: "t", criterion: "A coupon applies once", approach: "run it" }];
+    const old = await runAgent(deps(fakeSandbox(output({ answer: { kind: "done", summary: "s", cases: v1 } }))), { ...context("test_design"), runId: "r1-tests-1" }, "test_design", { plan });
+    expect(old.detail?.cases).toEqual(v1);
+  });
+
   it("runs the plan pack in the test_design state: its own pack and limits in the input, its own container, the plan under review in context", async () => {
     const plan = { record: null, brief: "b", criteria: ["c"], assumptions: [], slices: [], round: 2, gaps: ["c"] };
     const answer = { kind: "done", summary: "s", brief: "the brief", criteria: ["c1"], assumptions: ["a1"], slices: [{ title: "s1", est_loc: 5, touchpoints: ["a.ts"], acceptance: ["ok"] }], rollback: "revert" };

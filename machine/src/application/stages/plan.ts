@@ -246,7 +246,8 @@ export function planStage(deps: PlanDeps): StageRunner {
         roundsOnThisPlan += 1;
         testRuns += 1;
         const designed = await deps.runPack(lane === "fast" ? "test_design_fast" : "test_design", sub(`tests-${testRuns}`), {
-          plan: { record: task.record ?? null, ...plan, ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), round: roundsOnThisPlan, ...mapPart, ...riskPart },
+          // The designer reads the criteria and the goal only: no steps, brief, assumptions, map or risk.
+          plan: { record: task.record ?? null, brief: "", criteria: plan.criteria, assumptions: [], slices: [], ...(cases.length ? { cases } : {}), ...(gaps.length ? { gaps } : {}), round: roundsOnThisPlan },
         });
         if (designed.outcome !== "pass") return ended(designed);
         results.push(designed);

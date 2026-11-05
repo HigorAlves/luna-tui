@@ -4,7 +4,7 @@
 // (runtimes/claude/run.ts, `outputFormat`). Pure: the caller passes the template and the
 // project context, so a test needs no files.
 import type { AgentPack, Pack, StageInput } from "@hardness/contracts";
-import { PACKS, type TaskClassification, answerJsonSchema, classificationLine, verdictOf } from "@hardness/contracts";
+import { PACKS, type TaskClassification, answerJsonSchema, classificationLine, criteriaOf, scenarioText, verdictOf } from "@hardness/contracts";
 import type { TriageRecord } from "@hardness/contracts";
 import { createHash } from "node:crypto";
 
@@ -192,6 +192,12 @@ export interface RenderInput {
   projectContext?: string | null;
 }
 
+/** A scenario as one line: its id, title, type and layer, the criterion it proves, then given/when/then (a v1 case: its approach). */
+function scenarioLine(c: { id?: string; title: string; criterion: string | null; approach: string; type?: string; layer?: string | null; given?: string | null; when?: string | null; then?: string | null }): string {
+  const tags = [c.type, c.layer].filter(Boolean).join(", ");
+  return `${c.id ? `${c.id} ` : ""}${c.title}${tags ? ` [${tags}]` : ""}${c.criterion ? ` (criterion: ${c.criterion})` : ""}: ${scenarioText(c)}`;
+}
+
 /** A map file as `path (role)`; a plain string, as an old map wrote it, is a file to change. */
 const mapFileText = (f: string | { path: string; role?: string }): string => (typeof f === "string" ? `${f} (change)` : `${f.path} (${f.role ?? "change"})`);
 
@@ -254,7 +260,7 @@ const jsonText = (value: unknown): string => {
 
 /** The video packs' context, one text per placeholder. */
 const videoText = (video: StageInput["context"]["video"]) => ({
-  scenarios: bullets((video?.scenarios ?? []).map((c) => `${c.title}${c.criterion ? ` (criterion: ${c.criterion})` : ""}: ${c.approach}`)),
+  scenarios: bullets((video?.scenarios ?? []).map(scenarioLine)),
   steps: bullets(video?.steps),
   chapters: bullets((video?.chapters ?? []).map((c) => `${c.start}s: ${c.title}`)),
   target: video?.target ? `${video.target.name}: ${video.target.baseUrl}${video.target.credential ? ` (credential: ${video.target.credential})` : ""}` : NONE,
@@ -356,9 +362,11 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{plan.risk}}": riskText(input.plan?.risk),
     "{{context.plan.gaps}}": bullets(input.context.plan?.gaps),
     "{{context.plan.review}}": bullets(input.context.plan?.review),
-    "{{context.plan.cases}}": bullets((input.context.plan?.cases ?? []).map((c) => `${c.title}${c.criterion ? ` (criterion: ${c.criterion})` : ""}: ${c.approach}`)),
+    "{{context.plan.cases}}": bullets((input.context.plan?.cases ?? []).map(scenarioLine)),
     "{{plan.brief}}": txt(input.plan?.brief),
     "{{plan.criteria}}": bullets(input.plan?.criteria),
+    "{{plan.criteria.ids}}": input.plan?.criteria?.length ? criteriaOf(input.plan.criteria).map((c) => `${c.id}: ${c.text}`).join("\n") : NONE,
+    "{{task.goal}}": txt(input.task.record?.goal),
     "{{plan.assumptions}}": bullets(input.plan?.assumptions),
     "{{plan.slices}}": bullets(
       (input.plan?.slices ?? []).map((s, i) => {
@@ -370,10 +378,7 @@ export function renderPrompt({ pack, input, template, projectContext }: RenderIn
     "{{priorFindings}}": input.priorFindings.length > 0 ? input.priorFindings.map(findingLine).join("\n") : NONE,
     "{{context.projectContext}}": txt(context),
     "{{context.testCases}}": bullets(
-      (input.context.testCases ?? []).map((c) => {
-        const approach = "approach" in c ? c.approach : c.test;
-        return `${c.title}${c.criterion ? ` (criterion: ${c.criterion})` : ""}: ${approach}`;
-      }),
+      (input.context.testCases ?? []).map((c) => scenarioLine("approach" in c ? c : { ...c, approach: c.test })),
     ),
     "{{context.baseCommit}}": txt(input.context.baseCommit),
     "{{context.graph}}": graphText(input.context.graph),

@@ -60,10 +60,22 @@ describe("buildStageInput's pack and plan", () => {
   });
 
   it("hands a plan under review to the stage: context.plan as given, and the plan every stage reads rebuilt from it before any approval", () => {
-    const input = buildStageInput({ task, stage: "test_design", attempt: 1, approvals: [], priorFindings: [], plan: planContext });
+    const input = buildStageInput({ task, stage: "test_design", pack: "plan", attempt: 1, approvals: [], priorFindings: [], plan: planContext });
     expect(input.context.plan).toEqual(planContext);
     expect(input.plan).toEqual({ brief: "the plan", criteria: ["c1"], assumptions: ["a1"], slices, rollback: "revert" });
     expect(StageInput.safeParse(input).success).toBe(true);
+  });
+
+  it("hands the test designer the criteria and the goal and no step, brief or assumption, in context.plan and in the plan it reads", () => {
+    const withPlan = { ...planContext, risk: { level: "high" as const }, map: { components: [], files: [], entry_points: [], owners: [], confidence: 0.5 } };
+    for (const pack of ["test_design", "test_design_fast"] as const) {
+      const input = buildStageInput({ task, stage: "test_design", pack, attempt: 1, approvals: [], priorFindings: [], plan: withPlan });
+      expect(input.plan).toEqual({ brief: "", criteria: ["c1"], assumptions: [] });
+      expect(input.context.plan).toEqual({ record: null, brief: "", criteria: ["c1"], assumptions: [], slices: [], gaps: ["c1"], round: 2 });
+      expect(StageInput.safeParse(input).success).toBe(true);
+    }
+    // The planner still reads its whole context.
+    expect(buildStageInput({ task, stage: "test_design", pack: "plan", attempt: 1, approvals: [], priorFindings: [], plan: planContext }).context.plan).toEqual(planContext);
   });
 
   it("reads rollback and the cases from the approved plan, and the cases reach implementing without a test check", () => {

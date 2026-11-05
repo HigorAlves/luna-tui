@@ -2,7 +2,7 @@
 // in plain words, then the rule that the answer is the JSON the schema asks for, with a confidence
 // per question. Jev gets the questions on its own wire (runtimes/jev/questions.ts); every other
 // runtime renders this text and asks for structured output on `answerJsonSchema(pack)`.
-import type { CheckContext, EvidenceContext, PlanContext, Question, QuestionSet, ShipContext, StageInput } from "@hardness/contracts";
+import { type CheckContext, type EvidenceContext, type PlanContext, type Question, type QuestionSet, type ShipContext, type StageInput, scenarioText } from "@hardness/contracts";
 
 /** What a decision reads: the issue as intake sent it. */
 export type DecisionState = {
@@ -21,7 +21,7 @@ export function renderPlan(plan: PlanContext): string {
   const byCriterion = new Map<string, string[]>();
   for (const c of plan.cases ?? []) {
     const key = c.criterion ?? "(no criterion)";
-    byCriterion.set(key, [...(byCriterion.get(key) ?? []), `  - ${c.title}: ${c.approach}`]);
+    byCriterion.set(key, [...(byCriterion.get(key) ?? []), `  - ${c.id ? `${c.id} ` : ""}${c.title}${c.type ? ` [${c.type}]` : ""}: ${scenarioText(c)}`]);
   }
   return [
     ...(r ? [`Goal: ${r.goal}`, `Record: ${r.kind} / size ${r.size} / urgency ${r.urgency} / risk ${r.risk}: ${r.reason}`] : []),

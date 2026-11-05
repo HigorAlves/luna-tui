@@ -87,7 +87,6 @@ describe("planStage's code map", () => {
     const result = await run(context());
     expect(calls.map((c) => [c.pack, c.runId])).toEqual([["code_map", "r1-map"], ["plan", "r1-plan"], ["test_design", "r1-tests-1"]]);
     expect(calls[1]!.plan).toMatchObject({ record, map: theMap });
-    expect(calls[2]!.plan).toMatchObject({ map: theMap });
     for (const d of decided) expect(d.plan).toMatchObject({ map: theMap });
     expect(result.detail).toMatchObject({ map: theMap });
     expect(result.events).toContainEqual({ at: "t", kind: "stage.note", payload: { from: "map" } });
@@ -240,13 +239,24 @@ describe("planStage", () => {
     for (const call of calls) expect(call.context).toMatchObject({ stage: "test_design", started: undefined, resume: undefined, engine: undefined });
   });
 
-  it("hands the test designer the planner's plan, and the decisions the plan with its scenarios and the record", async () => {
+  it("hands the test designer the criteria and the goal, and the decisions the plan with its scenarios and the record", async () => {
     const { run, calls, decided } = setup();
     await run(context());
-    expect(calls[1]!.plan).toMatchObject({ record, brief: "Guard the empty list", criteria: ["no panic", "stays selected"], slices, rollback: "revert the commit", round: 1 });
-    expect(calls[1]!.plan).not.toHaveProperty("gaps");
+    // The designer is handed the criteria and the record's goal, never the steps, the brief, the assumptions, the map or the risk.
+    expect(calls[1]!.plan).toEqual({ record, brief: "", criteria: ["no panic", "stays selected"], assumptions: [], slices: [], round: 1 });
     for (const d of decided.filter((k) => k.pack !== "risk_score")) expect(d.plan).toMatchObject({ record, brief: "Guard the empty list", slices, cases: [{ title: "case 0" }, { title: "case 1" }] });
     expect(decided[0]!.repo).toBe("/repo");
+  });
+
+  it("keeps the designer blind to the plan on every round and on the fast lane, and tells it only the gaps and its earlier scenarios", async () => {
+    const { run, calls } = setup({ test_design: [cased("no panic"), cased("no panic", "stays selected")] }, withGraph);
+    await run(context());
+    const rounds = calls.filter((c) => c.pack === "test_design");
+    expect(rounds).toHaveLength(2);
+    expect(rounds[1]!.plan).toEqual({ record, brief: "", criteria: ["no panic", "stays selected"], assumptions: [], slices: [], cases: [{ title: "case 0", criterion: "no panic", approach: "run it" }], gaps: ["stays selected"], round: 2 });
+    const fast = setup({}, withGraph);
+    await fast.run(context({ task: fastTask }));
+    expect(fast.calls.find((c) => c.pack === "test_design_fast")!.plan).toEqual({ record: fastTask.record, brief: "", criteria: ["no panic", "stays selected"], assumptions: [], slices: [], round: 1 });
   });
 
   it("scores the risk before the plan, from the record and the code map alone, and writes the plan knowing it", async () => {
@@ -258,7 +268,8 @@ describe("planStage", () => {
     expect(decided[0]).toMatchObject({ pack: "risk_score", plan: { record, map: theMap, slices: [], brief: "" } });
     const risk = { level: "medium", product: 9, scores: { blast_radius: 2, reversibility: 2, data_sensitivity: 0 }, complexity: "L" };
     expect(calls[1]!.plan).toMatchObject({ record, risk });
-    expect(calls[2]!.plan).toMatchObject({ risk });
+    // The designer reads the criteria and the goal, not the risk the plan was written for.
+    expect(calls[2]!.plan).not.toHaveProperty("risk");
     expect(result.detail).toMatchObject({ risk });
   });
 

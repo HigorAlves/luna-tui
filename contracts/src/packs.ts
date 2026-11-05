@@ -10,7 +10,7 @@ import { decisionEngines } from "./decision-defaults.ts";
 import { type Access, type LunaTool, NO_ACCESS, access, readOnly } from "./access.ts";
 import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
-import { AnswerStep } from "./plan.ts";
+import { AnswerScenario, AnswerStep } from "./plan.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
 import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, riskProduct, scorePriority } from "./scoring.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
@@ -153,7 +153,10 @@ export const TestDesignAnswer = z.object({
   kind: z.enum(["done", "questions"]),
   summary: z.string(),
   questions: z.array(Question).max(3).optional(),
+  /** v1: one case per behaviour, a title and an approach. Still accepted; the machine reads `scenarios` first. */
   cases: z.array(TestCase).optional(),
+  /** v2.2: scenarios from the criteria and the goal, in given/when/then, each tied to its criterion by id. */
+  scenarios: z.array(AnswerScenario).optional(),
 });
 
 export const ImplementingAnswer = z.object({
@@ -756,7 +759,7 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     engines: only("claude:sonnet"),
     effort: "low",
     answer: TestDesignAnswer,
-    template: "test_design.md",
+    template: "test_design_fast.md",
   },
   implementing: {
     id: "implementing",

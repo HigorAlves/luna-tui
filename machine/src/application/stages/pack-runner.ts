@@ -1,6 +1,6 @@
 // The stages that run as packs in a sandbox: the machine writes a StageInput, the container
 // runs the factory runner, and the machine ingests what the pack left in /out.
-import { AnswerStep, type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, stepsOfAnswer } from "@hardness/contracts";
+import { AnswerScenario, AnswerStep, type CiContext, type CoverageSummary, EscalationReason, Ledger, PACKS, Slice, type StageInput, type PackId, type PlanContext, type ReviewContext, type RunSummary, type ServiceSpec, type ShipContext, type TaskState, type ThreadsContext, type VideoContext, criteriaOf, scenariosOfAnswer, stepsOfAnswer } from "@hardness/contracts";
 import { existsSync, statSync } from "node:fs";
 import { z } from "zod";
 import { mkdir, readFile } from "node:fs/promises";
@@ -631,7 +631,11 @@ export async function runAgent(deps: AgentDeps, context: StageContext, pack: Pac
     return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, ...(answer ? { map: answer } : {}) } });
   }
   if (pack === "test_design" || pack === "test_design_fast") {
-    const cases = answerOf(output.answer)?.cases;
+    const answer = answerOf(output.answer);
+    // The v2.2 scenarios (given/when/then, each tied to its criterion by id) first; an answer with v1 cases keeps them.
+    const parsed = z.array(AnswerScenario).safeParse(answer?.scenarios);
+    const scenarios = parsed.success && parsed.data.length > 0 ? scenariosOfAnswer(parsed.data, criteriaOf(extra.plan?.criteria ?? task.criteria), extra.plan?.round ?? 1) : null;
+    const cases = scenarios ?? answer?.cases;
     return merged({ ...mapped, detail: { ...mapped.detail, summary: output.summary, cases: Array.isArray(cases) ? cases : [] } });
   }
   return merged(mapped);

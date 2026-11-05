@@ -124,8 +124,12 @@ export function buildStageInput(opts: {
 }): StageInput {
   const { task, stage, attempt, approvals } = opts;
   const pack = opts.pack ?? (stage as PackId);
-  const underReview = opts.plan
-    ? { brief: opts.plan.brief, criteria: opts.plan.criteria, assumptions: opts.plan.assumptions, slices: opts.plan.slices, ...(opts.plan.rollback !== undefined ? { rollback: opts.plan.rollback } : {}) }
+  // The test designer designs from the criteria and the goal: it is never shown the plan's steps, brief or assumptions.
+  const designer = pack === "test_design" || pack === "test_design_fast";
+  const designed: PlanContext | null = designer && opts.plan ? { record: opts.plan.record, brief: "", criteria: opts.plan.criteria, assumptions: [], slices: [], ...(opts.plan.cases ? { cases: opts.plan.cases } : {}), ...(opts.plan.gaps ? { gaps: opts.plan.gaps } : {}), ...(opts.plan.round !== undefined ? { round: opts.plan.round } : {}) } : null;
+  const reviewed = designed ?? opts.plan;
+  const underReview = reviewed
+    ? { brief: reviewed.brief, criteria: reviewed.criteria, assumptions: reviewed.assumptions, ...(designer ? {} : { slices: reviewed.slices }), ...(reviewed.rollback !== undefined ? { rollback: reviewed.rollback } : {}) }
     : null;
   const plan = approvedPlan(approvals) ?? underReview;
   const { maxTurns, timeoutMs } = budgetFor(pack, plan?.slices?.length ?? 0);
@@ -167,7 +171,7 @@ export function buildStageInput(opts: {
       baseCommit: opts.baseCommit ?? null,
       ci: opts.ci ?? null,
       graph: opts.graph ?? null,
-      ...(opts.plan ? { plan: opts.plan } : {}),
+      ...(opts.plan ? { plan: reviewed ?? opts.plan } : {}),
       ...(pack === "verifying" && opts.blastRadius?.length ? { blastRadius: opts.blastRadius } : {}),
       ...(pack === "verifying" && opts.coverage ? { coverage: opts.coverage } : {}),
       ...((pack === "e2e" || pack === "recording") && opts.qaTargets ? { qaTargets: opts.qaTargets } : {}),

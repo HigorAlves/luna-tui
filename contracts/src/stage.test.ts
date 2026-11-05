@@ -227,7 +227,7 @@ describe("the plan pack", () => {
 
   it("has a fast lane: the same plan and scenarios on sonnet at low effort, 15 turns, for a small low-risk ticket", () => {
     expect(PACKS.plan_fast).toMatchObject({ kind: "agent", agent: "fast-planner", helpers: [], writable: false, maxTurns: 15, effort: "low", template: "plan_fast.md", answer: PlanAnswer, engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
-    expect(PACKS.test_design_fast).toMatchObject({ kind: "agent", agent: "test-designer", helpers: [], writable: false, maxTurns: 15, effort: "low", template: "test_design.md", answer: TestDesignAnswer, engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
+    expect(PACKS.test_design_fast).toMatchObject({ kind: "agent", agent: "test-designer", helpers: [], writable: false, maxTurns: 15, effort: "low", template: "test_design_fast.md", answer: TestDesignAnswer, engines: { default: "claude:sonnet", allowed: ["claude:sonnet"] } });
     expect(PlanAnswer.safeParse({ kind: "needs_full_plan", summary: "a second component appears" }).success).toBe(true);
   });
 

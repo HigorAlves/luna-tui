@@ -222,6 +222,30 @@ describe("renderPrompt", () => {
     expect(renderPrompt({ pack: PACKS.plan, input: { ...input, plan: null, context: { ...input.context, plan: { ...plan, risk: undefined } } } as never, template: "{{context.plan.risk}}" })).toContain("(none)");
   });
 
+  it("renders the designer's input: the goal and the criteria with their ids, and none of the plan's steps, brief or assumptions", () => {
+    const record = { source: "manual", kind: "bug", goal: "Stop the panic", size: "S", urgency: "high", risk: "medium", signals: {}, qa: [], decision: "plan", reason: "r", at: "t", model: "m" };
+    const designer = { ...input, stage: "test_design", pack: "test_design", task: { ...input.task, record }, plan: { brief: "THE BRIEF", criteria: ["no panic", "stays selected"], assumptions: ["AN ASSUMPTION"], slices: [{ title: "A STEP", est_loc: 5, touchpoints: ["a.rs"], acceptance: ["ok"] }] } };
+    for (const [id, pack] of [["test_design", PACKS.test_design], ["test_design_fast", PACKS.test_design_fast]] as const) {
+      const template = readFileSync(new URL(`../../prompts/${pack.template}`, import.meta.url), "utf8");
+      const prompt = renderPrompt({ pack, input: { ...designer, pack: id } as never, template });
+      expect(prompt, id).not.toContain("{{");
+      expect(prompt, id).toContain("Goal: Stop the panic");
+      expect(prompt, id).toContain("C1: no panic\nC2: stays selected");
+      for (const hidden of ["THE BRIEF", "AN ASSUMPTION", "A STEP", "a.rs"]) expect(prompt, `${id} ${hidden}`).not.toContain(hidden);
+    }
+    const fast = readFileSync(new URL(`../../prompts/${PACKS.test_design_fast.template}`, import.meta.url), "utf8");
+    expect(fast).toMatch(/one or two scenarios/i);
+  });
+
+  it("renders scenarios as given/when/then wherever later stages read them, and a v1 case by its approach", () => {
+    const v2 = { id: "S1", title: "the discount counts once", criterion: "A coupon applies once", criterion_ref: "C1", type: "happy", given: "a cart", when: "applied twice", then: "it counts once", approach: "Given a cart, when applied twice, then it counts once (unit)", layer: "unit" };
+    const v1 = { title: "j on empty", criterion: "no panic", approach: "run `cargo test keys::empty`" };
+    const render = (template: string, context: Record<string, unknown>) => renderPrompt({ pack: PACKS.implementing, input: { ...input, context: { ...input.context, ...context } } as never, template });
+    expect(render("{{context.testCases}}", { testCases: [v2, v1] })).toContain("- S1 the discount counts once [happy, unit] (criterion: A coupon applies once): given a cart, when applied twice, then it counts once\n- j on empty (criterion: no panic): run `cargo test keys::empty`");
+    const plan = { record: null, brief: "", criteria: [], assumptions: [], slices: [], cases: [v2] };
+    expect(render("{{context.plan.cases}}", { plan })).toContain("S1 the discount counts once [happy, unit] (criterion: A coupon applies once): given a cart, when applied twice, then it counts once");
+  });
+
   it("lists the repo's checks for the packs that run them, as the line to type and where", () => {
     const template = "checks:\n{{context.checks}}";
     const checks = [{ name: "board tests", run: "cargo test", cwd: "board", paths: ["board/**"] }, { name: "lint", run: "pnpm lint" }];
