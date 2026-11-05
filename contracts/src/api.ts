@@ -404,6 +404,33 @@ export interface Stats {
   p90: number | null;
 }
 
+/** A number and the count it rests on; the value is null when nothing backs it. */
+export interface FlowCount {
+  value: number | null;
+  n: number;
+}
+
+/** `Stats` and the count it rests on. */
+export type FlowStats = Stats & { n: number };
+
+/** The v2.2 diagram's flow numbers, read from the named events (`namesOf`) of the window. */
+export interface FlowMetrics {
+  /** Triage passed to plan approved, for plans approved in the window. */
+  planCycleMs: FlowStats;
+  /** The test designer's rounds per planned task, mean, for plans made in the window. */
+  coverageRounds: FlowCount;
+  /** Implementer runs per task, mean, for builds finished in the window. */
+  buildRuns: FlowCount;
+  /** Created to merged, for tasks merged in the window. */
+  leadTimeMs: FlowStats;
+  /** Merges in the window, scaled to a week. */
+  mergesPerWeek: FlowCount;
+  /** Null: nothing records a failed change yet. */
+  changeFailureRate: FlowCount & { reason: string };
+  /** Null: nothing records a failed change yet. */
+  timeToRestoreMs: FlowCount & { reason: string };
+}
+
 /** `GET /metrics?since=<7d|30d|ISO>`. Numbers with no data are null, never NaN. */
 /** The stage pool: size, in use, and whether the machine is draining. `GET /health`, `POST /drain`, `POST /resume` and `PATCH /slots` all answer with it. */
 export interface Slots {
@@ -493,6 +520,8 @@ export interface Metrics {
   };
   /** Gates answered within their SLA over gates answered, and the median wait per gate (ms). */
   gates: { withinSla: number | null; answered: number; waitMs: Record<string, Stats> };
+  /** The diagram's flow numbers; absent on a machine from before wave 8. */
+  flow?: FlowMetrics;
   /** Share of tasks whose first run of the stage passed. */
   firstPassRate: {
     verifying: number | null;

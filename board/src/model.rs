@@ -1642,6 +1642,43 @@ pub struct Metrics {
     /// Absent from machines that predate the gate SLA.
     #[serde(default)]
     pub gates: GateMetrics,
+    /// The v2.2 diagram's flow numbers; absent from machines that predate wave 8. Parsed, not shown yet.
+    #[serde(default)]
+    #[allow(dead_code)] // part of the contract; no view yet
+    pub flow: Option<FlowMetrics>,
+}
+
+/// A number and the count it rests on.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[allow(dead_code)]
+pub struct FlowCount {
+    pub value: Option<f64>,
+    pub n: u64,
+    /// Why the value is null, when the machine says (a failed change is not recorded yet).
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// `Stats` and the count it rests on.
+#[derive(Deserialize, Clone, Debug, Default)]
+#[allow(dead_code)]
+pub struct FlowStats {
+    pub median: Option<f64>,
+    pub p90: Option<f64>,
+    pub n: u64,
+}
+
+#[derive(Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
+pub struct FlowMetrics {
+    pub plan_cycle_ms: FlowStats,
+    pub coverage_rounds: FlowCount,
+    pub build_runs: FlowCount,
+    pub lead_time_ms: FlowStats,
+    pub merges_per_week: FlowCount,
+    pub change_failure_rate: FlowCount,
+    pub time_to_restore_ms: FlowCount,
 }
 
 const NONE: &str = "–";
@@ -2639,6 +2676,24 @@ pub(crate) mod tests {
         let old: Metrics = serde_json::from_str(&METRICS_JSON.replace(r#""gates":{"withinSla":0.75,"answered":8,"waitMs":{"awaiting_approval":{"median":1800000,"p90":5400000},"awaiting_ship":{"median":null,"p90":null}}},"#, "")).unwrap();
         assert_eq!(old.gates.answered, 0, "a machine without the gate SLA still loads");
         assert!(old.by_engine.is_none(), "a machine without groupBy=engine still loads");
+    }
+
+    #[test]
+    fn flow_metrics_parse_with_their_counts_and_a_machine_without_them_still_loads() {
+        let with_flow = METRICS_JSON.replacen(
+            r#"{"#,
+            r#"{"flow":{"planCycleMs":{"median":1200000,"p90":1680000,"n":2},"coverageRounds":{"value":1.5,"n":2},"buildRuns":{"value":null,"n":0},"leadTimeMs":{"median":null,"p90":null,"n":0},"mergesPerWeek":{"value":2,"n":2},"changeFailureRate":{"value":null,"n":0,"reason":"nothing records a failed change yet"},"timeToRestoreMs":{"value":null,"n":0,"reason":"nothing records a failed change yet"}},"#,
+            1,
+        );
+        let m: Metrics = serde_json::from_str(&with_flow).unwrap();
+        let flow = m.flow.expect("flow");
+        assert_eq!(flow.plan_cycle_ms.median, Some(1_200_000.0));
+        assert_eq!(flow.plan_cycle_ms.n, 2);
+        assert_eq!(flow.coverage_rounds.value, Some(1.5));
+        assert_eq!(flow.build_runs.value, None);
+        assert_eq!(flow.change_failure_rate.reason.as_deref(), Some("nothing records a failed change yet"));
+        let old: Metrics = serde_json::from_str(METRICS_JSON).unwrap();
+        assert!(old.flow.is_none());
     }
 
     #[test]

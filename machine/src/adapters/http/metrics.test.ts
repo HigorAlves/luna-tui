@@ -79,6 +79,17 @@ describe("GET /metrics", () => {
     expect(m.queue).toEqual({ depth: 0, slots: { max: 2, active: 0, draining: false, latched: [] }, utilisation: 0 });
   });
 
+  it("carries the flow numbers from the named events: null on an empty database, a plan cycle and a build run for a task that went through", async () => {
+    expect((await getMetrics()).flow).toMatchObject({ planCycleMs: { median: null, n: 0 }, buildRuns: { value: null, n: 0 }, mergesPerWeek: { n: 0 }, changeFailureRate: { value: null }, timeToRestoreMs: { value: null } });
+    const task = await pipeline.createTask({ title: "flows" });
+    await pipeline.start(task.id);
+    for (let i = 0; i < 3; i++) await pipeline.decide(task.id, "approved");
+    const { flow } = await getMetrics();
+    expect(flow?.planCycleMs.n).toBe(1);
+    expect(flow?.planCycleMs.median).toBeGreaterThanOrEqual(0);
+    expect(flow?.buildRuns).toEqual({ value: 1, n: 1 });
+  });
+
   it("counts the gates answered in the window, the share inside the gate SLA and the median wait per gate", async () => {
     const { closed, escalated } = await seed();
     const m = await getMetrics();

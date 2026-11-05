@@ -1,8 +1,9 @@
 // Factory metrics: how the pipeline is doing over a window. Rows come from Postgres and
 // the numbers are computed here, so a window with no data gives null, never NaN.
-import { type EngineId, type EngineMetrics, type FingerprintMetrics, type Metrics, type MetricsGroupBy, RUNNING, type RepoMetrics, type Slots, type TaskState, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
+import { type EngineId, type EngineMetrics, type FingerprintMetrics, type FlowMetrics, type Metrics, type MetricsGroupBy, RUNNING, type RepoMetrics, type Slots, type TaskState, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
+import { namesOf } from "../../domain/card-events.ts";
 import { ratio, stats } from "../http/metrics.ts";
 
 export interface MetricsOptions {
@@ -102,6 +103,62 @@ export function gateWaits(
   return waits;
 }
 
+const NOT_RECORDED = "nothing records a failed change yet";
+const DAY = 86_400_000;
+
+/** One logged event, slimmed to what `namesOf` and the flow numbers read. */
+export interface FlowRow {
+  task_id: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  at: Date;
+}
+
+/** The diagram's flow numbers from the window's event log, through `namesOf`. Each cohort is the tasks whose ending event falls in the window. */
+export function flowMetrics(rows: FlowRow[], window: [Date, Date]): FlowMetrics {
+  const [since, until] = window;
+  const inWindow = (at: Date) => at.getTime() >= since.getTime() && at.getTime() <= until.getTime();
+  const named = rows.map((r) => ({ ...r, names: namesOf(r), at: new Date(r.at) })).sort((a, b) => a.at.getTime() - b.at.getTime());
+  const byTask = new Map<string, typeof named>();
+  for (const r of named) byTask.set(r.task_id, [...(byTask.get(r.task_id) ?? []), r]);
+  const first = (rs: typeof named, name: string) => rs.find((r) => (r.names as string[]).includes(name));
+  const last = (rs: typeof named, name: string) => rs.findLast((r) => (r.names as string[]).includes(name));
+  const count = (values: number[]) => ({ value: mean(values), n: values.length });
+  const withN = (values: number[]) => ({ ...stats(values), n: values.length });
+
+  const planCycle: number[] = [];
+  const rounds: number[] = [];
+  const buildRuns: number[] = [];
+  const lead: number[] = [];
+  let merges = 0;
+  for (const rs of byTask.values()) {
+    const triaged = first(rs, "card.triaged");
+    const approved = first(rs, "card.approved");
+    if (triaged && approved && approved.at >= triaged.at && inWindow(approved.at)) planCycle.push(approved.at.getTime() - triaged.at.getTime());
+    const planned = last(rs, "card.planned");
+    const designed = Number(((planned?.payload.detail as { rounds?: { tests?: unknown } } | undefined)?.rounds ?? {}).tests);
+    if (planned && inWindow(planned.at) && Number.isFinite(designed)) rounds.push(designed);
+    const done = last(rs, "build.done");
+    if (done && inWindow(done.at)) buildRuns.push(rs.filter((r) => (r.names as string[]).includes("build.started")).length);
+    const merged = first(rs, "ship.merged");
+    const created = first(rs, "card.created");
+    if (merged && inWindow(merged.at)) {
+      merges += 1;
+      if (created) lead.push(merged.at.getTime() - created.at.getTime());
+    }
+  }
+  const weeks = (until.getTime() - since.getTime()) / (7 * DAY);
+  return {
+    planCycleMs: withN(planCycle),
+    coverageRounds: count(rounds),
+    buildRuns: count(buildRuns),
+    leadTimeMs: withN(lead),
+    mergesPerWeek: { value: weeks > 0 ? merges / weeks : null, n: merges },
+    changeFailureRate: { value: null, n: 0, reason: NOT_RECORDED },
+    timeToRestoreMs: { value: null, n: 0, reason: NOT_RECORDED },
+  };
+}
+
 export async function computeMetrics(db: DataSource, options: MetricsOptions): Promise<Metrics> {
   const { since, slots } = options;
   const until = options.until ?? new Date();
@@ -141,6 +198,16 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
        from events e join tasks t on t.id = e.task_id
       where e.kind = 'transition' and $1::timestamptz is not null and e.at <= $2 and ${inScope}
       order by e.at`,
+    params,
+  );
+  // The events `namesOf` reads, slimmed in SQL: only the fields it and the flow numbers look at, never a stage's whole detail.
+  const flowRows: FlowRow[] = await db.query(
+    `select e.task_id, e.kind, e.at,
+            jsonb_strip_nulls(jsonb_build_object('stage', e.payload->'stage', 'status', e.payload->'status', 'event', e.payload->'event', 'from', e.payload->'from', 'to', e.payload->'to',
+              'escalation', e.payload->'escalation', 'archiveReason', e.payload->'archiveReason',
+              'detail', case when e.kind = 'stage.finished' then jsonb_strip_nulls(jsonb_build_object('rounds', e.payload #> '{detail,rounds}', 'cases', case when e.payload #> '{detail,cases}' is not null then '[]'::jsonb end)) end)) as payload
+       from events e join tasks t on t.id = e.task_id
+      where e.kind in ('task.created', 'task.shipped', 'task.closed', 'transition', 'stage.started', 'stage.finished', 'stage.slice.committed', 'stage.pr.opened') and e.at <= $2 and $1::timestamptz is not null and ${inScope}`,
     params,
   );
   const touched: { retries: { verify: number; e2e: number; ci: number; total: number } }[] = await db.query(
@@ -257,6 +324,7 @@ export async function computeMetrics(db: DataSource, options: MetricsOptions): P
     tasks,
     cycleTimeMs: { task: stats(closedRows.map((r) => Number(r.ms))), perStage },
     gates,
+    flow: flowMetrics(flowRows, [since, until]),
     firstPassRate,
     escalations: { rate: ratio(escalatedTasks.size, started.size), topReasons },
     retries: { perTask: stats(touched.map((t) => t.retries.total)), byLoop },
