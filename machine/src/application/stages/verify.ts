@@ -1,6 +1,6 @@
-// The verifying stage: run the project's own checks in the task worktree, and only when they
-// are green hand the change to the verifying review pack. A red check fails the stage with
-// its output as findings, so the next implementing attempt sees what broke.
+// The verifying stage, in the diagram's order: the review pack reads the change first, and only when no
+// blocker stands do the project's own checks run in the task worktree. A blocker fails the stage with the
+// findings and no suite run; a red check fails it with its output as a finding of category `tests`.
 import type { CheckSpec, CoverageSummary, DecisionOverrides, Finding, ServiceSpec } from "@hardness/contracts";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
@@ -11,6 +11,7 @@ import { type GraphJson, blastRadius } from "../../domain/blast-radius.ts";
 import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.ts";
 import { addedLineNumbers, parseLcov, patchCoverage } from "../../domain/coverage.ts";
 import { type EnvRecord, compareEnv } from "../../domain/env-hash.ts";
+import { verifySteps } from "../../domain/verify-order.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import { type Decide, judgeCheck } from "./check-decide.ts";
@@ -200,6 +201,88 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       commands = CHECK_NAMES.flatMap((name) => (found[name] ? [{ name, cmd: found[name]!.join(" "), argv: found[name]! }] : []));
       noTests = !found.test;
     }
+    // The review's result as the stage returns it: its verdict, results and cases, with whatever else the stage found.
+    const assemble = (pack: StageResult, findings: Finding[], extra: Record<string, unknown>): StageResult => {
+      const answer = answerOf(pack.detail);
+      const results = Array.isArray(answer?.results) ? answer.results : [];
+      // One verdict per case, by the title the pack copied verbatim from the approved case. The
+      // cases are matched by title only: a reworded title is an unproven case, as the prompt says,
+      // and the project's own test names are not mapped to cases at all.
+      const cases = results.flatMap((r) => {
+        const row = r as { title?: unknown; outcome?: unknown };
+        return typeof row.title === "string" ? [{ title: row.title, ok: row.outcome === "pass" }] : [];
+      });
+      const asked = pack.outcome === "needs_input";
+      const resultsFailed = results.some((r) => (r as { outcome?: string }).outcome === "fail");
+      const verdict = !asked && (answer?.verdict === "pass" || answer?.verdict === "fail") ? answer.verdict : verdictOf(findings);
+      const summary = typeof answer?.summary === "string" ? answer.summary : String(pack.detail?.summary ?? "");
+      return {
+        ...pack,
+        outcome: asked || (verdict === "pass" && !resultsFailed) ? "pass" : "fail",
+        detail: {
+          step: "review",
+          verdict: asked ? "pass" : resultsFailed ? "fail" : verdict,
+          summary,
+          findings,
+          results,
+          ...(cases.length > 0 ? { cases } : {}),
+          ...extra,
+          ...(asked ? { note: "the reviewer asked a question; a reviewer should not, so the review counts as a pass" } : {}),
+        },
+        findings,
+      };
+    };
+
+    /** finding_classify over the review's most confident findings: recorded beside the verifier's severities, never a verdict. */
+    const classify = async (reviewed: Finding[]): Promise<Record<string, unknown>> => {
+      const decide = deps.decide ?? null;
+      if (!decide || reviewed.length === 0) return {};
+      const top = [...reviewed].sort((a, b) => b.confidence - a.confidence).slice(0, CLASSIFY_MAX);
+      const classified = await Promise.all(
+        top.map(async (finding) => {
+          const excerpt = await excerptOf(cwd, finding);
+          const { verdict, answer, recordId } = await judgeCheck(decide, "finding_classify", { kind: "finding", finding, excerpt }, task.repoPath ?? null, decisions);
+          const severity = (answer?.severity ?? null) as { choice?: unknown; confidence?: unknown } | null;
+          const usable = (verdict === "proceed" || verdict === "flag") && typeof severity?.choice === "string";
+          return {
+            title: finding.title,
+            path: finding.path,
+            line: finding.line,
+            severity: finding.severity,
+            classified: usable ? (severity!.choice as "blocker" | "should_fix" | "nit") : null,
+            confidence: typeof severity?.confidence === "number" ? severity.confidence : null,
+            verdict,
+            ...(recordId ? { recordId } : {}),
+          };
+        }),
+      );
+      const calibration = { agree: 0, disagree: 0, skipped: 0 };
+      for (const row of classified) {
+        if (row.classified === null) calibration.skipped++;
+        else if (row.classified === scaleOf(row.severity)) calibration.agree++;
+        else calibration.disagree++;
+      }
+      return { classified, calibration };
+    };
+
+    // Step A: the review, before anything of the suite runs (when agents are on).
+    let pack: StageResult | null = null;
+    let reviewed: Finding[] = [];
+    let classification: Record<string, unknown> = {};
+    if (deps.runPack) {
+      pack = await deps.runPack(context, state.radius.length ? { blastRadius: state.radius } : {});
+      if (signal.aborted) return aborted();
+      // A deliberate escalation is the pack's own answer, verbatim: it has no findings to compute a verdict from.
+      if (pack.outcome === "escalated") return { ...pack, detail: { ...pack.detail, step: "review" } };
+      const answer = answerOf(pack.detail);
+      reviewed = (Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[];
+      classification = await classify(reviewed);
+      if (pack.outcome === "fail") return { ...pack, detail: { ...pack.detail, step: "review", ...classification } };
+      const standing = assemble(pack, reviewed, classification);
+      const blockers = standing.outcome === "fail" ? 1 : 0;
+      if (verifySteps({ env: "matched", review: "done", blockers, checks: null }) === "fail") return standing;
+    }
+
     const log: string[] = [];
     const deadline = Date.now() + CHECKS_TIMEOUT_MS;
     for (const { name, cmd, argv } of commands) {
@@ -248,16 +331,18 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
 
     const failed = reports.filter((r) => r.ok === false);
     if (failed.length > 0) {
-      const findings: Finding[] = failed.map((r) => ({
+      const checkFindings: Finding[] = failed.map((r) => ({
         path: "",
         line: 0,
         start_line: null,
         severity: "test",
+        category: "tests",
         title: `${r.name} failed`,
         body: r.tail ?? "",
         suggestion_code: null,
         confidence: 1,
       }));
+      const findings = [...reviewed, ...checkFindings];
       const list = failed.map((r) => ({ name: r.name, cmd: r.cmd, tail: r.tail }));
       return {
         outcome: "fail",
@@ -309,90 +394,12 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     }
     const coverageDetail = coverage ? { coverage } : {};
 
-    /** finding_classify over the review's most confident findings: recorded beside the verifier's severities, never a verdict. */
-    const classify = async (reviewed: Finding[]): Promise<Record<string, unknown>> => {
-      const decide = deps.decide ?? null;
-      if (!decide || reviewed.length === 0) return {};
-      const top = [...reviewed].sort((a, b) => b.confidence - a.confidence).slice(0, CLASSIFY_MAX);
-      const classified = await Promise.all(
-        top.map(async (finding) => {
-          const excerpt = await excerptOf(cwd, finding);
-          const { verdict, answer, recordId } = await judgeCheck(decide, "finding_classify", { kind: "finding", finding, excerpt }, task.repoPath ?? null, decisions);
-          const severity = (answer?.severity ?? null) as { choice?: unknown; confidence?: unknown } | null;
-          const usable = (verdict === "proceed" || verdict === "flag") && typeof severity?.choice === "string";
-          return {
-            title: finding.title,
-            path: finding.path,
-            line: finding.line,
-            severity: finding.severity,
-            classified: usable ? (severity!.choice as "blocker" | "should_fix" | "nit") : null,
-            confidence: typeof severity?.confidence === "number" ? severity.confidence : null,
-            verdict,
-            ...(recordId ? { recordId } : {}),
-          };
-        }),
-      );
-      const calibration = { agree: 0, disagree: 0, skipped: 0 };
-      for (const row of classified) {
-        if (row.classified === null) calibration.skipped++;
-        else if (row.classified === scaleOf(row.severity)) calibration.agree++;
-        else calibration.disagree++;
-      }
-      return { classified, calibration };
-    };
-
-    // Step B: the review pack, only when agents are on.
+    // The review already ran (when agents are on) and no blocker stands: the report is its result with the suite's.
     const noTestsNote = noTests ? { note: "no test command detected; verifying proves the scenarios by direct check" } : {};
-    if (!deps.runPack) {
+    if (!pack) {
       return { outcome: "pass", detail: { step: "checks", note: "review: skipped (agents off)", checks: reports, ...coverageDetail }, run: { transcriptPath } };
     }
-    const pack = await deps.runPack(context, { ...(state.radius.length ? { blastRadius: state.radius } : {}), ...(coverage ? { coverage } : {}) });
-    // A plain failure or a deliberate escalation are both the pack's own answer, verbatim —
-    // neither should fall into the verdict computation below (an escalation has no real
-    // findings to compute one from, and would otherwise be miscounted as a pass).
-    if (pack.outcome === "escalated") {
-      return { ...pack, detail: { ...pack.detail, step: "review", checks: reports, ...coverageDetail } };
-    }
-    const answer = answerOf(pack.detail);
-    if (pack.outcome === "fail") {
-      const reviewed = (Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[];
-      return { ...pack, detail: { ...pack.detail, step: "review", checks: reports, ...coverageDetail, ...(await classify(reviewed)) } };
-    }
-    const reviewed = (Array.isArray(answer?.findings) ? answer.findings : pack.findings ?? []) as Finding[];
-    const classification = await classify(reviewed);
-    const findings = [...reviewed, ...coverageFindings];
-    const results = Array.isArray(answer?.results) ? answer.results : [];
-    // One verdict per case, by the title the pack copied verbatim from the approved case. The
-    // cases are matched by title only: a reworded title is an unproven case, as the prompt says,
-    // and the project's own test names are not mapped to cases at all.
-    const cases = results.flatMap((r) => {
-      const row = r as { title?: unknown; outcome?: unknown };
-      return typeof row.title === "string" ? [{ title: row.title, ok: row.outcome === "pass" }] : [];
-    });
-    const asked = pack.outcome === "needs_input";
-    const resultsFailed = results.some((r) => (r as { outcome?: string }).outcome === "fail");
-    const verdict =
-      !asked && (answer?.verdict === "pass" || answer?.verdict === "fail") ? answer.verdict : verdictOf(findings);
-    const summary =
-      typeof answer?.summary === "string" ? answer.summary : String(pack.detail?.summary ?? "");
-    return {
-      ...pack,
-      outcome: asked || (verdict === "pass" && !resultsFailed) ? "pass" : "fail",
-      detail: {
-        step: "review",
-        verdict: asked ? "pass" : resultsFailed ? "fail" : verdict,
-        summary,
-        findings,
-        results,
-        ...(cases.length > 0 ? { cases } : {}),
-        checks: reports,
-        ...coverageDetail,
-        ...classification,
-        ...noTestsNote,
-        ...(asked ? { note: "the reviewer asked a question; a reviewer should not, so the review counts as a pass" } : {}),
-      },
-      findings,
-    };
+    return assemble(pack, [...reviewed, ...coverageFindings], { checks: reports, ...coverageDetail, ...classification, ...noTestsNote });
   };
   return async (context) => {
     const state = { radius: [] as string[] };
@@ -413,7 +420,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         }
       }
     }
-    let result = envFinding
+    let result = verifySteps({ env: envFinding ? "mismatch" : "matched", review: null, blockers: 0, checks: null }) === "fail" && envFinding
       ? ({ outcome: "fail", detail: { step: "env", error: envFinding.body, summary: envFinding.title, findings: [envFinding] }, findings: [envFinding] } as StageResult)
       : await verify(inFresh, state);
     if (fresh) {

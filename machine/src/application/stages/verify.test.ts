@@ -70,14 +70,32 @@ function setup(opts: {
 }
 
 describe("verifying stage", () => {
-  it("fails on a red check with its tail as a test finding, and never calls the pack", async () => {
+  it("reviews first: a blocker in the review ends the stage before any check runs", async () => {
+    const { run, context, runPack, exec } = setup({ pack: { outcome: "pass", detail: { answer: { verdict: "fail", summary: "broken", findings: [finding()] } } } });
+    const result = await run(context);
+    expect(runPack).toHaveBeenCalledTimes(1);
+    expect(exec).not.toHaveBeenCalled();
+    expect(result.outcome).toBe("fail");
+    expect((result.detail as { step: string }).step).toBe("review");
+    expect(result.findings).toEqual([expect.objectContaining({ title: "off by one" })]);
+  });
+
+  it("a red check after a clean review fails with its output as a finding of category tests", async () => {
+    const { run, context, runPack } = setup({ checks: { "pnpm run test": { code: 1, stdout: "boom", stderr: "" } } });
+    const result = await run(context);
+    expect(runPack).toHaveBeenCalledTimes(1);
+    expect(result.outcome).toBe("fail");
+    expect(result.findings).toEqual([expect.objectContaining({ category: "tests", body: "boom" })]);
+  });
+
+  it("fails on a red check with its tail as a test finding, after the review", async () => {
     const tail = Array.from({ length: 100 }, (_, i) => `line ${i}`).join("\n");
     const { run, context, runPack, stateDir } = setup({
       checks: { "pnpm run test": { code: 1, stdout: tail, stderr: "" } },
     });
     const result = await run(context);
     expect(result.outcome).toBe("fail");
-    expect(runPack).not.toHaveBeenCalled();
+    expect(runPack).toHaveBeenCalledTimes(1);
     const detail = result.detail as { step: string; failed: Array<{ name: string; tail: string; cmd: string }> };
     expect(detail.step).toBe("checks");
     expect(detail.failed).toHaveLength(1);
@@ -99,7 +117,7 @@ describe("verifying stage", () => {
     const result = await run(context);
     expect(result.outcome).toBe("escalated");
     expect(result.detail).toMatchObject({ reason: expect.stringMatching(/pnpm run test.*runner image/) });
-    expect(runPack).not.toHaveBeenCalled();
+    expect(runPack).toHaveBeenCalledTimes(1);
   });
 
   it("runs every check as you: the identity git resolves for the repo rides into the check container", async () => {
@@ -205,7 +223,7 @@ describe("verifying stage", () => {
     };
     const lunaChecks = [{ name: "tests", run: "pnpm test", coverage: "coverage/lcov.info" }];
 
-    it("reads the report after a passing check, records it, adds a test finding per file with uncovered lines and hands the summary to the verifier", async () => {
+    it("reads the report after a passing check, records it, adds a test finding per file with uncovered lines and leaves the verifier to read the change first", async () => {
       const { run, context, runPack } = setup({ worktree: worktree(), lunaChecks, diffSince: async () => diff });
       const result = await run(context);
       const summary = { files: [{ path: "src/a.ts", added: 4, covered: 3, uncovered: [12] }], total: { added: 4, covered: 3 }, report: "coverage/lcov.info" };
@@ -214,7 +232,7 @@ describe("verifying stage", () => {
       expect(result.findings).toEqual([
         expect.objectContaining({ path: "src/a.ts", line: 12, severity: "test", title: "coverage: 3 of 4 added lines in src/a.ts are not covered", body: "uncovered: 12", confidence: 0.9 }),
       ]);
-      expect(runPack).toHaveBeenCalledWith(context, { coverage: summary });
+      expect(runPack).toHaveBeenCalledWith(context, {}); // the review runs before the suite, so it is not given the coverage
     });
 
     it("notes a report that is missing and still passes", async () => {
@@ -245,7 +263,7 @@ describe("verifying stage", () => {
     it("reads no report when the check failed", async () => {
       const { run, context, runPack } = setup({ worktree: worktree(), lunaChecks, diffSince: async () => diff, checks: { "sh -c pnpm test": { code: 1, stdout: "x", stderr: "" } } });
       const result = await run(context);
-      expect(runPack).not.toHaveBeenCalled();
+      expect(runPack).toHaveBeenCalledTimes(1);
       expect(result.detail).not.toHaveProperty("coverage");
     });
   });
@@ -339,7 +357,7 @@ describe("verifying stage", () => {
     expect(result.outcome).toBe("fail");
     expect(result.detail).toMatchObject({ summary: "board tests failed", error: expect.stringContaining("cargo test (in board)") });
     expect(result.findings).toEqual([expect.objectContaining({ severity: "test", title: "board tests failed", body: "test x ... FAILED" })]);
-    expect(runPack).not.toHaveBeenCalled();
+    expect(runPack).toHaveBeenCalledTimes(1);
   });
 
   it("asks for the repo's services beside every check, so a suite that needs a database gets one", async () => {
@@ -359,7 +377,7 @@ describe("verifying stage", () => {
     expect(result.outcome).toBe("fail");
     expect(result.findings).toEqual([f]);
     expect(result.detail).toMatchObject({ step: "review", verdict: "fail", summary: "bug", findings: [f] });
-    expect((result.detail as { checks: Array<{ name: string }> }).checks.map((c) => c.name)).toEqual(["test", "lint"]);
+    expect(result.detail).not.toHaveProperty("checks");
   });
 
   it("passes when checks and the review pass", async () => {
@@ -409,7 +427,7 @@ describe("verifying stage", () => {
       checks: { "pnpm run lint": { code: 1, stdout: "", stderr: "eslint: 3 errors" } },
     });
     const result = await run(context);
-    expect(runPack).not.toHaveBeenCalled();
+    expect(runPack).toHaveBeenCalledTimes(1);
     expect(result.outcome).toBe("fail");
   });
 
@@ -516,7 +534,7 @@ describe("verifying stage", () => {
     const result = await s.run(s.context);
     expect(result.outcome).toBe("fail");
     expect(result.detail).toMatchObject({ error: "aborted" });
-    expect(s.runPack).not.toHaveBeenCalled();
+    expect(s.runPack).toHaveBeenCalledTimes(1);
   });
 });
 

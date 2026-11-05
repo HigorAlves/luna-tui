@@ -20,10 +20,8 @@ Scenarios test_design named (each needs a test or a direct check):
 Files the code graph says depend on what changed (a change can break them without touching them; read the diff's callers there before the rest):
 {{context.blastRadius}}
 
-## Coverage of the change
-Added lines the repo's own coverage report saw run, per file (uncovered lines are ones no test reached):
-{{context.coverage}}
-A file whose added lines are uncovered deserves a finding, or a test you add yourself, unless the lines cannot run (a type, a re-export, a guard that cannot fail).
+## The suite
+You review before the suite runs: the machine runs the repo's checks and measures the coverage of the added lines after your review, and only when you found no blocker. Read the change; do not wait for the suite.
 
 ## Decisions so far
 {{decisions}}
