@@ -173,6 +173,26 @@ Each `services` entry runs as its own container beside every stage that runs the
 
 `PIPELINE.md` (the earlier per-repo file, front matter with the `policy` keys and `qa_target` lines) still works when there is no `luna.yaml`, with a deprecation notice once per repo; `luna.yaml` wins when both exist.
 
+### The v2.2 diagram's sections
+
+`luna.yaml` also takes the sections of the v2.2 flow diagram (RFC 0006). Each has the default shown; a key you write is merged over it into `Policy.factory`. A wrong type, a number out of range or an unknown key inside one of these sections makes the file invalid, naming the key (the `evidence` section keeps ignoring unknown keys, as it always did). The last column is the wave that reads the key: `8` means it already changes behaviour; every other key is defined now and does nothing until that wave, so setting it has no effect yet. The existing keys keep their meaning and win when both forms are set: `policy.auto_merge`, `freeze`, `evidence.retention_days` and the top-level `sla`.
+
+| Section | Keys and defaults | Read from wave |
+|---|---|---|
+| `dedup` | `duplicate: 0.90`, `related: 0.70`, `ask_below: 0.7`, `lookback_days: 90` | 14 |
+| `triage` | `confidence {kind 0.80, size 0.60, urgency 0.70, risk 0.85, archive 0.90}`, `flag_band: 0.15`, `hint_weight: 0.5`, `max_questions: 3`, `max_rounds: 2`, `sla {reminder_days 2, archive_days 5}` | 9 |
+| `scoring` | `weights {who 3, what 3, impact 2, time 2, demand 1}`, `bands {P0 28, P1 22, P2 16}` | 9 |
+| `fast_lane` | `max_risk: low`, `max_size: S`, `excluded_types: [infra, data]`, `cross_team: false` | 9 |
+| `plan` | `coverage_score_min: 0.85`, `coverage_rounds: 3`, `plan_check_retries: 2`, `approvers {low 1, medium 1, high 2, outside_owning_team true}`, `sla {reminder_days 2, escalate_days 5}` | `coverage_rounds` and `plan_check_retries` 8, the rest 9 |
+| `size` | `target_loc: [1000, 2000]`, `hard_limit_loc: 2500`, `max_children: 8`, `max_rounds: 3`, `depth: 2` | 15 |
+| `build` | `max_iterations: 15`, `max_tokens: 2000000`, `max_minutes: 90`, `backoff_minutes: [1, 30]`, `regression_full_suite_minutes: 10` | 10 |
+| `sandbox` | `cpu: 4`, `memory_gb: 8`, `egress: [registries, github]` | 11 |
+| `verify` | `coverage_drop_max: 0.5`, `mutation {command null, min_score 0.6}`, `build_rounds: 1`, `env_flake_retries: 1`, `ci_flaky_reruns: 1`, `auto_rebase: 1`, `e2e {deploy {command null}, start {command null}}` | `env_flake_retries`, `ci_flaky_reruns` and `auto_rebase` 8, the rest 12 |
+| `evidence` | `video_budget_s: 240`, `regenerate: 1`, `tts {voice null, language null}`, `storage: release_asset`, `retention_days: 180` | `retention_days` keeps its meaning (a repo's value, else `MACHINE_RETENTION_DAYS`); the rest 12 |
+| `ship` | `preview: off`, `auto_merge: medium_when_review_required`, `merge {method squash, queue true, delete_branch true, commit_template null}`, `release_owners: []`, `stale_days: 14`, `sla {reminder_days 2, escalate_days 5}`, `poll_minutes: 5` | `stale_days` 8, the rest 13 |
+
+Wave 8 reads `plan.coverage_rounds` (the test designer's rounds), `plan.plan_check_retries` (the planner's re-runs after a plan check), `verify.env_flake_retries` (browser re-runs on an environment flake), `verify.ci_flaky_reruns` and `verify.auto_rebase` (the ship monitor's CI re-runs and rebases) and `ship.stale_days` (how old a PR head may be before it blocks a merge). `evidence.video_budget_s` stays 240 in the film prompts and is wired in wave 12. `ship.auto_merge` is not read: today's `policy.auto_merge` (default `off`) decides what the machine merges. `verify.mutation.command`, `verify.e2e.deploy.command`, `verify.e2e.start.command` and `ship.merge.commit_template` are stored as written and are never run or rendered by this wave.
+
 ## GitHub gates
 
 `pnpm --filter @hardness/machine gates owner/name [--checks board,machine] [--dry-run]` applies a repository ruleset named `hardness gates` to the default branch: one approving review from someone other than the last pusher, reviews dismissed when the branch moves, no deletion, no force-push, and the named checks green. GitHub enforces it whatever an agent does; the pipeline cannot approve its own PR. The machine's side of the same gate: a writable stage refuses any branch outside `task/`.

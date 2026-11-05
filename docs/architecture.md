@@ -225,6 +225,38 @@ Dependencies point inward: `adapters` depend on `application` ports, `applicatio
 
 This is a lightweight application of ports-and-adapters, not a formal DI container: most stage runners already took their dependencies as plain function parameters before this layout existed (`deps.exec`, `deps.runPack`, `deps.sandbox`), so the move mostly made that existing seam's *location* match its *role*. A port got a named interface only where three or more call sites actually shared one (`TaskStore`, `GitHub`, the generic `exec`).
 
+## Contracts of the v2.2 diagram
+
+RFC 0006 aligns the machine with the v2.2 flow diagram. Wave 8 gives the machine the diagram's vocabulary and changes no route and no default; each behaviour change lands in the wave that owns its stage, reading what is defined here. Everything is additive: a record, plan, case, finding, pack or `luna.yaml` written before the wave parses and behaves as before.
+
+**The objects, and where each lives.**
+
+| Object | File | Read from today's shape by |
+|---|---|---|
+| `Criterion`, `Scenario`, `PlanStep`, `Plan` | `contracts/src/plan.ts` | `criteriaOf`, `scenarioOf`, `stepOf`, `planOf`; `TestCase` is the same schema as `Scenario` |
+| `Finding` v2 (id, category, resolution, merged) | `contracts/src/stage.ts`, helpers in `finding.ts` | `normaliseFinding`, `severityOf`, `findingId`, `mergeDuplicateFindings` |
+| `TriageRecord` v2 (summary, typeOfWork, urgencyDetail, riskPrelim, ...) | `contracts/src/stage.ts` | all new fields optional |
+| `CreateCardInput` (sources, reporter, hints, originMachine, attachments), `HINT_WEIGHT` | `contracts/src/card.ts`, `api.ts` | accepted and ignored until wave 14 stores them |
+| `BuildReport`, `VerifyReport` | `contracts/src/reports.ts` | `buildReportOf`, `verifyReportOf` (`machine/src/application/reports.ts`) from stage runs and logged details |
+| `EvidencePack` v2 (results, findingsDetail, previewUrl, media localPath) | `contracts/src/stage.ts` | `assembleEvidencePack` fills them from the Verify Report when one exists |
+| `FactoryConfig` and `CONSUMED_FROM` | `contracts/src/config-v22.ts` | `luna.yaml` sections over the diagram's defaults, in `Policy.factory` |
+
+The Build Report rides on the passing `implementing` finish (`detail.report`) and the Verify Report on the passing `ci_watch` finish, the last step of verify; `GET /tasks/:id` shows both as `reports {build, verify}`. A field the machine cannot know yet is null: `envHash` and `envReproduction` until wave 11, `tests[].before/after` and `tokens` until wave 10, `base` until wave 11.
+
+**The event names, by panel.** `CardEventName` (`contracts/src/card-events.ts`) is a way of reading a fact the machine already logs, not a second row for it: `namesOf` (`machine/src/domain/card-events.ts`) derives the name or names of a row from its kind and payload, and `TaskEvent.names` carries them on the stream (`GET /events?names=` filters by them). A fact that had no row gets one under the diagram's own name, with ids, counts and enum values only.
+
+- Intake: `card.created`, `card.merged` (wave 14), `card.setup_needed`, `card.setup_done`
+- Triage: `card.triaged`, `card.answers_needed`, `card.answered`, `card.archived`, `card.fast_lane`
+- Plan: `card.planned`, `card.tests_designed`, `card.approval_needed`, `card.approved`, `card.rejected`
+- Build: `build.started`, `build.checkpoint`, `build.paused`, `build.escalated`, `build.done`
+- Verify: `verify.started`, `verify.findings`, `verify.e2e_done`, `pr.opened`, `ci.status`, `verify.done`
+- Evidence: `evidence.started`, `evidence.media_ready`, `evidence.published`, `evidence.stale`
+- Ship: `ship.event`, `ship.ready`, `ship.approval_needed`, `ship.merged`, `card.closed`, `card.learned`
+
+`build.paused` and `build.escalated` are read from a transition out of `implementing` only. The metrics (`Metrics.flow`) are computed from this log through `namesOf`, with no new columns.
+
+**The scoring model** (`contracts/src/scoring.ts`): `scorePriority` weights the five sub-scores (`who`, `what`, `impact`, `time`, `demand`, each 1 to 3, weights 3, 3, 2, 2, 1), pulls each toward the neutral 2 by its confidence, and bands the sum (28 P0, 22 P1, 16 P2, else P3); `knockOut` sends a production outage, data loss, a security issue, an incident or a compliance deadline to P0 and parks a bug nobody can reproduce or ask about; `wsjf` ranks the backlog by cost of delay over cost of doing; `riskProduct` is the diagram's risk (a product of 4 or less is low, 5 to 11 medium, 12 or more high) and sits beside `riskLevelOf` in `packs.ts`, which still adds the three scores until wave 9. Nothing in the pipeline reads these before waves 9, 14 and 15.
+
 ## Evals and calibration
 
 Every decision pack call the pipeline makes leaves a record (`MACHINE_DECISIONS`, on by default): the context the model judged, its validated answer, each question's verdict under the pack's own bars, the engine and model, and the trace id of its span, under `<state dir>/decisions/<pack>/<day>/`. In `MACHINE_TRACES=full` the same context and answer sit on the decision's span as input and output (only for the pipeline's own calls, never a `POST /runs` client's), so a trace can go from the Laminar UI into a labeling queue and a dataset. When a later fact settles what the right answer was, the machine writes it onto the record as `truth` (`application/decision-truth.ts`): a flake re-run that passed or failed again (`e2e_failure_cause`), the format a pack finally shipped with after the vetoes (`evidence_format`), a slice that went green on the test the red check saw (`red_check`), the person approving the plan untouched or editing the question's subject (`plan_check`, `coverage_check`, `risk_score`), the retro gate's decision (`worth_learning`), a ship approval that kept a finding (`finding_classify`), and what the PR did after a comment was judged (`event_class`, `comment_intent`); `scope_check`, `fix_scope` and `evidence_valid` get no truth from the machine, a person labels them.
