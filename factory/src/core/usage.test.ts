@@ -9,9 +9,9 @@ describe("tokens count new work, with the cache's reads kept beside it", () => {
   });
 
   it("on eve: input minus its cached part, plus output; the cached part is `cached`", () => {
-    expect(eveTokens({ inputTokens: 100_000, cachedInputTokens: 90_000, outputTokens: 700 })).toEqual({ input: 10_000, output: 700, cached: 90_000 });
+    expect(eveTokens({ inputTokens: 100_000, cacheReadTokens: 90_000, outputTokens: 700 })).toEqual({ input: 10_000, output: 700, cached: 90_000 });
     expect(eveTokens({ inputTokens: 500, outputTokens: 50 })).toEqual({ input: 500, output: 50, cached: 0 });
-    expect(eveTokens({ inputTokens: 100, cachedInputTokens: 500, outputTokens: 1 })).toEqual({ input: 0, output: 1, cached: 100 });
+    expect(eveTokens({ inputTokens: 100, cacheReadTokens: 500, outputTokens: 1 })).toEqual({ input: 0, output: 1, cached: 100 });
   });
 
   it("is null where the runtime gave no numbers, never a guess", () => {

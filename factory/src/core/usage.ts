@@ -18,11 +18,12 @@ export function claudeTokens(usage: { input_tokens?: number; output_tokens?: num
   return { input: input + (num(usage?.cache_creation_input_tokens) ?? 0), output, cached: num(usage?.cache_read_input_tokens) ?? 0 };
 }
 
-export function eveTokens(usage: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number } | undefined): Tokens | null {
+/** eve's `Usage` (`usage.recorded`): `inputTokens` is every input token, `cacheReadTokens` the part of it served from the cache. */
+export function eveTokens(usage: { inputTokens?: number; outputTokens?: number; cacheReadTokens?: number } | undefined): Tokens | null {
   const input = num(usage?.inputTokens);
   const output = num(usage?.outputTokens);
   if (input === null || output === null) return null;
-  const cached = Math.min(input, num(usage?.cachedInputTokens) ?? 0);
+  const cached = Math.min(input, num(usage?.cacheReadTokens) ?? 0);
   return { input: input - cached, output, cached };
 }
 

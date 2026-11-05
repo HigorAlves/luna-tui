@@ -306,7 +306,7 @@ export class TurnFollower {
       const ok = data.outcome === "completed";
       this.calls.settled(id, ok, ok ? undefined : `${String(data.outcome)}: ${error?.message ?? ""}`);
     } else if (event.type === "usage.recorded") {
-      const usage = data.usage as { costUsd?: number; inputTokens?: number; outputTokens?: number; cachedInputTokens?: number } | undefined;
+      const usage = data.usage as { costUsd?: number; inputTokens?: number; outputTokens?: number; cacheReadTokens?: number } | undefined;
       if (typeof usage?.costUsd === "number") result.costUsd = (result.costUsd ?? 0) + usage.costUsd;
       result.tokens = sumTokens(result.tokens, eveTokens(usage));
       this.emit({
