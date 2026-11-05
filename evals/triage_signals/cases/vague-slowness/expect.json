@@ -9,10 +9,16 @@
     },
     {
       "kind": "between",
+      "path": "size.confidence",
+      "min": 0,
+      "max": 0.8
+    },
+    {
+      "kind": "between",
       "path": "ready.p",
       "min": 0,
       "max": 0.4
     }
   ],
-  "rubric": "No steps, no numbers, no acceptance criteria: bug or feature is unclear and it is not ready for an agent; confidence on the kind should be modest and ready low."
+  "rubric": "No steps, no numbers, no acceptance criteria: bug or feature is unclear and the size is a guess; confidence on the kind and the size should be modest and ready low."
 }

@@ -49,14 +49,37 @@ describe("the intake classifier", () => {
   });
 });
 
+describe("the intake classifier on the v2 questions", () => {
+  const v2 = {
+    kind: { choice: "bug", confidence: 0.9 }, type_of_work: { choice: "backend", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { choice: "S", confidence: 0.7 },
+    who: { score: 0, confidence: 1 }, what: { score: 0, confidence: 1 }, impact: { score: 0, confidence: 1 }, time: { score: 0, confidence: 1 }, demand: { score: 0, confidence: 1 },
+    risk_prelim: { choice: "low", confidence: 0.9 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.95 },
+  };
+  const usage = { model: "claude-haiku", engine: "claude:haiku" as const, turns: 1, durationMs: 5, costUsd: 0 };
+
+  it("reads the answer into a classification with a priority from the repo's bands", async () => {
+    const { port } = runs({ answer: v2, usage });
+    const classifier = createIssueClassifier({ runs: port, now: () => NOW });
+    expect(await classifier.classify(issue)).toMatchObject({ kind: "bug", typeOfWork: "backend", sizeBucket: "S", priority: "P3", riskPrelim: "low", subScores: { who: 1, what: 1, impact: 1, time: 1, demand: 1 } });
+    // 3 + 3 + 2 + 2 + 1 = 11 against a P2 bar of 10
+    expect(await classifier.classify(issue, { bands: { P0: 30, P1: 20, P2: 10 } })).toMatchObject({ priority: "P2" });
+  });
+
+  it("makes a security-labelled issue P0 whatever it scores", async () => {
+    const { port } = runs({ answer: v2, usage });
+    const c = await createIssueClassifier({ runs: port, now: () => NOW }).classify({ ...issue, labels: ["Security"] });
+    expect(c?.priority).toBe("P0");
+  });
+});
+
 describe("a confident question", () => {
   const c = { kind: "question", kindConfidence: 0.96, area: "machine", ready: false, size: 0.2, confidence: 0.27, at: "", model: "m" };
-  it("is a question Jev is sure is a question: the kind's own confidence at or above the pack's floor (0.7)", () => {
+  it("is a question Jev is sure is a question: the kind's own confidence at or above the pack's floor (0.8, the diagram's kind bar)", () => {
     // Live, a real question came back kind question 1.00 but ready at 0.60 and area at 0.27: the
     // lowest confidence says nothing about whether it is a question.
     expect(confidentQuestion(c)).toBe(true);
-    expect(confidentQuestion({ ...c, kindConfidence: 0.7 })).toBe(true);
-    expect(confidentQuestion({ ...c, kindConfidence: 0.69 })).toBe(false);
+    expect(confidentQuestion({ ...c, kindConfidence: 0.8 })).toBe(true);
+    expect(confidentQuestion({ ...c, kindConfidence: 0.79 })).toBe(false);
     expect(confidentQuestion({ ...c, kind: "bug" })).toBe(false);
     expect(confidentQuestion(null)).toBe(false);
   });

@@ -9,8 +9,8 @@
     },
     {
       "kind": "equals",
-      "path": "area.choice",
-      "value": "board"
+      "path": "type_of_work.choice",
+      "value": "frontend"
     },
     {
       "kind": "equals",
@@ -18,22 +18,23 @@
       "value": true
     },
     {
-      "kind": "between",
-      "path": "size.score",
-      "min": 0,
-      "max": 1.5
+      "kind": "oneOf",
+      "path": "size.choice",
+      "values": [
+        "XS",
+        "S"
+      ]
     },
     {
       "kind": "between",
-      "path": "urgency.score",
-      "min": 1,
-      "max": 3
-    },
-    {
-      "kind": "between",
-      "path": "risk.score",
+      "path": "time.score",
       "min": 0.5,
       "max": 1.5
+    },
+    {
+      "kind": "equals",
+      "path": "risk_prelim.choice",
+      "value": "low"
     },
     {
       "kind": "equals",
@@ -41,5 +42,31 @@
       "value": false
     }
   ],
-  "rubric": "A bug in the board (a panic in the Rust TUI's PR view), with steps, actual and expected behaviour: ready for an agent. Small: one function and its test. High confidence on kind and area is right here. Urgent-ish: a crash someone hits, so normal to high, not low. Isolated Rust with a test: low risk. It is real work or a real question: not a duplicate, not stale, so the archive suggestion is no."
+  "rubric": "A bug in the board (a panic in the Rust TUI's PR view), with steps, actual and expected behaviour: ready for an agent. Frontend work (the TUI), extra small or small: one function and its test. Urgency this cycle: a crash someone hits, not whenever and not now. Isolated Rust with a test: low risk. It is real work or a real question: not a duplicate, not stale, so the archive suggestion is no.",
+  "label": {
+    "kind": {
+      "choice": "bug"
+    },
+    "type_of_work": {
+      "choice": "frontend"
+    },
+    "ready": {
+      "value": true
+    },
+    "size": {
+      "choice": [
+        "XS",
+        "S"
+      ]
+    },
+    "time": {
+      "score": 1
+    },
+    "risk_prelim": {
+      "choice": "low"
+    },
+    "archive": {
+      "value": false
+    }
+  }
 }

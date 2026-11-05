@@ -474,12 +474,20 @@ export const TaskClassification = z.object({
   kind: z.string(),
   /** How sure Jev is of the kind alone; what routing reads. Absent on classifications stored before it. */
   kindConfidence: z.number().min(0).max(1).optional(),
-  area: z.string(),
+  /** The part of the repo a v1 answer named; v2 answers say `typeOfWork` instead. */
+  area: z.string().optional(),
   ready: z.boolean(),
   size: z.number(),
   /** How soon (rubric score, 0 low to 3 urgent) and how risky (0 none to 3 high); absent on classifications stored before triage_signals asked. */
   urgency: z.number().optional(),
   risk: z.number().optional(),
+  // v2 (wave 9): what the diagram's signals read; a classification stored before has none of them.
+  typeOfWork: z.enum(["frontend", "backend", "infra", "data", "docs", "mixed"]).optional(),
+  sizeBucket: z.enum(["XS", "S", "M", "L", "XL"]).optional(),
+  /** The five urgency sub-scores, 1 to 3. */
+  subScores: z.object({ who: z.number(), what: z.number(), impact: z.number(), time: z.number(), demand: z.number() }).optional(),
+  priority: z.enum(["P0", "P1", "P2", "P3"]).optional(),
+  riskPrelim: z.enum(["low", "medium", "high"]).optional(),
   /** The archive suggestion and why (`none` when it should be worked). */
   archive: z.boolean().optional(),
   archiveReason: z.string().optional(),

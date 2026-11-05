@@ -304,6 +304,16 @@ describe("renderPrompt", () => {
     expect(render({ ...classification, signals: undefined })).toContain("signals: (none)");
   });
 
+  it("renders a v2 classification's signals: a size as its bucket, a sub-score as its rubric level, a flag under the pack's own bar", () => {
+    const signals = {
+      kind: { answer: "bug", confidence: 0.9 }, type_of_work: { answer: "backend", confidence: 0.8 }, size: { answer: "S", confidence: 0.5 },
+      who: { answer: 2, confidence: 0.75 }, time: { answer: 0, confidence: 0.6 }, risk_prelim: { answer: "low", confidence: 0.9 },
+    };
+    const classification = { kind: "bug", ready: true, size: 1, confidence: 0.5, at: "2026-11-03T12:00:00.000Z", model: "m", signals };
+    const text = renderPrompt({ pack: PACKS.triage, input: { ...input, pack: "triage", stage: "triage", task: { ...input.task, classification: classification as never } }, template: "signals: {{task.classification}}" });
+    expect(text).toContain("signals: kind bug (0.90) · type_of_work backend (0.80) · size S (0.50, flagged) · who everyone (0.75) · time whenever (0.60, flagged) · risk_prelim low (0.90)");
+  });
+
   it("renders the triage record for the planner: the goal, the four grades, the reason and the signals; (none) before triage ran", () => {
     const record = {
       source: "github", kind: "bug", goal: "Stop the board panicking on resize", size: "small", urgency: "high", risk: "low", reason: "one function, tests exist",

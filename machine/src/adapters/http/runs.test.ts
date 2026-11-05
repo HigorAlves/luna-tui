@@ -103,7 +103,7 @@ describe("POST /runs", () => {
   it("runs a decision pack on claude:haiku when its default engine is off, and accepts the engine by name", async () => {
     const credentials = gatedCredentials(fixedCredentials({}), [runtimeKillSwitch(["jev"])]);
     const issue = { title: "t", description: "d" };
-    const labels = { kind: { choice: "bug", confidence: 0.9 }, area: { choice: "board", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { score: 1, confidence: 0.7 }, urgency: { score: 1, confidence: 0.8 }, risk: { score: 1, confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
+    const labels = { kind: { choice: "bug", confidence: 0.9 }, type_of_work: { choice: "frontend", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { choice: "S", confidence: 0.7 }, who: { score: 1, confidence: 0.8 }, what: { score: 1, confidence: 0.8 }, impact: { score: 1, confidence: 0.8 }, time: { score: 1, confidence: 0.8 }, demand: { score: 0, confidence: 0.8 }, risk_prelim: { choice: "low", confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
     const fell = await post(appWith(output({ answer: labels }), { deps: { credentials } }), { pack: "triage_signals", context: { issue } });
     expect(fell.status).toBe(200);
     expect(((await fell.json()) as { usage: { engine: string } }).usage.engine).toBe("claude:haiku");

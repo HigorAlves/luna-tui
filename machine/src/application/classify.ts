@@ -2,7 +2,7 @@
 // call (the stage container, the Jev credential by name, a pack_runs row for its cost, the day's
 // ceiling). Without a Jev credential it says nothing and intake goes on exactly as before; any
 // other failure is logged once per issue and intake goes on as before. Never throws.
-import { type DecisionOverrides, type IssueContext, PACKS, type TaskClassification, classificationOf } from "@hardness/contracts";
+import { type ClassifyOptions, type DecisionOverrides, type IssueContext, PACKS, type TaskClassification, classificationOf } from "@hardness/contracts";
 
 import { type PackRunsPort, RunNoCredentialError } from "./pack-runs.ts";
 
@@ -10,8 +10,9 @@ import { type PackRunsPort, RunNoCredentialError } from "./pack-runs.ts";
 export const INTAKE_CLIENT = "intake";
 
 export interface IssueClassifier {
-  /** The classification of one issue, or null when there is none to have (no Jev credential, a failed run). */
-  classify(issue: IssueContext): Promise<TaskClassification | null>;
+  /** The classification of one issue, or null when there is none to have (no Jev credential, a failed run).
+   *  `options` are the repo's scoring weights and bands; a `security` label on the issue is a P0 flag either way. */
+  classify(issue: IssueContext, options?: ClassifyOptions): Promise<TaskClassification | null>;
 }
 
 /** Whether intake may act on a classification alone: Jev calls the issue a question and is at or
@@ -27,10 +28,11 @@ export function createIssueClassifier(deps: { runs: PackRunsPort; now?: () => Da
   const now = deps.now ?? (() => new Date());
   const log = deps.log ?? ((line: string) => console.warn(line));
   return {
-    async classify(issue) {
+    async classify(issue, options = {}) {
       try {
         const { answer, usage } = await deps.runs.run({ pack: "triage_signals", context: { issue } }, INTAKE_CLIENT);
-        return classificationOf(answer, usage.model, now());
+        const security = (issue.labels ?? []).some((label) => label.toLowerCase() === "security");
+        return classificationOf(answer, usage.model, now(), { ...options, flags: { ...(security ? { security: true } : {}), ...options.flags } });
       } catch (thrown) {
         if (!(thrown instanceof RunNoCredentialError)) log(`intake: could not classify ${issue.source ?? issue.title}: ${thrown instanceof Error ? thrown.message : String(thrown)}; going on without it`);
         return null;

@@ -171,7 +171,7 @@ describe("factory main (dry run)", () => {
     expect(existsSync(join(out, "prompt.md"))).toBe(false);
     expect(stdout).toContain("pack triage_signals as a decision");
     const request = JSON.parse(stdout.slice(stdout.indexOf("{"), stdout.lastIndexOf("}") + 1));
-    expect(request).toMatchObject({ model: resolveEngine("jev").modelId, state: issue, questions: { kind: { type: "choice" }, ready: { type: "noul" }, size: { type: "score" } } });
+    expect(request).toMatchObject({ model: resolveEngine("jev").modelId, state: issue, questions: { kind: { type: "choice" }, ready: { type: "noul" }, size: { type: "choice" }, who: { type: "score" } } });
     expect(StageOutput.safeParse(result).error).toBeUndefined();
     expect(result).toMatchObject({ schema: 3, ok: true, outcome: "pass", summary: "dry-run" });
   });

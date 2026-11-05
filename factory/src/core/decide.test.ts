@@ -13,8 +13,10 @@ describe("renderDecision", () => {
     expect(text).toContain("## kind (choice)");
     expect(text).toContain("- bug: Something that works, or should work, is broken");
     expect(text).toContain("## ready (yes or no)");
-    expect(text).toContain("## size (score)");
-    expect(text).toContain("- 0 tiny:");
+    expect(text).toContain("## size (choice)");
+    expect(text).toContain("- XS:");
+    expect(text).toContain("## who (score)");
+    expect(text).toContain("- 0 few:");
     expect(text).toMatch(/Answer only with the JSON object the schema asks for/);
     expect(text).toMatch(/confidence/);
   });
@@ -114,8 +116,8 @@ describe("a finding and an e2e check context", () => {
 
 describe("decisionSummary", () => {
   it("is one line per question with its confidence, and names the ones below the pack's bar", () => {
-    const answer = { kind: { choice: "bug", confidence: 0.91 }, area: { choice: "board", confidence: 0.62 }, ready: { value: true, p: 0.83 }, size: { score: 1.4, confidence: 0.75 } };
-    expect(decisionSummary(questions, answer, 0.7)).toBe("kind bug (0.91) · area board (0.62) · ready yes (p 0.83) · size 1.4 (0.75) · below 0.7: area");
+    const answer = { kind: { choice: "bug", confidence: 0.91 }, type_of_work: { choice: "backend", confidence: 0.62 }, ready: { value: true, p: 0.83 }, size: { choice: "S", confidence: 0.75 }, who: { score: 1.4, confidence: 0.65 } };
+    expect(decisionSummary(questions, answer, 0.7)).toBe("kind bug (0.91) · type_of_work backend (0.62) · ready yes (p 0.83) · size S (0.75) · who 1.4 (0.65) · below 0.7: type_of_work, who");
   });
 });
 

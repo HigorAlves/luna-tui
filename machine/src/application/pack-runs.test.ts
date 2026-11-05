@@ -138,7 +138,7 @@ describe("PackRuns", () => {
   });
 
   it("runs a decision pack on its fallback when the default engine has no credential", async () => {
-    const labels = { kind: { choice: "bug", confidence: 0.9 }, area: { choice: "board", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { score: 1, confidence: 0.7 }, urgency: { score: 1, confidence: 0.8 }, risk: { score: 1, confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
+    const labels = { kind: { choice: "bug", confidence: 0.9 }, type_of_work: { choice: "frontend", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { choice: "S", confidence: 0.7 }, who: { score: 1, confidence: 0.8 }, what: { score: 1, confidence: 0.8 }, impact: { score: 1, confidence: 0.8 }, time: { score: 1, confidence: 0.8 }, demand: { score: 0, confidence: 0.8 }, risk_prelim: { choice: "low", confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
     const issue = { title: "Board crashes on resize", description: "It panics." };
     const result = await runs(fakeSandbox(output({ answer: labels })), { credentials: credentials(["jev"]) }).run({ pack: "triage_signals", context: { issue } }, "intake");
     expect(result.usage.engine).toBe("claude:haiku");
@@ -156,7 +156,7 @@ describe("PackRuns", () => {
   it("runs the pack's default engine when none is asked for, and triage_signals and jira_intake with their own contexts", async () => {
     await runs(fakeSandbox(output())).run({ pack: "chat_triage", context: { chat } }, null);
     expect(StageInput.parse(seen[0]!.input).engine).toBe("claude:haiku");
-    const labels = { kind: { choice: "bug", confidence: 0.9 }, area: { choice: "board", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { score: 1, confidence: 0.7 }, urgency: { score: 1, confidence: 0.8 }, risk: { score: 1, confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
+    const labels = { kind: { choice: "bug", confidence: 0.9 }, type_of_work: { choice: "frontend", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { choice: "S", confidence: 0.7 }, who: { score: 1, confidence: 0.8 }, what: { score: 1, confidence: 0.8 }, impact: { score: 1, confidence: 0.8 }, time: { score: 1, confidence: 0.8 }, demand: { score: 0, confidence: 0.8 }, risk_prelim: { choice: "low", confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
     const classified = await runs(fakeSandbox(output({ answer: labels }))).run({ pack: "triage_signals", context: { issue: { title: "Board crashes on resize", description: "It panics." } } }, "notch");
     expect(classified.answer).toEqual(labels);
     expect(StageInput.parse(seen[1]!.input)).toMatchObject({ pack: "triage_signals", engine: "jev", context: { issue: { title: "Board crashes on resize" } } });

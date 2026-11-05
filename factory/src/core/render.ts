@@ -431,21 +431,33 @@ export function recordText(record: TriageRecord | null | undefined): string {
   ].join("\n");
 }
 
+/** The signals a task stored before triage_signals v2 (area, one urgency and risk score, a four-level size): still shown in their own words. */
+const V1_SIGNALS: Array<{ name: string; type: "choice" | "yesno" | "score"; levels?: string[]; proceed: number }> = [
+  { name: "kind", type: "choice", proceed: 0.7 }, { name: "area", type: "choice", proceed: 0.7 }, { name: "ready", type: "yesno", proceed: 0.7 },
+  { name: "size", type: "score", levels: ["tiny", "small", "medium", "large"], proceed: 0.7 },
+  { name: "urgency", type: "score", levels: ["low", "normal", "high", "urgent"], proceed: 0.7 },
+  { name: "risk", type: "score", levels: ["none", "low", "medium", "high"], proceed: 0.7 },
+  { name: "archive", type: "yesno", proceed: 0.9 }, { name: "archive_reason", type: "choice", proceed: 0.9 },
+];
+
 function signalsLine(signals: TaskClassification["signals"] | undefined): string {
   if (!signals) return NONE;
   const pack = PACKS.triage_signals;
+  const legacy = "area" in signals || "urgency" in signals;
+  const table = legacy
+    ? V1_SIGNALS
+    : Object.entries(pack.questions).map(([name, q]) => ({ name, type: q.type, levels: q.type === "score" ? Object.keys(q.rubric) : undefined, proceed: pack.policy[name]!.proceed }));
   const parts: string[] = [];
-  for (const [name, question] of Object.entries(pack.questions)) {
+  for (const { name, type, levels, proceed } of table) {
     const signal = signals[name];
     if (!signal) continue;
     const confidence = signal.confidence;
-    const flagged = verdictOf(confidence, pack.policy[name]!) === "proceed" ? "" : ", flagged";
+    const flagged = confidence >= proceed ? "" : ", flagged";
     const fixed = confidence.toFixed(2);
-    if (question.type === "yesno") {
+    if (type === "yesno") {
       const yes = signal.answer === true;
       parts.push(`${name} ${yes ? "yes" : "no"} (p ${(yes ? confidence : 1 - confidence).toFixed(2)}${flagged})`);
-    } else if (question.type === "score") {
-      const levels = Object.keys(question.rubric);
+    } else if (type === "score" && levels) {
       const level = levels[Math.min(levels.length - 1, Math.max(0, Math.round(Number(signal.answer))))];
       parts.push(`${name} ${level} (${fixed}${flagged})`);
     } else {

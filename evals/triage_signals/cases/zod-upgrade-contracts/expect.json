@@ -9,8 +9,8 @@
     },
     {
       "kind": "equals",
-      "path": "area.choice",
-      "value": "contracts"
+      "path": "type_of_work.choice",
+      "value": "backend"
     },
     {
       "kind": "equals",
@@ -18,22 +18,23 @@
       "value": true
     },
     {
-      "kind": "between",
-      "path": "size.score",
-      "min": 0.5,
-      "max": 2.5
+      "kind": "oneOf",
+      "path": "size.choice",
+      "values": [
+        "S",
+        "M"
+      ]
     },
     {
       "kind": "between",
-      "path": "urgency.score",
-      "min": 0,
-      "max": 1.5
+      "path": "time.score",
+      "min": -0.5,
+      "max": 0.5
     },
     {
-      "kind": "between",
-      "path": "risk.score",
-      "min": 1,
-      "max": 2.5
+      "kind": "equals",
+      "path": "risk_prelim.choice",
+      "value": "medium"
     },
     {
       "kind": "equals",
@@ -41,5 +42,31 @@
       "value": false
     }
   ],
-  "rubric": "A dependency upgrade with call-site updates and no behaviour change: a chore in contracts, ready (it states how to verify), small to medium. Calling it a feature or placing it in machine is wrong. Not urgent. The shared types every package imports: medium risk, not none and not auth-or-data high. It is real work or a real question: not a duplicate, not stale, so the archive suggestion is no."
+  "rubric": "A dependency upgrade with call-site updates and no behaviour change: a chore, ready (it states how to verify), small or medium. Calling it a feature is wrong. Not urgent: whenever. Backend work. The shared types every package imports: medium risk, not low and not high. It is real work or a real question: not a duplicate, not stale, so the archive suggestion is no.",
+  "label": {
+    "kind": {
+      "choice": "chore"
+    },
+    "type_of_work": {
+      "choice": "backend"
+    },
+    "ready": {
+      "value": true
+    },
+    "size": {
+      "choice": [
+        "S",
+        "M"
+      ]
+    },
+    "time": {
+      "score": 0
+    },
+    "risk_prelim": {
+      "choice": "medium"
+    },
+    "archive": {
+      "value": false
+    }
+  }
 }

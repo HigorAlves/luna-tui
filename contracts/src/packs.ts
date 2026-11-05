@@ -5,11 +5,13 @@
 // may give is one the machine ingests.
 import { z } from "zod";
 
+import { FACTORY_DEFAULTS } from "./config-v22.ts";
 import { decisionEngines } from "./decision-defaults.ts";
 import { type Access, type LunaTool, NO_ACCESS, access, readOnly } from "./access.ts";
 import type { EngineId } from "./engines.ts";
 import type { Effort } from "./models.ts";
 import { type DecisionPolicy, type QuestionSet, answerSchema, samePolicy } from "./questions.ts";
+import { type Bands, type KnockOutFlags, type SubScores, type Weights, knockOut, scorePriority } from "./scoring.ts";
 import { SlackCategory, SlackPriority } from "./slack.ts";
 import { CodeMapAnswer, EscalationReason, Finding, LunaConfig, PackId, Risk, Slice, type TaskClassification, TestCase, VerifyResult } from "./stage.ts";
 
@@ -389,7 +391,9 @@ const LEDGER_TOOLS: LunaTool[] = ["slice_init", "slice_set", "slice_list", "deci
 /** What the setup planner may run to learn a repo: version prints and listings, nothing that builds. */
 const PROBE_COMMANDS = ["which", "command -v", "find", "node", "npm", "pnpm", "yarn", "go", "cargo", "rustc", "python", "python3", "pip", "make", "docker", "git log", "git ls-files"];
 
-/** What triage_signals asks about an issue before intake turns it into a ticket. */
+/** What triage_signals asks about an issue (v2.2 panel 2): the kind, the type of work, a size on five levels, five urgency
+ *  sub-scores that `scorePriority` turns into P0 to P3, a preliminary risk and the archive suggestion. One call, one schema.
+ *  The goal reference is not asked: the machine reads it from the source. */
 const TRIAGE_SIGNALS: QuestionSet = {
   kind: {
     type: "choice",
@@ -397,37 +401,64 @@ const TRIAGE_SIGNALS: QuestionSet = {
     criteria: {
       bug: "Something that works, or should work, is broken",
       feature: "New behaviour a user or the pipeline can see",
+      task: "A defined piece of work with no new behaviour to design: a migration, a rename, a config change",
       chore: "Upkeep with no new behaviour: a refactor, dependencies, docs, CI",
       question: "It asks for an answer or a decision, not a change",
+      incident: "Production is down or wrong right now, data is lost, or a secret is exposed",
     },
   },
-  area: {
+  type_of_work: {
     type: "choice",
-    instructions: "Which part of the repository would the change touch most?",
+    instructions: "Which kind of engineering would the change be?",
     criteria: {
-      board: "The Rust TUI under board/: views, keys, rendering",
-      machine: "The Node service under machine/: tasks, stages, Postgres, the GitHub, Jira and Slack adapters",
-      factory: "The stage runner under factory/: roles, prompts, skills and runtimes",
-      contracts: "The shared types under contracts/: stage input and output, packs, engines",
-      site: "The website under site/",
+      frontend: "Screens, views, keys, rendering, styling",
+      backend: "Services, APIs, stages, persistence, adapters",
+      infra: "Deploys, CI, containers, cloud or runtime configuration",
+      data: "Schemas, migrations, backfills, pipelines, analytics",
+      docs: "Documentation or copy only",
+      mixed: "Two or more of the above in one change",
     },
   },
   ready: { type: "yesno", instructions: "Does the issue have testable acceptance criteria an agent could verify without asking anyone?" },
   size: {
-    type: "score",
+    type: "choice",
     instructions: "How much code would the change touch?",
-    rubric: {
-      tiny: "A line or two: a typo, a constant, a copy change",
-      small: "One function or one file, with its test",
-      medium: "Several files in one package",
-      large: "Several packages, or a new subsystem",
+    criteria: {
+      XS: "A line or two: a typo, a constant, a copy change",
+      S: "One function or one file, with its test",
+      M: "Several files in one package",
+      L: "Several packages, or a new subsystem",
+      XL: "A cross-cutting change that should be split before anyone builds it",
     },
   },
-  urgency: { type: "score", instructions: "How soon does this need to land?", rubric: { low: "Whenever: no one is waiting", normal: "This cycle", high: "This week: someone is blocked", urgent: "Now: production is wrong or a deadline is today" } },
-  risk: { type: "score", instructions: "How much could the change break?", rubric: { none: "Docs or copy", low: "Isolated code with tests", medium: "Shared code other features depend on", high: "Auth, payments, data migrations, deletion, CI or infrastructure" } },
+  who: { type: "score", instructions: "Who is affected?", rubric: { few: "One person, or an internal tool", team: "A team or one customer segment", everyone: "Every user, or the customers who pay" } },
+  what: { type: "score", instructions: "What is at stake for them?", rubric: { rough_edge: "A rough edge: a workaround exists", broken: "A feature is broken or slow with no easy workaround", critical: "A core flow is down, or data or money is wrong" } },
+  impact: { type: "score", instructions: "What does it cost the product or the business if it stays as it is?", rubric: { minor: "Little beyond annoyance", notable: "Support load, lost time, or a slipping commitment", major: "Revenue, a launch, a contract or trust" } },
+  time: { type: "score", instructions: "How soon does it need to land?", rubric: { whenever: "No one is waiting", this_cycle: "This cycle", now: "Now: a deadline within days, or production is wrong" } },
+  demand: { type: "score", instructions: "How many people are asking?", rubric: { one: "One person", few: "A few", many: "Many, or a customer escalation" } },
+  risk_prelim: {
+    type: "choice",
+    instructions: "How much could the change break?",
+    criteria: {
+      low: "Isolated code with tests, docs or copy",
+      medium: "Shared code other features depend on",
+      high: "Auth, payments, data migrations, deletion, CI or infrastructure",
+    },
+  },
   archive: { type: "yesno", instructions: "Should this be archived instead of worked: a duplicate, out of scope, stale, or nothing an agent can act on?" },
   archive_reason: { type: "choice", instructions: "If it should be archived, why; else none.", criteria: { none: "It should be worked", duplicate: "Another open ticket asks for the same", out_of_scope: "Not this repository's or team's to do", stale: "Overtaken by events; nobody needs it now", not_actionable: "No change an agent could make or verify" } },
 };
+
+/** The bars of triage_signals, each question's from the diagram's confidence config and the flag band under it. */
+function triagePolicy(config: typeof FACTORY_DEFAULTS.triage): DecisionPolicy {
+  const bar = (proceed: number) => ({ proceed, flag: Math.round((proceed - config.flag_band) * 100) / 100 });
+  const { kind, size, urgency, risk, archive } = config.confidence;
+  return {
+    kind: bar(kind), type_of_work: bar(urgency), ready: bar(urgency), size: bar(size),
+    who: bar(urgency), what: bar(urgency), impact: bar(urgency), time: bar(urgency), demand: bar(urgency),
+    risk_prelim: bar(risk), archive: bar(archive), archive_reason: bar(archive),
+  };
+}
 
 /** What risk_score asks about a plan: three scores that riskLevelOf adds up. */
 const RISK_QUESTIONS: QuestionSet = {
@@ -1000,8 +1031,8 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
     // calls it yet; a caller acts on answers at or above `policy` and takes the agent path below.
     kind: "decision",
     questions: TRIAGE_SIGNALS,
-    // Archiving a ticket by machine wants a higher bar than labelling it.
-    policy: { ...samePolicy(TRIAGE_SIGNALS, { proceed: 0.7, flag: 0.5 }), archive: { proceed: 0.9, flag: 0.7 } },
+    // Archiving a ticket by machine wants a higher bar than labelling it; a repo's luna.yaml `triage.confidence` and `policy.decisions` move these.
+    policy: triagePolicy(FACTORY_DEFAULTS.triage),
     writable: false,
     maxTurns: 1,
     timeoutMs: 1 * MINUTE,
@@ -1033,14 +1064,61 @@ export const PACKS: Record<Exclude<PackId, DecisionPackId>, AgentPack> & Record<
 type Choice = { choice: string; confidence: number };
 type Score = { score: number; confidence: number };
 type YesNo = { value: boolean; p: number };
-type IssueAnswer = { kind: Choice; area: Choice; ready: YesNo; size: Score; urgency: Score; risk: Score; archive: YesNo; archive_reason: Choice };
+type IssueAnswerV1 = { kind: Choice; area: Choice; ready: YesNo; size: Score; urgency: Score; risk: Score; archive: YesNo; archive_reason: Choice };
+type IssueAnswerV2 = { kind: Choice; type_of_work: Choice; ready: YesNo; size: Choice; who: Score; what: Score; impact: Score; time: Score; demand: Score; risk_prelim: Choice; archive: YesNo; archive_reason: Choice };
+
+const SUB_SCORES = ["who", "what", "impact", "time", "demand"] as const;
+const SIZE_BUCKETS = ["XS", "S", "M", "L", "XL"] as const;
+
+/** What the machine adds to read a v2 answer: the repo's weights and bands, and the flags a source carries (a security label). */
+export interface ClassifyOptions {
+  weights?: Weights;
+  bands?: Bands;
+  flags?: KnockOutFlags;
+}
+
+const yn = (a: YesNo) => Math.max(a.p, 1 - a.p);
 
 /** triage_signals's validated answer as a task keeps it: the picks, every answer's own confidence
  *  under `signals`, and the least sure answer's confidence (a yes/no's is its distance from a
- *  coin toss: max(p, 1 - p)). */
-export function classificationOf(answer: Record<string, unknown>, model: string, at: Date): TaskClassification {
-  const { kind, area, ready, size, urgency, risk, archive, archive_reason } = answer as IssueAnswer;
-  const yn = (a: YesNo) => Math.max(a.p, 1 - a.p);
+ *  coin toss: max(p, 1 - p)). Reads both shapes: a stored v1 answer (`area`, one `urgency` score) and a v2 one,
+ *  whose five sub-scores become a priority through `scorePriority` (a knock-out first: an incident or a flag is P0). */
+export function classificationOf(answer: Record<string, unknown>, model: string, at: Date, options: ClassifyOptions = {}): TaskClassification {
+  return "type_of_work" in answer ? classificationV2(answer as unknown as IssueAnswerV2, model, at, options) : classificationV1(answer as unknown as IssueAnswerV1, model, at);
+}
+
+function classificationV2(answer: IssueAnswerV2, model: string, at: Date, options: ClassifyOptions): TaskClassification {
+  const { kind, type_of_work, ready, size, risk_prelim, archive, archive_reason } = answer;
+  const confidences = [kind.confidence, type_of_work.confidence, yn(ready), size.confidence, ...SUB_SCORES.map((k) => answer[k].confidence), risk_prelim.confidence, yn(archive), archive_reason.confidence];
+  // An answer's score runs 0 to 2 over the rubric; the scoring model's run 1 to 3.
+  const subScores = Object.fromEntries(SUB_SCORES.map((k) => [k, answer[k].score + 1])) as SubScores;
+  const scored = scorePriority(subScores, {
+    ...(options.weights ? { weights: options.weights } : {}),
+    ...(options.bands ? { bands: options.bands } : {}),
+    confidences: Object.fromEntries(SUB_SCORES.map((k) => [k, answer[k].confidence])),
+  });
+  const knocked = knockOut({ ...options.flags, ...(kind.choice === "incident" ? { incident: true } : {}) });
+  const signals: Record<string, { answer: string | number | boolean; confidence: number }> = {
+    kind: { answer: kind.choice, confidence: kind.confidence },
+    type_of_work: { answer: type_of_work.choice, confidence: type_of_work.confidence },
+    ready: { answer: ready.value, confidence: yn(ready) },
+    size: { answer: size.choice, confidence: size.confidence },
+    ...Object.fromEntries(SUB_SCORES.map((k) => [k, { answer: answer[k].score, confidence: answer[k].confidence }])),
+    risk_prelim: { answer: risk_prelim.choice, confidence: risk_prelim.confidence },
+    archive: { answer: archive.value, confidence: yn(archive) },
+    archive_reason: { answer: archive_reason.choice, confidence: archive_reason.confidence },
+  };
+  const bucket = SIZE_BUCKETS.find((b) => b === size.choice) ?? "M";
+  return {
+    kind: kind.choice, kindConfidence: kind.confidence, ready: ready.value, size: SIZE_BUCKETS.indexOf(bucket),
+    typeOfWork: type_of_work.choice as NonNullable<TaskClassification["typeOfWork"]>, sizeBucket: bucket, subScores,
+    priority: knocked?.action === "p0" ? "P0" : scored.priority, riskPrelim: risk_prelim.choice as NonNullable<TaskClassification["riskPrelim"]>,
+    archive: archive.value, archiveReason: archive_reason.choice, confidence: Math.min(...confidences), at: at.toISOString(), model, signals,
+  };
+}
+
+function classificationV1(answer: IssueAnswerV1, model: string, at: Date): TaskClassification {
+  const { kind, area, ready, size, urgency, risk, archive, archive_reason } = answer;
   const confidence = Math.min(kind.confidence, area.confidence, yn(ready), size.confidence, urgency.confidence, risk.confidence, yn(archive), archive_reason.confidence);
   const signals = {
     kind: { answer: kind.choice, confidence: kind.confidence },
@@ -1059,21 +1137,23 @@ export function classificationOf(answer: Record<string, unknown>, model: string,
   };
 }
 
-const levelOf = (question: QuestionSet[string], score: number): string => {
-  const labels = Object.keys((question as { rubric: Record<string, string> }).rubric);
-  return labels[Math.min(labels.length - 1, Math.max(0, Math.round(score)))]!;
-};
+// The labels a v1 answer's scores were read against, kept so a classification stored before v2 still reads in words.
+const V1_SIZE = ["tiny", "small", "medium", "large"];
+const V1_URGENCY = ["low", "normal", "high", "urgent"];
+const V1_RISK = ["none", "low", "medium", "high"];
+const levelOf = (labels: string[], score: number): string => labels[Math.min(labels.length - 1, Math.max(0, Math.round(score)))]!;
 
 /** A classification in one line, for an issue comment, a log or a prompt:
- *  `question · machine · not ready · size tiny · lowest confidence 0.85 (typesafe-ai/jev)`,
- *  with ` · urgency <label> · risk <label>` when it has them and ` · archive? <reason>` when it suggests archiving. */
+ *  v1 `question · machine · not ready · size tiny · lowest confidence 0.85 (jev) · urgency normal · risk low`,
+ *  v2 `bug · backend · ready · size S · P2 · risk low · lowest confidence 0.70 (claude:haiku)`,
+ *  each with ` · archive? <reason>` when it suggests archiving. */
 export function classificationLine(c: TaskClassification): string {
-  const extra = [
-    c.urgency !== undefined ? ` · urgency ${levelOf(TRIAGE_SIGNALS.urgency!, c.urgency)}` : "",
-    c.risk !== undefined ? ` · risk ${levelOf(TRIAGE_SIGNALS.risk!, c.risk)}` : "",
-    c.archive ? ` · archive? ${c.archiveReason ?? "yes"}` : "",
-  ].join("");
-  return `${c.kind} · ${c.area} · ${c.ready ? "ready" : "not ready"} · size ${levelOf(TRIAGE_SIGNALS.size!, c.size)} · lowest confidence ${c.confidence.toFixed(2)} (${c.model})${extra}`;
+  const archive = c.archive ? ` · archive? ${c.archiveReason ?? "yes"}` : "";
+  if (c.sizeBucket) {
+    return `${c.kind} · ${c.typeOfWork ?? "mixed"} · ${c.ready ? "ready" : "not ready"} · size ${c.sizeBucket}${c.priority ? ` · ${c.priority}` : ""}${c.riskPrelim ? ` · risk ${c.riskPrelim}` : ""} · lowest confidence ${c.confidence.toFixed(2)} (${c.model})${archive}`;
+  }
+  const extra = [c.urgency !== undefined ? ` · urgency ${levelOf(V1_URGENCY, c.urgency)}` : "", c.risk !== undefined ? ` · risk ${levelOf(V1_RISK, c.risk)}` : "", archive].join("");
+  return `${c.kind} · ${c.area ?? c.typeOfWork ?? "unknown"} · ${c.ready ? "ready" : "not ready"} · size ${levelOf(V1_SIZE, c.size)} · lowest confidence ${c.confidence.toFixed(2)} (${c.model})${extra}`;
 }
 
 /** A helper as the pack its child run is: the helper's role on its engine, the parent's access

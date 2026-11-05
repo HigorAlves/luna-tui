@@ -10,11 +10,15 @@ export const CAPS_NO_TOOLS = { tools: false, text: false, delegate: false } sati
 
 const ANSWER = {
   kind: { choice: "bug", confidence: 0.91 },
-  area: { choice: "board", confidence: 0.62 },
+  type_of_work: { choice: "backend", confidence: 0.55 },
   ready: { value: true, p: 0.83 },
-  size: { score: 1.4, confidence: 0.75 },
-  urgency: { score: 1, confidence: 0.7 },
-  risk: { score: 0.5, confidence: 0.8 },
+  size: { choice: "S", confidence: 0.75 },
+  who: { score: 1, confidence: 0.7 },
+  what: { score: 1, confidence: 0.7 },
+  impact: { score: 1, confidence: 0.7 },
+  time: { score: 0, confidence: 0.8 },
+  demand: { score: 0, confidence: 0.8 },
+  risk_prelim: { choice: "low", confidence: 0.8 },
   archive: { value: false, p: 0.05 },
   archive_reason: { choice: "none", confidence: 0.9 },
 };
