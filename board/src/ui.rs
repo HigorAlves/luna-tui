@@ -968,7 +968,10 @@ pub(crate) fn describe(event: &TaskEvent) -> String {
         "jira.moved" => format!("jira moved to {}", s("status")),
         other => other.to_string(),
     };
-    format!("{time}  {what}")
+    match event.names.first() {
+        Some(name) => format!("{time}  {name} · {what}"),
+        None => format!("{time}  {what}"),
+    }
 }
 
 /// Popup asking to confirm a delete or an abort.
@@ -2592,8 +2595,21 @@ mod tests {
             kind: "stage.note".into(),
             payload: serde_json::json!({"stage": "triage", "note": "waiting for the Codex login"}),
             at: "2026-11-03T10:11:12.000Z".into(),
+            names: vec![],
         };
         assert_eq!(describe(&event), "10:11:12  triage: waiting for the Codex login");
+    }
+
+    #[test]
+    fn an_event_with_a_diagram_name_shows_the_first_name_and_one_without_is_unchanged() {
+        let named: TaskEvent = serde_json::from_str(
+            r#"{"id":"1","taskId":"t1","kind":"task.shipped","payload":{},"at":"2026-11-03T10:11:12.000Z","names":["ship.merged","card.closed"]}"#,
+        )
+        .unwrap();
+        assert_eq!(describe(&named), "10:11:12  ship.merged · task.shipped");
+        let old: TaskEvent = serde_json::from_str(r#"{"id":"1","taskId":"t1","kind":"task.created","payload":{},"at":"2026-11-03T10:11:12.000Z"}"#).unwrap();
+        assert!(old.names.is_empty());
+        assert_eq!(describe(&old), "10:11:12  created");
     }
 
     #[test]

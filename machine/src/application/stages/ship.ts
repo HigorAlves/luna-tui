@@ -104,6 +104,7 @@ export function shipRunnerWith(deps: ShipDeps): StageRunner {
         const sha = (await headOf(cwd)).trim();
         await saveCursor(deps.stateDir, task.id, { ...(cursor ?? emptyCursor({ slug, number: pr.number })), pr: { slug, number: pr.number }, published: { sha } });
       }
+      if ("published" in phase && !already) await context.emit?.("evidence.published", {}).catch(() => {});
       const shown = "published" in phase ? { published: phase.published, ...(phase.note ? { note: phase.note } : {}) } : deps.evidence ? { evidence: "none" } : {};
       if (existing?.isDraft) await deps.github.markPrReady(slug, existing.number);
       const detail = { prUrl: pr.url, readied: existing?.isDraft === true, ...shown };

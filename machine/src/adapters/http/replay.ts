@@ -9,8 +9,9 @@
 // pass only for a task of that source, looked up once and kept: from the snapshots the bus and
 // the replay carry, else from Postgres, and forgotten when the task is deleted. A task's source
 // never changes after it is made (PATCH refuses it), so what is kept stays true. Those messages
-// go out in the order they came, a lookup holding back the ones behind it.
-import type { StreamMessage, Task } from "@hardness/contracts";
+// go out in the order they came, a lookup holding back the ones behind it. With `names`, a `task.event`
+// passes only when it carries one of those diagram names (`TaskEvent.names`, set where a row becomes a stream event).
+import type { CardEventName, StreamMessage, Task } from "@hardness/contracts";
 
 import type { TaskChange } from "../../application/task-store.ts";
 import type { TaskRow } from "../../domain/task.ts";
@@ -57,6 +58,7 @@ export class ReplayFeed {
     private readonly deps: ReplayDeps,
     since: number | null,
     private readonly sourceKind: string | null,
+    private readonly names: ReadonlySet<CardEventName> | null = null,
   ) {
     this.cursor = since;
   }
@@ -69,6 +71,7 @@ export class ReplayFeed {
       if (this.cursor === null || message.seq > this.cursor) this.read().catch((error: unknown) => console.error("event replay read failed", error));
       return;
     }
+    if (this.names && message.type === "task.event" && !message.event.names?.some((n) => this.names!.has(n))) return;
     const id = taskOf(message);
     if (this.sourceKind === null || id === null) {
       void this.deps.write(message);

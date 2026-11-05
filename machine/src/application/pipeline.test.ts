@@ -2394,3 +2394,31 @@ describe("the Build Report and the Verify Report ride on the finishes", () => {
     expect(await pipeline.reports((await newTask()).id)).toEqual({ build: null, verify: null });
   });
 });
+
+describe("the rows the diagram names that had none", () => {
+  const kinds = async (id: string) => (await pipeline.events(id)).map((e) => e.kind);
+
+  it("logs verify.findings, ci.status and evidence.media_ready once, with counts only, beside the finishes", async () => {
+    stubs.plan("verifying", { outcome: "pass", detail: { findings: [{ path: "a", line: 1, severity: "bug", title: "free text", body: "more free text", confidence: 1 }] } });
+    stubs.plan("ci_watch", { outcome: "pass", detail: { checks: [{ name: "a", state: "SUCCESS" }, { name: "b", state: "FAILURE" }] } });
+    stubs.plan("evidence", { outcome: "pass", detail: { artifactCount: 2 } });
+    const task = await newTask();
+    await startAndApprove(task.id);
+    const events = await pipeline.events(task.id);
+    const row = (kind: string) => events.filter((e) => e.kind === kind);
+    expect(row("verify.findings").map((e) => e.payload)).toEqual([{ count: 1, blockers: 1, shouldFix: 0, nits: 0 }]);
+    expect(row("ci.status").map((e) => e.payload)).toEqual([{ state: "red", total: 2, failed: 1 }]);
+    expect(row("evidence.media_ready").map((e) => e.payload)).toEqual([{ count: 2 }]);
+    expect(JSON.stringify(row("verify.findings"))).not.toContain("free text");
+  });
+
+  it("logs card.fast_lane when triage chose the fast lane, and nothing for the plan route", async () => {
+    const plain = await newTask();
+    await pipeline.start(plain.id);
+    expect(await kinds(plain.id)).not.toContain("card.fast_lane");
+    stubs.plan("triage", { outcome: "pass", detail: { outcome: "fast_lane" } });
+    const fast = await newTask();
+    await pipeline.start(fast.id);
+    expect((await kinds(fast.id)).filter((k) => k === "card.fast_lane")).toHaveLength(1);
+  });
+});

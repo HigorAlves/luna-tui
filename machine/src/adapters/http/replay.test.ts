@@ -269,3 +269,27 @@ describe("GET /events?since=", () => {
     expect((await app().request("/events?source=fax")).status).toBe(400);
   });
 });
+
+describe("GET /events?names=", () => {
+  const publish = (taskId: string, kind: string, payload: Record<string, unknown> = {}) =>
+    bus.publish({ type: "task.event", event: toEvent({ id: "1", taskId, stageRunId: null, kind, payload, at: new Date() }) });
+
+  it("passes only the task events that carry one of the names", async () => {
+    const task = await newTask("a");
+    const messages = listen("/events?names=card.created,ship.merged");
+    await until(() => ready(messages), "ready");
+    publish(task.id, "task.created", { title: "again" });
+    publish(task.id, "jira.moved", { to: "Done" });
+    publish(task.id, "task.shipped", { number: 3 });
+    publish(task.id, "transition", { event: "stage_done", from: "triage", to: "test_design" });
+    await until(() => messages.filter((m) => m.event === "task.event").length >= 2, "the named events");
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    // card.created and ship.merged pass; the Jira move and the unnamed transition do not.
+    expect(messages.filter((m) => m.event === "task.event")).toHaveLength(2);
+  });
+
+  it("refuses a name the diagram does not have (400)", async () => {
+    const response = await app().request("/events?names=ship.merged,ship.mrged");
+    expect(response.status).toBe(400);
+  });
+});

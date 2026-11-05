@@ -25,6 +25,7 @@ import { type CloseDeps, closeTask } from "./close-task.ts";
 import type { StageResult, StageRunner } from "./ports.ts";
 import { shippedEvent } from "./ship-loop.ts";
 import { buildReportOf, verifyReportOf } from "./reports.ts";
+import { stageFactRows } from "./stage-facts.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
@@ -1194,6 +1195,8 @@ export class Pipeline {
         await this.store.updateTask(id, { worktreePath: null });
       }
       await this.log(id, "task.closed", { ...report });
+      // The memory review's rules were written: the card learned something.
+      if (report.steps.some((step) => step.step === "rules" && step.ok && !step.note.startsWith("skipped"))) await this.log(id, "card.learned", {});
     } catch (error) {
       console.error(`could not close task ${id}`, error);
     }
@@ -1666,6 +1669,7 @@ export class Pipeline {
           return this.store.markStageRunStarted(runId, { containerId: facts.container, inputCommit: facts.inputCommit, ...(facts.engine ? { engine: facts.engine } : {}) });
         },
         note: (text) => this.log(id, "stage.note", { stage, note: text }, runId),
+        emit: (kind, payload) => this.log(id, kind, payload, runId),
         traceEnv: span.childEnv(),
       });
     } catch (thrown) {
@@ -1743,6 +1747,8 @@ export class Pipeline {
       },
       runId,
     );
+    // Facts the run knew that had no row of their own: logged once, beside the finish, under the diagram's name.
+    for (const fact of stageFactRows(stage, status, result)) await this.log(id, fact.kind, fact.payload, runId);
     return result;
   }
 

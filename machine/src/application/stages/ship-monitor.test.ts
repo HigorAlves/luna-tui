@@ -60,6 +60,7 @@ function setup(
   let clock = START.getTime();
   const slept: number[] = [];
   const notes: string[] = [];
+  const emitted: Array<[string, Record<string, unknown>]> = [];
   const deps: ShipMonitorDeps = {
     github,
     policies: { for: async () => ({ ...DEFAULT_POLICY, ...over.policy }) },
@@ -82,8 +83,9 @@ function setup(
     approvals: over.approvals ?? [],
     signal: (over.abort ?? new AbortController()).signal,
     note: async (text: string) => void notes.push(text),
+    emit: async (kind: string, payload: Record<string, unknown>) => void emitted.push([kind, payload]),
   } as unknown as StageContext;
-  return { run: () => shipMonitor(deps)(context, REF), github, slept, notes, advance: (ms: number) => void (clock += ms) };
+  return { run: () => shipMonitor(deps)(context, REF), github, slept, notes, emitted, advance: (ms: number) => void (clock += ms) };
 }
 
 /** A fake whose only answers are the ones the default CODEOWNERS reader and a one-poll merge need. */
@@ -110,6 +112,19 @@ describe("the ship monitor", () => {
     expect(calls(github, "mergePr")).toEqual([]);
     expect(slept).toEqual([60_000, 60_000]);
     expect(notes.filter((n) => /auto-merge/.test(n))).toHaveLength(1);
+  });
+
+  it("says ship.ready once, the first poll readiness is true, and ship.approval_needed when a person has to merge", async () => {
+    let polls = 0;
+    const { run, emitted } = setup({ prMerged: async () => (++polls < 3 ? open : merged) });
+    await run();
+    expect(emitted).toEqual([["ship.ready", {}], ["ship.approval_needed", {}]]);
+  });
+
+  it("says neither when the machine merges at once", async () => {
+    const { run, emitted } = setup({}, { policy: { autoMerge: "low" } });
+    await run();
+    expect(emitted.map(([kind]) => kind)).toEqual(["ship.ready"]);
   });
 
   it("calls a merge that followed its own request the machine's, even when seen on a later poll (a merge queue)", async () => {
@@ -318,7 +333,7 @@ describe("the review loop", () => {
     let polls = 0;
     const decide = vi.fn(async (pack: string, _ship: unknown, _repo: unknown) => (pack === "event_class" ? { event: { choice: "comment", confidence: 0.95 } } : { intent: { choice: "question", confidence: 0.9 } }));
     const runPack = vi.fn(async (_pack: string, _context: unknown, _extra: unknown) => ({ outcome: "pass" as const, detail: { answer: { reply, resolves: false, confidence: 0.9 } } }));
-    const { run, github } = setup(
+    const { run, github, emitted } = setup(
       {
         viewer: async () => ({ login: "me", teams: [] }),
         prMerged: async () => (++polls < 3 ? open : merged),
@@ -336,6 +351,8 @@ describe("the review loop", () => {
     expect(runPack.mock.calls[0]![2]).toMatchObject({ kind: "comment", comment: { thread, pack: { summary: "s", howToVerify: "h" }, myReplies: 0 } });
     expect(calls(github, "replyToThread")).toEqual([["replyToThread", "T1", reply]]);
     expect(calls(github, "resolveThread")).toEqual([]);
+    // One row for the classified item: its kind and class, never the reviewer's words.
+    expect(emitted.filter(([kind]) => kind === "ship.event")).toEqual([["ship.event", { kind: "review_comment", class: "comment" }]]);
   });
 });
 

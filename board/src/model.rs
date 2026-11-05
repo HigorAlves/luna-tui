@@ -601,6 +601,9 @@ pub struct TaskEvent {
     pub kind: String,
     pub payload: Value,
     pub at: String,
+    /// The v2.2 diagram's name(s) for the fact this row records; empty for a row it has no name for.
+    #[serde(default)]
+    pub names: Vec<String>,
 }
 
 #[derive(Deserialize, Clone, Debug)]

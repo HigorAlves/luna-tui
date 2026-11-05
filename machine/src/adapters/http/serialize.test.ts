@@ -44,3 +44,13 @@ describe("toTask", () => {
     expect(toTask({ ...row(), seq: "9007199254740" }).seq).toBe(9007199254740);
   });
 });
+
+describe("toEvent names", () => {
+  const row = (kind: string, payload: Record<string, unknown>) => ({ id: "5", taskId: "t", stageRunId: null, kind, payload, at: new Date("2026-11-05T00:00:00Z") });
+
+  it("sets the diagram's names on a row that has one, and leaves a row the diagram has no name for exactly as it was", async () => {
+    const { toEvent } = await import("./serialize.ts");
+    expect(toEvent(row("task.shipped", { number: 1 }))).toEqual({ id: "5", taskId: "t", kind: "task.shipped", payload: { number: 1 }, at: "2026-11-05T00:00:00.000Z", names: ["ship.merged"] });
+    expect(toEvent(row("stage.note", { note: "x" }))).toEqual({ id: "5", taskId: "t", kind: "stage.note", payload: { note: "x" }, at: "2026-11-05T00:00:00.000Z" });
+  });
+});

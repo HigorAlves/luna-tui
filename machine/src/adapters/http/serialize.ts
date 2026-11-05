@@ -11,6 +11,7 @@ import {
   WAITING_ON_USER,
 } from "@hardness/contracts";
 
+import { namesOf } from "../../domain/card-events.ts";
 import { jiraOf } from "../../domain/jira-link.ts";
 import type { ApprovalRow, ArtifactRow, EventRow, StageRunRow, TaskRow } from "../../domain/task.ts";
 
@@ -88,13 +89,18 @@ export const toApproval = (row: ApprovalRow): Approval => ({
   decidedAt: iso(row.decidedAt),
 });
 
-export const toEvent = (row: EventRow): TaskEvent => ({
-  id: String(row.id),
-  taskId: row.taskId,
-  kind: row.kind,
-  payload: row.payload,
-  at: row.at.toISOString(),
-});
+/** A logged row as a stream event, with the diagram's name(s) for the fact it records when it has one. */
+export const toEvent = (row: EventRow): TaskEvent => {
+  const names = namesOf(row);
+  return {
+    id: String(row.id),
+    taskId: row.taskId,
+    kind: row.kind,
+    payload: row.payload,
+    at: row.at.toISOString(),
+    ...(names.length > 0 ? { names } : {}),
+  };
+};
 
 export const toArtifact = (row: ArtifactRow): Artifact => ({
   id: row.id,

@@ -250,6 +250,8 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       const cls = await judgeShip(fixDeps(), "event_class", event, task.repoPath);
       if (cls.ok && cls.recordId && (cls.choice === "noise" || cls.choice === "comment")) cursor.decisions = [...(cursor.decisions ?? []), { pack: "event_class", recordId: cls.recordId, choice: cls.choice }];
       if (!cls.ok) return { result: escalated(`a review event needs a person (${cls.reason}): ${label}`) };
+      // One row per classified item, by its kind and class (enum values, never the reviewer's words).
+      await context.emit?.("ship.event", { kind: a.kind, class: ["noise", "approval", "changes_requested", "push", "comment"].includes(cls.choice) ? cls.choice : "other" }).catch(() => {});
       switch (cls.choice) {
         case "noise":
           return {};
@@ -437,6 +439,10 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
             }
           }
 
+          if (readiness.ready && !cursor.readyNoted) {
+            cursor.readyNoted = true;
+            await context.emit?.("ship.ready", {}).catch(() => {});
+          }
           if (moved || handled) {
             // The head moved this poll: what was judged ready is not what is there now. The next poll reads it again.
           } else if (cursor.queued) {
@@ -471,6 +477,8 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
             }
           } else if (cursor.lastBlockers !== readiness.reason) {
             cursor.lastBlockers = readiness.reason;
+            // Ready, but not for the machine to merge: a person has to.
+            await context.emit?.("ship.approval_needed", {}).catch(() => {});
             await note(readiness.reason);
           }
           await saveCursor(deps.stateDir, task.id, cursor);

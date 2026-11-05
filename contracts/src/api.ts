@@ -10,6 +10,7 @@ import type { AgentPack, AgentRole, Pack } from "./packs.ts";
 import { type CredentialOwner, EngineId } from "./engines.ts";
 import type { ModelEntry, RuntimeId } from "./models.ts";
 import { CardEntryFields } from "./card.ts";
+import type { CardEventName } from "./card-events.ts";
 import type { TaskReports } from "./reports.ts";
 import { type ArtifactKind, PackId, StageEngines, StageOutcome, type TaskClassification, type TaskRoute, TaskSource, TestCase, ArchiveReason, type EvidencePack, type TriageRecord } from "./stage.ts";
 
@@ -291,6 +292,8 @@ export interface TaskEvent {
   kind: string;
   payload: Record<string, unknown>;
   at: string;
+  /** The v2.2 diagram's name(s) for the fact this row records; absent for a row the diagram has no name for. */
+  names?: CardEventName[];
 }
 
 /** `GET /engines`: one row per engine, and whether this machine can run it. Never a credential's value. */

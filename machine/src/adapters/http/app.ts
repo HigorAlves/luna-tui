@@ -19,6 +19,8 @@ import {
   type MetricsGroupBy,
   type TaskDiff,
   type TaskSla,
+  CARD_EVENT_NAMES,
+  CardEventName,
   NewTaskInput,
   PACKS,
   PackId,
@@ -501,6 +503,9 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
   app.get("/events", (c) => {
     const since = c.req.query("since");
     const source = c.req.query("source") ?? null;
+    const wanted = c.req.query("names");
+    const names = wanted === undefined ? null : new Set(wanted.split(",").map((n) => n.trim()).filter((n) => n !== ""));
+    for (const n of names ?? []) if (!CardEventName.safeParse(n).success) throw new BadRequest(`names must be diagram event names (${CARD_EVENT_NAMES.join(", ")}), got "${n.slice(0, 40)}"`);
     if (since !== undefined && !/^\d+$/.test(since)) throw new BadRequest(`since must be a sequence number, got "${since}"`);
     if (source !== null && !SOURCE_KINDS.includes(source)) throw new BadRequest(`source must be one of ${SOURCE_KINDS.join(", ")}, got "${source}"`);
     return streamSSE(c, async (stream) => {
@@ -517,7 +522,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
         sourceOf: (taskId: string) => pipeline.get(taskId).then((task) => task.source?.kind ?? null, () => null),
         write,
       };
-      const feed = since === undefined && source === null ? null : new ReplayFeed(deps, since === undefined ? null : Number(since), source);
+      const feed = since === undefined && source === null && names === null ? null : new ReplayFeed(deps, since === undefined ? null : Number(since), source, names as ReadonlySet<CardEventName> | null);
       unsubscribe = bus.subscribe((message) => (feed ? feed.offer(message) : void write(message)));
       stream.onAbort(unsubscribe);
 

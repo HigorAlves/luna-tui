@@ -32,6 +32,8 @@ export interface StageContext {
   started?: (facts: { container: string; inputCommit: string | null; engine?: EngineId }) => Promise<void>;
   /** Puts a line on the task's activity while the stage runs (`stage.note`): a wait, a fallback, anything the run should say before it ends. */
   note?: (text: string) => Promise<void>;
+  /** Logs a row the v2.2 diagram names (`ship.ready`, `ship.event`...) while the stage runs; the payload is ids, counts and enum values only. */
+  emit?: (kind: string, payload: Record<string, unknown>) => Promise<void>;
   /** What the stage container needs in its environment to continue this run's trace (the
    *  telemetry's `childEnv()`); empty when nothing is traced. The pack runner passes it as the
    *  sandbox's `extraEnv`. */
