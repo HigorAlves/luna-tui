@@ -286,8 +286,8 @@ const realVerifyRunner = verifyRunner({
     return verifyDecisions.decide;
   },
   policy: async (repoPath) => {
-    const { checks, services, decisions } = await policies.for(repoPath);
-    return { checks, services, decisions };
+    const { checks, services, decisions, factory } = await policies.for(repoPath);
+    return { checks, services, decisions, verify: factory.verify };
   },
 });
 /** Delivering and shipping need only git and gh, not a Claude credential, so they always run for real. */

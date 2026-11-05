@@ -247,6 +247,15 @@ describe("retry loops", () => {
     expect(step.resumeTo).toBe("implementing");
   });
 
+  it("takes the browser run's and CI's caps from the event, three when it has none", () => {
+    const e2e = (loopCap?: number): PipelineEvent => ({ type: "stage_done", outcome: "fail", ...(loopCap ? { loopCap } : {}) });
+    const two = at("e2e", { retries: { ...NO_RETRIES, e2e: 1, total: 2 } });
+    expect(transition(two, e2e()).state).toBe("implementing");
+    expect(transition(two, e2e(2))).toMatchObject({ state: "escalated", reason: "e2e failed 2 times" });
+    const ci = at("ci_watch", { route: "ci_fix", retries: { ...NO_RETRIES, ci: 3, total: 2 } });
+    expect(transition(ci, e2e(5)).state).not.toBe("escalated");
+  });
+
   describe("one Build round per set of blocker findings", () => {
     const failing = (findingSet: string, buildRounds?: number): PipelineEvent => ({ type: "stage_done", outcome: "fail", findingSet, ...(buildRounds ? { buildRounds } : {}) });
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { addedLineNumbers, parseLcov, patchCoverage } from "./coverage.ts";
+import { addedLineNumbers, coverageFinding, mutationFinding, parseMutationScore, parseLcov, patchCoverage } from "./coverage.ts";
 
 const LCOV = ["TN:", "SF:/work/src/a.ts", "DA:10,1", "DA:11,3", "DA:12,0", "DA:13,2", "DA:20,5", "end_of_record", "SF:src/b.ts", "DA:1,0", "DA:2,1", "end_of_record", ""].join("\n");
 
@@ -85,5 +85,37 @@ describe("patchCoverage", () => {
     expect(summary.files[0]!.uncovered).toHaveLength(50);
     expect(summary.files[0]).toMatchObject({ added: 60, covered: 0 });
     expect(summary.total).toEqual({ added: 61, covered: 1 });
+  });
+});
+
+describe("coverageFinding", () => {
+  const summary = { files: [{ path: "src/a.ts", added: 4, covered: 1, uncovered: [2, 3, 4] }, { path: "src/b.ts", added: 2, covered: 2, uncovered: [] }], total: { added: 6, covered: 3 }, report: "coverage/lcov.info" };
+  it("is a should_fix finding of category tests naming the uncovered files when patch coverage is below 1 - coverage_drop_max", () => {
+    expect(coverageFinding(summary, 0.2)).toMatchObject({ severity: "should_fix", category: "tests", path: "src/a.ts", line: 2 });
+    expect(coverageFinding(summary, 0.2)!.body).toBe("3 of 6 added lines are covered (50%), below the 80% the repository asks for\nuncovered: src/a.ts (2, 3, 4)");
+  });
+  it("is null at or above the threshold, and when nothing was added", () => {
+    expect(coverageFinding(summary, 0.5)).toBeNull();
+    expect(coverageFinding({ ...summary, total: { added: 0, covered: 0 }, files: [] }, 0)).toBeNull();
+  });
+  it("reads a coverage_drop_max above 1 as a percentage", () => {
+    expect(coverageFinding(summary, 20)).not.toBeNull();
+    expect(coverageFinding(summary, 60)).toBeNull();
+  });
+});
+
+describe("the mutation score", () => {
+  it("is read from the last `mutation score: <n>` line of the output, a fraction or a percentage", () => {
+    expect(parseMutationScore("run\nmutation score: 0.82\n")).toBe(0.82);
+    expect(parseMutationScore("Mutation-Score = 71.5%\nmutation score: 64%")).toBe(0.64);
+  });
+  it("is null when no line says it, or the number is out of range", () => {
+    expect(parseMutationScore("all killed")).toBeNull();
+    expect(parseMutationScore("mutation score: 7")).toBeNull();
+    expect(parseMutationScore("mutation score: 140%")).toBeNull();
+  });
+  it("makes a should_fix finding of category tests under the minimum, none at or over it", () => {
+    expect(mutationFinding(0.4, 0.6)).toMatchObject({ severity: "should_fix", category: "tests", title: "mutation score 40% is below the 60% the repository asks for" });
+    expect(mutationFinding(0.6, 0.6)).toBeNull();
   });
 });

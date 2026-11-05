@@ -1,3 +1,4 @@
+import { factoryConfigOf } from "@hardness/contracts";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1658,6 +1659,13 @@ describe("the implementing findings loop", () => {
 });
 
 describe("retries and escalation", () => {
+  it("takes the browser run's cap from the repository's verify.e2e_rounds", async () => {
+    stubs.plan("e2e", { outcome: "fail", detail: {} }, { outcome: "fail", detail: {} });
+    pipeline = new Pipeline(db, stubs.runnerFor, { inline: true, hasConfig: () => true, policies: { for: async () => ({ ...DEFAULT_POLICY, factory: factoryConfigOf({ verify: { e2e_rounds: 2 } }) }) } });
+    const task = await newTask();
+    expect(await startAndApprove(task.id)).toMatchObject({ state: "escalated", reason: "e2e failed 2 times" });
+  });
+
   it("asks a person when Verify sends Build the same set of blocker findings twice (verify.build_rounds is 1)", async () => {
     const blocked = { outcome: "fail" as const, detail: {}, findings: [{ path: "a.ts", line: 3, severity: "blocker", title: "off by one", body: "b", confidence: 0.9 }] };
     stubs.plan("verifying", blocked, blocked);

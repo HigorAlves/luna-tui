@@ -60,6 +60,8 @@ export const FactoryConfigInput = {
     coverage_drop_max: z.number().min(0).max(100).optional(),
     mutation: section({ command: opaque.nullable().optional(), min_score: unit.optional() }).optional(),
     build_rounds: count(10).optional(),
+    e2e_rounds: count(10).optional(),
+    ci_rounds: count(10).optional(),
     env_flake_retries: count(5).optional(),
     ci_flaky_reruns: count(5).optional(),
     auto_rebase: count(5).optional(),
@@ -94,7 +96,7 @@ export interface FactoryConfig {
   size: { target_loc: [number, number]; hard_limit_loc: number; max_children: number; max_rounds: number; depth: number };
   build: { max_iterations: number; max_tokens: number; max_minutes: number; backoff_minutes: [number, number]; regression_full_suite_minutes: number };
   sandbox: { cpu: number; memory_gb: number; keep_hours: number; egress: string[] };
-  verify: { coverage_drop_max: number; mutation: { command: string | null; min_score: number }; build_rounds: number; env_flake_retries: number; ci_flaky_reruns: number; auto_rebase: number; e2e: { deploy: { command: string | null }; start: { command: string | null } } };
+  verify: { coverage_drop_max: number; mutation: { command: string | null; min_score: number }; build_rounds: number; e2e_rounds: number; ci_rounds: number; env_flake_retries: number; ci_flaky_reruns: number; auto_rebase: number; e2e: { deploy: { command: string | null }; start: { command: string | null } } };
   evidence: { video_budget_s: number; regenerate: number; tts: { voice: string | null; language: string | null }; storage: "release_asset" | "local"; retention_days: number };
   ship: { preview: "off" | "on"; auto_merge: "off" | "low" | "medium_when_review_required" | "medium"; merge: { method: "squash" | "merge" | "rebase"; queue: boolean; delete_branch: boolean; commit_template: string | null }; release_owners: string[]; stale_days: number; sla: { reminder_days: number; escalate_days: number }; poll_minutes: number };
 }
@@ -110,7 +112,7 @@ export const FACTORY_DEFAULTS: FactoryConfig = {
   size: { target_loc: [1000, 2000], hard_limit_loc: 2500, max_children: 8, max_rounds: 3, depth: 2 },
   build: { max_iterations: 15, max_tokens: 2_000_000, max_minutes: 90, backoff_minutes: [1, 30], regression_full_suite_minutes: 10 },
   sandbox: { cpu: 2, memory_gb: 4, keep_hours: 24, egress: ["registries", "github"] },
-  verify: { coverage_drop_max: 0.5, mutation: { command: null, min_score: 0.6 }, build_rounds: 1, env_flake_retries: 1, ci_flaky_reruns: 1, auto_rebase: 1, e2e: { deploy: { command: null }, start: { command: null } } },
+  verify: { coverage_drop_max: 0.5, mutation: { command: null, min_score: 0.6 }, build_rounds: 1, e2e_rounds: 3, ci_rounds: 3, env_flake_retries: 1, ci_flaky_reruns: 1, auto_rebase: 1, e2e: { deploy: { command: null }, start: { command: null } } },
   evidence: { video_budget_s: 240, regenerate: 1, tts: { voice: null, language: null }, storage: "release_asset", retention_days: 180 },
   ship: { preview: "off", auto_merge: "medium_when_review_required", merge: { method: "squash", queue: true, delete_branch: true, commit_template: null }, release_owners: [], stale_days: 14, sla: { reminder_days: 2, escalate_days: 5 }, poll_minutes: 5 },
 };
@@ -128,7 +130,7 @@ export const CONSUMED_FROM: Readonly<Record<string, number>> = {
   "size.target_loc": 15, "size.hard_limit_loc": 15, "size.max_children": 15, "size.max_rounds": 15, "size.depth": 15,
   "build.max_iterations": 10, "build.max_tokens": 10, "build.max_minutes": 10, "build.backoff_minutes": 10, "build.regression_full_suite_minutes": 10,
   "sandbox.cpu": 11, "sandbox.memory_gb": 11, "sandbox.keep_hours": 11, "sandbox.egress": 11,
-  "verify.coverage_drop_max": 12, "verify.mutation.command": 12, "verify.mutation.min_score": 12, "verify.build_rounds": 12,
+  "verify.coverage_drop_max": 12, "verify.mutation.command": 12, "verify.mutation.min_score": 12, "verify.build_rounds": 12, "verify.e2e_rounds": 12, "verify.ci_rounds": 12,
   "verify.env_flake_retries": 8, "verify.ci_flaky_reruns": 8, "verify.auto_rebase": 8, "verify.e2e.deploy.command": 12, "verify.e2e.start.command": 12,
   "evidence.video_budget_s": 12, "evidence.regenerate": 12, "evidence.tts.voice": 12, "evidence.tts.language": 12, "evidence.storage": 12, "evidence.retention_days": 13,
   "ship.preview": 13, "ship.auto_merge": 13, "ship.merge.method": 13, "ship.merge.queue": 13, "ship.merge.delete_branch": 13, "ship.merge.commit_template": 13,

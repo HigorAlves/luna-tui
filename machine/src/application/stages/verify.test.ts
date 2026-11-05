@@ -39,6 +39,8 @@ function setup(opts: {
   services?: Record<string, { image: string; exports?: Record<string, string> }>;
   decide?: Decide | null;
   decisions?: Record<string, Record<string, { proceed?: number; flag?: number }>>;
+  /** The repo's `verify` section as the machine reads it. */
+  verify?: { coverage_drop_max?: number; mutation?: { command: string | null; min_score: number } };
 }) {
   const stateDir = mkdtempSync(join(tmpdir(), "verify-"));
   const calls: string[][] = [];
@@ -53,7 +55,7 @@ function setup(opts: {
     stateDir,
     detect: async () => (opts.detected ?? { manager: "pnpm", test: ["pnpm", "run", "test"], lint: ["pnpm", "run", "lint"] }) as never,
     gitIdentity: async () => ("identity" in opts ? opts.identity! : { name: "Ada L", email: "ada@x.dev" }),
-    policy: async () => ({ checks: opts.lunaChecks ?? null, services: opts.services ?? {}, decisions: opts.decisions ?? {} }),
+    policy: async () => ({ checks: opts.lunaChecks ?? null, services: opts.services ?? {}, decisions: opts.decisions ?? {}, ...(opts.verify ? { verify: opts.verify } : {}) }),
     ...("decide" in opts ? { decide: opts.decide } : {}),
     changedPaths: async () => ("changed" in opts ? opts.changed! : null),
     ...(opts.diffSince ? { diffSince: opts.diffSince } : {}),
@@ -255,10 +257,16 @@ describe("verifying stage", () => {
       const summary = { files: [{ path: "src/a.ts", added: 4, covered: 3, uncovered: [12] }], total: { added: 4, covered: 3 }, report: "coverage/lcov.info" };
       expect(result.outcome).toBe("pass");
       expect(result.detail).toMatchObject({ coverage: summary });
-      expect(result.findings).toEqual([
-        expect.objectContaining({ path: "src/a.ts", line: 12, severity: "test", title: "coverage: 3 of 4 added lines in src/a.ts are not covered", body: "uncovered: 12", confidence: 0.9 }),
-      ]);
+      // 3 of 4 added lines are covered: above the default bar (1 - 0.5), so the numbers ride on the report and no finding is raised.
+      expect(result.findings).toEqual([]);
       expect(runPack).toHaveBeenCalledWith(context, {}); // the review runs before the suite, so it is not given the coverage
+    });
+
+    it("raises one should_fix finding of category tests naming the files when patch coverage is under 1 - verify.coverage_drop_max", async () => {
+      const { run, context } = setup({ worktree: worktree(), lunaChecks, diffSince: async () => diff, verify: { coverage_drop_max: 0.1 } });
+      const result = await run(context);
+      expect(result.outcome).toBe("pass");
+      expect(result.findings).toEqual([expect.objectContaining({ severity: "should_fix", category: "tests", path: "src/a.ts", body: expect.stringContaining("uncovered: src/a.ts (12)") })]);
     });
 
     it("notes a report that is missing and still passes", async () => {
@@ -372,6 +380,38 @@ describe("verifying stage", () => {
       const b = setup({ worktree: worktree(), pack: failing });
       expect((await a.run(a.context)).outcome).toBe("fail");
       expect((await b.run(b.context)).outcome).toBe("fail");
+    });
+  });
+
+  describe("the mutation hook", () => {
+    const lunaChecks = [{ name: "tests", run: "pnpm test" }];
+    const mutation = (command: string | null) => ({ mutation: { command, min_score: 0.6 } });
+
+    it("runs the repository's command in the sandbox after the checks and makes a should_fix finding of a score under the minimum", async () => {
+      const { run, context, calls } = setup({ lunaChecks, verify: mutation("pnpm stryker run"), checks: { "sh -c pnpm stryker run": { code: 0, stdout: "killed 3\nmutation score: 0.4\n", stderr: "" } } });
+      const result = await run(context);
+      expect(calls.map((c) => c.join(" "))).toEqual(["sh -c pnpm test", "sh -c pnpm stryker run"]);
+      expect(result.outcome).toBe("pass");
+      expect(result.findings).toEqual([expect.objectContaining({ severity: "should_fix", category: "tests", title: "mutation score 40% is below the 60% the repository asks for" })]);
+      expect(result.detail).toMatchObject({ mutation: { score: 0.4 } });
+    });
+
+    it("raises nothing at or over the minimum, and notes a run that printed no score", async () => {
+      const ok = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c m": { code: 0, stdout: "mutation score: 90%", stderr: "" } } });
+      expect((await ok.run(ok.context)).findings).toEqual([]);
+      const none = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c m": { code: 0, stdout: "done", stderr: "" } } });
+      const result = await none.run(none.context);
+      expect(result.findings).toEqual([]);
+      expect((result.detail as { checks: unknown[] }).checks).toContainEqual({ name: "mutation", note: "the mutation run printed no score" });
+    });
+
+    it("runs nothing when the command is unset, and not at all after a red check", async () => {
+      const unset = setup({ lunaChecks, verify: mutation(null) });
+      await unset.run(unset.context);
+      expect(unset.calls).toEqual([["sh", "-c", "pnpm test"]]);
+      const red = setup({ lunaChecks, verify: mutation("m"), checks: { "sh -c pnpm test": { code: 1, stdout: "x", stderr: "" } } });
+      await red.run(red.context);
+      expect(red.calls.map((c) => c.join(" "))).toEqual(["sh -c pnpm test"]);
     });
   });
 

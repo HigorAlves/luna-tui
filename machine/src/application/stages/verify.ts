@@ -1,7 +1,7 @@
 // The verifying stage, in the diagram's order: the review pack reads the change first, and only when no
 // blocker stands do the project's own checks run in the task worktree. A blocker fails the stage with the
 // findings and no suite run; a red check fails it with its output as a finding of category `tests`.
-import { type CheckSpec, type CoverageSummary, type DecisionOverrides, type Finding, type ServiceSpec, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, type CheckSpec, type CoverageSummary, type DecisionOverrides, type Finding, type ServiceSpec, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
 import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
@@ -9,7 +9,7 @@ import { branchBase, changedPaths as hostChangedPaths, diffText, gitIdentity as 
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type GraphJson, blastRadius } from "../../domain/blast-radius.ts";
 import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.ts";
-import { addedLineNumbers, parseLcov, patchCoverage } from "../../domain/coverage.ts";
+import { addedLineNumbers, coverageFinding, mutationFinding, parseLcov, parseMutationScore, patchCoverage } from "../../domain/coverage.ts";
 import { type EnvRecord, compareEnv } from "../../domain/env-hash.ts";
 import { verifySteps } from "../../domain/verify-order.ts";
 import { type DetectedChecks, detectChecks } from "../../domain/detect.ts";
@@ -48,7 +48,7 @@ export interface VerifyDeps {
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
   /** The repo's luna.yaml: its own checks (null means detect them from the tree) and the
    *  services to run beside each one. */
-  policy?: (repoPath: string | null) => Promise<{ checks: CheckSpec[] | null; services: Record<string, ServiceSpec>; decisions?: Record<string, DecisionOverrides> }>;
+  policy?: (repoPath: string | null) => Promise<{ checks: CheckSpec[] | null; services: Record<string, ServiceSpec>; decisions?: Record<string, DecisionOverrides>; /** The repository's `verify` section: the coverage bar and the mutation hook; the defaults of `FACTORY_DEFAULTS.verify` when absent. */ verify?: { coverage_drop_max?: number; mutation?: { command: string | null; min_score: number } } }>;
   /** The files the branch changed, worktree-relative; null when unknown (then every check runs). */
   changedPaths?: (worktreePath: string, repoPath: string) => Promise<string[] | null>;
   /** The machine's code graphs: when the repo has one, the files that depend on the change widen the checks and steer the review. */
@@ -70,7 +70,6 @@ interface CheckReport {
   skipped?: string;
 }
 
-const COVERAGE_BODY_LINES = 20;
 /** How many findings finding_classify sees, the most severe first, and how much code it gets around each. */
 const CLASSIFY_MAX = 20;
 const LEVEL_RANK = { blocker: 2, should_fix: 1, nit: 0 } as const;
@@ -178,7 +177,9 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     };
     // Step A: the project's own checks: the luna.yaml list when the repo has one (those the
     // change calls for), else what the tree says.
-    const { checks: declared, services, decisions = {} } = await repoPolicy(task.repoPath ?? null);
+    const { checks: declared, services, decisions = {}, verify: verifyConfig } = await repoPolicy(task.repoPath ?? null);
+    const coverageDropMax = verifyConfig?.coverage_drop_max ?? FACTORY_DEFAULTS.verify.coverage_drop_max;
+    const mutationConfig = verifyConfig?.mutation ?? FACTORY_DEFAULTS.verify.mutation;
     const reports: CheckReport[] = [];
     let commands: Array<{ name: string; cmd: string; argv: string[] }>;
     let selectedChecks: CheckSpec[] = [];
@@ -377,26 +378,29 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
       }
       const summary = patchCoverage({ lcov: parseLcov(text, { root: cwd, ...(check.cwd ? { cwd: check.cwd } : {}) }), added: addedLineNumbers(diff), report: relative });
       coverage = coverage ? { files: [...coverage.files, ...summary.files], total: { added: coverage.total.added + summary.total.added, covered: coverage.total.covered + summary.total.covered }, report: coverage.report } : summary;
-      for (const f of summary.files) {
-        if (f.uncovered.length === 0) continue;
-        coverageFindings.push({
-          path: f.path,
-          line: f.uncovered[0]!,
-          start_line: null,
-          severity: "test",
-          title: `coverage: ${f.covered} of ${f.added} added lines in ${f.path} are not covered`,
-          body: `uncovered: ${f.uncovered.slice(0, COVERAGE_BODY_LINES).join(", ")}`,
-          suggestion_code: null,
-          confidence: 0.9,
-        });
+    }
+    // One finding when the patch's coverage is under the repository's bar (`verify.coverage_drop_max`), naming the files.
+    const dropped = coverage ? coverageFinding(coverage, coverageDropMax) : null;
+    if (dropped) coverageFindings.push(dropped);
+    // The repository's own mutation command (from its luna.yaml, never from text a model wrote), run in the sandbox after the checks; its output is data, read for one score line.
+    let mutationDetail: Record<string, unknown> = {};
+    if (mutationConfig.command) {
+      const ran = await checkExec("sh", ["-c", mutationConfig.command], { cwd, signal, timeoutMs: Math.max(deadline - Date.now(), MINUTE), env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" }, services });
+      if (signal.aborted) return aborted();
+      const score = parseMutationScore(`${ran.stdout}\n${ran.stderr}`);
+      if (score === null) reports.push({ name: "mutation", note: "the mutation run printed no score" });
+      else {
+        mutationDetail = { mutation: { score, min: mutationConfig.min_score } };
+        const low = mutationFinding(score, mutationConfig.min_score);
+        if (low) coverageFindings.push(low);
       }
     }
-    const coverageDetail = coverage ? { coverage } : {};
+    const coverageDetail = { ...(coverage ? { coverage } : {}), ...mutationDetail };
 
     // The review already ran (when agents are on) and no blocker stands: the report is its result with the suite's.
     const noTestsNote = noTests ? { note: "no test command detected; verifying proves the scenarios by direct check" } : {};
     if (!pack) {
-      return { outcome: "pass", detail: { step: "checks", note: "review: skipped (agents off)", checks: reports, ...coverageDetail }, run: { transcriptPath } };
+      return { outcome: "pass", detail: { step: "checks", note: "review: skipped (agents off)", checks: reports, ...coverageDetail }, ...(coverageFindings.length > 0 ? { findings: coverageFindings } : {}), run: { transcriptPath } };
     }
     return assemble(pack, [...reviewed, ...coverageFindings], { checks: reports, ...coverageDetail, ...classification, ...noTestsNote });
   };

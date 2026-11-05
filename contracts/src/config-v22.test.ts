@@ -36,6 +36,14 @@ describe("the diagram's config defaults", () => {
   });
 });
 
+describe("the loop caps", () => {
+  it("default to today's three, are read from wave 12, and a repository's value wins", () => {
+    expect(FACTORY_DEFAULTS.verify).toMatchObject({ e2e_rounds: 3, ci_rounds: 3 });
+    for (const key of ["verify.e2e_rounds", "verify.ci_rounds"]) expect(CONSUMED_FROM[key], key).toBe(12);
+    expect(factoryConfigOf({ verify: { e2e_rounds: 5 } }).verify).toMatchObject({ e2e_rounds: 5, ci_rounds: 3 });
+  });
+});
+
 describe("the sandbox's size and keep", () => {
   it("defaults to two CPUs, four gigabytes and a day, all read from wave 11, a repository's section winning", () => {
     expect(FACTORY_DEFAULTS.sandbox).toMatchObject({ cpu: 2, memory_gb: 4, keep_hours: 24 });

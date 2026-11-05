@@ -157,8 +157,8 @@ export async function buildRealStages(
       runPack: null,
       stateDir: config.stateDir,
       policy: async (repoPath) => {
-        const { checks, services, decisions } = await policies.for(repoPath);
-        return { checks, services, decisions };
+        const { checks, services, decisions, factory } = await policies.for(repoPath);
+        return { checks, services, decisions, verify: factory.verify };
       },
       changedPaths: async (worktreePath) => {
         if (!/^[0-9a-f]{40,64}$/.test(since)) return null;

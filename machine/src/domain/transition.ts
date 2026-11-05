@@ -44,7 +44,7 @@ export type PipelineEvent =
   /** `setup` when the repo has no luna.yaml yet: the setup gate runs before triage. */
   | { type: "start"; setup?: boolean }
   /** `triage` is the outcome triage picked; absent means `plan`. */
-  | { type: "stage_done"; outcome: StageOutcome; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
+  | { type: "stage_done"; outcome: StageOutcome; /** Verify's blocker set (`blockerSetKey`) and `verify.build_rounds`: the same set back after that many rounds escalates. */ findingSet?: string; buildRounds?: number; /** The failures the loop of this stage may have before a person is asked (`verify.e2e_rounds`, `verify.ci_rounds`); `LOOP_CAP` when absent. */ loopCap?: number; reason?: string; escalation?: EscalationReason; triage?: TriageOutcome }
   /** Ends the task without shipping or closing it: from any state that has not ended. */
   | { type: "archive"; reason: ArchiveReason }
   | { type: "answered" }
@@ -129,14 +129,14 @@ function enterImplementing(retries: Retries): Move {
   return run("implementing", { ...retries, total: retries.total + 1 });
 }
 
-function loopFailed(task: Snapshot, loop: Loop, set?: { key: string; buildRounds: number }): Move {
+function loopFailed(task: Snapshot, loop: Loop, set?: { key: string; buildRounds: number }, cap: number = LOOP_CAP): Move {
   const retries: Retries = { ...task.retries, [loop]: task.retries[loop] + 1 };
   if (set) {
     const round = nextRound(task.retries.findingSet, set.key, set.buildRounds);
     retries.findingSet = round.set;
     if (round.escalate) return escalate(`the same findings came back after ${round.set.rounds} round${round.set.rounds === 1 ? "" : "s"} of Build`, "implementing", retries);
   }
-  if (retries[loop] >= LOOP_CAP) {
+  if (retries[loop] >= cap) {
     return escalate(`${loop} failed ${retries[loop]} times`, "implementing", retries);
   }
   return enterImplementing(retries);
@@ -299,7 +299,7 @@ function prStageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stag
       break;
     case "ci_watch":
       if (outcome === "pass") return done(retries);
-      if (outcome === "fail") return loopFailed(task, "ci");
+      if (outcome === "fail") return loopFailed(task, "ci", undefined, event.loopCap);
       break;
     case "implementing":
       if (outcome === "pass") return run("verifying", retries);
@@ -369,7 +369,7 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       break;
     case "e2e":
       if (outcome === "pass") return run("delivering", retries);
-      if (outcome === "fail") return loopFailed(task, "e2e");
+      if (outcome === "fail") return loopFailed(task, "e2e", undefined, event.loopCap);
       break;
     case "delivering":
       if (outcome === "pass") return run("ci_watch", retries);
@@ -377,12 +377,12 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       break;
     case "ci_watch":
       if (outcome === "pass") return run("evidence", retries);
-      if (outcome === "fail") return loopFailed(task, "ci");
+      if (outcome === "fail") return loopFailed(task, "ci", undefined, event.loopCap);
       break;
     case "evidence":
       if (outcome === "pass") return wait("awaiting_ship", retries);
       // The criteria could not be shown working: that counts against the e2e loop.
-      if (outcome === "fail") return loopFailed(task, "e2e");
+      if (outcome === "fail") return loopFailed(task, "e2e", undefined, event.loopCap);
       break;
     case "shipping":
       if (outcome === "pass") return wait("reviewing_memory", retries);

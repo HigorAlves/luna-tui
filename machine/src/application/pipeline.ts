@@ -1680,6 +1680,7 @@ export class Pipeline {
                 ...(stage === "triage" && TriageOutcome.safeParse(result.detail?.outcome).success ? { triage: result.detail!.outcome as TriageOutcome } : {}),
                 ...(EscalationReason.safeParse(result.detail?.escalation).success ? { escalation: result.detail!.escalation as EscalationReason } : {}),
                 ...(await this.blockerSet(id, stage, result)),
+                ...(await this.loopCap(id, stage, result)),
               };
         // An escalation from Build, the machine's own included, carries a decided reason: a fact where one decides, else the typed decision.
         const decided = stage === "implementing" ? await this.decideBuildEscalation(id, result, planned, { secondScopeRed, stuck: stuck ?? null }) : null;
@@ -1941,6 +1942,13 @@ export class Pipeline {
       const message = error instanceof Error ? error.message : String(error);
       return `could not revert verifying's tests ${verifying.outputCommit}: ${message}`;
     }
+  }
+
+  /** The failures the browser run's or CI's loop may have before a person is asked: the repository's `verify.e2e_rounds` or `verify.ci_rounds`. */
+  private async loopCap(id: string, stage: TaskState, result: StageResult): Promise<{ loopCap?: number }> {
+    if (result.outcome !== "fail" || (stage !== "e2e" && stage !== "evidence" && stage !== "ci_watch")) return {};
+    const { verify } = (await this.policyFor((await this.get(id)).repoPath)).factory;
+    return { loopCap: stage === "ci_watch" ? verify.ci_rounds : verify.e2e_rounds };
   }
 
   /** What Verify's failure tells the transition about its blocker findings: their set, and the rounds Build may have on one set (`verify.build_rounds`). */
