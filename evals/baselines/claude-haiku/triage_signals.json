@@ -3,7 +3,7 @@
   "pack": "triage_signals",
   "engine": "claude:haiku",
   "judge": null,
-  "at": "2026-11-05T15:39:19.002Z",
+  "at": "2026-11-05T22:45:06.466Z",
   "model": "claude-haiku-5-5",
   "summary": {
     "cases": 6,
@@ -11,8 +11,8 @@
     "passRate": 1,
     "meanJudgeScore": null,
     "meanTurns": 2,
-    "meanDurationMs": 4163,
-    "costUsd": 0.0038998600000000007,
+    "meanDurationMs": 4035.8333333333335,
+    "costUsd": 0.007145650000000001,
     "judgeCostUsd": null,
     "calibration": {
       "n": 6,
@@ -20,9 +20,9 @@
       "accuracy": 1,
       "actedOnAccuracy": null,
       "coverage": 0,
-      "brier": 0.0887557291666667,
-      "ece": 0.2947916666666668,
-      "meanConfidence": 0.7149999999999999,
+      "brier": 0.08344340277777779,
+      "ece": 0.2829166666666667,
+      "meanConfidence": 0.7220833333333333,
       "overconfident": 0
     }
   },
@@ -79,13 +79,13 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3350,
-      "costUsd": 0.00035543,
+      "durationMs": 2583,
+      "costUsd": 0.0013493000000000003,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.7649999999999998,
-        "verdict": "ask"
+        "confidence": 0.7683333333333332,
+        "verdict": "flag"
       }
     },
     {
@@ -135,13 +135,13 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3746,
-      "costUsd": 0.0009153900000000001,
+      "durationMs": 2616,
+      "costUsd": 0.00102201,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": null,
-        "confidence": 0.8650000000000001,
-        "verdict": "flag"
+        "confidence": 0.835,
+        "verdict": "ask"
       }
     },
     {
@@ -166,12 +166,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3852,
-      "costUsd": 0.0007268800000000001,
+      "durationMs": 4977,
+      "costUsd": 0.00110131,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.6708333333333334,
+        "confidence": 0.6791666666666667,
         "verdict": "ask"
       }
     },
@@ -217,12 +217,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 6361,
-      "costUsd": 0.0007721500000000001,
+      "durationMs": 5343,
+      "costUsd": 0.00135841,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.6583333333333333,
+        "confidence": 0.6416666666666667,
         "verdict": "ask"
       }
     },
@@ -253,12 +253,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3802,
-      "costUsd": 0.00041039,
+      "durationMs": 4585,
+      "costUsd": 0.00111861,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": null,
-        "confidence": 0.6041666666666666,
+        "confidence": 0.6291666666666667,
         "verdict": "ask"
       }
     },
@@ -314,12 +314,12 @@
       ],
       "judge": null,
       "turns": 2,
-      "durationMs": 3867,
-      "costUsd": 0.00071962,
+      "durationMs": 4111,
+      "costUsd": 0.00119601,
       "model": "claude-haiku-5-5",
       "decision": {
         "correct": true,
-        "confidence": 0.7266666666666666,
+        "confidence": 0.7791666666666667,
         "verdict": "ask"
       }
     }

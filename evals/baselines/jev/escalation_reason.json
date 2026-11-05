@@ -3,7 +3,7 @@
   "pack": "escalation_reason",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-05T20:05:29.375Z",
+  "at": "2026-11-05T22:45:04.383Z",
   "model": "typesafe-ai/jev",
   "summary": {
     "cases": 4,
@@ -11,7 +11,7 @@
     "passRate": 1,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 488,
+    "meanDurationMs": 414.25,
     "costUsd": 0.00010714,
     "judgeCostUsd": null,
     "calibration": {
@@ -20,9 +20,9 @@
       "accuracy": 1,
       "actedOnAccuracy": 1,
       "coverage": 0.75,
-      "brier": 0.0057,
-      "ece": 0.04999999999999993,
-      "meanConfidence": 0.8600000000000001,
+      "brier": 0.008600000000000003,
+      "ece": 0.06000000000000005,
+      "meanConfidence": 0.8499999999999999,
       "overconfident": 0
     }
   },
@@ -44,7 +44,7 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 435,
+      "durationMs": 410,
       "costUsd": 0.00002747,
       "model": "typesafe-ai/jev",
       "decision": {
@@ -70,12 +70,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 601,
+      "durationMs": 416,
       "costUsd": 0.00002713,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": null,
-        "confidence": 0.59,
+        "confidence": 0.58,
         "verdict": "flag"
       }
     },
@@ -96,7 +96,7 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 496,
+      "durationMs": 399,
       "costUsd": 0.00002671,
       "model": "typesafe-ai/jev",
       "decision": {
@@ -122,12 +122,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 420,
+      "durationMs": 432,
       "costUsd": 0.00002583,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": true,
-        "confidence": 0.87,
+        "confidence": 0.84,
         "verdict": "proceed"
       }
     }

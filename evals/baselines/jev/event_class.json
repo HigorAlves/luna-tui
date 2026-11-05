@@ -3,7 +3,7 @@
   "pack": "event_class",
   "engine": "jev",
   "judge": null,
-  "at": "2026-11-05T12:07:54.556Z",
+  "at": "2026-11-05T22:45:21.796Z",
   "model": "typesafe-ai/jev",
   "summary": {
     "cases": 4,
@@ -11,7 +11,7 @@
     "passRate": 0.5,
     "meanJudgeScore": null,
     "meanTurns": 1,
-    "meanDurationMs": 445.75,
+    "meanDurationMs": 437.75,
     "costUsd": 0.00008043,
     "judgeCostUsd": null,
     "calibration": {
@@ -20,9 +20,9 @@
       "accuracy": 0.6666666666666666,
       "actedOnAccuracy": 1,
       "coverage": 0.75,
-      "brier": 0.04533333333333333,
-      "ece": 0.1466666666666667,
-      "meanConfidence": 0.8099999999999999,
+      "brier": 0.03473333333333333,
+      "ece": 0.13333333333333328,
+      "meanConfidence": 0.8,
       "overconfident": 0
     }
   },
@@ -44,12 +44,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 472,
+      "durationMs": 426,
       "costUsd": 0.00002045,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": false,
-        "confidence": 0.36,
+        "confidence": 0.31,
         "verdict": "ask"
       }
     },
@@ -70,7 +70,7 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 438,
+      "durationMs": 433,
       "costUsd": 0.00001999,
       "model": "typesafe-ai/jev",
       "decision": {
@@ -91,17 +91,17 @@
         {
           "check": "event.confidence within 0..0.85",
           "pass": false,
-          "detail": "found 0.96"
+          "detail": "found 0.98"
         }
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 480,
+      "durationMs": 443,
       "costUsd": 0.00002008,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": null,
-        "confidence": 0.96,
+        "confidence": 0.98,
         "verdict": "proceed"
       }
     },
@@ -122,12 +122,12 @@
       ],
       "judge": null,
       "turns": 1,
-      "durationMs": 393,
+      "durationMs": 449,
       "costUsd": 0.00001991,
       "model": "typesafe-ai/jev",
       "decision": {
         "correct": true,
-        "confidence": 0.92,
+        "confidence": 0.91,
         "verdict": "proceed"
       }
     }
