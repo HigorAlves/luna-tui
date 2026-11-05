@@ -23,6 +23,7 @@ import {
   type TaskSla,
   CARD_EVENT_NAMES,
   CardEventName,
+  BacklogAddInput,
   ContextInput,
   MergeCardInput,
   NewTaskInput,
@@ -42,6 +43,7 @@ import {
   UpdateTaskInput,
 } from "@hardness/contracts";
 import { type Context, Hono } from "hono";
+import { type Backlog, BacklogItemNotFoundError } from "../../application/backlog.ts";
 import { streamSSE } from "hono/streaming";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DataSource } from "typeorm";
@@ -90,6 +92,8 @@ export interface AppDeps {
   db: DataSource;
   pipeline: Pipeline;
   bus: Bus;
+  /** The shared backlog; without it the `/backlog` routes are absent. */
+  backlog?: Backlog;
   /** Closes a task's herdr watch tab when it is deleted; closing it on `closed` is main.ts's job. */
   watcher?: Watcher;
   /** Enables `POST /dev/stubs` when the stub stages are in use. */
@@ -163,7 +167,7 @@ function checkStages(stages: Parameters<typeof taskStagesProblem>[0]): void {
   if (problem) throw new BadRequest(`stages.${problem}`);
 }
 
-export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
+export function createApp({ db, pipeline, bus, backlog, watcher, stubs, pulls, prTasks, taskDiff, slack, jira, sla, slaAll, credentials = machineCredentials(), engineBudgets, access = DEFAULT_ACCESS, runs }: AppDeps): Hono {
   const app = new Hono();
   engineBudgets ??= new EngineBudgetWatch({ budgets: {}, spend: new PgTaskStore(db), onAlert: () => {} });
   app.use(guard(access));
@@ -176,6 +180,7 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     if (error instanceof TransitionError) return fail(c, 409, "invalid_transition", error.message);
     if (error instanceof TaskBusyError) return fail(c, 409, "task_busy", error.message);
     if (error instanceof IdempotencyConflictError) return c.json<ApiError>({ error: "idempotency_conflict", message: error.message, taskId: error.taskId }, 409);
+    if (error instanceof BacklogItemNotFoundError) return fail(c, 404, "not_found", error.message);
     if (error instanceof MergeError) return fail(c, 409, "cannot_merge", error.message);
     if (error instanceof NoContextGateError) return fail(c, 409, "no_context_gate", error.message);
     if (error instanceof NoPlanToEditError) return fail(c, 409, "no_plan", error.message);
@@ -441,6 +446,27 @@ export function createApp({ db, pipeline, bus, watcher, stubs, pulls, prTasks, t
     bus.publish({ type: "task.updated", task, seq: task.seq });
     return c.json(task);
   });
+
+  if (backlog) {
+    const itemId = (c: Context): string => {
+      const id = c.req.param("id") ?? "";
+      if (!z.uuid().safeParse(id).success) throw new BacklogItemNotFoundError(id);
+      return id;
+    };
+    app.get("/backlog", async (c) => c.json(await backlog.list()));
+    app.post("/backlog", async (c) => c.json(await backlog.add(await body(c, BacklogAddInput)), 201));
+    app.post("/backlog/:id/bump", async (c) => c.json(await backlog.bump(itemId(c))));
+    app.post("/backlog/:id/promote", async (c) => {
+      const task = await serialize(await backlog.promote(itemId(c)));
+      bus.publish({ type: "task.updated", task, seq: task.seq });
+      return c.json(task, 201);
+    });
+    app.post("/backlog/:id/decline", async (c) => {
+      const id = itemId(c);
+      await backlog.decline(id);
+      return c.json({ id });
+    });
+  }
 
   /** A person marks the task as a duplicate of another card: its report merges into it. */
   app.post("/tasks/:id/merge", async (c) => {

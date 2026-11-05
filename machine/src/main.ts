@@ -1,6 +1,6 @@
 // Entry point for `pnpm dev`: migrates the database, recovers tasks a previous run left
 // mid-stage, then serves the API on localhost.
-import { type BudgetAlert, type EvidenceContext, Ledger, PrAction, type PullRequest, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
+import { FACTORY_DEFAULTS, type BudgetAlert, type EvidenceContext, Ledger, PrAction, type PullRequest, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -64,6 +64,8 @@ import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
 import { uniqueRepoForProject } from "./application/context-setup.ts";
+import { Backlog } from "./application/backlog.ts";
+import { PgBacklogStore } from "./adapters/persistence/backlog-store.ts";
 import { Pipeline } from "./application/pipeline.ts";
 import { PolicyStore } from "./application/policy.ts";
 import { exec } from "./adapters/process/exec.ts";
@@ -452,6 +454,7 @@ const app = createApp({
   db,
   pipeline,
   bus,
+  backlog: new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days }),
   watcher,
   stubs,
   pulls,

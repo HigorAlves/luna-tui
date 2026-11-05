@@ -104,7 +104,7 @@ export function cardFieldsOf(input: CardFieldsInput): CardFields {
 }
 
 const MAX_MERGED = 50;
-const DEMAND_MAX = 4;
+const DEMAND_MAX = 3;
 
 /** The kept card with a duplicate's report merged in: its sources after the kept ones, its reporter and followers following, the demand up by one. Pure. */
 export function mergeFields(kept: CardFields, dup: CardFields, dupId: string): CardFields {

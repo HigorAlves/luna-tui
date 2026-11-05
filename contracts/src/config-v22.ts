@@ -19,6 +19,7 @@ const Sla = section({ reminder_days: days.optional(), escalate_days: days.option
 
 /** What a repo may write, every key optional. */
 export const FactoryConfigInput = {
+  backlog: section({ stale_days: days.optional() }).optional(),
   dedup: section({ duplicate: unit.optional(), related: unit.optional(), ask_below: unit.optional(), lookback_days: days.optional() }).optional(),
   triage: section({
     confidence: section({ kind: unit.optional(), size: unit.optional(), urgency: unit.optional(), risk: unit.optional(), archive: unit.optional() }).optional(),
@@ -86,6 +87,7 @@ export const EvidenceConfigV22 = {
 
 export interface FactoryConfig {
   dedup: { duplicate: number; related: number; ask_below: number; lookback_days: number };
+  backlog: { stale_days: number };
   triage: { confidence: { kind: number; size: number; urgency: number; risk: number; archive: number }; flag_band: number; hint_weight: number; max_questions: number; max_rounds: number; sla: { reminder_days: number; archive_days: number } };
   scoring: { weights: { who: number; what: number; impact: number; time: number; demand: number }; bands: { P0: number; P1: number; P2: number } };
   graph: { stale_commits: number };
@@ -102,6 +104,7 @@ export interface FactoryConfig {
 /** The diagram's numbers. A `luna.yaml` section is merged over these. */
 export const FACTORY_DEFAULTS: FactoryConfig = {
   dedup: { duplicate: 0.9, related: 0.7, ask_below: 0.7, lookback_days: 90 },
+  backlog: { stale_days: 14 },
   triage: { confidence: { kind: 0.8, size: 0.6, urgency: 0.7, risk: 0.85, archive: 0.9 }, flag_band: 0.15, hint_weight: 0.5, max_questions: 3, max_rounds: 2, sla: { reminder_days: 2, archive_days: 5 } },
   scoring: { weights: { who: 3, what: 3, impact: 2, time: 2, demand: 1 }, bands: { P0: 28, P1: 22, P2: 16 } },
   graph: { stale_commits: 50 },
@@ -117,7 +120,7 @@ export const FACTORY_DEFAULTS: FactoryConfig = {
 
 /** Every key of the config, and the wave that reads it: `8` means code in this wave does. A key nothing reads is dead config. */
 export const CONSUMED_FROM: Readonly<Record<string, number>> = {
-  "dedup.duplicate": 14, "dedup.related": 14, "dedup.ask_below": 14, "dedup.lookback_days": 14,
+  "dedup.duplicate": 14, "dedup.related": 14, "dedup.ask_below": 14, "dedup.lookback_days": 14, "backlog.stale_days": 14,
   "triage.confidence.kind": 9, "triage.confidence.size": 9, "triage.confidence.urgency": 9, "triage.confidence.risk": 9, "triage.confidence.archive": 9,
   "triage.flag_band": 9, "triage.hint_weight": 9, "triage.max_questions": 9, "triage.max_rounds": 9, "triage.sla.reminder_days": 9, "triage.sla.archive_days": 9,
   "scoring.weights": 9, "scoring.bands": 9,

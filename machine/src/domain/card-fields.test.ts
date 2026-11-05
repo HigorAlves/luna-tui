@@ -58,3 +58,13 @@ describe("what a card keeps of the entry contract", () => {
     expect(fields.followers).toEqual(["U2linkhttp//x"]);
   });
 });
+
+describe("the demand sub-score", () => {
+  it("never goes past 3 or below 0, and the priority follows", async () => {
+    const { withDemand } = await import("./card-fields.ts");
+    const record = { urgencyDetail: { priority: "P2", subScores: { who: 3, what: 3, impact: 3, time: 3, demand: 3 } } } as never;
+    expect((withDemand(record, 1) as { urgencyDetail: { subScores: { demand: number } } }).urgencyDetail.subScores.demand).toBe(3);
+    expect((withDemand(record, -9) as { urgencyDetail: { subScores: { demand: number } } }).urgencyDetail.subScores.demand).toBe(0);
+    expect(withDemand(null, 1)).toBeNull();
+  });
+});

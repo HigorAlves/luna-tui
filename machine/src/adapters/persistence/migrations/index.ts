@@ -22,6 +22,7 @@ import { AddTaskClassification1794570000000 } from "./1794570000000-AddTaskClass
 import { AddTaskRecordAndEvidence1794580000000 } from "./1794580000000-AddTaskRecordAndEvidence.ts";
 import { AddTaskArchiveReason1794590000000 } from "./1794590000000-AddTaskArchiveReason.ts";
 import { AddTaskCard1794600000000 } from "./1794600000000-AddTaskCard.ts";
+import { AddBacklog1794610000000 } from "./1794610000000-AddBacklog.ts";
 
 export const MIGRATIONS: Function[] = [
   Init1792712166445,
@@ -47,4 +48,5 @@ export const MIGRATIONS: Function[] = [
   AddTaskRecordAndEvidence1794580000000,
   AddTaskArchiveReason1794590000000,
   AddTaskCard1794600000000,
+  AddBacklog1794610000000,
 ];
