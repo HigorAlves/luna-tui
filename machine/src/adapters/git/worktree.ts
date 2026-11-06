@@ -1,6 +1,7 @@
 // Task worktrees on the host. Each task gets its own branch and checkout; the agent works
 // there through a bind mount, and the machine commits on the host.
-import { existsSync, lstatSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 import { basename, dirname, join, resolve } from "node:path";
 
@@ -255,6 +256,28 @@ export const GRAPH_CHECKOUT = "graph";
 /** The clean checkout a repo's graph is built from, keyed by the graph store's slug: two repos with one basename never share it. */
 export function graphCheckoutPath(slug: string, worktreesDir: string): string {
   return join(worktreesDir, slug, GRAPH_CHECKOUT);
+}
+
+/**
+ * A clean copy of `commit`'s files in a new folder `dest`, taken from the card's machine-owned repository `M` (named by the
+ * workspace path, like every host git on a workspace) and never from the work folder. A temporary index, so neither the card's
+ * index nor its folder is touched; git itself refuses to write through a link in the tree. `dest` holds no `.git`.
+ */
+export async function exportCommit(workspacePath: string, commit: string, dest: string): Promise<void> {
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) throw new Error("not a commit id");
+  rmSync(dest, { recursive: true, force: true });
+  mkdirSync(dest, { recursive: true });
+  const scratch = mkdtempSync(join(tmpdir(), "luna-export-"));
+  try {
+    const env = { ...process.env, GIT_INDEX_FILE: join(scratch, "index") };
+    await execOrThrow("git", [...HOST_GIT, ...at(workspacePath), "read-tree", commit], { env });
+    await execOrThrow("git", [...HOST_GIT, ...at(workspacePath), "checkout-index", "--all", "--force", `--prefix=${resolve(dest)}/`], { env });
+  } catch (error) {
+    rmSync(dest, { recursive: true, force: true });
+    throw error;
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
 }
 
 /** The commit `origin/<default>` points at after a fetch (the repo's HEAD without an origin). */

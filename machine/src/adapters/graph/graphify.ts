@@ -12,13 +12,13 @@ import { join, sep } from "node:path";
 
 import { FACTORY_DEFAULTS, isPlainRepoPath } from "@hardness/contracts";
 
-import { GraphBuildError, type Graph, type GraphStamp } from "../../application/graph.ts";
+import { type BranchBuild, type BranchBuildInput, type BranchGraph, GraphBuildError, type Graph, type GraphStamp } from "../../application/graph.ts";
 import type { GraphJson } from "../../domain/blast-radius.ts";
 import { parseCodeowners, requiredOwners } from "../../domain/codeowners.ts";
 import { impact } from "../../domain/graph-impact.ts";
 import { type LocateGraph, locate } from "../../domain/graph-locate.ts";
 import type { SandboxResult, SandboxRun } from "../docker/docker.ts";
-import { checkoutHead, commitsBehind, defaultBranchFile, ensureCleanCheckout, graphCheckoutPath, isAncestor } from "../git/worktree.ts";
+import { checkoutHead, commitsBehind, defaultBranchFile, ensureCleanCheckout, exportCommit, graphCheckoutPath, isAncestor } from "../git/worktree.ts";
 import { safe } from "../../domain/evidence-markdown.ts";
 import { repoSlug } from "./slug.ts";
 
@@ -31,11 +31,19 @@ export const MAX_PAST_MISSES = 20;
 const BUILD_TIMEOUT_MS = 15 * 60_000;
 /** Commit folders kept per repo: the current graph and two older ones a running stage may still mount. */
 export const KEEP_GRAPHS = 3;
+/** Commit folders kept per card: the newest and the ones before it that a run may still have mounted. */
+export const KEEP_BRANCH_GRAPHS = 3;
+/** Where the previous branch graph is mounted in a branch build, for the incremental update. */
+const PREVIOUS_MOUNT = "/graph-prev";
+const TASK_ID = /^[0-9A-Za-z][0-9A-Za-z-]{0,63}$/;
+const COMMIT = /^[0-9a-f]{40}$/;
 
 export interface GraphGit {
   ensureCleanCheckout(repoPath: string, path: string): Promise<string>;
   /** HEAD of the read-only checkout `ensureCleanCheckout` made, read from the repository that registered it. */
   headCommit(path: string, repoPath: string): Promise<string>;
+  /** Writes the files of `commit` from the card's machine-owned repository (named by its workspace path) into the new folder `dest`. Default: `exportCommit`. */
+  exportCommit?(workspacePath: string, commit: string, dest: string): Promise<void>;
   /** Commits the default branch has over `commit`; null when unknown. Default: the repo's last-known default branch. */
   commitsBehind?(repoPath: string, commit: string): Promise<number | null>;
   /** The repo's CODEOWNERS text at the default branch; null when it has none. */
@@ -121,6 +129,133 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
     const commits = (await readdir(repoDir).catch(() => [])).filter((name) => /^[0-9a-f]{40}$/.test(name));
     const newestFirst = commits.map((name) => ({ name, at: statSync(join(repoDir, name)).mtimeMs })).sort((a, b) => b.at - a.at);
     for (const { name } of newestFirst.slice(KEEP_GRAPHS)) await rm(join(repoDir, name), { recursive: true, force: true });
+  }
+
+  // ---- Branch graphs: the graph of a card's newest accepted slice commit, `<graphs>/<repo>/cards/<task>/<commit>/`.
+  const exportOf = git.exportCommit ?? exportCommit;
+  const cardDirOf = (repoPath: string, taskId: string) => join(dirOf(repoPath), "cards", taskId);
+  /** The newest commit asked for per card: a build that starts for an older one is skipped. */
+  const wanted = new Map<string, string>();
+  /** Each card's builds run one after another. */
+  const chains = new Map<string, Promise<unknown>>();
+  /** Raised when a card's graphs are dropped: a build that started before that discards its output. */
+  const epochs = new Map<string, number>();
+  const keyOf = (repoPath: string, taskId: string) => `${repoPath}\0${taskId}`;
+
+  function branchCurrent(repoPath: string, taskId: string): string | null {
+    try {
+      return join(cardDirOf(repoPath, taskId), readlinkSync(join(cardDirOf(repoPath, taskId), "current")));
+    } catch {
+      return null;
+    }
+  }
+
+  async function pruneBranch(cardDir: string): Promise<void> {
+    const commits = (await readdir(cardDir).catch(() => [])).filter((name) => COMMIT.test(name));
+    const newestFirst = commits
+      .flatMap((name) => {
+        try {
+          return [{ name, at: statSync(join(cardDir, name)).mtimeMs }];
+        } catch {
+          return [];
+        }
+      })
+      .sort((a, b) => b.at - a.at);
+    for (const { name } of newestFirst.slice(KEEP_BRANCH_GRAPHS)) await rm(join(cardDir, name), { recursive: true, force: true });
+  }
+
+  async function branchNow(input: BranchBuildInput, epoch: number): Promise<BranchBuild> {
+    const { repoPath, taskId, commit } = input;
+    const key = keyOf(repoPath, taskId);
+    if (wanted.get(key) !== commit) return { state: "skipped", reason: "a newer commit of the card is waiting for its graph" };
+    if (!current(repoPath)) return { state: "skipped", reason: "the repository has no main graph" };
+    const cardDir = cardDirOf(repoPath, taskId);
+    const slug = repoSlug(repoPath);
+    const checkout = join(deps.worktreesDir, slug, `branch-${taskId}`);
+    const building = join(cardDir, `building-${commit}`);
+    const discard = async () => {
+      await rm(building, { recursive: true, force: true });
+      await rm(checkout, { recursive: true, force: true });
+    };
+    try {
+      let image: string;
+      let imageName: string | null = null;
+      try {
+        image = typeof deps.image === "function" ? await deps.image(repoPath) : deps.image;
+        imageName = deps.imageId ? await deps.imageId(image) : null;
+      } catch (error) {
+        return { state: "failed", reason: `the graph build did not run: ${(error as Error).message}` };
+      }
+      const target = join(cardDir, commit);
+      const have = await readStamp(target);
+      const expected = (await deps.graphifyVersion?.().catch(() => null)) ?? null;
+      if (have && (expected === null || have.graphify === expected) && (imageName === null || have.image === imageName)) {
+        if (branchCurrent(repoPath, taskId) !== target) await point(cardDir, commit);
+        return { state: "built", stamp: have, mode: "full" };
+      }
+      // The previous commit's graph, when this Graphify in this image built it: its cache makes the build incremental.
+      const previous = branchCurrent(repoPath, taskId);
+      const before = previous ? await readStamp(previous) : null;
+      const usable =
+        previous && before && previous !== target && (expected === null || before.graphify === expected) && (imageName === null || before.image === imageName) && existsSync(join(previous, "graphify-out", "cache"))
+          ? previous
+          : null;
+      await mkdir(cardDir, { recursive: true });
+      await rm(building, { recursive: true, force: true });
+      await mkdir(building, { recursive: true });
+      try {
+        await exportOf(input.workspacePath, commit, checkout);
+      } catch (error) {
+        await discard();
+        return { state: "failed", reason: `the commit could not be exported from the card's repository: ${safe((error as Error).message).slice(0, 300)}` };
+      }
+      let result: SandboxResult;
+      try {
+        result = await deps.sandbox({
+          name: `luna-graph-branch-${slug}-${taskId.slice(0, 8)}`,
+          image,
+          runDir: join(dirOf(repoPath), "run"),
+          worktree: checkout,
+          writable: false,
+          gitDir: null,
+          input: {},
+          timeoutMs: input.minutes * 60_000,
+          credential: { env: {}, mounts: [] },
+          labels: { luna: "graph-branch", "luna.repo": slug },
+          mounts: [{ host: building, container: "/graph", readOnly: false }, ...(usable ? [{ host: usable, container: PREVIOUS_MOUNT, readOnly: true }] : [])],
+          entrypoint: ["/opt/luna/python/bin/python3", "/opt/luna/graph-tools/build.py", "--input", "/work", "--out", "/graph", "--commit", commit, "--keep-cache", ...(usable ? ["--seed-cache", PREVIOUS_MOUNT] : [])],
+          networkNone: true,
+        });
+      } catch (error) {
+        await discard();
+        return { state: "failed", reason: `the graph build did not run: ${safe((error as Error).message).slice(0, 300)}` };
+      }
+      let stamp = result.exitCode === 0 ? await readStamp(building) : null;
+      if (stamp && imageName !== null) {
+        stamp = { ...stamp, image: imageName };
+        await writeStamp(join(building, "stamp.json"), JSON.stringify(stamp, null, 2));
+      }
+      if (!stamp) {
+        await discard();
+        const why = result.timedOut ? `ran past ${input.minutes} minutes` : result.aborted ? "aborted" : `exit code ${result.exitCode}`;
+        return { state: "failed", reason: `the graph build of ${commit.slice(0, 7)} failed (${why})` };
+      }
+      // The card was closed or removed while the build ran: nothing of it stays.
+      if ((epochs.get(key) ?? 0) !== epoch) {
+        await discard();
+        await rm(cardDir, { recursive: true, force: true });
+        return { state: "skipped", reason: "the card's graphs were dropped while the build ran" };
+      }
+      await rm(checkout, { recursive: true, force: true });
+      await rm(target, { recursive: true, force: true });
+      await rename(building, target);
+      await point(cardDir, commit);
+      await pruneBranch(cardDir);
+      return { state: "built", stamp, mode: usable ? "incremental" : "full" };
+    } catch (error) {
+      await discard().catch(() => {});
+      return { state: "failed", reason: safe(error instanceof Error ? error.message : String(error)).slice(0, 300) };
+    }
   }
 
   const inflight = new Map<string, Promise<GraphStamp>>();
@@ -221,6 +356,39 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       });
       inflight.set(repoPath, entry);
       return entry;
+    },
+
+    buildBranch(input) {
+      if (!TASK_ID.test(input.taskId)) return Promise.resolve({ state: "failed", reason: "not a usable task id" });
+      if (!COMMIT.test(input.commit)) return Promise.resolve({ state: "failed", reason: "not a usable commit id" });
+      const key = keyOf(input.repoPath, input.taskId);
+      wanted.set(key, input.commit);
+      const epoch = epochs.get(key) ?? 0;
+      const run = (chains.get(key) ?? Promise.resolve()).then(() => branchNow(input, epoch));
+      const settled = run.catch(() => undefined);
+      chains.set(key, settled);
+      void settled.then(() => {
+        if (chains.get(key) === settled) {
+          chains.delete(key);
+          if (wanted.get(key) === input.commit) wanted.delete(key);
+        }
+      });
+      return run;
+    },
+
+    async branchGraph(repoPath, taskId): Promise<BranchGraph | null> {
+      if (!TASK_ID.test(taskId)) return null;
+      const dir = branchCurrent(repoPath, taskId);
+      const stamp = dir ? await readStamp(dir) : null;
+      return dir && stamp ? { dir, stamp } : null;
+    },
+
+    async dropBranch(repoPath, taskId) {
+      if (!TASK_ID.test(taskId)) return;
+      const key = keyOf(repoPath, taskId);
+      epochs.set(key, (epochs.get(key) ?? 0) + 1);
+      wanted.delete(key);
+      await rm(cardDirOf(repoPath, taskId), { recursive: true, force: true });
     },
 
     async locate(repoPath, text, options) {

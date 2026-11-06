@@ -135,6 +135,9 @@ const MINUTE = 60_000;
 /** Where a repo's graph is mounted in a stage container, and the file the `graphify` verbs read. */
 const GRAPH_MOUNT = "/graph";
 const GRAPH_FILE = "/graph/graphify-out/graph.json";
+/** Where the graph of the card's own newest slice commit is mounted, when it has one. */
+const BRANCH_MOUNT = "/graph-branch";
+const BRANCH_FILE = "/graph-branch/graphify-out/graph.json";
 const isFile = (path: string): boolean => {
   try {
     return statSync(path).isFile();
@@ -351,9 +354,17 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
   const graphStamp = deps.graph && policy.graph ? await deps.graph.stampOf(task.repoPath) : null;
   const graphDir = graphStamp ? deps.graph!.currentDir(task.repoPath) : null;
   if (deps.graph && policy.graph && !graphDir) deps.ensureGraph?.(task.repoPath);
+  // The graph of the card's own newest slice commit, beside it: the card's next runs (the next slice, Verify) read what its commits changed.
+  const branchGraph = graphDir && !extra.checkout ? await deps.graph!.branchGraph?.(task.repoPath, task.id).catch(() => null) : null;
   const graphContext =
     graphStamp && graphDir
-      ? { path: GRAPH_FILE, commit: graphStamp.commit, builtAt: graphStamp.builtAt, fresh: baseCommit ? await deps.graph!.isFresh(task.repoPath, graphStamp, baseCommit) : true }
+      ? {
+          path: GRAPH_FILE,
+          commit: graphStamp.commit,
+          builtAt: graphStamp.builtAt,
+          fresh: baseCommit ? await deps.graph!.isFresh(task.repoPath, graphStamp, baseCommit) : true,
+          ...(branchGraph ? { branch: { path: BRANCH_FILE, commit: branchGraph.stamp.commit, builtAt: branchGraph.stamp.builtAt } } : {}),
+        }
       : null;
 
   // The browser run drives ONE target, chosen here, and holds only that target's credential.
@@ -419,9 +430,20 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
         runId: context.runId,
         dir: join(runDir, "out", "bundles"),
         // The card's branch shows in the user's repository too, written by the machine; a refusal is a note.
-        onAccepted: async () => {
+        onAccepted: async (head) => {
           const shown = await publishBranch(task.repoPath!, workspace.path, workspace.branch);
           if (!shown.ok) await context.note?.(shown.note).catch(() => {});
+          // The graph of this slice commit is built off the run's path: the run does not wait, and a failure is a note, never the card's.
+          if (graphStamp && graphDir && policy.graph && deps.graph?.buildBranch) {
+            const minutes = policy.factory.graph.branch_build_minutes;
+            const unbuilt = (why: string) => `the branch graph of ${head.slice(0, 7)} was not built (${why}); the previous graph stays`;
+            void deps.graph
+              .buildBranch({ repoPath: task.repoPath!, taskId: task.id, workspacePath: workspace.path, commit: head, minutes })
+              .then(async (built) => {
+                if (built.state === "failed") await context.note?.(unbuilt(built.reason));
+              })
+              .catch((error: unknown) => context.note?.(unbuilt(error instanceof Error ? error.message : String(error))).catch(() => {}));
+          }
         },
       });
   // Implementing: every slice that turns committed is pushed as it lands, one push at a time.
@@ -573,11 +595,12 @@ async function runAgentIn(deps: AgentDeps, context: StageContext, pack: PackId, 
     labels: { "dev.hardness.task": task.id },
     mounts: [
       ...(graphContext && graphDir ? [{ host: graphDir, container: GRAPH_MOUNT, readOnly: true }] : []),
+      ...(graphContext && branchGraph ? [{ host: branchGraph.dir, container: BRANCH_MOUNT, readOnly: true }] : []),
       // The worktree's `.git` file points at its admin dir: read-only, so no stage can repoint the checkout.
       ...(extra.mounts ?? []),
     ],
     // The graph's path for the pack, and what the stage container needs to continue the machine's trace.
-    extraEnv: { ...(graphContext && graphDir ? { LUNA_GRAPH: GRAPH_FILE } : {}), ...(context.traceEnv ?? {}), ...(qaCredentialNames.length > 0 ? { LUNA_QA_CREDENTIALS: qaCredentialNames.join(",") } : {}) },
+    extraEnv: { ...(graphContext && graphDir ? { LUNA_GRAPH: GRAPH_FILE } : {}), ...(graphContext && branchGraph ? { LUNA_GRAPH_BRANCH: BRANCH_FILE } : {}), ...(context.traceEnv ?? {}), ...(qaCredentialNames.length > 0 ? { LUNA_QA_CREDENTIALS: qaCredentialNames.join(",") } : {}) },
     signal: context.signal,
     // The tab's label names the repo too: five repos' Build tabs read apart.
     onStarted: (name) => {
