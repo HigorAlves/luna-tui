@@ -357,6 +357,70 @@ describe("evidenceStage", () => {
     expect(pack.summary.split(/\s+/).length).toBeLessThanOrEqual(200);
   });
 
+  describe("the format labels and the terminal capture", () => {
+    const run2 = (choice: string, over: Partial<EvidenceStageDeps> = {}) => stage({ decideFormat: async () => ({ format: { choice, confidence: 0.9 } }), ...over });
+    const verifying = (checks: unknown[]) => ({ runId: "v1", detail: { findings: [], checks } });
+    const apiChecks = [{ name: "unit", cmd: "pnpm test", ok: true, tail: "3 passed" }];
+
+    it("maps the diagram's labels to the stored format, and still takes the old ones", async () => {
+      browserRun();
+      for (const [choice, format] of [["video", "captures"], ["screenshots_or_terminal", "captures"], ["text_only", "text"], ["captures", "captures"], ["text", "text"]] as const) {
+        const { run, saved } = run2(choice);
+        await run(taskContext());
+        expect((saved[0]![1] as { evidence: { format: string } }).evidence.format, choice).toBe(format);
+      }
+    });
+
+    it("writes the decision's own label, from the format the pack shipped with", async () => {
+      browserRun();
+      const told: Learned[] = [];
+      const { run } = stage({ decideFormat: async () => tagged({ answer: { format: { choice: "text_only", confidence: 0.9 } }, recordId: "r1" }), truth: { learned: async (f: Learned) => (told.push(f), true) } });
+      await run(taskContext());
+      expect(told[0]!.label).toEqual({ format: { choice: "text_only" } });
+    });
+
+    it("hands the decision how many checks Verify ran", async () => {
+      browserRun();
+      const { run, asked } = stage({ latestFinish: async (_id, name) => (name === "verifying" ? verifying(apiChecks) : (finishes[name] ?? null)) });
+      await run(taskContext());
+      expect((asked[0]![0] as { checks?: number }).checks).toBe(1);
+    });
+
+    it("keeps captures with no browser run when Verify ran checks, and writes terminal.txt as a report media entry", async () => {
+      const { run, saved } = run2("screenshots_or_terminal", { latestFinish: async (_id, name) => (name === "verifying" ? verifying(apiChecks) : (finishes[name] ?? null)) });
+      await run(taskContext());
+      const pack = (saved[0]![1] as { evidence: { format: string; media: { kind: string; label: string; url: string }[]; note?: string } }).evidence;
+      expect(pack.format).toBe("captures");
+      expect(pack.note ?? "").not.toMatch(/no browser run to capture/);
+      const terminal = pack.media.find((m) => m.label === "terminal.txt")!;
+      expect(terminal.kind).toBe("report");
+      expect(readFileSync(terminal.url, "utf8")).toContain("$ pnpm test");
+    });
+
+    it("keeps captures with no browser run when Build tagged scenario tests", async () => {
+      const { run, saved } = run2("screenshots_or_terminal", { reports: async () => ({ build: { diffSummary: { added: 1, removed: 0, files: [] }, tests: [{ scenario: "S1", before: "fail", after: "pass", file: "a.test.ts" }] } as never, verify: null }) });
+      await run(taskContext());
+      expect((saved[0]![1] as { evidence: { format: string } }).evidence.format).toBe("captures");
+    });
+
+    it("becomes text only when there are neither checks nor tagged tests", async () => {
+      const { run, saved } = run2("screenshots_or_terminal");
+      await run(taskContext());
+      const pack = (saved[0]![1] as { evidence: { format: string; note?: string } }).evidence;
+      expect(pack.format).toBe("text");
+      expect(pack.note).toMatch(/no browser run to capture/);
+    });
+
+    it("gives a text pack a checks.txt excerpt as a media line, never inline", async () => {
+      const { run, saved } = run2("text_only", { latestFinish: async (_id, name) => (name === "verifying" ? verifying(apiChecks) : (finishes[name] ?? null)) });
+      await run(taskContext());
+      const pack = (saved[0]![1] as { evidence: { format: string; media: { kind: string; label: string; url: string }[] } }).evidence;
+      expect(pack.format).toBe("text");
+      expect(pack.media.map((m) => m.label)).toEqual(["checks.txt"]);
+      expect(readFileSync(pack.media[0]!.url, "utf8")).toContain("3 passed");
+    });
+  });
+
   it("assembles a captures pack, keeps its media locally and saves it on the task", async () => {
     const dir = browserRun();
     const { run, saved } = stage();
@@ -418,7 +482,7 @@ describe("evidenceStage", () => {
     const truth = { learned: async (fact: Learned) => (told.push(fact), true) };
     const { run } = stage({ decideFormat: async () => tagged({ answer: { format: { choice: "video", confidence: 0.95 } }, recordId: "rec-9" }), videoImage: async () => false, truth });
     await run(taskContext());
-    expect(told).toEqual([{ pack: "evidence_format", recordId: "rec-9", label: { format: { choice: "captures" } }, source: "evidence_shipped", taskId: expect.any(String) }]);
+    expect(told).toEqual([{ pack: "evidence_format", recordId: "rec-9", label: { format: { choice: "screenshots_or_terminal" } }, source: "evidence_shipped", taskId: expect.any(String) }]);
   });
 
   it("degrades video to captures when the image exists but the browser run left neither a recording nor steps", async () => {

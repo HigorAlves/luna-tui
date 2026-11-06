@@ -29,7 +29,9 @@ export type DecisionIds = Partial<Record<PackId, string>>;
 export type Label = Record<string, Record<string, unknown>>;
 
 export const e2eCauseTruth = (rerunPassed: boolean): Label => ({ cause: { choice: rerunPassed ? "env_flake" : ["product_bug", "test_bug"] } });
-export const evidenceFormatTruth = (format: string): Label => ({ format: { choice: format } });
+/** The decision's own label for the stored format (`video`, `captures`, `text`). */
+const FORMAT_LABEL: Record<string, string> = { video: "video", captures: "screenshots_or_terminal", text: "text_only" };
+export const evidenceFormatTruth = (format: string): Label => ({ format: { choice: FORMAT_LABEL[format] ?? format } });
 /** `testRewritten`: the slice went red again after the judged red, because the test was changed. */
 export const redCheckTruth = (testRewritten: boolean): Label => ({ right_reason: { value: !testRewritten } });
 export const worthLearningTruth = (approved: boolean): Label => ({ worth: { value: approved } });

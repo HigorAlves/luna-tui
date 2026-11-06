@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "format.choice",
+      "value": "screenshots_or_terminal"
+    }
+  ],
+  "rubric": "A command line change with no web surface: screenshots_or_terminal (the commands and their output).",
+  "label": {
+    "format": {
+      "choice": "screenshots_or_terminal"
+    }
+  }
+}

@@ -153,11 +153,18 @@ describe("the plan stage's decision packs", () => {
     }
   });
 
-  it("evidence_format asks one format choice (video, captures, text) on the evidence context, a decision like the others", () => {
+  it("evidence_format answers with the diagram's labels: video, screenshots_or_terminal, text_only", () => {
+    const criteria = (PACKS.evidence_format.questions.format as { criteria: Record<string, string> }).criteria;
+    expect(Object.keys(criteria)).toEqual(["video", "screenshots_or_terminal", "text_only"]);
+    expect(criteria.screenshots_or_terminal).toMatch(/API|CLI/);
+    expect(criteria.text_only).toMatch(/infrastructure|refactor/);
+  });
+
+  it("evidence_format asks one format choice on the evidence context, a decision like the others", () => {
     const pack = PACKS.evidence_format;
     expect(pack.kind).toBe("decision");
     expect(Object.keys(pack.questions)).toEqual(["format"]);
-    expect(pack.questions.format).toMatchObject({ type: "choice", criteria: { video: expect.stringContaining("recording"), captures: expect.any(String), text: expect.stringContaining("API") } });
+    expect(pack.questions.format).toMatchObject({ type: "choice", criteria: { video: expect.stringContaining("browser run"), screenshots_or_terminal: expect.any(String), text_only: expect.any(String) } });
     expect(pack.engines).toEqual({ ...decisionEngines(pack.id), allowed: ["jev", "claude:haiku", "codex:luna"] });
     expect(Object.keys(pack.policy)).toEqual(["format"]);
     expect(PACK_LIMITS[pack.id]).toEqual({ maxTurns: 1, timeoutMs: pack.timeoutMs, writable: false });

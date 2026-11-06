@@ -603,9 +603,9 @@ const EVIDENCE_FORMAT_QUESTIONS: QuestionSet = {
     type: "choice",
     instructions: "Which format shows this change to the person who approves it? Judge from the record, the surface, what the browser run left (a recording or replayable steps) and whether the video image exists.",
     criteria: {
-      video: "a user-visible change a person should watch happen: a web surface, scenarios the browser drove, a recording or replayable steps, and the video image is there",
-      captures: "a user-visible change screenshots show well enough, or a recording is not possible",
-      text: "no user-visible surface: an API, a library, docs, data, infrastructure",
+      video: "a UI or flow change a person should watch happen, and the browser run ran on a running system: scenarios the browser drove, a recording or replayable steps, and the video image is there",
+      screenshots_or_terminal: "an API or CLI change: screenshots when there is something to see, else a terminal capture of the commands and the scenarios' tests",
+      text_only: "CI/CD, config, infrastructure or a pure refactor: nothing a person could watch or run to see it",
     },
   },
 };

@@ -1,0 +1,64 @@
+{
+  "schema": 3,
+  "stage": "evidence_format",
+  "pack": "evidence_format",
+  "attempt": 1,
+  "task": {
+    "id": "evidence-format",
+    "title": "Evidence format: Cache the package store in the CI workflow",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "evidence": {
+      "record": {
+        "source": "example-tracker:EX-75",
+        "kind": "chore",
+        "goal": "Cache the package store in the CI workflow",
+        "size": "small",
+        "urgency": "normal",
+        "risk": "low",
+        "signals": {
+          "kind": {
+            "answer": "chore",
+            "confidence": 0.9
+          }
+        },
+        "qa": [],
+        "decision": "plan",
+        "reason": "ready",
+        "at": "2026-11-01T09:00:00.000Z",
+        "model": "fixture"
+      },
+      "risk": "low",
+      "webSurface": false,
+      "e2e": {
+        "ran": false,
+        "verdict": null,
+        "hasVideo": false,
+        "hasSteps": false,
+        "scenarios": 0,
+        "skippedReason": "no web surface detected"
+      },
+      "videoImage": true,
+      "changed": [
+        ".github/workflows/ci.yml"
+      ],
+      "checks": 2
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

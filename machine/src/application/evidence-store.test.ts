@@ -21,6 +21,17 @@ const file = (name: string, text = "x") => {
   return path;
 };
 
+describe("EvidenceStore.keepText", () => {
+  it("writes a text file under the task's folder and answers its path, the name made safe", async () => {
+    const store = new EvidenceStore(stateDir);
+    const kept = await store.keepText("t1", "abc123", "terminal.txt", "red -> green\n");
+    expect(kept).toEqual({ label: "terminal.txt", path: join(stateDir, "evidence", "t1", "abc123", "terminal.txt") });
+    expect(readFileSync(kept.path, "utf8")).toBe("red -> green\n");
+    const odd = await store.keepText("t1", "abc123", "../../etc/x", "y");
+    expect(odd.path.startsWith(join(stateDir, "evidence", "t1", "abc123") + "/")).toBe(true);
+  });
+});
+
 describe("EvidenceStore", () => {
   it("keeps a task's files under <stateDir>/evidence/<task>/<sha>/", () => {
     expect(new EvidenceStore(stateDir).dirFor("t1", "abc123")).toBe(join(stateDir, "evidence", "t1", "abc123"));

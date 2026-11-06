@@ -9,6 +9,7 @@ import { readdir, stat } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
 
 import { assembleEvidencePack, packComplete, repairPack } from "../../domain/evidence-pack.ts";
+import { type CheckOutput, checksExcerpt, terminalCapture } from "../../domain/terminal-capture.ts";
 import { parseNote } from "../../domain/fix-card.ts";
 import type { Policy } from "../../domain/policy.ts";
 import { approvedCases, approvedPlan, approvedScenarios } from "../../domain/stage-input.ts";
@@ -235,7 +236,8 @@ export interface EvidenceStageDeps extends EvidenceDeps {
 }
 
 type Format = EvidencePack["format"];
-const FORMATS: readonly string[] = ["video", "captures", "text"];
+/** The decision's labels (the diagram's) and the older ones, to the format a pack stores. */
+const FORMAT_OF: Record<string, Format> = { video: "video", screenshots_or_terminal: "captures", text_only: "text", captures: "captures", text: "text" };
 const CHANGED_CAP = 50;
 const MEDIA_SCREENSHOTS = 30;
 
@@ -274,6 +276,15 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
     const implementing = await deps.latestFinish(task.id, "implementing");
     const verifying = await deps.latestFinish(task.id, "verifying");
 
+    // What Verify ran: each check with its command and the end of its output (a row that is a note or a skip has no command).
+    const verifyChecks: CheckOutput[] | null = Array.isArray(verifying?.detail?.checks)
+      ? (verifying!.detail!.checks as unknown[]).flatMap((c) => {
+          const item = objectOf(c);
+          return typeof item?.cmd === "string" ? [{ name: typeof item.name === "string" ? item.name : item.cmd, cmd: item.cmd, ok: item.ok === true, tail: typeof item.tail === "string" ? item.tail : "" }] : [];
+        })
+      : null;
+    const buildReport = (await deps.reports?.(task.id).catch(() => null))?.build ?? null;
+
     const skipped = facts.e2e?.detail?.skipped === true;
     const skippedReason = skipped ? String(facts.e2e?.detail?.reason ?? facts.e2e?.detail?.note ?? "") || null : null;
     const hasManifest = facts.manifestPath !== undefined && facts.verdict !== "skipped" && facts.verdict !== "unreadable";
@@ -290,6 +301,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       e2e: { ran: !skipped && facts.e2e !== null, verdict: facts.verdict === "skipped" ? null : facts.verdict, hasVideo, hasSteps, scenarios: facts.approvedCount, skippedReason },
       videoImage,
       ...(changed.length > 0 ? { changed } : {}),
+      ...(verifyChecks ? { checks: verifyChecks.length } : {}),
     };
 
     // 1. The format: kept from a previous pack, else decided; then a mechanical veto.
@@ -310,7 +322,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
           const overrides = (await deps.policies.for(task.repoPath)).decisions.evidence_format;
           const verdict = applyPolicy(PACKS.evidence_format, answer, overrides).overall;
           const choice = objectOf(answer.format)?.choice;
-          if ((verdict === "proceed" || verdict === "flag") && typeof choice === "string" && FORMATS.includes(choice)) format = choice as Format;
+          if ((verdict === "proceed" || verdict === "flag") && typeof choice === "string" && Object.hasOwn(FORMAT_OF, choice)) format = FORMAT_OF[choice]!;
         } catch (error) {
           await context.note?.(`evidence_format skipped: ${error instanceof Error ? error.message : String(error)}`).catch(() => {});
         }
@@ -344,7 +356,9 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       else film = true;
       if (!film) format = "captures";
     }
-    if (format === "captures" && !hasManifest) {
+    // No browser run: an API or CLI change is still shown by a terminal capture when Verify ran checks or Build tagged scenario tests; with neither there is nothing to show but text.
+    const terminal = format === "captures" && !hasManifest;
+    if (terminal && (verifyChecks?.length ?? 0) === 0 && (buildReport?.tests.length ?? 0) === 0) {
       addNote("there is no browser run to capture");
       format = "text";
     }
@@ -361,7 +375,6 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
 
     const approvedScenarioList = approvedScenarios(context.approvals);
     const scenarioInputs = facts.scenarios.map((x, i) => ({ text: x.text, criterion: x.criterion, result: packResult(x.result), test: x.test, ...(approvedScenarioList[i]?.id !== undefined ? { id: approvedScenarioList[i]!.id } : {}), layer: approvedScenarioList[i]?.layer ?? null }));
-    const buildReport = (await deps.reports?.(task.id).catch(() => null))?.build ?? null;
 
     // 2b. The film: the pipeline runs on the approved scenarios and the browser run's facts; a person's send-back note re-enters it at the fix.
     let video: EvidencePack["video"] | undefined;
@@ -424,6 +437,16 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       const kind = picked.find((p) => p.label === k.label)?.kind;
       return kind ? [{ kind, label: k.label, url: k.path }] : [];
     });
+
+    // A terminal capture or the checks' excerpt: written from the card, listed as a media line and never inline.
+    if (format === "captures" && terminal) {
+      const text = terminalCapture({ scenarios: scenarioInputs.map((x) => ({ id: x.id, title: x.text, test: x.test })), tests: buildReport?.tests ?? [], checks: verifyChecks ?? [] });
+      const written = await store.keepText(task.id, commitSha, "terminal.txt", text);
+      media.push({ kind: "report", label: written.label, url: written.path });
+    } else if (format === "text" && (verifyChecks?.length ?? 0) > 0) {
+      const written = await store.keepText(task.id, commitSha, "checks.txt", checksExcerpt(verifyChecks!));
+      media.push({ kind: "report", label: written.label, url: written.path });
+    }
 
     // 4. The pack.
     const findings = (Array.isArray(verifying?.detail?.findings) ? verifying!.detail!.findings : []).flatMap((f) => {

@@ -110,6 +110,7 @@ export function renderEvidence(evidence: EvidenceContext): string {
     `Web surface: ${evidence.webSurface ? "yes" : "no"}`,
     `E2E: ${run}`,
     `Video image: ${evidence.videoImage ? "present" : "absent"}`,
+    ...(evidence.checks !== undefined ? [`Checks run by Verify: ${evidence.checks}`] : []),
     ...bullets("Changed files", evidence.changed),
   ].join("\n");
 }

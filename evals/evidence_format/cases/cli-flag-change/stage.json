@@ -1,0 +1,65 @@
+{
+  "schema": 3,
+  "stage": "evidence_format",
+  "pack": "evidence_format",
+  "attempt": 1,
+  "task": {
+    "id": "evidence-format",
+    "title": "Evidence format: Add a --dry-run flag to the deploy command line tool",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "evidence": {
+      "record": {
+        "source": "example-tracker:EX-89",
+        "kind": "feature",
+        "goal": "Add a --dry-run flag to the deploy command line tool",
+        "size": "small",
+        "urgency": "normal",
+        "risk": "low",
+        "signals": {
+          "kind": {
+            "answer": "feature",
+            "confidence": 0.9
+          }
+        },
+        "qa": [],
+        "decision": "plan",
+        "reason": "ready",
+        "at": "2026-11-01T09:00:00.000Z",
+        "model": "fixture"
+      },
+      "risk": "low",
+      "webSurface": false,
+      "e2e": {
+        "ran": false,
+        "verdict": null,
+        "hasVideo": false,
+        "hasSteps": false,
+        "scenarios": 0,
+        "skippedReason": "no web surface detected"
+      },
+      "videoImage": true,
+      "changed": [
+        "cli/deploy.ts",
+        "cli/deploy.test.ts"
+      ],
+      "checks": 3
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

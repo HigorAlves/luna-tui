@@ -58,6 +58,16 @@ export class EvidenceStore {
     return kept;
   }
 
+  /** Writes a text file (the terminal capture, the checks' excerpt) beside the media and says where it went. The name is made safe like any other. */
+  async keepText(taskId: string, sha: string, name: string, text: string): Promise<{ label: string; path: string }> {
+    const dir = this.dirFor(taskId, sha);
+    await mkdir(dir, { recursive: true });
+    const file = safeName(name);
+    const path = join(dir, file === "pack.json" ? "pack-text.json" : file);
+    await writeFile(path, text);
+    return { label: name === file ? name : file, path };
+  }
+
   /** `pack.json` beside the media: what the sweep dates a store entry by. */
   async writePack(taskId: string, sha: string, pack: unknown): Promise<void> {
     const dir = this.dirFor(taskId, sha);

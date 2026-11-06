@@ -763,6 +763,8 @@ export const EvidenceContext = z.object({
   videoImage: z.boolean(),
   /** Repo-relative paths the change touched; the caller caps it at 50. */
   changed: z.array(z.string()).max(200).optional(),
+  /** How many checks Verify ran (an API or CLI change is shown by their output). */
+  checks: z.number().int().min(0).optional(),
 });
 export type EvidenceContext = z.infer<typeof EvidenceContext>;
 

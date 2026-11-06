@@ -204,6 +204,11 @@ describe("an evidence context", () => {
     for (const part of ["Goal: Show the cart total", "Record: feature", "Risk: medium", "Web surface: yes", "E2E: ran, verdict pass, 3 scenarios, a recording, replayable steps", "Video image: absent", "Changed files:\n- web/cart.tsx\n- web/cart.css"]) expect(text).toContain(part);
   });
 
+  it("prints how many checks Verify ran when the context says, and nothing when it does not", () => {
+    expect(renderEvidence({ ...evidence, checks: 4 } as never)).toContain("Checks run by Verify: 4");
+    expect(renderEvidence(evidence as never)).not.toContain("Checks run by Verify");
+  });
+
   it("says why e2e did not run and that there is no surface", () => {
     const text = renderEvidence({ record: null, risk: null, webSurface: false, e2e: { ran: false, verdict: null, hasVideo: false, hasSteps: false, scenarios: 0, skippedReason: "no web surface" }, videoImage: true } as never);
     expect(text).toContain("Web surface: no");

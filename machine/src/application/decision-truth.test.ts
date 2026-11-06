@@ -10,7 +10,10 @@ describe("what each fact says about the answer", () => {
   });
 
   it("evidence_format: the format the pack shipped with", () => {
-    expect(evidenceFormatTruth("captures")).toEqual({ format: { choice: "captures" } });
+    // The decision's own labels, from the stored format.
+    expect(evidenceFormatTruth("captures")).toEqual({ format: { choice: "screenshots_or_terminal" } });
+    expect(evidenceFormatTruth("video")).toEqual({ format: { choice: "video" } });
+    expect(evidenceFormatTruth("text")).toEqual({ format: { choice: "text_only" } });
   });
 
   it("red_check: a slice that went green with the test unchanged was a right-reason red; a rewritten test was not", () => {
