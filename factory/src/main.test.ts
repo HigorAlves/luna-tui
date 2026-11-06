@@ -103,7 +103,7 @@ describe("factory main (dry run)", () => {
   it("memory_extract: runs over an empty /work with no tools, renders the facts and the proposals as data and leaves a valid result", () => {
     const task = { id: "memory-lessons", title: "Memory lessons: extract", description: "", criteria: [], repoPath: "", branch: "", source: null };
     const lessons = { kind: "extract", facts: ["Verify found a high finding in README.md: broken relative link."], proposals: ["runbook: check links after a move"] };
-    const { code, stdout, out, result } = run(stageInput("memory_extract", { task, plan: null, context: { projectContext: null, lessons } }), {}, {}, { emptyWork: true });
+    const { code, stdout, out, result } = run(stageInput("memory_extract", { engine: "claude:haiku", task, plan: null, context: { projectContext: null, lessons } }), {}, {}, { emptyWork: true });
     expect(code).toBe(0);
     const prompt = readFileSync(join(out, "prompt.md"), "utf8");
     expect(prompt).not.toContain("{{");
