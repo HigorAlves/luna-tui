@@ -8,7 +8,7 @@ import type { TaskRow } from "../domain/task.ts";
 import { MemorySlackStore, fakeSlack } from "../test/slack.ts";
 import { ChannelClaims } from "./channel-claims.ts";
 import type { Assessed } from "./conversation-machine.ts";
-import { AlreadyTaskError, BuiltinWatchError, NoItemError, SlackInbox } from "./slack-inbox.ts";
+import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, SlackInbox } from "./slack-inbox.ts";
 import { NoSlackTokenError, type RawMessage, type SearchHit, noTokenSlack } from "./slack.ts";
 import type { TriageAnswer, TriageItem, Triager } from "./slack-triage.ts";
 
@@ -43,7 +43,7 @@ interface World {
   claimed?: Record<string, string>;
   conv?: Partial<typeof FACTORY_DEFAULTS.conversation>;
   assessor?: { assess: (row: SlackItemRow) => Promise<Assessed> };
-  truth?: { override: (input: unknown) => Promise<void> };
+  truth?: { override: (input: unknown) => Promise<void>; relation?: (input: unknown) => Promise<void> };
 }
 
 const msg = (over: Partial<RawMessage> & { ts: string }): RawMessage => ({ user: "U2", botId: null, text: "", subtype: null, threadTs: null, replyCount: 0, latestReply: null, ...over });
@@ -300,6 +300,7 @@ describe("SlackInbox.pollOnce", () => {
       triage: { priority: "P1", category: "request", expectsReply: true, summary: "s", why: "bug; who 1", draft: null, refs: [], deadline: null, by: "model", triagedAt: iso(0), overridden: false },
       classification: { kind: "bug", confidence: 0.9, by: "model", at: iso(0), records: { assess: "rec-1" }, verdict: "ok" },
       verdict: "ok",
+      relation: null,
       shortlist: [],
       ...over,
     });
@@ -356,6 +357,46 @@ describe("SlackInbox.pollOnce", () => {
       expect(item.conversation?.classification).toMatchObject({ kind: "question", by: "person", verdict: "ok" });
       expect(item.triage?.category).toBe("question");
       expect(overrides).toMatchObject([{ thread: id, kind: "question" }]);
+    });
+
+    it("stores the relation and the shortlist the assessment offered", async () => {
+      const shortlist = [{ slot: 1, id: "card-1", kind: "open" as const, otherSource: { kind: "jira" as const, key: "ENG-1" } }];
+      const relation = { type: "related_to_in_progress" as const, target: "card-1", confidence: 0.9, by: "model" as const, at: iso(0), record: "rel-1", otherSource: { kind: "jira" as const, key: "ENG-1" } };
+      const assessor = { assess: async () => assessed({ relation, shortlist }) };
+      const { inbox, store } = setup({ assessor, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })] });
+      await poll(inbox);
+      const conversation = store.rows.get(`C1:${ts(10)}`)!.conversation!;
+      expect(conversation.relation).toEqual(relation);
+      expect(conversation.shortlist).toEqual(shortlist);
+    });
+
+    describe("a person sets the relation", () => {
+      const shortlist = [{ slot: 2, id: "card-2", kind: "open" as const, otherSource: null }, { slot: 3, id: "backlog-3", kind: "backlog" as const, otherSource: null }];
+      const ready = async () => {
+        const labels: unknown[] = [];
+        const assessor = { assess: async () => assessed({ relation: { type: "ask", target: null, confidence: 0.4, by: "model", at: iso(0), record: "rel-1" }, shortlist, classification: { kind: "bug", confidence: 0.9, by: "model", at: iso(0), records: { assess: "rec-1", relation: "rel-1" }, verdict: "ok" } }) };
+        const world = setup({ assessor, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })], truth: { override: async () => {}, relation: async (i: unknown) => void labels.push(i) } });
+        await poll(world.inbox);
+        return { ...world, labels, id: `C1:${ts(10)}` };
+      };
+      it("with a target from the stored shortlist: by person, and the record learns it", async () => {
+        const { inbox, labels, id } = await ready();
+        const item = await inbox.relate(id, { relation: "related_to_backlog", target: "backlog-3" });
+        expect(item.conversation?.relation).toMatchObject({ type: "related_to_backlog", target: "backlog-3", by: "person", record: "rel-1" });
+        expect(labels).toMatchObject([{ thread: id, record: "rel-1", relation: "related_to_backlog", slot: 3 }]);
+      });
+      it("as new candidate or none without a target; the label says whether new work was asked", async () => {
+        const { inbox, labels, id } = await ready();
+        await inbox.relate(id, { relation: "new_candidate" });
+        await inbox.relate(id, { relation: "none" });
+        expect(labels).toMatchObject([{ relation: "new_candidate", slot: null }, { relation: "none", slot: null }]);
+      });
+      it("refuses a target that is not in the shortlist, a related type with no target, and a target on none", async () => {
+        const { inbox, id } = await ready();
+        await expect(inbox.relate(id, { relation: "related_to_in_progress", target: "card-9" })).rejects.toBeInstanceOf(BadRelationError);
+        await expect(inbox.relate(id, { relation: "related_to_in_progress" })).rejects.toBeInstanceOf(BadRelationError);
+        await expect(inbox.relate(id, { relation: "none", target: "card-2" })).rejects.toBeInstanceOf(BadRelationError);
+      });
     });
 
     it("retries a failed call on the retry clock and leaves triage null meanwhile", async () => {

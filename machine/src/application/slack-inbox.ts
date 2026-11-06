@@ -13,6 +13,7 @@ import { FACTORY_DEFAULTS } from "@hardness/contracts";
 import type {
   SlackItem,
   SlackItemPatch,
+  SlackRelationInput,
   SlackMetrics,
   SlackPriority,
   SlackSnapshot,
@@ -65,6 +66,8 @@ export interface SlackInboxPort {
   /** `force` polls even inside a rate-limit backoff (the board's refresh); scheduled and socket polls wait it out. */
   pollOnce(force?: boolean): Promise<SlackSnapshot>;
   patch(id: string, patch: SlackItemPatch): Promise<SlackItem>;
+  /** A person's say on what a thread is about: a stored answer and a truth record, never a post. */
+  relate(id: string, input: SlackRelationInput): Promise<SlackItem>;
   /** Posts `text` (escaped) in the item's thread as you; `nudge` prefixes a mention of its author. */
   reply(id: string, text: string, nudge?: boolean): Promise<SlackItem>;
   toTask(id: string, input: SlackTaskInput): Promise<TaskRow>;
@@ -98,6 +101,14 @@ export class BuiltinWatchError extends Error {
   constructor(label: string) {
     super(`${label} is built in; switch it off instead of deleting it`);
     this.name = "BuiltinWatchError";
+  }
+}
+
+/** A relation a person set that the stored shortlist does not allow: a target it does not hold, a missing one, or one where none belongs. */
+export class BadRelationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "BadRelationError";
   }
 }
 
@@ -138,7 +149,7 @@ export interface SlackInboxOptions {
   /** The Conversation Machine's chain. Without it (agents off) every item takes the `slack_triage` path as before. */
   assessor?: { assess(row: SlackItemRow): Promise<Assessed> };
   /** Ground truth of a hand-set kind or priority. */
-  truth?: Pick<ConversationTruth, "override">;
+  truth?: Pick<ConversationTruth, "override" | "relation">;
 }
 
 const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
@@ -827,7 +838,7 @@ export class SlackInbox implements SlackInboxPort {
       if (!fresh) continue;
       const conversation = fresh.conversation ?? emptyConversation(fresh.channel);
       const kept = conversation.classification?.by === "person" ? conversation.classification : out.classification;
-      await store.save([{ ...fresh, triage: withFloor(this.keepOverride(fresh.triage, out.triage), entry.floor), conversation: { ...conversation, classification: kept } }]);
+      await store.save([{ ...fresh, triage: withFloor(this.keepOverride(fresh.triage, out.triage), entry.floor), conversation: { ...conversation, classification: kept, relation: conversation.classification?.by === "person" && conversation.relation?.by === "person" ? conversation.relation : out.relation, shortlist: out.shortlist } }]);
       await this.refresh(this.snapshot.polledAt, this.snapshot.error);
     }
     if (!triager || rows.size === 0) return;
@@ -1007,6 +1018,22 @@ export class SlackInbox implements SlackInboxPort {
       next = { ...next, triage: { ...base, priority: patch.priority, overridden: true } };
     }
     return this.saveAndPublish(next);
+  }
+
+  async relate(id: string, input: SlackRelationInput): Promise<SlackItem> {
+    const row = await this.get(id);
+    const conversation = row.conversation ?? emptyConversation(row.channel);
+    const entry = input.target === undefined ? undefined : (conversation.shortlist ?? []).find((e) => e.id === input.target);
+    const related = input.relation === "related_to_in_progress" || input.relation === "related_to_backlog";
+    if (related && input.target === undefined) throw new BadRelationError("a related thread needs a target");
+    if (!related && input.target !== undefined) throw new BadRelationError("this relation takes no target");
+    if (related && !entry) throw new BadRelationError("target is not among the thread's candidates");
+    if (entry && (input.relation === "related_to_backlog") !== (entry.kind === "backlog")) throw new BadRelationError("target does not match the relation");
+    const now = this.now().toISOString();
+    const record = conversation.relation?.record ?? conversation.classification?.records.relation;
+    const relation = { type: input.relation, target: entry?.id ?? null, confidence: 1, by: "person" as const, at: now, ...(record ? { record } : {}), ...(entry?.otherSource ? { otherSource: entry.otherSource } : {}) };
+    await this.options.truth?.relation?.({ thread: row.id, record: record ?? null, relation: input.relation, slot: entry?.slot ?? null }).catch(() => {});
+    return this.saveAndPublish({ ...row, conversation: { ...conversation, relation } });
   }
 
   async reply(id: string, text: string, nudge = false): Promise<SlackItem> {

@@ -1,0 +1,48 @@
+{
+  "schema": 3,
+  "stage": "conversation_relation",
+  "pack": "conversation_relation",
+  "attempt": 1,
+  "task": {
+    "id": "conversation-relation",
+    "title": "Login flaky again",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "conversation": {
+      "channel": "eng",
+      "private": false,
+      "thread": [
+        "marta: login is flaky again for some of us, it logs me out after a few minutes"
+      ],
+      "latest": "login is flaky again for some of us, it logs me out after a few minutes",
+      "author": {
+        "profile": "member",
+        "title": null
+      },
+      "candidates": [
+        {
+          "slot": 1,
+          "kind": "open",
+          "title": "Session cookie expires too early",
+          "summary": "The session cookie lifetime is set in minutes instead of hours for the web app."
+        }
+      ]
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

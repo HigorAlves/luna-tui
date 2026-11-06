@@ -166,6 +166,13 @@ export const SlackItemPatch = z.object({
 });
 export type SlackItemPatch = z.infer<typeof SlackItemPatch>;
 
+/** `POST /slack/items/:id/relation`: what a person says a thread is about. `target` is an id of the stored shortlist, absent for a new candidate or none. */
+export const SlackRelationInput = z.object({
+  relation: z.enum(["related_to_in_progress", "related_to_backlog", "new_candidate", "none"]),
+  target: z.string().min(1).optional(),
+});
+export type SlackRelationInput = z.infer<typeof SlackRelationInput>;
+
 /** `POST /slack/items/:id/reply`: `nudge` prefixes a mention of the item's author (`<@id> `), built on the machine. */
 export const SlackReplyInput = z.object({ text: z.string().min(1), nudge: z.boolean().optional() });
 export type SlackReplyInput = z.infer<typeof SlackReplyInput>;

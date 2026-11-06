@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "related.choice",
+      "value": "slot1"
+    }
+  ],
+  "rubric": "The thread describes the exact failure the open card is about: the export of a large report timing out.",
+  "label": {
+    "related": {
+      "choice": "slot1"
+    }
+  }
+}

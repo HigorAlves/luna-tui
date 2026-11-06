@@ -407,3 +407,16 @@ describe("the conversation_assess decision pack", () => {
     expect(ConversationContext.safeParse({ ...ok, candidates: Array.from({ length: 6 }, (_, i) => ({ slot: 1, kind: "open", title: String(i), summary: "" })) }).success).toBe(false);
   });
 });
+
+describe("the conversation_relation decision pack", () => {
+  it("asks which slot the thread is about and whether it asks for new work, in one call", async () => {
+    const { PACKS } = await import("./index.ts");
+    const pack = PACKS.conversation_relation;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["related", "new_work"]);
+    const answer = { related: { choice: "slot2", confidence: 0.8 }, new_work: { value: false, p: 0.1 } };
+    expect(pack.answer.safeParse(answer).success).toBe(true);
+    expect(pack.answer.safeParse({ ...answer, related: { choice: "slot6", confidence: 0.8 } }).success).toBe(false);
+    expect(pack.answer.safeParse({ ...answer, related: { choice: "none", confidence: 0.8 } }).success).toBe(true);
+  });
+});

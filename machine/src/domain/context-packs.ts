@@ -31,6 +31,7 @@ export const CONTEXT_OF = {
   ticket_recommend: { key: "ticket", schema: TicketContext },
   ticket_reply: { key: "ticket", schema: TicketContext },
   conversation_assess: { key: "conversation", schema: ConversationContext },
+  conversation_relation: { key: "conversation", schema: ConversationContext },
 } as const;
 
 export type ContextPackId = keyof typeof CONTEXT_OF;

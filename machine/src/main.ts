@@ -480,6 +480,7 @@ const conversationMachine = (): ConversationMachine => {
         new Date(),
       ),
     decide: async (context) => packRuns!.run({ pack: "conversation_assess", context: { conversation: context } }, INTAKE_CLIENT),
+    decideRelation: async (context) => packRuns!.run({ pack: "conversation_relation", context: { conversation: context } }, INTAKE_CLIENT),
     config: (channel) => channelClaims.configOf(channel),
   });
 };

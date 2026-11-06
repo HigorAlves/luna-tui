@@ -169,6 +169,8 @@ export const PackId = z.enum([
   "ticket_assess",
   // A decision at the Conversation Machine (a conversation context, run on demand): the kind of a Slack thread, whether it needs a reply, three knock-outs and five scores.
   "conversation_assess",
+  // A decision at the Conversation Machine over the same context: is the thread about one of the candidates, and does it ask for new work.
+  "conversation_relation",
   // A decision at the Ticket Machine: what to do with a scored ticket where the scores alone cannot tell (do now, schedule, decline, needs decision).
   "ticket_recommend",
   // Drafts the reply that declines a ticket, from the ticket and its assessment as data; the draft waits for a person.

@@ -1,0 +1,24 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "related.choice",
+      "value": "none"
+    },
+    {
+      "kind": "equals",
+      "path": "new_work.value",
+      "value": true
+    }
+  ],
+  "rubric": "A request for a feature that no candidate is about.",
+  "label": {
+    "related": {
+      "choice": "none"
+    },
+    "new_work": {
+      "value": true
+    }
+  }
+}

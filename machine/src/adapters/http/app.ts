@@ -36,6 +36,7 @@ import {
   RunInput,
   SetupRepoInput,
   SlackItemPatch,
+  SlackRelationInput,
   SlackReplyInput,
   SlackTaskInput,
   SlackWatchInput,
@@ -71,7 +72,7 @@ import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
 import { CloneError, NoPullError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
-import { AlreadyTaskError, BuiltinWatchError, NoItemError, NoWatchError, type SlackInboxPort } from "../../application/slack-inbox.ts";
+import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, NoWatchError, type SlackInboxPort } from "../../application/slack-inbox.ts";
 import { NoSlackTokenError } from "../../application/slack.ts";
 import { NoJiraTokenError } from "../../application/jira.ts";
 import { AlreadyLinkedElsewhereError, AlreadyLinkedError, HasWorktreeError, type JiraTasksPort, NoIssueError, NoProjectError, NotchTaskError } from "../../application/jira-tasks.ts";
@@ -218,6 +219,7 @@ export function createApp({ db, pipeline, bus, backlog, tickets, watcher, stubs,
     if (error instanceof ForkError) return fail(c, 409, "fork", error.message);
     if (error instanceof OwnPrError) return fail(c, 409, "own_pr", error.message);
     if (error instanceof CloneError) return fail(c, 400, "invalid_request", error.message);
+    if (error instanceof BadRelationError) return fail(c, 400, "invalid_request", error.message);
     if (error instanceof NoItemError) return fail(c, 404, "no_item", error.message);
     if (error instanceof NoWatchError) return fail(c, 404, "no_watch", error.message);
     if (error instanceof NoSlackTokenError) return fail(c, 409, "no_token", error.message);
@@ -560,6 +562,7 @@ export function createApp({ db, pipeline, bus, backlog, tickets, watcher, stubs,
     app.get("/slack/items", (c) => c.json(slack.snapshot));
     app.post("/slack/refresh", async (c) => c.json(await slack.pollOnce(true)));
     app.patch("/slack/items/:id", async (c) => c.json(await slack.patch(c.req.param("id"), await body(c, SlackItemPatch))));
+    app.post("/slack/items/:id/relation", async (c) => c.json(await slack.relate(c.req.param("id"), await body(c, SlackRelationInput))));
     app.post("/slack/items/:id/reply", async (c) => {
       const { text, nudge } = await body(c, SlackReplyInput);
       return c.json(await slack.reply(c.req.param("id"), text, nudge ?? false));

@@ -15,6 +15,14 @@ export class ConversationTruth {
     private readonly now: () => Date = () => new Date(),
   ) {}
 
+  /** A hand-set relation: labels `related` (the slot, or none) and, for a new candidate or none, `new_work`, on the `conversation_relation` record. */
+  async relation(input: { thread: string; record: string | null; relation: string; slot: number | null }): Promise<void> {
+    if (!input.record || !this.truth) return;
+    const label: Record<string, { choice: string } | { value: boolean }> = { related: { choice: input.slot ? `slot${input.slot}` : "none" } };
+    if (input.slot === null) label.new_work = { value: input.relation === "new_candidate" };
+    await this.truth.learned({ pack: "conversation_relation", recordId: input.record, label, source: "person" });
+  }
+
   /** A hand-set kind or priority on a thread the machine classified. Never throws: ground truth must not block a tap. */
   async override(input: { thread: string; classification: ConversationClassification | null; kind?: ConversationKind; priority?: SlackPriority }): Promise<void> {
     const c = input.classification;

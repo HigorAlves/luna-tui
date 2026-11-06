@@ -66,6 +66,16 @@ export interface ConversationRelation {
   by: "model" | "person";
   at: string;
   record?: string;
+  /** Where a ticket-sourced card came from (a channel a repository claims sees such cards): the board says so on its own line before the tap. */
+  otherSource?: { kind: "jira" | "github"; key: string } | null;
+}
+
+/** The ids behind the slots the relation decision saw: a target a person sets must be one of them, never anything a message names. */
+export interface ConversationShortlistEntry {
+  slot: number;
+  id: string;
+  kind: "open" | "closed" | "backlog";
+  otherSource: { kind: "jira" | "github"; key: string } | null;
 }
 
 export interface ConversationParticipant {
@@ -85,6 +95,8 @@ export interface Conversation {
   repo: string | null;
   classification: ConversationClassification | null;
   relation: ConversationRelation | null;
+  /** What the last assessment offered as targets; absent before wave 17's relation. */
+  shortlist?: ConversationShortlistEntry[];
   /** How many secrets were cut from this thread's messages. */
   redactions: number;
   /** Which personal data the stored text still holds. */

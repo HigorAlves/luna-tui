@@ -3,7 +3,7 @@ import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { Pipeline } from "../../application/pipeline.ts";
-import { AlreadyTaskError, BuiltinWatchError, NoItemError, NoWatchError, type SlackInboxPort } from "../../application/slack-inbox.ts";
+import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, NoWatchError, type SlackInboxPort } from "../../application/slack-inbox.ts";
 import { NoSlackTokenError } from "../../application/slack.ts";
 import { StubStages } from "../../application/stages/stubs.ts";
 import type { TaskRow } from "../../domain/task.ts";
@@ -82,6 +82,12 @@ function fakeInbox(items: SlackItem[], over: { hasToken?: boolean } = {}): Slack
       did.push(`reply ${id} ${text}${nudge ? " (nudge)" : ""}`);
       return { ...found, youReplied: true, split: "done" };
     },
+    async relate(id, input) {
+      const found = find(id);
+      if (input.target === "forbidden") throw new BadRelationError("target is not among the thread's candidates");
+      did.push(`relate ${id} ${JSON.stringify(input)}`);
+      return found;
+    },
     async toTask(id, input) {
       const found = find(id);
       if (found.linked.taskId) throw new AlreadyTaskError(id, found.linked.taskId);
@@ -154,6 +160,28 @@ describe("the Slack inbox over HTTP", () => {
     expect(await missing.json()).toMatchObject({ error: "no_item" });
     expect((await app.request("/slack/items/C1:1", json("PATCH", { priority: "P9" }))).status).toBe(400);
     expect(slack.did).toEqual(['patch C1:1 {"done":true}']);
+  });
+
+  it("sets the kind of a conversation through PATCH, and refuses a kind that is not one", async () => {
+    const slack = fakeInbox([item("C1:1", "needs_reply")]);
+    const app = createApp({ db, pipeline, bus: new Bus(), slack });
+    expect((await app.request("/slack/items/C1:1", json("PATCH", { kind: "question" }))).status).toBe(200);
+    expect((await app.request("/slack/items/C1:1", json("PATCH", { kind: "rant" }))).status).toBe(400);
+    expect(slack.did).toEqual(['patch C1:1 {"kind":"question"}']);
+  });
+
+  it("sets the relation of a thread: 400 for a bad body or a target the machine refuses, 404 for an unknown item", async () => {
+    const slack = fakeInbox([item("C1:1", "needs_reply")]);
+    const app = createApp({ db, pipeline, bus: new Bus(), slack });
+    const ok = await app.request("/slack/items/C1%3A1/relation", json("POST", { relation: "related_to_backlog", target: "b1" }));
+    expect(ok.status).toBe(200);
+    expect((await app.request("/slack/items/C1:1/relation", json("POST", { relation: "ask" }))).status).toBe(400);
+    expect((await app.request("/slack/items/C1:1/relation", json("POST", { relation: "bogus" }))).status).toBe(400);
+    const refused = await app.request("/slack/items/C1:1/relation", json("POST", { relation: "related_to_backlog", target: "forbidden" }));
+    expect(refused.status).toBe(400);
+    expect(await refused.json()).toMatchObject({ error: "invalid_request" });
+    expect((await app.request("/slack/items/C1:9/relation", json("POST", { relation: "none" }))).status).toBe(404);
+    expect(slack.did).toEqual(['relate C1:1 {"relation":"related_to_backlog","target":"b1"}']);
   });
 
   it("replies as you, or 409 no_token when it cannot", async () => {
