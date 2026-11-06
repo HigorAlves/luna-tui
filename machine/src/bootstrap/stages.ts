@@ -18,7 +18,7 @@ import { type AgentDeps, type AgentExtra, agentRunners, runAgent } from "../appl
 import { ciWatchRunner } from "../application/stages/ci.ts";
 import { e2eRunner, missingQaImageRunner } from "../application/stages/e2e.ts";
 import { type EvidenceDeps, type EvidenceStageDeps, evidenceStage } from "../application/stages/evidence.ts";
-import { type RetroFacts, memoryReviewRunner } from "../application/stages/memory.ts";
+import { type MemoryDeps, type RetroFacts, memoryReviewRunner } from "../application/stages/memory.ts";
 import type { StageContext, StageResult, StageRunner } from "../application/ports.ts";
 import { type PlanDeps, planStage } from "../application/stages/plan.ts";
 import { type TriageSignalDeps, withTriageSignals } from "../application/stages/triage-signals.ts";
@@ -131,7 +131,7 @@ export async function buildRealStages(
   /** What a stacked card's workspace is cut from (`Pipeline.baseOf`) and the base it drops (`Pipeline.clearBase`). */
   stack?: { baseFor: NonNullable<AgentDeps["baseFor"]>; clearBase: NonNullable<AgentDeps["clearBase"]>; /** The checklist's and the merge rule's view of the parent. */ facts: NonNullable<ShipMonitorDeps["stack"]>["facts"]; defaultBranch: NonNullable<ShipMonitorDeps["stack"]>["defaultBranch"]; /** Whether another open card is stacked on a card (its branch is kept). */ hasChildren?: (id: string) => Promise<boolean> },
   /** Memory's hooks (RFC 0007): what it adds to triage's and implementing's input, and the review asks written when a PR merges. Absent, memory adds nothing. */
-  memoryHooks?: { memoryFor?: AgentDeps["memoryFor"]; reviewAsks?: ShipMonitorDeps["reviewAsks"] },
+  memoryHooks?: { memoryFor?: AgentDeps["memoryFor"]; reviewAsks?: ShipMonitorDeps["reviewAsks"]; /** The retro's lessons (M2); bound late, with the packs it runs. */ lessons?: MemoryDeps["lessons"] },
 ): Promise<RealStagesResult> {
   if (!config.agents) {
     console.log("agents off (MACHINE_AGENTS=off): every stage is a stub");
@@ -475,6 +475,13 @@ export async function buildRealStages(
         return shipDecisions.decide;
       },
       overrides: async (repoPath) => (await policies.for(repoPath)).decisions.worth_learning,
+      // Memory's lessons bind late too: the packs they run exist once PackRuns does.
+      ...(memoryHooks?.lessons ? { lessons: {
+        facts: (taskId: string) => memoryHooks.lessons!.facts(taskId),
+        extract: (ctx, repoPath) => memoryHooks.lessons!.extract(ctx, repoPath),
+        recall: (c, text) => memoryHooks.lessons!.recall(c, text),
+        decide: (pack, ctx, repoPath) => memoryHooks.lessons!.decide(pack, ctx, repoPath),
+      } } : {}),
     }),
   };
   return { real, verifyPack, checksExec, shipGateProbe: shipGateProbe({ github, ...(stack ? { stack: { facts: stack.facts, defaultBranch: stack.defaultBranch } } : {}), policies, evidence: { load: evidenceDeps.load }, stateDir: config.stateDir }), agentDeps: { ...(egress ? { egress } : {}), image: config.runnerImage, approvals, repoImages, imageEvents, repoImageOf: async (repoPath: string, signal?: AbortSignal) => (await repoImages.ensure(repoPath, signal)).image, credentials, stateDir: config.stateDir, worktreesDir: config.worktreesDir, policies } };

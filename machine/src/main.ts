@@ -2,7 +2,7 @@
 // mid-stage, then serves the API on localhost.
 import { expireKept, keepFolder } from "./application/kept-sandboxes.ts";
 import { hostFreshWorkspace, removeLeftovers } from "./adapters/git/clone.ts";
-import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
+import { type BudgetAlert, type EvidenceContext, FACTORY_DEFAULTS, Ledger, MemoryExtractAnswer, PrAction, type PullRequest, RUN_OR_GATE, type TicketContext, WAITING_ON_USER, isTerminal } from "@hardness/contracts";
 import { serve } from "@hono/node-server";
 
 import { createApp } from "./adapters/http/app.ts";
@@ -35,12 +35,13 @@ import type { PlanDeps } from "./application/stages/plan.ts";
 import type { Decide } from "./application/stages/check-decide.ts";
 import { loadCursor } from "./application/ship-cursor.ts";
 import { shipViewOf } from "./application/ship-view.ts";
-import { retroFactsOf } from "./application/stages/memory.ts";
+import { type MemoryDeps, retroFactsOf } from "./application/stages/memory.ts";
+import { approvedPlan } from "./domain/stage-input.ts";
 import { shippedStream } from "./application/ship-loop.ts";
 import type { ShipDecide } from "./application/stages/ship-fixes.ts";
 import type { TriageSignalDeps } from "./application/stages/triage-signals.ts";
 import { createIssueClassifier } from "./application/classify.ts";
-import { searchCards } from "./domain/card-search.ts";
+import { searchCards, sourceKindOf } from "./domain/card-search.ts";
 import { GitHubIntake } from "./application/intake.ts";
 import { GitHubPulls } from "./application/pulls.ts";
 import { SlackInbox } from "./application/slack-inbox.ts";
@@ -79,6 +80,9 @@ import type { AgentDeps } from "./application/stages/pack-runner.ts";
 import type { ShipMonitorDeps } from "./application/stages/ship-monitor.ts";
 import type { TaskRow } from "./domain/task.ts";
 import { similarCardIds, similarOutcomes, viewerOfCard } from "./application/memory-similar.ts";
+import { recallBlock, toolAnswer, viewerForRun } from "./application/memory-recall.ts";
+import { recordClose } from "./application/memory-close.ts";
+import { type CloseFactsInput, closeFacts } from "./application/memory-facts.ts";
 import { imageSpecOf } from "./domain/image-spec.ts";
 import { repoHealthOf } from "./application/repo-health.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
@@ -255,8 +259,65 @@ const companyDocs = new CompanyDocs({ memory, dirs: config.memoryDocs.dirs, stat
 /** A card's own source and repository as memory's viewer: what it recalls is what its source could already see. */
 const memoryViewerOf = (task: TaskRow) => viewerOfCard({ repoSlug: repoSlug(task.repoPath ?? ""), source: task.source });
 /** What memory adds around triage, implementing and the merge (RFC 0007, M3 and M4); each part is empty with memory off. */
-const memoryHooks: { memoryFor: NonNullable<AgentDeps["memoryFor"]>; reviewAsks: NonNullable<ShipMonitorDeps["reviewAsks"]> } = {
+/** The viewer a run of `pack` recalls as: the card's own, with `publicPost` from the pack and the card's source (never a literal). */
+const memoryViewerForRun = (task: TaskRow, pack: string) => viewerForRun(memoryViewerOf(task), pack, sourceKindOf(task));
+/** What the close step writes for a card, from the machine's own records: its retro facts, Verify's and CI's findings, its escalations (with a person's correction), Build's scope reds, the CI classes, the dedup answer, the plan's files and the commit it ended at. Null for a card with no repository. */
+async function closeFactsInput(taskId: string): Promise<CloseFactsInput | null> {
+  const task = await pipeline.get(taskId);
+  if (!task.repoPath) return null;
+  const [facts, events, approvals, runs] = await Promise.all([retroFactsFor(taskId), pipeline.events(taskId), pipeline.approvals(taskId), pipeline.stageRuns(taskId)]);
+  const finished = events.filter((e) => e.kind === "stage.finished").map((e) => e.payload as { stage?: string; findings?: unknown; detail?: Record<string, unknown> });
+  const findingsOf = (p: (typeof finished)[number]): Array<{ id?: string; severity: string; category?: string; path: string; title: string }> => {
+    const list = p.findings ?? p.detail?.findings;
+    return Array.isArray(list) ? (list as never) : [];
+  };
+  const seen = new Map<string, { severity: string; category?: string | undefined; path: string }>();
+  for (const p of finished.filter((f) => f.stage === "verifying" || f.stage === "ci_watch")) for (const f of findingsOf(p)) seen.set(f.id ?? `${f.path}:${f.title}`, { severity: String(f.severity), category: f.category, path: String(f.path) });
+  const scopeReds = finished.filter((f) => f.stage === "implementing" && f.detail?.scopeRed === true).flatMap((f) => findingsOf(f).filter((x) => x.severity === "scope").map((x) => ({ check: String(x.title), path: x.path ? String(x.path) : null })));
+  const corrections = events.filter((e) => e.kind === "escalation.corrected").map((e) => (typeof e.payload.to === "string" ? e.payload.to : null));
+  const escalations = events.filter((e) => e.kind === "transition" && e.payload.to === "escalated").map((e, i) => ({ reason: typeof e.payload.escalation === "string" ? e.payload.escalation : null, correctedTo: corrections[i] ?? null }));
+  const ciClasses = finished.filter((f) => f.stage === "ci_watch").flatMap((f) => (typeof f.detail?.class === "string" && f.detail.class !== "none" ? [f.detail.class] : []));
+  const dedup = events.some((e) => e.kind === "card.merged") ? "merged" : events.some((e) => e.kind === "intake.related") ? "related" : null;
+  const plan = approvedPlan(approvals);
+  const planned = (plan?.slices ?? []).flatMap((s) => ((s as { touchpoints?: unknown }).touchpoints as string[] | undefined) ?? []);
+  return {
+    card: { id: task.id, title: task.title },
+    repo: repoSlug(task.repoPath),
+    source: memoryViewerOf(task).source,
+    facts,
+    findings: [...seen.values()],
+    escalations,
+    scopeReds,
+    ciClasses,
+    dedup,
+    files: [...new Set([...planned, ...[...seen.values()].map((f) => f.path)])].filter((p) => typeof p === "string" && p !== ""),
+    commit: runs.findLast((r) => r.outputCommit)?.outputCommit ?? null,
+  };
+}
+/** The retro's lessons (RFC 0007, M2): memory_extract, memory_worth and memory_conflict through PackRuns, bound late; only with memory on. */
+const memoryLessons = {
+  facts: async (taskId: string): Promise<string[]> => {
+    const input = await closeFactsInput(taskId);
+    return input ? closeFacts(input).map((d) => d.text) : [];
+  },
+  extract: async (context: Parameters<NonNullable<MemoryDeps["lessons"]>["extract"]>[0]) => {
+    if (!packRuns) return null;
+    const parsed = MemoryExtractAnswer.safeParse((await ownCalls(packRuns).run({ pack: "memory_extract", context: { lessons: context }, stage: "ship" }, "ship")).answer);
+    return parsed.success ? parsed.data : null;
+  },
+  recall: async (context: Parameters<NonNullable<MemoryDeps["lessons"]>["recall"]>[0], text: string) =>
+    context.task.repoPath ? (await memory.recall({ query: text, viewer: memoryViewerForRun(context.task, "memory_extract"), scope: "memory", limit: 12 })).items : [],
+  decide: async (pack: "memory_worth" | "memory_conflict", context: Parameters<NonNullable<MemoryDeps["lessons"]>["extract"]>[0]) => {
+    if (!packRuns) throw new Error("agents are off: no model to ask");
+    return tagged(await ownCalls(packRuns).run({ pack, context: { lessons: context }, stage: "ship" }, "ship"));
+  },
+};
+const memoryHooks: { memoryFor: NonNullable<AgentDeps["memoryFor"]>; reviewAsks: NonNullable<ShipMonitorDeps["reviewAsks"]>; lessons?: MemoryDeps["lessons"] } = {
+  ...(memory.enabled ? { lessons: memoryLessons } : {}),
   memoryFor: {
+    // The pushed block and the memory_recall tool: the same viewer, the card's own source, publicPost from the pack.
+    recall: async (task, pack, files) => (task.repoPath ? recallBlock(memory, { pack, viewer: memoryViewerForRun(task, pack), goal: `${task.title}\n${task.record?.goal ?? ""}`, files }) : undefined),
+    answer: async (task, pack, request) => (task.repoPath ? toolAnswer(memory, request, memoryViewerForRun(task, pack)) : { verdict: "ok", items: [], note: "the card has no repository" }),
     similarOutcomes: async (task) => (task.repoPath ? await similarOutcomes(memory, { title: task.title, text: task.description, id: task.id }, memoryViewerOf(task)) : []),
     reviewAsks: async (task, files) => {
       if (!task.repoPath || files.length === 0) return [];
@@ -545,6 +606,8 @@ pipeline = new Pipeline(db, runnerFor, {
   maxPerStage: config.maxPerStage,
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
+  // Memory at close (RFC 0007, M2): the card's facts, the lessons a person approved, the items they retired. Off with memory.
+  ...(memory.enabled ? { memoryClose: async (taskId: string, approved: Parameters<typeof recordClose>[2]) => void (await recordClose(memory, await closeFactsInput(taskId).catch(() => null), approved)) } : {}),
   closeDeps: { exec, worktreeRemove: false, watcher, github, dropBranchGraphs: async (repoPath, taskId) => void (await graph.dropBranch?.(repoPath, taskId)) },
   // A merged card's retro: the truth file, and the graph misses its Build Report also declared (never written into prompts or rules).
   retroOutputs: {
