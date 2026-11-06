@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { ConversationDrafts, MemoryDraftStore } from "./conversation-drafts.ts";
+import { ConversationDrafts, draftHash, MemoryDraftStore } from "./conversation-drafts.ts";
 
 let clock = new Date("2026-10-28T12:00:00Z");
 const make = () => new ConversationDrafts(new MemoryDraftStore(), { expiryHours: () => 24, now: () => clock });
@@ -61,5 +61,36 @@ describe("ConversationDrafts", () => {
     expect(tone.map((t) => t.person)).toEqual(["person 7", "person 6", "person 5", "person 4", "person 3"]);
     expect((await drafts.recentEdits("C2", false)).map((t) => t.person)).toEqual(["person 20"]);
     expect((await drafts.recentEdits("C1", true)).map((t) => t.person)).toEqual(["person 30"]);
+  });
+
+  describe("a claim that never settled", () => {
+    it("stops blocking the thread after five minutes: the tick moves it to unknown, and it is never offered or claimed again", async () => {
+      clock = new Date("2026-10-28T12:00:00Z");
+      const drafts = make();
+      const a = await drafts.open(input());
+      expect(await drafts.claim("C1:1.1", "It is queued.")).not.toBeNull();
+      clock = new Date("2026-10-28T12:03:00Z");
+      expect(await drafts.inFlight("C1:1.1")).toBe(true);
+      expect(await drafts.abandonStuck(clock)).toEqual([]);
+      clock = new Date("2026-10-28T12:06:00Z");
+      expect(await drafts.inFlight("C1:1.1")).toBe(false);
+      expect((await drafts.abandonStuck(clock)).map((d) => d.id)).toEqual([a.id]);
+      expect((await drafts.get(a.id))?.status).toBe("unknown");
+      expect(await drafts.claim("C1:1.1", "It is queued.")).toBeNull();
+      expect(await drafts.waiting("C1:1.1")).toBeNull();
+      expect(await drafts.finish(a.id, "x")).toBeNull();
+      expect(await drafts.abandonStuck(clock)).toEqual([]);
+    });
+  });
+  describe("the claim compares what the person saw", () => {
+    it("claims on a matching id and hash, and on neither a wrong hash, a wrong id nor an absent one when one is demanded", async () => {
+      const drafts = make();
+      const a = await drafts.open(input());
+      const hash = draftHash("It is queued.");
+      expect(await drafts.claim("C1:1.1", "mine", { id: a.id, hash: "0".repeat(64) })).toBeNull();
+      expect(await drafts.claim("C1:1.1", "mine", { id: "other", hash })).toBeNull();
+      expect((await drafts.get(a.id))?.status).toBe("waiting");
+      expect((await drafts.claim("C1:1.1", "mine", { id: a.id, hash }))?.status).toBe("posting");
+    });
   });
 });

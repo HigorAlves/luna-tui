@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 // The drafts that wait for a person, one per thread. Every change happens inside `transaction(thread, ...)`, which holds the thread's lock, so two
 // taps, the expiry clock and a new draft never settle the same row twice. Nothing here posts: a tap does, and a draft that went out is kept.
 export type DraftKind = "reply" | "questions" | "shipped" | "status";
-export type DraftStatus = "waiting" | "sent" | "edited" | "ignored" | "expired" | "superseded" | "posting" | "posted";
+export type DraftStatus = "waiting" | "sent" | "edited" | "ignored" | "expired" | "superseded" | "posting" | "posted" | "unknown";
 
 export interface DraftRow {
   id: string;
@@ -25,6 +25,11 @@ export interface DraftRow {
   records: Record<string, string>;
 }
 
+/** The hash of a draft's text: the board sends it back with the reply, so a tap settles only the draft its person saw. */
+export const draftHash = (text: string): string => createHash("sha256").update(text).digest("hex");
+/** A claim older than this is no claim: the settle failed after the post, or the machine died, and the draft may have gone out. */
+export const CLAIM_MS = 5 * 60_000;
+
 export interface DraftTx {
   /** The thread's waiting draft, locked for this transaction. */
   waiting(thread: string): Promise<DraftRow | null>;
@@ -38,6 +43,7 @@ export interface DraftStore {
   allWaiting(): Promise<DraftRow[]>;
   /** The thread's draft that a tap has claimed and is posting right now. */
   posting(thread: string): Promise<DraftRow | null>;
+  allPosting(): Promise<DraftRow[]>;
   waitingExpiredBy(now: Date): Promise<DraftRow[]>;
   /** The last `n` edited drafts of a channel, newest first, of public or of private conversations. */
   recentEdited(channel: string, isPrivate: boolean, n: number): Promise<DraftRow[]>;
@@ -92,7 +98,28 @@ export class ConversationDrafts {
 
   /** Whether a tap is posting this thread's draft right now (a second tap must not post it again). */
   async inFlight(thread: string): Promise<boolean> {
-    return (await this.store.posting(thread)) !== null;
+    const row = await this.store.posting(thread);
+    return row !== null && this.claimedAt(row) > this.now().getTime() - CLAIM_MS;
+  }
+
+  private claimedAt(row: DraftRow): number {
+    const entry = [...row.history].reverse().find((h) => h.did === "posting");
+    return entry ? new Date(entry.at).getTime() : 0;
+  }
+
+  /** A draft left `posting` for over five minutes may or may not have gone out: it becomes `unknown`, terminal, never offered or posted again. */
+  async abandonStuck(now: Date = this.now()): Promise<DraftRow[]> {
+    const done: DraftRow[] = [];
+    for (const candidate of await this.store.allPosting()) {
+      if (this.claimedAt(candidate) > now.getTime() - CLAIM_MS) continue;
+      await this.store.transaction(candidate.thread, async (tx) => {
+        const current = await this.store.get(candidate.id);
+        if (!current || current.status !== "posting") return;
+        await tx.update(current.id, { status: "unknown", decidedAt: now, history: [...current.history, { at: now.toISOString(), did: "unknown" }] });
+        done.push({ ...current, status: "unknown", decidedAt: now });
+      });
+    }
+    return done;
   }
 
   /** Marks every waiting draft past its expiry `expired`; answers them. Posts nothing. */
@@ -128,12 +155,14 @@ export class ConversationDrafts {
    * A tap's claim before Slack is called: the waiting draft becomes `posting`, with the hash of the text the person saw, under the thread's lock.
    * Answers the draft; null when none waits or another tap already holds it, so two taps in flight post once.
    */
-  async claim(thread: string, text: string): Promise<DraftRow | null> {
+  async claim(thread: string, text: string, expect?: { id: string; hash: string }): Promise<DraftRow | null> {
     const now = this.now();
     return this.store.transaction(thread, async (tx) => {
       const current = await tx.waiting(thread);
       if (!current) return null;
-      const history = [...current.history, { at: now.toISOString(), did: "posting", hash: createHash("sha256").update(text).digest("hex") }];
+      // When the caller says which draft its person saw, only that one, with that text, is claimed.
+      if (expect && (expect.id !== current.id || expect.hash !== draftHash(current.text))) return null;
+      const history = [...current.history, { at: now.toISOString(), did: "posting", hash: draftHash(text) }];
       await tx.update(current.id, { status: "posting", history });
       return { ...current, status: "posting" as const, history };
     });
@@ -230,6 +259,10 @@ export class MemoryDraftStore implements DraftStore {
 
   async posting(thread: string): Promise<DraftRow | null> {
     return this.rows.find((r) => r.thread === thread && r.status === "posting") ?? null;
+  }
+
+  async allPosting(): Promise<DraftRow[]> {
+    return this.rows.filter((r) => r.status === "posting");
   }
 
   async waitingExpiredBy(now: Date): Promise<DraftRow[]> {

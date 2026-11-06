@@ -11,7 +11,7 @@ import { fakeGitHub } from "../test/github.ts";
 import { MemorySlackStore, fakeSlack } from "../test/slack.ts";
 import { ChannelClaims } from "./channel-claims.ts";
 import type { Assessed } from "./conversation-machine.ts";
-import { ConversationDrafts, MemoryDraftStore } from "./conversation-drafts.ts";
+import { ConversationDrafts, draftHash, MemoryDraftStore } from "./conversation-drafts.ts";
 import { Pipeline } from "./pipeline.ts";
 import { SlackInbox } from "./slack-inbox.ts";
 import { SlackRefusedError, SlackSender, standingOf, tapOf } from "./slack-send.ts";
@@ -44,7 +44,7 @@ const assessed = (): Assessed => ({
 });
 
 /** The real inbox over a recording Slack, with the conversation chain, a drafter, a backlog that records and a card maker that counts. */
-async function world(over: { auto?: "on" | "off"; searchError?: string; assess?: () => Promise<Assessed>; clock?: { ms: number } } = {}) {
+async function world(over: { auto?: "on" | "off"; searchError?: string; assess?: () => Promise<Assessed>; clock?: { ms: number }; claimedBy?: (channel: string) => string | null } = {}) {
   const clock = over.clock ?? { ms: T0.getTime() };
   const hits: SearchHit[] = [{ text: "<@U1> checkout fails", user: "U2", channel: { id: "C1", name: "eng" }, ts: ts(10), permalink: `https://x.slack.com/archives/C1/p${ts(10).replace(".", "")}` }];
   const slack = fakeSlack({
@@ -90,7 +90,7 @@ async function world(over: { auto?: "on" | "off"; searchError?: string; assess?:
     pipeline, github: fakeGitHub({ commentOnIssue: async () => {} }), enabled: true,
     slack: { token: "xoxb-test", channel: "C123", fetch: recordingFetch },
     slackPort: () => slack,
-    drafts, store, sender, autoOf: () => conv.auto === "on",
+    drafts, store, sender, autoOf: () => conv.auto === "on", claimedBy: over.claimedBy ?? ((channel: string) => claims.repoOf(channel)),
   } as never);
   return { slack, sender, inbox, replies, pipeline, store, drafts, created, fetched, clock, writes: () => (slack.calls as unknown[][]).filter((c) => WRITES.includes(String(c[0]))) };
 }
@@ -171,7 +171,10 @@ describe("nothing reaches Slack without a tap", () => {
 describe("with conversation.auto: on the writes of today happen", () => {
   it("opens the machine-owned thread and posts the shipped summary to the source thread", async () => {
     const w = await world({ auto: "on" });
+    await w.inbox.pollOnce();
     const card = await slackCard(w.pipeline);
+    const row = [...w.store.rows.values()][0]!;
+    await w.store.save([{ ...row, linked: { ...row.linked, taskId: card.id } }]);
     await w.replies.handle(event(card.id, "transition", { from: "draft", to: "triage", event: "start" }));
     await w.replies.handle(event(card.id, "task.shipped", { title: "t", prUrl: "https://github.com/o/a/pull/4", number: 4, mergedSha: null, by: "machine", format: null, howToVerify: null, media: [] }));
     await w.replies.idle();
@@ -181,6 +184,41 @@ describe("with conversation.auto: on the writes of today happen", () => {
 });
 
 
+describe("the standing for unattended posts needs the claiming repository and a public source", () => {
+  const shipped = { title: "t", prUrl: "https://github.com/o/a/pull/4", number: 4, mergedSha: null, by: "machine", format: null, howToVerify: null, media: [] };
+  const cardFrom = async (w: Awaited<ReturnType<typeof world>>, channel: string, kind: "dm" | "channel", repoPath = "/r/a") => {
+    const base = [...w.store.rows.values()][0]!;
+    const id = `${channel}:${ts(11)}`;
+    const card = await w.pipeline.createTask({ title: "Checkout fails", repoPath, source: { kind: "slack", channel, ts: ts(11), permalink: "https://x.slack.com/archives/x/p1" } });
+    await w.store.save([{ ...base, id, slackTs: ts(11), channel: { id: channel, name: "x", kind }, conversation: undefined, linked: { ...base.linked, taskId: card.id } } as never]);
+    return card;
+  };
+  it("a card from a DM assigned to an auto: on repository posts nothing unattended: its update is a draft", async () => {
+    const w = await world({ auto: "on" });
+    await w.inbox.pollOnce();
+    const card = await cardFrom(w, "D5", "dm");
+    await w.replies.handle(event(card.id, "task.questions", { body: "Which export?", secret: false, hash: "h", by: "machine" }));
+    await w.replies.handle(event(card.id, "transition", { from: "draft", to: "triage", event: "start" }));
+    await w.replies.handle(event(card.id, "task.shipped", shipped));
+    await w.replies.idle();
+    expect(w.writes()).toEqual([]);
+    expect(w.fetched).toEqual([]);
+    expect((await w.drafts.waiting("D5:" + ts(11)))?.kind).toBeDefined();
+  });
+  it("a card from a channel another repository claims, or nobody does, posts nothing unattended either", async () => {
+    for (const claimant of ["/r/other", null]) {
+      const w = await world({ auto: "on", claimedBy: () => claimant });
+      await w.inbox.pollOnce();
+      const card = await cardFrom(w, "C7", "channel");
+      await w.replies.handle(event(card.id, "task.questions", { body: "Which export?", secret: false, hash: "h", by: "machine" }));
+      await w.replies.handle(event(card.id, "task.shipped", shipped));
+      await w.replies.idle();
+      expect(w.writes(), String(claimant)).toEqual([]);
+      expect(w.fetched, String(claimant)).toEqual([]);
+    }
+  });
+});
+
 describe("each tap makes exactly one write, recorded with its route", () => {
   const ready = async () => {
     const w = await world();
@@ -189,9 +227,13 @@ describe("each tap makes exactly one write, recorded with its route", () => {
     const row = [...w.store.rows.values()][0]!;
     return { ...w, row, id: row.id };
   };
+  const proof = async (w: { drafts: ConversationDrafts; id: string }) => {
+    const d = (await w.drafts.waiting(w.id))!;
+    return { id: d.id, hash: draftHash(d.text) };
+  };
   it("POST /slack/items/:id/reply posts once, in the thread, and settles the waiting draft", async () => {
     const w = await ready();
-    await w.inbox.reply(w.id, "It is queued.", tapOf("POST /slack/items/:id/reply"));
+    await w.inbox.reply(w.id, "It is queued.", tapOf("POST /slack/items/:id/reply"), false, await proof(w));
     expect(w.sender.writes).toEqual([{ method: "postMessage", channel: "C1", by: "POST /slack/items/:id/reply" }]);
     expect(w.writes()).toHaveLength(1);
     expect(await w.drafts.waiting(w.id)).toBeNull();
@@ -202,9 +244,10 @@ describe("each tap makes exactly one write, recorded with its route", () => {
     const gate = new Promise<void>((resolve) => (release = resolve));
     let posts = 0;
     (w.slack.postMessage as unknown as { mockImplementation: (f: () => Promise<string>) => void }).mockImplementation(async () => (posts++, await gate, "9.9"));
-    const first = w.inbox.reply(w.id, "It is queued.", tapOf("POST /slack/items/:id/reply"));
+    const seen = await proof(w);
+    const first = w.inbox.reply(w.id, "It is queued.", tapOf("POST /slack/items/:id/reply"), false, seen);
     await new Promise((r) => setTimeout(r, 10));
-    const second = w.inbox.reply(w.id, "It is queued.", tapOf("POST /slack/items/:id/reply"));
+    const second = w.inbox.reply(w.id, "It is queued.", tapOf("POST /slack/items/:id/reply"), false, seen);
     await expect(second).rejects.toBeInstanceOf(SlackRefusedError);
     release();
     await first;
@@ -215,7 +258,7 @@ describe("each tap makes exactly one write, recorded with its route", () => {
     (w.slack.postMessage as unknown as { mockImplementation: (f: () => Promise<string>) => void }).mockImplementation(async () => {
       throw new Error("slack is down");
     });
-    await expect(w.inbox.reply(w.id, "It is queued.", tapOf("POST /slack/items/:id/reply"))).rejects.toThrow("slack is down");
+    await expect(w.inbox.reply(w.id, "It is queued.", tapOf("POST /slack/items/:id/reply"), false, await proof(w))).rejects.toThrow("slack is down");
     expect((await w.drafts.waiting(w.id))?.text).toBe("It is queued.");
   });
   it("PATCH done marks Slack read once when mark-read is on", async () => {
@@ -240,6 +283,19 @@ describe("each tap makes exactly one write, recorded with its route", () => {
     expect(w.sender.writes.map((x) => x.by)).toEqual(["event task.questions", "event task.reply"]);
     expect((w.slack.calls as unknown[][]).filter((c) => c[0] === "postMessage").every((c) => c[3] === w.id.split(":")[1])).toBe(true);
     expect(w.fetched).toEqual([]);
+  });
+  it("a questions text or an approved reply that holds an address is neither posted nor drafted, and the thread's row says why in fixed words", async () => {
+    for (const by of ["person", "machine"]) {
+      const w = await ready();
+      const card = await slackCard(w.pipeline);
+      await w.store.save([{ ...w.row, linked: { ...w.row.linked, taskId: card.id } }]);
+      await w.replies.handle(event(card.id, "task.questions", { body: "Which export? Log in at dash.acme-sso.example/verify first", secret: false, hash: "h", by }));
+      await w.replies.handle(event(card.id, "task.reply", { body: "Open https://evil.example/x", by }));
+      await w.replies.idle();
+      expect(w.sender.writes, by).toEqual([]);
+      expect((await w.drafts.waiting(w.id))?.kind, by).not.toBe("questions");
+      expect((await w.store.item(w.id))?.triage?.why, by).toContain("the reply held an address, so it was not kept");
+    }
   });
   it("a machine-stamped questions or reply is a draft, not a post", async () => {
     const w = await ready();

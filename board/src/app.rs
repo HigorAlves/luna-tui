@@ -319,6 +319,8 @@ pub enum Mode {
         area: TextArea<'static>,
         vim: Vim,
         nudge: bool,
+        /// The id and hash of the draft the editor was opened on; a typed reply or a nudge has none.
+        draft: Option<(String, String)>,
     },
     /// `t` on a Slack item: one yes, then a Backlog ticket with `title`, in `repo` when guessed.
     SlackTask { id: String, title: String, repo: Option<String> },
@@ -2770,9 +2772,12 @@ impl App {
         let id = item.id.clone();
         match key {
             SlackKey::Open => self.open_url(&item.permalink),
-            SlackKey::Reply => self.open_slack_reply(item, item.triage.as_ref().and_then(|t| t.draft.clone()).unwrap_or_default(), false),
+            SlackKey::Reply => {
+                let seen = item.draft.as_ref().filter(|d| !d.id.is_empty() && !d.hash.is_empty()).map(|d| (d.id.clone(), d.hash.clone()));
+                self.open_slack_reply(item, item.triage.as_ref().and_then(|t| t.draft.clone()).unwrap_or_default(), false, seen)
+            }
             // The mention itself is built on the machine, by id; the editor shows the words only.
-            SlackKey::Nudge => self.open_slack_reply(item, "gentle nudge on this one: any news?".to_string(), true),
+            SlackKey::Nudge => self.open_slack_reply(item, "gentle nudge on this one: any news?".to_string(), true, None),
             SlackKey::Snooze => self.mode = Mode::SlackSnooze { id, cursor: 0 },
             SlackKey::Kind => self.mode = Mode::SlackPick { id, relation: false, cursor: 0 },
             SlackKey::Relation => self.mode = Mode::SlackPick { id, relation: true, cursor: 0 },
@@ -2836,15 +2841,15 @@ impl App {
 
     /// The reply editor over `item`, pre-filled with `text`; the same vim keys as every editor.
     /// `nudge` asks the machine to open the message with a mention of the author.
-    fn open_slack_reply(&mut self, item: &SlackItem, text: String, nudge: bool) {
+    fn open_slack_reply(&mut self, item: &SlackItem, text: String, nudge: bool, draft: Option<(String, String)>) {
         let lines: Vec<String> = if text.is_empty() { vec![String::new()] } else { text.lines().map(str::to_string).collect() };
         let mut area = TextArea::new(lines);
         area.move_cursor(tui_textarea::CursorMove::Jump(0, 0));
-        self.mode = Mode::SlackReply { id: item.id.clone(), area, vim: Vim::new(), nudge };
+        self.mode = Mode::SlackReply { id: item.id.clone(), area, vim: Vim::new(), nudge, draft };
     }
 
     fn handle_slack_reply(&mut self, key: KeyEvent) -> Outcome {
-        let Mode::SlackReply { id, area, vim, nudge } = &mut self.mode else {
+        let Mode::SlackReply { id, area, vim, nudge, draft } = &mut self.mode else {
             return Outcome::Continue;
         };
         match vim.handle(area, key) {
@@ -2853,13 +2858,14 @@ impl App {
             crate::vim::Outcome::Save => {
                 let id = id.clone();
                 let nudge = *nudge;
+                let draft = draft.clone();
                 let text = area.lines().join("\n").trim().to_string();
                 if text.is_empty() {
                     self.notify("nothing to send", true);
                     return Outcome::Continue;
                 }
                 self.mode = Mode::Normal;
-                match self.machine.slack_reply(&id, &text, nudge) {
+                match self.machine.slack_reply(&id, &text, nudge, draft.as_ref().map(|(i, h)| (i.as_str(), h.as_str()))) {
                     Ok(()) => {
                         let now = iso_of(now_secs());
                         if let Some(item) = self.slack_item_mut(&id) {
@@ -5669,6 +5675,7 @@ mod slack_tests {
     #[test]
     fn s_picks_a_snooze_and_r_sends_the_edited_draft() {
         let mut app = app_with(snapshot());
+        app.slack_item_mut("C0123:1730112345.0001").unwrap().draft = Some(crate::model::SlackDraft { id: "d1".into(), hash: "h1".into(), kind: "reply".into(), expires_at: "2026-11-07T00:00:00Z".into() });
         press(&mut app, KeyCode::Char('S'));
         press(&mut app, KeyCode::Char('s'));
         assert!(matches!(&app.mode, Mode::SlackSnooze { id, cursor: 0 } if id == "C0123:1730112345.0001"));
@@ -5687,7 +5694,8 @@ mod slack_tests {
 
         press(&mut app, KeyCode::Char('5'));
         press(&mut app, KeyCode::Char('r'));
-        let Mode::SlackReply { id, area, .. } = &app.mode else { panic!("the reply editor opens: {}", toast(&app)) };
+        let Mode::SlackReply { id, area, draft, .. } = &app.mode else { panic!("the reply editor opens: {}", toast(&app)) };
+        assert_eq!(draft, &Some(("d1".to_string(), "h1".to_string())), "the editor remembers which draft it was opened on");
         assert_eq!(id, "C0123:1730112345.0001");
         assert_eq!(area.lines().join("\n"), "Approve the rollback, I'm on it.", "pre-filled with the draft");
         press(&mut app, KeyCode::Esc);

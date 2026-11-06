@@ -1,7 +1,7 @@
 import type { DataSource } from "typeorm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { ConversationDrafts } from "../../application/conversation-drafts.ts";
+import { ConversationDrafts, draftHash } from "../../application/conversation-drafts.ts";
 import { freshTestDatabase } from "../../test/database.ts";
 import { PgDraftStore } from "./slack-drafts.ts";
 
@@ -67,5 +67,22 @@ describe("PgDraftStore claims", () => {
     const [row] = await db.query("select history from slack_drafts where id = $1", [a.id]);
     expect(JSON.stringify(row.history)).toContain("posting");
   });
+  it("moves a claim left posting for over five minutes to unknown, and it cannot be claimed or finished again", async () => {
+    const d = drafts();
+    const a = await d.open(input());
+    await d.claim("C1:1.1", "It is queued.");
+    expect(await d.inFlight("C1:1.1")).toBe(true);
+    expect(await d.abandonStuck()).toEqual([]);
+    const later = new Date(Date.now() + 6 * 60_000);
+    expect((await d.abandonStuck(later)).map((x) => x.id)).toEqual([a.id]);
+    expect((await d.get(a.id))?.status).toBe("unknown");
+    expect(await d.claim("C1:1.1", "It is queued.")).toBeNull();
+    expect(await d.finish(a.id, "x")).toBeNull();
+  });
+  it("claims only the draft whose id and hash the person saw", async () => {
+    const d = drafts();
+    const a = await d.open(input());
+    expect(await d.claim("C1:1.1", "x", { id: a.id, hash: "0".repeat(64) })).toBeNull();
+    expect((await d.claim("C1:1.1", "x", { id: a.id, hash: draftHash("It is queued.") }))?.status).toBe("posting");
+  });
 });
-

@@ -2,13 +2,13 @@ import { type ConversationRelation, FACTORY_DEFAULTS, type SlackPriority, type S
 import { describe, expect, it, vi } from "vitest";
 
 import type { SlackItemRow } from "../domain/slack-item.ts";
-import { carriesSecret } from "../domain/postable.ts";
+import { carriesSecret, postable } from "../domain/postable.ts";
 import { RULES_TEMPLATE } from "../domain/slack-rules.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { MemorySlackStore, fakeSlack } from "../test/slack.ts";
 import { tapOf } from "./slack-send.ts";
 import { ChannelClaims } from "./channel-claims.ts";
-import { ConversationDrafts, MemoryDraftStore } from "./conversation-drafts.ts";
+import { ConversationDrafts, draftHash, MemoryDraftStore } from "./conversation-drafts.ts";
 import type { Assessed } from "./conversation-machine.ts";
 import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, SlackInbox, SlackRefusedError } from "./slack-inbox.ts";
 import { NoSlackTokenError, type RawMessage, type SearchHit, noTokenSlack } from "./slack.ts";
@@ -498,14 +498,39 @@ describe("SlackInbox.pollOnce", () => {
         expect(await drafts.waiting(id)).toBeNull();
         expect(store.rows.get(id)!.triage?.why).toContain("the reply held an address, so it was not kept");
       });
+      const proof = async (drafts: ConversationDrafts, id: string) => {
+        const d = (await drafts.waiting(id))!;
+        return { id: d.id, hash: draftHash(d.text) };
+      };
+      it("a draft sent as drafted is escaped once: its `<` is not turned into `&amp;lt;`, its `&` becomes `&amp;`", async () => {
+        const w = await waiting({ drafter: { draft: async () => postable("a < b & c > d") } });
+        expect((await w.drafts.waiting(w.id))?.text).toBe("a &lt; b & c &gt; d");
+        await w.inbox.reply(w.id, "a &lt; b & c &gt; d", TAP, false, await proof(w.drafts, w.id));
+        expect(w.post).toHaveBeenLastCalledWith("C1", "a &lt; b &amp; c &gt; d", expect.anything());
+      });
+      it("a reply with the id and hash of another draft posts the person's text and settles and labels nothing", async () => {
+        const w = await waiting();
+        const d = (await w.drafts.waiting(w.id))!;
+        await w.inbox.reply(w.id, "We are on it.", TAP, false, { id: d.id, hash: "0".repeat(64) });
+        expect(w.post).toHaveBeenCalledTimes(1);
+        expect(w.outcomes).toEqual([]);
+        expect((await w.drafts.waiting(w.id))?.id).toBe(d.id);
+      });
+      it("a reply from a board that sends neither id nor hash still posts, and settles no draft", async () => {
+        const w = await waiting();
+        await w.inbox.reply(w.id, "It is queued.", TAP);
+        expect(w.post).toHaveBeenCalledTimes(1);
+        expect(w.outcomes).toEqual([]);
+        expect(await w.drafts.waiting(w.id)).not.toBeNull();
+      });
       it("a reply with the draft's own text settles it as sent, another text as edited, and each is ground truth", async () => {
         const first = await waiting();
-        await first.inbox.reply(first.id, "It is queued.", TAP);
+        await first.inbox.reply(first.id, "It is queued.", TAP, false, await proof(first.drafts, first.id));
         expect(first.post).toHaveBeenCalledTimes(1);
         expect((await first.drafts.get((first.outcomes[0] as { draft: string }).draft))?.status).toBe("sent");
         expect(first.outcomes).toMatchObject([{ thread: first.id, outcome: "sent_as_drafted" }]);
         const second = await waiting();
-        await second.inbox.reply(second.id, "We are on it.", TAP);
+        await second.inbox.reply(second.id, "We are on it.", TAP, false, await proof(second.drafts, second.id));
         expect(second.outcomes).toMatchObject([{ outcome: "edited", machine: "It is queued.", person: "We are on it." }]);
         expect(second.store.rows.get(second.id)!.triage?.draft ?? null).toBeNull();
       });
@@ -844,6 +869,23 @@ describe("SlackInbox actions", () => {
     const titled = await seeded();
     await titled.inbox.toTask(titled.item.id, { title: "Approve the thing" }, TAP);
     expect(titled.created[0]).toMatchObject({ title: "Approve the thing", repoPath: null });
+  });
+
+  it("toTask on a row stored before this wave: a DM's text never enters the card, a public channel's personal data is masked", async () => {
+    const dm = await seeded();
+    const stored = (await dm.store.item(dm.item.id))!;
+    const legacy = { ...stored, channel: { id: "D9", name: "marta", kind: "dm" as const }, text: "my password is hunter2, call +1 415-555-0132", context: [], conversation: undefined };
+    await dm.store.save([legacy as never]);
+    await dm.inbox.toTask(dm.item.id, {}, TAP);
+    const card = JSON.stringify(dm.created[0]);
+    expect(card).not.toMatch(/hunter2|415-555|password/);
+    const open = await seeded();
+    const row = (await open.store.item(open.item.id))!;
+    await open.store.save([{ ...row, text: "mail ana@example.com or call +1 415-555-0132", context: [], conversation: undefined } as never]);
+    await open.inbox.toTask(open.item.id, {}, TAP);
+    const made = open.created[0] as { title: string; description: string };
+    expect(`${made.title}\n${made.description}`).not.toMatch(/ana@example|415-555/);
+    expect(made.description).toContain("[email]");
   });
 
   it("watches: add with a resolved label, patch, delete, builtins stay", async () => {

@@ -566,8 +566,8 @@ export function createApp({ db, pipeline, bus, backlog, tickets, watcher, stubs,
     app.patch("/slack/items/:id", async (c) => c.json(await slack.patch(c.req.param("id"), await body(c, SlackItemPatch), tapOf("PATCH /slack/items/:id"))));
     app.post("/slack/items/:id/relation", async (c) => c.json(await slack.relate(c.req.param("id"), await body(c, SlackRelationInput))));
     app.post("/slack/items/:id/reply", async (c) => {
-      const { text, nudge } = await body(c, SlackReplyInput);
-      return c.json(await slack.reply(c.req.param("id"), text, tapOf("POST /slack/items/:id/reply"), nudge ?? false));
+      const { text, nudge, draftId, draftHash } = await body(c, SlackReplyInput);
+      return c.json(await slack.reply(c.req.param("id"), text, tapOf("POST /slack/items/:id/reply"), nudge ?? false, draftId && draftHash ? { id: draftId, hash: draftHash } : undefined));
     });
     app.post("/slack/items/:id/task", async (c) => c.json(await serialize(await slack.toTask(c.req.param("id"), await body(c, SlackTaskInput), tapOf("POST /slack/items/:id/task"))), 201));
     app.get("/slack/watches", async (c) => c.json(await slack.watches()));

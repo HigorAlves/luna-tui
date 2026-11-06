@@ -34,7 +34,7 @@ import { candidateOf } from "../domain/conversation-candidate.ts";
 import { humansActive } from "../domain/conversation-quiet.ts";
 import { carriesSecret, postable } from "../domain/postable.ts";
 import { applyEdit, canonicalMessageOf, emptyConversation, foldMessage, latestText } from "../domain/conversation.ts";
-import { screen } from "../domain/secrets-check.ts";
+import { maskPii, screen } from "../domain/secrets-check.ts";
 import {
   type IncomingMessage,
   KEEP_DONE_MS,
@@ -58,7 +58,7 @@ import { ChannelClaims } from "./channel-claims.ts";
 import { type Assessed, CATEGORY } from "./conversation-machine.ts";
 import type { ConversationActions } from "./conversation-actions.ts";
 import { type Tap, SlackRefusedError, SlackSender, standingOf } from "./slack-send.ts";
-import type { ConversationDrafts } from "./conversation-drafts.ts";
+import { draftHash, type ConversationDrafts } from "./conversation-drafts.ts";
 import type { ConversationTruth } from "./conversation-truth.ts";
 import { settled as threadQuiet } from "../domain/ticket-scope.ts";
 import type { NewTask } from "./pipeline.ts";
@@ -76,7 +76,7 @@ export interface SlackInboxPort {
   /** A person's say on what a thread is about: a stored answer and a truth record, never a post. */
   relate(id: string, input: SlackRelationInput): Promise<SlackItem>;
   /** Posts `text` (escaped) in the item's thread as you; `nudge` prefixes a mention of its author. */
-  reply(id: string, text: string, tap: Tap, nudge?: boolean): Promise<SlackItem>;
+  reply(id: string, text: string, tap: Tap, nudge?: boolean, seen?: { id: string; hash: string }): Promise<SlackItem>;
   toTask(id: string, input: SlackTaskInput, tap: Tap): Promise<TaskRow>;
   watches(): Promise<SlackWatch[]>;
   addWatch(input: SlackWatchInput): Promise<SlackWatch>;
@@ -331,6 +331,7 @@ export class SlackInbox implements SlackInboxPort {
   async expireDrafts(): Promise<void> {
     const { drafts, truth, store } = this.options;
     if (!drafts) return;
+    await drafts.abandonStuck(this.now());
     const done = await drafts.expire(this.now());
     for (const d of done) {
       await truth?.outcome({ thread: d.thread, draft: d.id, outcome: "expired", machine: d.text, records: d.records }).catch(() => {});
@@ -477,7 +478,7 @@ export class SlackInbox implements SlackInboxPort {
       .map((row) => {
         const pr = this.options.linkPr(prUrlsIn(row.text)) ?? row.linked.pr;
         const d = waitingDrafts.get(row.id);
-        return toSlackItem({ ...row, linked: { ...row.linked, pr }, ...(d ? { draft: { id: d.id, kind: d.kind === "reply" || d.kind === "questions" || d.kind === "shipped" || d.kind === "status" ? d.kind : "reply", text: d.text, expiresAt: d.expiresAt.toISOString() } } : {}) }, now, this.sla);
+        return toSlackItem({ ...row, linked: { ...row.linked, pr }, ...(d ? { draft: { id: d.id, kind: d.kind === "reply" || d.kind === "questions" || d.kind === "shipped" || d.kind === "status" ? d.kind : "reply", text: d.text, hash: draftHash(d.text), expiresAt: d.expiresAt.toISOString() } } : {}) }, now, this.sla);
       });
     const watches = await this.options.store.watches();
     this.publishIfChanged({
@@ -1137,7 +1138,7 @@ export class SlackInbox implements SlackInboxPort {
     return this.saveAndPublish({ ...row, linked, triage, conversation: { ...conversation, relation: stored } });
   }
 
-  async reply(id: string, text: string, tap: Tap, nudge = false): Promise<SlackItem> {
+  async reply(id: string, text: string, tap: Tap, nudge = false, seen?: { id: string; hash: string }): Promise<SlackItem> {
     let row = await this.get(id);
     // Nothing that looks like a secret is sent, typed or drafted; a draft sent as drafted must still equal its own `postable()`.
     const waiting = this.options.drafts ? await this.options.drafts.waiting(row.id) : null;
@@ -1147,15 +1148,19 @@ export class SlackInbox implements SlackInboxPort {
     // so a second tap in flight finds none to claim and posts nothing.
     const drafts = this.options.drafts;
     if (drafts && (await drafts.inFlight(row.id))) throw new SlackRefusedError("this draft is already being sent");
-    const claimed = drafts && waiting ? await drafts.claim(row.id, text) : null;
-    if (drafts && waiting && !claimed) throw new SlackRefusedError("this draft is already being sent");
+    // A claim needs the id and the hash of the draft the person saw. A reply without them, or with another draft's, is the person's own text: posted, and no draft is settled or labelled.
+    const matches = !!(drafts && waiting && seen && seen.id === waiting.id && seen.hash === draftHash(waiting.text));
+    const claimed = matches ? await drafts!.claim(row.id, text, seen) : null;
+    if (matches && !claimed) throw new SlackRefusedError("this draft is already being sent");
+    // The draft's text was flattened and its `<` escaped when it was written; typed text is escaped here, a draft sent as drafted only for what is left.
+    const outward = claimed && text === claimed.text ? escapeMrkdwn(text.replace(/&lt;/g, "<").replace(/&gt;/g, ">")) : escapeMrkdwn(text);
     // The thread is the item's own ts (the root of a collapsed thread, not its latest message);
     // a top-level DM is answered in the DM itself.
     const isDm = row.channel.kind === "dm" || row.channel.kind === "mpim";
     const threadTs = isDm && row.threadTs === null ? undefined : row.id.split(":")[1];
     // What you typed is escaped so it cannot open a mention or a link; the nudge's mention is built here, by id.
     try {
-      await this.sender.postMessage(tap, row.channel.id, `${nudge ? `<@${row.author.id}> ` : ""}${escapeMrkdwn(text)}`, threadTs);
+      await this.sender.postMessage(tap, row.channel.id, `${nudge ? `<@${row.author.id}> ` : ""}${outward}`, threadTs);
     } catch (error) {
       if (claimed) await drafts!.release(claimed.id).catch(() => {});
       throw error;
@@ -1179,9 +1184,11 @@ export class SlackInbox implements SlackInboxPort {
     const where = row.channel.kind === "dm" ? `DM with @${row.channel.name}` : `#${row.channel.name}`;
     // A conversation the machine classified, or a private one, becomes a card from `candidateOf`: the thread masked and capped, and for a private one no text at all.
     // The card is made here and nowhere else: a relation's action never calls `createTask`.
-    if (row.conversation && (row.conversation.classification || row.conversation.private)) {
+    // A row stored before this wave has no conversation object: it is private unless its channel is a public one, so a DM's text never enters a card.
+    const stored = row.conversation ?? null;
+    if ((stored && (stored.classification || stored.private)) || (!stored && row.channel.kind !== "channel")) {
       const candidate = candidateOf(row);
-      const c = row.conversation;
+      const c = stored ?? emptyConversation(row.channel);
       const priority = c.classification?.priority ?? row.triage?.priority;
       const confidence = c.classification?.confidence;
       const task = await this.options.createTask({
@@ -1196,15 +1203,16 @@ export class SlackInbox implements SlackInboxPort {
       await this.saveAndPublish({ ...row, linked: { ...row.linked, taskId: task.id } });
       return task;
     }
-    const context = row.context.map((m) => `> @${m.user.name}: ${m.text.replace(/\n/g, "\n> ")}`);
+    // The public branch keeps the thread as the person wrote it, with e-mail addresses and phone numbers masked (a card is read by more people than a thread).
+    const context = row.context.map((m) => `> @${m.user.name}: ${maskPii(m.text).replace(/\n/g, "\n> ")}`);
     const description = [
       `From Slack: @${row.author.name} in ${where}${row.permalink ? ` · ${row.permalink}` : ""}`,
       "",
       ...(context.length > 0 ? [...context, ">"] : []),
-      `> @${row.author.name}: ${row.text.replace(/\n/g, "\n> ")}`,
+      `> @${row.author.name}: ${maskPii(row.text).replace(/\n/g, "\n> ")}`,
     ].join("\n");
     const task = await this.options.createTask({
-      title: input.title ?? row.triage?.summary ?? firstLine(row.text),
+      title: input.title ?? maskPii(row.triage?.summary ?? firstLine(row.text)),
       description,
       repoPath: input.repoPath ?? null,
       source: { kind: "slack", channel: row.channel.id, ts: row.slackTs, permalink: row.permalink },

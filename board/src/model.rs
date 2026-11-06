@@ -1313,6 +1313,11 @@ pub struct SlackItem {
 #[derive(Deserialize, Clone, Debug, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SlackDraft {
+    /// The draft's id and the hash of its text: sent back with the reply, so a tap settles only the draft you saw.
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub hash: String,
     #[serde(default)]
     pub kind: String,
     #[serde(default)]

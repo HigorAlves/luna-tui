@@ -197,7 +197,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         match &app.mode {
             Mode::SlackSnooze { cursor, .. } => render_slack_snooze(frame, *cursor),
             Mode::SlackPick { id, relation, cursor } => render_slack_pick(frame, app, id, *relation, *cursor),
-            Mode::SlackReply { id, area, vim, nudge } => render_slack_reply(frame, app, id, area, vim, *nudge),
+            Mode::SlackReply { id, area, vim, nudge, .. } => render_slack_reply(frame, app, id, area, vim, *nudge),
             Mode::SlackTask { id, title, repo } => render_slack_task(frame, app, id, title, repo.as_deref()),
             Mode::SlackWatchAdd { query, cursor } => render_slack_watch_add(frame, app, query, *cursor),
             Mode::SlackActions { cursor } => render_slack_actions(frame, app, *cursor),
@@ -3478,7 +3478,7 @@ mod slack_render_tests {
         assert!(text.contains("n add  e floor  d delete  space on/off  esc"), "{text}");
         app.slack.as_mut().unwrap().watches = None;
 
-        app.mode = Mode::SlackReply { id: "C0123:1730112345.0001".into(), area: TextArea::new(vec!["Approve the rollback, I'm on it.".into()]), vim: crate::vim::Vim::new(), nudge: false };
+        app.mode = Mode::SlackReply { id: "C0123:1730112345.0001".into(), area: TextArea::new(vec!["Approve the rollback, I'm on it.".into()]), vim: crate::vim::Vim::new(), nudge: false, draft: None };
         let text = render(120, 40, &app);
         assert!(text.contains(" reply · #payments-oncall · thread with @marta "), "{text}");
         assert!(text.contains("ctrl+s send  esc back") && text.contains(" NORMAL "), "{text}");

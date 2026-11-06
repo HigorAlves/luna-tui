@@ -100,6 +100,8 @@ export interface SlackDraft {
   id: string;
   kind: "reply" | "questions" | "shipped" | "status";
   text: string;
+  /** The sha256 of `text`: the board sends it back with `id` when the reply is the draft's tap. */
+  hash?: string;
   expiresAt: string;
 }
 
@@ -184,7 +186,7 @@ export const SlackRelationInput = z.object({
 export type SlackRelationInput = z.infer<typeof SlackRelationInput>;
 
 /** `POST /slack/items/:id/reply`: `nudge` prefixes a mention of the item's author (`<@id> `), built on the machine. */
-export const SlackReplyInput = z.object({ text: z.string().min(1), nudge: z.boolean().optional() });
+export const SlackReplyInput = z.object({ text: z.string().min(1), nudge: z.boolean().optional(), draftId: z.string().optional(), draftHash: z.string().optional() });
 export type SlackReplyInput = z.infer<typeof SlackReplyInput>;
 
 /** `POST /slack/items/:id/task`: a Backlog ticket from the item. */

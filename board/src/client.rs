@@ -413,8 +413,9 @@ impl Machine {
 
     /// Posts `text` as you, in the item's thread (or channel). Nothing is added to it.
     /// Posts `text` in the item's thread as you; `nudge` has the machine prefix a mention of the item's author.
-    pub fn slack_reply(&self, id: &str, text: &str, nudge: bool) -> Result<(), String> {
-        Self::json(self.agent.post(self.url(&slack_item_path(id, "/reply"))).send_json(json!({ "text": text, "nudge": nudge }))).map(|_| ())
+    /// `draft` is the id and hash of the waiting draft you were shown: with them the machine settles that draft, without them it only posts.
+    pub fn slack_reply(&self, id: &str, text: &str, nudge: bool, draft: Option<(&str, &str)>) -> Result<(), String> {
+        Self::json(self.agent.post(self.url(&slack_item_path(id, "/reply"))).send_json(slack_reply_body(text, nudge, draft))).map(|_| ())
     }
 
     /// What you say a thread is about: a stored answer (and a truth record), never a post. `target` is an id of the item's stored shortlist.
@@ -492,6 +493,16 @@ impl Machine {
 }
 
 /// `/slack/items/<id><verb>`; the id carries `:` and `.`, so it travels percent-encoded.
+/// The body of a Slack reply: the text, the nudge flag and, for a draft's tap, the draft's id and hash.
+fn slack_reply_body(text: &str, nudge: bool, draft: Option<(&str, &str)>) -> Value {
+    let mut body = json!({ "text": text, "nudge": nudge });
+    if let Some((id, hash)) = draft {
+        body["draftId"] = json!(id);
+        body["draftHash"] = json!(hash);
+    }
+    body
+}
+
 fn slack_item_path(id: &str, verb: &str) -> String {
     format!("/slack/items/{}{verb}", urlencoding(id))
 }
@@ -658,6 +669,12 @@ fn reject_body(comment: &str, approver: Option<&str>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_reply_carries_the_draft_id_and_hash_only_when_it_was_opened_on_a_draft() {
+        assert_eq!(slack_reply_body("hi", false, Some(("d1", "abc"))), json!({ "text": "hi", "nudge": false, "draftId": "d1", "draftHash": "abc" }));
+        assert_eq!(slack_reply_body("hi", true, None), json!({ "text": "hi", "nudge": true }));
+    }
 
     #[test]
     fn a_decision_names_its_approver_when_there_is_one_and_stays_as_it_was_when_not() {
