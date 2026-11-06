@@ -289,7 +289,9 @@ const realVerifyRunner = verifyRunner({
     const env = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.env as EnvRecord | undefined;
     return env && typeof env.hash === "string" ? env : null;
   },
-  envOf: async (path, commit, repoPath) => envOf({ image: await imageId(agentDeps && repoPath ? await agentDeps.repoImageOf(repoPath) : config.runnerImage), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
+  imageOf: agentDeps ? (repoPath, signal) => agentDeps.repoImageOf(repoPath, signal) : async () => config.runnerImage,
+  // The image Verify chose once (the sandboxes run in it) is the one compared; only a caller that chose none resolves the repository's image here.
+  envOf: async (path, commit, repoPath, image) => envOf({ image: await imageId(image ?? (agentDeps && repoPath ? await agentDeps.repoImageOf(repoPath) : config.runnerImage)), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
   graph,
   stateDir: config.stateDir,
   get decide() {

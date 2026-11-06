@@ -108,13 +108,32 @@ pub struct FloorState {
 }
 
 impl FloorState {
-    /// `None` for every repo; `Some(repo)` for one, where the repo may itself be `None`
-    /// (the tasks with no repo).
-    pub fn focused(&self) -> Option<Option<&str>> {
+    /// The repositories the machine knows (`GET /repos`) that have no task-metrics row yet: a repository just configured. They
+    /// follow the metrics rows in the focus order, so tab reaches them and `A` can approve their base.
+    pub fn health_only(&self) -> Vec<&crate::model::RepoHealth> {
+        self.health.iter().filter(|h| !self.repos.iter().any(|r| r.repo.as_deref() == Some(h.repo.as_str()))).collect()
+    }
+
+    /// How many repositories tab can focus: the metrics rows, then the health-only ones.
+    pub fn focusable(&self) -> usize {
+        self.repos.len() + self.health_only().len()
+    }
+
+    /// The focused repository's path; `None` for every repo, `Some(None)` for the tasks with no repo.
+    fn focused_repo(&self) -> Option<Option<&str>> {
         if self.cursor == 0 {
             return None;
         }
-        self.repos.get(self.cursor - 1).map(|r| r.repo.as_deref())
+        match self.repos.get(self.cursor - 1) {
+            Some(r) => Some(r.repo.as_deref()),
+            None => self.health_only().get(self.cursor - 1 - self.repos.len()).map(|h| Some(h.repo.as_str())),
+        }
+    }
+
+    /// `None` for every repo; `Some(repo)` for one, where the repo may itself be `None`
+    /// (the tasks with no repo).
+    pub fn focused(&self) -> Option<Option<&str>> {
+        self.focused_repo()
     }
 
     /// The focused repo's name for the header; `None` when every repo is in.
@@ -122,11 +141,14 @@ impl FloorState {
         if self.cursor == 0 {
             return None;
         }
-        self.repos.get(self.cursor - 1).map(RepoMetrics::name)
+        match self.repos.get(self.cursor - 1) {
+            Some(r) => Some(r.name()),
+            None => self.health_only().get(self.cursor - 1 - self.repos.len()).map(|h| h.name()),
+        }
     }
 
     fn cycle(&mut self, by: isize) {
-        let n = self.repos.len() + 1;
+        let n = self.focusable() + 1;
         self.cursor = (self.cursor as isize + by).rem_euclid(n as isize) as usize;
     }
 }
@@ -1984,7 +2006,7 @@ impl App {
             Some(Err(e)) => errors.push(e),
             None => {}
         }
-        if floor.cursor > floor.repos.len() {
+        if floor.cursor > floor.focusable() {
             floor.cursor = 0;
         }
         if let Some(error) = errors.into_iter().next() {
@@ -2018,7 +2040,7 @@ impl App {
     /// A: approves the base the focused repository is waiting on (the machine checks it is the one in its luna.yaml).
     fn approve_pending_base(&mut self) {
         let Some(floor) = self.floor.as_ref() else { return };
-        let Some(repo) = floor.repos.get(floor.cursor.wrapping_sub(1)).and_then(|r| r.repo.clone()) else {
+        let Some(repo) = floor.focused_repo().flatten().map(str::to_string) else {
             self.notify("focus a repository (tab) to approve its base".to_string(), true);
             return;
         };
@@ -4484,6 +4506,33 @@ mod tests {
         assert_eq!(app.floor.as_ref().unwrap().focused(), None, "back to all");
         app.handle_key(KeyEvent::from(KeyCode::BackTab));
         assert_eq!(app.floor.as_ref().unwrap().focused(), Some(None));
+    }
+
+    #[test]
+    fn tab_reaches_a_repository_with_no_task_numbers_and_a_approves_its_base() {
+        let mut app = App::new(Machine::from_env());
+        app.floor = Some(FloorState::default());
+        let floor = app.floor.as_mut().unwrap();
+        floor.repos = serde_json::from_str(
+            r#"[{"repo":"/r/alpha","tasks":{"created":1,"closed":0,"open":1,"waitingOnYou":0,"running":0,"queued":0},
+                 "escalationRate":null,"firstPassVerifying":null,"costUsd":0}]"#,
+        )
+        .unwrap();
+        floor.health = serde_json::from_str(
+            r#"[{"repo":"/r/alpha","image":{"inUse":"m","base":null,"builtAt":null,"lastFailure":null},
+                 "graph":{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}},
+                {"repo":"/r/fresh","image":{"inUse":"m","base":null,"builtAt":null,"lastFailure":null,"pendingBase":"python:3.13-slim"},
+                 "graph":{"on":false,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":false,"lastFailure":null}}]"#,
+        )
+        .unwrap();
+        assert_eq!(floor.focusable(), 2);
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        let floor = app.floor.as_ref().unwrap();
+        assert_eq!(floor.focused(), Some(Some("/r/fresh")));
+        assert_eq!(floor.focused_name(), Some("fresh"));
+        app.handle_key(KeyEvent::from(KeyCode::Tab));
+        assert_eq!(app.floor.as_ref().unwrap().focused(), None, "back to all");
     }
 
     #[test]

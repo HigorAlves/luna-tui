@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
@@ -33,5 +33,32 @@ describe("redactFiles", () => {
     await redactFiles(dir, secretRedactor({ QA: secret }));
     expect(readFileSync(outside, "utf8")).toBe(`keep ${secret}`);
     rmSync(outside);
+  });
+
+  it("never writes through a link planted where the temporary would go: the host file stays, the redaction still lands", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "redact-plant-"));
+    const target = join(tmpdir(), `zshenv-${process.pid}`);
+    writeFileSync(target, "host startup file\n");
+    writeFileSync(join(folder, "a.txt"), `echo owned ${secret}`);
+    symlinkSync(target, join(folder, "a.txt.redacting"));
+    const changed = await redactFiles(folder, secretRedactor({ QA: secret }));
+    expect(readFileSync(target, "utf8")).toBe("host startup file\n");
+    expect(changed).toEqual(["a.txt"]);
+    expect(readFileSync(join(folder, "a.txt"), "utf8")).toBe("echo owned [secret:QA]");
+    rmSync(target);
+    rmSync(folder, { recursive: true, force: true });
+  });
+
+  it("does not walk into a linked folder or leave a temporary behind", async () => {
+    const folder = mkdtempSync(join(tmpdir(), "redact-dir-"));
+    const outside = mkdtempSync(join(tmpdir(), "redact-outside-"));
+    writeFileSync(join(outside, "x.txt"), `keep ${secret}`);
+    symlinkSync(outside, join(folder, "linked"));
+    writeFileSync(join(folder, "b.txt"), secret);
+    await redactFiles(folder, secretRedactor({ QA: secret }));
+    expect(readFileSync(join(outside, "x.txt"), "utf8")).toBe(`keep ${secret}`);
+    expect(readdirSync(folder).sort()).toEqual(["b.txt", "linked"]);
+    rmSync(folder, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
   });
 });
