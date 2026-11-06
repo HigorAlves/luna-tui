@@ -24,4 +24,16 @@ describe("a repository's image and graph health", () => {
     expect(shop!.image.pendingBase).toBeNull();
     expect(off).toMatchObject({ graph: { on: false, commit: null, behind: null, graphify: null, builtAt: null } });
   });
+
+  it("shows a build a card's readiness wait started, which the watch never saw", async () => {
+    const [row] = await repoHealthOf({
+      repos: ["/a/shop"],
+      policy: async () => ({ graph: true }),
+      machineImage: "hardness-runner:dev",
+      images: { pending: async () => null, status: () => null },
+      graph: { stampOf: async () => null, health: () => ({ building: true, lastFailure: "the graph build failed (exit code 1)" }) },
+      watch: { health: () => ({ building: false, lastFailure: null }) },
+    });
+    expect(row!.graph).toMatchObject({ building: true, lastFailure: "the graph build failed (exit code 1)" });
+  });
 });

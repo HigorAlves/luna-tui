@@ -69,6 +69,8 @@ export interface StageRunRow {
   turns: number | null;
   containerId: string | null;
   inputCommit: string | null;
+  /** The commit the run first started from, written once; `inputCommit` follows the run's latest container. Null on rows from before. */
+  baseCommit?: string | null;
   outputCommit: string | null;
   transcriptPath: string | null;
   /** Verifying only: one verdict per approved case, when the run reported them. */
@@ -333,7 +335,8 @@ export function sameSource(a: unknown, b: unknown): boolean {
     if (value === null || typeof value !== "object") return value ?? null;
     return Object.fromEntries(
       Object.entries(value)
-        .filter(([, v]) => v !== undefined && v !== null)
+        // `labels` are what intake saw, never part of a source's identity.
+        .filter(([k, v]) => k !== "labels" && v !== undefined && v !== null)
         .sort(([x], [y]) => (x < y ? -1 : 1))
         .map(([k, v]) => [k, canonical(v)]),
     );

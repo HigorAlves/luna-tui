@@ -1650,6 +1650,17 @@ mod tests {
     }
 
     #[test]
+    fn a_text_only_pack_the_machine_published_says_published_and_an_old_pack_is_read_from_its_links() {
+        let text = crate::ui::pack_lines(&serde_json::json!({"summary":"s","format":"text","scenarios":[],"media":[],"published":true})).join("\n");
+        assert!(text.contains("published: yes"), "{text}");
+        let text = crate::ui::pack_lines(&serde_json::json!({"summary":"s","format":"video","scenarios":[],"media":[{"label":"w","url":"https://x/w.mp4"}],"published":false})).join("\n");
+        assert!(text.contains("published: no"), "{text}");
+        // A pack stored before the field existed still reads from its links.
+        let text = crate::ui::pack_lines(&serde_json::json!({"summary":"s","format":"video","scenarios":[],"media":[{"label":"w","url":"https://x/w.mp4"}]})).join("\n");
+        assert!(text.contains("published: yes"), "{text}");
+    }
+
+    #[test]
     fn a_high_risk_pack_is_read_from_the_task_when_no_gate_is_open() {
         let (_, mut detail) = fixture();
         assert!(!ship_risk_is_high(Some(&detail)));

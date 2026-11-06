@@ -45,7 +45,8 @@ const titleKey = (t: string): string => t.trim().replace(/\s+/g, " ").toLowerCas
 
 /** One finding per fact: the same id, or the same path within 3 lines with the same normalised title.
  *  The kept finding sits at its first member's place, carries the highest severity and confidence, and
- *  lists the others' ids in `merged`. */
+ *  lists the others' ids in `merged`. A later member's resolution wins, and a resolution only inferred for an earlier member is dropped
+ *  when a later one is still raised. */
 export function mergeDuplicateFindings(findings: readonly Finding[]): Finding[] {
   const out: Finding[] = [];
   for (const f of findings) {
@@ -62,8 +63,12 @@ export function mergeDuplicateFindings(findings: readonly Finding[]): Finding[] 
     const keptId = kept.id ?? findingId(kept);
     const merged = [...(kept.merged ?? [])];
     if (id !== keptId && !merged.includes(id)) merged.push(id);
+    // A finding raised again contradicts a resolution the machine only inferred; a person's or a stage's stands.
+    const { resolution: keptResolution, ...rest } = kept;
+    const resolution = f.resolution ?? (keptResolution?.inferred === true ? undefined : keptResolution);
     out[at] = {
-      ...kept,
+      ...rest,
+      ...(resolution ? { resolution } : {}),
       severity: RANK[severityOf(f.severity)] > RANK[severityOf(kept.severity)] ? f.severity : kept.severity,
       confidence: Math.max(kept.confidence, f.confidence),
       ...(merged.length > 0 ? { merged } : {}),
