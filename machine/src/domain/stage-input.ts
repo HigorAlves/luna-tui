@@ -145,7 +145,7 @@ export function buildStageInput(opts: {
   const pack = opts.pack ?? (stage as PackId);
   // The test designer designs from the criteria and the goal: it is never shown the plan's steps, brief or assumptions.
   const designer = pack === "test_design" || pack === "test_design_fast";
-  const designed: PlanContext | null = designer && opts.plan ? { record: opts.plan.record, brief: "", criteria: opts.plan.criteria, assumptions: [], slices: [], ...(opts.plan.cases ? { cases: opts.plan.cases } : {}), ...(opts.plan.gaps ? { gaps: opts.plan.gaps } : {}), ...(opts.plan.round !== undefined ? { round: opts.plan.round } : {}) } : null;
+  const designed: PlanContext | null = designer && opts.plan ? { record: opts.plan.record, brief: "", criteria: opts.plan.criteria, assumptions: [], slices: [], ...(opts.plan.cases ? { cases: opts.plan.cases } : {}), ...(opts.plan.gaps ? { gaps: opts.plan.gaps } : {}), ...(opts.plan.coverage_notes ? { coverage_notes: opts.plan.coverage_notes } : {}), ...(opts.plan.round !== undefined ? { round: opts.plan.round } : {}) } : null;
   const reviewed = designed ?? opts.plan;
   const underReview = reviewed
     ? { brief: reviewed.brief, criteria: reviewed.criteria, assumptions: reviewed.assumptions, ...(designer ? {} : { slices: reviewed.slices }), ...(reviewed.rollback !== undefined ? { rollback: reviewed.rollback } : {}) }

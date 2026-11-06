@@ -31,8 +31,10 @@ const MAX_ANSWER_CHARS = 2000;
 
 const issueOf = (task: TaskRow, answers: NonNullable<IssueContext["answers"]>): IssueContext => {
   const source = task.source;
+  // The source labels the card was taken in with: a `security` label must still knock the reading out to P0.
+  const sourceLabels = source && (source.kind === "github" || source.kind === "jira") ? (source.labels ?? []) : [];
   const ref = source && "url" in source ? source.url : source?.kind === "slack" ? source.permalink : undefined;
-  return { title: task.title, description: task.description, labels: [], ...(ref ? { source: ref } : {}), ...(answers.length > 0 ? { answers } : {}) };
+  return { title: task.title, description: task.description, labels: sourceLabels, ...(ref ? { source: ref } : {}), ...(answers.length > 0 ? { answers } : {}) };
 };
 
 /** What the person answered at the questions gates so far, oldest first; an answer that is not text is dropped. */

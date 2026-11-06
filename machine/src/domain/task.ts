@@ -304,7 +304,8 @@ export function sameSource(a: unknown, b: unknown): boolean {
     if (value === null || typeof value !== "object") return value ?? null;
     return Object.fromEntries(
       Object.entries(value)
-        .filter(([, v]) => v !== undefined && v !== null)
+        // `labels` are what intake saw, never part of a source's identity.
+        .filter(([k, v]) => k !== "labels" && v !== undefined && v !== null)
         .sort(([x], [y]) => (x < y ? -1 : 1))
         .map(([k, v]) => [k, canonical(v)]),
     );
