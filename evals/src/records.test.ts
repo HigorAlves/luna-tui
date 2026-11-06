@@ -94,3 +94,10 @@ describe("folderMegabytes", () => {
     expect(folderMegabytes(join(dir, "none"))).toBe(0);
   });
 });
+
+describe("stripUnsafe", () => {
+  it("turns control characters into spaces and removes bidirectional and zero-width characters", async () => {
+    const { stripUnsafe } = await import("./records.ts");
+    expect(stripUnsafe("a\u001b[31mb\u202ec\u200bd\u2066e\ufefff")).toBe("a [31mbcdef");
+  });
+});

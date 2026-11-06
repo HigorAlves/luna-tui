@@ -50,7 +50,7 @@ describe("harvest", () => {
     expect(expectation.checks).toEqual([{ kind: "equals", path: "worth.value", value: false }]);
     expect(expectation).toMatchObject({ label: { worth: { value: false } }, recordId: "6b0f2c52-7a3e-4d0b-9c1e-0a1f2b3c4d5e", traceId: "t-1" });
     expect(expectation.rubric).toMatch(/^worth: Would a retro/);
-    expect(expectation.review).toBeUndefined();
+    expect(expectation.review).toBe(true);
   });
 
   it("marks a record without a truth for review, with no checks, and keeps the model's answer to prefill a queue", () => {
@@ -65,10 +65,10 @@ describe("harvest", () => {
     expect(Expect.parse(read(dir, "rec-6b0f2c52", "expect.json"))).toMatchObject({ label: { worth: { value: true } }, review: true });
   });
 
-  it("does not mark a person's or a fact's label for review", () => {
+  it("marks every harvested case for review, a person's or a fact's label included, until a person confirms it", () => {
     const dir = mkdtempSync(join(tmpdir(), "harvest-"));
     harvest(dir, "worth_learning", [record({ truth: { label: { worth: { value: true } }, source: "retro_approved", kind: "person", at: "2026-11-05T00:00:00.000Z" } })]);
-    expect(Expect.parse(read(dir, "rec-6b0f2c52", "expect.json"))).not.toHaveProperty("review");
+    expect(Expect.parse(read(dir, "rec-6b0f2c52", "expect.json"))).toHaveProperty("review", true);
   });
 
   it("refuses a record marked private, whatever its context holds", () => {

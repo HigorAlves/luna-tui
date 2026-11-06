@@ -13,7 +13,7 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import type { Calibration } from "./calibration.ts";
-import type { Scorecard } from "./grade.ts";
+import { type Scorecard, summarize } from "./grade.ts";
 
 export const MIN_COVERAGE = 0.6;
 export const MIN_CASES = 4;
@@ -37,6 +37,20 @@ export const PINNED: Partial<Record<PackId, { engine: EngineId; since: string; w
 
 export const RULE = `An engine qualifies with coverage >= ${MIN_COVERAGE} and n >= ${MIN_CASES}. The default is the qualifying engine with the highest acted-on accuracy; engines within ${TIE_POINTS * 100} points of it tie, and a tie goes to Jev when it is among them (by far the cheapest engine), else to the cheaper one (cost per case). A pack with fewer than two engines measured keeps its current default. An engine that acted on every case and was right on every one wins outright; among several such, Jev, else the cheaper. A pack the machine reads answer by answer is read the same way on its pool of answers (at least ${MIN_ANSWERS} labelled). A default moves only when the winner has ${MIN_CASES_TO_MOVE} graded cases and ${MIN_LABELLED_TO_MOVE} labelled; under that it keeps its engine. A pin of the owner is never moved by any of this.`;
 
+/** A baseline's numbers recomputed from its own `cases[]`: the rule never trusts the summary a file carries, which a hand edit could have raised. Cost, time and turn
+ *  figures stay as the file has them (a case's grade is what the rule reads); a baseline whose cases hold no grades keeps its summary as it is. */
+export function withOwnSummary(card: Scorecard): Scorecard {
+  if (!card.cases.some((c) => c.decision)) return card;
+  const own = summarize(card.cases, card.pack);
+  const { cases, passed, passRate, calibration, answers, perQuestion } = own;
+  const summary = { ...card.summary, cases, passed, passRate, calibration } as Scorecard["summary"];
+  if (answers) summary.answers = answers;
+  else delete summary.answers;
+  if (perQuestion) summary.perQuestion = perQuestion;
+  else delete summary.perQuestion;
+  return { ...card, summary };
+}
+
 /** Every decision pack's baselines under `evals/baselines/<engine>/<pack>.json`, those that parse. */
 export function loadBaselines(evalsDir: string): Scorecard[] {
   const root = join(evalsDir, "baselines");
@@ -46,7 +60,7 @@ export function loadBaselines(evalsDir: string): Scorecard[] {
     for (const file of readdirSync(join(root, engineDir.name)).filter((f) => f.endsWith(".json"))) {
       try {
         const card = JSON.parse(readFileSync(join(root, engineDir.name, file), "utf8")) as Scorecard;
-        if (card.schema === 1 && PACKS[card.pack]?.kind === "decision" && card.summary?.calibration) cards.push(card);
+        if (card.schema === 1 && PACKS[card.pack]?.kind === "decision" && card.summary?.calibration && Array.isArray(card.cases)) cards.push(withOwnSummary(card));
       } catch {
         // A file that is not a scorecard is not a baseline.
       }

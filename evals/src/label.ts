@@ -3,7 +3,9 @@
 import type { DecisionPack, DecisionRecord, DecisionTruth, PackId } from "@hardness/contracts";
 
 import { decisionPack, type Label } from "./labels.ts";
-import { labelState, printable } from "./records.ts";
+import { maskPii } from "@hardness/machine/decisions";
+
+import { labelState, printable, stripUnsafe } from "./records.ts";
 
 const CONTEXT_CAP = 4000;
 
@@ -71,12 +73,12 @@ const flat = (value: unknown, path = ""): string[] =>
 export function renderNext(record: DecisionRecord): string[] {
   const decision = decisionPack(record.pack)!;
   const priv = record.private === true || (record.context as { conversation?: { private?: unknown } }).conversation?.private === true;
-  const context = priv ? "(private conversation: its text is not shown, and was never kept; label it from what you remember of the thread)" : printable(flat(record.context).join("\n")).slice(0, CONTEXT_CAP);
+  const context = priv ? "(private conversation: its text is not shown, and was never kept; label it from what you remember of the thread)" : maskPii(printable(flat(record.context).join("\n"))).slice(0, CONTEXT_CAP);
   const lines = [`${record.pack}  ${record.id}  ${record.at}  ${record.engine}`, "", "context:", context, "", "the model said:"];
-  for (const [name, entry] of Object.entries(record.answer)) lines.push(printable(`  ${name}: ${JSON.stringify(entry)}`));
+  for (const [name, entry] of Object.entries(record.answer)) lines.push(maskPii(printable(`  ${name}: ${JSON.stringify(entry)}`)));
   lines.push("", "labels:");
   for (const [name, question] of Object.entries(decision.questions)) lines.push(`  ${name}: ${allowedOf(question).join(", ")}`);
   const first = Object.keys(decision.questions)[0]!;
   lines.push("", `pnpm eval label --pack ${record.pack} --record ${record.id} --set ${first}=<label> [--set ...] [--note <text>]`);
-  return lines;
+  return lines.map(stripUnsafe);
 }

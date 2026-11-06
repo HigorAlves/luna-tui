@@ -66,3 +66,14 @@ describe("next", () => {
     expect(text).toContain("private");
   });
 });
+
+describe("renderNext masks and strips what it prints", () => {
+  it("masks an email address and a phone number in the context and the answer, and strips bidirectional and zero-width characters on every line", () => {
+    const text = renderNext(record({ context: { ship: { text: "ring +1 415-555-0132 or write bob@corp.test \u202ehidden\u200b" } } })).join("\n");
+    expect(text).not.toContain("555-0132");
+    expect(text).not.toContain("bob@corp.test");
+    expect(text).toContain("[phone]");
+    expect(text).toContain("[email]");
+    expect(text).not.toMatch(/[\u202e\u200b]/);
+  });
+});

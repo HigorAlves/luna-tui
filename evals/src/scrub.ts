@@ -2,6 +2,7 @@
 // is the machine's own data (its contexts come from repos it reads), so everything that could name
 // a person, a host or a machine is replaced, and anything token-shaped REFUSES the record: a secret
 // is never redacted and kept. Pure; the unit test over `evals/**` stays the final gate.
+import { maskPhones } from "@hardness/machine/decisions";
 
 /** The token shapes a case or a datapoint may never hold: the one list, imported by the cases test. */
 export const TOKEN_SHAPE = /xox[abposr]-|xapp-[A-Za-z0-9-]{10,}|hooks\.slack\.com\/services\/|\bgh[pousr]_[A-Za-z0-9]{20,}|github_pat_|glpat-[A-Za-z0-9_-]{20,}|\bsk-[A-Za-z0-9_-]{20,}|\b[sr]k_(?:live|test)_[A-Za-z0-9]{10,}|AIza[0-9A-Za-z_-]{35}|\bnpm_[A-Za-z0-9]{36}|AKIA[0-9A-Z]{12}|ASIA[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----/;
@@ -90,7 +91,9 @@ export function scrubContext(context: Record<string, unknown>): Scrubbed {
       if (!logins.has(key)) logins.set(key, `user-${logins.size + 1}.example`);
       return `@${logins.get(key)}`;
     });
-    return loginRe ? out.replace(loginRe, (match) => logins.get(match.toLowerCase())!) : out;
+    out = loginRe ? out.replace(loginRe, (match) => logins.get(match.toLowerCase())!) : out;
+    // Phone numbers by the machine's own masking, so a case and a queue item carry none.
+    return maskPhones(out);
   };
 
   const walk = (value: unknown): unknown => (typeof value === "string" ? clean(value) : Array.isArray(value) ? value.map(walk) : isObject(value) ? Object.fromEntries(Object.entries(value).map(([k, v]) => [k, walk(v)])) : value);

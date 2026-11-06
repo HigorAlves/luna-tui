@@ -35,7 +35,10 @@ export function labelState(record: DecisionRecord): LabelState {
 }
 
 /** Printable text: control characters gone (a hostile context cannot paint the terminal), a token shape redacted. */
-export const printable = (text: string): string => redact(safe(String(text)).replace(/[\u0000-\u001f\u007f-\u009f]/g, " "));
+export const printable = (text: string): string => stripUnsafe(redact(safe(String(text))));
+
+/** One printed line made safe for a terminal: control characters become spaces, and bidirectional controls and zero-width characters (which can reorder or hide text) go. */
+export const stripUnsafe = (text: string): string => String(text).replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/g, "").replace(/[\u0000-\u001f\u007f-\u009f]/g, " ");
 
 const COUNT_LINE: Array<[LabelState, string]> = [["labelled", "labelled"], ["to_confirm", "to confirm"], ["queue", "waiting for a label"], ["local_only", "local only"]];
 

@@ -86,7 +86,7 @@ export function casesOfDatapoints(pack: PackId, datapoints: Datapoint[], options
       continue;
     }
     const recordId = typeof point.metadata?.recordId === "string" ? point.metadata.recordId : undefined;
-    result.cases.push(caseOf(pack, id, scrubbed.value, checked.label, recordId ? { recordId } : {}));
+    result.cases.push(caseOf(pack, id, scrubbed.value, checked.label, { review: true, ...(recordId ? { recordId } : {}) }));
   }
   return result;
 }

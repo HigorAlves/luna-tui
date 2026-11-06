@@ -75,4 +75,13 @@ describe("scrubContext", () => {
     expect(d).not.toMatch(/acme|rafael|corp\.internal|\.local/);
     expect(d).toMatch(/host-\d\.example/);
   });
+
+  it("masks a phone number by the machine's own masking, as well as an address", () => {
+    const out = scrubContext({ note: "call +1 415-555-0132 or (415) 555-0133, mail bob@corp.test" });
+    expect(out.ok).toBe(true);
+    const text = JSON.stringify(out.ok ? out.value : {});
+    expect(text).not.toMatch(/555-01/);
+    expect(text).toContain("[phone]");
+    expect(text).not.toContain("bob@corp.test");
+  });
 });

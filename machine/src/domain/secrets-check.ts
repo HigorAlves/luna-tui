@@ -83,4 +83,6 @@ export function screen(text: string): Screened {
 }
 
 /** E-mail addresses and phone numbers replaced by `[email]` and `[phone]`: the form every copy that leaves the conversation takes. */
-export const maskPii = (text: string): string => text.replace(EMAIL, "[email]").replace(PHONE, "[phone]");
+/** Phone numbers masked: the part of `maskPii` the evals' scrub adds to its own address pseudonyms. */
+export const maskPhones = (text: string): string => text.replace(PHONE, "[phone]");
+export const maskPii = (text: string): string => maskPhones(text.replace(EMAIL, "[email]"));

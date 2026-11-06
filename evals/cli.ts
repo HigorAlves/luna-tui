@@ -28,6 +28,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 
 import { decisionPack } from "./src/labels.ts";
+import { baselineHashes, changedLines, readLedger, writeLedger } from "./src/baseline-ledger.ts";
 import { labelFor, nextToLabel, renderNext, setLabel } from "./src/label.ts";
 import { runHarvest, runLabelPush, runPull, runPush } from "./src/loop.ts";
 import { baselinePlan } from "./src/baseline-plan.ts";
@@ -36,7 +37,7 @@ import { pruneRuns } from "./src/prune-runs.ts";
 import { writeReport } from "./src/report-out.ts";
 import { proposeWeights, readPriorityFiles, renderWeights } from "./src/weights.ts";
 import { casesTable, decisionPackIds, preflight } from "./src/preflight.ts";
-import { folderMegabytes, priorityHints, printable, recordsReport } from "./src/records.ts";
+import { folderMegabytes, priorityHints, printable, recordsReport, stripUnsafe } from "./src/records.ts";
 import { type Proposal, PINNED, buildDefaultsFile, loadBaselines, proposeDefaults, renderScorecard } from "./src/scorecard.ts";
 
 const EVALS = dirname(fileURLToPath(import.meta.url));
@@ -96,7 +97,7 @@ if (command === "harvest") {
   if (since && Number.isNaN(since.getTime())) fail("--since must be a date, like 2026-11-01");
   const packs = values.pack ? [decisionOf(values.pack)] : Object.values(PACKS).filter((p) => p.kind === "decision").map((p) => p.id);
   const found = (await Promise.all(packs.map((p) => log().list(p, since ? { since } : {})))).flat().filter((r) => !values.task || r.taskId === values.task).sort((a, b) => a.at.localeCompare(b.at));
-  for (const line of recordsReport(found).lines) console.log(line);
+  for (const line of recordsReport(found).lines) console.log(stripUnsafe(line));
   if (values.sizes) {
     const state = machineStateDir();
     for (const [name, dir] of [["decisions", join(state, "decisions")], ["ground-truth", join(state, "ground-truth")], ["evals/.runs", join(EVALS, ".runs")]] as const) console.log(`${name}: ${folderMegabytes(dir).toFixed(1)} MB`);
@@ -116,7 +117,7 @@ if (command === "harvest") {
     const records = (await log().list(pack, { withTruth: true, ...(since ? { since } : {}) })).filter((r) => r.private !== true);
     lines = renderBars(pack, records, { ...(PINNED[pack] ? { pin: PINNED[pack]! } : {}), ...(target === undefined ? {} : { target }), withOutcome: values["with-outcome"] });
   }
-  for (const line of lines) console.log(line);
+  for (const line of lines) console.log(stripUnsafe(line));
   const saved = writeReport(values.out, lines);
   if (saved) console.log(`report written to ${saved}`);
 } else if (command === "baseline-plan") {
@@ -131,8 +132,8 @@ if (command === "harvest") {
 } else if (command === "cases") {
   const { values } = parseArgs({ args: process.argv.slice(3), options: { pack: { type: "string" } } });
   for (const pack of values.pack ? [decisionOf(values.pack)] : decisionPackIds()) {
-    console.log(`\n${pack}`);
-    for (const row of casesTable(EVALS, pack)) console.log(`  ${row}`);
+    console.log(`\n${stripUnsafe(pack)}`);
+    for (const row of casesTable(EVALS, pack)) console.log(stripUnsafe(`  ${row}`));
   }
 } else if (command === "preflight") {
   const credentials = machineCredentials();
@@ -141,7 +142,7 @@ if (command === "harvest") {
     check: (engine) => credentials.check(engine),
     collector: async () => (await collectorGate(tracesFromEnv())).ok,
   }, { image: process.env.RUNNER_IMAGE ?? "hardness-runner:dev" });
-  for (const line of out.lines) console.log(line);
+  for (const line of out.lines) console.log(stripUnsafe(line));
   if (!out.ok) process.exit(1);
 } else if (command === "label") {
   const rest = process.argv.slice(sub === "push" ? 4 : 3);
@@ -193,7 +194,10 @@ if (command === "harvest") {
     const next = buildDefaultsFile(DECISION_DEFAULTS, proposals, { except: values.except });
     for (const [pack, p] of Object.entries(proposals)) console.log(values.except.includes(pack) ? `${pack}: left exactly as it is (--except)` : `${pack}: ${p!.default}${p!.measured ? "" : " (unmeasured, kept)"} · ${p!.reason}`);
     if (values.write) {
+      const hashes = baselineHashes(EVALS);
+      for (const line of changedLines(readLedger(EVALS), hashes)) console.log(line);
       writeFileSync(DEFAULTS_FILE, `${JSON.stringify(next, null, 2)}\n`);
+      writeLedger(EVALS, hashes);
       console.log(`contracts/src/decision-defaults.json written`);
     } else console.log("dry run: --write writes contracts/src/decision-defaults.json");
   }

@@ -77,7 +77,7 @@ export function harvest(evalsDir: string, pack: PackId, records: DecisionRecord[
     }
     let files: CaseFiles;
     try {
-      files = caseOf(pack, id, scrubbed.value, currentLabel(pack, (record.truth?.label as Label | undefined) ?? null), { recordId: record.id, traceId: record.traceId, modelAnswer: record.answer, ...(record.truth?.kind === "outcome" ? { review: true } : {}) });
+      files = caseOf(pack, id, scrubbed.value, currentLabel(pack, (record.truth?.label as Label | undefined) ?? null), { recordId: record.id, traceId: record.traceId, modelAnswer: record.answer, review: true });
     } catch (error) {
       report.refused.push({ id: record.id, reason: `the context is off the pack's schema: ${error instanceof Error ? error.message.split("\n")[0] : String(error)}` });
       continue;

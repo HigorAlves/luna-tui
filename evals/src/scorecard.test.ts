@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 
 import type { Calibration } from "./calibration.ts";
 import type { Scorecard } from "./grade.ts";
-import { buildDefaultsFile, loadBaselines, proposeDefaults, renderScorecard, wilson, PINNED } from "./scorecard.ts";
+import { buildDefaultsFile, loadBaselines, withOwnSummary, proposeDefaults, renderScorecard, wilson, PINNED } from "./scorecard.ts";
 
 /** A baseline: `cases` graded cases costing `costUsd` in all, calibration as given over the defaults below. */
 const card = (pack: string, engine: string, calibration: Partial<Calibration>, over: { costUsd?: number | null; at?: string } = {}): Scorecard =>
@@ -112,6 +112,19 @@ describe("the scorecard", () => {
     expect(md).toContain("claude:haiku");
     expect(md).toMatch(/risk_score.*claude:haiku.*acted-on accuracy 0\.90/);
     expect(md).toContain("Generated 2026-11-12");
+  });
+
+  it("recomputes a baseline's numbers from its own cases instead of trusting the summary the file carries", () => {
+    const honest = card("worth_learning", "claude:haiku", {});
+    // Eight graded cases, half wrong; the file's summary says every one was right.
+    honest.cases = Array.from({ length: 8 }, (_, i) => ({ ...honest.cases[0]!, id: `c${i}`, decision: { correct: i < 4, confidence: 0.9, verdict: "proceed" as const } })) as never;
+    honest.summary = { ...honest.summary, calibration: { ...honest.summary.calibration!, n: 8, labelled: 8, acted: 8, accuracy: 1, actedOnAccuracy: 1, coverage: 1 } };
+    const dir = mkdtempSync(join(tmpdir(), "evals-"));
+    mkdirSync(join(dir, "baselines", "claude-haiku"), { recursive: true });
+    writeFileSync(join(dir, "baselines", "claude-haiku", "worth_learning.json"), JSON.stringify(honest));
+    const [loaded] = loadBaselines(dir);
+    expect(loaded!.summary.calibration!.actedOnAccuracy).toBeCloseTo(0.5);
+    expect(withOwnSummary(honest).summary.calibration!.accuracy).toBeCloseTo(0.5);
   });
 
   it("marks a pack with fewer than two engines unmeasured, keeping its default", () => {
