@@ -5,7 +5,7 @@ import { carriesSecret, flattenLinks, postable } from "./postable.ts";
 
 describe("postable", () => {
   it("shows a link's address in the open and drops an image", () => {
-    expect(postable("See [the docs](https://evil.example/login) now")).toBe("See the docs (https://evil.example/login) now");
+    expect(postable("See [the docs](https://evil.example/login) now")).toBe("See the docs (https\u200b://evil.example/login) now");
     expect(postable("before ![tracking pixel](https://evil.example/p.png) after")).toBe("before  after".replace("  ", " "));
     expect(flattenLinks("![a](http://x) [b](http://y)")).toBe(" b (http://y)");
   });
@@ -26,7 +26,7 @@ describe("postable", () => {
     // A reference definition, which would arm a later `[a]`.
     expect(postable("[a]: https://evil.example/e")).not.toMatch(/\]:/);
     // The address stays readable.
-    expect(postable("[click\nhere](https://evil.example/a)")).toContain("https://evil.example/a");
+    expect(postable("[click\nhere](https://evil.example/a)")).toContain("https\u200b://evil.example/a");
   });
 
   it("does not backtrack on a long run of brackets", () => {

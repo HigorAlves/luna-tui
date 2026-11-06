@@ -357,10 +357,10 @@ describe("JiraSync: a reply and the questions go to the card's own issue", () =>
     await pipeline.record(task.id, "task.questions", { body: "1) Which?", secret: true, hash: "s" });
     await pipeline.record(task.id, "task.reply", { body: "See [the docs](https://evil.example/x)." });
     await sync.idle();
-    expect(jira.comments["PLAT-123"]).toEqual(["See the docs (https://evil.example/x)."]);
+    expect(jira.comments["PLAT-123"]).toEqual(["See the docs (https\u200b://evil.example/x)."]);
     const linked = await pipeline.createTask({ title: "PLAT-123 other", repoPath: "/r/a" });
     await pipeline.record(linked.id, "task.reply", { body: "never posted: no source" });
     await sync.idle();
-    expect(jira.comments["PLAT-123"]).toEqual(["See the docs (https://evil.example/x)."]);
+    expect(jira.comments["PLAT-123"]).toEqual(["See the docs (https\u200b://evil.example/x)."]);
   });
 });
