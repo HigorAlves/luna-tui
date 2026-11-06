@@ -81,4 +81,5 @@ pnpm eval --pack ticket_recommend --engine codex:luna --save-baseline
 pnpm eval --pack ticket_recommend --engine jev --save-baseline
 pnpm eval scorecard
 pnpm eval defaults   # prints every proposal and writes nothing
-pnpm eval defaults --write --except triage_signals   # then take the packs that now have an entry out of UNMEASURED
+# pnpm eval defaults --write --except triage_signals   # then take the packs that now have an entry out of UNMEASURED
+# The line above writes the defaults: run it by hand after reading the dry run.
