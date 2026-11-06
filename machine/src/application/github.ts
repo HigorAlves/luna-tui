@@ -85,11 +85,15 @@ export interface PrActivity {
 }
 
 /** A submitted review: who, its state, the commit it was given on (when GitHub says) and when. */
+import type { ReviewRule } from "../domain/review-rule.ts";
+
 export interface PrReview {
   author: string | null;
   state: string;
   commitId: string | null;
   at: string;
+  /** GitHub's `author_association` of the reviewer to the repository (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, ...); null when GitHub gave none. */
+  association: string | null;
 }
 
 export interface GitHub {
@@ -117,6 +121,8 @@ export interface GitHub {
   prActivity(slug: string, number: number, since: string | null): Promise<PrActivity[]>;
   /** Every submitted review, oldest first. */
   prReviews(slug: string, number: number): Promise<PrReview[]>;
+  /** What the repository's own rules ask of a PR into `baseRef`: a ruleset's or the branch protection's required reviews, none, or unreadable (a protected branch whose protection the token cannot read is never `none`). */
+  reviewRule(slug: string, baseRef: string): Promise<ReviewRule>;
   /** The logins in `org/<teamSlug>`; throws a GitHubError when the token cannot read the team. */
   teamMembers(org: string, teamSlug: string): Promise<string[]>;
   /** Whether the PR is merged, and its state. */
@@ -173,6 +179,7 @@ export function noTokenGitHub(): GitHub {
     fileAtRef: refuse,
     prActivity: refuse,
     prReviews: refuse,
+    reviewRule: refuse,
     teamMembers: refuse,
     prMerged: refuse,
     closePr: refuse,

@@ -117,6 +117,14 @@ export function slaTargetsOf(sla: SlaConfig, warn: Warn = quiet): Partial<SlaTar
   return targets;
 }
 
+/** The `ship` block, with the old `policy.auto_merge` read as `ship.auto_merge` when the new key is absent (one warning per parse of the file). */
+function shipOf(config: LunaConfig, warn: Warn): LunaConfig["ship"] {
+  const legacy = config.policy?.auto_merge;
+  if (legacy === undefined || config.ship?.auto_merge !== undefined) return config.ship;
+  warn(`policy.auto_merge is the old spelling of ship.auto_merge; it is read as ship.auto_merge: ${legacy}`);
+  return { ...config.ship, auto_merge: legacy };
+}
+
 /** The policy a validated config means. */
 export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
   const { policy = {}, qa_targets = [], checks, services = {}, toolchains = {}, jira, sla, engines = {}, budget, evidence, freeze = [] } = config;
@@ -137,8 +145,7 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     engineBudgets: budget?.engines ?? {},
     decisions: (policy.decisions ?? {}) as Policy["decisions"],
     evidenceRetentionDays: evidence?.retention_days ?? null,
-    autoMerge: policy.auto_merge ?? DEFAULT_POLICY.autoMerge,
     freeze: freeze.map((f) => ({ ...f })),
-    factory: factoryConfigOf({ dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, ship: config.ship }),
+    factory: factoryConfigOf({ dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, ship: shipOf(config, warn) }),
   };
 }

@@ -1,6 +1,7 @@
 // The GitHub port on Octokit (REST, GraphQL and pagination). One client, one token, no CLI.
 // The client is injected so a test can hand in a stub shaped like Octokit; `createGitHub`
 // builds the real one from a token.
+import type { ReviewRule } from "../../domain/review-rule.ts";
 import { Octokit } from "octokit";
 
 import { PR_QUERY, type PrNode } from "../../domain/pull-request.ts";
@@ -58,6 +59,7 @@ export interface OctokitLike {
       reRunWorkflowFailedJobs(params: Record<string, unknown>): Promise<unknown>;
     };
   };
+  request(route: string, params: Record<string, unknown>): Promise<{ data: unknown }>;
   graphql<T = unknown>(query: string, variables?: Record<string, unknown>): Promise<T>;
   paginate<T = unknown>(method: unknown, params?: Record<string, unknown>): Promise<T[]>;
 }
@@ -282,9 +284,39 @@ export class OctokitGitHub implements GitHub {
   async prReviews(slug: string, number: number): Promise<PrReview[]> {
     const { owner, repo } = repoRef(slug);
     const rows = await call(`listing the reviews of ${slug}#${number}`, () =>
-      this.octokit.paginate<{ user: { login: string } | null; state: string; commit_id?: string | null; submitted_at?: string | null }>(this.octokit.rest.pulls.listReviews, { owner, repo, pull_number: number, per_page: 100 }),
+      this.octokit.paginate<{ user: { login: string } | null; state: string; commit_id?: string | null; submitted_at?: string | null; author_association?: string | null }>(this.octokit.rest.pulls.listReviews, { owner, repo, pull_number: number, per_page: 100 }),
     );
-    return rows.map((r) => ({ author: r.user?.login ?? null, state: r.state, commitId: r.commit_id ?? null, at: r.submitted_at ?? "" }));
+    return rows.map((r) => ({ author: r.user?.login ?? null, state: r.state, commitId: r.commit_id ?? null, at: r.submitted_at ?? "", association: r.author_association ?? null }));
+  }
+
+  async reviewRule(slug: string, baseRef: string): Promise<ReviewRule> {
+    const { owner, repo } = repoRef(slug);
+    const branch = baseRef;
+    const read = async (route: string): Promise<{ ok: true; data: unknown } | { ok: false; why: string }> => {
+      try {
+        return { ok: true, data: (await this.octokit.request(route, { owner, repo, branch })).data };
+      } catch (error) {
+        const { status, message } = error as { status?: number; message?: string };
+        return { ok: false, why: `${route.replace(/^GET \/repos\/\{owner\}\/\{repo\}\//, "")} could not be read${status ? ` (${status})` : ""}: ${message ?? "unknown"}` };
+      }
+    };
+    // The rulesets that apply to the branch (by name or pattern, evaluated by GitHub).
+    const rules = await read("GET /repos/{owner}/{repo}/rules/branches/{branch}");
+    if (rules.ok && Array.isArray(rules.data)) {
+      const pulls = (rules.data as Array<{ type?: string; parameters?: { required_approving_review_count?: number; require_code_owner_review?: boolean } }>).filter((r) => r.type === "pull_request");
+      if (pulls.length > 0) return { source: "ruleset", approvals: Math.max(...pulls.map((r) => r.parameters?.required_approving_review_count ?? 0)), codeOwners: pulls.some((r) => r.parameters?.require_code_owner_review === true) };
+    }
+    const info = await read("GET /repos/{owner}/{repo}/branches/{branch}");
+    if (!info.ok) return { source: "unreadable", why: info.why };
+    if ((info.data as { protected?: boolean } | null)?.protected === true) {
+      // A protection the token cannot read (403, 404) says nothing: never "none".
+      const protection = await read("GET /repos/{owner}/{repo}/branches/{branch}/protection");
+      if (!protection.ok) return { source: "unreadable", why: protection.why };
+      const reviews = (protection.data as { required_pull_request_reviews?: { required_approving_review_count?: number; require_code_owner_reviews?: boolean } } | null)?.required_pull_request_reviews;
+      if (reviews) return { source: "branch_protection", approvals: reviews.required_approving_review_count ?? 0, codeOwners: reviews.require_code_owner_reviews === true };
+    }
+    // Nothing found, but a ruleset list that could not be read may have held a rule.
+    return rules.ok ? { source: "none" } : { source: "unreadable", why: rules.why };
   }
 
   async teamMembers(org: string, teamSlug: string): Promise<string[]> {

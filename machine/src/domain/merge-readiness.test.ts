@@ -40,6 +40,8 @@ const input = (over: Partial<Parameters<typeof mergeReadiness>[0]> = {}): Parame
   now: NOW,
   dependencies: [],
   owners: { missing: [], unresolved: [] },
+  review: { required: true, by: "ruleset" },
+  approvedOnHead: true,
   ...over,
 });
 
@@ -111,8 +113,8 @@ describe("mergeReadiness", () => {
       ["medium", "medium", null, true],
       ["high", "medium", null, false],
       ["high", "off", "ana", false],
-      ["high", "low", "ana", true],
-      ["high", "medium", "ana", true],
+      ["high", "low", "ana", false],
+      ["high", "medium", "ana", false],
     ];
     it.each(cases)("%s risk, auto_merge %s, ship approver %s: %s", (risk, autoMerge, shipApprover, expected) => {
       const out = mergeReadiness(input({ risk: risk as "low", policy: { autoMerge, freeze: [] }, shipApprover }));
@@ -126,7 +128,7 @@ describe("mergeReadiness", () => {
 
     it("says why a ready PR waits for a person", () => {
       expect(mergeReadiness(input({ policy: { autoMerge: "off", freeze: [] } })).reason).toMatch(/auto-merge/);
-      expect(mergeReadiness(input({ risk: "high" })).reason).toMatch(/ship approver/);
+      expect(mergeReadiness(input({ risk: "high" })).reason).toMatch(/release approval/);
     });
   });
 });
@@ -164,23 +166,38 @@ describe("mergeReadiness after a fix the loop made", () => {
 });
 
 describe("mergeReadiness: a person must have looked", () => {
-  const ready = (over: Partial<Parameters<typeof mergeReadiness>[0]> = {}) => mergeReadiness(input({ pr: pr({ reviewDecision: null }), ...over }));
-
-  it("does not let the machine merge a PR no person approved or looked at, and says an approving review is needed", () => {
-    const out = ready({ humanLook: false });
-    expect(out.ready).toBe(true);
-    expect(out.canAutoMerge).toBe(false);
-    expect(out.reason).toMatch(/approving review is needed/);
+  it("does not let the machine merge a PR with no approval on the head, and says which sha has none", () => {
+    const out = mergeReadiness(input({ pr: pr({ reviewDecision: null }), approvedOnHead: false }));
+    expect(out).toMatchObject({ ready: true, canAutoMerge: false });
+    expect(out.reason).toMatch(/no approval on 9c1f0e2/);
   });
-
-  it("is satisfied by an approved awaiting_ship gate or by an approving review", () => {
-    expect(ready({ humanLook: true }).canAutoMerge).toBe(true);
-    expect(mergeReadiness(input({ pr: pr({ reviewDecision: "APPROVED" }), humanLook: false })).canAutoMerge).toBe(true);
-  });
-
-  it("still never merges a high-risk pack with no ship approver, whatever the look", () => {
-    const out = mergeReadiness(input({ risk: "high", humanLook: true, policy: { autoMerge: "medium", freeze: [] }, shipApprover: null }));
-    expect(out.canAutoMerge).toBe(false);
+  it("is not satisfied by GitHub's reviewDecision or an approved preview gate alone", () => {
+    expect(mergeReadiness(input({ pr: pr({ reviewDecision: "APPROVED" }), approvedOnHead: false })).canAutoMerge).toBe(false);
+    expect(mergeReadiness(input({ approvedOnHead: true })).canAutoMerge).toBe(true);
   });
 });
 
+describe("auto-merge under the review rule (D4)", () => {
+  const required = { required: true as const, by: "ruleset" };
+  const base = (over: Partial<Parameters<typeof mergeReadiness>[0]> = {}) => input({ policy: { autoMerge: "medium_when_review_required", freeze: [] }, review: required, approvedOnHead: true, ...over });
+  it("the default merges Medium risk only where a review is required and one is on the head", () => {
+    expect(mergeReadiness(base({ risk: "medium" })).canAutoMerge).toBe(true);
+    expect(mergeReadiness(base({ risk: "medium", approvedOnHead: false })).reason).toMatch(/no approval on 9c1f0e2/);
+    expect(mergeReadiness(base({ risk: "medium", review: { required: false } })).reason).toBe("ready; this repository requires no review, so a person merges it");
+    const unreadable = mergeReadiness(base({ risk: "medium", review: { required: null, why: "403" } }));
+    expect(unreadable.canAutoMerge).toBe(false);
+    expect(unreadable.reason).toBe("ready; whether a review is required could not be read (403), so a person merges it");
+  });
+  it("no mode merges a PR that has no approval on the head: GitHub's reviewDecision alone is not enough", () => {
+    for (const autoMerge of ["low", "medium", "medium_when_review_required"] as const) {
+      expect(mergeReadiness(base({ policy: { autoMerge, freeze: [] }, approvedOnHead: false, pr: pr({ reviewDecision: "APPROVED" }) })).canAutoMerge).toBe(false);
+    }
+  });
+  it("off never merges; low merges only Low risk; medium merges Low and Medium on an approval; High is never merged here", () => {
+    expect(mergeReadiness(base({ policy: { autoMerge: "off", freeze: [] } })).canAutoMerge).toBe(false);
+    expect(mergeReadiness(base({ policy: { autoMerge: "low", freeze: [] }, risk: "medium" })).canAutoMerge).toBe(false);
+    expect(mergeReadiness(base({ policy: { autoMerge: "low", freeze: [] }, review: { required: false } })).canAutoMerge).toBe(true);
+    expect(mergeReadiness(base({ policy: { autoMerge: "medium", freeze: [] }, risk: "medium", review: { required: false } })).canAutoMerge).toBe(true);
+    expect(mergeReadiness(base({ policy: { autoMerge: "medium", freeze: [] }, risk: "high", shipApprover: "ana" })).canAutoMerge).toBe(false);
+  });
+});

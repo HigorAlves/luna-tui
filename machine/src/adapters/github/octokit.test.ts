@@ -47,6 +47,12 @@ function stub(answers: Record<string, unknown>) {
         reRunWorkflowFailedJobs: endpoint("actions.reRunWorkflowFailedJobs"),
       },
     },
+    request: vi.fn(async (route: string, params: unknown) => {
+      calls.push([route, params]);
+      const answer = answers[route];
+      if (answer instanceof Error) throw answer;
+      return { data: typeof answer === "function" ? (answer as (p: unknown) => unknown)(params) : answer };
+    }),
     graphql: vi.fn(async (query: string, variables?: Record<string, unknown>) => {
       calls.push(["graphql", { query, variables }]);
       const answer = answers.graphql;
@@ -235,12 +241,12 @@ describe("OctokitGitHub: shipping", () => {
 
   it("lists every review with its author, state, commit and time, and a team's members by login", async () => {
     const { github, calls } = stub({
-      "pulls.listReviews": [{ id: 1, user: { login: "ana" }, state: "APPROVED", commit_id: "abc", submitted_at: "t1" }, { id: 2, user: null, state: "COMMENTED", submitted_at: "t2" }],
+      "pulls.listReviews": [{ id: 1, user: { login: "ana" }, state: "APPROVED", commit_id: "abc", submitted_at: "t1", author_association: "MEMBER" }, { id: 2, user: null, state: "COMMENTED", submitted_at: "t2" }],
       "teams.listMembersInOrg": [{ login: "bob" }, { login: "cy" }],
     });
     expect(await github.prReviews("o/a", 7)).toEqual([
-      { author: "ana", state: "APPROVED", commitId: "abc", at: "t1" },
-      { author: null, state: "COMMENTED", commitId: null, at: "t2" },
+      { author: "ana", state: "APPROVED", commitId: "abc", at: "t1", association: "MEMBER" },
+      { author: null, state: "COMMENTED", commitId: null, at: "t2", association: null },
     ]);
     expect(await github.teamMembers("acme", "core")).toEqual(["bob", "cy"]);
     expect(calls.at(-1)![1]).toMatchObject({ org: "acme", team_slug: "core", per_page: 100 });
@@ -326,5 +332,42 @@ describe("OctokitGitHub: publishing evidence", () => {
   it("wraps a failed upload as a GitHubError", async () => {
     const { github } = stub({ "repos.uploadReleaseAsset": Object.assign(new Error("Validation Failed"), { status: 422 }) });
     await expect(github.uploadReleaseAsset("o/a", 11, "n", Buffer.from("x"), "image/png")).rejects.toThrow(/422/);
+  });
+});
+
+describe("reviewRule", () => {
+  const RULES = "GET /repos/{owner}/{repo}/rules/branches/{branch}";
+  const BRANCH = "GET /repos/{owner}/{repo}/branches/{branch}";
+  const PROTECTION = "GET /repos/{owner}/{repo}/branches/{branch}/protection";
+  const denied = (status: number) => Object.assign(new Error("denied"), { status });
+
+  it("reads a pull_request rule of a ruleset that applies to the branch", async () => {
+    const { github, calls } = stub({ [RULES]: [{ type: "deletion" }, { type: "pull_request", parameters: { required_approving_review_count: 2, require_code_owner_review: true } }] });
+    expect(await github.reviewRule("o/a", "release/1")).toEqual({ source: "ruleset", approvals: 2, codeOwners: true });
+    expect(calls[0]![1]).toMatchObject({ owner: "o", repo: "a", branch: "release/1" });
+  });
+
+  it("falls back to the protection of a protected branch", async () => {
+    const { github } = stub({ [RULES]: [], [BRANCH]: { protected: true }, [PROTECTION]: { required_pull_request_reviews: { required_approving_review_count: 1, require_code_owner_reviews: false } } });
+    expect(await github.reviewRule("o/a", "main")).toEqual({ source: "branch_protection", approvals: 1, codeOwners: false });
+  });
+
+  it("a protected branch whose protection cannot be read is unreadable, never none", async () => {
+    for (const status of [403, 404]) {
+      const { github } = stub({ [RULES]: [], [BRANCH]: { protected: true }, [PROTECTION]: denied(status) });
+      expect(await github.reviewRule("o/a", "main")).toMatchObject({ source: "unreadable" });
+    }
+  });
+
+  it("an unprotected branch with no pull_request rule is none; with the rules unreadable it is unreadable", async () => {
+    expect(await stub({ [RULES]: [], [BRANCH]: { protected: false } }).github.reviewRule("o/a", "main")).toEqual({ source: "none" });
+    expect(await stub({ [RULES]: [{ type: "deletion" }], [BRANCH]: { protected: false } }).github.reviewRule("o/a", "main")).toEqual({ source: "none" });
+    expect(await stub({ [RULES]: denied(403), [BRANCH]: { protected: false } }).github.reviewRule("o/a", "main")).toMatchObject({ source: "unreadable" });
+    expect(await stub({ [RULES]: [], [BRANCH]: denied(403) }).github.reviewRule("o/a", "main")).toMatchObject({ source: "unreadable" });
+  });
+
+  it("protection with no required reviews is none", async () => {
+    const { github } = stub({ [RULES]: [], [BRANCH]: { protected: true }, [PROTECTION]: { required_status_checks: {} } });
+    expect(await github.reviewRule("o/a", "main")).toEqual({ source: "none" });
   });
 });

@@ -56,8 +56,6 @@ export interface Policy {
   decisions: Record<string, DecisionOverrides>;
   /** Days the local Evidence Pack store keeps a task's media (luna.yaml `evidence.retention_days`); 0 keeps it for good, null defers to the machine's retention. */
   evidenceRetentionDays: number | null;
-  /** What the machine may merge by itself once a shipped PR is ready (luna.yaml `policy.auto_merge`): nothing, low risk, or low and medium. */
-  autoMerge: "off" | "low" | "medium";
   /** Windows in which the machine merges nothing (luna.yaml `freeze`). */
   freeze: Freeze[];
   /** The v2.2 diagram's sections over its defaults (luna.yaml `dedup`, `triage`, ... `ship`). Keys wave 8 reads are named in CONSUMED_FROM; the others are defined for the wave that reads them. */
@@ -97,7 +95,6 @@ export const DEFAULT_POLICY: Policy = {
   engineBudgets: {},
   decisions: {},
   evidenceRetentionDays: null,
-  autoMerge: "off",
   freeze: [],
   factory: FACTORY_DEFAULTS,
 };

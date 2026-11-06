@@ -12,6 +12,7 @@ import { exec as realExec } from "../../adapters/process/exec.ts";
 import { type Policy } from "../../domain/policy.ts";
 import { ownerApprovals, parseCodeownersChecked, requiredOwners } from "../../domain/codeowners.ts";
 import { MAX_DEPENDENCIES, mergeReadiness, parseDependencies } from "../../domain/merge-readiness.ts";
+import { type ReviewRule, approvedOnHead, reviewRequirement } from "../../domain/review-rule.ts";
 import { fromGraphQl } from "../../domain/pull-request.ts";
 import { type GitHub, type PrActivity, type PrReview, messageOf } from "../github.ts";
 import type { StageContext, StageResult } from "../ports.ts";
@@ -121,8 +122,7 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   };
 
   /** What the repo's CODEOWNERS still wants: null when it has none. A team the token cannot read stays unresolved. */
-  const ownersOf = async (baseRef: string) => {
-    const text = await readCodeowners(slug, baseRef);
+  const ownersOf = async (text: string | null) => {
     if (!text) return null;
     const { rules, problems } = parseCodeownersChecked(text);
     const required = requiredOwners(paths, rules);
@@ -145,13 +145,27 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
     return { missing: out.missing, unresolved: [...out.unresolved, ...problems] };
   };
 
-  const owners = await ownersOf(pr.baseRef).catch((error: unknown) => ({ missing: [], unresolved: [`CODEOWNERS could not be checked: ${messageOf(error)}`] }));
+  // CODEOWNERS is read once, at the PR's base branch.
+  let codeownersText: string | null = null;
+  let codeownersError: string | null = null;
+  try {
+    codeownersText = await readCodeowners(slug, pr.baseRef);
+  } catch (error) {
+    codeownersError = messageOf(error);
+  }
+  const owners = await (codeownersError ? Promise.reject(new Error(codeownersError)) : ownersOf(codeownersText)).catch((error: unknown) => ({ missing: [], unresolved: [`CODEOWNERS could not be checked: ${messageOf(error)}`] }));
   // After a fix the loop made, the approval that counts is one on the fix itself: the latest review of each person, on the head.
   const fixApproval = cursor.fixRounds > 0 ? { approved: approvedOn(head, await reviewsOf().catch(() => [])) } : null;
+  // Is a review required here, and is a good one on the head? Facts only: the repository's rules, GitHub's own answer, CODEOWNERS at the base ref.
+  if (pr.reviewDecision === "REVIEW_REQUIRED") cursor.reviewRequiredSeen = true;
+  const rule: ReviewRule = await deps.github.reviewRule(slug, pr.baseRef).catch((error: unknown): ReviewRule => ({ source: "unreadable", why: messageOf(error) }));
+  const review = reviewRequirement({ rule, seenRequired: cursor.reviewRequiredSeen === true, owners: codeownersText ? parseCodeownersChecked(codeownersText).rules : null, paths });
+  const me = (await deps.github.viewer().catch(() => null))?.login ?? null;
+  const onHead = approvedOnHead(await reviewsOf().catch(() => []), head, me);
   const readiness = mergeReadiness({
     pr,
     packSha: pack?.commitSha ?? null,
-    policy: { autoMerge: policy.autoMerge, freeze: policy.freeze },
+    policy: { autoMerge: policy.factory.ship.auto_merge, freeze: policy.freeze },
     risk,
     shipApprover: risk === "high" && typeof approver === "string" && approver ? approver : null,
     now: now(),
@@ -161,7 +175,8 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
     dependenciesListed: listed.length,
     fixApproval,
     staleDays: policy.factory.ship.stale_days,
-    humanLook: context.approvals.some((a) => a.kind === "awaiting_ship" && a.decision === "approved"),
+    review,
+    approvedOnHead: onHead,
   });
   return { pr, head, pack, risk, readiness, paths };
 }

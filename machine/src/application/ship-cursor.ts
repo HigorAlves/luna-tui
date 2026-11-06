@@ -38,6 +38,8 @@ const ShipCursorSchema = z.object({
   resolvedByMachine: z.array(z.string()).optional(),
   /** The blockers last noted, so a poll that finds the same ones says nothing. */
   lastBlockers: z.string().optional(),
+  /** GitHub itself answered `reviewDecision: REVIEW_REQUIRED` for this PR at some poll: a review is required here (kept as evidence the rule reader may not see). */
+  reviewRequiredSeen: z.boolean().optional(),
   /** `ship.ready` was logged: readiness is announced the first time it is true. */
   readyNoted: z.boolean().optional(),
 });

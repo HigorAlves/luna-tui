@@ -83,7 +83,6 @@ describe("parseLunaConfig", () => {
       engineBudgets: { "openai:sol": 10, codex: 0 },
       decisions: {},
       evidenceRetentionDays: 30,
-      autoMerge: "off",
       freeze: [{ from: "2026-12-24T00:00:00Z", to: "2026-12-27T00:00:00Z", reason: "holiday freeze" }],
       factory: factoryConfigOf({ evidence: { retention_days: 30 } }),
     });
@@ -94,10 +93,17 @@ describe("parseLunaConfig", () => {
     expect(parseLunaConfig('freeze:\n  - from: "2026-12-24"\n    to: "2026-12-27T00:00:00Z"\n    reason: r\n').freeze).toHaveLength(1);
   });
 
-  it("reads policy.auto_merge (off by default, low or medium) and refuses any other value", () => {
-    expect(parseLunaConfig("").autoMerge).toBe("off");
-    expect(parseLunaConfig("policy:\n  auto_merge: low\n").autoMerge).toBe("low");
-    expect(parseLunaConfig("policy:\n  auto_merge: medium\n").autoMerge).toBe("medium");
+  it("reads ship.auto_merge (medium_when_review_required by default); the old policy.auto_merge is read as the same word, with one warning, unless ship.auto_merge is set", () => {
+    const warnings: string[] = [];
+    expect(parseLunaConfig("").factory.ship.auto_merge).toBe("medium_when_review_required");
+    expect(parseLunaConfig("policy:\n  auto_merge: low\n", (m) => warnings.push(m)).factory.ship.auto_merge).toBe("low");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/policy\.auto_merge.*ship\.auto_merge/);
+    expect(parseLunaConfig("policy:\n  auto_merge: medium\n").factory.ship.auto_merge).toBe("medium");
+    expect(parseLunaConfig("policy:\n  auto_merge: off\n").factory.ship.auto_merge).toBe("off");
+    const both: string[] = [];
+    expect(parseLunaConfig("policy:\n  auto_merge: low\nship:\n  auto_merge: medium\n", (m) => both.push(m)).factory.ship.auto_merge).toBe("medium");
+    expect(both).toEqual([]);
     expect(() => parseLunaConfig("policy:\n  auto_merge: high\n")).toThrow(/auto_merge/);
     expect(parseLunaConfig("").freeze).toEqual([]);
   });
@@ -283,12 +289,11 @@ describe("the v2.2 diagram's sections", () => {
 
   it("leave the existing keys meaning what they did, and win over the new forms", () => {
     const policy = parseLunaConfig("policy:\n  auto_merge: low\nevidence:\n  retention_days: 7\nsla:\n  cycle: 3d\nship:\n  auto_merge: medium\n");
-    expect(policy.autoMerge).toBe("low");
     expect(policy.evidenceRetentionDays).toBe(7);
     expect(policy.sla.cycle).toBe(3 * 86_400);
-    // the new form is defined and not wired: today's behaviour does not read it
+    // the new form wins over the old spelling
     expect(policy.factory.ship.auto_merge).toBe("medium");
-    expect(parseLunaConfig("ship:\n  preview: off\n").autoMerge).toBe("off");
+    expect(parseLunaConfig("ship:\n  preview: off\n").factory.ship.auto_merge).toBe("medium_when_review_required");
   });
 
   it("render back into a file the parser reads to the same sections", () => {

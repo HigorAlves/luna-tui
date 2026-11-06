@@ -4,6 +4,7 @@
 import type { Risk } from "@hardness/contracts";
 
 import type { Freeze } from "./policy.ts";
+import type { ReviewRequirement } from "./review-rule.ts";
 import type { PrFacts } from "./pull-request.ts";
 
 /** A head commit older than this many days is stale. */
@@ -15,7 +16,7 @@ export interface MergeReadinessInput {
   pr: PrFacts;
   /** The commit the Evidence Pack describes. */
   packSha: string | null;
-  policy: { autoMerge: "off" | "low" | "medium"; freeze: Freeze[] };
+  policy: { autoMerge: "off" | "low" | "medium_when_review_required" | "medium"; freeze: Freeze[] };
   risk: Risk;
   /** The attested ship approver of a high-risk pack, when there is one. */
   shipApprover: string | null;
@@ -31,8 +32,10 @@ export interface MergeReadinessInput {
   dependenciesListed?: number;
   /** The repo's `ship.stale_days` (luna.yaml); absent means STALE_DAYS. */
   staleDays?: number;
-  /** A person looked: an approved `awaiting_ship` gate is on record for the card. An approving review on the PR counts too. */
-  humanLook?: boolean;
+  /** Whether the repository requires a review (`reviewRequirement`); absent is read as unknown. */
+  review?: ReviewRequirement;
+  /** An APPROVED review on the head commit by a collaborator who is not the machine's own account (`approvedOnHead`). */
+  approvedOnHead?: boolean;
 }
 
 /** At most this many dependencies are read from a PR body. */
@@ -97,19 +100,29 @@ export function mergeReadiness(input: MergeReadinessInput): MergeReadiness {
   }
 
   const ready = blockers.length === 0;
-  // `off` never merges, whatever the risk; high risk needs the ship approver's attestation on top of a policy that is on.
-  const allowed = policy.autoMerge === "off" ? false : risk === "high" ? shipApprover !== null : risk === "medium" ? policy.autoMerge === "medium" : true;
-  // Without the preview gate nobody is guaranteed to have seen the PR: the machine merges only one a person approved or an approving review covers (until D4, wave 13).
-  const humanLook = input.humanLook === true || pr.reviewDecision === "APPROVED";
-  const canAutoMerge = ready && allowed && humanLook;
+  // The machine merges nothing it was not allowed to, and nothing nobody looked at: an approval on the head is always needed (the preview gate and
+  // GitHub's reviewDecision alone are not a look at the code), and under the default the repository must itself require a review. High risk is asked
+  // of a person after readiness (the ship approval), never merged here.
+  const mode = policy.autoMerge;
+  const approved = input.approvedOnHead === true;
+  const review = input.review ?? { required: null, why: "not read" };
+  const coversRisk = mode === "off" || risk === "high" ? false : risk === "medium" ? mode === "medium" || mode === "medium_when_review_required" : true;
+  const reviewOk = mode === "medium_when_review_required" ? review.required === true : true;
+  const canAutoMerge = ready && coversRisk && reviewOk && approved;
   const reason = !ready
     ? blockers.join("; ")
     : canAutoMerge
       ? "ready, and the policy lets the machine merge it"
-      : allowed && !humanLook
-        ? "ready; an approving review is needed before the machine merges a PR no person has looked at"
-        : risk === "high" && policy.autoMerge !== "off" && shipApprover === null
-        ? "ready; a high-risk PR waits for a ship approver"
-        : `ready; auto-merge is ${policy.autoMerge} for ${risk} risk, so it waits for a person`;
+      : mode === "off"
+        ? "ready; auto-merge is off, so a person merges it"
+        : risk === "high"
+          ? "ready; a high-risk PR waits for a person's release approval"
+          : !coversRisk
+            ? `ready; auto-merge is ${mode} for ${risk} risk, so it waits for a person`
+            : mode === "medium_when_review_required" && review.required === false
+              ? "ready; this repository requires no review, so a person merges it"
+              : mode === "medium_when_review_required" && review.required === null
+                ? `ready; whether a review is required could not be read (${review.why}), so a person merges it`
+                : `ready; no approval on ${sha7(pr.headSha ?? "")}`;
   return { ready, blockers, canAutoMerge, reason };
 }

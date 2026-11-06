@@ -52,18 +52,25 @@ beforeEach(async () => {
 });
 afterEach(() => rm(stateDir, { recursive: true, force: true }));
 
+/** The default policy with the old test spelling `autoMerge` read as `factory.ship.auto_merge` ("off" unless a test says otherwise). */
+function policyWith(over: (Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }) | undefined): Policy {
+  const { autoMerge, ...rest } = over ?? {};
+  const factory = rest.factory ?? DEFAULT_POLICY.factory;
+  return { ...DEFAULT_POLICY, ...rest, factory: { ...factory, ship: { ...factory.ship, auto_merge: autoMerge ?? "off" } } };
+}
+
 function setup(
   answers: Partial<GitHub> = {},
-  over: { policy?: Partial<Policy>; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean } = {},
+  over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean } = {},
 ) {
-  const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => {}, ...answers });
+  const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }], prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => {}, ...answers });
   let clock = START.getTime();
   const slept: number[] = [];
   const notes: string[] = [];
   const emitted: Array<[string, Record<string, unknown>]> = [];
   const deps: ShipMonitorDeps = {
     github,
-    policies: { for: async () => ({ ...DEFAULT_POLICY, ...over.policy }) },
+    policies: { for: async () => policyWith(over.policy) },
     evidence: { load: async () => (over.pack === undefined ? pack() : over.pack), ...over.evidence },
     stateDir,
     pollMs: 60_000,
@@ -114,15 +121,27 @@ describe("the ship monitor", () => {
     expect(notes.filter((n) => /auto-merge/.test(n))).toHaveLength(1);
   });
 
-  it("says a merge is due only for a PR a person looked at (the preview gate approved)", async () => {
+  it("says a merge is due only for a PR with an approval on the head, whatever the preview gate and GitHub's reviewDecision say", async () => {
     let polls = 0;
-    const unseen = { prFacts: async () => node({ reviewDecision: null }), prMerged: async () => (++polls < 2 ? open : merged) };
-    const none = setup(unseen, { policy: { autoMerge: "low" }, approvals: [] });
+    const unseen = { prReviews: async () => [], prMerged: async () => (++polls < 2 ? open : merged) };
+    const none = setup(unseen, { policy: { autoMerge: "low" }, approvals: [{ kind: "awaiting_ship", decision: "approved", response: {} } as never] });
     expect(await none.run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "person" } } });
     expect(calls(none.github, "mergePr")).toEqual([]);
-    const looked = setup({ prFacts: async () => node({ reviewDecision: null }) }, { policy: { autoMerge: "low" }, approvals: [{ kind: "awaiting_ship", decision: "approved", response: {} } as never] });
+    const looked = setup({}, { policy: { autoMerge: "low" } });
     expect(await looked.run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
-    expect(calls(looked.github, "mergePr")).toEqual([]);
+    const stranger = setup({ prReviews: async () => [{ author: "eve", state: "APPROVED", commitId: HEAD, at: "t", association: "NONE" }], prMerged: vi.fn().mockResolvedValueOnce(open).mockResolvedValueOnce(merged) }, { policy: { autoMerge: "low" } });
+    expect(await stranger.run()).toMatchObject({ detail: { merged: { by: "person" } } });
+  });
+
+  it("under the default, an unreadable rule is manual, unless GitHub said REVIEW_REQUIRED once for this PR (kept on the cursor)", async () => {
+    const unreadable = { reviewRule: async () => ({ source: "unreadable" as const, why: "protection not readable (403)" }) };
+    const manual = setup({ ...unreadable, prMerged: vi.fn().mockResolvedValueOnce(open).mockResolvedValueOnce(merged) }, { policy: { autoMerge: "medium_when_review_required" } });
+    expect(await manual.run()).toMatchObject({ detail: { merged: { by: "person" } } });
+    expect(manual.notes.join("\n")).toMatch(/could not be read \(protection not readable \(403\)\)/);
+    let polls = 0;
+    const seen = setup({ ...unreadable, prFacts: async () => node({ reviewDecision: ++polls === 1 ? "REVIEW_REQUIRED" : null }) }, { policy: { autoMerge: "medium_when_review_required" } });
+    expect(await seen.run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
+    expect((await loadCursor(stateDir, "t1"))?.reviewRequiredSeen).toBe(true);
   });
 
   it("says ship.ready once, the first poll readiness is true, and ship.approval_needed when a person has to merge", async () => {
@@ -144,14 +163,11 @@ describe("the ship monitor", () => {
     expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
   });
 
-  it("holds a high-risk PR with no ship approver, naming nothing it may not say, and merges once there is one", async () => {
-    const none = setup({ prMerged: vi.fn().mockResolvedValueOnce(open).mockResolvedValueOnce(merged) }, { policy: { autoMerge: "medium" }, pack: pack("high") });
-    expect(await none.run()).toMatchObject({ detail: { merged: { by: "person" } } });
-    expect(calls(none.github, "mergePr")).toEqual([]);
-    expect(none.notes.join("\n")).toMatch(/ship approver/);
-
-    const approved = setup({}, { policy: { autoMerge: "medium" }, pack: pack("high"), approvals: [{ kind: "awaiting_ship", decision: "approved", response: { approver: "bo" } } as never] });
-    expect(await approved.run()).toMatchObject({ detail: { ready: { head: HEAD } } });
+  it("never says a merge is due for a high-risk PR: a person is asked after readiness (slice 4)", async () => {
+    const high = setup({ prMerged: vi.fn().mockResolvedValueOnce(open).mockResolvedValueOnce(merged) }, { policy: { autoMerge: "medium" }, pack: pack("high") });
+    expect(await high.run()).toMatchObject({ detail: { merged: { by: "person" } } });
+    expect(calls(high.github, "mergePr")).toEqual([]);
+    expect(high.notes.join("\n")).toMatch(/release approval/);
   });
 
   it("waits through a freeze window and merges after it", async () => {
@@ -178,7 +194,7 @@ describe("the ship monitor", () => {
     const { run, github, notes } = setup(
       {
         prFiles: async () => [{ path: "src/a.ts", additions: 1, deletions: 0 }],
-        prReviews: async () => (++reviews < 2 ? [] : [{ author: "Ana", state: "APPROVED", commitId: HEAD, at: "t" }]),
+        prReviews: async () => (++reviews < 2 ? [] : [{ author: "Ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }]),
       },
       { policy: { autoMerge: "low" }, codeowners: "src/ @ana\n" },
     );
@@ -205,10 +221,10 @@ describe("the ship monitor", () => {
 
   it("reads CODEOWNERS at the PR's base branch through the port, never from the worktree", async () => {
     const fileAtRef = vi.fn(async (_slug: string, _ref: string, path: string) => (path === "CODEOWNERS" ? "src/ @ana\n" : null));
-    const github = fakeGitHub({ fileAtRef, prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], mergePr: async () => {}, prFiles: async () => [{ path: "src/a.ts", additions: 1, deletions: 0 }], prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t" }] });
+    const github = fakeGitHub({ fileAtRef, viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "none" as const }), prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], mergePr: async () => {}, prFiles: async () => [{ path: "src/a.ts", additions: 1, deletions: 0 }], prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }] });
     const result = await shipMonitor({
       github,
-      policies: { for: async () => ({ ...DEFAULT_POLICY, autoMerge: "low" as const }) },
+      policies: { for: async () => policyWith({ autoMerge: "low" }) },
       evidence: { load: async () => pack() },
       stateDir,
       pollMs: 1,
@@ -254,7 +270,7 @@ describe("the ship monitor", () => {
       {
         teamMembers,
         prFiles: async () => [{ path: "src/a.ts", additions: 1, deletions: 0 }],
-        prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t" }],
+        prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }],
         prMerged: async () => {
           // after the 10th poll the team loses ana; the 13th poll (> 10 minutes after the first fetch) sees it
           if (++polls === 10) members = [];
@@ -699,8 +715,8 @@ describe("the review loop: what the security pass found", () => {
   });
 
   it("merges after a fix only with an approval on the fix's own commit", async () => {
-    const stale = [{ author: "ana", state: "APPROVED", commitId: "1".repeat(40), at: "t" }];
-    const fresh = [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t" }];
+    const stale = [{ author: "ana", state: "APPROVED", commitId: "1".repeat(40), at: "t", association: "COLLABORATOR" }];
+    const fresh = [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }];
     const blocked = setup({ prReviews: async () => stale }, { policy: { autoMerge: "low" }, maxWaitMs: 120_000 });
     await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), fixRounds: 1 });
     await blocked.run();
@@ -710,7 +726,7 @@ describe("the review loop: what the security pass found", () => {
     const ok = setup({ prReviews: async () => fresh }, { policy: { autoMerge: "low" } });
     expect(await ok.run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
 
-    const dismissed = setup({ prReviews: async () => [...fresh, { author: "ana", state: "CHANGES_REQUESTED", commitId: HEAD, at: "t2" }] }, { policy: { autoMerge: "low" }, maxWaitMs: 120_000 });
+    const dismissed = setup({ prReviews: async () => [...fresh, { author: "ana", state: "CHANGES_REQUESTED", commitId: HEAD, at: "t2", association: "COLLABORATOR" }] }, { policy: { autoMerge: "low" }, maxWaitMs: 120_000 });
     await dismissed.run();
     expect(calls(dismissed.github, "mergePr")).toEqual([]);
   });

@@ -24,6 +24,7 @@ const METHODS: Array<keyof GitHub> = [
   "fileAtRef",
   "prActivity",
   "prReviews",
+  "reviewRule",
   "teamMembers",
   "prMerged",
   "closePr",
