@@ -8,6 +8,7 @@ import type { TaskRow } from "../domain/task.ts";
 import { MemorySlackStore, fakeSlack } from "../test/slack.ts";
 import { tapOf } from "./slack-send.ts";
 import { ChannelClaims } from "./channel-claims.ts";
+import { ConversationActions } from "./conversation-actions.ts";
 import { ConversationDrafts, draftHash, MemoryDraftStore } from "./conversation-drafts.ts";
 import type { Assessed } from "./conversation-machine.ts";
 import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, SlackInbox, SlackRefusedError } from "./slack-inbox.ts";
@@ -427,6 +428,18 @@ describe("SlackInbox.pollOnce", () => {
         expect(row.triage?.priority).toBe("P0");
         expect(row.conversation?.relation?.applied).toBeDefined();
         expect(created).toEqual([]);
+      });
+      it("hands a first assessment's own classification to the action: a new candidate is added to the backlog on the first run", async () => {
+        const added: unknown[] = [];
+        const real = new ConversationActions({ attachThread: async () => ({}) as never, bump: async () => {}, unbump: async () => {}, addCandidate: async (input) => (added.push(input), { id: "b-1" }), linkedTo: async () => [] });
+        const scores = { who: { score: 2, confidence: 0.9 }, what: { score: 2, confidence: 0.9 }, impact: { score: 1, confidence: 0.9 }, time: { score: 3, confidence: 0.9 }, demand: { score: 1, confidence: 0.9 } };
+        const assessor = { assess: async () => assessed({ relation: { type: "new_candidate", target: null, confidence: 0.9, by: "model", at: iso(0) }, classification: { kind: "bug", confidence: 0.9, by: "model", at: iso(0), records: {}, verdict: "ok", scores } }) };
+        const { inbox, store } = setup({ assessor, actions: real, claimed: { C1: "/r" }, hits: [hit({ ts: ts(10), text: "<@U1> it breaks" })] });
+        await poll(inbox);
+        await poll(inbox);
+        expect(added).toHaveLength(1);
+        expect(added[0]).toMatchObject({ repo: "/r", scores: { who: 2, what: 2, impact: 1, time: 3, demand: 1 } });
+        expect(store.rows.get(`C1:${ts(10)}`)!.conversation?.relation?.applied).toMatchObject({ backlog: "b-1" });
       });
       it("does not run for ask, nor for a verdict ask", async () => {
         const a = actions();

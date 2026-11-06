@@ -910,7 +910,8 @@ export class SlackInbox implements SlackInboxPort {
         else if (!relation.applied) {
           try {
             if (previous) await this.options.actions.undo(previous, relation);
-            const done = await this.options.actions.apply(fresh, relation);
+            // The action reads the classification it was assessed with (a backlog item is created from its scores), not the one the row held before this run.
+            const done = await this.options.actions.apply({ ...fresh, conversation: { ...conversation, classification: kept, relation, shortlist: out.shortlist } }, relation);
             relation = done.relation;
             if (done.taskId) linked = { ...linked, taskId: done.taskId };
             if (done.priority && triage && !triage.overridden) triage = { ...triage, priority: done.priority };
