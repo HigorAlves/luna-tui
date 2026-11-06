@@ -1807,9 +1807,11 @@ fn slack_widget(item: &SlackItem, sla: u64, now: u64) -> Vec<Line<'static>> {
             if let Some((_, waiting)) = slack::conversation_lines(item, now).into_iter().find(|(n, _)| *n == "waiting") {
                 lines.push(field("waiting", waiting));
             }
-            if let Some(draft) = triage.draft.as_deref().filter(|d| !d.is_empty()) {
+            // The waiting draft's own text first (the one a reply sends), else the classifier's reply.
+            let waiting = item.draft.as_ref().map(|d| d.text.as_str()).filter(|d| !d.is_empty());
+            if let Some(draft) = waiting.or(triage.draft.as_deref().filter(|d| !d.is_empty())) {
                 lines.push(Line::default());
-                lines.push(field("draft", draft.to_string()));
+                lines.push(field("draft", crate::detail::plain(draft)));
             }
         }
         None => lines.push(field("triage", "not yet".to_string())),

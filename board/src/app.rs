@@ -2811,7 +2811,9 @@ impl App {
             SlackKey::Open => self.open_url(&item.permalink),
             SlackKey::Reply => {
                 let seen = item.draft.as_ref().filter(|d| !d.id.is_empty() && !d.hash.is_empty()).map(|d| (d.id.clone(), d.hash.clone()));
-                self.open_slack_reply(item, item.triage.as_ref().and_then(|t| t.draft.clone()).unwrap_or_default(), false, seen)
+                // The waiting draft's own text is what its id and hash stand for; the classifier's reply (`triage.draft`) is the fallback when no draft waits or the snapshot predates the text.
+                let text = item.draft.as_ref().map(|d| d.text.clone()).filter(|t| !t.is_empty()).or_else(|| item.triage.as_ref().and_then(|t| t.draft.clone())).unwrap_or_default();
+                self.open_slack_reply(item, text, false, seen)
             }
             // The mention itself is built on the machine, by id; the editor shows the words only.
             SlackKey::Nudge => self.open_slack_reply(item, "gentle nudge on this one: any news?".to_string(), true, None),
@@ -5764,9 +5766,27 @@ mod slack_tests {
     }
 
     #[test]
+    fn r_opens_the_waiting_drafts_own_text_not_the_classifiers_old_reply() {
+        let mut app = app_with(snapshot());
+        let id = "C0123:1730112345.0001";
+        app.slack_item_mut(id).unwrap().draft = Some(crate::model::SlackDraft { id: "d2".into(), hash: "h2".into(), kind: "questions".into(), text: "Which export?".into(), expires_at: "2026-11-07T00:00:00Z".into() });
+        press(&mut app, KeyCode::Char('S'));
+        press(&mut app, KeyCode::Char('r'));
+        let Mode::SlackReply { area, draft, .. } = &app.mode else { panic!("the reply editor opens: {}", toast(&app)) };
+        assert_eq!(draft, &Some(("d2".to_string(), "h2".to_string())));
+        assert_eq!(area.lines().join("\n"), "Which export?", "the draft the id and hash stand for, not triage.draft");
+    }
+
+    #[test]
+    fn a_slack_draft_from_before_its_text_was_sent_still_parses() {
+        let old: crate::model::SlackDraft = serde_json::from_str(r#"{"id":"d1","hash":"h1","kind":"reply","expiresAt":"2026-11-07T00:00:00Z"}"#).unwrap();
+        assert_eq!(old.text, "");
+    }
+
+    #[test]
     fn s_picks_a_snooze_and_r_sends_the_edited_draft() {
         let mut app = app_with(snapshot());
-        app.slack_item_mut("C0123:1730112345.0001").unwrap().draft = Some(crate::model::SlackDraft { id: "d1".into(), hash: "h1".into(), kind: "reply".into(), expires_at: "2026-11-07T00:00:00Z".into() });
+        app.slack_item_mut("C0123:1730112345.0001").unwrap().draft = Some(crate::model::SlackDraft { id: "d1".into(), hash: "h1".into(), kind: "reply".into(), text: String::new(), expires_at: "2026-11-07T00:00:00Z".into() });
         press(&mut app, KeyCode::Char('S'));
         press(&mut app, KeyCode::Char('s'));
         assert!(matches!(&app.mode, Mode::SlackSnooze { id, cursor: 0 } if id == "C0123:1730112345.0001"));
