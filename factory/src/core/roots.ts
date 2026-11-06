@@ -14,6 +14,8 @@ const DEVICES = new Set(["/dev/null", "/dev/stdin", "/dev/stdout", "/dev/stderr"
  *  and not normalized first, so `link/..` is resolved by the kernel the way open() would. */
 /** Where the machine mounts the repo's code graph, read-only, in a stage container. */
 export const GRAPH_ROOT = "/graph";
+/** Where the graph of the card's own newest slice commit is mounted, read-only, when one exists. */
+export const GRAPH_BRANCH_ROOT = "/graph-branch";
 
 export function realPath(path: string): string {
   // One component at a time, so a link is followed even when what it points at does not exist

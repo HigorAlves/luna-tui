@@ -186,6 +186,9 @@ describe("the code graph root", () => {
     const input = { task: { branch: "task/x", source: null }, context: {} } as never;
     for (const policy of [claudePolicy({ pack: PACKS.triage, input, paths } as never), evePolicy(PACKS.triage, { input, paths } as never)]) {
       expect(policy.roots?.read).toContain("/graph");
+      expect(policy.roots?.read).toContain("/graph-branch");
+      expect(read("/graph-branch/graphify-out/graph.json", {}, { ...policy, workRoot: work }).allow).toBe(true);
+      expect(write("/graph-branch/graphify-out/graph.json", { ...policy, workRoot: work })).toMatchObject({ allow: false });
       expect(read("/graph/graphify-out/graph.json", {}, { ...policy, workRoot: work }).allow).toBe(true);
       expect(write("/graph/graphify-out/graph.json", { ...policy, workRoot: work })).toMatchObject({ allow: false });
     }
