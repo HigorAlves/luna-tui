@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,6 +6,7 @@ import { join } from "node:path";
 import { type EvidencePack, FACTORY_DEFAULTS } from "@hardness/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { SECTION_END, SECTION_START } from "../../domain/evidence-markdown.ts";
 import { DEFAULT_POLICY, type Policy } from "../../domain/policy.ts";
 import type { PrNode } from "../../domain/pull-request.ts";
 import { fakeGitHub } from "../../test/github.ts";
@@ -703,6 +705,23 @@ describe("the review loop: fixes", () => {
       const addressing = world.runPack.mock.calls.find((c) => c[0] === "addressing");
       expect(JSON.stringify(addressing![2])).not.toContain("rm -rf");
     });
+  });
+
+  it("keeps the section hash a fix's publisher saved: the monitor's later saves do not bring the old one back", async () => {
+    const section = (text: string) => `${SECTION_START}\n${text}\n${SECTION_END}`;
+    const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+    let body = section("what the machine wrote first");
+    await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), publishedSection: hash(body) });
+    const world = loopWorld({ choices: { comment_intent: "change_request" } });
+    world.publish.mockImplementation((async ({ pack: p }: { pack: EvidencePack }) => {
+      body = section("what the machine wrote after the fix");
+      return { pack: p, comment: "updated" as const, assets: 0 };
+    }) as never);
+    const { run } = review(world, { prFacts: async () => node({ body }) });
+    await run();
+    const cursor = (await loadCursor(stateDir, "t1"))!;
+    expect(cursor.fixRounds).toBe(1);
+    expect(cursor.publishedSection).toBe(hash(section("what the machine wrote after the fix")));
   });
 
   it("sizes a nit with fix_scope like any change request, then fixes it in place", async () => {
