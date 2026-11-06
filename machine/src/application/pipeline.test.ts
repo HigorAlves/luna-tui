@@ -105,6 +105,12 @@ describe("creating and starting", () => {
     expect((await pipeline.update(task.id, { source: { ...source } })).source).toEqual(source);
   });
 
+  it("keeps the source's labels, and a client sending the source back with or without them is no change", async () => {
+    const source = { kind: "github", repo: "owner/name", number: 43, url: "https://github.com/owner/name/issues/43" } as const;
+    const task = await pipeline.createTask({ title: "Login page", source: { ...source, labels: ["security"] } });
+    expect((await pipeline.update(task.id, { source })).source).toMatchObject({ labels: ["security"] });
+  });
+
   it("runs triage and the plan stage on start and waits for you to approve the plan", async () => {
     const task = await newTask();
     const started = await pipeline.start(task.id);
