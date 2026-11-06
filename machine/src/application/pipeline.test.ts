@@ -106,6 +106,12 @@ describe("creating and starting", () => {
     expect((await pipeline.update(task.id, { source: { ...source } })).source).toEqual(source);
   });
 
+  it("keeps the source's labels, and a client sending the source back with or without them is no change", async () => {
+    const source = { kind: "github", repo: "owner/name", number: 43, url: "https://github.com/owner/name/issues/43" } as const;
+    const task = await pipeline.createTask({ title: "Login page", source: { ...source, labels: ["security"] } });
+    expect((await pipeline.update(task.id, { source })).source).toMatchObject({ labels: ["security"] });
+  });
+
   it("runs triage and the plan stage on start and waits for you to approve the plan", async () => {
     const task = await newTask();
     const started = await pipeline.start(task.id);
@@ -598,6 +604,29 @@ describe("the triage record: a correction and its ground truth", () => {
     expect(raised.record).toMatchObject({ riskPrelim: "high", riskMachine: "medium", risk: "high" });
     // and back down: the floor is still the machine's, not the person's last value
     expect((await p.editRecord(id, { riskPrelim: "low" })).record).toMatchObject({ riskPrelim: "low", risk: "medium" });
+  });
+
+  it("a risk raised to High by a correction at the plan gate holds the plan for two names and drops the first approval", async () => {
+    const { p, id } = await setup();
+    const store = new PgTaskStore(db);
+    const gate = (await p.approvals(id)).find((a) => a.decision === null)!;
+    await store.withTaskLock(id, async (_t, tx) => tx.updateApprovalRequested(gate, { ...gate.requested, risk: { level: "low", scores: {} }, approvers: ["ana"] }));
+    await p.editRecord(id, { riskPrelim: "high" });
+    const open = (await p.approvals(id)).find((a) => a.decision === null)!;
+    expect(open.requested).toMatchObject({ risk: { level: "high" }, approvers: [] });
+    await expect(p.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
+    expect((await p.decide(id, "approved", undefined, undefined, { approver: "bo" })).state).toBe("awaiting_approval");
+    expect((await p.decide(id, "approved", undefined, undefined, { approver: "cy" })).state).not.toBe("awaiting_approval");
+  });
+
+  it("reads the card's own record risk at the decision too: a gate written before the correction still needs two names", async () => {
+    const { p, id } = await setup();
+    const store = new PgTaskStore(db);
+    const gate = (await p.approvals(id)).find((a) => a.decision === null)!;
+    await store.withTaskLock(id, async (_t, tx) => tx.updateApprovalRequested(gate, { ...gate.requested, risk: { level: "low", scores: {} } }));
+    const task = await p.get(id);
+    await store.updateTask(id, { record: { ...task.record!, risk: "high" } });
+    await expect(p.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
   });
 
   it("corrects only at triage's questions and at the plan gate", async () => {

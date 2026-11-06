@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EditPlanInput, CodeMapAnswer, type EngineId, type Finding, type JiraLink, PACKS, type PackId, Plan, Scenario, type Criterion, FACTORY_DEFAULTS, coverageOf, criteriaOf, type PlanRisk, type PlanStep, RUNNING, type Risk, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, maxRisk, reviseCriteria, stepOf, stepsOfAnswer, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -697,6 +697,13 @@ export class Pipeline {
       next.decisionBy = "person";
       next.editedFields = [...new Set([...(before.editedFields ?? []), ...changed])];
       await tx.updateTask(id, { record: next as TriageRecord });
+      // A risk raised here reaches the open plan gate in the same transaction: its grade rises, and approvals given for the lower one are void.
+      const gate = await tx.findOpenApproval(id);
+      const gateRisk = gate?.requested.risk as { level?: unknown } | undefined;
+      if (gate && gate.kind === "awaiting_approval" && gate.requested.outcome === undefined && gateRisk && typeof next.risk === "string") {
+        const level = maxRisk(next.risk as Risk, (typeof gateRisk.level === "string" ? gateRisk.level : "none") as Risk);
+        if (level !== gateRisk.level) await tx.updateApprovalRequested(gate, { ...gate.requested, risk: { ...gateRisk, level }, ...(Array.isArray(gate.requested.approvers) ? { approvers: [] } : {}) });
+      }
       return { record: next as TriageRecord, classification: task.classification, fields: changed };
     });
     if (fields.length > 0) {
@@ -824,7 +831,9 @@ export class Pipeline {
       const configured = (await this.policyFor(task.repoPath)).factory.plan.approvers;
       const ruleOf = async (requested: Record<string, unknown>) => {
         const lv = (requested.risk as { level?: unknown } | undefined)?.level;
-        const level: Risk = lv === "high" || lv === "medium" ? lv : "low";
+        // The higher of the gate's grade and the card's own: a record corrected after the gate was written still counts.
+        const graded = maxRisk((typeof lv === "string" ? lv : "none") as Risk, (task.record?.risk ?? "none") as Risk);
+        const level: Risk = graded === "high" || graded === "medium" ? graded : "low";
         let owners: OwnersState = level === "high" ? await this.ruleOwnersOf(task.repoPath, requested) : { state: "skipped" };
         // CODEOWNERS could not be read just now: the owners the gate was opened with (the machine's own reading, kept on the gate) still hold,
         // so a lookup that fails at the moment of approval does not switch the condition off.
