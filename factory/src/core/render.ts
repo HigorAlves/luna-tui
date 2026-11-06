@@ -377,7 +377,10 @@ const splitText = (split: StageInput["context"]["split"]): string => (split ? re
 function graphText(graph: StageInput["context"]["graph"]): string {
   if (!graph) return "Code graph: (none: use Glob, Grep and Read)";
   const built = `built at ${graph.commit.slice(0, 7)} on ${graph.builtAt.slice(0, 10)}`;
-  return `Code graph: ${graph.path}, ${built} (${graph.fresh ? "fresh" : "stale: the base commit is newer; prefer Grep for changed areas"})`;
+  const main = `Code graph: ${graph.path}, ${built} (${graph.fresh ? "fresh" : "stale: the base commit is newer; prefer Grep for changed areas"})`;
+  if (!graph.branch) return main;
+  const at = `built at ${graph.branch.commit.slice(0, 7)} on ${graph.branch.builtAt.slice(0, 10)}`;
+  return `${main}\nBranch graph: ${graph.branch.path}, this card's own commits, ${at}; query it first (--graph branch), and the main graph for the rest (--graph main)`;
 }
 
 /** The prompt the model gets. */

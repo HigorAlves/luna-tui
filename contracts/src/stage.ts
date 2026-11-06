@@ -1045,6 +1045,8 @@ export const GraphContext = z.object({
   builtAt: z.string(),
   /** False when the graph was built from a commit older than the task's base commit. */
   fresh: z.boolean(),
+  /** The graph of the card's own newest slice commit, read-only at /graph-branch; absent until one is built. */
+  branch: z.object({ path: z.string(), commit: z.string(), builtAt: z.string() }).optional(),
 });
 export type GraphContext = z.infer<typeof GraphContext>;
 

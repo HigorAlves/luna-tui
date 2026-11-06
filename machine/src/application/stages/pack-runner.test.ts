@@ -1,6 +1,6 @@
 import { RepoImageError } from "../repo-images.ts";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -326,6 +326,80 @@ describe("agent stages through packs", () => {
       expect(seen!.extraEnv?.LUNA_GRAPH).toBeUndefined();
       expect((seen!.input as unknown as StageInput).context.graph).toBeNull();
       expect(ensured).toEqual([repo]);
+    });
+
+    describe("a card's branch graph", () => {
+      const task = "11111111-2222-3333-4444-555555555555";
+      const branchStamp: GraphStamp = { ...stamp, commit: "d".repeat(40), builtAt: "2026-11-05T09:00:00Z" };
+      const branchDir = `/state/graphs/repo/cards/${task}/${"d".repeat(40)}`;
+      const withBranch = (over: Partial<Graph> = {}): Graph => ({ ...graphOf(true), branchGraph: async () => ({ dir: branchDir, stamp: branchStamp }), ...over });
+      let n = 0;
+      const commits = (r: SandboxRun) => {
+        writeFileSync(join(r.worktree, "b.txt"), `b${++n}\n`);
+        agent(r.worktree, "add", "-A");
+        agent(r.worktree, "commit", "-q", "-m", "slice 1");
+      };
+
+      const acting = (graph: Graph) => agentRunners({ ...deps(fakeSandbox(output(), commits)), graph });
+
+      it("mounts the newest one read-only at /graph-branch beside the main graph, and names it in the stage input", async () => {
+        await withGraph(withBranch()).triage!(context("triage"));
+        expect(extraMounts(seen!)).toEqual([
+          { host: "/state/graphs/repo/current", container: "/graph", readOnly: true },
+          { host: branchDir, container: "/graph-branch", readOnly: true },
+        ]);
+        expect(seen!.extraEnv).toMatchObject({ LUNA_GRAPH: "/graph/graphify-out/graph.json", LUNA_GRAPH_BRANCH: "/graph-branch/graphify-out/graph.json" });
+        expect((seen!.input as unknown as StageInput).context.graph).toMatchObject({ path: "/graph/graphify-out/graph.json", branch: { path: "/graph-branch/graphify-out/graph.json", commit: branchStamp.commit, builtAt: branchStamp.builtAt } });
+      });
+
+      it("mounts only the main graph when the card has no branch graph, and none without a main graph", async () => {
+        await withGraph(withBranch({ branchGraph: async () => null })).triage!(context("triage"));
+        expect(extraMounts(seen!)).toEqual([{ host: "/state/graphs/repo/current", container: "/graph", readOnly: true }]);
+        expect((seen!.input as unknown as StageInput).context.graph?.branch).toBeUndefined();
+        expect(seen!.extraEnv?.LUNA_GRAPH_BRANCH).toBeUndefined();
+        await withGraph(withBranch({ stampOf: async () => null, currentDir: () => null })).triage!(context("triage"));
+        expect(extraMounts(seen!)).toEqual([]);
+      });
+
+      it("starts a build of the accepted slice commit without making the run wait for it, with graph.branch_build_minutes", async () => {
+        const calls: Array<Parameters<NonNullable<Graph["buildBranch"]>>[0]> = [];
+        const never = new Promise<never>(() => {});
+        const graph = withBranch({ buildBranch: (input) => (calls.push(input), never) });
+        const result = await acting(graph).implementing!(context("implementing"));
+        expect(result.outcome).toBe("pass");
+        expect(calls).toHaveLength(1);
+        expect(calls[0]).toMatchObject({ repoPath: repo, taskId: task, minutes: 3, workspacePath: seen!.worktree });
+        expect(calls[0]!.commit).toBe(agent(seen!.worktree, "rev-parse", "HEAD"));
+      });
+
+      it("takes graph.branch_build_minutes from the repository's luna.yaml", async () => {
+        writeFileSync(join(repo, "luna.yaml"), "graph:\n  branch_build_minutes: 7\n");
+        const calls: number[] = [];
+        const graph = withBranch({ buildBranch: async (input) => (calls.push(input.minutes), { state: "skipped", reason: "x" }) });
+        await acting(graph).implementing!(context("implementing"));
+        expect(calls).toEqual([7]);
+      });
+
+      it("says on the card that the previous graph stays when a build fails, and never fails the run", async () => {
+        const notes: string[] = [];
+        const graph = withBranch({ buildBranch: async () => ({ state: "failed", reason: "the graph build of ddddddd failed (ran past 3 minutes)" }) });
+        const result = await acting(graph).implementing!({ ...context("implementing"), note: async (t) => void notes.push(t) });
+        expect(result.outcome).toBe("pass");
+        await vi.waitFor(() => expect(notes.some((n) => n.includes("branch graph") && n.includes("ran past 3 minutes") && n.includes("previous"))).toBe(true));
+      });
+
+      it("builds nothing when the repository's graph is off, when it has no main graph, or when no commit came in", async () => {
+        const calls: string[] = [];
+        const graph = (over: Partial<Graph> = {}) => withBranch({ buildBranch: async (input) => (calls.push(input.commit), { state: "skipped", reason: "x" }), ...over, ...{} });
+        await acting(graph({ stampOf: async () => null, currentDir: () => null })).implementing!(context("implementing"));
+        writeFileSync(join(repo, "luna.yaml"), "policy:\n  graph: off\n");
+        await acting(graph()).implementing!(context("implementing"));
+        expect(calls).toEqual([]);
+        rmSync(join(repo, "luna.yaml"));
+        const idle = agentRunners({ ...deps(fakeSandbox(output(), () => {})), graph: graph() });
+        await idle.implementing!(context("implementing"));
+        expect(calls).toEqual([]);
+      });
     });
 
     it("leaves the graph out when the repo's luna.yaml turns it off", async () => {

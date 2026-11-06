@@ -1122,6 +1122,9 @@ export class Pipeline {
         console.error(`could not remove the worktree of deleted task ${id}`, error),
       );
     }
+    if (task.repoPath) {
+      await this.closeDeps?.dropBranchGraphs?.(task.repoPath, id).catch((error: unknown) => console.error(`could not delete the branch graphs of deleted task ${id}`, error));
+    }
     return this.store.deleteTask(id);
   }
 

@@ -506,7 +506,7 @@ pipeline = new Pipeline(db, runnerFor, {
   maxPerStage: config.maxPerStage,
   budget: { taskUsd: config.taskBudgetUsd, dailyUsd: config.dailyBudgetUsd },
   restartPolicy: config.restartPolicy,
-  closeDeps: { exec, worktreeRemove: false, watcher, github },
+  closeDeps: { exec, worktreeRemove: false, watcher, github, dropBranchGraphs: async (repoPath, taskId) => void (await graph.dropBranch?.(repoPath, taskId)) },
   // A merged card's retro: the truth file, and the graph misses its Build Report also declared (never written into prompts or rules).
   retroOutputs: {
     stateDir: config.stateDir,

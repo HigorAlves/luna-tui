@@ -195,6 +195,14 @@ describe("renderPrompt", () => {
     expect(render(undefined)).toContain("Code graph: (none: use Glob, Grep and Read)");
   });
 
+  it("names the card's branch graph beside the main one, and queries the branch graph first", () => {
+    const template = "{{context.graph}}";
+    const graph = { path: "/graph/graphify-out/graph.json", commit: "9c1f0e2a7b3d4e5f", builtAt: "2026-11-04T10:00:00Z", fresh: true, branch: { path: "/graph-branch/graphify-out/graph.json", commit: "77aa1b2c3d4e5f60", builtAt: "2026-11-05T09:00:00Z" } };
+    const text = renderPrompt({ pack: PACKS.implementing, input: { ...input, context: { ...input.context, graph } }, template });
+    expect(text).toContain("Code graph: /graph/graphify-out/graph.json, built at 9c1f0e2 on 2026-11-04 (fresh)");
+    expect(text).toContain("Branch graph: /graph-branch/graphify-out/graph.json, this card's own commits, built at 77aa1b2 on 2026-11-05; query it first (--graph branch), and the main graph for the rest (--graph main)");
+  });
+
   it("lists the files the graph says depend on what changed, or says there are none", () => {
     const template = "{{context.blastRadius}}";
     const render = (radius?: string[]) => renderPrompt({ pack: PACKS.verifying, input: { ...input, pack: "verifying", stage: "verifying", context: { ...input.context, ...(radius ? { blastRadius: radius } : {}) } }, template });
