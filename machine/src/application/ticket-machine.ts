@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 
 import type { BacklogAddInput, CanonicalTicket, FactoryConfig, TaskSource, TicketContext } from "@hardness/contracts";
 
+import { IdempotencyConflictError } from "../domain/task.ts";
 import { carriesSecret } from "../domain/postable.ts";
 import type { Candidate } from "../domain/similarity.ts";
 import { buildValidityContext } from "./ticket-validity.ts";
@@ -67,8 +68,8 @@ export interface TicketMachineDeps {
   candidates(ticket: CanonicalTicket, repoPath: string | null): Promise<Candidate[]>;
   config(repoPath: string | null): Promise<FactoryConfig>;
   locate?(repoPath: string | null, text: string): Promise<string[]>;
-  /** Makes a card through `create_card`. */
-  createCard(input: NewTask): Promise<{ id: string }>;
+  /** Makes a card through `create_card`, once per `key`: a second call with the key answers the card the first made (`cardOnce`). */
+  createCard(input: NewTask, key: string): Promise<{ id: string }>;
   validity: ValidityDeps;
   assess: Pick<AssessDeps, "decide">;
   recommend: RecommendDeps;
@@ -82,6 +83,19 @@ export interface TicketMachineDeps {
   backlog?: { upsertFromSource(input: BacklogAddInput, options: { createIfMissing: boolean }): Promise<{ id: string; created: boolean } | null> };
   now?: () => Date;
 }
+
+/** The card for `key`, made once: a retry after a crash (or a retaken claim) answers the card already made, even when the order's body changed since (a reassessment moved a hint). */
+export async function cardOnce(pipeline: { createTaskOnce(order: NewTask & Record<string, unknown>, key: string): Promise<{ task: { id: string } }> }, input: NewTask, key: string): Promise<{ id: string }> {
+  try {
+    return { id: (await pipeline.createTaskOnce(input as NewTask & Record<string, unknown>, key)).task.id };
+  } catch (error) {
+    if (error instanceof IdempotencyConflictError) return { id: error.taskId };
+    throw error;
+  }
+}
+
+/** How long a claim on a ticket's card creation holds before a retry may take it (a machine that died between the card and the link; the card's own key then returns the card already made). */
+const CARD_CLAIM_MS = 10 * 60_000;
 
 const sourceOf = (t: CanonicalTicket): TaskSource => {
   const gh = GITHUB_KEY.exec(t.key);
@@ -108,7 +122,13 @@ export class TicketMachine implements TicketIntake {
       // Under the row lock: a draft being posted or already posted is never rewritten, and a new draft with the same id is dropped.
       await store.updateDrafts(ticket.key, (current) => {
         const keep = (current as unknown as Draft[]).filter((d) => d.status === "posting" || d.status === "posted");
-        return [...keep, ...drafts.filter((f) => !keep.some((k) => k.id === f.id))] as unknown as Record<string, unknown>[];
+        const added: Draft[] = [];
+        for (const f of drafts) {
+          if (!keep.some((k) => k.id === f.id)) added.push(f);
+          // An assessment after one was posted is new information: a draft of its own, unless it says what the posted one said.
+          else if (f.kind === "assessment" && !keep.some((k) => k.kind === "assessment" && k.text === f.text)) added.push({ ...f, id: `${f.id}:${keep.filter((k) => k.kind === "assessment").length + 1}` });
+        }
+        return [...keep, ...added] as unknown as Record<string, unknown>[];
       });
       await store.setMachine(ticket.key, { status, ...(ctx.repoPath ? { links: [{ kind: "repo", target: ctx.repoPath }] } : {}) });
     };
@@ -231,7 +251,11 @@ export class TicketMachine implements TicketIntake {
     const t = row.canonical;
     const last = [...row.assessments].reverse().find((a) => a.outcome === "workable");
     const repo = row.machineLinks.find((l) => l.kind === "repo")?.target;
-    const card = await this.deps.createCard({
+    // Claimed under the row lock before the card exists: two taps, or a retry after a crash, cannot both make one.
+    if (!(await this.deps.store.claimCard(key, this.now(), CARD_CLAIM_MS))) throw new TicketRefusal("this ticket already has a card, or one is being made for it");
+    let card: { id: string };
+    try {
+      card = await this.deps.createCard({
       title: t.title,
       description: t.description,
       ...(repo ? { repoPath: repo } : {}),
@@ -240,7 +264,11 @@ export class TicketMachine implements TicketIntake {
       noJiraDetection: true,
       ...(t.reporter ? { reporter: { id: t.reporter.id, channel: t.tool } } : {}),
       ...(last ? { hints: { size: String(last.size), urgency: String(last.priority) } } : {}),
-    } as NewTask);
+    } as NewTask, `ticket-card:${t.key}`);
+    } catch (error) {
+      await this.deps.store.releaseCard(key).catch(() => {});
+      throw error;
+    }
     await this.deps.store.setMachine(key, { cardId: card.id, status: "carded" });
     await this.acknowledge(key);
     await this.learn(row, "do_now");
@@ -339,7 +367,7 @@ export class TicketMachine implements TicketIntake {
       const config = (await this.deps.config(repo)).tickets;
       const last = [...row.assessments].reverse().find((a) => a.outcome === "workable") as { priority?: "P0" | "P1" | "P2" | "P3" } | undefined;
       const since = typeof row.clocks.needsInfoSince === "string" ? new Date(row.clocks.needsInfoSince) : null;
-      const clocks = ticketClocks({ firstSeenAt: row.createdAt, acknowledgedAt: typeof row.clocks.acknowledgedAt === "string" ? new Date(row.clocks.acknowledgedAt) : null, priority: last?.priority ?? null, status: row.machineStatus, needsInfoSince: since, updatedAt: row.updatedAt }, now, config);
+      const clocks = ticketClocks({ firstSeenAt: row.createdAt, acknowledgedAt: typeof row.clocks.acknowledgedAt === "string" ? new Date(row.clocks.acknowledgedAt) : null, priority: last?.priority ?? null, status: row.machineStatus, needsInfoSince: since, updatedAt: activityOf(row) }, now, config);
       const overdue = clocks.filter((c) => c.overdue).map((c) => c.name);
       const drafts = row.drafts as unknown as Draft[];
       const missing = ([...row.assessments].reverse().find((a) => a.outcome === "needs_info")?.missing as string[] | undefined) ?? [];
@@ -352,6 +380,12 @@ export class TicketMachine implements TicketIntake {
     }
     return out;
   }
+}
+
+/** The last time the tool says the ticket changed; the row's own `updated_at` moves with every clock the machine writes, so it dates nothing. */
+function activityOf(row: TicketRow): Date {
+  const at = new Date(row.canonical.updatedAt ?? "");
+  return Number.isNaN(at.getTime()) ? row.createdAt : at;
 }
 
 /** The backlog item for a ticket: its five urgency sub-scores as the scores, its size, and its ticket as the source. */

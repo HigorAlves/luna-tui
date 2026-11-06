@@ -366,6 +366,15 @@ describe("runSandbox and execInSandbox on a run's own network", () => {
     expect(started).toEqual(expect.arrayContaining(["--network", "net-own", "--dns", "172.30.0.2"]));
   });
 
+  it("execInSandbox with the services already up starts none and removes none: the seed runs against the app's own database", async () => {
+    const { deps, events, calls, network } = fakes();
+    const card = network("app");
+    await execInSandbox({ name: "seed", image: "img", worktree: "/wt", argv: ["sh", "-c", "true"], cardNetwork: card as never, services: { db: { image: "pg" } }, servicesUp: true, network: "net-app", serviceEnv: { DATABASE_URL: "postgres://db/app" } }, {}, deps);
+    expect(events.filter((e) => e.startsWith("services") || e.startsWith("teardown"))).toEqual([]);
+    const ran = calls.find((c) => c[0] === "run")!;
+    expect(ran).toEqual(expect.arrayContaining(["--network", "net-app", "DATABASE_URL=postgres://db/app"]));
+  });
+
   it("removes the network when the container does not start, and when it is killed by the time limit", async () => {
     const failing = fakes({ failRun: true });
     await expect(runSandbox(run({ runDir: tmp(), egress: { allow: ["a.example.com:443"], allowPrivate: [], proxyImage: "m" } }), failing.deps)).rejects.toThrow("docker run failed");

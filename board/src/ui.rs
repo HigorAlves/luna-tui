@@ -961,11 +961,8 @@ pub(crate) fn pack_lines(value: &Value) -> Vec<String> {
         };
         lines.push(format!("{mark} {}", plain(text)));
     }
-    let mut published = false;
-    for media in value["media"].as_array().into_iter().flatten() {
-        let url = media["url"].as_str().unwrap_or("");
-        published |= url.starts_with("https://");
-    }
+    // The publish result the machine stamped on the pack; a pack from before that field is read from its links.
+    let published = value["published"].as_bool().unwrap_or_else(|| value["media"].as_array().into_iter().flatten().any(|m| m["url"].as_str().unwrap_or("").starts_with("https://")));
     for media in value["media"].as_array().into_iter().flatten().take(6) {
         let Some(label) = media["label"].as_str() else { continue };
         match media["url"].as_str() {
@@ -2270,7 +2267,8 @@ fn render_floor(frame: &mut Frame, area: Rect, floor: &FloorState) {
 
     // The per-repo table takes the bottom when there is more than one repo to compare, the
     // per-engine one sits above it once there are numbers.
-    let repo_height = if floor.repos.is_empty() { 0 } else { (floor.repos.len() as u16 + 3 + floor.health.len() as u16 * 3).min(area.height / 2) };
+    // A repository with no task numbers yet still has a health panel (and a row to focus), so the table is sized by either.
+    let repo_height = if floor.repos.is_empty() && floor.health.is_empty() { 0 } else { (floor.focusable() as u16 + 3 + floor.health.len() as u16 * 3).min(area.height / 2) };
     let engine_rows = floor_engine_rows(floor);
     let engine_height = match (&floor.d7, &floor.by_engine) {
         (None, _) => 0,
@@ -2421,6 +2419,13 @@ fn render_floor_repos(frame: &mut Frame, area: Rect, floor: &FloorState, head_st
             &fmt_pct(r.first_pass_verifying),
             &fmt_usd(Some(r.cost_usd)),
         );
+        out.push(Line::from(Span::from(text).style(if focused { Style::new().fg(c(ACCENT)).bold() } else { Style::new() })));
+    }
+    // Repositories the machine knows that have no task numbers yet: a row each, so tab reaches them.
+    let only = floor.health_only();
+    for (i, h) in only.iter().enumerate().take(room.saturating_sub(1 + floor.repos.len())) {
+        let focused = floor.cursor == floor.repos.len() + i + 1;
+        let text = row(if focused { "▌ " } else { "  " }, &crate::model::plain(h.name(), 15), "–", "–", "–", "–", "–", "–");
         out.push(Line::from(Span::from(text).style(if focused { Style::new().fg(c(ACCENT)).bold() } else { Style::new() })));
     }
     // Under the table: each repository's image and graph, and what failed.
@@ -2820,6 +2825,23 @@ mod tests {
         .unwrap();
         let text = render(160, 40, &state);
         assert!(text.lines().any(|l| l.contains("base waiting for you: attacker/x:1") && l.contains("A approves")), "{text}");
+    }
+
+    #[test]
+    fn floor_shows_the_health_of_a_repository_that_has_no_task_numbers_yet() {
+        let mut state = floor();
+        state.health = serde_json::from_str(
+            r#"[{"repo":"/r/fresh","image":{"inUse":"hardness-runner:dev","base":null,"builtAt":null,"lastFailure":null,"pendingBase":"python:3.13-slim"},
+                 "graph":{"on":true,"commit":null,"behind":null,"graphify":null,"builtAt":null,"building":true,"lastFailure":null}}]"#,
+        )
+        .unwrap();
+        assert!(state.repos.is_empty());
+        let text = render(160, 40, &state);
+        assert!(text.lines().any(|l| l.contains("fresh") && l.contains("–")), "{text}");
+        assert!(text.contains("base waiting for you: python:3.13-slim"), "{text}");
+        state.cursor = 1;
+        let text = render(160, 40, &state);
+        assert!(text.contains("▌ fresh") && text.contains("Floor · fresh ·"), "{text}");
     }
 
     #[test]

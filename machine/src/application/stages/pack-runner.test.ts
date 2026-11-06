@@ -553,6 +553,20 @@ describe("agent stages through packs", () => {
     expect((result.detail?.env as { image: string }).image).toBe("sha256:id-of-hardness-runner-shop:abc");
   });
 
+  it("records the image the sandbox ran in, not the one the repository resolves to after the run", async () => {
+    let made = "";
+    let resolved = 0;
+    const d = { ...deps(fakeSandbox(() => output({ commit: made }), (r) => {
+      writeFileSync(join(r.worktree, "pnpm-lock.yaml"), "lock\n");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice 1");
+      made = agent(r.worktree, "rev-parse", "HEAD");
+    })), imageId: async (image: string) => `sha256:id-of-${image}`, repoImages: { ensure: async () => ({ image: `hardness-runner-shop:${++resolved === 1 ? "A" : "B"}` }) } };
+    const result = await agentRunners(d).implementing!(context("implementing"));
+    expect((result.detail?.env as { image: string }).image).toBe("sha256:id-of-hardness-runner-shop:A");
+    expect(resolved).toBe(1);
+  });
+
   it("makes triage wait for the repository's graph, and escalates as an environment problem when it cannot be built", async () => {
     const sandbox = vi.fn();
     const failing = { ...deps(sandbox), graphReady: async () => ({ state: "failed" as const, reason: "exit code 1" }) };

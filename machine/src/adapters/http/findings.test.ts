@@ -73,6 +73,22 @@ describe("a dismissed or added finding", () => {
     expect(learned).toEqual([["finding_classify", "rec1", { severity: { choice: "nit" } }]]);
   });
 
+  it("keeps the dismissal reason (through safe, capped) in the ground truth file and never on the event stream", async () => {
+    const id = await watched();
+    const reason = `not <b>real</b> ${"y".repeat(600)}`.slice(0, 500);
+    expect((await post(`/tasks/${id}/findings/f1/dismiss`, { reason })).status).toBe(200);
+    const file = JSON.parse(await readFile(join(stateDir, "ground-truth", "verify", `${id}.json`), "utf8"));
+    expect(file.dismissed[0]).toMatchObject({ id: "f1" });
+    expect(file.dismissed[0].reason).toContain("not");
+    expect(file.dismissed[0].reason).not.toContain("<b>");
+    expect(file.dismissed[0].reason.length).toBeLessThanOrEqual(300);
+    expect(JSON.stringify(await pipeline.events(id))).not.toContain("not real");
+    expect((await post(`/tasks/${id}/findings/f2/dismiss`, {})).status).toBe(200);
+    const again = JSON.parse(await readFile(join(stateDir, "ground-truth", "verify", `${id}.json`), "utf8"));
+    expect(again.dismissed).toHaveLength(2);
+    expect(again.dismissed[1].reason).toBeUndefined();
+  });
+
   it("is 404 for an id the last Verify did not report, and 409 when the card is not at awaiting_ship", async () => {
     const id = await watched();
     expect((await post(`/tasks/${id}/findings/zzz/dismiss`, {})).status).toBe(404);

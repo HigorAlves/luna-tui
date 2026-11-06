@@ -146,11 +146,12 @@ export interface TaskDiffFile {
   removed: number;
 }
 
-/** `POST /tasks/:id/context`: what a person gives Intake's context gate. Any one of the three; the card is checked again. */
+/** `POST /tasks/:id/context`: what a person gives Intake's context gate. Any one of them; the card is checked again. `reporterChannel` is the channel the card's reporter can be reached on, for a card whose reporter has none. */
 export const ContextInput = z.object({
   repoPath: z.string().trim().min(1).max(1000).optional(),
   project: z.string().trim().min(1).max(120).optional(),
   text: z.string().trim().min(1).max(20_000).optional(),
+  reporterChannel: z.string().trim().min(1).max(200).optional(),
 });
 export type ContextInput = z.infer<typeof ContextInput>;
 

@@ -61,6 +61,13 @@ describe("finding v2", () => {
     expect(severityOf(mergeDuplicateFindings([nit, blocker])[0]!.severity)).toBe("blocker");
   });
 
+  it("a finding raised again drops a resolution the machine inferred, and keeps one a stage set", () => {
+    const inferred = { status: "fixed" as const, by: "implementer", inferred: true };
+    const set = { status: "dismissed" as const, by: "owner" };
+    expect(mergeDuplicateFindings([{ ...base, line: 10, resolution: inferred }, { ...base, line: 11 }])[0]?.resolution).toBeUndefined();
+    expect(mergeDuplicateFindings([{ ...base, line: 10, resolution: set }, { ...base, line: 11 }])[0]?.resolution).toEqual(set);
+  });
+
   it("does not merge across paths, beyond 3 lines, or with different titles; a title match ignores case and spacing", () => {
     expect(mergeDuplicateFindings([base, { ...base, line: 14 }])).toHaveLength(2);
     expect(mergeDuplicateFindings([base, { ...base, path: "src/b.ts" }])).toHaveLength(2);

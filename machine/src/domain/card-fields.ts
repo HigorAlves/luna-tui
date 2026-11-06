@@ -34,6 +34,8 @@ const text = (value: string, max = TEXT): string => safe(value).slice(0, max).tr
 const web = (url: string): boolean => WEB_URL.test(url.trim());
 /** An identifier (a login, a team, a project key): only letters, digits and `@ / . _ -` survive, capped, so it cannot carry markup, a link or a control character. `@team` still matches; output escapes it again. */
 const ident = (value: string, max = TEXT): string => value.replace(/[^\p{L}\p{N}@/._-]/gu, "").slice(0, max);
+/** A reporter's channel as a person gave it at the context gate: flattened the way the card's own reporter channel is. */
+export const channelOf = (value: string): string => ident(value);
 const list = (values: string[] | undefined, max: number): string[] =>
   [...new Set((values ?? []).map((v) => ident(v)).filter(Boolean))].slice(0, max);
 

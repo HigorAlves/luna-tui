@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { ensureClone } from "./clone.ts";
 import { machineGitDir } from "./machine-repo.ts";
-import { changedSince, commitsSince, currentBranch, dirtyFiles, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, ensureCleanCheckout, graphCheckoutPath, isAncestor,  intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
+import { changedSince, commitsSince, currentBranch, dirtyFiles, headCommit, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, checkoutHead, ensureCleanCheckout, graphCheckoutPath, isAncestor,  intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -132,6 +132,38 @@ describe("host-side git", () => {
     expect(existsSync(join(path, "left-over.txt"))).toBe(false);
     expect(existsSync(join(path, "c.txt"))).toBe(true);
     expect(git(repo, "rev-parse", "HEAD")).not.toBe(tip);
+  });
+
+  it("reads HEAD of a read-only checkout the machine made, from the repository that registered it, and refuses a link or an unregistered folder", async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "checkout-head-")));
+    const repo = join(root, "repo");
+    mkdirSync(repo);
+    git(repo, "init", "-q", "-b", "main");
+    writeFileSync(join(repo, "a.txt"), "a\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-q", "-m", "init");
+    const path = graphCheckoutPath("repo", join(root, "wt"));
+    await ensureCleanCheckout(repo, path);
+    // A card's headCommit has no machine repository for this folder; the checkout reader does not need one.
+    await expect(headCommit(path)).rejects.toThrow();
+    expect(await checkoutHead(repo, path)).toBe(git(repo, "rev-parse", "HEAD"));
+
+    // The folder's own `.git` file is never read: one pointing at another repository changes nothing.
+    const other = join(root, "other");
+    mkdirSync(other);
+    git(other, "init", "-q", "-b", "main");
+    writeFileSync(join(other, "x.txt"), "x\n");
+    git(other, "add", "-A");
+    git(other, "commit", "-q", "-m", "other");
+    writeFileSync(join(path, ".git"), `gitdir: ${join(other, ".git")}\n`);
+    expect(await checkoutHead(repo, path)).toBe(git(repo, "rev-parse", "HEAD"));
+
+    // A link in place of the checkout, and a folder the repository did not register, are refused.
+    const link = join(root, "link");
+    symlinkSync(path, link);
+    await expect(checkoutHead(repo, link)).rejects.toThrow(/not a checkout/);
+    await expect(checkoutHead(repo, join(root, "wt"))).rejects.toThrow(/not a checkout the repository registered/);
+    await expect(checkoutHead(repo, other)).rejects.toThrow(/not a checkout the repository registered/);
   });
 
   it("recreates a worktree whose directory went missing, instead of failing on the stale registration", async () => {
