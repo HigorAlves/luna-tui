@@ -26,9 +26,9 @@ import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import { blockerSetKey } from "../domain/finding-sets.ts";
-import { EMITTABLE, type StageResult, type StageRunner } from "./ports.ts";
+import { EMITTABLE, type StageContext, type StageResult, type StageRunner } from "./ports.ts";
 import { shippedEvent } from "./ship-loop.ts";
-import { buildProgressOf, buildReportOf, verifyReportOf } from "./reports.ts";
+import { buildProgressOf, buildReportOf, prFactsOf, verifyReportOf } from "./reports.ts";
 import { stageFactRows } from "./stage-facts.ts";
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
@@ -1944,6 +1944,12 @@ export class Pipeline {
     }
   }
 
+  /** What the draft PR's body is fed: the rows of the stages that ran before Deliver. */
+  private async prFacts(id: string): Promise<NonNullable<StageContext["prFacts"]>> {
+    const [task, runs, events] = await Promise.all([this.get(id), this.store.listStageRuns(id), this.store.listEvents(id)]);
+    return prFactsOf(task, runs, events);
+  }
+
   /** The failures the browser run's or CI's loop may have before a person is asked: the repository's `verify.e2e_rounds` or `verify.ci_rounds`. */
   private async loopCap(id: string, stage: TaskState, result: StageResult): Promise<{ loopCap?: number }> {
     if (result.outcome !== "fail" || (stage !== "e2e" && stage !== "evidence" && stage !== "ci_watch")) return {};
@@ -2153,6 +2159,7 @@ export class Pipeline {
         runId,
         approvals,
         priorFindings,
+        ...(stage === "delivering" ? { prFacts: await this.prFacts(id) } : {}),
         ...(replan ? { replan } : {}),
         ...(budgetMinutes !== undefined ? { budgetMinutes } : {}),
         ...(testsCommit ? { testsCommit } : {}),

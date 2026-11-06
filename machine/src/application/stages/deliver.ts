@@ -62,7 +62,9 @@ export function prExtraOf(context: StageContext, commits: { base: string | null;
     record: task.record,
     // The plan's version: how many times a plan was approved (a plan sent back and approved again counts).
     planVersion: context.approvals.filter((a) => a.kind === "awaiting_approval" && a.decision === "approved").length || null,
-    scenarios: approvedScenarios(context.approvals).map((sc) => ({ id: sc.id ?? "", title: sc.title, criterion: sc.criterion_ref ?? null, test: null })),
+    scenarios: approvedScenarios(context.approvals).map((sc) => ({ id: sc.id ?? "", title: sc.title, criterion: sc.criterion_ref ?? null, test: context.prFacts?.tests.get(sc.id ?? "") ?? null })),
+    findings: context.prFacts?.findings ?? [],
+    outOfMap: context.prFacts?.outOfMap ?? [],
     ...(commits ?? {}),
   };
 }

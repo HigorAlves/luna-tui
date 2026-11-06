@@ -1633,6 +1633,25 @@ describe("the implementing findings loop", () => {
     expect(seen[1]).toEqual(["scenario failed: login works"]);
   });
 
+  it("feeds Deliver the open findings Verify left, from the rows of the stages before it", async () => {
+    const soft = { path: "a.ts", line: 3, start_line: null, severity: "should_fix", title: "add a test", body: "b", suggestion_code: null, confidence: 0.9 };
+    let seen: unknown;
+    const runner = (stage: TaskState): StageRunner => {
+      if (stage === "verifying") return async () => ({ outcome: "pass", detail: { findings: [soft] }, findings: [soft] });
+      if (stage === "delivering") {
+        return async (context) => {
+          seen = context.prFacts?.findings.map((f) => f.title);
+          return stubs.runnerFor(stage)(context);
+        };
+      }
+      return stubs.runnerFor(stage);
+    };
+    pipeline = new Pipeline(db, runner, { inline: true, hasConfig: () => true });
+    const task = await newTask();
+    await startAndApprove(task.id);
+    expect(seen).toEqual(["add a test"]);
+  });
+
   it("gives the next implementing attempt the findings its own failed run left", async () => {
     const finding = (title: string) => ({
       path: "test/a.test.ts", line: 0, start_line: null, severity: "test", title, body: "", suggestion_code: null, confidence: 1,

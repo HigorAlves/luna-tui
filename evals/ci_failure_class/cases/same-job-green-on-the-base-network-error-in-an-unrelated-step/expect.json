@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "checks": [
+    {
+      "kind": "equals",
+      "path": "class.choice",
+      "value": "flake"
+    }
+  ],
+  "rubric": "A network error in an unrelated step of a job that is green on the base: a flake, a re-run is the right move.",
+  "label": {
+    "class": {
+      "choice": "flake"
+    }
+  }
+}

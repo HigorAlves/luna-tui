@@ -106,6 +106,23 @@ describe("the draft PR's body", () => {
     expect(body).toContain(`Base ${"a".repeat(7)}, head ${"b".repeat(7)}`);
   });
 
+  it("is fed the open findings, the files outside the map and each scenario's test by the context", async () => {
+    const github = fakeGitHub({ findPr: async () => null, openPr: async () => ({ url: "u", number: 7, isDraft: true }) });
+    const { run, context } = withBody(github);
+    const finding = (title: string, severity: string) => ({ path: "a.ts", line: 2, severity, title, body: "b", confidence: 0.9 });
+    const ctx = {
+      ...context,
+      approvals: [{ kind: "awaiting_approval", decision: "approved", requested: { cases: [{ title: "export downloads", criterion: null, approach: "a" }] } }],
+      prFacts: { findings: [finding("add a test", "should_fix"), finding("rename", "nit")], outOfMap: [{ path: "docs/x.md", reason: "stale flag" }], tests: new Map([["S1", "src/export.test.ts"]]) },
+    } as unknown as StageContext;
+    await run(ctx);
+    const body = (github.openPr as ReturnType<typeof vi.fn>).mock.calls[0]![1].body as string;
+    expect(body).toContain("### should_fix\n- add a test (a.ts:2)");
+    expect(body).toContain("### nit\n- rename (a.ts:2)");
+    expect(body).toContain("- docs/x.md: stale flag");
+    expect(body).toContain("- S1: export downloads, test `src/export.test.ts`");
+  });
+
   it("on a PR that exists, replaces only what is between the markers and keeps a person's own text", async () => {
     const updatePrBody = vi.fn(async () => {});
     const old = "My note\n\n<!-- luna:pr:start -->\nold\n<!-- luna:pr:end -->\n\nafter";

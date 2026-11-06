@@ -1,0 +1,35 @@
+{
+  "schema": 3,
+  "stage": "ci_failure_class",
+  "pack": "ci_failure_class",
+  "attempt": 1,
+  "task": {
+    "id": "ci-failure-class",
+    "title": "CI failure: e2e (chromium)",
+    "description": "",
+    "criteria": [],
+    "repoPath": "",
+    "branch": "",
+    "source": null
+  },
+  "plan": null,
+  "decisions": [],
+  "priorFindings": [],
+  "context": {
+    "projectContext": null,
+    "check": {
+      "kind": "ci",
+      "ci": {
+        "job": "e2e (chromium)",
+        "log": "Run npm ci ... ok\nRun playwright test\n  1 passed\nError: getaddrinfo ECONNRESET downloading the browser build from cdn.example.com (attempt 1 of 1)\nThe same job passed on main 40 minutes ago; no file this change touches is named in the log.\nProcess completed with exit code 1."
+      }
+    }
+  },
+  "limits": {
+    "maxTurns": 1,
+    "timeoutMs": 60000
+  },
+  "env": {
+    "LUNA_FACTORY": "1"
+  }
+}

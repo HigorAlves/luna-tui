@@ -33,6 +33,8 @@ export interface StageContext {
   testsCommit?: string;
   /** For implementing: the minutes Build's budget has left; a run's time limit is the smaller of its own and this. */
   budgetMinutes?: number;
+  /** For delivering: what the draft PR's body is fed, from the rows of the stages before it (the open findings, the files outside the map, each scenario's test file). */
+  prFacts?: { findings: Finding[]; outOfMap: Array<{ path: string; reason: string }>; tests: Map<string, string> };
   /** Findings from the latest verifying run, fed to the next implementing attempt. */
   priorFindings?: Finding[];
   /** Aborted when you abort the task; the runner should stop its container. */

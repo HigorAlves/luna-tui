@@ -2,7 +2,7 @@ import { BuildReport, VerifyReport, findingId } from "@hardness/contracts";
 import { describe, expect, it } from "vitest";
 
 import type { EventRow, StageRunRow, TaskRow } from "../domain/task.ts";
-import { buildProgressOf, buildReportOf, verifyReportOf } from "./reports.ts";
+import { buildProgressOf, buildReportOf, prFactsOf, verifyReportOf } from "./reports.ts";
 
 const task = { branch: "luna/x", diffAdded: 12, diffRemoved: 3, testsPassed: 4, testsTotal: 5 } as unknown as TaskRow;
 
@@ -238,5 +238,37 @@ describe("the environment in the reports", () => {
     expect(verifyReportOf(task, runs, [finished("verifying", 1, "passed", { envReproduction: "matched" })])?.envReproduction).toBe("matched");
     expect(verifyReportOf(task, runs, [finished("verifying", 1, "failed", { envReproduction: "the runner image differs" })])?.envReproduction).toBe("the runner image differs");
     expect(verifyReportOf(task, runs, [finished("verifying", 1, "passed", {})])?.envReproduction).toBeNull();
+  });
+});
+
+describe("prFactsOf: what the draft PR's body is fed after Build, Verify and the browser run", () => {
+  it("gives the open should_fix and nit findings of the last verifying run, the files Build declared outside the map and each scenario's tagged test", () => {
+    const runs = [run("implementing", 1), run("verifying", 1), run("implementing", 2), run("verifying", 2), run("e2e", 1)];
+    const soft = (title: string, severity: string) => ({ path: "src/a.ts", line: title.length, severity, title, body: "b", confidence: 0.9 });
+    const events = [
+      event("scenario.red", { scenario: "S1" }),
+      finished("implementing", 1, "passed", { answer: { outOfMap: [{ path: "docs/old.md", reason: "stale" }] } }),
+      finished("verifying", 1, "failed", { findings: [soft("old blocker", "blocker")] }),
+      finished("implementing", 2, "passed", { answer: { outOfMap: [{ path: "docs/x.md", reason: "the guide named the old flag" }] } }),
+      finished("verifying", 2, "passed", { findings: [soft("rename it", "nit"), soft("add a test", "should_fix")] }),
+      finished("e2e", 1, "passed", { verdict: "pass" }),
+    ];
+    const facts = prFactsOf(task, runs, events);
+    expect(facts.findings.map((f) => f.title).sort()).toEqual(["add a test", "rename it"]);
+    expect(facts.outOfMap).toEqual([{ path: "docs/x.md", reason: "the guide named the old flag" }]);
+    expect(facts.tests).toBeInstanceOf(Map);
+  });
+
+  it("is empty for a card with no rows", () => {
+    expect(prFactsOf(task, [], [])).toEqual({ findings: [], outOfMap: [], tests: new Map() });
+  });
+
+  it("maps a scenario to the file of its test from the Build Report", () => {
+    const runs = [run("implementing", 1, { outputCommit: "abc" })];
+    const events = [finished("implementing", 1, "passed", { testsStep: { scenarioTests: [{ scenario: "S1", file: "src/export.test.ts" }, { scenario: "S2" }] } })];
+    const report = buildReportOf(task, runs, events);
+    const facts = prFactsOf(task, runs, events);
+    expect(report?.tests.map((t) => t.scenario)).toEqual(["S1", "S2"]);
+    expect([...facts.tests]).toEqual([["S1", "src/export.test.ts"]]);
   });
 });

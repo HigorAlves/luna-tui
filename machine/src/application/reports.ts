@@ -1,7 +1,7 @@
 // The v2.2 Build Report and Verify Report, assembled from what the stages already leave: the stage runs,
 // the `stage.finished` details, the task's counters. Pure; the caller reads the rows. Reads only the
 // machine's own events, never anything a model or a ticket wrote beyond what a stage detail already holds.
-import { type FactoryConfig, type BuildProgress, type BuildReport, CoverageSummary, DiffSummary, Finding, type VerifyReport, credentialOwner, mergeDuplicateFindings, normaliseFinding } from "@hardness/contracts";
+import { type FactoryConfig, type BuildProgress, type BuildReport, CoverageSummary, DiffSummary, Finding, type VerifyReport, credentialOwner, mergeDuplicateFindings, normaliseFinding, severityOf } from "@hardness/contracts";
 
 import { safe } from "../domain/evidence-markdown.ts";
 import { budgetRowsOf, buildBudget } from "../domain/build-budget.ts";
@@ -109,6 +109,18 @@ const findingsOf = (detail: Record<string, unknown> | undefined): Finding[] =>
     const parsed = Finding.safeParse(f);
     return parsed.success ? [normaliseFinding(parsed.data)] : [];
   });
+
+/** What the draft PR's body is fed, from the rows of Build, Verify and the browser run (Deliver runs after all three): the open findings of the last verifying run that are not blockers
+ *  (a blocker fails the stage), the files Build declared outside the map and the file of each scenario's tagged test. */
+export function prFactsOf(task: TaskRow, runs: readonly StageRunRow[], events: readonly EventRow[]): { findings: Finding[]; outOfMap: Array<{ path: string; reason: string }>; tests: Map<string, string> } {
+  const build = buildReportOf(task, runs, events);
+  const last = finishes(events).filter((f) => f.stage === "verifying").at(-1);
+  return {
+    findings: findingsOf(last?.detail).filter((f) => !f.resolution && severityOf(f.severity) !== "blocker"),
+    outOfMap: build?.declaredFiles ?? [],
+    tests: new Map((build?.tests ?? []).flatMap((t) => (t.file ? [[t.scenario, t.file] as [string, string]] : []))),
+  };
+}
 
 /** What Verify hands to Evidence; null until a verifying run has happened. */
 export function verifyReportOf(task: TaskRow, runs: readonly StageRunRow[], events: readonly EventRow[]): VerifyReport | null {
