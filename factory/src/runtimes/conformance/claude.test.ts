@@ -23,7 +23,7 @@ it("the Claude runtime's transcript of the golden run", async () => {
       "· reading the code (1/3)",
       "→ Bash git push origin HEAD",
       "→ Bash pwd",
-      "→ mcp__luna__slice_init",
+      "→ mcp__luna__slice_init ·ea8d6129",
     ]);
     // The events behind it: every call with the guard's decision, then its result.
     expect(events.filter((e) => e.kind === "tool_call" || e.kind === "tool_result").map((e) => e.payload)).toEqual([
@@ -33,7 +33,7 @@ it("the Claude runtime's transcript of the golden run", async () => {
       { id: "toolu_2", tool: "Bash", ok: false },
       { id: "toolu_3", tool: "Bash", target: "pwd", allowed: true },
       { id: "toolu_3", tool: "Bash", ok: true },
-      { id: "toolu_4", tool: "mcp__luna__slice_init", target: "", allowed: true },
+      { id: "toolu_4", tool: "mcp__luna__slice_init", target: "", fingerprint: "ea8d6129", allowed: true },
       { id: "toolu_4", tool: "mcp__luna__slice_init", ok: true },
     ]);
     expect(events.map((e) => e.kind)).toEqual(["session", "text", "tool_call", "step", "tool_result", "tool_call", "tool_result", "tool_call", "tool_result", "tool_call", "ledger.init", "tool_result", "usage"]);
