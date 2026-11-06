@@ -1,7 +1,7 @@
 // What the retro's outputs become (RFC 0006 wave 13, decision 25): "applied" means recorded where it is used, never written into prompts or rules by itself.
 // Recalibration is a file the eval loop reads; a graph miss goes to the graph's misses file only when the card's own Build Report declared the same path; rules and
 // proposals reach the repository only as a draft PR after a person's `a` (the close step), with the proposals inert in its body.
-import { mkdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type { ShipContext } from "@hardness/contracts";
@@ -69,20 +69,34 @@ export interface RetroOutputs {
   declaredFiles?: (taskId: string) => Promise<string[]>;
 }
 
-/** A finding a person added at Ship, kept as data for the verifier's calibration: text through `safe()`, capped. It has no decision record to label. */
-export async function appendAddedFinding(stateDir: string, taskId: string, finding: { title: string; severity: string; path?: string | undefined; line?: number | undefined }): Promise<void> {
+/** The verify ground-truth file of a card: what a person added or dismissed at Ship, as data for the verifier's calibration. Text through `safe()`, capped; never on the event stream. */
+async function updateVerifyTruth(stateDir: string, taskId: string, change: (doc: { schema: 1; taskId: string; added: unknown[]; dismissed?: unknown[] }) => void): Promise<void> {
   const dir = join(stateDir, "ground-truth", "verify");
   await mkdir(dir, { recursive: true });
   const file = join(dir, `${taskId.replace(/[^A-Za-z0-9-]/g, "_")}.json`);
-  let doc: { schema: 1; taskId: string; added: unknown[] } = { schema: 1, taskId, added: [] };
+  let doc: { schema: 1; taskId: string; added: unknown[]; dismissed?: unknown[] } = { schema: 1, taskId, added: [] };
   try {
-    const { readFile } = await import("node:fs/promises");
     const old = JSON.parse(await readFile(file, "utf8")) as typeof doc;
     if (Array.isArray(old.added)) doc = old;
   } catch {
     // no file yet
   }
-  doc.added = [...doc.added, { title: cap(finding.title, 200), severity: finding.severity, ...(finding.path ? { path: cap(finding.path, 300) } : {}), ...(finding.line ? { line: finding.line } : {}), at: new Date().toISOString() }].slice(-50);
+  change(doc);
   await writeFile(`${file}.tmp`, JSON.stringify(doc, null, 2));
   await rename(`${file}.tmp`, file);
+}
+
+/** A finding a person added at Ship. It has no decision record to label. */
+export async function appendAddedFinding(stateDir: string, taskId: string, finding: { title: string; severity: string; path?: string | undefined; line?: number | undefined }): Promise<void> {
+  await updateVerifyTruth(stateDir, taskId, (doc) => {
+    doc.added = [...doc.added, { title: cap(finding.title, 200), severity: finding.severity, ...(finding.path ? { path: cap(finding.path, 300) } : {}), ...(finding.line ? { line: finding.line } : {}), at: new Date().toISOString() }].slice(-50);
+  });
+}
+
+/** A finding a person dismissed at Ship, with the reason they typed when they gave one. */
+export async function appendDismissedFinding(stateDir: string, taskId: string, dismissal: { id: string; reason?: string | undefined }): Promise<void> {
+  await updateVerifyTruth(stateDir, taskId, (doc) => {
+    const reason = dismissal.reason ? cap(dismissal.reason, NOTE_CAP) : "";
+    doc.dismissed = [...(Array.isArray(doc.dismissed) ? doc.dismissed : []), { id: cap(dismissal.id, 200), ...(reason ? { reason } : {}), at: new Date().toISOString() }].slice(-50);
+  });
 }

@@ -26,7 +26,7 @@ import { pickEngine } from "./engine.ts";
 import type { TaskUsage } from "./task-store.ts";
 import { type CloseDeps, closeTask } from "./close-task.ts";
 import { blockerSetKey } from "../domain/finding-sets.ts";
-import { type RetroOutputs, acceptedMisses, appendAddedFinding, retroTruthOf, writeRetroTruth } from "./retro-outputs.ts";
+import { type RetroOutputs, acceptedMisses, appendAddedFinding, appendDismissedFinding, retroTruthOf, writeRetroTruth } from "./retro-outputs.ts";
 import { EMITTABLE, type StageContext, type StageResult, type StageRunner } from "./ports.ts";
 import { shippedEvent } from "./ship-loop.ts";
 import { buildProgressOf, buildReportOf, prFactsOf, verifyReportOf } from "./reports.ts";
@@ -585,13 +585,14 @@ export class Pipeline {
     return found;
   }
 
-  /** A person dismisses a finding while the card waits at awaiting_ship: `finding.dismissed` carries the id only; when Verify kept a classification record for it, the truth is "nit" (`ship_dismissed`). */
-  async dismissFinding(id: string, findingId: string): Promise<void> {
+  /** A person dismisses a finding while the card waits at awaiting_ship: `finding.dismissed` carries the id only and the reason a person typed goes to the ground truth file (`safe()`, capped), never the stream; when Verify kept a classification record for it, the truth is "nit" (`ship_dismissed`). */
+  async dismissFinding(id: string, findingId: string, reason?: string): Promise<void> {
     const task = await this.get(id);
     if (task.state !== "awaiting_ship") throw new TransitionError(task, { type: "approved" });
     const reported = await this.reportedFindings(id);
     if (!reported.has(findingId)) throw new FindingNotFoundError(findingId);
     await this.log(id, "finding.dismissed", { id: findingId });
+    if (this.retroOutputs) await appendDismissedFinding(this.retroOutputs.stateDir, id, { id: findingId, reason });
     const recordId = reported.get(findingId);
     if (recordId) await this.truth?.learned({ pack: "finding_classify", recordId, label: { severity: { choice: "nit" } }, source: "ship_dismissed", taskId: id });
   }
