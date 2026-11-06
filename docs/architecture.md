@@ -101,6 +101,17 @@ The Slack side is the diagram's Conversation Machine. A message becomes one **ca
 - **Ground truth.** A hand-set kind or relation is a truth on the decision's record; a lowered knock-out labels its flag; a priority override is kept in the ground-truth file only. Each draft outcome writes `<stateDir>/ground-truth/conversation/<thread>-<draft>.json` (mode 0600); sent or edited labels `needs_reply`, ignored and expired label nothing.
 - **`slack_triage` runs only with `conversation.auto: on`** (a repository's `luna.yaml`): that repository's channels keep the old batch triage with its inline draft, the machine-owned thread and the unattended posts.
 
+### The limits of the Conversation Machine
+
+What the security pass checked and what it leaves to you, in plain words.
+
+- **What a draft may hold.** One address at most: the card's own PR link. Any other address, a bare `name.tld` included (Slack links it by itself), drops the draft, and a text a gate approves (a triage reply, questions) is held to the same rule; the thread's row says why in fixed words. A file name such as `README.md` stands only when a docs excerpt the machine supplied names that exact token.
+- **Who may post unattended.** Only a card whose repository set `conversation.auto: on` and is also the repository that claims the source channel, and only from a conversation that is not private. Any other card's updates are drafts.
+- **Where a file's say ends.** A merged `luna.yaml` change can opt in any channel the operator's token reads and turn `auto` on for that repository. A DM or group DM id in a `luna.yaml` is dropped with a warning: a DM is opted in only from the board.
+- **A tap settles the draft its person saw.** The board sends the draft's id and hash with the reply; a reply without them, or with another draft's, is posted as typed and settles and labels nothing. A draft left `posting` for over five minutes becomes `unknown` and is never offered or posted again, since it may have gone out.
+- **What stays visible.** In a claimed channel a ticket-sourced card's description reaches the decision prompt and its title can appear in a draft. A private repository's docs can be quoted into a public channel's draft, with the operator's reading as the only safeguard. Private text reaches the model provider and telemetry when the machine is on. E-mail addresses and phone numbers stay unmasked in the store and on the board.
+- **What a stranger can cost.** In an opted-in channel a stranger can cause one assess, one relation and one draft run per thread per debounce window. Superseded drafts are not pruned.
+
 ### Defaults that changed
 
 - Reading is opt-in per channel; set `MACHINE_SLACK_SCOPE=all` for the old reading.

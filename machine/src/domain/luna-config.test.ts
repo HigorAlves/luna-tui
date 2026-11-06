@@ -51,6 +51,17 @@ freeze:
     reason: holiday freeze
 `;
 
+describe("conversation.channels in a luna.yaml", () => {
+  it("opts in channels (C, G) only: a DM or group DM id still parses, is dropped with a warning, and is opted in from the board", () => {
+    const warnings: string[] = [];
+    const policy = parseLunaConfig("conversation:\n  channels: [C0123ABC, D0123ABC, G0123ABC]\n", (m) => warnings.push(m));
+    expect(policy.factory.conversation.channels).toEqual(["C0123ABC", "G0123ABC"]);
+    expect(warnings).toEqual([expect.stringContaining("conversation.channels")]);
+    expect(warnings[0]).toContain("D0123ABC");
+    expect(parseLunaConfig("conversation:\n  channels: [C0123ABC]\n").factory.conversation.channels).toEqual(["C0123ABC"]);
+  });
+});
+
 describe("parseLunaConfig", () => {
   it("reads every section into the policy, so one file says how a repo runs", () => {
     expect(parseLunaConfig(full)).toEqual({

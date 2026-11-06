@@ -34,6 +34,14 @@ function wire(options: { slack?: boolean; enabled?: boolean; slackPort?: ReturnT
     pipeline,
     enabled: options.enabled ?? true,
     autoOf: () => true,
+    // A Slack-sourced card posts unattended only from a public conversation its own repository claims.
+    claimedBy: () => "/r/a",
+    store: {
+      itemByTask: async (taskId: string) => {
+        const from = (await pipeline.get(taskId)).source as { channel: string; ts: string };
+        return { id: `${from.channel}:${from.ts}`, slackTs: from.ts, doneAt: null, channel: { id: from.channel, name: "eng", kind: "channel" } } as never;
+      },
+      item: async () => null, save: async () => {} },
     ...(options.slackPort !== undefined ? { slackPort: () => options.slackPort! } : {}),
     github: fakeGitHub({
       commentOnIssue: async (repo, number, body) => {

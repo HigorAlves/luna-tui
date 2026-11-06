@@ -53,6 +53,17 @@ export function parseLunaConfig(text: string, warn: Warn = quiet): Policy {
   return policyOf(validateLunaConfig(raw), warn);
 }
 
+/** The `conversation` block as policy: a file opts in channels only (`C…`, and `G…` for a private one). A DM or group DM id is dropped with a warning: a repository's file never makes the machine read a DM. */
+function conversationOf(conversation: LunaConfig["conversation"], warn: Warn): LunaConfig["conversation"] {
+  if (!conversation?.channels) return conversation;
+  const channels = conversation.channels.filter((id) => {
+    if (!id.startsWith("D")) return true;
+    warn(`conversation.channels: ${id} is a direct message; dropped (a DM is opted in from the board)`);
+    return false;
+  });
+  return { ...conversation, channels };
+}
+
 const DEFAULT_INTAKE_EVERY_SECS = 300;
 
 const isState = (key: string): boolean => TaskState.safeParse(key).success;
@@ -139,6 +150,6 @@ export function policyOf(config: LunaConfig, warn: Warn = quiet): Policy {
     evidenceRetentionDays: evidence?.retention_days ?? null,
     autoMerge: policy.auto_merge ?? DEFAULT_POLICY.autoMerge,
     freeze: freeze.map((f) => ({ ...f })),
-    factory: factoryConfigOf({ backlog: config.backlog, tickets: config.tickets, conversation: config.conversation, dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, ship: config.ship }),
+    factory: factoryConfigOf({ backlog: config.backlog, tickets: config.tickets, conversation: conversationOf(config.conversation, warn), dedup: config.dedup, triage: config.triage, scoring: config.scoring, graph: config.graph, fast_lane: config.fast_lane, plan: config.plan, size: config.size, build: config.build, sandbox: config.sandbox, verify: config.verify, evidence: config.evidence, ship: config.ship }),
   };
 }

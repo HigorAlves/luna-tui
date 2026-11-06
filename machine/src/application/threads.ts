@@ -8,7 +8,9 @@ import { basename } from "node:path";
 
 import { safe } from "../domain/evidence-markdown.ts";
 import { archivedNotice } from "../domain/notices.ts";
+import { holdsForeignAddress } from "../domain/address-rule.ts";
 import { carriesSecret, postable } from "../domain/postable.ts";
+import { ADDRESS_REFUSED } from "./conversation-draft.ts";
 import { fromNotch } from "../domain/jira-link.ts";
 import { type GitHub, messageOf } from "./github.ts";
 import type { EventRow, TaskRow } from "../domain/task.ts";
@@ -45,6 +47,8 @@ export interface ThreadRepliesOptions {
   store?: Pick<SlackStore, "itemByTask" | "item" | "save">;
   /** Whether the card's repository set `conversation.auto: on`: only then does the machine post by itself. Absent: off, failing closed. */
   autoOf?: (task: TaskRow) => boolean | Promise<boolean>;
+  /** The repository that claims a channel (`ChannelClaims.repoOf`). A Slack-sourced card's unattended posts need the claimant to be the card's own repository; absent: none does, failing closed. */
+  claimedBy?: (channel: string) => string | null;
 }
 
 /** What a gate asks of you, as the reply says it. */
@@ -129,8 +133,28 @@ export class ThreadReplies {
     return port ? new SlackSender(port) : null;
   }
 
+  /** The address rule for text a model wrote and a gate approved (a triage reply, questions): it holds no address, since none was given. When it does, nothing is posted or drafted and the thread's row says why in fixed words. */
+  private async addressOk(task: TaskRow, text: string): Promise<boolean> {
+    if (!holdsForeignAddress(text, { given: [] })) return true;
+    const item = this.options.store ? await this.options.store.itemByTask(task.id) : null;
+    if (item?.triage) await this.options.store!.save([{ ...item, triage: { ...item.triage, why: ADDRESS_REFUSED } }]);
+    return false;
+  }
+
+  /**
+   * Whether the machine may post for this card without a tap. The card's repository must have turned `conversation.auto` on and, for a card that came
+   * from Slack, be the very repository that claims the source channel, and the source conversation must not be private; when any of it cannot be
+   * decided the answer is no, and the card's updates are drafts as with `auto` off.
+   */
   private async auto(task: TaskRow): Promise<boolean> {
-    return (await this.options.autoOf?.(task)) ?? false;
+    if (!((await this.options.autoOf?.(task)) ?? false)) return false;
+    const source = task.source;
+    if (source?.kind !== "slack") return true;
+    const claimant = this.options.claimedBy?.(source.channel) ?? null;
+    if (!claimant || claimant !== task.repoPath) return false;
+    const item = this.options.store ? await this.options.store.itemByTask(task.id) : null;
+    if (!item) return false;
+    return (item.conversation?.private ?? item.channel.kind !== "channel") === false;
   }
 
   /**
@@ -142,6 +166,7 @@ export class ThreadReplies {
     const { drafts, store } = this.options;
     const body = postable(text);
     if (!body || secret || carriesSecret(text)) return;
+    if (kind === "questions" && !(await this.addressOk(task, body))) return;
     const item = given ?? (drafts && store ? await store.itemByTask(task.id) : null);
     if (!drafts || !item) {
       await this.options.pipeline.record(task.id, "conversation.undeliverable", { kind });
@@ -171,6 +196,7 @@ export class ThreadReplies {
     const source = task.source;
     if (source?.kind === "github") return this.comment(task, body);
     if (source?.kind !== "slack") return;
+    if (!(await this.addressOk(task, body))) return;
     const auth: Authority | null = tapOfEvent(event) ?? standingOf({ auto: await this.auto(task) });
     if (!auth) return this.outbound(task, "questions", body);
     const sender = this.sender();

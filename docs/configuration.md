@@ -180,7 +180,7 @@ Each `services` entry runs as its own container beside every stage that runs the
 
 ```yaml
 conversation:
-  channels: [C0123ABCD]   # Slack channel ids this repository claims: opted in, and the repository's docs and cards answer them
+  channels: [C0123ABCD]   # Slack channel ids (C, or G for a private channel) this repository claims; a DM id is dropped with a warning: opt a DM in from the board
   auto: off               # on: the old slack_triage path, the machine-owned thread and unattended posts for this repository
   debounce_seconds: 90    # a thread waits this long after its last message
   draft_expiry_hours: 24  # a waiting draft expires after this long

@@ -526,6 +526,7 @@ replies = new ThreadReplies({
   drafts: conversationDrafts,
   store: slackStore,
   autoOf: async (task) => (task.repoPath ? (await policies.for(task.repoPath)).factory.conversation.auto === "on" : false),
+  claimedBy: (channel) => channelClaims.repoOf(channel),
 });
 const conversationMachine = (): ConversationMachine => {
   if (!packRuns) throw new Error("agents are off: the conversation machine has no model to ask");
