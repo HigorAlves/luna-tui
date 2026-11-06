@@ -113,6 +113,8 @@ export const GateLesson = z.object({
   kind: LessonCandidate.shape.kind,
   files: z.array(z.string()).max(10),
   reason: z.string().max(300),
+  /** The `memory_worth` decision record that kept it: the person's answer is its ground truth. */
+  record: z.string().max(100).nullable().optional(),
 });
 export type GateLesson = z.infer<typeof GateLesson>;
 
@@ -124,6 +126,9 @@ export const GateRetirement = z.object({
   /** The lesson that contradicts it. */
   lesson: z.string().min(1).max(40),
   certainty: z.enum(["confident", "unsure"]),
+  /** The `memory_conflict` record and the slot it judged: the person's answer is that slot's ground truth. */
+  record: z.string().max(100).nullable().optional(),
+  slot: z.number().int().min(1).max(5).optional(),
 });
 export type GateRetirement = z.infer<typeof GateRetirement>;
 
