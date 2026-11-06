@@ -409,6 +409,29 @@ describe("the triage record: a correction and its ground truth", () => {
     expect((await p.editRecord(id, { riskPrelim: "low" })).record).toMatchObject({ riskPrelim: "low", risk: "medium" });
   });
 
+  it("a risk raised to High by a correction at the plan gate holds the plan for two names and drops the first approval", async () => {
+    const { p, id } = await setup();
+    const store = new PgTaskStore(db);
+    const gate = (await p.approvals(id)).find((a) => a.decision === null)!;
+    await store.withTaskLock(id, async (_t, tx) => tx.updateApprovalRequested(gate, { ...gate.requested, risk: { level: "low", scores: {} }, approvers: ["ana"] }));
+    await p.editRecord(id, { riskPrelim: "high" });
+    const open = (await p.approvals(id)).find((a) => a.decision === null)!;
+    expect(open.requested).toMatchObject({ risk: { level: "high" }, approvers: [] });
+    await expect(p.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
+    expect((await p.decide(id, "approved", undefined, undefined, { approver: "bo" })).state).toBe("awaiting_approval");
+    expect((await p.decide(id, "approved", undefined, undefined, { approver: "cy" })).state).not.toBe("awaiting_approval");
+  });
+
+  it("reads the card's own record risk at the decision too: a gate written before the correction still needs two names", async () => {
+    const { p, id } = await setup();
+    const store = new PgTaskStore(db);
+    const gate = (await p.approvals(id)).find((a) => a.decision === null)!;
+    await store.withTaskLock(id, async (_t, tx) => tx.updateApprovalRequested(gate, { ...gate.requested, risk: { level: "low", scores: {} } }));
+    const task = await p.get(id);
+    await store.updateTask(id, { record: { ...task.record!, risk: "high" } });
+    await expect(p.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
+  });
+
   it("corrects only at triage's questions and at the plan gate", async () => {
     const { p, id } = await setup();
     const record = (await p.get(id)).record;

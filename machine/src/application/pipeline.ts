@@ -2,7 +2,7 @@
 // transaction that locks the task row, so two requests cannot move one task at once, and
 // a rejected event leaves no trace. Stages run in a background loop per task, so requests
 // return as soon as the transition is stored.
-import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type TriageRecord, credentialOwner, stronger } from "@hardness/contracts";
+import { type ArchiveReason, type BuildReport, type BudgetAlert, type CredentialOwner, EscalationReason, type EngineId, type Finding, type JiraLink, PACKS, type PackId, RUNNING, TriageOutcome, WAITING_ON_USER, type Slots, type StageEngines, type StageRunCase, type Task, type TaskClassification, type TaskReports, type TaskRoute, type TaskSource, type TaskState, type TestCase, type VerifyReport, type EvidencePack, type Risk, type TriageRecord, credentialOwner, maxRisk, stronger } from "@hardness/contracts";
 import type { DataSource } from "typeorm";
 
 import type { RestartPolicy } from "../config.ts";
@@ -589,6 +589,13 @@ export class Pipeline {
       next.decisionBy = "person";
       next.editedFields = [...new Set([...(before.editedFields ?? []), ...changed])];
       await tx.updateTask(id, { record: next as TriageRecord });
+      // A risk raised here reaches the open plan gate in the same transaction: its grade rises, and approvals given for the lower one are void.
+      const gate = await tx.findOpenApproval(id);
+      const gateRisk = gate?.requested.risk as { level?: unknown } | undefined;
+      if (gate && gate.kind === "awaiting_approval" && gate.requested.outcome === undefined && gateRisk && typeof next.risk === "string") {
+        const level = maxRisk(next.risk as Risk, (typeof gateRisk.level === "string" ? gateRisk.level : "none") as Risk);
+        if (level !== gateRisk.level) await tx.updateApprovalRequested(gate, { ...gate.requested, risk: { ...gateRisk, level }, ...(Array.isArray(gate.requested.approvers) ? { approvers: [] } : {}) });
+      }
       return { record: next as TriageRecord, classification: task.classification, fields: changed };
     });
     if (fields.length > 0) {
@@ -705,7 +712,9 @@ export class Pipeline {
     const outcome = open?.requested.outcome;
     // A plan of High risk needs two distinct names: the first is kept on the gate, the second closes it.
     let answered = response;
-    const risk = (open?.requested.risk as { level?: unknown } | undefined)?.level;
+    // The higher of the gate's grade and the card's own: a record corrected after the gate was written still counts.
+    const gateLevel = (open?.requested.risk as { level?: unknown } | undefined)?.level;
+    const risk = open && outcome === undefined ? maxRisk((typeof gateLevel === "string" ? gateLevel : "none") as Risk, (task.record?.risk ?? "none") as Risk) : gateLevel;
     if (decision === "approved" && open && outcome === undefined && risk === "high") {
       const prior = await this.store.withTaskLock(id, async (_task, tx) => {
         const fresh = await tx.findOpenApproval(id);
