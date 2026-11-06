@@ -7,7 +7,7 @@ import { PgTicketStore } from "../adapters/persistence/ticket-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import { Pipeline } from "./pipeline.ts";
 import { StubStages } from "./stages/stubs.ts";
-import { TicketMachine } from "./ticket-machine.ts";
+import { TicketMachine, cardOnce } from "./ticket-machine.ts";
 
 let db: DataSource;
 beforeAll(async () => {
@@ -26,12 +26,12 @@ const f = { value: false, p: 0.05 };
 const y = { value: true, p: 0.95 };
 const base = { description: "d", type: "Task", status: "open", priority: null, reporter: { id: "u" }, assignee: null, labels: [], components: [], links: { blocks: [], duplicates: [], epic: null }, comments: [], attachments: [], sprint: null, dueAt: null, createdAt: null, updatedAt: "t" };
 
-function wire() {
+function wire(over: { store?: PgTicketStore } = {}) {
   const pipeline = new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true, jiraSite: "https://acme.atlassian.net" });
   const machine = new TicketMachine({
-    store: new PgTicketStore(db),
+    store: over.store ?? new PgTicketStore(db),
     port: () => ({ listInScope: async () => [], create: async () => { throw new Error("no create"); }, read: async () => { throw new Error("no"); }, comment: async () => {}, transition: async () => {}, link: async () => {} }),
-    candidates: async () => [], config: async () => FACTORY_DEFAULTS, createCard: (input) => pipeline.createTask(input),
+    candidates: async () => [], config: async () => FACTORY_DEFAULTS, createCard: (input, key) => cardOnce(pipeline, input, key),
     validity: { decide: async () => ({ goal: y, criteria: y, scope: y, duplicate: { choice: "none", confidence: 0.9 }, project: y, reporter: y }) },
     assess: { decide: async () => Object.fromEntries([...["who", "what", "impact", "time", "demand", "files", "unknowns", "cross_team", "new_infra", "dependents", "traffic", "data_sensitivity", "reversibility", "regression", "compounding"].map((k) => [k, s]), ...["production_down", "data_loss", "security", "incident", "compliance_deadline"].map((k) => [k, f])]) as never },
     recommend: { decide: async () => ({ action: { choice: "schedule", confidence: 0.9 } }) }, reply: { write: async () => ({ reply: "no", confidence: 1 }) },
@@ -54,5 +54,27 @@ describe("card()", () => {
     await machine.ingest({ ...base, tool: "jira", id: "PAY-12", key: "PAY-12", title: "Refund fails, like FIN-1234", permalink: "https://acme.atlassian.net/browse/PAY-12" } as never, { repoPath: null, question: false });
     const task = await pipeline.get((await machine.card("PAY-12")).id);
     expect(task.jira?.key).toBe("PAY-12");
+  });
+
+  it("a card made and then not linked (the link write threw) is the card a retry returns, even after the claim is retaken: one card, linked", async () => {
+    const store = new PgTicketStore(db);
+    const { pipeline, machine } = wire({ store });
+    await machine.ingest({ ...base, tool: "jira", id: "PAY-12", key: "PAY-12", title: "Refund fails", permalink: "https://acme.atlassian.net/browse/PAY-12" } as never, { repoPath: null, question: false });
+    const real = store.setMachine.bind(store);
+    let fail = true;
+    store.setMachine = async (key, change) => {
+      if (fail && change.cardId) { fail = false; throw new Error("crash before the link"); }
+      return real(key, change);
+    };
+    await expect(machine.card("PAY-12")).rejects.toThrow("crash before the link");
+    expect((await pipeline.list()).filter((t) => t.source?.kind === "jira")).toHaveLength(1);
+    // The claim is still held (the process died): it is retaken after its time, and the tap comes again.
+    await db.query("update tickets set card_claimed_at = now() - interval '11 minutes' where key = 'PAY-12'");
+    const card = await machine.card("PAY-12");
+    const cards = (await pipeline.list()).filter((t) => t.source?.kind === "jira");
+    expect(cards).toHaveLength(1);
+    expect(card.id).toBe(cards[0]!.id);
+    expect((await store.get("PAY-12"))!.cardId).toBe(card.id);
+    await expect(machine.card("PAY-12")).rejects.toThrow(/already has a card/);
   });
 });

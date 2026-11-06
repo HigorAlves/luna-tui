@@ -82,7 +82,7 @@ import { Backlog } from "./application/backlog.ts";
 import { PgTicketStore } from "./adapters/persistence/ticket-store.ts";
 import { GitHubTickets } from "./adapters/tickets/github-tickets.ts";
 import { JiraTickets } from "./adapters/tickets/jira-tickets.ts";
-import { TicketMachine } from "./application/ticket-machine.ts";
+import { TicketMachine, cardOnce } from "./application/ticket-machine.ts";
 import { TicketEvents } from "./application/ticket-events.ts";
 import { INTAKE_CLIENT } from "./application/classify.ts";
 import type { DedupAnswer } from "./application/intake-dedup.ts";
@@ -106,7 +106,7 @@ import { createGitHub } from "./adapters/github/octokit.ts";
 import { taskDiff } from "./adapters/git/diff.ts";
 import { noTokenGitHub } from "./application/github.ts";
 import { realDeliverRunner } from "./application/stages/deliver.ts";
-import { stackFactsOf } from "./application/stack.ts";
+import { currentStackFacts } from "./application/stack.ts";
 import { similarCards } from "./application/size-estimate.ts";
 import { shipRunner } from "./application/stages/ship.ts";
 import { StubStages } from "./application/stages/stubs.ts";
@@ -271,7 +271,7 @@ const stackDeps = {
   clearBase: (id: string) => pipeline.clearBase(id),
   hasChildren: async (id: string) => (await pipeline.stackedOn(id)).length > 0,
   facts: (slug: string, task: Parameters<typeof pipeline.baseOf>[0]) =>
-    stackFactsOf(
+    currentStackFacts(
       {
         github,
         getTask: (id) => pipeline.get(id).catch(() => null),
@@ -357,7 +357,9 @@ const realVerifyRunner = verifyRunner({
     const env = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.env as EnvRecord | undefined;
     return env && typeof env.hash === "string" ? env : null;
   },
-  envOf: async (path, commit, repoPath) => envOf({ image: await imageId(agentDeps && repoPath ? await agentDeps.repoImageOf(repoPath) : config.runnerImage), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
+  imageOf: agentDeps ? (repoPath, signal) => agentDeps.repoImageOf(repoPath, signal) : async () => config.runnerImage,
+  // The image Verify chose once (the sandboxes run in it) is the one compared; only a caller that chose none resolves the repository's image here.
+  envOf: async (path, commit, repoPath, image) => envOf({ image: await imageId(image ?? (agentDeps && repoPath ? await agentDeps.repoImageOf(repoPath) : config.runnerImage)), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
   graph,
   stateDir: config.stateDir,
   get decide() {
@@ -589,6 +591,8 @@ const slackInbox = new SlackInbox({
     return !repo || repoKeepsTruth(repo);
   }),
   drafts: conversationDrafts,
+  // The one address a draft about a card may hold whole, read where the drafter reads it.
+  cardAddress: (id) => pipeline.prLinkOf(id),
   // The reply draft: one `conversation_reply` run over the card's state, its evidence and the docs, all as data. Built lazily: `packRuns` is below.
   drafter: new ConversationDrafter({
     card: async (id) => {
@@ -702,7 +706,7 @@ if (packRuns) planDecisions.split.decompose = async (split) => (await ownCalls(p
 if (packRuns) planDecisions.split.check = async (split) => tagged(await ownCalls(packRuns).run({ pack: "split_check", context: { split }, stage: "plan" }, "plan"));
 // The size prompt's similar cards: closed cards with a counted diff that the card's own audience may see, nearest first.
 planDecisions.size.similar = async (task, card) => similarCards({ ...card, repo: task.repoPath }, await pipeline.closedSized(task), { now: new Date(), lookbackDays: (await policies.for(task.repoPath)).factory.dedup.lookback_days });
-planDecisions.split.depthOf = (task) => splitDepth((id) => pipeline.get(id).catch(() => null), task);
+planDecisions.split.depthOf = (task) => splitDepth((id) => pipeline.get(id).catch(() => null), task, () => ticketMachine.originHops(task));
 planDecisions.split.via = (task) => pipeline.splitVia(task);
 if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await ownCalls(packRuns).run({ pack, context: { check }, stage: "verify" }, "verify"));
 if (packRuns) evidenceDecisions.decide = async (evidence) => tagged(await ownCalls(packRuns).run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence"));
@@ -711,7 +715,7 @@ buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
 if (packRuns) buildDecisions.decide = async (pack, check) => tagged(await ownCalls(packRuns).run({ pack, context: { check }, stage: "build" }, "build"));
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 /** The shared backlog; the duplicate check reads and bumps it through the pipeline's `dedup` port. */
-const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days, onDecline: (row) => ticketMachine.declineFromBacklog(row.sources) });
+const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days, onDecline: (row) => ticketMachine.declineFromBacklog(row.sources), stackOf: (sources) => ticketMachine.stackOfSources(sources) });
 /** The Ticket Machine: Jira and GitHub tickets in scope are read, checked, assessed and drafted, then held for a person's tap. Every model call is a pack through `packRuns`; the port's writes are reached only from the tap routes. */
 const ticketPack = async (pack: "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply", context: TicketContext): Promise<unknown> => {
   if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");
@@ -725,7 +729,7 @@ const ticketMachine = new TicketMachine({
   candidates: (ticket, repoPath) => pipeline.ticketCandidates(repoPath, ticket.tool === "github" ? { kind: "github", repo: ticket.key.split("#")[0]!, number: Number(ticket.key.split("#")[1]), url: ticket.permalink } : { kind: "jira", key: ticket.key, url: ticket.permalink, issueType: ticket.type }),
   config: async (repoPath) => (await policies.for(repoPath)).factory,
   locate: async (repoPath, text) => (repoPath ? ((await graph.locate(repoPath, text))?.files ?? []).map((f: { path?: string } | string) => (typeof f === "string" ? f : (f.path ?? ""))).filter(Boolean) : []),
-  createCard: (input) => pipeline.createTask(input),
+  createCard: (input, key) => cardOnce(pipeline, input, key),
   validity: { decide: async (c) => (await ticketPack("ticket_validity", c)) as never },
   assess: { decide: async (c) => (await ticketPack("ticket_assess", c)) as never },
   recommend: { decide: async (c) => (await ticketPack("ticket_recommend", c)) as never },

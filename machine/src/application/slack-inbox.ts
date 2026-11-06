@@ -32,7 +32,8 @@ import { stats } from "../adapters/http/metrics.ts";
 import { inConversationScope, optedIn, type SlackScope } from "../domain/conversation-scope.ts";
 import { candidateOf } from "../domain/conversation-candidate.ts";
 import { humansActive } from "../domain/conversation-quiet.ts";
-import { carriesSecret, postable } from "../domain/postable.ts";
+import { domainTokens } from "../domain/address-rule.ts";
+import { carriesSecret, postableDraft } from "../domain/postable.ts";
 import { applyEdit, canonicalMessageOf, emptyConversation, foldMessage, latestText } from "../domain/conversation.ts";
 import { maskPii, screen } from "../domain/secrets-check.ts";
 import {
@@ -165,6 +166,8 @@ export interface SlackInboxOptions {
   truth?: Pick<ConversationTruth, "override" | "relation" | "outcome">;
   /** The drafts that wait for a tap, one per thread. */
   drafts?: ConversationDrafts;
+  /** The card's own PR link as the machine supplies it (the address a draft about the card may hold whole); absent or unreadable, no address is allowed. */
+  cardAddress?: (cardId: string) => Promise<string | null>;
   /** The one door to Slack; built from `slack` when absent. */
   sender?: SlackSender;
   /** `MACHINE_SLACK_DIGEST_AT` is set: the daily digest may be posted to the operator's own DM. */
@@ -919,7 +922,8 @@ export class SlackInbox implements SlackInboxPort {
         else if (!relation.applied) {
           try {
             if (previous) await this.options.actions.undo(previous, relation);
-            const done = await this.options.actions.apply(fresh, relation);
+            // The action reads the classification it was assessed with (a backlog item is created from its scores), not the one the row held before this run.
+            const done = await this.options.actions.apply({ ...fresh, conversation: { ...conversation, classification: kept, relation, shortlist: out.shortlist } }, relation);
             relation = done.relation;
             if (done.taskId) linked = { ...linked, taskId: done.taskId };
             if (done.priority && triage && !triage.overridden) triage = { ...triage, priority: done.priority };
@@ -1149,10 +1153,15 @@ export class SlackInbox implements SlackInboxPort {
 
   async reply(id: string, text: string, tap: Tap, nudge = false, seen?: { id: string; hash: string }): Promise<SlackItem> {
     let row = await this.get(id);
-    // Nothing that looks like a secret is sent, typed or drafted; a draft sent as drafted must still equal its own `postable()`.
+    // Nothing that looks like a secret is sent, typed or drafted; a draft sent as drafted must still equal its own `postableDraft()`.
     const waiting = this.options.drafts ? await this.options.drafts.waiting(row.id) : null;
     if (carriesSecret(text)) throw new SlackRefusedError("the text carries something shaped like a secret, so it was not sent");
-    if (waiting && text === waiting.text && postable(text) !== text) throw new SlackRefusedError("the draft is not safe to send as it stands");
+    // The same rule that wrote the draft (`postableDraft`): the card's own PR link, as the machine supplies it now, may stand whole; any other address makes it unsafe.
+    // A file name already in the stored text was screened when the draft was written (against the docs the machine supplied), so it is read as such here.
+    if (waiting && text === waiting.text) {
+      const given = waiting.cardId && this.options.cardAddress ? await this.options.cardAddress(waiting.cardId).catch(() => null) : null;
+      if (postableDraft(text, given ? [given] : [], domainTokens(text)) !== text) throw new SlackRefusedError("the draft is not safe to send as it stands");
+    }
     // The tap's claim comes before Slack is called: the waiting draft is `posting` under the thread's lock with the hash of the text the person saw,
     // so a second tap in flight finds none to claim and posts nothing.
     const drafts = this.options.drafts;

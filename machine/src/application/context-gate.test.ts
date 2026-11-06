@@ -4,6 +4,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { freshTestDatabase } from "../test/database.ts";
 import type { ContextDeps } from "./context-setup.ts";
+import { cardOf } from "../domain/card-fields.ts";
 import { Pipeline } from "./pipeline.ts";
 import { StubStages } from "./stages/stubs.ts";
 
@@ -69,6 +70,16 @@ describe("the context gate", () => {
     expect(moved.state).not.toBe("awaiting_setup");
     expect(moved.repoPath).toBe("/repos/a");
     expect((await pipeline.events(task.id)).filter((e) => e.kind === "task.questions")).toHaveLength(1);
+  });
+
+  it("lets a reporter with no channel be given one, so the card can leave the gate", async () => {
+    const pipeline = make();
+    const task = await pipeline.createTask({ title: "T", description: longText, repoPath: "/repos/a", source: slack, reporter: { id: "alice" } });
+    await pipeline.start(task.id);
+    expect((await pipeline.approvals(task.id)).find((a) => a.decision === null)?.requested).toMatchObject({ kind: "context", missing: ["reporter"] });
+    const moved = await pipeline.provideContext(task.id, { reporterChannel: "slack \nC1 <@x>" });
+    expect(moved.state).not.toBe("awaiting_setup");
+    expect(cardOf(moved).reporter).toEqual({ id: "alice", channel: "slackC1@x" });
   });
 
   it("starts a complete card as before", async () => {

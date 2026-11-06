@@ -7,6 +7,7 @@ import { type BacklogAddInput, SplitChild, type CanonicalTicket, type FactoryCon
 
 import { z } from "zod";
 
+import { IdempotencyConflictError } from "../domain/task.ts";
 import { carriesSecret, postable } from "../domain/postable.ts";
 import { decompositionLoop } from "./stages/decompose.ts";
 import type { Candidate } from "../domain/similarity.ts";
@@ -73,8 +74,8 @@ export interface TicketMachineDeps {
   candidates(ticket: CanonicalTicket, repoPath: string | null): Promise<Candidate[]>;
   config(repoPath: string | null): Promise<FactoryConfig>;
   locate?(repoPath: string | null, text: string): Promise<string[]>;
-  /** Makes a card through `create_card`. */
-  createCard(input: NewTask): Promise<{ id: string }>;
+  /** Makes a card through `create_card`, once per `key`: a second call with the key answers the card the first made (`cardOnce`). */
+  createCard(input: NewTask, key: string): Promise<{ id: string }>;
   validity: ValidityDeps;
   assess: Pick<AssessDeps, "decide">;
   /**
@@ -105,6 +106,19 @@ function splitReason(decision: SizeDecision, limits: ReturnType<typeof sizeLimit
   return null;
 }
 
+/** The card for `key`, made once: a retry after a crash (or a retaken claim) answers the card already made, even when the order's body changed since (a reassessment moved a hint). */
+export async function cardOnce(pipeline: { createTaskOnce(order: NewTask & Record<string, unknown>, key: string): Promise<{ task: { id: string } }> }, input: NewTask, key: string): Promise<{ id: string }> {
+  try {
+    return { id: (await pipeline.createTaskOnce(input as NewTask & Record<string, unknown>, key)).task.id };
+  } catch (error) {
+    if (error instanceof IdempotencyConflictError) return { id: error.taskId };
+    throw error;
+  }
+}
+
+/** How long a claim on a ticket's card creation holds before a retry may take it (a machine that died between the card and the link; the card's own key then returns the card already made). */
+const CARD_CLAIM_MS = 10 * 60_000;
+
 const sourceOf = (t: CanonicalTicket): TaskSource => {
   const gh = GITHUB_KEY.exec(t.key);
   if (t.tool === "github" && gh) return { kind: "github", repo: `${gh[1]}/${gh[2]}`, number: Number(gh[3]), url: t.permalink };
@@ -133,7 +147,13 @@ export class TicketMachine implements TicketIntake {
       // Under the row lock: a draft being posted or already posted is never rewritten, and a new draft with the same id is dropped.
       await store.updateDrafts(ticket.key, (current) => {
         const keep = (current as unknown as Draft[]).filter((d) => d.status === "posting" || d.status === "posted");
-        return [...keep, ...drafts.filter((f) => !keep.some((k) => k.id === f.id))] as unknown as Record<string, unknown>[];
+        const added: Draft[] = [];
+        for (const f of drafts) {
+          if (!keep.some((k) => k.id === f.id)) added.push(f);
+          // An assessment after one was posted is new information: a draft of its own, unless it says what the posted one said.
+          else if (f.kind === "assessment" && !keep.some((k) => k.kind === "assessment" && k.text === f.text)) added.push({ ...f, id: `${f.id}:${keep.filter((k) => k.kind === "assessment").length + 1}` });
+        }
+        return [...keep, ...added] as unknown as Record<string, unknown>[];
       });
       // The machine's own links (an origin, the siblings it waits for, a floor) stay; only the repository link is replaced.
       const kept = ((await store.get(ticket.key))?.machineLinks ?? []).filter((l) => l.kind !== "repo");
@@ -232,7 +252,16 @@ export class TicketMachine implements TicketIntake {
     const last = [...row.assessments].reverse().find((a) => a.outcome === "workable");
     if (!last || !this.deps.backlog) throw new TicketRefusal("only a ticket assessed as workable goes to the backlog");
     const repo = row.machineLinks.find((l) => l.kind === "repo")?.target ?? null;
-    const placed = await this.deps.backlog.upsertFromSource(backlogInput(row.canonical, repo, last as unknown as AssessmentRecord), { createIfMissing: true });
+    // A ticket that waits on others (a split's sibling) waits on what each became: its card, or its backlog item. One that is neither yet is not scheduled first.
+    const dependsOn: string[] = [];
+    for (const target of row.machineLinks.filter((l) => l.kind === "depends_on").map((l) => l.target)) {
+      const other = await this.deps.store.get(target);
+      const otherLast = other ? [...other.assessments].reverse().find((a) => a.outcome === "workable") : undefined;
+      const id = other?.cardId ?? (other && otherLast ? (await this.deps.backlog.upsertFromSource(backlogInput(other.canonical, other.machineLinks.find((l) => l.kind === "repo")?.target ?? null, otherLast as unknown as AssessmentRecord), { createIfMissing: false }))?.id : undefined);
+      if (!id) throw new TicketRefusal(`${target} is not in the backlog or a card yet: schedule it first`);
+      dependsOn.push(id);
+    }
+    const placed = await this.deps.backlog.upsertFromSource(backlogInput(row.canonical, repo, last as unknown as AssessmentRecord, dependsOn), { createIfMissing: true });
     if (!placed) throw new TicketRefusal("the backlog did not take the ticket");
     await this.deps.store.setMachine(key, { status: "scheduled" });
     await this.acknowledge(key);
@@ -316,7 +345,11 @@ export class TicketMachine implements TicketIntake {
       cardIds.push(other.cardId);
     }
     const floor = row.machineLinks.find((l) => l.kind === "risk_floor")?.target;
-    const card = await this.deps.createCard({
+    // Claimed under the row lock before the card exists: two taps, or a retry after a crash, cannot both make one.
+    if (!(await this.deps.store.claimCard(key, this.now(), CARD_CLAIM_MS))) throw new TicketRefusal("this ticket already has a card, or one is being made for it");
+    let card: { id: string };
+    try {
+      card = await this.deps.createCard({
       title: t.title,
       description: t.description,
       ...(repo ? { repoPath: repo } : {}),
@@ -326,7 +359,11 @@ export class TicketMachine implements TicketIntake {
       ...(t.reporter ? { reporter: { id: t.reporter.id, channel: t.tool } } : {}),
       ...(last ? { hints: { size: String(last.size), urgency: String(last.priority) } } : {}),
       ...(cardIds.length > 0 || floor ? { stack: { ...(cardIds.length > 0 ? { dependsOn: cardIds } : {}), ...(floor === "low" || floor === "medium" || floor === "high" ? { riskFloor: floor } : {}) } } : {}),
-    } as NewTask);
+    } as NewTask, `ticket-card:${t.key}`);
+    } catch (error) {
+      await this.deps.store.releaseCard(key).catch(() => {});
+      throw error;
+    }
     await this.deps.store.setMachine(key, { cardId: card.id, status: "carded" });
     await this.acknowledge(key);
     await this.learn(row, "do_now");
@@ -452,6 +489,32 @@ export class TicketMachine implements TicketIntake {
     return row && row.cardId === task.id ? { tool: row.canonical.tool, key } : null;
   }
 
+  /** What a backlog item that came from a ticket carries onto its card when it is promoted: the risk floor its split set. Empty for any other item. */
+  async stackOfSources(sources: unknown[]): Promise<{ riskFloor?: "low" | "medium" | "high" }> {
+    for (const src of sources) {
+      const x = src as Record<string, unknown>;
+      const key = x.kind === "jira" && typeof x.key === "string" ? x.key : x.kind === "github" ? `${String(x.repo)}#${String(x.number)}` : null;
+      if (!key || !(JIRA_KEY.test(key) || GITHUB_KEY.test(key))) continue;
+      const floor = (await this.deps.store.get(key))?.machineLinks.find((l) => l.kind === "risk_floor")?.target;
+      if (floor === "low" || floor === "medium" || floor === "high") return { riskFloor: floor };
+    }
+    return {};
+  }
+
+  /** How many tickets sit above a card's own ticket in a chain of splits (0 for a card whose ticket is not a part): a child ticket's card is as deep as its lineage, though its card has no `splitFrom`. */
+  async originHops(task: { id: string; source?: unknown; sources?: unknown }): Promise<number> {
+    const own = await this.ticketOfCard(task);
+    let hops = 0;
+    let key: string | null = own?.key ?? null;
+    while (key && hops < 10) {
+      const origin = (await this.deps.store.get(key))?.machineLinks.find((l) => l.kind === "origin")?.target ?? null;
+      if (!origin) break;
+      hops += 1;
+      key = origin;
+    }
+    return hops;
+  }
+
   private async row(key: string): Promise<TicketRow> {
     const row = await this.deps.store.get(parseTicketKey(key));
     if (!row) throw new TicketNotFound(key);
@@ -544,7 +607,7 @@ export class TicketMachine implements TicketIntake {
       const config = (await this.deps.config(repo)).tickets;
       const last = [...row.assessments].reverse().find((a) => a.outcome === "workable") as { priority?: "P0" | "P1" | "P2" | "P3" } | undefined;
       const since = typeof row.clocks.needsInfoSince === "string" ? new Date(row.clocks.needsInfoSince) : null;
-      const clocks = ticketClocks({ firstSeenAt: row.createdAt, acknowledgedAt: typeof row.clocks.acknowledgedAt === "string" ? new Date(row.clocks.acknowledgedAt) : null, priority: last?.priority ?? null, status: row.machineStatus, needsInfoSince: since, updatedAt: row.updatedAt }, now, config);
+      const clocks = ticketClocks({ firstSeenAt: row.createdAt, acknowledgedAt: typeof row.clocks.acknowledgedAt === "string" ? new Date(row.clocks.acknowledgedAt) : null, priority: last?.priority ?? null, status: row.machineStatus, needsInfoSince: since, updatedAt: activityOf(row) }, now, config);
       const overdue = clocks.filter((c) => c.overdue).map((c) => c.name);
       const drafts = row.drafts as unknown as Draft[];
       const missing = ([...row.assessments].reverse().find((a) => a.outcome === "needs_info")?.missing as string[] | undefined) ?? [];
@@ -559,8 +622,14 @@ export class TicketMachine implements TicketIntake {
   }
 }
 
+/** The last time the tool says the ticket changed; the row's own `updated_at` moves with every clock the machine writes, so it dates nothing. */
+function activityOf(row: TicketRow): Date {
+  const at = new Date(row.canonical.updatedAt ?? "");
+  return Number.isNaN(at.getTime()) ? row.createdAt : at;
+}
+
 /** The backlog item for a ticket: its five urgency sub-scores as the scores, its size, and its ticket as the source. */
-function backlogInput(t: CanonicalTicket, repo: string | null, r: AssessmentRecord): BacklogAddInput {
+function backlogInput(t: CanonicalTicket, repo: string | null, r: AssessmentRecord, dependsOn: string[] = []): BacklogAddInput {
   const v = (k: "who" | "what" | "impact" | "time" | "demand") => Math.min(3, Math.max(1, r.subScores[k].value));
   return {
     title: t.title.slice(0, 300),
@@ -569,7 +638,7 @@ function backlogInput(t: CanonicalTicket, repo: string | null, r: AssessmentReco
     repo,
     scores: { who: v("who"), what: v("what"), impact: v("impact"), time: v("time"), demand: v("demand") },
     size: r.size,
-    dependsOn: [],
+    dependsOn,
   };
 }
 

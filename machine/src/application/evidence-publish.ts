@@ -230,7 +230,9 @@ export async function publishAndReady(deps: ReadyDeps, input: { task: { id: stri
   const done = await deps.publish({ github: deps.github, slug, number, taskId: task.id, pack, localDir: deps.localDir(task.id, pack.commitSha), repoPath: task.repoPath, approved });
   // With no token behind the port nothing was published: no cursor, no ready.
   if (done.comment === "skipped") return { published: false, reason: "GitHub is not reachable with a token", pack };
-  await deps.save(task.id, done.pack);
+  // The pack carries the fact that it is on the PR: the board reads it, not the media's links (a text-only pack has none).
+  const posted: EvidencePack = { ...done.pack, published: true };
+  await deps.save(task.id, posted);
   if (deps.stateDir) {
     const cursor = (await loadCursor(deps.stateDir, task.id)) ?? emptyCursor({ slug, number });
     const section = sectionOf((await deps.github.prFacts(slug, number).catch(() => null))?.body ?? "");
@@ -243,5 +245,5 @@ export async function publishAndReady(deps: ReadyDeps, input: { task: { id: stri
     }
   }
   if (draft) await deps.github.markPrReady(slug, number);
-  return { published: true, pack: done.pack, comment: done.comment, assets: done.assets, readied: draft, notes: done.notes ?? [], ...(edited ? { edited } : {}) };
+  return { published: true, pack: posted, comment: done.comment, assets: done.assets, readied: draft, notes: done.notes ?? [], ...(edited ? { edited } : {}) };
 }

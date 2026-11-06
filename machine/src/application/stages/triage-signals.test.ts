@@ -320,3 +320,17 @@ describe("withTriageSignals and the fast lane", () => {
     expect((await lane(reading(), agentPass({ outcome: "archive" }))).decision).toBe("archive");
   });
 });
+
+describe("withTriageSignals's source labels", () => {
+  it("hands the labels the card was taken in with to the classifier, so a security label still knocks the priority out", async () => {
+    const seen: Array<{ labels?: string[] | undefined }> = [];
+    const classify = async (issue: { labels?: string[] | undefined }) => (seen.push(issue), classification);
+    const github = task({ source: { kind: "github", repo: "o/n", number: 7, url: "https://github.com/o/n/issues/7", labels: ["security", "bug"] } });
+    const jira = task({ source: { kind: "jira", key: "P-1", url: "https://j/P-1", issueType: "Bug", labels: ["security"] } });
+    const runner = withTriageSignals(async () => ({ outcome: "needs_input" }), { classify: classify as never, save: async () => {} });
+    await runner(context({ task: github }));
+    await runner(context({ task: jira }));
+    await runner(context({ task: task({ source: null }) }));
+    expect(seen.map((i) => i.labels)).toEqual([["security", "bug"], ["security"], []]);
+  });
+});

@@ -118,6 +118,12 @@ describe("creating and starting", () => {
     expect((await pipeline.update(task.id, { source: { ...source } })).source).toEqual(source);
   });
 
+  it("keeps the source's labels, and a client sending the source back with or without them is no change", async () => {
+    const source = { kind: "github", repo: "owner/name", number: 43, url: "https://github.com/owner/name/issues/43" } as const;
+    const task = await pipeline.createTask({ title: "Login page", source: { ...source, labels: ["security"] } });
+    expect((await pipeline.update(task.id, { source })).source).toMatchObject({ labels: ["security"] });
+  });
+
   it("runs triage and the plan stage on start and waits for you to approve the plan", async () => {
     const task = await newTask();
     const started = await pipeline.start(task.id);
@@ -469,6 +475,21 @@ describe("the commit the card's first implementing run started from", () => {
     expect(seen[0]).toBeUndefined();
     expect(seen[1]).toBe("a".repeat(40));
     expect(seen[2]).toBe("a".repeat(40));
+  });
+});
+
+describe("the base commit of a run that starts several containers", () => {
+  it("stays the first container's commit when the implementer then starts on the tests commit, for every later run", async () => {
+    const seen: Array<string | undefined> = [];
+    const base = "a".repeat(40);
+    const testsCommit = "b".repeat(40);
+    const p = new Pipeline(db, (stage) => (stage === "implementing" ? async (context) => (seen.push(context.firstInputCommit), await context.started?.({ container: "w", inputCommit: base }), await context.started?.({ container: "i", inputCommit: testsCommit }), { outcome: "fail" as const, detail: { error: `different ${seen.length}` } }) : stubs.runnerFor(stage)), { inline: true, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login" });
+    await p.start(task.id);
+    await p.decide(task.id, "approved");
+    expect(seen[0]).toBeUndefined();
+    expect(seen[1]).toBe(base);
+    expect(seen[2]).toBe(base);
   });
 });
 
@@ -1063,6 +1084,44 @@ describe("the triage record: a correction and its ground truth", () => {
     expect((await p.editRecord(id, { riskPrelim: "low" })).record).toMatchObject({ riskPrelim: "low", risk: "medium" });
   });
 
+  it("a risk raised to High by a correction at the plan gate holds the plan for two names and drops the first approval", async () => {
+    const { p, id } = await setup();
+    const store = new PgTaskStore(db);
+    const gate = (await p.approvals(id)).find((a) => a.decision === null)!;
+    await store.withTaskLock(id, async (_t, tx) => tx.updateApprovalRequested(gate, { ...gate.requested, risk: { level: "low", scores: {} }, approvers: ["ana"] }));
+    await p.editRecord(id, { riskPrelim: "high" });
+    const open = (await p.approvals(id)).find((a) => a.decision === null)!;
+    expect(open.requested).toMatchObject({ risk: { level: "high" }, approvers: [] });
+    await expect(p.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
+    expect((await p.decide(id, "approved", undefined, undefined, { approver: "bo" })).state).toBe("awaiting_approval");
+    expect((await p.decide(id, "approved", undefined, undefined, { approver: "cy" })).state).not.toBe("awaiting_approval");
+  });
+
+  it("a correction to High at the plan gate recomputes the approval rule and the owners: the first approval for the lower level is void, High needs two different names", async () => {
+    const { p, id } = await setup();
+    const store = new PgTaskStore(db);
+    const gate = (await p.approvals(id)).find((a) => a.decision === null)!;
+    await store.withTaskLock(id, async (_t, tx) => tx.updateApprovalRequested(gate, { ...gate.requested, risk: { level: "low", machine: "low", scores: {} }, approvalRule: { needed: 1, outside: "none" }, approvers: ["ana"] }));
+    await p.editRecord(id, { riskPrelim: "high" });
+    const open = (await p.approvals(id)).find((a) => a.decision === null)!;
+    expect(open.requested).toMatchObject({ risk: { level: "high" }, approvalRule: { needed: 2 }, approvers: [] });
+    expect(open.requested.ruleOwners).toBeDefined();
+    // ana's first approval, given for the lower level, is void: she counts once now, and the same name cannot close a High gate.
+    expect((await p.decide(id, "approved", undefined, undefined, { approver: "ana" })).state).toBe("awaiting_approval");
+    await expect(p.decide(id, "approved", undefined, undefined, { approver: "ana" })).rejects.toBeInstanceOf(SameApproverError);
+    expect((await p.decide(id, "approved", undefined, undefined, { approver: "bo" })).state).not.toBe("awaiting_approval");
+  });
+
+  it("reads the card's own record risk at the decision too: a gate written before the correction still needs two names", async () => {
+    const { p, id } = await setup();
+    const store = new PgTaskStore(db);
+    const gate = (await p.approvals(id)).find((a) => a.decision === null)!;
+    await store.withTaskLock(id, async (_t, tx) => tx.updateApprovalRequested(gate, { ...gate.requested, risk: { level: "low", scores: {} } }));
+    const task = await p.get(id);
+    await store.updateTask(id, { record: { ...task.record!, risk: "high" } });
+    await expect(p.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
+  });
+
   it("corrects only at triage's questions and at the plan gate", async () => {
     const { p, id } = await setup();
     const record = (await p.get(id)).record;
@@ -1607,6 +1666,23 @@ describe("editing the plan before approving", () => {
       expect(requested.rollback).toBe("git revert, then run the down migration");
       expect(requested.plan).toMatchObject({ version: 3, rollback: "git revert, then run the down migration", steps: [{ id: "P1", description: "Cap a coupon", files: ["a.ts", "b.ts"], done_when: ["c1 holds"] }] });
       expect(requested.revisions).toEqual([expect.objectContaining({ before: { slices, rollback: "revert" }, after: expect.objectContaining({ slices: [expect.objectContaining({ title: "Cap a coupon" })], rollback: "git revert, then run the down migration" }) })]);
+    });
+
+    it("raises the plan to high when edited steps touch the control plane, as the plan stage does, and holds it for two names", async () => {
+      const id = await atGate("low");
+      await pipeline.editPlan(id, { steps: [{ description: "Deploy it", files: ["src/a.ts", ".github/workflows/deploy.yml"], done_when: ["it ships"], est_loc: 10 }] });
+      const { requested } = await gate(id);
+      expect(requested.risk).toMatchObject({ level: "high", machine: "high" });
+      expect(requested.approvalRule).toMatchObject({ needed: 2 });
+      await expect(pipeline.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
+      expect((await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" })).state).toBe("awaiting_approval");
+      // A lockfile or CODEOWNERS is the same; plain files leave a low plan low.
+      const other = await atGate("low");
+      await pipeline.editPlan(other, { steps: [{ description: "Bump", files: ["pnpm-lock.yaml"], done_when: ["x"], est_loc: 1 }] });
+      expect((await gate(other)).requested.risk).toMatchObject({ level: "high" });
+      const plain = await atGate("low");
+      await pipeline.editPlan(plain, { steps: [{ description: "Edit", files: ["src/b.ts"], done_when: ["x"], est_loc: 1 }] });
+      expect((await gate(plain)).requested.risk).toMatchObject({ level: "low" });
     });
 
     it("applies a raised risk at once: the level the approvers rule reads rises, the machine's own is kept, the reason is ground truth", async () => {

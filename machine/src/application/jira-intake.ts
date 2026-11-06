@@ -196,7 +196,7 @@ export class JiraIntake {
         description: answer.description?.trim() || issue.description,
         criteria: answer.criteria?.length ? answer.criteria : parseChecklist(issue.description),
         repoPath,
-        source: { kind: "jira", key: issue.key, url: issue.url, issueType: issue.issueType },
+        source: { kind: "jira", key: issue.key, url: issue.url, issueType: issue.issueType, ...(issue.labels.length > 0 ? { labels: issue.labels.slice(0, 50).map((l) => l.slice(0, 100)) } : {}) },
         ...(issue.reporter ? { reporter: { ...issue.reporter, channel: "jira" } } : {}),
         // The card's classification is triage's: intake's reading only routed a report (and rode into jira_intake as a hint).
       });

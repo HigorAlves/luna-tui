@@ -337,6 +337,8 @@ export interface SandboxExec {
   services?: Record<string, ServiceSpec>;
   network?: string | null;
   serviceEnv?: Record<string, string>;
+  /** The services are already up (the caller started them and owns their teardown): `services` then only names the aliases, and none is started or removed here. */
+  servicesUp?: boolean;
   /** Secret values by name for this command only, passed as `-e NAME`; the values go in the docker client's environment alone. */
   secrets?: Record<string, string>;
   /** The list the check may reach, as for a stage; `execInSandbox` opens and removes the network. */
@@ -394,7 +396,9 @@ export async function execInSandbox(
   const own = !run.cardNetwork && run.egress ? await deps.openCardNetwork(run.name, run.egress, { proxyImage: run.egress.proxyImage }) : null;
   const card = run.cardNetwork ?? own;
   try {
-    const services = await deps.startServices(run.name, run.services ?? {}, card ? { network: { name: card.name, dns: card.dns } } : {});
+    const services = run.servicesUp
+      ? { network: run.network ?? null, env: run.serviceEnv ?? {}, teardown: async () => {} }
+      : await deps.startServices(run.name, run.services ?? {}, card ? { network: { name: card.name, dns: card.dns } } : {});
     try {
       // What the project's own commands print is theirs to choose: only its tail is kept.
       const result = await deps.exec("docker", sandboxExecArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env }), { ...options, outputCap: OUTPUT_CAP, ...(run.secrets ? { env: { ...process.env, ...run.secrets } } : {}) });
@@ -430,11 +434,12 @@ export function sandboxExecutor(
   return async (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[] } = {},
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string; secrets?: string[]; image?: string } = {},
   ): Promise<ExecResult> => {
     if (!options.cwd) throw new Error("sandboxExecutor needs cwd: the worktree to mount");
     // The image is the repository's, named by the caller: never guessed from the folder. No repository, the machine's image.
-    const image = options.repoPath ? await images.imageOf(options.repoPath) : images.machine;
+    // A caller that already chose the image for its whole stage hands it in (`image`): it is not resolved a second time.
+    const image = options.image ?? (options.repoPath ? await images.imageOf(options.repoPath) : images.machine);
     const env: Record<string, string> = {};
     const identity: Record<string, string> = {};
     for (const [key, value] of Object.entries(options.env ?? {})) {

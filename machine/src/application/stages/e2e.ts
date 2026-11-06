@@ -169,13 +169,13 @@ export function e2eRunner(deps: E2eDeps): StageRunner {
     };
     const scenarios = approvedScenarios(context.approvals).map((sc) => ({ id: sc.id ?? "", title: sc.title, criterion_ref: sc.criterion_ref ?? null }));
     const qaDir = deps.stateDir ? join(deps.stateDir, "runs", context.runId, "files", "qa") : null;
-    /** The manifest the machine checks by script: one row per approved scenario, artifacts only when they are plain-named regular files in the run's folder; a scenario with no row is not run, which fails a passing verdict. */
+    /** The manifest the machine checks by script: one row per approved scenario, artifacts only when they are plain-named regular files in the run's folder; a scenario that is not a pass (not run, failed or partial) fails a passing verdict. */
     const judged = async (r: StageResult): Promise<StageResult> => {
       const d = r.detail as { criteria?: unknown[]; summary?: unknown; verdict?: string; skipped?: boolean } | undefined;
       if (scenarios.length === 0 || d?.skipped === true || (r.outcome !== "pass" && r.outcome !== "fail")) return r;
       const rows = manifestRows(scenarios, d?.criteria ?? [], typeof d?.summary === "string" ? d.summary : "");
       for (const row of rows) row.artifacts = await boundedArtifacts(row.artifacts, qaDir);
-      const incomplete = rows.some((row) => row.result === "not_run");
+      const incomplete = rows.some((row) => row.result !== "pass");
       return incomplete && r.outcome === "pass"
         ? { ...r, outcome: "fail", detail: { ...r.detail, verdict: "partial", manifest: rows } }
         : { ...r, detail: { ...r.detail, manifest: rows } };

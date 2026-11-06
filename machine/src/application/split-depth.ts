@@ -6,7 +6,8 @@ type Row = Parameters<typeof cardOf>[0];
 /** At most this many hops are followed: a chain that long (or a loop) is as deep as any limit asks. */
 const MAX_HOPS = 10;
 
-export async function splitDepth(get: (id: string) => Promise<Row | null>, row: Row): Promise<number> {
+/** `ticketHops` says how many tickets sit above the card's own ticket (a child ticket's card has no `splitFrom`): the depth is the deeper of the two chains. */
+export async function splitDepth(get: (id: string) => Promise<Row | null>, row: Row, ticketHops?: (row: Row) => Promise<number>): Promise<number> {
   let depth = 1;
   let from = cardOf(row).splitFrom;
   while (from && depth <= MAX_HOPS) {
@@ -14,5 +15,6 @@ export async function splitDepth(get: (id: string) => Promise<Row | null>, row: 
     const parent = await get(from);
     from = parent ? cardOf(parent).splitFrom : undefined;
   }
-  return depth;
+  const hops = ticketHops ? Math.max(0, Math.min(MAX_HOPS, await ticketHops(row).catch(() => 0))) : 0;
+  return Math.max(depth, 1 + hops);
 }

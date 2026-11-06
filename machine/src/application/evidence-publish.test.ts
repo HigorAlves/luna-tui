@@ -427,6 +427,13 @@ describe("publishAndReady", () => {
     });
   });
 
+  it("stamps the saved pack as published even when it has no media at all (a text-only pack)", async () => {
+    const { out, saved } = await run({ pack: pack([]) });
+    expect(out).toMatchObject({ published: true });
+    expect(saved[0]!.published).toBe(true);
+    expect(out.published && out.pack.published).toBe(true);
+  });
+
   it("does not mark a PR that is already ready", async () => {
     const { out, gh } = await run({ draft: false });
     expect(out).toMatchObject({ published: true, readied: false });

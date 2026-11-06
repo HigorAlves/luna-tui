@@ -905,6 +905,40 @@ describe("evidenceStage", () => {
     expect(result.detail).toMatchObject({ verdict: "skipped", format: "text" });
   });
 
+  it("a skipped browser run of an API change keeps its scenarios, asks the format decision and ends in a terminal capture", async () => {
+    const skippedE2e = { runId: "e2e-run", detail: { skipped: true, reason: "no web surface detected", manifest: scenarios.map((s) => ({ title: s.title, result: "pass", artifacts: ["api.test.ts"] })) } };
+    const checks = [{ name: "unit", cmd: "pnpm test", ok: true, tail: "3 passed" }];
+    const { run, saved, asked } = stage({
+      latestE2e: async () => skippedE2e,
+      decideFormat: async (ctx) => (asked2.push(ctx), { format: { choice: "screenshots_or_terminal", confidence: 0.9 } }),
+      latestFinish: async (_id, name) => (name === "verifying" ? { runId: "v1", detail: { findings: [], checks } } : (finishes[name] ?? null)),
+    });
+    const asked2: unknown[] = [];
+    const result = await run(taskContext());
+    expect(result.outcome).toBe("pass");
+    expect(asked2).toHaveLength(1);
+    expect(asked2[0]).toMatchObject({ webSurface: false, e2e: { ran: false, scenarios: 2 } });
+    const pack = (saved[0]![1] as { evidence: { format: string; scenarios: { result: string }[]; media: { kind: string; label: string; url: string }[] } }).evidence;
+    expect(pack.format).toBe("captures");
+    expect(pack.scenarios.map((x) => x.result)).toEqual(["pass", "pass"]);
+    const terminal = pack.media.find((m) => m.label === "terminal.txt")!;
+    expect(terminal.kind).toBe("report");
+    expect(readFileSync(terminal.url, "utf8")).toContain("$ pnpm test");
+    expect(asked).toEqual([]);
+  });
+
+  it("a skipped browser run with no decision wired still falls back to the terminal capture when Verify ran checks", async () => {
+    const { run, saved } = stage({
+      latestE2e: async () => ({ runId: "e2e-run", detail: { skipped: true, reason: "no web surface detected" } }),
+      decideFormat: null,
+      latestFinish: async (_id, name) => (name === "verifying" ? { runId: "v1", detail: { findings: [], checks: [{ name: "unit", cmd: "pnpm test", ok: true, tail: "ok" }] } } : (finishes[name] ?? null)),
+    });
+    await run(taskContext());
+    const pack = (saved[0]![1] as { evidence: { format: string; scenarios: unknown[] } }).evidence;
+    expect(pack.format).toBe("captures");
+    expect(pack.scenarios).toHaveLength(2);
+  });
+
   it("with no decision wired and a manifest, the format is captures", async () => {
     browserRun();
     const { run, saved } = stage({ decideFormat: null });

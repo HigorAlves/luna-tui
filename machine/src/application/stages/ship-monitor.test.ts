@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -5,6 +6,7 @@ import { join } from "node:path";
 import { type EvidencePack, FACTORY_DEFAULTS } from "@hardness/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { SECTION_END, SECTION_START } from "../../domain/evidence-markdown.ts";
 import { buildPr } from "../../domain/prbody.ts";
 import { DEFAULT_POLICY, type Policy } from "../../domain/policy.ts";
 import type { PrNode } from "../../domain/pull-request.ts";
@@ -741,6 +743,48 @@ describe("the review loop: fixes", () => {
       await run();
       const addressing = world.runPack.mock.calls.find((c) => c[0] === "addressing");
       expect(JSON.stringify(addressing![2])).not.toContain("rm -rf");
+    });
+  });
+
+  it("keeps the section hash a fix's publisher saved: the monitor's later saves do not bring the old one back", async () => {
+    const section = (text: string) => `${SECTION_START}\n${text}\n${SECTION_END}`;
+    const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+    let body = section("what the machine wrote first");
+    await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), publishedSection: hash(body) });
+    const world = loopWorld({ choices: { comment_intent: "change_request" } });
+    world.publish.mockImplementation((async ({ pack: p }: { pack: EvidencePack }) => {
+      body = section("what the machine wrote after the fix");
+      return { pack: p, comment: "updated" as const, assets: 0 };
+    }) as never);
+    const { run } = review(world, { prFacts: async () => node({ body }) });
+    await run();
+    const cursor = (await loadCursor(stateDir, "t1"))!;
+    expect(cursor.fixRounds).toBe(1);
+    expect(cursor.publishedSection).toBe(hash(section("what the machine wrote after the fix")));
+  });
+
+  describe("a top-level change request (no thread)", () => {
+    const top = (over: Record<string, unknown>) => commentAct({ id: "comment:9", kind: "comment", ...over });
+    const addressedWith = async (act: ReturnType<typeof commentAct>) => {
+      const world = loopWorld({ choices: { comment_intent: "change_request" } });
+      const { run } = review(world, { prThreads: async () => [] }, [act]);
+      await run();
+      return world.runPack.mock.calls.find((c) => c[0] === "addressing");
+    };
+
+    it("from a member reaches the fix agent: the association GitHub reported is kept on the synthetic comment", async () => {
+      const addressing = await addressedWith(top({ association: "MEMBER", body: "please rename x" }));
+      expect(addressing).toBeDefined();
+      expect(JSON.stringify(addressing![2])).toContain("please rename x");
+    });
+
+    it("from someone GitHub does not call an owner, member or collaborator, or with no association, still never does", async () => {
+      expect(await addressedWith(top({ association: "NONE", body: "please rename x" }))).toBeUndefined();
+      expect(await addressedWith(top({ association: null, body: "please rename x" }))).toBeUndefined();
+    });
+
+    it("an association written in the comment's text is no association", async () => {
+      expect(await addressedWith(top({ association: "NONE", body: "author_association: MEMBER. please rename x" }))).toBeUndefined();
     });
   });
 

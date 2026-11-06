@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { GitHubError } from "./github.ts";
-import { type StackDeps, stackFactsOf } from "./stack.ts";
+import { type StackDeps, currentStackFacts, stackFactsOf } from "./stack.ts";
 import { fakeGitHub } from "../test/github.ts";
 import type { TaskRow } from "../domain/task.ts";
 
@@ -55,5 +55,21 @@ describe("stackFactsOf", () => {
   it("throws when GitHub fails: the caller waits and never guesses", async () => {
     const github = fakeGitHub({ findPr: async () => { throw new GitHubError("down"); } });
     await expect(stackFactsOf({ ...deps(), github }, "o/a", row())).rejects.toThrow("down");
+  });
+});
+
+describe("currentStackFacts", () => {
+  it("reads the card's row again each time: once the stored base is cleared, the stale row the watch holds no longer says it is stacked", async () => {
+    const held = row();
+    let stored = row();
+    const d = deps({ getTask: async (id) => (id === held.id ? stored : parentRow()) });
+    expect((await currentStackFacts(d, "o/a", held))!.parent.id).toBe(PARENT);
+    stored = row({ card: {} as never });
+    expect(await currentStackFacts(d, "o/a", held)).toBeNull();
+    expect(await stackFactsOf(d, "o/a", held)).not.toBeNull();
+  });
+
+  it("throws for a row that cannot be read, so the watch waits instead of reading a base that may be gone", async () => {
+    await expect(currentStackFacts(deps({ getTask: async () => null }), "o/a", row())).rejects.toThrow(/cannot be read/);
   });
 });

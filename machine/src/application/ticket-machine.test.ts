@@ -71,7 +71,7 @@ function setup(over: { validity?: ValidityAnswer; validityRecord?: string; recom
     config: async () => FACTORY_DEFAULTS,
     ...(over.size ? { size: { decide: sizeDecide, counted: async (ids: string[]) => ids.flatMap((id) => (over.size!.counted?.[id] ? [{ id, ...over.size!.counted[id]! }] : [])) } } : {}),
     ...(over.split ? { split: { decompose: async () => ({ children: over.split!.children === "none" ? [] : over.split!.children ?? SPLIT_KIDS }), check: null } } : {}),
-    createCard: async (input) => (cards.push(input), { id: "card-1" }),
+    createCard: async (input, key) => (cards.push({ ...input, key }), { id: "card-1" }),
     validity: { decide: decide.validity }, assess: { decide: decide.assess }, recommend: { decide: decide.recommend }, reply: { write: decide.write },
     truth: { learned: async (f) => (learned.push(f), true), draft: async (e) => void kept.push(e) },
     backlog: { upsertFromSource: async (input, o) => { const i = items.findIndex((x) => JSON.stringify(x.sources) === JSON.stringify(input.sources)); if (i >= 0) { items[i] = { ...input, id: "b1" }; return { id: "b1", created: false }; } if (!o.createIfMissing) return null; items.push({ ...input, id: "b1" }); return { id: "b1", created: true }; } },
@@ -190,8 +190,31 @@ describe("what a tap does", () => {
     await machine.card("PAY-12");
     expect(cards[0]).toMatchObject({ title: "Refund fails", source: { kind: "jira", key: "PAY-12" }, reporter: { id: "u1", channel: "jira" }, hints: { size: "M" } });
     expect((await store.get("PAY-12"))!.cardId).toBe("card-1");
+    expect(cards[0]).toMatchObject({ key: "ticket-card:PAY-12" });
     await expect(machine.card("PAY-12")).rejects.toBeInstanceOf(TicketRefusal);
     expect(writes).toEqual([]);
+  });
+
+  it("two simultaneous card taps make one card; a failed creation releases the claim", async () => {
+    const { machine, cards, store } = await held();
+    const make = (machine as any).deps.createCard;
+    (machine as any).deps.createCard = async (input: unknown, key: string) => (await new Promise((r) => setTimeout(r, 50)), make(input, key));
+    const results = await Promise.allSettled([machine.card("PAY-12"), machine.card("PAY-12")]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((r) => r.status === "rejected")).toHaveLength(1);
+    expect(cards).toHaveLength(1);
+    expect((await store.get("PAY-12"))!.cardId).toBe("card-1");
+  });
+
+  it("a card creation that threw leaves the ticket free to be carded again", async () => {
+    const x = setup();
+    await x.machine.ingest(ticket(), ctx);
+    const real = (x.machine as any).deps.createCard;
+    let fail = true;
+    (x.machine as any).deps.createCard = async (input: unknown, key: string) => { if (fail) { fail = false; throw new Error("boom"); } return real(input, key); };
+    await expect(x.machine.card("PAY-12")).rejects.toThrow("boom");
+    await expect(x.machine.card("PAY-12")).resolves.toEqual({ id: "card-1" });
+    expect(x.cards).toHaveLength(1);
   });
 
   it("answers an unknown ticket as not found", async () => {
@@ -240,6 +263,30 @@ describe("scheduling into the shared backlog", () => {
   });
 });
 
+describe("reassessing after an assessment was posted", () => {
+  it("a changed assessment after the first was posted is a new draft with its own id, the posted one kept", async () => {
+    const x = setup({ silent: true });
+    await x.machine.ingest(ticket(), ctx);
+    const first = (await x.machine.view("PAY-12")).drafts[0]!;
+    await x.machine.approve("PAY-12", { draft: first.id, hash: first.hash });
+    x.decide.assess.mockImplementation(async () => assessAnswer);
+    await x.machine.ingest(ticket({ updatedAt: "2026-11-05T12:30:00Z" }), ctx);
+    const drafts = (await x.machine.view("PAY-12")).drafts.filter((d) => d.kind === "assessment");
+    expect(drafts.map((d) => d.status)).toEqual(["posted", "waiting"]);
+    expect(new Set(drafts.map((d) => d.id)).size).toBe(2);
+    expect(drafts[0]!.text).not.toBe(drafts[1]!.text);
+  });
+
+  it("an assessment that says what the posted one said is not offered again", async () => {
+    const x = setup();
+    await x.machine.ingest(ticket(), ctx);
+    const first = (await x.machine.view("PAY-12")).drafts[0]!;
+    await x.machine.approve("PAY-12", { draft: first.id, hash: first.hash });
+    await x.machine.ingest(ticket({ updatedAt: "2026-11-05T12:30:00Z" }), ctx);
+    expect((await x.machine.view("PAY-12")).drafts.filter((d) => d.kind === "assessment")).toHaveLength(1);
+  });
+});
+
 describe("clocks", () => {
   const DAY = 86_400_000;
   const at = (days: number) => new Date(Date.parse("2026-11-05T12:00:00Z") + days * DAY);
@@ -255,6 +302,16 @@ describe("clocks", () => {
     expect((await machine.view("PAY-12")).drafts.map((d) => d.kind)).toEqual(["needs_info", "reminder", "park"]);
     expect((await store.get("PAY-12"))!.machineStatus).toBe("needs_info");
     expect(writes).toEqual([]);
+  });
+
+  it("a ticket nobody touched goes stale 30 days after the tool's last update, however often the sweeps wrote its clocks", async () => {
+    const { machine } = setup();
+    await machine.ingest(ticket(), ctx);
+    await machine.sweepClocks(at(1));
+    await machine.sweepClocks(at(2));
+    const after = new Date(Date.parse("2026-11-05T10:00:00Z") + 30 * DAY + 3_600_000);
+    const out = await machine.sweepClocks(after);
+    expect(out[0]!.overdue).toContain("stale");
   });
 
   it("a person's tap acknowledges the ticket, and approving a park draft is what parks it", async () => {
@@ -673,6 +730,38 @@ describe("a ticket's split (wave 15)", () => {
     await x.store.setDrafts("PAY-12", [old, ...(row.drafts as any[]).filter((d) => d.kind !== "split")]);
     await expect(x.machine.approve("PAY-12", { draft: old.id, hash: textOnly })).rejects.toBeInstanceOf(TicketRefusal);
     expect(x.creates).toEqual([]);
+  });
+
+  it("Schedule keeps a split's dependency: the item waits on its sibling's backlog item or card, and one the sibling has neither is refused", async () => {
+    const { x } = await proposed();
+    await x.machine.splitChildren("PAY-12", SPLIT_KIDS as never, { id: "gate-1", floor: "high" });
+    await expect(x.machine.schedule("PAY-102")).rejects.toThrow(/PAY-101 is not in the backlog or a card yet/);
+    expect(x.items).toEqual([]);
+    await x.machine.schedule("PAY-101");
+    await x.machine.schedule("PAY-102");
+    expect(x.items.find((i) => i.title === "child PAY-102" || i.sources.some((s: any) => s.key === "PAY-102"))).toMatchObject({ dependsOn: ["b1"] });
+    await x.store.setMachine("PAY-101", { cardId: "card-a" });
+    await x.store.setMachine("PAY-102", { status: "assessed" });
+    await x.machine.schedule("PAY-102");
+    expect(x.items.find((i) => i.sources.some((s: any) => s.key === "PAY-102"))).toMatchObject({ dependsOn: ["card-a"] });
+  });
+
+  it("a promoted item gets the ticket's risk floor back, and only a ticket's item does", async () => {
+    const { x } = await proposed();
+    await x.machine.splitChildren("PAY-12", SPLIT_KIDS as never, { id: "gate-1", floor: "high" });
+    expect(await x.machine.stackOfSources([{ kind: "jira", key: "PAY-102", url: "u" }])).toEqual({ riskFloor: "high" });
+    expect(await x.machine.stackOfSources([{ kind: "jira", key: "PAY-12", url: "u" }])).toEqual({});
+    expect(await x.machine.stackOfSources([{ kind: "slack", channel: "C1", ts: "1" }])).toEqual({});
+  });
+
+  it("a child ticket's card is counted as deep as its lineage, though its card has no splitFrom", async () => {
+    const { x } = await proposed();
+    await x.machine.splitChildren("PAY-12", SPLIT_KIDS as never, { id: "gate-1", floor: "high" });
+    await x.store.setMachine("PAY-101", { cardId: "card-a" });
+    const task = { id: "card-a", source: { kind: "jira", key: "PAY-101", url: "u" } };
+    expect(await x.machine.originHops(task)).toBe(1);
+    expect(await x.machine.originHops({ id: "card-z", source: { kind: "jira", key: "PAY-101", url: "u" } })).toBe(0);
+    expect(await x.machine.originHops({ id: "card-q", source: { kind: "jira", key: "PAY-12", url: "u" } })).toBe(0);
   });
 
   it("a ticket that depends on another needs that ticket's card first; then its card waits on it with the floor kept", async () => {
