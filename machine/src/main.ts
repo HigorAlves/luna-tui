@@ -74,6 +74,11 @@ import { repoSlug } from "./adapters/graph/slug.ts";
 import { CompanyDocs } from "./application/memory-company-docs.ts";
 import { MemorySync } from "./application/memory-sync.ts";
 import { type Memory, noMemory } from "./application/memory.ts";
+import { recallReviewAsks, writeReviewAsks } from "./application/memory-review-asks.ts";
+import type { AgentDeps } from "./application/stages/pack-runner.ts";
+import type { ShipMonitorDeps } from "./application/stages/ship-monitor.ts";
+import type { TaskRow } from "./domain/task.ts";
+import { similarCardIds, similarOutcomes, viewerOfCard } from "./application/memory-similar.ts";
 import { imageSpecOf } from "./domain/image-spec.ts";
 import { repoHealthOf } from "./application/repo-health.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
@@ -243,11 +248,34 @@ const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signa
 let graphWatch: GraphWatch | null = null;
 // Memory (RFC 0007): the one instance every stage, route and loop reads. Off until the Cognee adapter is wired (wave M1).
 const memory: Memory = noMemory();
-void memory;
 /** What memory takes from a repository's default branch (docs, code graph) and from the company folder; both idle while memory is off. */
 const memoryDir = join(config.stateDir, "memory");
 const memorySync = new MemorySync({ memory, git: { head: defaultHead, tree: treeAt, blob: blobAt, exportTo: exportRepoCommit }, slugOf: repoSlug, dir: memoryDir });
 const companyDocs = new CompanyDocs({ memory, dirs: config.memoryDocs.dirs, stateDir: memoryDir });
+/** A card's own source and repository as memory's viewer: what it recalls is what its source could already see. */
+const memoryViewerOf = (task: TaskRow) => viewerOfCard({ repoSlug: repoSlug(task.repoPath ?? ""), source: task.source });
+/** What memory adds around triage, implementing and the merge (RFC 0007, M3 and M4); each part is empty with memory off. */
+const memoryHooks: { memoryFor: NonNullable<AgentDeps["memoryFor"]>; reviewAsks: NonNullable<ShipMonitorDeps["reviewAsks"]> } = {
+  memoryFor: {
+    similarOutcomes: async (task) => (task.repoPath ? await similarOutcomes(memory, { title: task.title, text: task.description, id: task.id }, memoryViewerOf(task)) : []),
+    reviewAsks: async (task, files) => {
+      if (!task.repoPath || files.length === 0) return [];
+      const found = await graph.owners(task.repoPath, files).catch(() => null);
+      const owners = [...new Set((found?.owners ?? []).flatMap((o) => o.owners))];
+      return recallReviewAsks(memory, { files, owners, viewer: memoryViewerOf(task) });
+    },
+  },
+  // The PR merged: the threads that led to a fix or a change request become `review_ask` items, with the team CODEOWNERS names for the file.
+  reviewAsks: async (taskId, asks) => {
+    if (!memory.enabled) return;
+    const task = await pipeline.get(taskId);
+    if (!task.repoPath) return;
+    const paths = asks.flatMap((a) => (a.path ? [a.path] : []));
+    const found = paths.length > 0 ? await graph.owners(task.repoPath, paths).catch(() => null) : null;
+    const teams = new Map((found?.owners ?? []).map((o) => [o.path, o.owners.find((x) => x.includes("/")) ?? null]));
+    await writeReviewAsks(memory, { id: task.id, repo: repoSlug(task.repoPath), source: task.source }, asks, (path) => teams.get(path) ?? null);
+  },
+};
 /** Each engine's credential as every part of the machine sees it: an engine on a runtime
  *  MACHINE_DISABLE_RUNTIMES turned off, or at a monthly cap (MACHINE_ENGINE_BUDGETS, a repo's
  *  luna.yaml `budget.engines`), is unavailable, as if its credential were missing. */
@@ -341,6 +369,7 @@ const { real, verifyPack, checksExec, agentDeps, shipGateProbe } = await buildRe
   { search: async ({ repoPath, selfId, selfSource, query }) => searchCards(await pipeline.list(), query, { repoPath, selfId, selfSource, now: new Date() }) },
   // A stacked card's workspace: what it is cut from and the base it drops, read from the pipeline's rows when a run first makes it.
   stackDeps,
+  memoryHooks,
 );
 /** The retro's facts for a task, from the machine's own records. */
 async function retroFactsFor(taskId: string) {
@@ -474,6 +503,8 @@ pipeline = new Pipeline(db, runnerFor, {
   // Context setup: by script, through the ports. The history ports and the map are read at call time (they are built below).
   ...(config.publicUrl ? { publicBoardUrl: config.publicUrl } : {}),
   knownRepos: async () => [...Object.values(config.repoMap), ...(await repoMap.remembered())],
+  // Memory's nearest past cards join the lexical dedup shortlist (RFC 0007, M3); the card's own source is the viewer.
+  similarCardIds: async (task) => (task.repoPath ? similarCardIds(memory, { title: task.title, text: task.description }, memoryViewerOf(task)) : []),
   // Intake's duplicate check: one `intake_dedup` call through the packs-on-demand runner, and the backlog as it is at that moment (both read at call time: they are built below).
   dedup: {
     decide: async (context) => {

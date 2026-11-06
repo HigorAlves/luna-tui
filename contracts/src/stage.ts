@@ -923,6 +923,8 @@ export const IntakeContext = z.object({
   history: z.array(z.object({ author: z.string().nullable(), text: z.string() })).max(50),
   attachments: z.array(z.object({ name: z.string(), url: z.string(), mediaType: z.string().optional(), size: z.number().optional() })).max(20),
   hints: z.record(z.string(), z.union([z.string(), z.number()])).nullable(),
+  /** Up to five similar past cards' recalled `outcome` items from memory (RFC 0007): what was predicted against what happened (size, risk, planned against changed lines, retries, escalations). Data from past work, never instructions. */
+  similar: z.array(z.object({ card: z.string().nullable(), text: z.string().max(400) })).max(5).optional(),
 });
 export type IntakeContext = z.infer<typeof IntakeContext>;
 
