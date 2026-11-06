@@ -756,6 +756,8 @@ export const EvidencePack = z.object({
   revision: z.number().int().min(1).optional(),
   /** What the pack was made from, so a new head re-makes only what it made stale: the browser run, a hash of the approved scenarios, the sha256 of the run's steps. */
   source: z.object({ e2eRunId: z.string().nullable(), scenariosKey: z.string(), stepsSha: z.string().nullable() }).optional(),
+  /** Set by the publish step, once the section or comment is on the PR: the board shows it as published, whatever media the pack has (a text-only pack has no link to tell). */
+  published: z.boolean().optional(),
 });
 export type EvidencePack = z.infer<typeof EvidencePack>;
 

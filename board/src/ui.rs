@@ -934,11 +934,8 @@ pub(crate) fn pack_lines(value: &Value) -> Vec<String> {
         };
         lines.push(format!("{mark} {}", plain(text)));
     }
-    let mut published = false;
-    for media in value["media"].as_array().into_iter().flatten() {
-        let url = media["url"].as_str().unwrap_or("");
-        published |= url.starts_with("https://");
-    }
+    // The publish result the machine stamped on the pack; a pack from before that field is read from its links.
+    let published = value["published"].as_bool().unwrap_or_else(|| value["media"].as_array().into_iter().flatten().any(|m| m["url"].as_str().unwrap_or("").starts_with("https://")));
     for media in value["media"].as_array().into_iter().flatten().take(6) {
         let Some(label) = media["label"].as_str() else { continue };
         match media["url"].as_str() {
