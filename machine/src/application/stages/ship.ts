@@ -44,12 +44,14 @@ export function mergeRunner(deps: MergeDeps): StageRunner {
     // The repository's `ship.merge`, read from the user's checkout (never the card's workspace).
     const policy = await deps.policies.for(task.repoPath);
     const config = { ...FACTORY_DEFAULTS.ship.merge, ...(policy.factory?.ship?.merge ?? {}) };
+    /** Another open card is stacked on this one: its branch is the base of that PR, so it is never deleted (an unreadable answer counts as yes). */
+    const hasChildren = async (): Promise<boolean> => (deps.stack?.hasChildren ? await deps.stack.hasChildren(task.id).catch(() => true) : false);
     const recorded = async (state: Awaited<ReturnType<GitHub["prMerged"]>>, note?: string, made?: { sha: string | null; method: string }): Promise<StageResult> => {
       // A merged card's repository gets its graph rebuilt at once.
       if (task.repoPath) deps.onMerged?.(task.repoPath);
       await settle(task.id, cursor, slug, number).catch(() => {});
       // A queue merge the machine asked for leaves the head branch for the queue; it goes now (never after a person's merge). Already gone is not an error.
-      if (cursor.queued && config.delete_branch && task.branch) await deps.github.deleteBranch(slug, task.branch).catch(() => {});
+      if (cursor.queued && config.delete_branch && task.branch && !(await hasChildren())) await deps.github.deleteBranch(slug, task.branch).catch(() => {});
       const sha = made?.sha ?? state.mergedSha ?? null;
       return { outcome: "pass", detail: { merged: { sha, at: state.mergedAt, by: cursor.mergeRequested || cursor.queued ? "machine" : "person", ...(made ? { method: made.method } : {}) }, prUrl: url, number, ...(note ? { note } : {}) } };
     };
@@ -101,7 +103,7 @@ export function mergeRunner(deps: MergeDeps): StageRunner {
             sha: facts.head,
             method: config.method,
             queue: config.queue,
-            deleteBranch: config.delete_branch,
+            deleteBranch: config.delete_branch && !(await hasChildren()),
             ...(text ? { title: text.title, message: text.message } : {}),
           });
           if (result && "queued" in result) {

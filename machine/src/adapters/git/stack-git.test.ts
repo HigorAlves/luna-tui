@@ -11,7 +11,7 @@ import { ensureClone, freshClone } from "./clone.ts";
 import { taskDiff } from "./diff.ts";
 import { machineGitDir } from "./machine-repo.ts";
 import { exec } from "../process/exec.ts";
-import { branchBase, branchDiffStat, changedPaths, commitAll, rebaseOntoBase, rebaseOntoDefault, stackOf, unstack, workspaceFor } from "./worktree.ts";
+import { branchBase, branchDiffStat, changedPaths, commitAll, rebaseOntoBase, forgetBase, rebaseOntoDefault, stackOf, unstack, workspaceFor } from "./worktree.ts";
 
 const cfg = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"];
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...cfg, ...args], { encoding: "utf8" }).trim();
@@ -237,6 +237,28 @@ describe("rebasing a stacked card", () => {
     expect(await unstack(exec, workspace.path, s.repo)).toMatchObject({ ok: false, conflicts: ["p9.txt"] });
     expect(wgit(workspace.path, "rev-parse", "HEAD")).toBe(before);
     expect(await stackOf(workspace.path)).toEqual({ sha: s.tip, branch: PARENT });
+  });
+});
+
+describe("a card whose parent is gone and whose PR a person retargeted", () => {
+  it("forgets the recorded base: the base moves to the merge base with the default branch, the branch name goes, the commits are untouched", async () => {
+    const s = stacked();
+    const workspace = await child(s);
+    const head = wgit(workspace.path, "rev-parse", "HEAD");
+    const initial = git(s.repo, "rev-parse", "main");
+    expect(await forgetBase(exec, workspace.path, s.repo)).toEqual({ ok: true, onto: "origin/main" });
+    expect(wgit(workspace.path, "rev-parse", "HEAD")).toBe(head);
+    expect(await stackOf(workspace.path)).toEqual({ sha: initial, branch: null });
+    // The parent's commits are in the branch now: they show in its diff, which is what the reviewer must see.
+    expect([...((await changedPaths(workspace.path, s.repo)) ?? [])].sort()).toEqual(["c.txt", "p1.txt", "p2.txt", "p3.txt"]);
+  });
+
+  it("changes nothing when the card has no recorded base", async () => {
+    const s = stacked();
+    const workspace = workspaceFor(task, s.repo, s.dir);
+    await ensureClone(s.repo, workspace);
+    expect(await forgetBase(exec, workspace.path, s.repo)).toMatchObject({ ok: false });
+    expect(await stackOf(workspace.path)).toEqual({ sha: null, branch: null });
   });
 });
 

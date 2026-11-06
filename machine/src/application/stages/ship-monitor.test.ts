@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { type EvidencePack, FACTORY_DEFAULTS } from "@hardness/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { buildPr } from "../../domain/prbody.ts";
 import { DEFAULT_POLICY, type Policy } from "../../domain/policy.ts";
 import type { PrNode } from "../../domain/pull-request.ts";
 import { fakeGitHub } from "../../test/github.ts";
@@ -12,6 +13,7 @@ import type { GitHub } from "../github.ts";
 import type { GitExec } from "../../adapters/git/worktree.ts";
 import type { StageContext } from "../ports.ts";
 import { emptyCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
+import { STACK_REBASES_MAX } from "../stack.ts";
 import { type Learned, tagged } from "../decision-truth.ts";
 import type { ReviewLoop } from "./ship-fixes.ts";
 import { mergeRunner } from "./ship.ts";
@@ -62,7 +64,7 @@ function policyWith(over: (Partial<Policy> & { autoMerge?: "off" | "low" | "medi
 
 function setup(
   answers: Partial<GitHub> = {},
-  over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; pollMs?: number | null; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean; latestFinish?: ShipMonitorDeps["latestFinish"]; freezeSource?: ShipMonitorDeps["freeze"]; buildTests?: ShipMonitorDeps["buildTests"]; onMerged?: ShipMonitorDeps["onMerged"] } = {},
+  over: { policy?: Partial<Policy> & { autoMerge?: "off" | "low" | "medium_when_review_required" | "medium" }; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; pollMs?: number | null; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean; latestFinish?: ShipMonitorDeps["latestFinish"]; freezeSource?: ShipMonitorDeps["freeze"]; buildTests?: ShipMonitorDeps["buildTests"]; onMerged?: ShipMonitorDeps["onMerged"]; stack?: ShipMonitorDeps["stack"]; task?: Record<string, unknown> } = {},
 ) {
   const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: HEAD, at: "t", association: "COLLABORATOR" }], prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => ({ merged: true as const, sha: null }), ...answers });
   let clock = START.getTime();
@@ -89,9 +91,10 @@ function setup(
     ...(over.latestFinish ? { latestFinish: over.latestFinish } : {}),
     ...(over.freezeSource ? { freeze: over.freezeSource } : {}),
     ...(over.buildTests ? { buildTests: over.buildTests } : {}),
+    ...(over.stack ? { stack: over.stack } : {}),
   };
   const context = {
-    task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1" },
+    task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1", ...over.task },
     approvals: over.approvals ?? [],
     signal: (over.abort ?? new AbortController()).signal,
     note: async (text: string) => void notes.push(text),
@@ -1327,6 +1330,22 @@ describe("a stacked card's readiness (wave 15)", () => {
   });
 });
 
+describe("an approval given while stacked (wave 15)", () => {
+  const OLD = "0".repeat(40);
+  const readyOn = async (reviewedCommit: string) => {
+    const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), reviewRule: async () => ({ source: "ruleset" as const, approvals: 1, codeOwners: false }), prReviews: async () => [{ author: "ana", state: "APPROVED", commitId: reviewedCommit, at: "t", association: "COLLABORATOR" }], prMerged: async () => open, prFacts: async () => node({ baseRefName: "main" }), prHeadSha: async () => HEAD, prFiles: async () => [] });
+    const deps = { github, policies: { for: async () => policyWith({ autoMerge: "low" }) }, evidence: { load: async () => pack() }, stateDir, pollMs: 1, readCodeowners: async () => null, now: () => START, stack: { facts: async () => null, defaultBranch: async () => "main" } };
+    const context = { task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1" }, approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    return (await readShipFacts(deps as never, context, REF, emptyCursor({ slug: "o/a", number: 3 }), deps.now))!;
+  };
+  it("does not count on the head the retarget's rebase made, and counts again once given on the new head", async () => {
+    const before = await readyOn(OLD);
+    expect(before.readiness.checklist.find((i) => i.id === "stack")!.ok).toBe(true);
+    expect(before.readiness.canAutoMerge).toBe(false);
+    expect((await readyOn(HEAD)).readiness.canAutoMerge).toBe(true);
+  });
+});
+
 describe("a merge that is not a ship (wave 15)", () => {
   const into = (baseRef: string) => {
     const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), prMerged: async () => merged, prFacts: async () => node({ baseRefName: baseRef }) });
@@ -1337,5 +1356,161 @@ describe("a merge that is not a ship (wave 15)", () => {
   it("is closed, with the branch it went into, when the PR merged anywhere but the default branch; a merge into the default branch is a ship", async () => {
     expect(await into("task/parent")).toEqual({ outcome: "fail", detail: { prClosed: true, mergedInto: "task/parent" } });
     expect(await into("main")).toMatchObject({ outcome: "pass", detail: { merged: { sha: "m1" } } });
+  });
+});
+
+describe("a parent that changed or merged (wave 15)", () => {
+  const PARENT_TIP = "a".repeat(40);
+  const NEW_TIP = "b".repeat(40);
+  const body = `${buildPr({ task: { title: "t", description: "", criteria: [] } as never, plan: null, repoSlug: "o/a", extra: { stack: { number: 2 } } }).body}\n\nA person's own text`;
+  /** A stacked card whose parent is `parent`; `recorded` is the commit its workspace records as its base. The PR targets `prBase`. */
+  function stacked(over: { parent?: "open" | "merged" | "gone"; head?: string | null; prBase?: string; world?: ReturnType<typeof loopWorld>; children?: boolean; deleteBranch?: boolean; unstackOk?: boolean; rebaseOk?: boolean; github?: Partial<GitHub> } = {}) {
+    const world = over.world ?? loopWorld();
+    const state = { parent: over.parent ?? "open", base: PARENT_TIP, head: over.head === undefined ? NEW_TIP : over.head };
+    const cleared: string[] = [];
+    const forgotten: string[] = [];
+    const rebase = vi.fn(async () => {
+      if (over.rebaseOk === false) return { ok: false as const, error: "conflict", conflicts: ["a.ts"] };
+      state.base = state.head ?? state.base;
+      return world.rebase();
+    });
+    const unstackFn = vi.fn(async () => (over.unstackOk === false ? { ok: false as const, error: "conflict", conflicts: ["b.ts"] } : world.rebase()));
+    const stack: NonNullable<ShipMonitorDeps["stack"]> = {
+      facts: async () => cleared.length > 0 ? null : ({ parent: { id: "p1", branch: "task/p1", number: 2, state: state.parent, head: state.parent === "open" ? state.head : null }, defaultBranch: "main" }),
+      defaultBranch: async () => "main",
+      recordedBase: async () => state.base,
+      clearBase: async (id) => void cleared.push(id),
+      hasChildren: async () => over.children === true,
+      rebase,
+      unstack: unstackFn,
+      forget: async () => (forgotten.push("forgot"), { ok: true as const, onto: "origin/main" }),
+    };
+    const policy = { factory: { ...FACTORY_DEFAULTS, ship: { ...FACTORY_DEFAULTS.ship, merge: { ...FACTORY_DEFAULTS.ship.merge, delete_branch: over.deleteBranch ?? true } } } };
+    const prBase = { current: over.prBase ?? "task/p1", last: false };
+    let polls = 0;
+    const answers: Partial<GitHub> = {
+      prFacts: async () => node({ baseRefName: prBase.last ? "main" : prBase.current, body }),
+      // The last poll is a person's merge into the default branch, so the end of the watch is a ship.
+      prMerged: async () => (++polls < 3 ? open : ((prBase.last = true), merged)),
+      retargetPr: async (_s, _n, base) => void (prBase.current = base),
+      updatePrBody: async () => {},
+      deleteBranch: async () => {},
+      ...over.github,
+    };
+    const run = review(world, answers, [], { stack, policy, task: { title: "t", description: "", criteria: [] } });
+    return { ...run, world, cleared, forgotten, rebase, unstackFn, state };
+  }
+
+  it("rebases onto the parent's new tip when it changed, pushes with a lease on the old head, re-stamps the pack and counts it", async () => {
+    const t = stacked();
+    expect(await t.run()).toMatchObject({ outcome: "pass" });
+    expect(t.rebase).toHaveBeenCalledTimes(1);
+    expect(t.world.pushes()).toEqual([["push", `--force-with-lease=refs/heads/hardness/t1:${HEAD}`, "-u", "origin", "hardness/t1"]]);
+    expect(t.world.saved[0]).toMatchObject({ commitSha: "f".repeat(40) });
+    expect((await loadCursor(stateDir, "t1"))!.stackRebases).toBe(1);
+    expect(t.emitted).toContainEqual(["ship.event", { kind: "stack", class: "parent_changed" }]);
+    expect(t.unstackFn).not.toHaveBeenCalled();
+    expect(calls(t.github, "retargetPr")).toEqual([]);
+  });
+
+  it("does nothing while the parent's head is the recorded base", async () => {
+    const t = stacked({ head: PARENT_TIP });
+    await t.run();
+    expect(t.rebase).not.toHaveBeenCalled();
+    expect(t.world.pushes()).toEqual([]);
+  });
+
+  it("rebases at most STACK_REBASES_MAX times, then asks a person", async () => {
+    await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), stackRebases: STACK_REBASES_MAX });
+    const t = stacked();
+    expect(await t.run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("rebased onto it") } });
+    expect(t.rebase).not.toHaveBeenCalled();
+    expect(t.world.pushes()).toEqual([]);
+  });
+
+  it("pushes nothing and asks a person, naming the files, when the rebase stops", async () => {
+    const t = stacked({ rebaseOk: false });
+    expect(await t.run()).toMatchObject({ outcome: "escalated", detail: { verdict: "conflict_unresolvable", reason: expect.stringContaining("a.ts"), options: ["rebase the branch by hand and approve", "merge the default branch into the branch and approve"] } });
+    expect(t.world.pushes()).toEqual([]);
+  });
+
+  it("does not rebase a branch that is not at the PR's head", async () => {
+    const world = loopWorld();
+    world.loop.exec = (async (_c: string, args: string[]) => ({ code: 0, stdout: args.includes("rev-parse") ? "c".repeat(40) : "", stderr: "" })) as never;
+    const t = stacked({ world });
+    expect(await t.run()).toMatchObject({ outcome: "escalated", detail: { escalation: "head_moved" } });
+    expect(t.rebase).not.toHaveBeenCalled();
+  });
+
+  it("when the parent merged: retargets the PR to the default branch, moves the card off its parent, pushes with a lease, drops the stacked line and the base", async () => {
+    const t = stacked({ parent: "merged" });
+    expect(await t.run()).toMatchObject({ outcome: "pass" });
+    expect(calls(t.github, "retargetPr")).toEqual([["retargetPr", "o/a", 3, "main"]]);
+    expect(t.unstackFn).toHaveBeenCalledTimes(1);
+    expect(t.world.pushes()).toEqual([["push", `--force-with-lease=refs/heads/hardness/t1:${HEAD}`, "-u", "origin", "hardness/t1"]]);
+    expect(t.world.saved[0]).toMatchObject({ commitSha: "f".repeat(40) });
+    const edited = calls(t.github, "updatePrBody")[0]!;
+    expect(edited[3]).not.toContain("Stacked on");
+    expect(edited[3]).toContain("A person's own text");
+    expect(t.cleared).toEqual(["t1"]);
+    expect(t.emitted).toContainEqual(["ship.event", { kind: "stack", class: "parent_merged" }]);
+    expect(calls(t.github, "deleteBranch")).toEqual([["deleteBranch", "o/a", "task/p1"]]);
+  });
+
+  it("does not retarget a PR GitHub already shows on the default branch", async () => {
+    const t = stacked({ parent: "merged", prBase: "main" });
+    await t.run();
+    expect(calls(t.github, "retargetPr")).toEqual([]);
+    expect(t.cleared).toEqual(["t1"]);
+  });
+
+  it("keeps the parent's branch while another card is stacked on it, or when the repository keeps branches, and a branch already gone is no error", async () => {
+    const children = stacked({ parent: "merged", children: true });
+    await children.run();
+    expect(calls(children.github, "deleteBranch")).toEqual([]);
+    const kept = stacked({ parent: "merged", deleteBranch: false });
+    await kept.run();
+    expect(calls(kept.github, "deleteBranch")).toEqual([]);
+    const gone = stacked({ parent: "merged", github: { deleteBranch: async () => { throw new Error("Reference does not exist"); } } });
+    expect(await gone.run()).toMatchObject({ outcome: "pass" });
+  });
+
+  it("when moving off a merged parent stops on a conflict: the PR stays retargeted, nothing is pushed or cleared, a person is asked", async () => {
+    const t = stacked({ parent: "merged", unstackOk: false });
+    expect(await t.run()).toMatchObject({ outcome: "escalated", detail: { verdict: "conflict_unresolvable", reason: expect.stringContaining("b.ts") } });
+    expect(calls(t.github, "retargetPr")).toEqual([["retargetPr", "o/a", 3, "main"]]);
+    expect(t.world.pushes()).toEqual([]);
+    expect(t.cleared).toEqual([]);
+    expect(calls(t.github, "deleteBranch")).toEqual([]);
+  });
+
+  it("a parent that is gone asks a person once, with fixed words and the two options; the machine touches nothing", async () => {
+    const t = stacked({ parent: "gone" });
+    const first = await t.run();
+    expect(first).toMatchObject({ outcome: "escalated", detail: { reason: "the card this one is stacked on was archived or its PR closed unmerged; its commits are in this branch", options: ["archive this card", "rebase it by hand, retarget its PR to main and approve"] } });
+    expect(t.rebase).not.toHaveBeenCalled();
+    expect(t.unstackFn).not.toHaveBeenCalled();
+    expect(t.world.pushes()).toEqual([]);
+    expect(t.cleared).toEqual([]);
+    // Resumed with nothing changed: the same state is not asked again; the watch waits.
+    const again = stacked({ parent: "gone" });
+    expect(await again.run()).toMatchObject({ outcome: "pass" });
+  });
+
+  it("a parent that is gone, once a person retargeted the PR to the default branch: the card leaves its stack", async () => {
+    await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), stackGone: "gone" });
+    const t = stacked({ parent: "gone", prBase: "main" });
+    await t.run();
+    expect(t.forgotten).toEqual(["forgot"]);
+    expect(t.cleared).toEqual(["t1"]);
+    expect(t.world.pushes()).toEqual([]);
+  });
+
+  it("a card with no stack facts is watched exactly as before: no stack call, no event", async () => {
+    const world = loopWorld();
+    const { run, emitted } = review(world, { prMerged: async () => merged }, [], { stack: { facts: async () => null, defaultBranch: async () => "main" } });
+    await run();
+    expect(emitted.filter(([, p]) => p.kind === "stack")).toEqual([]);
+    expect(world.rebase).not.toHaveBeenCalled();
   });
 });

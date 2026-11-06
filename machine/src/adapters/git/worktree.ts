@@ -586,3 +586,28 @@ export async function originSlugOf(cwd: string): Promise<string | null> {
 export function prWorktreePath(repoPath: string, worktreesDir: string, number: number, headRef: string): string {
   return join(worktreesDir, basename(repoPath), `pr-${number}-${slug(headRef)}`);
 }
+
+/**
+ * A person retargeted a stacked card's PR to the default branch by hand (its parent is gone): nothing is replayed. The recorded base moves to
+ * the merge base of the branch and `origin/<default branch>` and the parent's branch name is forgotten, so the card's diffs are what the PR now shows.
+ */
+export async function forgetBase(
+  run: GitExec,
+  worktreePath: string,
+  repoPath: string,
+  defaultBranchOf: (repoPath: string) => Promise<string | null> = defaultBranch,
+): Promise<RebaseResult> {
+  const recorded = await stackOf(worktreePath);
+  if (!recorded.sha) return { ok: false, error: "the card has no recorded base", conflicts: [] };
+  const nested = nestedRefusal(worktreePath);
+  if (nested) return nested;
+  const base = await defaultTarget(defaultBranchOf, repoPath);
+  if (typeof base !== "string") return base;
+  const fetched = await run("git", [...HOST_GIT, ...at(worktreePath), "fetch", "--quiet", "--end-of-options", "origin", base], { timeoutMs: FETCH_TIMEOUT });
+  if (fetched.code !== 0) return failed("git fetch", fetched);
+  const mergeBase = await run("git", [...HOST_GIT, ...at(worktreePath), "merge-base", "HEAD", `origin/${base}`]);
+  if (mergeBase.code !== 0 || !/^[0-9a-f]{40,64}$/.test(mergeBase.stdout.trim())) return failed("reading the merge base", mergeBase);
+  await run("git", [...HOST_GIT, ...at(worktreePath), "update-ref", BASE_REF, mergeBase.stdout.trim()]);
+  await run("git", [...HOST_GIT, ...at(worktreePath), "config", "--local", "--unset", BASE_KEY]);
+  return { ok: true, onto: `origin/${base}` };
+}

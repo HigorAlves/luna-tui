@@ -8,7 +8,7 @@ import { shipSla, quietDays } from "../../domain/ship-sla.ts";
 import { viewSnapshot } from "../ship-view.ts";
 import { PrReplyAnswer, type EvidencePack, type Risk, type ShipContext, type ShipEventClass, type TaskState, eventClassOf } from "@hardness/contracts";
 
-import { HOST_GIT, rebaseOntoDefault } from "../../adapters/git/worktree.ts";
+import { HOST_GIT, type RebaseResult, rebaseOntoBase, rebaseOntoDefault, stackOf, unstack as hostUnstack, forgetBase } from "../../adapters/git/worktree.ts";
 import { exec as realExec } from "../../adapters/process/exec.ts";
 
 import { lunaYamlFreeze } from "../../adapters/freeze/luna-yaml.ts";
@@ -16,7 +16,7 @@ import { type Freeze, type Policy } from "../../domain/policy.ts";
 import { shipEvents } from "../../domain/ship-events.ts";
 import { ownerApprovals, parseCodeownersChecked, requiredOwners } from "../../domain/codeowners.ts";
 import { MAX_DEPENDENCIES, type MergeReadinessInput, inFreeze, mergeReadiness, parseDependencies } from "../../domain/merge-readiness.ts";
-import { type StackFacts, mergedIntoOther } from "../stack.ts";
+import { STACK_REBASES_MAX, type StackFacts, mergedIntoOther } from "../stack.ts";
 import { type ReviewRequirement, type ReviewRule, approvedOnHead, objectionOnPr, reviewRequirement } from "../../domain/review-rule.ts";
 import { fromGraphQl } from "../../domain/pull-request.ts";
 import { type GitHub, type PrActivity, type PrReview, messageOf } from "../github.ts";
@@ -24,7 +24,10 @@ import type { FreezeSource } from "../freeze.ts";
 import type { StageContext, StageResult } from "../ports.ts";
 import { type ShipCursor, SEEN_CAP, emptyCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
 import { ciContextOf, ciRunIdOf, failedChecks } from "./ci.ts";
-import { pushBranch } from "./deliver.ts";
+import { buildPr, mergePrSection } from "../../domain/prbody.ts";
+import { approvedPlan } from "../../domain/stage-input.ts";
+import { prExtraOf, pushBranch } from "./deliver.ts";
+import { FACTORY_DEFAULTS } from "@hardness/contracts";
 import { type TruthSink, commentIntentTruth, eventClassTruth } from "../decision-truth.ts";
 import { type EvidenceHandle, type FixDeps, type ReviewLoop, SECRET_REASON, carriesSecret, escalated, fixRound, headOfWorktree, judgeShip, postable, resetTo, restampPack, subContext } from "./ship-fixes.ts";
 
@@ -50,7 +53,21 @@ const TEAM_TTL_MS = 10 * 60_000;
 export interface ShipMonitorDeps {
   github: GitHub;
   /** A stacked card's parent, and the default branch: what the checklist's `stack` item reads. Absent, the item is always ok (a card read before the stack existed). */
-  stack?: { facts: (slug: string, task: StageContext["task"]) => Promise<StackFacts | null>; defaultBranch: (repoPath: string) => Promise<string | null> };
+  stack?: {
+    facts: (slug: string, task: StageContext["task"]) => Promise<StackFacts | null>;
+    defaultBranch: (repoPath: string) => Promise<string | null>;
+    /** What the watch does when the parent changed or merged (slice 9); absent, the watch only reports the checklist's `stack` item. */
+    /** The commit the card's workspace records as its base (default: `stackOf`). */
+    recordedBase?: (worktreePath: string) => Promise<string | null>;
+    /** The card left its stack: the pipeline drops its `card.base`. */
+    clearBase?: (taskId: string) => Promise<void>;
+    /** Whether another open card is stacked on this one: its branch is not deleted then. */
+    hasChildren?: (taskId: string) => Promise<boolean>;
+    rebase?: typeof rebaseOntoBase;
+    unstack?: typeof hostUnstack;
+    /** A person retargeted the PR to the default branch: forget the recorded base (default: `forgetBase`). */
+    forget?: typeof forgetBase;
+  };
   policies: { for: (repoPath: string | null) => Promise<Policy> };
   /** The Evidence Pack: `load` to watch it; with `save`, `publish` and `store` the loop re-stamps and republishes it after a fix. */
   evidence: EvidenceHandle;
@@ -94,6 +111,8 @@ export interface ShipFacts {
   paths: string[];
   /** The classes GitHub's facts decided at this poll (`shipEvents`). */
   events: ShipEventClass[];
+  /** A stacked card's parent and the commit the card was last cut from; null for a card with no stack. */
+  stack: { parent: StackFacts["parent"]; defaultBranch: string | null; recordedBase: string | null } | null;
   /** Who answers the release question: `ship.release_owners`, else the CODEOWNERS owners of the PR's paths at the base ref. Facts, never a model's word. */
   releaseOwners: string[];
 }
@@ -194,8 +213,13 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   const review = reviewRequirement({ rule, seenRequired: cursor.reviewRequiredSeen !== undefined, owners: codeownersText ? parseCodeownersChecked(codeownersText).rules : null, paths });
   // The stack: waiting for a parent, or a PR aimed at some other branch than the default. A parent that cannot be read counts as not merged (it waits).
   let stack: MergeReadinessInput["stack"];
+  let stackFacts: ShipFacts["stack"] = null;
   if (deps.stack) {
     const facts = await deps.stack.facts(slug, task).catch((): "unreadable" => "unreadable");
+    if (facts && facts !== "unreadable") {
+      const recordedBase = task.worktreePath ? await (deps.stack.recordedBase ?? (async (path: string) => (await stackOf(path)).sha))(task.worktreePath).catch(() => null) : null;
+      stackFacts = { parent: facts.parent, defaultBranch: facts.defaultBranch, recordedBase };
+    }
     const defaultBranch = facts !== "unreadable" && facts ? facts.defaultBranch : task.repoPath ? await deps.stack.defaultBranch(task.repoPath).catch(() => null) : null;
     stack = { stacked: facts === "unreadable" || (facts !== null && facts.parent.state === "open"), baseRef: pr.baseRef, defaultBranch };
   }
@@ -221,8 +245,8 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
   const named = policy.factory.ship.release_owners;
   const fromCodeowners = codeownersText ? [...new Set(requiredOwners(paths, parseCodeownersChecked(codeownersText).rules).flatMap((r) => r.owners))] : [];
   const releaseOwners = (named.length > 0 ? named : fromCodeowners).slice(0, 20);
-  const events = shipEvents({ mergeable: pr.mergeable, mergeState: pr.mergeState, frozen: inFreeze(windows, now()) !== null, openDependencies: dependencies.filter((d) => !d.merged && !d.closed).length });
-  return { pr, head, pack, risk, readiness, review, paths, events, releaseOwners };
+  const events = shipEvents({ mergeable: pr.mergeable, mergeState: pr.mergeState, frozen: inFreeze(windows, now()) !== null, openDependencies: dependencies.filter((d) => !d.merged && !d.closed).length, stack: stackFacts ? { state: stackFacts.parent.state, head: stackFacts.parent.head, recordedBase: stackFacts.recordedBase } : null });
+  return { pr, head, pack, risk, readiness, review, paths, events, releaseOwners, stack: stackFacts };
 }
 
 /** The PR merged: the decisions it was waiting on are settled by what happened to their threads. Called wherever a merge is recorded. */
@@ -460,6 +484,90 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       return fix({ id: "ci", threads: [synthetic], scope: sizedCi.choice, summary: `CI: ${plain(summary || "a failing check", 120)}`, postReplies: false, quote: `CI: ${plain(summary, 200)}` }, pack);
     };
 
+    /**
+     * A stacked card's parent, read from facts (never a model): a parent that changed rebases the card onto its new tip (at most `STACK_REBASES_MAX`
+     * times); a parent that merged moves the card onto the default branch and retargets its PR; a parent that is gone is a person's call. A rebase that
+     * stops pushes nothing and asks a person, and the next run tries again.
+     */
+    const watchStack = async (sf: NonNullable<ShipFacts["stack"]>, prBase: string, head: string, pack: EvidencePack | null, classes: ShipEventClass[]): Promise<Outcome> => {
+      const stack = deps.stack!;
+      const defaultBranch = sf.defaultBranch;
+      const stuck = (why: string): Outcome => ({ result: escalated(why, "other", { verdict: "conflict_unresolvable", options: ["rebase the branch by hand and approve", "merge the default branch into the branch and approve"] }) });
+      const wt = task.worktreePath;
+      const branch = task.branch;
+      const defaultOf = async (repoPath: string) => defaultBranch ?? (await stack.defaultBranch(repoPath));
+      if (sf.parent.state === "gone") {
+        // A person retargeted the PR to the default branch: the card has left its stack, and its diff is what the PR shows.
+        if (defaultBranch && prBase === defaultBranch && wt && task.repoPath) {
+          const done = await (stack.forget ?? forgetBase)(runOf(), wt, task.repoPath, defaultOf);
+          if (!done.ok) return stuck(`the card left its stack but its base could not be moved: ${plain(done.error, 200)}`);
+          await stack.clearBase?.(task.id);
+          delete cursor.stackGone;
+          await saveCursor(deps.stateDir, task.id, cursor);
+          await note("the PR now targets the default branch: the card is no longer stacked");
+          return {};
+        }
+        if (cursor.stackGone === "gone") return {};
+        cursor.stackGone = "gone";
+        await saveCursor(deps.stateDir, task.id, cursor);
+        return { result: escalated("the card this one is stacked on was archived or its PR closed unmerged; its commits are in this branch", "other", { options: ["archive this card", `rebase it by hand, retarget its PR to ${defaultBranch ?? "the default branch"} and approve`] }) };
+      }
+      if (!wt || !branch || !task.repoPath) return stuck("the task has no worktree to rebase");
+      const settled = async (run: ReturnType<typeof runOf>, local: string, what: string): Promise<Outcome & { head?: string }> => {
+        const pushError = await pushBranch(run, branch, wt, { force: true, lease: local });
+        if (pushError) {
+          await resetTo(run, wt, local).catch(() => {});
+          return { result: escalated(pushError) };
+        }
+        const now2 = await headOfWorktree(run, wt);
+        if (pack && now2) {
+          const stamped = await restampPack(fixDeps(), task.id, slug, number, pack, now2, null, { repoPath: task.repoPath ?? null, emit: context.emit });
+          if (!stamped.ok) return { result: escalated(`${what} (${now2.slice(0, 7)}); ${stamped.reason}, so Evidence runs again`, "head_moved") };
+        }
+        cursor.published = now2 ? { sha: now2 } : cursor.published;
+        return { moved: true, ...(now2 ? { head: now2 } : {}) };
+      };
+      if (classes.includes("parent_merged")) {
+        // The PR first: whatever happens to the branch, it no longer targets a branch that is gone.
+        if (defaultBranch && prBase !== defaultBranch) await deps.github.retargetPr(slug, number, defaultBranch);
+        const run = runOf();
+        const local = await headOfWorktree(run, wt);
+        if (!local || local !== head) return { result: escalated("the worktree is not at the PR's head; the branch is not moved off its parent", "head_moved") };
+        const moved = await (stack.unstack ?? hostUnstack)(run, wt, task.repoPath, defaultOf);
+        if (!moved.ok) return stuck(moved.conflicts.length > 0 ? `the parent merged and moving the branch onto the default branch stops on: ${moved.conflicts.join(", ")}` : `the parent merged and the branch could not be moved onto the default branch: ${plain(moved.error, 200)}`);
+        const done = await settled(run, local, "the branch is moved onto the default branch");
+        if (done.result) return done;
+        // The PR's own section, without the stacked line.
+        const current = await deps.github.prFacts(slug, number).catch(() => null);
+        if (current) {
+          const recordedBase = await (stack.recordedBase ?? (async (path: string) => (await stackOf(path)).sha))(wt).catch(() => null);
+          const fresh = buildPr({ task: task as never, plan: approvedPlan(context.approvals), repoSlug: slug, extra: prExtraOf(context, { base: recordedBase, head: done.head ?? null }) }).body;
+          await deps.github.updatePrBody(slug, number, mergePrSection(current.body ?? "", fresh)).catch(() => {});
+        }
+        await stack.clearBase?.(task.id);
+        // The parent's branch goes only when the repository deletes merged branches and no other open card is stacked on it.
+        const config = { ...FACTORY_DEFAULTS.ship.merge, ...((await deps.policies.for(task.repoPath)).factory?.ship?.merge ?? {}) };
+        if (config.delete_branch && !(await (stack.hasChildren?.(sf.parent.id) ?? Promise.resolve(true)).catch(() => true))) await deps.github.deleteBranch(slug, sf.parent.branch).catch(() => {});
+        await note(`the parent merged: the branch is on the default branch${done.head ? ` (${done.head.slice(0, 7)})` : ""} and its PR targets it`);
+        return { moved: true };
+      }
+      if (classes.includes("parent_changed")) {
+        if ((cursor.stackRebases ?? 0) >= STACK_REBASES_MAX) return stuck(`the parent changed again after the branch was rebased onto it ${STACK_REBASES_MAX} times`);
+        const run = runOf();
+        const local = await headOfWorktree(run, wt);
+        if (!local || local !== head) return { result: escalated("the worktree is not at the PR's head; the branch is not rebased", "head_moved") };
+        cursor.stackRebases = (cursor.stackRebases ?? 0) + 1;
+        await saveCursor(deps.stateDir, task.id, cursor);
+        const result = await (stack.rebase ?? rebaseOntoBase)(run, wt, task.repoPath, defaultOf);
+        if (!result.ok) return stuck(result.conflicts.length > 0 ? `the parent changed and the rebase stops on: ${result.conflicts.join(", ")}` : `the parent changed and the branch could not be rebased: ${plain(result.error, 200)}`);
+        const done = await settled(run, local, "the branch is rebased onto its parent");
+        if (done.result) return done;
+        await note(`rebased onto the parent's new tip${done.head ? ` (${done.head.slice(0, 7)})` : ""}`);
+        return { moved: true };
+      }
+      return {};
+    };
+
     /** The base moved and the PR conflicts: rebase once, push with a lease, re-stamp the pack; a second time is a person's. */
     const watchConflict = async (head: string, pack: EvidencePack | null): Promise<Outcome> => {
       const stuck = (why: string): Outcome => ({ result: escalated(why, "other", { verdict: "conflict_unresolvable", options: ["rebase the branch by hand and approve", "merge the default branch into the branch and approve"] }) });
@@ -579,7 +687,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
           const before = cursor.lastEvents ?? [];
           for (const c of classes) if (!before.includes(c)) {
             cursor.lastEvent = { class: c, at: now().toISOString() };
-            await context.emit?.("ship.event", { kind: "poll", class: c }).catch(() => {});
+            await context.emit?.("ship.event", { kind: c === "parent_merged" || c === "parent_changed" ? "stack" : "poll", class: c }).catch(() => {});
           }
           cursor.lastEvents = classes;
           // A checks run that left failure and came back is a new red even under the same run id.
@@ -604,6 +712,11 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
                 moved = true;
                 break;
               }
+            }
+            if (!moved && facts.stack && deps.stack && head) {
+              const out = await watchStack(facts.stack, pr.baseRef, head, pack, classes);
+              if (out.result) return out.result;
+              moved = out.moved ?? false;
             }
             if (!moved && classes.includes("conflict") && head) {
               const out = await watchConflict(head, pack);

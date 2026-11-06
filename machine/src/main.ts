@@ -255,6 +255,7 @@ const evidenceDecisions: { decide: ((context: EvidenceContext, repoPath: string 
 const stackDeps = {
   baseFor: (task: Parameters<typeof pipeline.baseOf>[0]) => pipeline.baseOf(task),
   clearBase: (id: string) => pipeline.clearBase(id),
+  hasChildren: async (id: string) => (await pipeline.stackedOn(id)).length > 0,
   facts: (slug: string, task: Parameters<typeof pipeline.baseOf>[0]) =>
     stackFactsOf(
       {

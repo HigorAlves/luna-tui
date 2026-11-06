@@ -72,6 +72,10 @@ const ShipCursorSchema = z.object({
     .optional(),
   /** The last event class the watch logged (an enum value) and when. */
   lastEvent: z.object({ class: z.string(), at: z.string() }).optional(),
+  /** How many times the branch was rebased onto a parent that changed (at most `STACK_REBASES_MAX`, then a person). */
+  stackRebases: z.number().int().optional(),
+  /** The parent state a person was last asked about (`gone`): the same state is not asked twice. */
+  stackGone: z.string().optional(),
   /** `ship.ready` was logged: readiness is announced the first time it is true. */
   readyNoted: z.boolean().optional(),
 });
