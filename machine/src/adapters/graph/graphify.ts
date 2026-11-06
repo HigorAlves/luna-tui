@@ -19,6 +19,7 @@ import { impact } from "../../domain/graph-impact.ts";
 import { type LocateGraph, locate } from "../../domain/graph-locate.ts";
 import type { SandboxResult, SandboxRun } from "../docker/docker.ts";
 import { commitsBehind, defaultBranchFile, ensureCleanCheckout, graphCheckoutPath, headCommit, isAncestor } from "../git/worktree.ts";
+import { safe } from "../../domain/evidence-markdown.ts";
 import { repoSlug } from "./slug.ts";
 
 /** Where a repo's misses file is mounted in the build container. */
@@ -122,15 +123,26 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
   }
 
   const inflight = new Map<string, Promise<GraphStamp>>();
+  /** The last failure of each repository's build, flattened and capped, whoever asked for the build; a success clears it. */
+  const failures = new Map<string, string>();
 
   async function buildNow(repoPath: string, signal?: AbortSignal): Promise<GraphStamp> {
     const repoDir = dirOf(repoPath);
     const checkout = await git.ensureCleanCheckout(repoPath, graphCheckoutPath(repoSlug(repoPath), deps.worktreesDir));
     const commit = await git.headCommit(checkout);
     const target = join(repoDir, commit);
+    // The image is chosen once: the sandbox runs in it, the stamp names it, and the cache check below compares it.
+    let image: string;
+    let imageName: string | null = null;
+    try {
+      image = typeof deps.image === "function" ? await deps.image(repoPath, signal) : deps.image;
+      imageName = deps.imageId ? await deps.imageId(image) : null;
+    } catch (error) {
+      throw new GraphBuildError(`the graph build did not run: ${(error as Error).message}`);
+    }
     const have = await readStamp(target);
     const expected = (await deps.graphifyVersion?.().catch(() => null)) ?? null;
-    if (have && (expected === null || have.graphify === expected)) {
+    if (have && (expected === null || have.graphify === expected) && (imageName === null || have.image === imageName)) {
       const previous = current(repoPath);
       if (previous !== target) await point(repoDir, commit);
       return have;
@@ -142,9 +154,7 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
     await rm(building, { recursive: true, force: true });
     await mkdir(building, { recursive: true });
     let result: SandboxResult;
-    let image: string;
     try {
-      image = typeof deps.image === "function" ? await deps.image(repoPath, signal) : deps.image;
       result = await deps.sandbox({
         name: `luna-graph-${repoSlug(repoPath)}`,
         image,
@@ -168,8 +178,8 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
     }
     let stamp = result.exitCode === 0 ? await readStamp(building) : null;
     // The image the graph was built in, by its id: the machine records it, the container cannot.
-    if (stamp && deps.imageId) {
-      stamp = { ...stamp, image: await deps.imageId(image) };
+    if (stamp && imageName !== null) {
+      stamp = { ...stamp, image: imageName };
       await writeStamp(join(building, "stamp.json"), JSON.stringify(stamp, null, 2));
     }
     if (!stamp) {
@@ -199,7 +209,13 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
     build(repoPath, signal) {
       const running = inflight.get(repoPath);
       if (running) return running;
-      const entry = buildNow(repoPath, signal).finally(() => {
+      const entry = buildNow(repoPath, signal).then(
+        (stamp) => (failures.delete(repoPath), stamp),
+        (error: unknown) => {
+          failures.set(repoPath, safe(error instanceof Error ? error.message : String(error)).slice(0, 400));
+          throw error;
+        },
+      ).finally(() => {
         if (inflight.get(repoPath) === entry) inflight.delete(repoPath);
       });
       inflight.set(repoPath, entry);
@@ -264,9 +280,18 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       }
     },
 
+    health(repoPath) {
+      return { building: inflight.has(repoPath), lastFailure: failures.get(repoPath) ?? null };
+    },
+
     async isFresh(repoPath, stamp, baseCommit) {
       const expected = (await deps.graphifyVersion?.().catch(() => null)) ?? null;
       if (expected !== null && stamp.graphify !== expected) return false;
+      // The image the repository's stages run in now: a graph built in another one (its base was approved anew) is stale, and one that cannot be compared is too.
+      if (deps.imageId) {
+        const now = await (async () => deps.imageId!(typeof deps.image === "function" ? await deps.image(repoPath) : deps.image))().catch(() => null);
+        if (now === null || stamp.image !== now) return false;
+      }
       if (stamp.commit === baseCommit) return true;
       return !(await isAncestor(repoPath, stamp.commit, baseCommit));
     },

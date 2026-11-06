@@ -178,6 +178,57 @@ describe("a graph and the image that builds it", () => {
   });
 });
 
+describe("a graph is only as fresh as the image it was built in", () => {
+  it("rebuilds when the repository's image changed at the same commit, and says so in isFresh", async () => {
+    let image = "img:1";
+    const { graph, repo, seen } = setup(0, { image: async () => image, imageId: async (i) => `sha256:id-of-${i}` });
+    const first = await graph.build(repo);
+    expect(await graph.isFresh(repo, first, first.commit)).toBe(true);
+    await graph.build(repo);
+    expect(seen).toHaveLength(1);
+    image = "img:2";
+    expect(await graph.isFresh(repo, first, first.commit)).toBe(false);
+    const second = await graph.build(repo);
+    expect(seen).toHaveLength(2);
+    expect(seen[1]?.image).toBe("img:2");
+    expect(second.image).toBe("sha256:id-of-img:2");
+  });
+
+  it("stamps the id of the image the sandbox ran in, resolved once", async () => {
+    const calls: string[] = [];
+    let n = 0;
+    const { graph, repo, seen } = setup(0, { image: async () => `img:${++n}`, imageId: async (i) => (calls.push(i), `sha256:${i}`) });
+    const stamp = await graph.build(repo);
+    expect(seen[0]?.image).toBe("img:1");
+    expect(stamp.image).toBe("sha256:img:1");
+    expect(n).toBe(1);
+  });
+
+  it("treats a stamp with no image as stale when the machine can name images", async () => {
+    const { graph, repo } = setup(0);
+    const first = await graph.build(repo);
+    const other = graphifyGraph({ stateDir: join(repo, ".."), image: "img:1", imageId: async () => "sha256:x", worktreesDir: "/x", sandbox: async () => ({ exitCode: 1, timedOut: false, aborted: false, transcriptPath: "" }) });
+    expect(first.image).toBeUndefined();
+    expect(await other.isFresh(repo, first, first.commit)).toBe(false);
+  });
+});
+
+describe("what every build says of the repository's health", () => {
+  it("shows a running build and its failure, whoever started it, and clears the failure on a success", async () => {
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    const { graph, repo } = setup(1, { image: async () => (await gate, "img:1") });
+    expect(graph.health?.(repo)).toEqual({ building: false, lastFailure: null });
+    const pending = graph.build(repo).catch((e: Error) => e);
+    expect(graph.health?.(repo)).toEqual({ building: true, lastFailure: null });
+    release();
+    await pending;
+    const failed = graph.health?.(repo);
+    expect(failed?.building).toBe(false);
+    expect(failed?.lastFailure).toContain("failed");
+  });
+});
+
 describe("stamp.json written by a build in the repository's image", () => {
   it("is not followed when it is a link, and a link planted by the build is replaced, not written through", async () => {
     const outside = join(realpathSync(mkdtempSync(join(tmpdir(), "outside-"))), "target.json");
