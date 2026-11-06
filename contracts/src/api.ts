@@ -502,6 +502,34 @@ export interface UsageLatch {
   until: string;
 }
 
+/** One repository's sandbox image and code graph, for `GET /repos`. Text (a base's name, a failure reason) is untrusted: flattened and capped by the machine, still never rendered as markup. */
+export interface RepoHealth {
+  /** The checkout's path. */
+  repo: string;
+  image: {
+    /** The image its stages run in: the machine's, or its own. */
+    inUse: string;
+    /** The base `sandbox.image.base` names; null when the repository runs on the machine's image. */
+    base: string | null;
+    /** When its own image was built by this machine; null when unknown or not its own. */
+    builtAt: string | null;
+    lastFailure: string | null;
+    /** A base the repository's luna.yaml names that no person approved yet (flattened, capped); it runs on the machine's image until `POST /repos/base/approve`. */
+    pendingBase: string | null;
+  };
+  graph: {
+    /** `policy.graph` is on. */
+    on: boolean;
+    commit: string | null;
+    /** Commits the default branch has over the graph's; null when unknown. */
+    behind: number | null;
+    graphify: string | null;
+    builtAt: string | null;
+    building: boolean;
+    lastFailure: string | null;
+  };
+}
+
 /** One repo's slice of the window, for `GET /metrics?groupBy=repo`. */
 export interface RepoMetrics {
   /** The checkout's path; null for tasks with no repo. */

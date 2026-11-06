@@ -54,7 +54,7 @@ afterEach(() => rm(stateDir, { recursive: true, force: true }));
 
 function setup(
   answers: Partial<GitHub> = {},
-  over: { policy?: Partial<Policy>; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean } = {},
+  over: { policy?: Partial<Policy>; pack?: EvidencePack | null; approvals?: StageContext["approvals"]; maxWaitMs?: number; codeowners?: string | null; abort?: AbortController; loop?: ShipMonitorDeps["loop"]; truth?: ShipMonitorDeps["truth"]; evidence?: Partial<ShipMonitorDeps["evidence"]>; viewer?: boolean; onMerged?: ShipMonitorDeps["onMerged"] } = {},
 ) {
   const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), prMerged: async () => open, prFacts: async () => node(), prHeadSha: async () => HEAD, prActivity: async () => [], prFiles: async () => [], mergePr: async () => {}, ...answers });
   let clock = START.getTime();
@@ -66,6 +66,7 @@ function setup(
     policies: { for: async () => ({ ...DEFAULT_POLICY, ...over.policy }) },
     evidence: { load: async () => (over.pack === undefined ? pack() : over.pack), ...over.evidence },
     stateDir,
+    ...(over.onMerged ? { onMerged: over.onMerged } : {}),
     pollMs: 60_000,
     ...(over.maxWaitMs !== undefined ? { maxWaitMs: over.maxWaitMs } : {}),
     sleep: async (ms) => {
@@ -102,6 +103,13 @@ describe("the ship monitor", () => {
     expect(result).toMatchObject({ outcome: "pass", detail: { merged: { sha: HEAD, by: "machine" }, prUrl: REF.url, number: 3 } });
     expect(calls(github, "mergePr")).toEqual([["mergePr", "o/a", 3, { sha: HEAD }]]);
     expect(slept).toEqual([]);
+  });
+
+  it("asks for a rebuild of the repository's graph at once when the PR is seen merged, by a person or by the machine", async () => {
+    const asked: string[] = [];
+    const person = setup({ prMerged: async () => merged }, { onMerged: (repo) => void asked.push(repo) });
+    await person.run();
+    expect(asked).toEqual(["/repo"]);
   });
 
   it("does not merge with auto_merge off, and passes when a person merges later", async () => {

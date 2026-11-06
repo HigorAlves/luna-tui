@@ -7,6 +7,9 @@
     "./credentials": "./src/adapters/credentials/index.ts",
     "./docker": "./src/adapters/docker/docker.ts",
     "./telemetry": "./src/bootstrap/telemetry.ts",
+    "./egress": "./src/bootstrap/egress.ts",
+    "./config": "./src/config.ts",
+    "./policy": "./src/application/policy.ts",
     "./decisions": "./src/bootstrap/decisions.ts"
   },
   "scripts": {

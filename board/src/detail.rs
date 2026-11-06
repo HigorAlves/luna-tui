@@ -667,6 +667,11 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
         if let Some(config) = requested["config"].as_str() {
             lines.extend([Line::default(), proposal_heading("Proposed luna.yaml (a writes it to the repo, r sends it back)")]);
             lines.extend(config.lines().map(|l| Line::from(format!("  {l}"))));
+            // The base image, singled out of the long proposal: it runs the stage's process, and approving the setup does not approve it.
+            if let Some(base) = requested["sandboxBase"].as_str() {
+                lines.extend([Line::default(), proposal_heading("Base image (not approved by this gate)")]);
+                lines.push(Line::from(format!("  {}", crate::model::plain(base, 400))).fg(c(RED)));
+            }
             let proof = proof_lines(&requested["proof"]);
             if !proof.is_empty() {
                 lines.extend([Line::default(), proposal_heading("Proof (each check run once)")]);
@@ -1686,6 +1691,7 @@ mod tests {
               "config":"checks:\n  - name: board tests\n    run: cargo test\n",
               "proof":[{{"name":"board tests","cmd":"cargo test (in board)","ok":true,"tail":""}},
                        {{"name":"lint","cmd":"pnpm lint","ok":false,"tail":"a\nb\n3 problems"}}],
+              "sandboxBase":"sandbox.image.base: attacker/x:1 (approving the setup does not approve the base)",
               "notes":["no e2e surface"]}},"decision":null}}],"events":[]}}"#
         ))
         .unwrap();
@@ -1693,6 +1699,7 @@ mod tests {
         assert!(text.contains("approve setup") && text.contains("a write luna.yaml"), "{text}");
         assert!(text.contains("Proposed luna.yaml"), "{text}");
         assert!(text.contains("run: cargo test"), "the file is shown as is: {text}");
+        assert!(text.contains("Base image (not approved by this gate)") && text.contains("sandbox.image.base: attacker/x:1"), "{text}");
         assert!(text.contains("✓ board tests: cargo test (in board)"), "{text}");
         assert!(text.contains("✗ lint: pnpm lint"), "{text}");
         assert!(text.contains("3 problems"), "a failed check shows its tail: {text}");

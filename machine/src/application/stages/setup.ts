@@ -6,6 +6,7 @@ import { join } from "node:path";
 
 import { gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
+import { safe } from "../../domain/evidence-markdown.ts";
 import { checkCommand } from "../../domain/checks.ts";
 import { renderLunaConfig, validateLunaConfig } from "../../domain/luna-config.ts";
 import type { ServiceSpec } from "@hardness/contracts";
@@ -23,7 +24,7 @@ export interface SetupDeps {
   exec: (
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> },
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string },
   ) => Promise<ExecResult>;
   stateDir: string;
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
@@ -83,6 +84,7 @@ export function setupRunner(deps: SetupDeps): StageRunner {
               timeoutMs: remaining,
               env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "setup" },
               services: config.services ?? {},
+              ...(task.repoPath ? { repoPath: task.repoPath } : {}),
             });
       if (signal.aborted) return { outcome: "fail", detail: { error: "aborted" } };
       const output = `${result.stdout}${result.stderr ? `\n${result.stderr}` : ""}`;
@@ -101,6 +103,8 @@ export function setupRunner(deps: SetupDeps): StageRunner {
         summary: typeof answer?.summary === "string" ? answer.summary : "",
         notes: Array.isArray(answer?.notes) ? answer.notes : [],
         config: text,
+        // The base image is singled out of the long proposal: it runs the stage's process, so approving this setup does not approve it.
+        ...(config.sandbox?.image?.base ? { sandboxBase: `sandbox.image.base: ${safe(config.sandbox.image.base).slice(0, 255)} (this setup sets it; approving the setup does not approve the base, which a person approves from the repository's row on the Floor)` } : {}),
         proof,
         ...(identity ? {} : { note: "git has no identity for this repo; checks that commit would fail as nobody" }),
       },

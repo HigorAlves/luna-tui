@@ -57,10 +57,12 @@ import { createJiraTriager } from "./application/stages/jira-intake-runner.ts";
 import { PgPackRunStore } from "./adapters/persistence/pack-run-store.ts";
 import { MINUTE_MS, Ticker } from "./application/ticker.ts";
 import { graphifyGraph } from "./adapters/graph/graphify.ts";
-import { imageId, runSandbox } from "./adapters/docker/docker.ts";
+import { imageId, imageLabel, runSandbox } from "./adapters/docker/docker.ts";
 import { LOCKFILES, type EnvRecord, envOf } from "./domain/env-hash.ts";
 import { lockfilesAt } from "./adapters/git/worktree.ts";
 import { GraphWatch } from "./application/graph-watch.ts";
+import { imageSpecOf } from "./domain/image-spec.ts";
+import { repoHealthOf } from "./application/repo-health.ts";
 import { EngineBudgetWatch, engineBudgetGate, gatedCredentials, runtimeKillSwitch } from "./application/engine-gates.ts";
 import { PgTaskStore } from "./adapters/persistence/task-store.ts";
 import { machineCredentials } from "./adapters/credentials/index.ts";
@@ -190,7 +192,10 @@ const watcher = new StreamWatcher(bus);
 // ever called once a stage actually runs, by which point `pipeline` is set.
 let pipeline: Pipeline;
 /** One Graphify code graph per repo, built from its default branch in the runner image. */
-const graph = graphifyGraph({ stateDir: config.stateDir, image: config.runnerImage, worktreesDir: config.worktreesDir, sandbox: runSandbox });
+// A graph is built in the repository's own image, so the Graphify that built it is the one that reads it; the resolver is bound
+// once the stages (and with them the repository images) exist.
+let graphImage: (repoPath: string, signal?: AbortSignal) => Promise<string> = async () => config.runnerImage;
+const graph = graphifyGraph({ stateDir: config.stateDir, image: (repoPath, signal) => graphImage(repoPath, signal), imageId, graphifyVersion: () => imageLabel(config.runnerImage, "dev.hardness.graphify"), worktreesDir: config.worktreesDir, sandbox: runSandbox });
 /** The graph watch, built below once the pipeline and the repo map exist; a stage with no graph asks it for a first build. */
 let graphWatch: GraphWatch | null = null;
 /** Each engine's credential as every part of the machine sees it: an engine on a runtime
@@ -245,7 +250,7 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   credentials,
   triageSignals,
   planDecisions,
-  { graph, ensure: (repoPath) => graphWatch?.ensure(repoPath) },
+  { graph, ensure: (repoPath) => graphWatch?.ensure(repoPath), rebuild: (repoPath) => graphWatch?.requestRebuild(repoPath) },
   buildDecisions,
   verifyDecisions,
   {
@@ -265,6 +270,10 @@ const { real, verifyPack, checksExec, agentDeps } = await buildRealStages(
   // Triage's card_search: the task's own repository's cards, from the board the pipeline keeps.
   { search: async ({ repoPath, selfId, selfSource, query }) => searchCards(await pipeline.list(), query, { repoPath, selfId, selfSource, now: new Date() }) },
 );
+if (agentDeps) {
+  graphImage = agentDeps.repoImageOf;
+  agentDeps.imageEvents.sink = (event) => { if (event.taskId) void pipeline.recordImageEvent(event.taskId, event).catch(() => undefined); else console.warn(`repository image: ${JSON.stringify(event)}`); };
+}
 /** Verifying always runs for real: the project's checks in the runner image when there is one
  *  (what implementing installed there does not run on the host), else on the host; the review
  *  pack joins when agents are on. */
@@ -280,7 +289,7 @@ const realVerifyRunner = verifyRunner({
     const env = (await pipeline.latestStageFinish(taskId, "implementing"))?.detail?.env as EnvRecord | undefined;
     return env && typeof env.hash === "string" ? env : null;
   },
-  envOf: async (path, commit) => envOf({ image: await imageId(config.runnerImage), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
+  envOf: async (path, commit, repoPath) => envOf({ image: await imageId(agentDeps && repoPath ? await agentDeps.repoImageOf(repoPath) : config.runnerImage), lockfiles: await lockfilesAt(path, commit, LOCKFILES), commit }),
   graph,
   stateDir: config.stateDir,
   get decide() {
@@ -435,6 +444,7 @@ const slackInbox = new SlackInbox({
 /** Packs on demand (`POST /runs`): the stage image, each call with its own engine's credential;
  *  off only with MACHINE_AGENTS=off. Their cost counts toward the day's ceiling, which they obey. */
 const packRuns = buildPackRuns(config, {
+  ...(config.egress.enabled && agentDeps?.egress ? { egress: agentDeps.egress } : {}),
   credentials,
   store: new PgPackRunStore(db),
   budget: { dailyUsd: pipeline.budget.dailyUsd, spentTodayUsd: () => pipeline.spentTodayUsd() },
@@ -457,7 +467,34 @@ if (packRuns) shipDecisions.decide = async (pack, ship) => tagged(await packRuns
 buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
 if (packRuns) buildDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "build" }, "build"));
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
+/** Every checkout the machine knows: the repo map, the repos dir's remembered ones, and the repos of live tasks. */
+const knownRepos = async (): Promise<string[]> => {
+  const known = [...Object.values(config.repoMap), ...(await repoMap.remembered())];
+  for (const task of await pipeline.list()) if (task.repoPath && !isTerminal(task.state)) known.push(task.repoPath);
+  return [...new Set(known)];
+};
+/** A person approves the exact base the repository's luna.yaml (on the user's checkout) names now; any other reference is refused. */
+const approveBase = async (repo: string, base: string): Promise<{ ok: true } | { ok: false; reason: string }> => {
+  if (!agentDeps) return { ok: false, reason: "repository images are off on this machine" };
+  if (!(await knownRepos()).includes(repo)) return { ok: false, reason: "the machine does not know that repository" };
+  const spec = imageSpecOf((await policies.for(repo)).factory.sandbox.image);
+  if (spec.kind !== "repo" || spec.base !== base) return { ok: false, reason: "that is not the base in the repository's luna.yaml now" };
+  await agentDeps.approvals.approve(repo, base);
+  agentDeps.repoImages.approved(repo);
+  return { ok: true };
+};
 const app = createApp({
+  approveBase,
+  repoHealth: () =>
+    repoHealthOf({
+      repos: [],
+      knownRepos,
+      policy: (repoPath) => policies.for(repoPath),
+      machineImage: config.runnerImage,
+      images: { status: (repoPath) => agentDeps?.repoImages.status(repoPath) ?? null, pending: async (repoPath) => (await agentDeps?.repoImages.pending(repoPath)) ?? null },
+      graph,
+      watch: { health: (repoPath) => graphWatch?.health(repoPath) ?? { building: false, lastFailure: null } },
+    }),
   db,
   pipeline,
   bus,
@@ -566,11 +603,7 @@ if (config.jira) {
 graphWatch = new GraphWatch({
   graph,
   policies,
-  repos: async () => {
-    const known = [...Object.values(config.repoMap), ...(await repoMap.remembered())];
-    for (const task of await pipeline.list()) if (task.repoPath && !isTerminal(task.state)) known.push(task.repoPath);
-    return [...new Set(known)];
-  },
+  repos: knownRepos,
 });
 const graphTicker = config.agents && config.graphIntervalSecs !== null ? new Ticker(() => void graphWatch?.tick(), config.graphIntervalSecs * 1000) : null;
 if (graphTicker) {

@@ -18,12 +18,30 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 # Graphify, pinned, for the machine's per-repo code graph: a graph build is this image with the
-# entrypoint overridden to /graph-tools/build.py (code-only, no model), and a stage reads the
+# entrypoint overridden to /opt/luna/graph-tools/build.py (below, in the machine's layer; the version is the label dev.hardness.graphify) (code-only, no model), and a stage reads the
 # result read-only at /graph with the `graphify query` verbs. Installed as root, before USER node.
 ARG GRAPHIFY_VERSION=0.9.34
-RUN pip3 install --no-cache-dir --break-system-packages "graphifyy==${GRAPHIFY_VERSION}"
-COPY machine/runner/graph/build.py /graph-tools/build.py
-RUN chmod -R a+rX /graph-tools
+
+# The machine's layer, /opt/luna: everything a stage needs of the machine, in one directory that runs
+# when copied onto another glibc Linux image (machine/runner/layer.md). Its Python is a relocatable
+# standalone build with its own Graphify, so the base image's Python is never touched. The same pinned
+# Graphify as above: the graph is built and queried by one version. Node, ripgrep and their shared
+# libraries, gh, the Codex CLI and the factory follow below.
+ARG PYTHON_STANDALONE=20261026
+ARG PYTHON_VERSION=3.13.18
+RUN mkdir -p /opt/luna/bin /opt/luna/lib /opt/luna/libexec /opt/luna/graph-tools \
+ && arch="$(dpkg --print-architecture)" \
+ && case "$arch" in \
+      amd64) parch=x86_64; psum=126343c54daff4068efc1ac269518d0cc202d57857794948103dd1454e8881be ;; \
+      arm64) parch=aarch64; psum=b48451865bde9a39e2f3e71d7fdcbf1f32615f50f24d78dc50d04ede6501cf81 ;; \
+      *) echo "unsupported architecture $arch" >&2; exit 1 ;; esac \
+ && curl -fsSL -o /tmp/python.tar.gz "https://github.com/astral-sh/python-build-standalone/releases/download/${PYTHON_STANDALONE}/cpython-${PYTHON_VERSION}%2B${PYTHON_STANDALONE}-${parch}-unknown-linux-gnu-install_only.tar.gz" \
+ && echo "${psum}  /tmp/python.tar.gz" | sha256sum -c - \
+ && tar -xz -C /opt/luna -f /tmp/python.tar.gz && rm /tmp/python.tar.gz \
+ && /opt/luna/python/bin/python3 -m pip install --no-cache-dir "graphifyy==${GRAPHIFY_VERSION}" \
+ && ln -s ../python/bin/graphify /opt/luna/bin/graphify \
+ && /opt/luna/bin/graphify --help >/dev/null
+COPY machine/runner/graph/build.py /opt/luna/graph-tools/build.py
 
 # Go, for repos whose suite is `go test ./...` (fixtures/golden-cli is one). The stage runs
 # with HOME=/tmp on a read-only root, so the module and build caches land on the tmpfs;
@@ -51,7 +69,9 @@ ENV PATH="/usr/local/cargo/bin:${PATH}"
 # ChatGPT login's token, and Codex owns its refresh (it rewrites $CODEX_HOME/auth.json, a per-run
 # copy the machine mounts writable at /tmp/.codex). Without it eve would want an OS keychain.
 ARG CODEX_VERSION=0.164.0
-RUN npm install -g --no-audit --no-fund "@openai/codex@${CODEX_VERSION}" \
+RUN npm install -g --no-audit --no-fund --prefix /opt/luna/codex "@openai/codex@${CODEX_VERSION}" \
+ && ln -s ../codex/bin/codex /opt/luna/bin/codex \
+ && ln -s /opt/luna/codex/bin/codex /usr/local/bin/codex \
  && codex --version \
  && rm -rf /root/.npm
 ENV CODEX_HOME=/tmp/.codex EVE_TELEMETRY_DISABLED=1
@@ -60,7 +80,7 @@ ENV CODEX_HOME=/tmp/.codex EVE_TELEMETRY_DISABLED=1
 # workspace's own lockfile so the image runs exactly what the checkout tests. The Agent SDK
 # and eve are installed now, so a stage needs no network to start. .pnpmfile.cjs keeps eve's
 # optional framework peers (next, react, vite) out, which the lockfile records.
-WORKDIR /factory-src
+WORKDIR /opt/luna/factory-src
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .pnpmfile.cjs ./
 COPY contracts/package.json contracts/
 COPY factory/package.json factory/
@@ -77,9 +97,28 @@ RUN cd factory && node src/runtimes/eve/build.ts \
 # Declared here, not at the top: every RUN after an ARG sees it as environment, so a new commit
 # hash would otherwise rebuild the apt, pip, Go, Rust and Codex layers on every branch.
 ARG FACTORY_REF=unknown
-RUN echo "${FACTORY_REF}" > /factory-src/factory/.ref \
- && chmod -R a+rX /factory-src
-ENV LUNA_FACTORY_ROOT=/factory-src/factory
+RUN echo "${FACTORY_REF}" > /opt/luna/factory-src/factory/.ref \
+ && ln -s /opt/luna/factory-src /factory-src
+ENV LUNA_FACTORY_ROOT=/opt/luna/factory-src/factory
+
+# Node and ripgrep go in as binaries with their shared libraries beside them (everything but glibc itself),
+# behind wrappers that point only those two at the bundled libraries; gh is a static binary. luna-stage is
+# the stage's entry: the factory on the layer's own Node, with the layer's tools first on PATH.
+COPY machine/runner/luna-stage /opt/luna/bin/luna-stage
+COPY machine/runner/layer-wrapper /opt/luna/bin/.wrapper
+# The egress proxy (machine/runner/egress/proxy.ts): the machine starts it as a second container of this image, the only door
+# out of a run's network. One file of erasable TypeScript on the layer's own Node; it is never run inside a stage container.
+COPY machine/runner/egress/proxy.ts /opt/luna/egress/proxy.ts
+ARG LAYER_REV=unknown
+LABEL dev.hardness.graphify="${GRAPHIFY_VERSION}"
+LABEL dev.hardness.egress="1"
+RUN for bin in /usr/local/bin/node /usr/bin/rg; do ldd "$bin" | awk '/=> \//{print $3}'; done | sort -u \
+      | grep -Ev '/(libc|libm|libdl|libpthread|librt|libutil|libresolv|ld-linux[^/]*)\.so' | xargs -r -I{} cp -L {} /opt/luna/lib/ \
+ && cp /usr/local/bin/node /opt/luna/libexec/node && cp /usr/bin/rg /opt/luna/libexec/rg && cp /usr/local/bin/gh /opt/luna/bin/gh \
+ && cp /opt/luna/bin/.wrapper /opt/luna/bin/node && cp /opt/luna/bin/.wrapper /opt/luna/bin/rg && rm /opt/luna/bin/.wrapper \
+ && chmod 0755 /opt/luna/bin/* && echo "${LAYER_REV}" > /opt/luna/KEY \
+ && chmod -R a+rX /opt/luna \
+ && /opt/luna/bin/node --version && /opt/luna/bin/rg --version | head -1 && /opt/luna/bin/gh --version | head -1
 
 # The machine runs the stage as its own host uid:gid (so the mounted worktree, run folder and
 # session dir are writable). Named volumes copy the image's permissions on first use: an open
@@ -88,4 +127,5 @@ ENV LUNA_FACTORY_ROOT=/factory-src/factory
 RUN mkdir -p /cache && chmod 0777 /cache
 USER node
 WORKDIR /work
-ENTRYPOINT ["node", "/factory-src/factory/src/main.ts"]
+ENV PATH="/opt/luna/bin:${PATH}"
+ENTRYPOINT ["/opt/luna/bin/luna-stage"]

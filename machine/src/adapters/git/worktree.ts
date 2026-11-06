@@ -316,6 +316,17 @@ export async function lockfilesAt(path: string, commit: string, names: readonly 
   return found;
 }
 
+/** The blob id of each named file in the tree of `commit` in the USER's own repository (its own git directory, as `repoHead` reads it): what the commit holds, never a file in a folder. */
+export async function blobsAtRepo(repoPath: string, commit: string, names: readonly string[]): Promise<Record<string, string>> {
+  const found: Record<string, string> = {};
+  if (!/^[0-9a-f]{40,64}$/.test(commit)) return found;
+  for (const name of names) {
+    const out = await exec("git", [...HOST_GIT, "-C", repoPath, "rev-parse", "--verify", "--quiet", `${commit}:${name}`]);
+    if (out.code === 0 && out.stdout.trim()) found[name] = out.stdout.trim();
+  }
+  return found;
+}
+
 export function headCommit(path: string): Promise<string> {
   return execOrThrow("git", [...HOST_GIT, ...at(path), "rev-parse", "HEAD"]);
 }

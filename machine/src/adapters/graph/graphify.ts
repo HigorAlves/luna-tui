@@ -4,7 +4,10 @@
 // entrypoint overridden to `/graph-tools/build.py`, over a clean checkout of the default branch
 // mounted read-only; no model, no credential.
 import { existsSync, readlinkSync, statSync } from "node:fs";
-import { appendFile, lstat, mkdir, readFile, readdir, realpath, rename, rm, symlink } from "node:fs/promises";
+import { constants } from "node:fs";
+import { appendFile, lstat, mkdir, open, readFile, readdir, realpath, rename, rm, symlink } from "node:fs/promises";
+
+import { readRegularFile } from "../fs/bounded.ts";
 import { join, sep } from "node:path";
 
 import { FACTORY_DEFAULTS, isPlainRepoPath } from "@hardness/contracts";
@@ -20,6 +23,10 @@ import { repoSlug } from "./slug.ts";
 
 /** Where a repo's misses file is mounted in the build container. */
 const MISSES_MOUNT = "/graph-misses.jsonl";
+/** The misses file is the machine's own, but a card declares what goes in it: it is read only up to this size, and at most this many paths seed a shortlist. */
+const MAX_STAMP_BYTES = 64 * 1024;
+const MAX_MISSES_BYTES = 2 * 1024 * 1024;
+export const MAX_PAST_MISSES = 20;
 const BUILD_TIMEOUT_MS = 15 * 60_000;
 /** Commit folders kept per repo: the current graph and two older ones a running stage may still mount. */
 export const KEEP_GRAPHS = 3;
@@ -53,10 +60,26 @@ async function readGraphJson(dir: string): Promise<(GraphJson & LocateGraph) | n
 
 export interface GraphifyDeps {
   stateDir: string;
-  image: string;
+  /** The image a build runs in: one for every repository, or the repository's own (`RepoImages`). */
+  image: string | ((repoPath: string, signal?: AbortSignal) => Promise<string>);
+  /** The id of a local image, written into the stamp; absent, the stamp carries none. */
+  imageId?: (image: string) => Promise<string>;
+  /** The Graphify version the repository's image carries now; a stamp built by another version is stale. Absent, no version is compared. */
+  graphifyVersion?: () => Promise<string | null>;
   worktreesDir: string;
   sandbox: (run: SandboxRun) => Promise<SandboxResult>;
   git?: GraphGit;
+}
+
+/** Replaces `stamp.json` without following whatever the build left there: the entry is removed, then created exclusively and without following a link. */
+async function writeStamp(path: string, text: string): Promise<void> {
+  await rm(path, { force: true });
+  const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o644);
+  try {
+    await handle.writeFile(text, "utf8");
+  } finally {
+    await handle.close();
+  }
 }
 
 export function graphifyGraph(deps: GraphifyDeps): Graph {
@@ -67,7 +90,8 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
 
   async function readStamp(dir: string): Promise<GraphStamp | null> {
     try {
-      const stamp = JSON.parse(await readFile(join(dir, "stamp.json"), "utf8")) as GraphStamp;
+      // Written by a build that ran in the repository's image: read only a regular file (never a link out of the folder), within a cap.
+      const stamp = JSON.parse(await readRegularFile(join(dir, "stamp.json"), MAX_STAMP_BYTES)) as GraphStamp;
       return typeof stamp?.commit === "string" ? stamp : null;
     } catch {
       return null;
@@ -97,6 +121,69 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
     for (const { name } of newestFirst.slice(KEEP_GRAPHS)) await rm(join(repoDir, name), { recursive: true, force: true });
   }
 
+  const inflight = new Map<string, Promise<GraphStamp>>();
+
+  async function buildNow(repoPath: string, signal?: AbortSignal): Promise<GraphStamp> {
+    const repoDir = dirOf(repoPath);
+    const checkout = await git.ensureCleanCheckout(repoPath, graphCheckoutPath(repoSlug(repoPath), deps.worktreesDir));
+    const commit = await git.headCommit(checkout);
+    const target = join(repoDir, commit);
+    const have = await readStamp(target);
+    const expected = (await deps.graphifyVersion?.().catch(() => null)) ?? null;
+    if (have && (expected === null || have.graphify === expected)) {
+      const previous = current(repoPath);
+      if (previous !== target) await point(repoDir, commit);
+      return have;
+    }
+    // The files scope checks found outside the code map: the build counts them into the stamp.
+    const missesFile = join(repoDir, "misses.jsonl");
+    const hasMisses = existsSync(missesFile);
+    const building = join(repoDir, `building-${commit}`);
+    await rm(building, { recursive: true, force: true });
+    await mkdir(building, { recursive: true });
+    let result: SandboxResult;
+    let image: string;
+    try {
+      image = typeof deps.image === "function" ? await deps.image(repoPath, signal) : deps.image;
+      result = await deps.sandbox({
+        name: `luna-graph-${repoSlug(repoPath)}`,
+        image,
+        runDir: join(repoDir, "run"),
+        worktree: checkout,
+        writable: false,
+        gitDir: null,
+        input: {},
+        timeoutMs: BUILD_TIMEOUT_MS,
+        credential: { env: {}, mounts: [] },
+        labels: { luna: "graph", "luna.repo": repoSlug(repoPath) },
+        mounts: [{ host: building, container: "/graph", readOnly: false }, ...(hasMisses ? [{ host: missesFile, container: MISSES_MOUNT, readOnly: true }] : [])],
+        entrypoint: ["/opt/luna/python/bin/python3", "/opt/luna/graph-tools/build.py", "--input", "/work", "--out", "/graph", "--commit", commit, ...(hasMisses ? ["--misses", MISSES_MOUNT] : [])],
+        // Parsing untrusted code needs no network at all.
+        networkNone: true,
+        signal,
+      });
+    } catch (error) {
+      await rm(building, { recursive: true, force: true });
+      throw new GraphBuildError(`the graph build did not run: ${(error as Error).message}`);
+    }
+    let stamp = result.exitCode === 0 ? await readStamp(building) : null;
+    // The image the graph was built in, by its id: the machine records it, the container cannot.
+    if (stamp && deps.imageId) {
+      stamp = { ...stamp, image: await deps.imageId(image) };
+      await writeStamp(join(building, "stamp.json"), JSON.stringify(stamp, null, 2));
+    }
+    if (!stamp) {
+      await rm(building, { recursive: true, force: true });
+      const why = result.timedOut ? "timed out" : result.aborted ? "aborted" : `exit code ${result.exitCode}`;
+      throw new GraphBuildError(`the graph build of ${commit.slice(0, 7)} failed (${why})`);
+    }
+    await rm(target, { recursive: true, force: true });
+    await rename(building, target);
+    await point(repoDir, commit);
+    await prune(repoDir);
+    return stamp;
+  }
+
   return {
     async stampOf(repoPath) {
       const dir = current(repoPath);
@@ -107,57 +194,16 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       return current(repoPath);
     },
 
-    async build(repoPath, signal) {
-      const repoDir = dirOf(repoPath);
-      const checkout = await git.ensureCleanCheckout(repoPath, graphCheckoutPath(repoSlug(repoPath), deps.worktreesDir));
-      const commit = await git.headCommit(checkout);
-      const target = join(repoDir, commit);
-      const have = await readStamp(target);
-      if (have) {
-        const previous = current(repoPath);
-        if (previous !== target) await point(repoDir, commit);
-        return have;
-      }
-      // The files scope checks found outside the code map: the build counts them into the stamp.
-      const missesFile = join(repoDir, "misses.jsonl");
-      const hasMisses = existsSync(missesFile);
-      const building = join(repoDir, `building-${commit}`);
-      await rm(building, { recursive: true, force: true });
-      await mkdir(building, { recursive: true });
-      let result: SandboxResult;
-      try {
-        result = await deps.sandbox({
-          name: `luna-graph-${repoSlug(repoPath)}`,
-          image: deps.image,
-          runDir: join(repoDir, "run"),
-          worktree: checkout,
-          writable: false,
-          gitDir: null,
-          input: {},
-          timeoutMs: BUILD_TIMEOUT_MS,
-          credential: { env: {}, mounts: [] },
-          labels: { luna: "graph", "luna.repo": repoSlug(repoPath) },
-          mounts: [{ host: building, container: "/graph", readOnly: false }, ...(hasMisses ? [{ host: missesFile, container: MISSES_MOUNT, readOnly: true }] : [])],
-          entrypoint: ["python3", "/graph-tools/build.py", "--input", "/work", "--out", "/graph", "--commit", commit, ...(hasMisses ? ["--misses", MISSES_MOUNT] : [])],
-          // Parsing untrusted code needs no network at all.
-          networkNone: true,
-          signal,
-        });
-      } catch (error) {
-        await rm(building, { recursive: true, force: true });
-        throw new GraphBuildError(`the graph build did not run: ${(error as Error).message}`);
-      }
-      const stamp = result.exitCode === 0 ? await readStamp(building) : null;
-      if (!stamp) {
-        await rm(building, { recursive: true, force: true });
-        const why = result.timedOut ? "timed out" : result.aborted ? "aborted" : `exit code ${result.exitCode}`;
-        throw new GraphBuildError(`the graph build of ${commit.slice(0, 7)} failed (${why})`);
-      }
-      await rm(target, { recursive: true, force: true });
-      await rename(building, target);
-      await point(repoDir, commit);
-      await prune(repoDir);
-      return stamp;
+    // One build in flight per repository, whoever asks (the watch, a card waiting for its graph, a rebuild on merge): two at once
+    // would remove each other's output folder and collide on the container's name. The first caller's signal is the build's.
+    build(repoPath, signal) {
+      const running = inflight.get(repoPath);
+      if (running) return running;
+      const entry = buildNow(repoPath, signal).finally(() => {
+        if (inflight.get(repoPath) === entry) inflight.delete(repoPath);
+      });
+      inflight.set(repoPath, entry);
+      return entry;
     },
 
     async locate(repoPath, text, options) {
@@ -192,7 +238,35 @@ export function graphifyGraph(deps: GraphifyDeps): Graph {
       await appendFile(join(dirOf(repoPath), "misses.jsonl"), `${JSON.stringify(miss)}\n`);
     },
 
+    async behind(repoPath, commit) {
+      return behindOf(repoPath, commit).catch(() => null);
+    },
+
+    async pastMisses(repoPath) {
+      const file = join(dirOf(repoPath), "misses.jsonl");
+      try {
+        const info = await lstat(file);
+        if (!info.isFile() || info.size > MAX_MISSES_BYTES) return [];
+        const counts = new Map<string, number>();
+        for (const line of (await readFile(file, "utf8")).split("\n")) {
+          let row: { files?: unknown };
+          try {
+            row = JSON.parse(line) as { files?: unknown };
+          } catch {
+            continue;
+          }
+          if (!Array.isArray(row.files)) continue;
+          for (const f of row.files) if (typeof f === "string" && isPlainRepoPath(f)) counts.set(f, (counts.get(f) ?? 0) + 1);
+        }
+        return [...counts].sort((a, b) => b[1] - a[1]).slice(0, MAX_PAST_MISSES).map(([f]) => f);
+      } catch {
+        return [];
+      }
+    },
+
     async isFresh(repoPath, stamp, baseCommit) {
+      const expected = (await deps.graphifyVersion?.().catch(() => null)) ?? null;
+      if (expected !== null && stamp.graphify !== expected) return false;
       if (stamp.commit === baseCommit) return true;
       return !(await isAncestor(repoPath, stamp.commit, baseCommit));
     },

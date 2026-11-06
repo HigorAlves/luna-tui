@@ -1,3 +1,4 @@
+import { RepoImageError } from "../repo-images.ts";
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, mkdtempSync, realpathSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -13,6 +14,8 @@ import { HOST_GIT } from "../../adapters/git/worktree.ts";
 import { DEFAULT_POLICY } from "../../domain/policy.ts";
 import type { TaskRow } from "../../domain/task.ts";
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
+import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import type { SecretStore } from "../secrets.ts";
 import { type AgentDeps, agentRunners, runAgent } from "./pack-runner.ts";
 import type { StageContext } from "../ports.ts";
 import type { Graph, GraphStamp } from "../graph.ts";
@@ -533,6 +536,42 @@ describe("agent stages through packs", () => {
     expect(result.outcome).toBe("pass");
     expect(result.run?.outputCommit).toBe(made);
     expect(git(seen!.worktree, "log", "--format=%s")).toBe("slice 1\ninit");
+  });
+
+  it("runs the stage in the repository's own image, and records that image's id", async () => {
+    let made = "";
+    let seen: SandboxRun | undefined;
+    const d = { ...deps(fakeSandbox(() => output({ commit: made }), (r) => {
+      seen = r;
+      writeFileSync(join(r.worktree, "pnpm-lock.yaml"), "lock\n");
+      agent(r.worktree, "add", "-A");
+      agent(r.worktree, "commit", "-q", "-m", "slice 1");
+      made = agent(r.worktree, "rev-parse", "HEAD");
+    })), imageId: async (image: string) => `sha256:id-of-${image}`, repoImages: { ensure: async () => ({ image: "hardness-runner-shop:abc" }) } };
+    const result = await agentRunners(d).implementing!(context("implementing"));
+    expect(seen?.image).toBe("hardness-runner-shop:abc");
+    expect((result.detail?.env as { image: string }).image).toBe("sha256:id-of-hardness-runner-shop:abc");
+  });
+
+  it("makes triage wait for the repository's graph, and escalates as an environment problem when it cannot be built", async () => {
+    const sandbox = vi.fn();
+    const failing = { ...deps(sandbox), graphReady: async () => ({ state: "failed" as const, reason: "exit code 1" }) };
+    const result = await agentRunners(failing).triage!(context("triage"));
+    expect(result).toMatchObject({ outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "graph" } });
+    expect(sandbox).not.toHaveBeenCalled();
+    const seen: boolean[] = [];
+    const going = { ...deps(fakeSandbox(output())), graphReady: async (i: { skip: boolean }) => (seen.push(i.skip), { state: "ready" as const }) };
+    await agentRunners(going).triage!(context("triage"));
+    expect(seen).toEqual([false]);
+  });
+
+  it("escalates as an environment problem, with the reason, when the repository's image cannot be built", async () => {
+    const sandbox = vi.fn();
+    const d = { ...deps(sandbox), repoImages: { ensure: async () => { throw new RepoImageError("step 3 failed: no such package"); } } };
+    const result = await agentRunners(d).implementing!(context("implementing"));
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, reason: expect.stringContaining("no such package") });
+    expect(sandbox).not.toHaveBeenCalled();
   });
 
   it("records the environment a passing Build ran in: the image id, the lockfiles at the head, the head, and their hash", async () => {
@@ -1255,5 +1294,229 @@ describe("the engine a stage runs on", () => {
       // The first try and one retry after each of 1 s, 5 s and 25 s.
       expect(hostExec).toHaveBeenCalledTimes(4);
     });
+  });
+});
+
+describe("a stage's own list of hosts", () => {
+  const spec = { allow: ["github.com:443"], allowPrivate: [], proxyImage: "img" };
+  const withEgress = (sandbox: ReturnType<typeof fakeSandbox>) => {
+    const requests: unknown[] = [];
+    const d: AgentDeps = { ...deps(sandbox), egress: { for: async (request) => (requests.push(request), spec) } };
+    return { d, requests };
+  };
+
+  it("asks for the agent list of the run's repository with its engine's owner, and hands it to the sandbox with the machine's image", async () => {
+    const { d, requests } = withEgress(fakeSandbox(output()));
+    await runAgent(d, context("triage"), "triage");
+    expect(requests).toEqual([expect.objectContaining({ repoPath: repo, kind: "agent", owners: expect.arrayContaining(["claude"]), targets: [] })]);
+    expect(seen?.egress).toEqual(spec);
+  });
+
+  it("gives a browser run the host of the one QA target it is given", async () => {
+    writeFileSync(join(repo, "luna.yaml"), "qa_targets:\n  - name: staging\n    url: https://staging.example.com\n  - name: local\n    url: http://127.0.0.1:3000\n");
+    const { d, requests } = withEgress(fakeSandbox(output()));
+    await runAgent(d, context("e2e"), "e2e");
+    expect((requests[0] as { targets: string[] }).targets).toEqual(["staging.example.com:443"]); // the one target the machine chose: the first declared
+  });
+
+  it("runs as before without a policy", async () => {
+    await runAgent(deps(fakeSandbox(output())), context("triage"), "triage");
+    expect(seen?.egress).toBeUndefined();
+  });
+
+  it("emits one row per refused (host, port, via), at most 20 and then one `more`, never from the container", async () => {
+    const rows = Array.from({ length: 25 }, (_, i) => ({ host: `h${i}.example.com`, port: 443, via: "connect" as const, reason: "not_listed", count: 1 }));
+    const inner = fakeSandbox(output());
+    const { d } = withEgress(async (run) => ({ ...(await inner(run)), blocked: rows }));
+    const emitted: Array<[string, Record<string, unknown>]> = [];
+    await runAgent(d, { ...context("triage"), emit: async (kind, payload) => void emitted.push([kind, payload]) }, "triage");
+    const blocked = emitted.filter(([k]) => k === "sandbox.egress_blocked");
+    expect(blocked).toHaveLength(21);
+    expect(blocked[0]![1]).toEqual({ step: "stage", host: "h0.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 });
+    expect(blocked[20]![1]).toEqual({ step: "stage", more: 5 });
+  });
+
+  it("ends the stage as env_broken at step network when the daemon cannot make the isolated network", async () => {
+    const { d } = withEgress(async () => {
+      throw new EgressUnsupportedError("old daemon");
+    });
+    const result = await runAgent(d, context("triage"), "triage");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "network", reason: expect.stringContaining("Docker Engine 28"), options: expect.any(Array) });
+  });
+});
+
+describe("the machine's install before a writable stage", () => {
+  const outcome = { ok: true as const, ran: ["pnpm install --frozen-lockfile --ignore-scripts"], notes: ["restored tracked files the install changed (package.json)"], blocked: [{ host: "x.example.com", port: 443, via: "connect" as const, reason: "not_listed", count: 1 }] };
+
+  it("installs after the workspace is made and before the container, for implementing, with the card's commit, and not for a read-only pack", async () => {
+    const order: string[] = [];
+    const inner = fakeSandbox(output());
+    const calls: Array<Record<string, unknown>> = [];
+    const d: AgentDeps = { ...deps(async (run) => (order.push("sandbox"), inner(run))), install: async (input) => (order.push("install"), calls.push(input as never), outcome) };
+    const notes: string[] = [];
+    const emitted: string[] = [];
+    await runAgent(d, { ...context("implementing"), note: async (t) => void notes.push(t), emit: async (k, p) => void emitted.push(`${k}:${p.step}`) }, "implementing");
+    expect(order).toEqual(["install", "sandbox"]);
+    expect(calls[0]).toMatchObject({ taskId: "11111111-2222-3333-4444-555555555555", repoPath: repo });
+    expect(String(calls[0]!.commit)).toMatch(/^[0-9a-f]{40}$/);
+    expect(String(calls[0]!.workspace)).toContain(join(root, "worktrees"));
+    expect(notes.join(" ")).toContain("restored tracked files");
+    expect(emitted).toContain("sandbox.egress_blocked:install");
+    order.length = 0;
+    await runAgent(d, context("triage"), "triage");
+    expect(order).toEqual(["sandbox"]);
+  });
+
+  it("ends the stage as env_broken at step install, with the step's detail, and starts no container, when the install fails", async () => {
+    let started = false;
+    const d: AgentDeps = { ...deps(async (run) => ((started = true), fakeSandbox(output())(run))), install: async () => ({ ok: false, blocked: [], detail: { escalation: "env_broken", envBroken: true, step: "install", tool: "pnpm", lockfile: "pnpm-lock.yaml", reason: "x", logTail: "boom", options: [] } }) };
+    const result = await runAgent(d, context("implementing"), "implementing");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", step: "install", tool: "pnpm", logTail: "boom" });
+    expect(started).toBe(false);
+  });
+});
+
+describe("scoped secrets and the agent stages", () => {
+  const secret = ["qa", "pw", "z".repeat(10)].join("-");
+  const store = (missing: string[] = []): SecretStore & { loads: Array<[string, string[]]> } => {
+    const loads: Array<[string, string[]]> = [];
+    return { loads, folder: () => "/home/me/.config/hardness/secrets/repo-1", load: async (r, names) => (loads.push([r, [...names]]), { values: Object.fromEntries(names.filter((n) => !missing.includes(n)).map((n) => [n, secret])), missing: missing.filter((m) => names.includes(m)).map((name) => ({ name, reason: "there is no such file" })) }) };
+  };
+  const withTarget = () => writeFileSync(join(repo, "luna.yaml"), "qa_targets:\n  - name: staging\n    url: https://staging.example.com\n    credential: env:QA_PASSWORD\nchecks:\n  - name: db\n    run: make db\n    secrets: [DB_URL]\n");
+
+  it("gives the browser run the credential its QA target names, by value only to the container, and implementing none even when a check declares one", async () => {
+    withTarget();
+    const s = store();
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), secrets: s };
+    await runAgent(d, context("e2e"), "e2e");
+    expect(seen?.secrets).toEqual({ QA_PASSWORD: secret });
+    // the names only, so the fill helper knows which variable is the QA login and never the engine's own key
+    expect(seen?.extraEnv?.LUNA_QA_CREDENTIALS).toBe("QA_PASSWORD");
+    expect(JSON.stringify(seen?.input)).not.toContain(secret);
+    await runAgent(d, context("implementing"), "implementing");
+    expect(seen?.secrets).toBeUndefined();
+    expect(seen?.extraEnv?.LUNA_QA_CREDENTIALS).toBeUndefined();
+    await runAgent(d, context("triage"), "triage");
+    expect(seen?.secrets).toBeUndefined();
+  });
+
+  it("ends the stage as env_broken at step secrets, naming the secret and the folder and no value, and starts no container", async () => {
+    withTarget();
+    let started = false;
+    const d: AgentDeps = { ...deps(async (run) => ((started = true), fakeSandbox(output())(run))), secrets: store(["QA_PASSWORD"]) };
+    const result = await runAgent(d, context("e2e"), "e2e");
+    expect(result.outcome).toBe("escalated");
+    expect(result.detail).toMatchObject({ escalation: "env_broken", envBroken: true, step: "secrets", names: ["QA_PASSWORD"] });
+    expect(JSON.stringify(result.detail)).toContain("/home/me/.config/hardness/secrets/repo-1");
+    expect(JSON.stringify(result.detail)).not.toContain(secret);
+    expect(started).toBe(false);
+  });
+});
+
+describe("a secret's value in what a stage returns and leaves", () => {
+  const secret = ["out", "pw", "q".repeat(10)].join("-");
+  it("is replaced in the answer, the summary, the events and the files the run left, for a run that had secrets", async () => {
+    writeFileSync(join(repo, "luna.yaml"), "qa_targets:\n  - name: staging\n    url: https://staging.example.com\n    credential: env:QA_PASSWORD\n");
+    const store = { folder: () => "/f", load: async (_r: string, names: string[]) => ({ values: Object.fromEntries(names.map((n) => [n, secret])), missing: [] }) };
+    const inner = fakeSandbox(output({ summary: `typed ${secret}`, answer: { note: `pw ${secret}` } as never }), (r) => {
+      mkdirSync(join(r.runDir, "out", "files"), { recursive: true });
+      writeFileSync(join(r.runDir, "out", "files", "steps.jsonl"), `{"v":"${secret}"}`);
+    });
+    const d: AgentDeps = { ...deps(inner), secrets: store };
+    const result = await runAgent(d, context("e2e"), "e2e");
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).toContain("[secret:QA_PASSWORD]");
+    expect(readFileSync(join(stateDir, "runs", "run-1", "out", "files", "steps.jsonl"), "utf8")).toBe('{"v":"[secret:QA_PASSWORD]"}');
+  });
+});
+
+describe("the browser run's one target", () => {
+  const secret = ["tgt", "pw", "t".repeat(10)].join("-");
+  const store = (): SecretStore & { loads: string[][] } => {
+    const loads: string[][] = [];
+    return { loads, folder: () => "/f", load: async (_r, names) => (loads.push([...names]), { values: Object.fromEntries(names.map((n) => [n, `${secret}-${n}`])), missing: [] }) };
+  };
+  const two = () => writeFileSync(join(repo, "luna.yaml"), "qa_targets:\n  - name: staging\n    url: https://staging.example.com\n    credential: env:STAGING_PW\n  - name: prod-like\n    url: https://other.example.com\n    credential: env:OTHER_PW\n");
+
+  it("is the first declared QA target: the agent is told that one, its host is on the list, and only its credential is loaded and passed", async () => {
+    two();
+    const s = store();
+    const requests: Array<{ targets?: string[] }> = [];
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), secrets: s, egress: { for: async (r) => (requests.push(r as never), { allow: [], allowPrivate: [], proxyImage: "img" }) } };
+    await runAgent(d, context("e2e"), "e2e");
+    expect(s.loads).toEqual([["STAGING_PW"]]);
+    expect(seen?.secrets).toEqual({ STAGING_PW: `${secret}-STAGING_PW` });
+    expect((seen?.input as { context: { qaTargets: Array<{ name: string }> } }).context.qaTargets.map((t) => t.name)).toEqual(["staging"]);
+    expect(requests[0]!.targets).toEqual(["staging.example.com:443"]);
+    expect(JSON.stringify(seen?.input)).not.toContain("OTHER_PW");
+  });
+
+  it("is the app the machine started when it is given one: no credential, the app's network joined, and the aliases kept off the proxy", async () => {
+    two();
+    const s = store();
+    const d: AgentDeps = { ...deps(fakeSandbox(output())), secrets: s };
+    await runAgent(d, context("e2e"), "e2e", { qaTarget: { name: "app", baseUrl: "http://luna-app:4000", credential: null }, alsoJoin: ["hardness-card-app"], noProxy: ["luna-app", "db"] });
+    expect((seen?.input as { context: { qaTargets: unknown[] } }).context.qaTargets).toEqual([{ name: "app", baseUrl: "http://luna-app:4000", credential: null }]);
+    expect(seen?.alsoJoin).toEqual(["hardness-card-app"]);
+    expect(seen?.noProxy).toEqual(["luna-app", "db"]);
+    expect(seen?.secrets).toBeUndefined();
+    expect(s.loads).toEqual([]);
+  });
+});
+
+describe("a value kept only for redaction, and the failure paths", () => {
+  const secret = ["kept", "pw", "r".repeat(10)].join("-");
+  const extra = { redactValues: { APP_KEY: secret } };
+
+  it("cleans the answer, the files and the events of an app's secret the browser run never held", async () => {
+    const inner = fakeSandbox(output({ summary: `echoed ${secret}`, answer: { note: secret } as never }), (r) => {
+      mkdirSync(join(r.runDir, "out", "files"), { recursive: true });
+      writeFileSync(join(r.runDir, "out", "files", "trace.har"), `{"body":"${secret}"}`);
+    });
+    const result = await runAgent(deps(inner), context("e2e"), "e2e", extra);
+    expect(seen?.secrets).toBeUndefined();
+    expect(JSON.stringify(seen?.input)).not.toContain(secret);
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(readFileSync(join(stateDir, "runs", "run-1", "out", "files", "trace.har"), "utf8")).toBe('{"body":"[secret:APP_KEY]"}');
+  });
+
+  it("cleans the text of a run stopped as stuck", async () => {
+    const inner = fakeSandbox(output());
+    const result = await runAgent(deps(async (run) => ({ ...(await inner(run)), stuck: `looped on ${secret}` })), context("e2e"), "e2e", extra);
+    expect(result.outcome).toBe("fail");
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).toContain("[secret:APP_KEY]");
+  });
+
+  it("cleans the kept ledger of a run that timed out", async () => {
+    const inner = fakeSandbox(output());
+    const result = await runAgent(
+      deps(async (run) => {
+        const done = await inner(run);
+        writeFileSync(join(run.runDir, "out", "ledger.json"), JSON.stringify({ schema: 1, slices: [{ id: 1, title: `typed ${secret}`, status: "red", commit: null }] }));
+        return { ...done, timedOut: true };
+      }),
+      context("e2e"),
+      "e2e",
+      extra,
+    );
+    expect(JSON.stringify(result)).not.toContain(secret);
+    expect(JSON.stringify(result)).toContain("[secret:APP_KEY]");
+  });
+
+  it("cleans the message of an unreadable result", async () => {
+    const result = await runAgent(
+      deps(async (run) => {
+        mkdirSync(join(run.runDir, "out"), { recursive: true });
+        writeFileSync(join(run.runDir, "out", "result.json"), `${secret} is not json`);
+        return { exitCode: 0, timedOut: false, aborted: false, transcriptPath: join(run.runDir, "t.log") };
+      }),
+      context("e2e"),
+      "e2e",
+      extra,
+    );
+    expect(JSON.stringify(result)).not.toContain(secret);
   });
 });

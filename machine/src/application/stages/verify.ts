@@ -6,6 +6,11 @@ import { mkdir, readFile, realpath, stat, writeFile } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 
 import { branchBase, changedPaths as hostChangedPaths, diffText, gitIdentity as hostGitIdentity } from "../../adapters/git/worktree.ts";
+import { RepoImageError } from "../repo-images.ts";
+import { EgressUnsupportedError } from "../../adapters/docker/egress.ts";
+import { blockedPayloads } from "../egress-policy.ts";
+import { InstallFailedError } from "../install.ts";
+import { SecretsMissingError } from "../../adapters/docker/docker.ts";
 import type { ExecResult } from "../../adapters/process/exec.ts";
 import { type GraphJson, blastRadius } from "../../domain/blast-radius.ts";
 import { checkCommand, selectChecks, skippedReason } from "../../domain/checks.ts";
@@ -26,7 +31,7 @@ export interface VerifyDeps {
   exec: ((
     command: string,
     args: string[],
-    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec> },
+    options: { env?: NodeJS.ProcessEnv; cwd?: string; signal?: AbortSignal; timeoutMs?: number; services?: Record<string, ServiceSpec>; repoPath?: string },
   ) => Promise<ExecResult>) | null;
   /** Runs the verifying review pack; null when agents are off, which skips the review. */
   runPack: ((context: StageContext, extra?: { blastRadius?: string[]; coverage?: CoverageSummary }) => Promise<StageResult>) | null;
@@ -43,7 +48,7 @@ export interface VerifyDeps {
   /** The environment Build recorded for the task (its passing run's `env`); null when none. */
   buildEnv?: (taskId: string) => Promise<EnvRecord | null>;
   /** The environment as it is in `path` at `commit`: the image id and the lockfiles. */
-  envOf?: (path: string, commit: string) => Promise<EnvRecord>;
+  envOf?: (path: string, commit: string, repoPath?: string) => Promise<EnvRecord>;
   /** Who a check commits as: the identity git resolves for the repo. Null escalates. */
   gitIdentity?: (repoPath: string) => Promise<{ name: string; email: string } | null>;
   /** The repo's luna.yaml: its own checks (null means detect them from the tree) and the
@@ -128,6 +133,16 @@ async function excerptOf(worktree: string, finding: Finding): Promise<string> {
     .slice(0, EXCERPT_CAP);
 }
 
+/** A check that could not start because of the environment is an escalation with the step named, not a crashed stage; null for any other error. */
+function escalationOf(error: unknown): StageResult | null {
+  // The install failed, or a declared secret is missing: the step's own detail.
+  if (error instanceof InstallFailedError || error instanceof SecretsMissingError) return { outcome: "escalated", detail: error.detail };
+  if (error instanceof EgressUnsupportedError) return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "network", reason: error.message, options: ["install Docker Engine 28.0 or newer, or set MACHINE_EGRESS=off on the machine to run without the allow-list, then resume"] } };
+  // The repository's image could not be built: an environment problem with the reason.
+  if (error instanceof RepoImageError) return { outcome: "escalated", detail: { escalation: "env_broken", envBroken: true, step: "checks", reason: `the repository's image could not be built: ${error.reason}`, options: ["fix sandbox.image.base in luna.yaml, or remove it to use the machine's image, then resume"] } };
+  return null;
+}
+
 export function verifyRunner(deps: VerifyDeps): StageRunner {
   const detect = deps.detect ?? detectChecks;
   const resolveIdentity = deps.gitIdentity ?? hostGitIdentity;
@@ -181,7 +196,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     const coverageDropMax = verifyConfig?.coverage_drop_max ?? FACTORY_DEFAULTS.verify.coverage_drop_max;
     const mutationConfig = verifyConfig?.mutation ?? FACTORY_DEFAULTS.verify.mutation;
     const reports: CheckReport[] = [];
-    let commands: Array<{ name: string; cmd: string; argv: string[] }>;
+    let commands: Array<{ name: string; cmd: string; argv: string[]; secrets?: string[] }>;
     let selectedChecks: CheckSpec[] = [];
     let noTests: boolean;
     const skipped: CheckReport[] = [];
@@ -286,7 +301,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
 
     const log: string[] = [];
     const deadline = Date.now() + CHECKS_TIMEOUT_MS;
-    for (const { name, cmd, argv } of commands) {
+    for (const { name, cmd, argv, secrets: declaredSecrets } of commands) {
       const remaining = deadline - Date.now();
       let result: ExecResult;
       let timedOut = false;
@@ -294,14 +309,23 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
         result = { code: 1, stdout: "", stderr: "skipped: the 30 minute checks budget ran out" };
         timedOut = true;
       } else {
-        result = await checkExec(argv[0]!, argv.slice(1), {
-          cwd,
-          signal,
-          timeoutMs: remaining,
-          env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
-          services,
-        });
+        try {
+          result = await checkExec(argv[0]!, argv.slice(1), {
+            cwd,
+            signal,
+            timeoutMs: remaining,
+            env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" },
+            services,
+            ...(task.repoPath ? { repoPath: task.repoPath } : {}),
+            ...(declaredSecrets && declaredSecrets.length > 0 ? { secrets: declaredSecrets } : {}),
+          });
+        } catch (error) {
+          const escalated = escalationOf(error);
+          if (escalated) return escalated;
+          throw error;
+        }
         timedOut = result.code !== 0 && Date.now() >= deadline;
+        for (const payload of blockedPayloads((result as { blocked?: Parameters<typeof blockedPayloads>[0] }).blocked, "check")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
       }
       if (signal.aborted) return aborted();
       // The shell's "command not found": the runner image lacks the tool. No implementing
@@ -386,7 +410,16 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     // The repository's own mutation command (from its luna.yaml, never from text a model wrote), run in the sandbox after the checks; its output is data, read for one score line.
     let mutationDetail: Record<string, unknown> = {};
     if (mutationConfig.command) {
-      const ran = await checkExec("sh", ["-c", mutationConfig.command], { cwd, signal, timeoutMs: Math.max(deadline - Date.now(), MINUTE), env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" }, services });
+      let ran: ExecResult;
+      try {
+        // As every check: the card's repository names its image, its list and its install; nothing runs on the machine's bare defaults.
+        ran = await checkExec("sh", ["-c", mutationConfig.command], { cwd, signal, timeoutMs: Math.max(deadline - Date.now(), MINUTE), env: { ...process.env, ...identityEnv, HARDNESS_STAGE: "verifying" }, services, ...(task.repoPath ? { repoPath: task.repoPath } : {}) });
+      } catch (error) {
+        const escalated = escalationOf(error);
+        if (escalated) return escalated;
+        throw error;
+      }
+      for (const payload of blockedPayloads((ran as { blocked?: Parameters<typeof blockedPayloads>[0] }).blocked, "check")) await Promise.resolve(context.emit?.("sandbox.egress_blocked", payload)).catch(() => {});
       if (signal.aborted) return aborted();
       // A run that failed has no score to trust, whatever it printed.
       const score = ran.code === 0 ? parseMutationScore(`${ran.stdout}\n${ran.stderr}`) : null;
@@ -418,7 +451,7 @@ export function verifyRunner(deps: VerifyDeps): StageRunner {
     if (fresh && deps.buildEnv && deps.envOf) {
       const recorded = await deps.buildEnv(task.id);
       if (recorded) {
-        const compared = compareEnv(recorded, await deps.envOf(fresh.path, fresh.commit));
+        const compared = compareEnv(recorded, await deps.envOf(fresh.path, fresh.commit, task.repoPath ?? undefined));
         envReproduction = compared.matched ? "matched" : compared.differences.join("; ");
         if (!compared.matched) {
           envFinding = { path: "", line: 0, start_line: null, severity: "blocker", category: "env", title: "the environment Verify has is not the one Build ran in", body: compared.differences.join("\n"), suggestion_code: null, confidence: 1 };
