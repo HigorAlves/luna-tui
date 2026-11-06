@@ -486,6 +486,7 @@ export function createApp({ db, pipeline, bus, backlog, tickets, watcher, stubs,
     app.post("/tickets/:key/approve", async (c) => (await tickets.approve(key(c), await body(c, TicketApproveInput)), c.json(await tickets.view(key(c)))));
     app.post("/tickets/:key/edit", async (c) => (await tickets.edit(key(c), await body(c, TicketEditInput)), c.json(await tickets.view(key(c)))));
     app.post("/tickets/:key/ignore", async (c) => (await tickets.ignore(key(c), await body(c, TicketIgnoreInput)), c.json(await tickets.view(key(c)))));
+    app.post("/tickets/:key/backlog", async (c) => c.json(await tickets.schedule(key(c)), 201));
     app.post("/tickets/:key/card", async (c) => c.json(await tickets.card(key(c)), 201));
   }
 

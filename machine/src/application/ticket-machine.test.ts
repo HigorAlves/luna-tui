@@ -41,6 +41,7 @@ function setup(over: { validity?: ValidityAnswer; recommend?: string } = {}) {
     comment: async (k, t) => void writes.push(["comment", k, t]), transition: async (k, to) => void writes.push(["transition", k, to]), link: async (k, u) => void writes.push(["link", k, u]),
   };
   const cards: unknown[] = [];
+  const items: Array<Record<string, any>> = [];
   const decide = { validity: vi.fn(async () => over.validity ?? goodValidity), assess: vi.fn(async () => assessAnswer), recommend: vi.fn(async () => ({ action: { choice: over.recommend ?? "schedule", confidence: 0.9 } })), write: vi.fn(async () => ({ reply: "Not planned now.", confidence: 0.9 })) };
   const store = new PgTicketStore(db);
   const machine = new TicketMachine({
@@ -50,9 +51,10 @@ function setup(over: { validity?: ValidityAnswer; recommend?: string } = {}) {
     config: async () => FACTORY_DEFAULTS,
     createCard: async (input) => (cards.push(input), { id: "card-1" }),
     validity: { decide: decide.validity }, assess: { decide: decide.assess }, recommend: { decide: decide.recommend }, reply: { write: decide.write },
+    backlog: { upsertFromSource: async (input, o) => { const i = items.findIndex((x) => JSON.stringify(x.sources) === JSON.stringify(input.sources)); if (i >= 0) { items[i] = { ...input, id: "b1" }; return { id: "b1", created: false }; } if (!o.createIfMissing) return null; items.push({ ...input, id: "b1" }); return { id: "b1", created: true }; } },
     now: () => new Date("2026-11-05T12:00:00Z"),
   });
-  return { machine, store, writes, cards, decide };
+  return { machine, store, writes, cards, decide, items };
 }
 const ctx = { repoPath: "/r/a", question: false };
 
@@ -168,6 +170,46 @@ describe("what a tap does", () => {
   it("answers an unknown ticket as not found", async () => {
     const { machine } = setup();
     await expect(machine.ignore("PAY-99", { draft: "x" })).rejects.toBeInstanceOf(TicketNotFound);
+  });
+});
+
+describe("scheduling into the shared backlog", () => {
+  it("places a ticket in the backlog on a tap, with its sub-scores as scores, its size and its ticket as the source, and writes nothing to the ticket", async () => {
+    const { machine, items, writes, store } = setup();
+    await machine.ingest(ticket(), ctx);
+    await machine.schedule("PAY-12");
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ title: "Refund fails", size: "M", scores: { who: 2, what: 2, impact: 2, time: 2, demand: 2 }, sources: [{ kind: "jira", key: "PAY-12" }] });
+    expect((await store.get("PAY-12"))!.machineStatus).toBe("scheduled");
+    expect(writes).toEqual([]);
+  });
+
+  it("updates the item, not adds one, when the ticket is scheduled again or assessed again", async () => {
+    const { machine, items, decide } = setup();
+    await machine.ingest(ticket(), ctx);
+    await machine.schedule("PAY-12");
+    await machine.schedule("PAY-12");
+    expect(items).toHaveLength(1);
+    decide.assess.mockResolvedValueOnce({ ...assessAnswer, who: { score: 2, confidence: 1 } } as never);
+    await machine.ingest(ticket({ updatedAt: "2026-11-06T10:00:00Z" }), ctx);
+    expect(items).toHaveLength(1);
+    expect(items[0]!.scores.who).toBe(3);
+    expect((await machine.view("PAY-12")).status).toBe("scheduled");
+  });
+
+  it("refuses to schedule a ticket that was not assessed as workable", async () => {
+    const { machine } = setup({ validity: { ...goodValidity, goal: no } });
+    await machine.ingest(ticket(), ctx);
+    await expect(machine.schedule("PAY-12")).rejects.toBeInstanceOf(TicketRefusal);
+  });
+
+  it("drafts the decline reply when its backlog item is declined, posting nothing", async () => {
+    const { machine, writes } = setup();
+    await machine.ingest(ticket(), ctx);
+    await machine.declineFromBacklog([{ kind: "jira", key: "PAY-12", url: "u", issueType: null }]);
+    const drafts = (await machine.view("PAY-12")).drafts;
+    expect(drafts.map((d) => d.kind)).toContain("decline");
+    expect(writes).toEqual([]);
   });
 });
 

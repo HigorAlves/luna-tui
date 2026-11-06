@@ -53,6 +53,11 @@ export class PgBacklogStore implements BacklogStore {
     return rows[0] ? rowOf(rows[0]) : null;
   }
 
+  async rescore(id: string, change: { text: string; scores: BacklogRow["scores"]; size: BacklogRow["size"] }): Promise<BacklogRow | null> {
+    const [rows] = (await this.db.query(`update backlog_items set text = $2, scores = $3, size = $4, assessed_at = now() where id = $1 returning ${COLUMNS}`, [id, change.text, JSON.stringify(change.scores), change.size])) as [Raw[], number];
+    return rows[0] ? rowOf(rows[0]) : null;
+  }
+
   async remove(id: string): Promise<boolean> {
     const [, count] = (await this.db.query("delete from backlog_items where id = $1", [id])) as [unknown, number];
     return count > 0;

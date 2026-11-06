@@ -3,13 +3,13 @@
 // a card; only `approve`, `edit` and `card`, each started by a person's request, do. A clock or an event handler has no path to them.
 import { createHash } from "node:crypto";
 
-import type { CanonicalTicket, FactoryConfig, TaskSource, TicketContext } from "@hardness/contracts";
+import type { BacklogAddInput, CanonicalTicket, FactoryConfig, TaskSource, TicketContext } from "@hardness/contracts";
 
 import { carriesSecret } from "../domain/postable.ts";
 import type { Candidate } from "../domain/similarity.ts";
 import { buildValidityContext } from "./ticket-validity.ts";
 import type { AssessAnswer } from "../domain/ticket-score.ts";
-import { type AssessDeps, assessTicket } from "./ticket-assess.ts";
+import { type AssessDeps, type AssessmentRecord, assessTicket } from "./ticket-assess.ts";
 import { type Draft, type RecommendDeps, type ReplyDeps, assessmentDraft, declineDraft, editDraft, ignoreDraft, needsInfoDraft, notOursDraft, recommendWithDecision } from "./ticket-drafts.ts";
 import { enrichTicket } from "./ticket-enrich.ts";
 import { type ValidityDeps, checkValidity } from "./ticket-validity.ts";
@@ -72,6 +72,8 @@ export interface TicketMachineDeps {
   assess: Pick<AssessDeps, "decide">;
   recommend: RecommendDeps;
   reply: ReplyDeps;
+  /** The shared backlog, for `schedule` and for keeping an item's rank in step with a re-assessment. */
+  backlog?: { upsertFromSource(input: BacklogAddInput, options: { createIfMissing: boolean }): Promise<{ id: string; created: boolean } | null> };
   now?: () => Date;
 }
 
@@ -130,7 +132,43 @@ export class TicketMachine implements TicketIntake {
       const decline = await declineDraft(this.deps.reply, ticket.key, context);
       if (decline) drafts.push(decline);
     }
-    return done("assessed", { outcome: "workable", ...head, subScores: record.subScores, recommendation }, drafts);
+    await done("assessed", { outcome: "workable", ...head, subScores: record.subScores, recommendation }, drafts);
+    // A ticket already in the backlog keeps its rank in step with the new assessment (updated, never added).
+    if (prev?.machineStatus === "scheduled" && this.deps.backlog) {
+      const updated = await this.deps.backlog.upsertFromSource(backlogInput(ticket, ctx.repoPath, record), { createIfMissing: false }).catch(() => null);
+      if (updated) await store.setMachine(ticket.key, { status: "scheduled" });
+    }
+  }
+
+  /** Places the ticket in the shared backlog by its score, or updates its item. A tap. Nothing is written to the ticket. */
+  async schedule(key: string): Promise<{ id: string; created: boolean }> {
+    const row = await this.row(key);
+    const last = [...row.assessments].reverse().find((a) => a.outcome === "workable");
+    if (!last || !this.deps.backlog) throw new TicketRefusal("only a ticket assessed as workable goes to the backlog");
+    const repo = row.machineLinks.find((l) => l.kind === "repo")?.target ?? null;
+    const placed = await this.deps.backlog.upsertFromSource(backlogInput(row.canonical, repo, last as unknown as AssessmentRecord), { createIfMissing: true });
+    if (!placed) throw new TicketRefusal("the backlog did not take the ticket");
+    await this.deps.store.setMachine(key, { status: "scheduled" });
+    return placed;
+  }
+
+  /** A backlog item that came from a ticket was declined: the decline reply is drafted on the ticket, behind a tap. Posts nothing. */
+  async declineFromBacklog(sources: unknown[]): Promise<void> {
+    for (const s of sources) {
+      const x = s as Record<string, unknown>;
+      const key = x.kind === "jira" && typeof x.key === "string" ? x.key : x.kind === "github" ? `${String(x.repo)}#${String(x.number)}` : null;
+      if (!key || !(JIRA_KEY.test(key) || GITHUB_KEY.test(key))) continue;
+      const row = await this.deps.store.get(key);
+      if (!row) continue;
+      const last = [...row.assessments].reverse().find((a) => a.outcome === "workable") as unknown as AssessmentRecord | undefined;
+      const empty = { linked: [], epic: null, recent: [], files: [], shortlist: [] };
+      const base = buildValidityContext(row.canonical, empty, []);
+      const context: TicketContext = last ? { ...base, assessment: { priority: last.priority, size: last.size, blastRadius: last.blastRadius, costOfDelay: last.costOfDelay, costOfDoing: last.costOfDoing, score: last.score } } : base;
+      const draft = await declineDraft(this.deps.reply, key, context);
+      if (!draft) continue;
+      const others = (row.drafts as unknown as Draft[]).filter((d) => d.id !== draft.id);
+      await this.deps.store.setDrafts(key, [...others, draft] as unknown as Record<string, unknown>[]);
+    }
   }
 
   async list(): Promise<TicketView[]> {
@@ -207,6 +245,20 @@ export class TicketMachine implements TicketIntake {
     const drafts = (row.drafts as unknown as Draft[]).map((d) => (d.id === draft.id ? { ...draft, status: "posted" as const, text, history: [...draft.history, { at: this.now().toISOString(), did: "posted" as const, from: d.text }] } : d));
     await this.deps.store.setDrafts(row.key, drafts as unknown as Record<string, unknown>[]);
   }
+}
+
+/** The backlog item for a ticket: its five urgency sub-scores as the scores, its size, and its ticket as the source. */
+function backlogInput(t: CanonicalTicket, repo: string | null, r: AssessmentRecord): BacklogAddInput {
+  const v = (k: "who" | "what" | "impact" | "time" | "demand") => Math.min(3, Math.max(1, r.subScores[k].value));
+  return {
+    title: t.title.slice(0, 300),
+    text: t.description.slice(0, 4000),
+    sources: [sourceOf(t)],
+    repo,
+    scores: { who: v("who"), what: v("what"), impact: v("impact"), time: v("time"), demand: v("demand") },
+    size: r.size,
+    dependsOn: [],
+  };
 }
 
 function viewOf(row: TicketRow): TicketView {

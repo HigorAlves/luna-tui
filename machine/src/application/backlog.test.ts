@@ -90,3 +90,32 @@ describe("the backlog routes", () => {
     expect((await call("POST", "/backlog/not-a-uuid/bump")).status).toBe(404);
   });
 });
+
+describe("a candidate that comes from a ticket", () => {
+  const source = { kind: "jira" as const, key: "PAY-12", url: "https://x/PAY-12", issueType: "Task" };
+  const input = (over: Record<string, unknown> = {}) => ({ title: "Refund", text: "t", sources: [source], repo: null, scores: top, size: "M" as const, dependsOn: [], ...over }) as never;
+
+  it("is added once and updated, not added twice, when it comes again with new scores", async () => {
+    const first = await backlog.upsertFromSource(input(), { createIfMissing: true });
+    expect(first).toMatchObject({ created: true });
+    const again = await backlog.upsertFromSource(input({ scores: { ...top, who: 1 }, size: "L" }), { createIfMissing: true });
+    expect(again).toMatchObject({ created: false, id: first!.id });
+    const list = await backlog.list();
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ size: "L", scores: { who: 1 }, demand: 1 });
+  });
+
+  it("is not created by a re-assessment that finds no item", async () => {
+    expect(await backlog.upsertFromSource(input(), { createIfMissing: false })).toBeNull();
+    expect(await backlog.list()).toHaveLength(0);
+  });
+
+  it("tells the ticket machine when an item is declined, after removing it", async () => {
+    const seen: string[] = [];
+    const withHook = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: 14, onDecline: async (row) => void seen.push(row.title) });
+    const item = (await withHook.upsertFromSource(input(), { createIfMissing: true }))!;
+    await withHook.decline(item.id);
+    expect(seen).toEqual(["Refund"]);
+    expect(await withHook.list()).toHaveLength(0);
+  });
+});

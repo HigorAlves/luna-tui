@@ -35,6 +35,7 @@ const mk = () => {
     validity: { decide: async () => ({ goal: y, criteria: y, scope: y, duplicate: { choice: "none", confidence: 0.9 }, project: y, reporter: y }) },
     assess: { decide: async () => Object.fromEntries([...["who", "what", "impact", "time", "demand", "files", "unknowns", "cross_team", "new_infra", "dependents", "traffic", "data_sensitivity", "reversibility", "regression", "compounding"].map((k) => [k, s]), ...["production_down", "data_loss", "security", "incident", "compliance_deadline"].map((k) => [k, f])]) as never },
     recommend: { decide: async () => ({ action: { choice: "schedule", confidence: 0.9 } }) }, reply: { write: async () => ({ reply: "no", confidence: 1 }) },
+    backlog: { upsertFromSource: async () => ({ id: "b1", created: true }) },
   });
   const app = createApp({ db, pipeline: new Pipeline(db, new StubStages().runnerFor, { inline: true, hasConfig: () => true }), bus: new Bus(), tickets: machine, access: { host: "127.0.0.1", port: 1, token: "tok" } });
   return { machine, app };
@@ -85,5 +86,12 @@ describe("the ticket routes", () => {
     const card = () => app.request("/tickets/PAY-12/card", { method: "POST", headers: auth });
     expect((await card()).status).toBe(201);
     expect((await card()).status).toBe(409);
+  });
+
+  it("send an assessed ticket to the backlog on /backlog, and refuse one that is not assessed", async () => {
+    const { app, machine } = mk();
+    await machine.ingest(ticket("PAY-12", "jira") as never, { repoPath: null, question: false });
+    expect((await app.request("/tickets/PAY-12/backlog", { method: "POST", headers: auth })).status).toBe(201);
+    expect((await app.request("/tickets/PAY-99/backlog", { method: "POST", headers: auth })).status).toBe(404);
   });
 });

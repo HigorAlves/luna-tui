@@ -29,6 +29,8 @@ export interface BacklogStore {
   /** Demand minus one (never under 1): the undo of a bump. */
   unbump(id: string): Promise<BacklogRow | null>;
   remove(id: string): Promise<boolean>;
+  /** New scores and size for an item (a ticket assessed again); it counts as assessed now and keeps its demand. */
+  rescore(id: string, change: { text: string; scores: BacklogScores; size: BacklogSize }): Promise<BacklogRow | null>;
 }
 
 export class BacklogItemNotFoundError extends Error {
@@ -44,6 +46,8 @@ export interface BacklogOptions {
   /** `backlog.stale_days`. */
   staleDays?: number;
   now?: () => Date;
+  /** Called after a declined item has been removed (the ticket machine drafts the decline reply for a ticket's item). Never throws into the caller. */
+  onDecline?: (row: BacklogRow) => Promise<void>;
 }
 
 export class Backlog {
@@ -112,6 +116,28 @@ export class Backlog {
   }
 
   async decline(id: string): Promise<void> {
+    const row = await this.options.store.get(id);
     if (!(await this.options.store.remove(id))) throw new BacklogItemNotFoundError(id);
+    if (row && this.options.onDecline) await this.options.onDecline(row).catch((error: unknown) => console.warn(`backlog: decline hook failed: ${error instanceof Error ? error.message : String(error)}`));
   }
+
+  /** A candidate that comes from a ticket: the item with the same first source is updated (scores, size: its rank follows), else added when `createIfMissing`. Never twice. */
+  async upsertFromSource(input: BacklogAddInput, options: { createIfMissing: boolean }): Promise<{ id: string; created: boolean } | null> {
+    const first = input.sources.find((s): s is TaskSource => "kind" in s);
+    const found = first ? (await this.options.store.list()).find((r) => r.sources.some((s) => sameSource(s, first))) : undefined;
+    if (found) {
+      const row = await this.options.store.rescore(found.id, { text: input.text, scores: input.scores, size: input.size });
+      return row ? { id: row.id, created: false } : null;
+    }
+    if (!options.createIfMissing) return null;
+    return { id: (await this.options.store.add(input)).id, created: true };
+  }
+}
+
+/** The same ticket: a Jira key, or a GitHub repository and number. */
+export function sameSource(a: unknown, b: TaskSource): boolean {
+  const x = a as Record<string, unknown>;
+  if (b.kind === "jira") return x.kind === "jira" && x.key === b.key;
+  if (b.kind === "github") return x.kind === "github" && x.repo === b.repo && x.number === b.number;
+  return false;
 }
