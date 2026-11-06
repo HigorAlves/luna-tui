@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import { ensureClone } from "./clone.ts";
 import { machineGitDir } from "./machine-repo.ts";
-import { changedSince, commitsSince, currentBranch, dirtyFiles, headCommit, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, checkoutHead, ensureCleanCheckout, graphCheckoutPath, isAncestor,  intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
+import { refuseHugeUntracked, UNTRACKED_LIMIT, changedSince, commitsSince, currentBranch, dirtyFiles, headCommit, stagePending, readCommitDiff, branchBase, commitAll, defaultHead, checkoutHead, ensureCleanCheckout, graphCheckoutPath, isAncestor,  intakeCheckoutPath, ownedWorkspace, prWorktreePath, workspaceFor } from "./worktree.ts";
 
 const git = (cwd: string, ...args: string[]) =>
   execFileSync("git", ["-C", cwd, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], {
@@ -284,6 +284,21 @@ describe("the tests step's git", () => {
     expect(pending.nameStatus).toBe("A\tcart.test.ts");
     expect(pending.diff).toContain("+it('x @scenario:S1'");
     expect(pending.modes).toEqual({ "cart.test.ts": "100644" });
+  });
+
+  it("refuses to stage a folder nobody ignored that is too big to be source, naming it, instead of committing a package manager's store", async () => {
+    expect(UNTRACKED_LIMIT).toBeLessThan(256 * 1024 * 1024);
+    const { root, base } = repoWith();
+    mkdirSync(join(root, ".pnpm-store", "v11"), { recursive: true });
+    writeFileSync(join(root, ".pnpm-store", "v11", "blob"), "x".repeat(4096));
+    writeFileSync(join(root, "small.txt"), "ok\n");
+    await expect(stagePending(root, base, { untrackedLimit: 1024 })).rejects.toThrow(/\.pnpm-store/);
+    await expect(commitAll(root, "feat: c", { untrackedLimit: 1024 })).rejects.toThrow(/nothing was staged/);
+    expect(wgit(root, "diff", "--cached", "--name-only")).toBe("");
+    // Under the limit it stages as before, and a folder the repo ignores is not counted.
+    writeFileSync(join(root, ".gitignore"), ".pnpm-store\n");
+    expect((await stagePending(root, base, { untrackedLimit: 1024 })).nameStatus).toContain(".gitignore");
+    expect(refuseHugeUntracked).toBeTypeOf("function");
   });
 
   it("reports a symlink as mode 120000, and refuses a nested repository (a gitlink, mode 160000) instead of staging it", async () => {
