@@ -43,7 +43,7 @@ import { removeNestedRepositories } from "../adapters/git/machine-repo.ts";
 import { isClone } from "../adapters/git/clone.ts";
 import { DEFAULT_SANDBOX_SIZE, execInSandbox, imageExists, imageId, imageLabel, removeLeftoverContainers, runSandbox, sandboxExecutor } from "../adapters/docker/docker.ts";
 import { removeLeftoverApps } from "../adapters/docker/app.ts";
-import { openCardNetwork, removeLeftoverNetworks } from "../adapters/docker/egress.ts";
+import { openCardNetwork, openPlainNetwork, removeLeftoverNetworks } from "../adapters/docker/egress.ts";
 import { startServices } from "../adapters/docker/services.ts";
 import { type AppDeps, openApp, openPreview } from "../application/app-session.ts";
 import { type EgressPolicy, blockedPayloads } from "../application/egress-policy.ts";
@@ -201,6 +201,7 @@ export async function buildRealStages(
     ...(egress ? { egress } : {}),
     secrets,
     openCardNetwork,
+    openPlainNetwork,
     startServices,
     exec: execInSandbox,
     docker: (args, options) => exec("docker", args, options ?? {}),

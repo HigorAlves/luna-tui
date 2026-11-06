@@ -202,6 +202,26 @@ export async function openCardNetwork(runName: string, spec: { allow: readonly s
   }
 }
 
+/** With `MACHINE_EGRESS=off`: an ordinary bridge (labelled as a stage's, so leftovers are swept), no proxy and no list, which the app and the browser run join by name. Not isolated: the owner's switch. */
+export async function openPlainNetwork(runName: string, options: { exec?: DockerExec } = {}): Promise<CardNetwork> {
+  const exec = options.exec ?? hostExec;
+  const network = cardNetworkName(runName);
+  const made = await exec("docker", ["network", "create", "--label", STAGE_LABEL, network]);
+  if (made.code !== 0) throw new Error(`network ${network}: ${made.stderr.trim() || "docker network create failed"}`);
+  let torn = false;
+  return {
+    name: network,
+    dns: "",
+    containerArgs: () => ["--network", network],
+    blocked: async () => [],
+    async teardown() {
+      if (torn) return;
+      torn = true;
+      await exec("docker", ["network", "rm", network]);
+    },
+  };
+}
+
 /** A re-attached run's network and proxy, found by name (a restart found the container still running); null when the network is gone. The handle reads and removes them; it cannot put a container on the network. */
 export async function findCardNetwork(runName: string, exec: DockerExec = hostExec): Promise<CardNetwork | null> {
   const network = cardNetworkName(runName);

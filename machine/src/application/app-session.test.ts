@@ -13,7 +13,7 @@ function setup(over: { seedExit?: number; probes?: number[]; running?: string; l
   const events: string[] = [];
   const dockerCalls: string[][] = [];
   const dockerEnvs: Array<NodeJS.ProcessEnv | undefined> = [];
-  const seedRuns: Array<{ secrets?: Record<string, string>; argv: string[] }> = [];
+  const seedRuns: Array<{ secrets?: Record<string, string>; argv: string[]; servicesUp?: boolean }> = [];
   const blocked: Array<[string, unknown]> = [];
   const probes = [...(over.probes ?? [0])];
   const rowsNow: Array<{ host: string; port: number; via: "connect" | "http" | "dns"; reason: string; count: number }> = [];
@@ -26,8 +26,9 @@ function setup(over: { seedExit?: number; probes?: number[]; running?: string; l
     egress: { for: async (r) => (events.push(`egress ${r.kind}`), { allow: ["github.com:443"], allowPrivate: [], proxyImage: "machine:dev" }) },
     secrets: { folder: () => "/secrets/repo", load: async (_r, names) => ({ values: Object.fromEntries(names.filter((n) => !(over.missing ?? []).includes(n)).map((n) => [n, n === "APP_KEY" ? secretA : secretB])), missing: (over.missing ?? []).filter((m) => names.includes(m)).map((name) => ({ name, reason: "there is no such file" })) }) },
     openCardNetwork: async (run) => (events.push(`network ${run}`), card as never),
+    openPlainNetwork: async (run) => (events.push(`plain network ${run}`), card as never),
     startServices: async (run, _s, options) => (events.push(`services on ${options?.network?.name}`), { network: options?.network?.name ?? null, env: { DATABASE_URL: "postgres://db/app" }, teardown: async () => void events.push("teardown services") }),
-    exec: async (run) => (events.push("seed"), seedRuns.push({ ...(run.secrets ? { secrets: run.secrets } : {}), argv: run.argv }), rowsNow.push({ host: "seed.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }), { code: over.seedExit ?? 0, stdout: `seeding ${secretB}\n`, stderr: "" }),
+    exec: async (run) => (events.push("seed"), seedRuns.push({ ...(run.secrets ? { secrets: run.secrets } : {}), argv: run.argv, ...(run.servicesUp ? { servicesUp: true } : {}) }), rowsNow.push({ host: "seed.example.com", port: 443, via: "connect", reason: "not_listed", count: 1 }), { code: over.seedExit ?? 0, stdout: `seeding ${secretB}\n`, stderr: "" }),
     docker: async (args, options) => {
       dockerCalls.push(args);
       dockerEnvs.push(options?.env);
@@ -67,6 +68,24 @@ describe("openApp", () => {
     }
     expect(s.seedRuns[0]!.argv).toEqual(["sh", "-c", "npm run seed"]);
     expect(s.seedRuns[0]!.secrets).toEqual({ SEED_KEY: secretB });
+  });
+
+  it("seeds against the services it already started: the seed run is told they are up, so it starts no second database", async () => {
+    const s = setup();
+    await openApp(s.deps, { ...input, onBlocked: s.onBlocked });
+    expect(s.seedRuns[0]!.servicesUp).toBe(true);
+    expect(s.events.filter((e) => e.startsWith("services on"))).toHaveLength(1);
+  });
+
+  it("with MACHINE_EGRESS=off (no egress policy) joins an ordinary network and never asks the isolated one", async () => {
+    const s = setup();
+    delete s.deps.egress;
+    s.deps.openCardNetwork = async () => {
+      throw new Error("an isolated network was asked for");
+    };
+    const out = await openApp(s.deps, { ...input, onBlocked: s.onBlocked });
+    expect(out.ok).toBe(true);
+    expect(s.events).toContain("plain network abcd1234-app-2");
   });
 
   it("gives the app only its own secrets, by name on the command line and by value in the docker client's environment", async () => {
@@ -162,6 +181,17 @@ describe("openPreview", () => {
     };
     return { ...s, runs, requests, spec: () => spec };
   }
+
+  it("with MACHINE_EGRESS=off (no egress policy) the preview joins an ordinary network and never asks the isolated one", async () => {
+    const p = previewSetup({ health: [0] });
+    delete p.deps.egress;
+    p.deps.openCardNetwork = async () => {
+      throw new Error("an isolated network was asked for");
+    };
+    const out = await openPreview(p.deps, pinput);
+    expect(out.ok).toBe(true);
+    expect(p.events).toContain("plain network abcd1234-deploy-2");
+  });
 
   it("runs the deploy command with its secrets and the check list plus the preview's host, then waits for the health path from a container on the proxy", async () => {
     const p = previewSetup({ health: [1, 0] });

@@ -337,6 +337,8 @@ export interface SandboxExec {
   services?: Record<string, ServiceSpec>;
   network?: string | null;
   serviceEnv?: Record<string, string>;
+  /** The services are already up (the caller started them and owns their teardown): `services` then only names the aliases, and none is started or removed here. */
+  servicesUp?: boolean;
   /** Secret values by name for this command only, passed as `-e NAME`; the values go in the docker client's environment alone. */
   secrets?: Record<string, string>;
   /** The list the check may reach, as for a stage; `execInSandbox` opens and removes the network. */
@@ -394,7 +396,9 @@ export async function execInSandbox(
   const own = !run.cardNetwork && run.egress ? await deps.openCardNetwork(run.name, run.egress, { proxyImage: run.egress.proxyImage }) : null;
   const card = run.cardNetwork ?? own;
   try {
-    const services = await deps.startServices(run.name, run.services ?? {}, card ? { network: { name: card.name, dns: card.dns } } : {});
+    const services = run.servicesUp
+      ? { network: run.network ?? null, env: run.serviceEnv ?? {}, teardown: async () => {} }
+      : await deps.startServices(run.name, run.services ?? {}, card ? { network: { name: card.name, dns: card.dns } } : {});
     try {
       const result = await deps.exec("docker", sandboxExecArgs({ ...run, ...(card ? { cardNetwork: card } : {}), network: services.network, serviceEnv: services.env }), { ...options, ...(run.secrets ? { env: { ...process.env, ...run.secrets } } : {}) });
       await deps.exec("docker", ["rm", "-f", run.name]);
