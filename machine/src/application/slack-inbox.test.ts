@@ -6,6 +6,7 @@ import { carriesSecret } from "../domain/postable.ts";
 import { RULES_TEMPLATE } from "../domain/slack-rules.ts";
 import type { TaskRow } from "../domain/task.ts";
 import { MemorySlackStore, fakeSlack } from "../test/slack.ts";
+import { tapOf } from "./slack-send.ts";
 import { ChannelClaims } from "./channel-claims.ts";
 import { ConversationDrafts, MemoryDraftStore } from "./conversation-drafts.ts";
 import type { Assessed } from "./conversation-machine.ts";
@@ -50,6 +51,7 @@ interface World {
   truth?: { override: (input: unknown) => Promise<void>; relation?: (input: unknown) => Promise<void>; outcome?: (input: unknown) => Promise<void> };
 }
 
+const TAP = tapOf("test");
 const msg = (over: Partial<RawMessage> & { ts: string }): RawMessage => ({ user: "U2", botId: null, text: "", subtype: null, threadTs: null, replyCount: 0, latestReply: null, ...over });
 const hit = (over: Partial<SearchHit> & { ts: string }): SearchHit => ({ text: "<@U1> hi", user: "U2", channel: { id: "C1", name: "eng" }, permalink: `https://x.slack.com/archives/C1/p${over.ts.replace(".", "")}`, ...over });
 
@@ -130,6 +132,7 @@ function setup(world: World = {}) {
     ...(world.actions ? { actions: world.actions } : {}),
     ...(world.drafter ? { drafter: world.drafter } : {}),
     ...(world.drafts ? { drafts: world.drafts } : {}),
+    digest: true,
     ...(world.truth ? { truth: world.truth as never } : {}),
     rulesPath: "/rules.md",
     socketToken: null,
@@ -360,7 +363,7 @@ describe("SlackInbox.pollOnce", () => {
       await poll(inbox);
       const id = `C1:${ts(10)}`;
       expect(store.rows.get(id)!.conversation?.classification).toMatchObject({ verdict: "ask", kind: "bug" });
-      const item = await inbox.patch(id, { kind: "question" });
+      const item = await inbox.patch(id, { kind: "question" }, TAP);
       expect(item.conversation?.classification).toMatchObject({ kind: "question", by: "person", verdict: "ok" });
       expect(item.triage?.category).toBe("question");
       expect(overrides).toMatchObject([{ thread: id, kind: "question" }]);
@@ -497,25 +500,25 @@ describe("SlackInbox.pollOnce", () => {
       });
       it("a reply with the draft's own text settles it as sent, another text as edited, and each is ground truth", async () => {
         const first = await waiting();
-        await first.inbox.reply(first.id, "It is queued.");
+        await first.inbox.reply(first.id, "It is queued.", TAP);
         expect(first.post).toHaveBeenCalledTimes(1);
         expect((await first.drafts.get((first.outcomes[0] as { draft: string }).draft))?.status).toBe("sent");
         expect(first.outcomes).toMatchObject([{ thread: first.id, outcome: "sent_as_drafted" }]);
         const second = await waiting();
-        await second.inbox.reply(second.id, "We are on it.");
+        await second.inbox.reply(second.id, "We are on it.", TAP);
         expect(second.outcomes).toMatchObject([{ outcome: "edited", machine: "It is queued.", person: "We are on it." }]);
         expect(second.store.rows.get(second.id)!.triage?.draft ?? null).toBeNull();
       });
       it("refuses a reply that carries a token, with no post and the draft still waiting", async () => {
         const { inbox, drafts, id, post } = await waiting();
         const token = ["gh", "p_", "a".repeat(36)].join("");
-        await expect(inbox.reply(id, `use ${token}`)).rejects.toBeInstanceOf(SlackRefusedError);
+        await expect(inbox.reply(id, `use ${token}`, TAP)).rejects.toBeInstanceOf(SlackRefusedError);
         expect(post).not.toHaveBeenCalled();
         expect(await drafts.waiting(id)).not.toBeNull();
       });
       it("marks the waiting draft ignored on done, and expires it after the configured hours without posting", async () => {
         const a = await waiting();
-        await a.inbox.patch(a.id, { done: true });
+        await a.inbox.patch(a.id, { done: true }, TAP);
         expect((await a.drafts.waiting(a.id))).toBeNull();
         expect(a.outcomes).toMatchObject([{ outcome: "ignored" }]);
         const b = await waiting();
@@ -532,7 +535,7 @@ describe("SlackInbox.pollOnce", () => {
         const assessor = { assess: async () => assessed({ classification: { kind: "bug", confidence: 0.85, by: "model", at: iso(0), records: {}, verdict: "ok", priority: "P1" } }) };
         const { inbox, created } = setup({ assessor, hits: [hit({ ts: ts(10), text: "<@U1> login fails\nsecond line" })], claimed: { C1: "/r" } });
         await poll(inbox);
-        await inbox.toTask(`C1:${ts(10)}`, {});
+        await inbox.toTask(`C1:${ts(10)}`, {}, TAP);
         expect(created).toHaveLength(1);
         expect(created[0]).toMatchObject({ title: "@higor login fails", originMachine: "conversation", hints: { kind: "bug", urgency: "P1", confidence: 0.85 }, reporter: { id: "U2", channel: "slack" }, source: { kind: "slack", channel: "C1" } });
         expect((created[0] as { description: string }).description).toContain("> marta: ");
@@ -543,7 +546,7 @@ describe("SlackInbox.pollOnce", () => {
         await poll(inbox);
         const id = `G1:${ts(10)}`;
         expect(store.rows.get(id)?.conversation?.private).toBe(true);
-        await inbox.toTask(id, {});
+        await inbox.toTask(id, {}, TAP);
         expect(created).toHaveLength(1);
         expect(JSON.stringify(created[0])).not.toContain("banana");
         expect(created[0]).toMatchObject({ title: "A private Slack conversation" });
@@ -620,7 +623,7 @@ describe("SlackInbox.pollOnce", () => {
     world.replies![`C1:${root}`]!.push(msg({ ts: ts(40), user: "U1", text: "done" }));
     ({ items } = await poll(inbox));
     expect(items[0]).toMatchObject({ replies: 3, youReplied: true, split: "fyi" });
-    await inbox.patch(items[0]!.id, { done: true });
+    await inbox.patch(items[0]!.id, { done: true }, TAP);
     world.replies![`C1:${root}`]!.push(msg({ ts: ts(30), user: "U3", text: "<@U1> one more?" }));
     ({ items } = await poll(inbox));
     expect(items[0]).toMatchObject({ replies: 4, youReplied: false, doneAt: null, reopenedAt: NOW.toISOString(), count: 3, text: "@higor one more?", split: "needs_reply" });
@@ -679,7 +682,7 @@ describe("SlackInbox.pollOnce", () => {
     expect(inbox.snapshot.items.map((i) => i.triage)).toEqual([null, null]);
     expect(batches).toHaveLength(1);
     // You set a priority by hand meanwhile; the verdict keeps it.
-    await inbox.patch(`C1:${ts(10)}`, { priority: "P0" });
+    await inbox.patch(`C1:${ts(10)}`, { priority: "P0" }, TAP);
     release();
     await inbox.idle();
     expect(batches).toEqual([[`C1:${ts(10)}`], [`C1:${ts(5)}`]]);
@@ -766,32 +769,32 @@ describe("SlackInbox actions", () => {
 
   it("patch: done clears (marking Slack only when told), learns a lowered prior, reopens, snoozes, overrides priority", async () => {
     const { inbox, item, slack, files } = await seeded();
-    let patched = await inbox.patch(item.id, { done: true });
+    let patched = await inbox.patch(item.id, { done: true }, TAP);
     expect(patched).toMatchObject({ doneAt: NOW.toISOString(), split: "done" });
     expect(slack.mark).not.toHaveBeenCalled();
     expect(files.get("/rules.learned.md")).toContain("- U2 (@marta): lowered (1)");
     expect(files.get("/rules.md")).toBe(RULES_TEMPLATE);
-    patched = await inbox.patch(item.id, { done: false });
+    patched = await inbox.patch(item.id, { done: false }, TAP);
     expect(patched).toMatchObject({ doneAt: null, split: "needs_reply" });
-    patched = await inbox.patch(item.id, { snoozedUntil: iso(-60), seen: true });
+    patched = await inbox.patch(item.id, { snoozedUntil: iso(-60), seen: true }, TAP);
     expect(patched).toMatchObject({ split: "snoozed", seenAt: NOW.toISOString() });
-    patched = await inbox.patch(item.id, { snoozedUntil: null, priority: "P0" });
+    patched = await inbox.patch(item.id, { snoozedUntil: null, priority: "P0" }, TAP);
     expect(patched.triage).toMatchObject({ priority: "P0", overridden: true });
     expect(patched.split).toBe("needs_reply");
     // A re-triage keeps the override.
     await poll(inbox);
     expect(inbox.snapshot.items[0]!.triage).toMatchObject({ priority: "P0", overridden: true });
-    await expect(inbox.patch("C1:nope", { done: true })).rejects.toThrow(NoItemError);
+    await expect(inbox.patch("C1:nope", { done: true }, TAP)).rejects.toThrow(NoItemError);
 
     const marking = await seeded({ markRead: true });
-    await marking.inbox.patch(marking.item.id, { done: true });
+    await marking.inbox.patch(marking.item.id, { done: true }, TAP);
     expect(marking.slack.mark).toHaveBeenCalledWith("C1", ts(30));
   });
 
   it("reply posts in the thread as you, clears the item and learns a raised prior for a quick answer", async () => {
     const { inbox, item, slack, files, published } = await seeded();
     const before = published.length;
-    const replied = await inbox.reply(item.id, "Approved.");
+    const replied = await inbox.reply(item.id, "Approved.", TAP);
     expect(slack.postMessage).toHaveBeenCalledWith("C1", "Approved.", ts(30));
     expect(replied).toMatchObject({ doneAt: NOW.toISOString(), youReplied: true, split: "done" });
     expect(files.get("/rules.learned.md")).toContain("- U2 (@marta): raised (1)");
@@ -818,17 +821,17 @@ describe("SlackInbox actions", () => {
     const { inbox, item, store, slack } = await seeded({ hits: [hit({ ts: ts(30), text: "<@U1> ok?", permalink: `https://x.slack.com/p?thread_ts=${root}&cid=C1` })] });
     expect(item.threadTs).toBe(root);
     expect(item.id).toBe(`C1:${root}`);
-    await inbox.reply(item.id, "yes");
+    await inbox.reply(item.id, "yes", TAP);
     expect(slack.postMessage).toHaveBeenCalledWith("C1", "yes", root);
     const silent = new SlackInbox({ slack: noTokenSlack(), triager: null, store, intervalMs: 1, publish: () => {}, findTask: async () => null, linkPr: () => null, createTask: async () => ({}) as TaskRow, markRead: false, rulesPath: "/r", socketToken: null, now: () => NOW, files: { read: async () => "", write: async () => {} } });
-    await expect(silent.reply(item.id, "x")).rejects.toThrow(NoSlackTokenError);
+    await expect(silent.reply(item.id, "x", TAP)).rejects.toThrow(NoSlackTokenError);
     const snapshot = await poll(silent);
     expect(snapshot.error).toMatch(/MACHINE_SLACK_USER_TOKEN/);
   });
 
   it("toTask creates a Backlog task from the item and links it once", async () => {
     const { inbox, item, created } = await seeded();
-    const task = await inbox.toTask(item.id, { repoPath: "/r/a" });
+    const task = await inbox.toTask(item.id, { repoPath: "/r/a" }, TAP);
     expect(created[0]).toEqual({
       title: "re: @higor can you appro",
       reporter: { id: "U2", name: "marta", channel: "slack" },
@@ -837,9 +840,9 @@ describe("SlackInbox actions", () => {
       source: { kind: "slack", channel: "C1", ts: ts(30), permalink: item.permalink },
     });
     expect(inbox.snapshot.items[0]!.linked.taskId).toBe(task.id);
-    await expect(inbox.toTask(item.id, {})).rejects.toThrow(AlreadyTaskError);
+    await expect(inbox.toTask(item.id, {}, TAP)).rejects.toThrow(AlreadyTaskError);
     const titled = await seeded();
-    await titled.inbox.toTask(titled.item.id, { title: "Approve the thing" });
+    await titled.inbox.toTask(titled.item.id, { title: "Approve the thing" }, TAP);
     expect(titled.created[0]).toMatchObject({ title: "Approve the thing", repoPath: null });
   });
 
@@ -902,14 +905,14 @@ describe("SlackInbox actions", () => {
 
   it("reply escapes what you typed and a nudge mentions the author by id, unescaped", async () => {
     const { inbox, item, slack, triaged } = await seeded();
-    await inbox.reply(item.id, "a < b & c > d");
+    await inbox.reply(item.id, "a < b & c > d", TAP);
     expect(slack.postMessage).toHaveBeenLastCalledWith("C1", "a &lt; b &amp; c &gt; d", ts(30));
-    await inbox.reply(item.id, "any news?", true);
+    await inbox.reply(item.id, "any news?", TAP, true);
     expect(slack.postMessage).toHaveBeenLastCalledWith("C1", "<@U2> any news?", ts(30));
     // The learned prior reaches the model by name, not id.
     await poll(inbox);
     const more = await seeded({ hits: [hit({ ts: ts(3), text: "<@U1> next?" })] });
-    await more.inbox.patch(more.item.id, { done: true });
+    await more.inbox.patch(more.item.id, { done: true }, TAP);
     const again = setup({ hits: [hit({ ts: ts(2), text: "<@U1> and again?" })] });
     again.files.set("/rules.learned.md", more.files.get("/rules.learned.md")!);
     await poll(again.inbox);
@@ -925,9 +928,9 @@ describe("SlackInbox actions", () => {
     });
     const thread = (await store.item(`C1:${root}`))!;
     expect(thread.slackTs).toBe(ts(50));
-    await inbox.reply(thread.id, "yes");
+    await inbox.reply(thread.id, "yes", TAP);
     expect(slack.postMessage).toHaveBeenLastCalledWith("C1", "yes", root);
-    await inbox.reply(`D1:${ts(20)}`, "10 works");
+    await inbox.reply(`D1:${ts(20)}`, "10 works", TAP);
     expect(slack.postMessage).toHaveBeenLastCalledWith("D1", "10 works", undefined);
   });
 
@@ -991,7 +994,7 @@ describe("SlackInbox resilience", () => {
     });
     const polling = inbox.pollOnce();
     await new Promise((r) => setTimeout(r, 0));
-    await inbox.patch(`C1:${root}`, { done: true, priority: "P0" });
+    await inbox.patch(`C1:${root}`, { done: true, priority: "P0" }, TAP);
     release();
     await polling;
     await inbox.idle();

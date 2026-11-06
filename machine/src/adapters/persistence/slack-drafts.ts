@@ -49,6 +49,11 @@ export class PgDraftStore implements DraftStore {
     return (await this.db.query("select * from slack_drafts where status = 'waiting'")).map(rowOf);
   }
 
+  async posting(thread: string): Promise<DraftRow | null> {
+    const [r] = await this.db.query("select * from slack_drafts where thread = $1 and status = 'posting'", [thread]);
+    return r ? rowOf(r) : null;
+  }
+
   async waitingExpiredBy(now: Date): Promise<DraftRow[]> {
     return (await this.db.query("select * from slack_drafts where status = 'waiting' and expires_at <= $1", [now])).map(rowOf);
   }

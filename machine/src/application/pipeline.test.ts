@@ -1002,7 +1002,7 @@ describe("triage outcomes", () => {
     expect(closed).toMatchObject({ state: "closed", archiveReason: null });
     const events = await pipeline.events(task.id);
     const reply = events.find((e) => e.kind === "task.reply");
-    expect(reply?.payload).toEqual({ body: "Use `pnpm dev`." });
+    expect(reply?.payload).toEqual({ body: "Use `pnpm dev`.", by: "person" });
     // The reply is posted only by the request that closed the gate: after the close, never before it.
     expect(events.findIndex((e) => e.kind === "task.reply")).toBeGreaterThan(events.findIndex((e) => e.kind === "transition" && e.payload.to === "closed"));
     expect(events.some((e) => e.kind === "transition" && e.payload.to === "archived")).toBe(false);

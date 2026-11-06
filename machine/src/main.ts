@@ -77,6 +77,7 @@ import { Pipeline } from "./application/pipeline.ts";
 import { ChannelClaims } from "./application/channel-claims.ts";
 import { ConversationMachine } from "./application/conversation-machine.ts";
 import { enrichConversation } from "./application/conversation-enrich.ts";
+import { SlackSender } from "./application/slack-send.ts";
 import { ConversationDrafter } from "./application/conversation-draft.ts";
 import { ConversationDrafts } from "./application/conversation-drafts.ts";
 import { PgDraftStore } from "./adapters/persistence/slack-drafts.ts";
@@ -449,10 +450,13 @@ const prTasks = {
  *  container with the same image and credential as the stages, so it is off when they are. */
 const slackApi = config.slackInbox.userToken ? createSlack(config.slackInbox.userToken) : noTokenSlack();
 const slackStore = new PgSlackStore(db);
+const slackSender = new SlackSender(slackApi);
 const conversationDrafts = new ConversationDrafts(new PgDraftStore(db), { expiryHours: (channel) => channelClaims.configOf(channel).conversation.draft_expiry_hours });
 const triager = agentDeps ? createSlackTriager({ ...agentDeps, store: slackStore }) : null;
 const slackInbox = new SlackInbox({
   slack: slackApi,
+  sender: slackSender,
+  digest: config.slackInbox.digestAt !== null,
   triager,
   store: slackStore,
   intervalMs: config.slackInbox.intervalMs,
@@ -509,6 +513,19 @@ const slackInbox = new SlackInbox({
     },
     linkedTo: (id) => slackStore.itemsLinkedTo(id),
   }),
+});
+// Outbound updates of a card (status, questions, the shipped summary) wait as drafts on the thread it came from; the machine posts by itself only
+// for a repository whose luna.yaml sets `conversation.auto: on`. Built here, once the store and the drafts exist.
+replies = new ThreadReplies({
+  pipeline,
+  github,
+  enabled: config.threadReplies,
+  ...(config.slack ? { slack: config.slack } : {}),
+  sender: slackSender,
+  slackPort: () => (config.slackInbox.userToken ? slackApi : null),
+  drafts: conversationDrafts,
+  store: slackStore,
+  autoOf: async (task) => (task.repoPath ? (await policies.for(task.repoPath)).factory.conversation.auto === "on" : false),
 });
 const conversationMachine = (): ConversationMachine => {
   if (!packRuns) throw new Error("agents are off: the conversation machine has no model to ask");

@@ -71,12 +71,12 @@ function fakeInbox(items: SlackItem[], over: { hasToken?: boolean } = {}): Slack
       did.push("poll");
       return snapshot;
     },
-    async patch(id, patch) {
+    async patch(id, patch, _tap) {
       const found = find(id);
       did.push(`patch ${id} ${JSON.stringify(patch)}`);
       return { ...found, ...(patch.done ? { doneAt: "2026-10-28T12:00:00Z", split: "done" as const } : {}) };
     },
-    async reply(id, text, nudge) {
+    async reply(id, text, _tap, nudge) {
       const found = find(id);
       if (over.hasToken === false) throw new NoSlackTokenError();
       did.push(`reply ${id} ${text}${nudge ? " (nudge)" : ""}`);
@@ -88,7 +88,7 @@ function fakeInbox(items: SlackItem[], over: { hasToken?: boolean } = {}): Slack
       did.push(`relate ${id} ${JSON.stringify(input)}`);
       return found;
     },
-    async toTask(id, input) {
+    async toTask(id, input, _tap) {
       const found = find(id);
       if (found.linked.taskId) throw new AlreadyTaskError(id, found.linked.taskId);
       did.push(`task ${id} ${JSON.stringify(input)}`);

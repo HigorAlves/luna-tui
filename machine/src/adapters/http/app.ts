@@ -72,6 +72,7 @@ import { taskStagesProblem } from "../../domain/engine-choice.ts";
 import { NoFileError, NoWorktreeError } from "../git/diff.ts";
 import { ForkError, NoCheckoutError, OwnPrError, PrBusyError } from "../../application/pr-tasks.ts";
 import { CloneError, NoPullError, NotReadyError, type PullsPort } from "../../application/pulls.ts";
+import { tapOf } from "../../application/slack-send.ts";
 import { AlreadyTaskError, BadRelationError, BuiltinWatchError, NoItemError, NoWatchError, SlackRefusedError, type SlackInboxPort } from "../../application/slack-inbox.ts";
 import { NoSlackTokenError } from "../../application/slack.ts";
 import { NoJiraTokenError } from "../../application/jira.ts";
@@ -562,13 +563,13 @@ export function createApp({ db, pipeline, bus, backlog, tickets, watcher, stubs,
     // how fast you answer, and the listings the board's watch popup completes from.
     app.get("/slack/items", (c) => c.json(slack.snapshot));
     app.post("/slack/refresh", async (c) => c.json(await slack.pollOnce(true)));
-    app.patch("/slack/items/:id", async (c) => c.json(await slack.patch(c.req.param("id"), await body(c, SlackItemPatch))));
+    app.patch("/slack/items/:id", async (c) => c.json(await slack.patch(c.req.param("id"), await body(c, SlackItemPatch), tapOf("PATCH /slack/items/:id"))));
     app.post("/slack/items/:id/relation", async (c) => c.json(await slack.relate(c.req.param("id"), await body(c, SlackRelationInput))));
     app.post("/slack/items/:id/reply", async (c) => {
       const { text, nudge } = await body(c, SlackReplyInput);
-      return c.json(await slack.reply(c.req.param("id"), text, nudge ?? false));
+      return c.json(await slack.reply(c.req.param("id"), text, tapOf("POST /slack/items/:id/reply"), nudge ?? false));
     });
-    app.post("/slack/items/:id/task", async (c) => c.json(await serialize(await slack.toTask(c.req.param("id"), await body(c, SlackTaskInput))), 201));
+    app.post("/slack/items/:id/task", async (c) => c.json(await serialize(await slack.toTask(c.req.param("id"), await body(c, SlackTaskInput), tapOf("POST /slack/items/:id/task"))), 201));
     app.get("/slack/watches", async (c) => c.json(await slack.watches()));
     app.post("/slack/watches", async (c) => c.json(await slack.addWatch(await body(c, SlackWatchInput)), 201));
     app.patch("/slack/watches/:id", async (c) => c.json(await slack.patchWatch(c.req.param("id"), await body(c, SlackWatchPatch))));

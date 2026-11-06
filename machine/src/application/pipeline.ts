@@ -1340,7 +1340,7 @@ export class Pipeline {
       // One tap: the reply is posted where the card came from and the conversation ends closed, not archived. The close runs under
       // the row lock, so only the request that closed the gate goes on to post.
       await this.dispatch(id, { type: "replied" }, { decision: record, onlyFrom: new Set<TaskState>(["awaiting_approval"]) });
-      await this.log(id, "task.reply", { body: String(open!.requested.reply ?? "") });
+      await this.log(id, "task.reply", { body: String(open!.requested.reply ?? ""), by: "person" });
       if (gate) await this.learnFromGate(id, gate, decision, response);
       return this.get(id);
     }

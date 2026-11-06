@@ -57,6 +57,7 @@ import type { TaskRow } from "../domain/task.ts";
 import { ChannelClaims } from "./channel-claims.ts";
 import { type Assessed, CATEGORY } from "./conversation-machine.ts";
 import type { ConversationActions } from "./conversation-actions.ts";
+import { type Tap, SlackRefusedError, SlackSender, standingOf } from "./slack-send.ts";
 import type { ConversationDrafts } from "./conversation-drafts.ts";
 import type { ConversationTruth } from "./conversation-truth.ts";
 import { settled as threadQuiet } from "../domain/ticket-scope.ts";
@@ -71,12 +72,12 @@ export interface SlackInboxPort {
   readonly snapshot: SlackSnapshot;
   /** `force` polls even inside a rate-limit backoff (the board's refresh); scheduled and socket polls wait it out. */
   pollOnce(force?: boolean): Promise<SlackSnapshot>;
-  patch(id: string, patch: SlackItemPatch): Promise<SlackItem>;
+  patch(id: string, patch: SlackItemPatch, tap: Tap): Promise<SlackItem>;
   /** A person's say on what a thread is about: a stored answer and a truth record, never a post. */
   relate(id: string, input: SlackRelationInput): Promise<SlackItem>;
   /** Posts `text` (escaped) in the item's thread as you; `nudge` prefixes a mention of its author. */
-  reply(id: string, text: string, nudge?: boolean): Promise<SlackItem>;
-  toTask(id: string, input: SlackTaskInput): Promise<TaskRow>;
+  reply(id: string, text: string, tap: Tap, nudge?: boolean): Promise<SlackItem>;
+  toTask(id: string, input: SlackTaskInput, tap: Tap): Promise<TaskRow>;
   watches(): Promise<SlackWatch[]>;
   addWatch(input: SlackWatchInput): Promise<SlackWatch>;
   patchWatch(id: string, patch: SlackWatchPatch): Promise<SlackWatch>;
@@ -111,13 +112,7 @@ export class BuiltinWatchError extends Error {
 }
 
 /** A relation a person set that the stored shortlist does not allow: a target it does not hold, a missing one, or one where none belongs. */
-/** Text the machine will not send: it carries something shaped like a secret (HTTP 409 `slack_refused`). */
-export class SlackRefusedError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SlackRefusedError";
-  }
-}
+export { SlackRefusedError };
 
 export class BadRelationError extends Error {
   constructor(message: string) {
@@ -170,6 +165,10 @@ export interface SlackInboxOptions {
   truth?: Pick<ConversationTruth, "override" | "relation" | "outcome">;
   /** The drafts that wait for a tap, one per thread. */
   drafts?: ConversationDrafts;
+  /** The one door to Slack; built from `slack` when absent. */
+  sender?: SlackSender;
+  /** `MACHINE_SLACK_DIGEST_AT` is set: the daily digest may be posted to the operator's own DM. */
+  digest?: boolean;
 }
 
 const RATE_LIMIT_BACKOFF_MS = 5 * 60_000;
@@ -277,7 +276,10 @@ export class SlackInbox implements SlackInboxPort {
   /** The conversations a person opted in, as of the last poll. */
   private opted = new Set<string>();
 
+  private readonly sender: SlackSender;
+
   constructor(private readonly options: SlackInboxOptions) {
+    this.sender = options.sender ?? new SlackSender(options.slack);
     this.scope = options.scope ?? "opted_in";
     this.claims = options.claims ?? new ChannelClaims(async () => [], async () => ({ conversation: FACTORY_DEFAULTS.conversation, scoring: FACTORY_DEFAULTS.scoring }));
     this.now = options.now ?? (() => new Date());
@@ -1066,7 +1068,7 @@ export class SlackInbox implements SlackInboxPort {
     }
   }
 
-  async patch(id: string, patch: SlackItemPatch): Promise<SlackItem> {
+  async patch(id: string, patch: SlackItemPatch, tap: Tap): Promise<SlackItem> {
     const row = await this.get(id);
     const now = this.now().toISOString();
     let next = row;
@@ -1080,7 +1082,7 @@ export class SlackInbox implements SlackInboxPort {
       if (!row.youReplied && !row.repliedAt) await this.learnFrom(row, "lowered");
       if (this.options.markRead) {
         try {
-          await this.options.slack.mark(row.channel.id, row.slackTs);
+          await this.sender.mark(tap, row.channel.id, row.slackTs);
         } catch (error) {
           console.warn(`slack inbox: conversations.mark failed: ${messageOf(error)}`);
         }
@@ -1135,22 +1137,33 @@ export class SlackInbox implements SlackInboxPort {
     return this.saveAndPublish({ ...row, linked, triage, conversation: { ...conversation, relation: stored } });
   }
 
-  async reply(id: string, text: string, nudge = false): Promise<SlackItem> {
+  async reply(id: string, text: string, tap: Tap, nudge = false): Promise<SlackItem> {
     let row = await this.get(id);
     // Nothing that looks like a secret is sent, typed or drafted; a draft sent as drafted must still equal its own `postable()`.
     const waiting = this.options.drafts ? await this.options.drafts.waiting(row.id) : null;
     if (carriesSecret(text)) throw new SlackRefusedError("the text carries something shaped like a secret, so it was not sent");
     if (waiting && text === waiting.text && postable(text) !== text) throw new SlackRefusedError("the draft is not safe to send as it stands");
+    // The tap's claim comes before Slack is called: the waiting draft is `posting` under the thread's lock with the hash of the text the person saw,
+    // so a second tap in flight finds none to claim and posts nothing.
+    const drafts = this.options.drafts;
+    if (drafts && (await drafts.inFlight(row.id))) throw new SlackRefusedError("this draft is already being sent");
+    const claimed = drafts && waiting ? await drafts.claim(row.id, text) : null;
+    if (drafts && waiting && !claimed) throw new SlackRefusedError("this draft is already being sent");
     // The thread is the item's own ts (the root of a collapsed thread, not its latest message);
     // a top-level DM is answered in the DM itself.
     const isDm = row.channel.kind === "dm" || row.channel.kind === "mpim";
     const threadTs = isDm && row.threadTs === null ? undefined : row.id.split(":")[1];
     // What you typed is escaped so it cannot open a mention or a link; the nudge's mention is built here, by id.
-    await this.options.slack.postMessage(row.channel.id, `${nudge ? `<@${row.author.id}> ` : ""}${escapeMrkdwn(text)}`, threadTs);
+    try {
+      await this.sender.postMessage(tap, row.channel.id, `${nudge ? `<@${row.author.id}> ` : ""}${escapeMrkdwn(text)}`, threadTs);
+    } catch (error) {
+      if (claimed) await drafts!.release(claimed.id).catch(() => {});
+      throw error;
+    }
     const now = this.now();
-    // The message went out: it stays posted whatever fails below. A draft waiting for this thread is settled by what was sent.
-    if (this.options.drafts) {
-      const settled = await this.options.drafts.settle(row.id, text).catch(() => null);
+    // The message went out: it stays posted whatever fails below. The claimed draft is settled by what was sent.
+    if (claimed && drafts) {
+      const settled = await drafts.finish(claimed.id, text).catch(() => null);
       if (settled) {
         await this.options.truth?.outcome({ thread: row.id, draft: settled.draft.id, outcome: settled.outcome, machine: settled.draft.original ?? settled.draft.text, person: text, records: settled.draft.records }).catch(() => {});
         if (row.triage?.draft) row = { ...row, triage: { ...row.triage, draft: null } };
@@ -1160,7 +1173,7 @@ export class SlackInbox implements SlackInboxPort {
     return this.saveAndPublish({ ...row, doneAt: now.toISOString(), youReplied: true, repliedAt: now.toISOString(), snoozedUntil: null });
   }
 
-  async toTask(id: string, input: SlackTaskInput): Promise<TaskRow> {
+  async toTask(id: string, input: SlackTaskInput, _tap: Tap): Promise<TaskRow> {
     const row = await this.get(id);
     if (row.linked.taskId && (await this.options.findTask(row.linked.taskId))) throw new AlreadyTaskError(id, row.linked.taskId);
     const where = row.channel.kind === "dm" ? `DM with @${row.channel.name}` : `#${row.channel.name}`;
@@ -1309,9 +1322,12 @@ export class SlackInbox implements SlackInboxPort {
 
   /** Posts the digest to your own DM. */
   async postDigest(): Promise<void> {
+    // The one clock that writes: only when the operator set `MACHINE_SLACK_DIGEST_AT`, and only to their own DM.
+    const standing = standingOf({ digest: this.options.digest === true });
+    if (!standing) return;
     const me = await this.whoAmI();
-    const channel = await this.options.slack.openDm(me.id);
-    await this.options.slack.postMessage(channel, escapeMrkdwn(await this.digest()));
+    const channel = await this.sender.openDm(standing, me.id);
+    await this.sender.postMessage(standing, channel, escapeMrkdwn(await this.digest()));
   }
 
   async usergroups(): Promise<Usergroup[]> {

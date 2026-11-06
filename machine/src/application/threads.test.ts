@@ -33,6 +33,7 @@ function wire(options: { slack?: boolean; enabled?: boolean; slackPort?: ReturnT
   replies = new ThreadReplies({
     pipeline,
     enabled: options.enabled ?? true,
+    autoOf: () => true,
     ...(options.slackPort !== undefined ? { slackPort: () => options.slackPort! } : {}),
     github: fakeGitHub({
       commentOnIssue: async (repo, number, body) => {
