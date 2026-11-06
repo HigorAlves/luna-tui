@@ -267,7 +267,8 @@ function approved(task: Snapshot, event: PipelineEvent): Move {
     case "awaiting_test_check":
       return enterImplementing(retries);
     case "awaiting_ship":
-      return run("shipping", retries);
+      // The ship approval (the release question the watch asked) starts the merge; the preview gate publishes the pack and starts the watch.
+      return run(event.type === "approved" && event.gate === "ship_approval" ? "shipping" : "awaiting_ship", retries);
     case "reviewing_memory":
       return done(retries);
     default:
@@ -385,8 +386,8 @@ function stageDone(task: Snapshot, event: Extract<PipelineEvent, { type: "stage_
       if (outcome === "fail") return loopFailed(task, "ci", undefined, event.loopCap);
       break;
     case "evidence":
-      // With the preview on a person approves the pack before anything is public; otherwise Evidence has published it and Ship takes over.
-      if (outcome === "pass") return event.preview === true ? wait("awaiting_ship", retries) : run("shipping", retries);
+      // With the preview on a person approves the pack before anything is public, and the watch starts at the approval; otherwise Evidence has published it and the watch starts at once.
+      if (outcome === "pass") return event.preview === true ? wait("awaiting_ship", retries) : run("awaiting_ship", retries);
       // Evidence shows less and says why; it never sends a card back to Build. A failure here is a card with no workspace, or a stage that broke: a person is asked, and the card resumes at Evidence.
       if (outcome === "fail") return escalate(event.reason || "evidence failed", "evidence", retries);
       break;

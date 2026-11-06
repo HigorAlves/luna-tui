@@ -950,7 +950,9 @@ export class Pipeline {
       return (await this.store.getTask(id)) ?? archived;
     }
     // A gate that carries triage's outcome came from triage; any other open approval is the plan stage's.
-    const event: PipelineEvent = decision === "approved" ? { type: "approved" } : { type: "sent_back", from: outcome === undefined ? "plan" : "triage" };
+    // The watch's release question says so on its approval; the preview gate (and a gate stored before this wave) has no such word.
+    const shipGate = task.state === "awaiting_ship" && (await this.approvals(id)).find((a) => a.kind === "awaiting_ship" && a.decision === null)?.requested.gate === "ship_approval" ? ({ gate: "ship_approval" } as const) : {};
+    const event: PipelineEvent = decision === "approved" ? { type: "approved", ...shipGate } : { type: "sent_back", from: outcome === undefined ? "plan" : "triage", ...shipGate };
     const moved = await this.dispatch(id, event, { decision: record, ...(guard ? { guard } : {}) });
     if (decision === "approved" && open && outcome === undefined) await this.keepGroundTruth(moved, open.id);
     if (gate) await this.learnFromGate(id, gate, decision, response);
@@ -1637,7 +1639,7 @@ export class Pipeline {
         }
         // ci_watch polls GitHub for up to 45 minutes, and shipping's monitor for days, and neither
         // computes anything: they give their slot back for that long, and the queue is looked at right away.
-        const polling = stage === "ci_watch" || stage === "shipping";
+        const polling = stage === "ci_watch" || stage === "awaiting_ship" || stage === "shipping";
         if (polling) {
           this.offPool.add(id);
           this.fillSlots().catch((error: unknown) => console.error(`could not fill slots during ${stage}`, error));
@@ -1743,7 +1745,7 @@ export class Pipeline {
         // queued task, and gets one as soon as a loop ends.
         if (stage && polling && this.active() > this.maxConcurrentTasks) {
           await this.enqueue(id);
-          await this.log(id, "slot.waited", { stage, reason: `the pool filled while ${stage === "ci_watch" ? "ci_watch" : "shipping"} was polling` });
+          await this.log(id, "slot.waited", { stage, reason: `the pool filled while ${stage} was polling` });
           return;
         }
       }

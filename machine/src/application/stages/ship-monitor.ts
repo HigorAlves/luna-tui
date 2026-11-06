@@ -62,85 +62,147 @@ export type ShipMonitor = (context: StageContext, pr: { slug: string; number: nu
 
 const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+/** What a poll reads from GitHub, the pack and the policy, and the readiness script's answer on it. */
+export interface ShipFacts {
+  pr: ReturnType<typeof fromGraphQl>;
+  head: string | null;
+  pack: EvidencePack | null;
+  risk: Risk;
+  readiness: ReturnType<typeof mergeReadiness>;
+  paths: string[];
+}
+
+export type ShipFactsDeps = Pick<ShipMonitorDeps, "github" | "policies" | "evidence" | "readCodeowners">;
+
+const defaultReadCodeowners = (github: GitHub) => async (slug: string, baseRef: string): Promise<string | null> => {
+  for (const path of CODEOWNERS_PATHS) {
+    const text = await github.fileAtRef(slug, baseRef, path);
+    if (text !== null) return text;
+  }
+  return null;
+};
+
+/**
+ * The facts of one poll: the PR as GitHub shows it now, the pack, the repository's policy, the dependencies, the CODEOWNERS owners and the
+ * reviews, and what `mergeReadiness` makes of them. Null when GitHub shows no such PR. The watch (to decide when a merge is due) and the
+ * merge (to decide again, at the head GitHub shows then) both read it, so the answer never comes from a stage's memory.
+ */
+export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, ref: { slug: string; number: number }, cursor: ShipCursor, now: () => Date = () => new Date(), teamCache: Map<string, { at: number; members: string[] | null }> = new Map()): Promise<ShipFacts | null> {
+  const { slug, number } = ref;
+  const { task } = context;
+  const readCodeowners = deps.readCodeowners ?? defaultReadCodeowners(deps.github);
+  const node = await deps.github.prFacts(slug, number);
+  if (!node) return null;
+  const pr = fromGraphQl(node, slug, "", []);
+  const head = pr.headSha ?? (await deps.github.prHeadSha(slug, number));
+  const pack = await deps.evidence.load(task.id);
+  const policy = await deps.policies.for(task.repoPath);
+  // No pack fails closed: the highest risk, and the readiness script names the missing pack.
+  const risk: Risk = pack?.risk ?? "high";
+  const approver = context.approvals.findLast((a) => a.kind === "awaiting_ship" && a.decision === "approved")?.response?.approver;
+  const listed = parseDependencies(pr.body);
+  const dependencies = await Promise.all(
+    listed.slice(0, MAX_DEPENDENCIES).map(async (n) => {
+      const dep = await deps.github.prMerged(slug, n).catch(() => null);
+      return { number: n, merged: dep?.merged ?? false, closed: dep ? dep.state === "closed" : false };
+    }),
+  );
+  const paths = (await deps.github.prFiles(slug, number)).map((f) => f.path);
+  const changesCodeowners = paths.some((p) => CODEOWNERS_PATHS.includes(p));
+  // The reviews are read once a poll, for the owners and for the approval a fix needs.
+  let reviewsRead: Promise<PrReview[]> | null = null;
+  const reviewsOf = () => (reviewsRead ??= deps.github.prReviews(slug, number));
+
+  /** Whether the latest review of someone is an approval given on `head`: nothing older counts after a fix. */
+  const approvedOn = (onHead: string | null, reviews: PrReview[]): boolean => {
+    const latest = new Map<string, PrReview>();
+    for (const r of reviews) if (r.author && (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED")) latest.set(r.author.toLowerCase(), r);
+    return onHead !== null && [...latest.values()].some((r) => r.state === "APPROVED" && r.commitId === onHead);
+  };
+
+  /** What the repo's CODEOWNERS still wants: null when it has none. A team the token cannot read stays unresolved. */
+  const ownersOf = async (baseRef: string) => {
+    const text = await readCodeowners(slug, baseRef);
+    if (!text) return null;
+    const { rules, problems } = parseCodeownersChecked(text);
+    const required = requiredOwners(paths, rules);
+    if (required.length === 0) return { missing: [], unresolved: problems };
+    const reviews = await reviewsOf();
+    const latest = new Map<string, (typeof reviews)[number]>();
+    for (const r of reviews) if (r.author && (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED")) latest.set(r.author.toLowerCase(), r);
+    const approvers = [...latest.values()].filter((r) => r.state === "APPROVED" && (r.commitId === null || head === null || r.commitId === head)).map((r) => r.author!);
+    const members: Record<string, string[]> = {};
+    for (const team of new Set(required.flatMap((r) => r.owners).filter((o) => o.startsWith("@") && o.includes("/")).map((o) => o.slice(1).toLowerCase()))) {
+      const cached = teamCache.get(team);
+      if (!cached || now().getTime() - cached.at > TEAM_TTL_MS) {
+        const [org = "", slugOfTeam = ""] = team.split("/");
+        teamCache.set(team, { at: now().getTime(), members: await deps.github.teamMembers(org, slugOfTeam).catch(() => null) });
+      }
+      const list = teamCache.get(team)!.members;
+      if (list) members[team] = list;
+    }
+    const out = ownerApprovals(required, { approvers, members });
+    return { missing: out.missing, unresolved: [...out.unresolved, ...problems] };
+  };
+
+  const owners = await ownersOf(pr.baseRef).catch((error: unknown) => ({ missing: [], unresolved: [`CODEOWNERS could not be checked: ${messageOf(error)}`] }));
+  // After a fix the loop made, the approval that counts is one on the fix itself: the latest review of each person, on the head.
+  const fixApproval = cursor.fixRounds > 0 ? { approved: approvedOn(head, await reviewsOf().catch(() => [])) } : null;
+  const readiness = mergeReadiness({
+    pr,
+    packSha: pack?.commitSha ?? null,
+    policy: { autoMerge: policy.autoMerge, freeze: policy.freeze },
+    risk,
+    shipApprover: risk === "high" && typeof approver === "string" && approver ? approver : null,
+    now: now(),
+    dependencies,
+    owners,
+    changesCodeowners,
+    dependenciesListed: listed.length,
+    fixApproval,
+    staleDays: policy.factory.ship.stale_days,
+    humanLook: context.approvals.some((a) => a.kind === "awaiting_ship" && a.decision === "approved"),
+  });
+  return { pr, head, pack, risk, readiness, paths };
+}
+
+/** The PR merged: the decisions it was waiting on are settled by what happened to their threads. Called wherever a merge is recorded. */
+export async function settleDecisions(deps: Pick<ShipMonitorDeps, "github" | "truth" | "stateDir">, taskId: string, cursor: ShipCursor, slug: string, number: number): Promise<void> {
+  const pending = cursor.decisions ?? [];
+  if (!deps.truth || pending.length === 0) return;
+  const open = await deps.github.prThreads(slug, number).catch(() => null);
+  for (const d of pending) {
+    if (d.pack === "event_class") await deps.truth.learned({ pack: "event_class", recordId: d.recordId, label: eventClassTruth(d.further === true), source: "pr_merged", taskId });
+    else if (open && d.threadId && !(cursor.resolvedByMachine ?? []).includes(d.threadId) && !open.some((t) => t.id === d.threadId)) await deps.truth.learned({ pack: "comment_intent", recordId: d.recordId, label: commentIntentTruth(d.choice as "question" | "change_request"), source: "thread_resolved", taskId });
+  }
+  cursor.decisions = [];
+  await saveCursor(deps.stateDir, taskId, cursor);
+}
+
 export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
   const sleep = deps.sleep ?? defaultSleep;
   const now = deps.now ?? (() => new Date());
   const maxWaitMs = deps.maxWaitMs ?? 14 * DAY_MS;
-  const readCodeowners =
-    deps.readCodeowners ??
-    (async (slug: string, baseRef: string) => {
-      for (const path of CODEOWNERS_PATHS) {
-        const text = await deps.github.fileAtRef(slug, baseRef, path);
-        if (text !== null) return text;
-      }
-      return null;
-    });
-
   return async (context, ref) => {
-    // Per run, so a member removed from a team stops counting after the TTL.
-    const teamCache = new Map<string, { at: number; members: string[] | null }>();
     const { task, signal } = context;
     const { slug, number, url } = ref;
     const note = async (text: string) => {
       deps.log?.(text);
       await context.note?.(text).catch(() => {});
     };
+    // Per run, so a member removed from a team stops counting after the TTL.
+    const teamCache = new Map<string, { at: number; members: string[] | null }>();
     let cursor: ShipCursor = (await loadCursor(deps.stateDir, task.id)) ?? emptyCursor({ slug, number });
     if (cursor.pr.slug !== slug || cursor.pr.number !== number) cursor = { ...emptyCursor({ slug, number }), published: cursor.published };
     cursor.startedAt ??= now().toISOString();
     await saveCursor(deps.stateDir, task.id, cursor);
-    let mergeErrors = 0;
-
-    /** Whether the latest review of someone is an approval given on `head`: nothing older counts after a fix. */
-    const approvedOn = (head: string | null, reviews: PrReview[]): boolean => {
-      const latest = new Map<string, PrReview>();
-      for (const r of reviews) if (r.author && (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED")) latest.set(r.author.toLowerCase(), r);
-      return head !== null && [...latest.values()].some((r) => r.state === "APPROVED" && r.commitId === head);
-    };
-
-    /** What the repo's CODEOWNERS still wants: null when it has none. A team the token cannot read stays unresolved. */
-    const ownersOf = async (head: string | null, baseRef: string, paths: string[], reviewsOf: () => Promise<PrReview[]>) => {
-      const text = await readCodeowners(slug, baseRef);
-      if (!text) return null;
-      const { rules, problems } = parseCodeownersChecked(text);
-      const required = requiredOwners(paths, rules);
-      if (required.length === 0) return { missing: [], unresolved: problems };
-      const reviews = await reviewsOf();
-      const latest = new Map<string, (typeof reviews)[number]>();
-      for (const r of reviews) if (r.author && (r.state === "APPROVED" || r.state === "CHANGES_REQUESTED" || r.state === "DISMISSED")) latest.set(r.author.toLowerCase(), r);
-      const approvers = [...latest.values()].filter((r) => r.state === "APPROVED" && (r.commitId === null || head === null || r.commitId === head)).map((r) => r.author!);
-      const members: Record<string, string[]> = {};
-      for (const team of new Set(required.flatMap((r) => r.owners).filter((o) => o.startsWith("@") && o.includes("/")).map((o) => o.slice(1).toLowerCase()))) {
-        const cached = teamCache.get(team);
-        if (!cached || now().getTime() - cached.at > TEAM_TTL_MS) {
-          const [org = "", slugOfTeam = ""] = team.split("/");
-          teamCache.set(team, { at: now().getTime(), members: await deps.github.teamMembers(org, slugOfTeam).catch(() => null) });
-        }
-        const list = teamCache.get(team)!.members;
-        if (list) members[team] = list;
-      }
-      const out = ownerApprovals(required, { approvers, members });
-      return { missing: out.missing, unresolved: [...out.unresolved, ...problems] };
-    };
-
 
     // ---- The review loop (only with `deps.loop`): activity judged and answered, fixes in place, CI red and conflicts. ----
     type Outcome = { result?: StageResult; moved?: boolean };
     type Facts = ReturnType<typeof fromGraphQl>;
     let me: string | null = null;
     const login = async () => (me ??= (await deps.github.viewer()).login.toLowerCase());
-    /** The PR merged: the decisions it was waiting on are settled by what happened to their threads. */
-    const settleDecisions = async (): Promise<void> => {
-      const pending = cursor.decisions ?? [];
-      if (!deps.truth || pending.length === 0) return;
-      const open = await deps.github.prThreads(slug, number).catch(() => null);
-      for (const d of pending) {
-        if (d.pack === "event_class") await deps.truth.learned({ pack: "event_class", recordId: d.recordId, label: eventClassTruth(d.further === true), source: "pr_merged", taskId: task.id });
-        else if (open && d.threadId && !(cursor.resolvedByMachine ?? []).includes(d.threadId) && !open.some((t) => t.id === d.threadId)) await deps.truth.learned({ pack: "comment_intent", recordId: d.recordId, label: commentIntentTruth(d.choice as "question" | "change_request"), source: "thread_resolved", taskId: task.id });
-      }
-      cursor.decisions = [];
-      await saveCursor(deps.stateDir, task.id, cursor);
-    };
+    const settle = () => settleDecisions(deps, task.id, cursor, slug, number);
     const fixDeps = (): FixDeps => ({ github: deps.github, loop: deps.loop!, policies: deps.policies, evidence: deps.evidence });
     const runOf = () => deps.loop?.exec ?? realExec;
     const plain = (text: string, cap: number) => postable(text, cap);
@@ -348,59 +410,23 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       try {
         const state = await deps.github.prMerged(slug, number);
         if (state.merged) {
-          await settleDecisions().catch(() => {});
+          await settle().catch(() => {});
           return { outcome: "pass", detail: { merged: { sha: state.mergedSha, at: state.mergedAt, by: cursor.mergeRequested || cursor.queued ? "machine" : "person" }, prUrl: url, number } };
         }
         if (state.state === "closed") {
           return { outcome: "escalated", detail: { escalation: "other", reason: "the PR was closed without a merge", options: [] } };
         }
-        const node = await deps.github.prFacts(slug, number);
-        if (!node) {
+        const facts = await readShipFacts(deps, context, { slug, number }, cursor, now, teamCache);
+        if (!facts) {
           await note("GitHub shows no such PR right now; waiting");
         } else {
-          const pr = fromGraphQl(node, slug, "", []);
-          const head = pr.headSha ?? (await deps.github.prHeadSha(slug, number));
-          const pack = await deps.evidence.load(task.id);
+          const { pr, head, pack, readiness } = facts;
           if (pack && head && pack.commitSha !== head) {
             return {
               outcome: "escalated",
               detail: { escalation: "head_moved", reason: `the PR head moved after the evidence pack (${pack.commitSha.slice(0, 7)} → ${head.slice(0, 7)}): Evidence runs again`, options: [] },
             };
           }
-          const policy = await deps.policies.for(task.repoPath);
-          // No pack fails closed: the highest risk, and the readiness script names the missing pack.
-          const risk: Risk = pack?.risk ?? "high";
-          const approver = context.approvals.findLast((a) => a.kind === "awaiting_ship" && a.decision === "approved")?.response?.approver;
-          const listed = parseDependencies(pr.body);
-          const dependencies = await Promise.all(
-            listed.slice(0, MAX_DEPENDENCIES).map(async (n) => {
-              const dep = await deps.github.prMerged(slug, n).catch(() => null);
-              return { number: n, merged: dep?.merged ?? false, closed: dep ? dep.state === "closed" : false };
-            }),
-          );
-          const paths = (await deps.github.prFiles(slug, number)).map((f) => f.path);
-          const changesCodeowners = paths.some((p) => CODEOWNERS_PATHS.includes(p));
-          // The reviews are read once a poll, for the owners and for the approval a fix needs.
-          let reviewsRead: Promise<PrReview[]> | null = null;
-          const reviewsOf = () => (reviewsRead ??= deps.github.prReviews(slug, number));
-          const owners = await ownersOf(head, pr.baseRef, paths, reviewsOf).catch((error: unknown) => ({ missing: [], unresolved: [`CODEOWNERS could not be checked: ${messageOf(error)}`] }));
-          // After a fix the loop made, the approval that counts is one on the fix itself: the latest review of each person, on the head.
-          const fixApproval = cursor.fixRounds > 0 ? { approved: await approvedOn(head, await reviewsOf().catch(() => [])) } : null;
-          const readiness = mergeReadiness({
-            pr,
-            packSha: pack?.commitSha ?? null,
-            policy: { autoMerge: policy.autoMerge, freeze: policy.freeze },
-            risk,
-            shipApprover: risk === "high" && typeof approver === "string" && approver ? approver : null,
-            now: now(),
-            dependencies,
-            owners,
-            changesCodeowners,
-            dependenciesListed: listed.length,
-            fixApproval,
-            staleDays: policy.factory.ship.stale_days,
-            humanLook: context.approvals.some((a) => a.kind === "awaiting_ship" && a.decision === "approved"),
-          });
           // A checks run that left failure and came back is a new red even under the same run id.
           if (deps.loop && pr.checks.state !== "failure") cursor.ciCycled = true;
 
@@ -450,29 +476,13 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
           if (moved || handled) {
             // The head moved this poll: what was judged ready is not what is there now. The next poll reads it again.
           } else if (cursor.queued) {
-            // In the merge queue: the queue merges it. Asking again would only race it.
+            // In the merge queue: the queue merges it; `shipping` waits for it.
+            await saveCursor(deps.stateDir, task.id, cursor);
+            return { outcome: "pass", detail: { queued: true, prUrl: url, number } };
           } else if (readiness.canAutoMerge && head) {
-            try {
-              cursor.mergeRequested = true;
-              await saveCursor(deps.stateDir, task.id, cursor);
-              const result = await deps.github.mergePr(slug, number, { sha: head });
-              mergeErrors = 0;
-              if (result && "queued" in result) {
-                cursor.queued = true;
-                await note("the PR is in the merge queue");
-              }
-              else {
-                await settleDecisions().catch(() => {});
-                return { outcome: "pass", detail: { merged: { sha: head, at: now().toISOString(), by: "machine" }, prUrl: url, number } };
-              }
-            } catch (error) {
-              cursor.mergeRequested = false;
-              mergeErrors++;
-              await note(`the merge failed: ${messageOf(error)}`);
-              if (mergeErrors >= 2) {
-                return { outcome: "escalated", detail: { escalation: "other", reason: `the merge failed twice: ${messageOf(error)}`, options: [] } };
-              }
-            }
+            // The watch does not merge: it says the merge is due, at this head. `shipping` reads the facts again and merges.
+            await saveCursor(deps.stateDir, task.id, cursor);
+            return { outcome: "pass", detail: { ready: { head }, prUrl: url, number } };
           } else if (!readiness.ready) {
             const text = readiness.blockers.join("; ");
             if (text !== cursor.lastBlockers) {

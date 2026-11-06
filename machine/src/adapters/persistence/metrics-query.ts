@@ -96,7 +96,7 @@ export function gateWaits(
     const waiting = open.get(t.task_id);
     if (waiting && t.from === waiting.state) {
       open.delete(t.task_id);
-      if (t.at >= window[0] && t.at <= window[1] && t.to !== waiting.state) waits.push({ state: waiting.state, ms: t.at.getTime() - waiting.at.getTime() });
+      if (t.at >= window[0] && t.at <= window[1] && (t.to !== waiting.state || RUN_OR_GATE.has(waiting.state as never))) waits.push({ state: waiting.state, ms: t.at.getTime() - waiting.at.getTime() });
     }
     // A state that holds a stage or a gate is a wait only for a step that opened a gate.
     const isWait = t.to && (RUN_OR_GATE.has(t.to as never) ? t.gate === "true" : WAITING_ON_USER.has(t.to as never) && t.to !== t.from);

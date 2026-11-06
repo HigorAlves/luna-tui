@@ -1136,6 +1136,7 @@ describe("the whole pipeline with stub stages", () => {
       "delivering",
       "ci_watch",
       "evidence",
+      "awaiting_ship",
       "shipping",
     ]);
     const approvals = await pipeline.approvals(task.id);
@@ -2184,6 +2185,30 @@ describe("awaiting_ship holds a stage or a gate", () => {
     expect(seen).toEqual(["awaiting_ship"]);
     expect((await pipeline.events(task.id)).some((e) => e.kind === "stage.restarted" && e.payload.stage === "awaiting_ship")).toBe(true);
     expect((await pipeline.get(task.id)).state).toBe("reviewing_memory");
+  });
+
+  it("approving the preview gate starts the watch; the ship approval's own approval starts the merge", async () => {
+    const task = await newTask();
+    await startAndApprove(task.id);
+    expect((await pipeline.get(task.id)).state).toBe("awaiting_ship");
+    const before = (await stagesRun(task.id)).filter((s) => s === "awaiting_ship").length;
+    await pipeline.decide(task.id, "approved");
+    const ran = await stagesRun(task.id);
+    expect(ran.filter((s) => s === "awaiting_ship").length).toBe(before + 1);
+    expect(ran.slice(-2)).toEqual(["awaiting_ship", "shipping"]);
+    expect((await pipeline.get(task.id)).state).toBe("reviewing_memory");
+
+    const second = await newTask();
+    stubs.plan("awaiting_ship", { outcome: "needs_input", detail: { gate: "ship_approval", head: "abc" } });
+    await startAndApprove(second.id);
+    await pipeline.decide(second.id, "approved");
+    // The preview gate approved, then the watch asked the release question: it waits with its own approval.
+    expect((await pipeline.get(second.id)).state).toBe("awaiting_ship");
+    const open = (await pipeline.approvals(second.id)).find((a) => a.decision === null);
+    expect(open?.requested.gate).toBe("ship_approval");
+    await pipeline.decide(second.id, "approved");
+    expect((await stagesRun(second.id)).slice(-1)).toEqual(["shipping"]);
+    expect((await pipeline.get(second.id)).state).toBe("reviewing_memory");
   });
 
   it("abort at awaiting_ship with an open approval is still refused", async () => {

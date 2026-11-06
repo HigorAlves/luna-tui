@@ -33,8 +33,8 @@ describe("archive", () => {
 describe("evidence without the preview gate", () => {
   it("goes straight to shipping on a pass unless the repository keeps the preview", () => {
     const step = transition(at("evidence"), { type: "stage_done", outcome: "pass" });
-    expect(step).toMatchObject({ state: "shipping", effect: { kind: "run", stage: "shipping" } });
-    expect(transition(at("evidence"), { type: "stage_done", outcome: "pass", preview: false })).toMatchObject({ state: "shipping" });
+    expect(step).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
+    expect(transition(at("evidence"), { type: "stage_done", outcome: "pass", preview: false })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
     expect(transition(at("evidence"), { type: "stage_done", outcome: "pass", preview: true })).toMatchObject({ state: "awaiting_ship", effect: { kind: "wait", gate: "awaiting_ship" } });
   });
 
@@ -141,8 +141,9 @@ describe("happy path", () => {
       pass, // delivering
       pass, // ci_watch
       { ...pass, preview: true }, // evidence, the repository keeps the preview gate
-      approved, // ship targets
-      pass, // shipping
+      approved, // the preview gate: publishes and starts the watch
+      pass, // the watch at awaiting_ship: a merge to make
+      pass, // shipping: the merge
       approved, // memory proposals
     ]);
 
@@ -156,6 +157,7 @@ describe("happy path", () => {
       "delivering",
       "ci_watch",
       "evidence",
+      "awaiting_ship",
       "awaiting_ship",
       "shipping",
       "reviewing_memory",
@@ -623,7 +625,8 @@ describe("awaiting_ship and reviewing_memory hold a running stage or an open gat
   it("the ship approval's answers: approved runs shipping, sent_back runs the watch again; without the gate both are as before", () => {
     expect(transition(at("awaiting_ship"), { type: "approved", gate: "ship_approval" })).toMatchObject({ state: "shipping" });
     expect(transition(at("awaiting_ship"), { type: "sent_back", gate: "ship_approval" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
-    expect(transition(at("awaiting_ship"), { type: "approved" })).toMatchObject({ state: "shipping" });
+    // The preview gate (no `gate`, and any gate stored before this wave): approving publishes and starts the watch.
+    expect(transition(at("awaiting_ship"), { type: "approved" })).toMatchObject({ state: "awaiting_ship", effect: { kind: "run", stage: "awaiting_ship" } });
     expect(transition(at("awaiting_ship"), { type: "sent_back" })).toMatchObject({ state: "evidence" });
   });
 });

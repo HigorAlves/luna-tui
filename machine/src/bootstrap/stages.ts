@@ -27,7 +27,8 @@ import { videoPipeline } from "../application/stages/video.ts";
 import { scanImages } from "../application/video-jobs.ts";
 import { judgePrivacy } from "../application/frame-privacy.ts";
 import { setupRunner } from "../application/stages/setup.ts";
-import { shipRunnerWith } from "../application/stages/ship.ts";
+import { mergeRunner } from "../application/stages/ship.ts";
+import { shipWatchRunner } from "../application/stages/ship-watch.ts";
 import { type ShipDecide } from "../application/stages/ship-fixes.ts";
 import { shipMonitor } from "../application/stages/ship-monitor.ts";
 import { verifyRunner } from "../application/stages/verify.ts";
@@ -302,10 +303,8 @@ export async function buildRealStages(
     // The PR tasks' own stages: the host fetches the diff or the threads, the pack answers.
     reviewing: prReviewRunner({ github, runPack: (context, review) => runAgent(deps, context, "reviewing", { review }) }),
     addressing: prAddressRunner({ github, runPack: (context, threads) => runAgent(deps, context, "addressing", { threads }) }),
-    // The memory-review gate has no stage of its own: the retro pack runs after shipping and its
-    // proposal rides on the gate; approving applies it at close.
-    shipping: withMemoryReview(
-      shipRunnerWith({
+    // The watch: the PR is made ready with the pack on it, then watched until a merge is due or a person is needed.
+    awaiting_ship: shipWatchRunner({
         exec,
         github,
         // Ship publishes the task's Evidence Pack once it is complete and its commit is the PR head.
@@ -335,7 +334,11 @@ export async function buildRealStages(
           pollMs: config.shipPoll.intervalMs,
           maxWaitMs: config.shipPoll.maxWaitDays * 86_400_000,
         }),
-      }),
+    }),
+    // The merge (decided again on GitHub's facts at that moment). The memory-review gate has no stage of its own yet: the retro pack runs after
+    // shipping and its proposal rides on the gate; approving applies it at close.
+    shipping: withMemoryReview(
+      mergeRunner({ github, policies, evidence: { load: evidenceDeps.load }, truth: truth ?? null, stateDir: config.stateDir, pollMs: config.shipPoll.intervalMs }),
       memoryReviewRunner({
         runPack: async (context, ship) => runAgent(deps, context, "reviewing_memory", { history: (await history?.(context.task.id)) ?? null, ...(ship ? { ship } : {}) }),
         stateDir: config.stateDir,

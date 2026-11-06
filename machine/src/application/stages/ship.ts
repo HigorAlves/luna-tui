@@ -1,127 +1,108 @@
-// The ship stage: the PR was opened as a draft at delivering, so shipping pushes any last
-// commits, publishes the task's Evidence Pack onto it when there is one, and marks it ready for
-// review. Git on the host for the push, the GitHub port for the PR. The pack is published here,
-// at the approval of the preview gate, and only once it is complete and its commit is the PR head:
-// a head that moved sends the task back to Evidence.
-import type { EvidencePack } from "@hardness/contracts";
-
-import { headCommit as worktreeHead, originSlugOf } from "../../adapters/git/worktree.ts";
-import { exec as realExec } from "../../adapters/process/exec.ts";
-import { packComplete, repairPack } from "../../domain/evidence-pack.ts";
-import type { PublishEvidence } from "../evidence-publish.ts";
+// The ship stage, the feature route's `shipping`: the merge and nothing else. The watch (ship-watch.ts, at `awaiting_ship`) says a
+// merge is due; this stage decides again on GitHub's facts at that moment (the readiness script, the head GitHub shows now) and merges
+// with the head's sha as the guard. What it records as merged is the merge commit GitHub reports, never the PR head. A PR that is not
+// ready any more is handed back to the watch (`notReady`), and nothing in a PR comment, a review or a log can reach this stage.
 import { type GitHub, messageOf } from "../github.ts";
-import type { StageResult, StageRunner } from "../ports.ts";
-import { emptyCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
-import { type DeliverDeps, openTaskPr, pushBranch } from "./deliver.ts";
-import type { ShipMonitor } from "./ship-monitor.ts";
+import type { StageContext, StageResult, StageRunner } from "../ports.ts";
+import { type ShipCursor, loadCursor, saveCursor } from "../ship-cursor.ts";
+import { type ShipFacts, type ShipMonitorDeps, readShipFacts, settleDecisions } from "./ship-monitor.ts";
 
-export interface ShipDeps extends DeliverDeps {
-  /** The Evidence Pack of the task: where it is read from and saved to, how it is published, where its local copy lives. Absent means ship without one. */
-  evidence?: {
-    load: (taskId: string) => Promise<EvidencePack | null>;
-    save: (taskId: string, pack: EvidencePack) => Promise<void>;
-    publish: PublishEvidence;
-    store: { dirFor: (taskId: string, sha: string) => string };
-  };
-  /** The worktree's HEAD, the head the push just set; tests inject one. */
-  headCommit?: (worktreePath: string) => Promise<string>;
-  /** Watches the PR after the publish until it merges (ship-monitor.ts); absent, the stage passes once the PR is ready. */
-  monitor?: ShipMonitor;
-  /** Where the ship cursor lives; with it, a restarted run knows the pack is already published and goes straight to the monitor. */
-  stateDir?: string;
+/** How long the machine waits for the merge queue to merge a PR it queued, before the watch looks at it again. */
+export const MERGE_QUEUE_WAIT_MS = 6 * 3_600_000;
+/** Reads of the merge commit after a merge: GitHub can lag the merge it just made. */
+const MERGE_READS = 3;
+const MERGE_READ_PAUSE_MS = 1000;
+const MERGE_ATTEMPTS = 2;
+
+export interface MergeDeps extends Pick<ShipMonitorDeps, "github" | "policies" | "evidence" | "truth" | "stateDir" | "pollMs" | "sleep" | "now" | "readCodeowners"> {
+  /** The facts of one poll; default `readShipFacts`. Tests inject one. */
+  readFacts?: (context: StageContext, ref: { slug: string; number: number }, cursor: ShipCursor) => Promise<ShipFacts | null>;
+  /** What the merge settles (the decisions waiting on the PR's outcome); default `settleDecisions`. */
+  settle?: (taskId: string, cursor: ShipCursor, slug: string, number: number) => Promise<void>;
 }
 
-export function shipRunnerWith(deps: ShipDeps): StageRunner {
-  const slugOf = deps.slugOf ?? originSlugOf;
-  const headOf = deps.headCommit ?? worktreeHead;
-  /** The pack's turn at the gate: nothing to do (no pack), a stop (the head moved, the pack is incomplete), or what was published. */
-  const evidencePhase = async (slug: string, number: number, taskId: string, worktreePath: string, repoPath: string | null, approved: boolean): Promise<{ stop: StageResult } | { published: Record<string, unknown>; note?: string } | { none: true }> => {
-    const evidence = deps.evidence;
-    if (!evidence) return { none: true };
-    const pack = await evidence.load(taskId);
-    if (!pack) return { none: true };
-    // The head is what the push a moment ago set; GitHub's view of it can lag, so a difference there is a note, never a stop.
-    const head = (await headOf(worktreePath)).trim();
-    const seen = await deps.github.prHeadSha(slug, number).catch(() => null);
-    const note = seen && seen !== head ? `GitHub shows ${seen.slice(0, 7)} as the PR head; the pushed head is ${head.slice(0, 7)}` : undefined;
-    if (pack.commitSha !== head) {
-      return {
-        stop: {
-          outcome: "escalated",
-          detail: { escalation: "head_moved", reason: `the PR head moved after the evidence pack (${pack.commitSha.slice(0, 7)} → ${head.slice(0, 7)}): Evidence runs again`, options: [] },
-        },
-      };
-    }
-    // What a script can fix is fixed before the stage fails on an incomplete pack.
-    let shown = pack;
-    const complete = packComplete(pack, head);
-    if (!complete.ok) {
-      const fixed = repairPack(pack, complete.problems);
-      const after = packComplete(fixed.pack, head);
-      if (fixed.unfixed.length > 0 || !after.ok) return { stop: { outcome: "fail", detail: { error: `the evidence pack is not complete: ${[...fixed.unfixed, ...after.problems].join("; ")}` } } };
-      shown = fixed.pack;
-    }
-    const done = await evidence.publish({ github: deps.github, slug, number, taskId, pack: shown, repoPath, approved, localDir: evidence.store.dirFor(taskId, pack.commitSha) });
-    await evidence.save(taskId, done.pack);
-    return { published: { comment: done.comment, assets: done.assets }, ...(note ? { note } : {}) };
-  };
+export function mergeRunner(deps: MergeDeps): StageRunner {
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = deps.now ?? (() => new Date());
+  const readFacts = deps.readFacts ?? ((context, ref, cursor) => readShipFacts(deps, context, ref, cursor, now));
+  const settle = deps.settle ?? ((taskId, cursor, slug, number) => settleDecisions(deps, taskId, cursor, slug, number));
+  const notReady = (reason: string): StageResult => ({ outcome: "fail", detail: { notReady: true, reason } });
+
   return async (context) => {
-    const { task } = context;
-    if (!task.repoPath || !task.branch || !task.worktreePath) {
-      return { outcome: "fail", detail: { error: "no branch to ship; the implementer never ran for real" } };
-    }
-    const cwd = task.worktreePath;
-    // A restart re-runs this stage. The cursor names the PR already watched: ask GitHub about it first, so a merged PR
-    // (whose branch the merge deleted) is neither pushed again nor opened anew.
-    const cursor = deps.stateDir ? await loadCursor(deps.stateDir, task.id) : null;
-    const resumed = cursor?.pr ?? null;
-    if (resumed) {
-      try {
-        const state = await deps.github.prMerged(resumed.slug, resumed.number);
-        const url = `https://github.com/${resumed.slug}/pull/${resumed.number}`;
-        if (state.merged) {
-          return { outcome: "pass", detail: { merged: { sha: state.mergedSha, at: state.mergedAt, by: cursor!.mergeRequested || cursor!.queued ? "machine" : "person" }, prUrl: url, number: resumed.number } };
+    const { task, signal } = context;
+    const cursor = await loadCursor(deps.stateDir, task.id);
+    // No cursor: nothing is being watched. The watch finds the PR itself.
+    if (!cursor) return notReady("no PR is being watched");
+    const { slug, number } = cursor.pr;
+    const url = `https://github.com/${slug}/pull/${number}`;
+    const recorded = async (state: Awaited<ReturnType<GitHub["prMerged"]>>, note?: string): Promise<StageResult> => {
+      await settle(task.id, cursor, slug, number).catch(() => {});
+      return { outcome: "pass", detail: { merged: { sha: state.mergedSha ?? null, at: state.mergedAt, by: cursor.mergeRequested || cursor.queued ? "machine" : "person" }, prUrl: url, number, ...(note ? { note } : {}) } };
+    };
+    /** The PR's own state, read first and last: a merge a person made, a PR closed. Null when it is still open. */
+    const ended = async (): Promise<StageResult | null> => {
+      const state = await deps.github.prMerged(slug, number);
+      if (state.merged) return recorded(state);
+      if (state.state === "closed") return { outcome: "escalated", detail: { escalation: "other", reason: "the PR was closed without a merge", options: [] } };
+      return null;
+    };
+    /** Waits for the queue to merge what the machine queued: pass when it does, notReady (queue flag cleared) after the wait. */
+    const queued = async (): Promise<StageResult> => {
+      const began = now().getTime();
+      let waited = 0;
+      for (;;) {
+        const result = await ended().catch(() => null);
+        if (result) return result;
+        if (signal.aborted) return { outcome: "fail", detail: { error: "aborted" } };
+        if (waited >= MERGE_QUEUE_WAIT_MS || now().getTime() - began >= MERGE_QUEUE_WAIT_MS) {
+          cursor.queued = false;
+          await saveCursor(deps.stateDir, task.id, cursor);
+          return notReady("the merge queue did not merge the PR in six hours");
         }
-        if (state.state === "closed") {
-          return { outcome: "escalated", detail: { escalation: "other", reason: "the PR was closed without a merge", options: [] } };
-        }
-      } catch (error) {
-        return { outcome: "fail", detail: { error: messageOf(error) } };
+        await sleep(deps.pollMs);
+        waited += deps.pollMs;
       }
-    }
-    // The pack is already published on this very head: nothing new to push or publish.
-    const head = cursor?.published ? (await headOf(cwd)).trim() : null;
-    const already = head !== null && cursor?.published?.sha === head;
-    if (!(resumed && already)) {
-      const pushError = await pushBranch(deps.exec, task.branch, cwd);
-      if (pushError) return { outcome: "fail", detail: { error: pushError } };
-    }
-    const slug = resumed?.slug ?? (await slugOf(cwd));
-    if (!slug) return { outcome: "fail", detail: { error: "the worktree's origin is not a GitHub repository" } };
+    };
+
     try {
-      const existing = await deps.github.findPr(slug, task.branch).catch((error: unknown) => {
-        if (resumed) return null;
-        throw error;
-      });
-      // Delivering was skipped (an older task): open the PR ready, as shipping used to. A resumed run never opens another.
-      const pr = existing ?? (resumed ? { url: `https://github.com/${resumed.slug}/pull/${resumed.number}`, number: resumed.number, isDraft: false } : await openTaskPr(deps.github, slug, context, false));
-      const phase: Awaited<ReturnType<typeof evidencePhase>> = already ? { published: { resumed: true } } : await evidencePhase(slug, pr.number, task.id, cwd, task.repoPath ?? null, context.approvals.some((a) => a.kind === "awaiting_ship" && a.decision === "approved"));
-      if ("stop" in phase) return phase.stop;
-      if (deps.stateDir && "published" in phase && !already) {
-        const sha = (await headOf(cwd)).trim();
-        await saveCursor(deps.stateDir, task.id, { ...(cursor ?? emptyCursor({ slug, number: pr.number })), pr: { slug, number: pr.number }, published: { sha } });
+      const done = await ended();
+      if (done) return done;
+      if (cursor.queued) return await queued();
+      const facts = await readFacts(context, { slug, number }, cursor);
+      if (!facts) return notReady("GitHub shows no such PR right now");
+      // Decided again on what GitHub shows now, at the head it shows now.
+      if (!facts.readiness.canAutoMerge || !facts.head) return notReady(facts.readiness.reason);
+      for (let attempt = 1; ; attempt++) {
+        try {
+          cursor.mergeRequested = true;
+          await saveCursor(deps.stateDir, task.id, cursor);
+          const result = await deps.github.mergePr(slug, number, { sha: facts.head });
+          if (result && "queued" in result) {
+            cursor.queued = true;
+            await saveCursor(deps.stateDir, task.id, cursor);
+            return await queued();
+          }
+          break;
+        } catch (error) {
+          cursor.mergeRequested = false;
+          await saveCursor(deps.stateDir, task.id, cursor);
+          if (attempt >= MERGE_ATTEMPTS) return { outcome: "escalated", detail: { escalation: "other", reason: `the merge failed twice: ${messageOf(error)}`, options: [] } };
+          await sleep(deps.pollMs);
+        }
       }
-      if ("published" in phase && !already) await context.emit?.("evidence.published", {}).catch(() => {});
-      const shown = "published" in phase ? { published: phase.published, ...(phase.note ? { note: phase.note } : {}) } : deps.evidence ? { evidence: "none" } : {};
-      if (existing?.isDraft) await deps.github.markPrReady(slug, existing.number);
-      const detail = { prUrl: pr.url, readied: existing?.isDraft === true, ...shown };
-      if (!deps.monitor) return { outcome: "pass", detail };
-      const watched = await deps.monitor(context, { slug, number: pr.number, url: pr.url });
-      return watched.outcome === "pass" ? { ...watched, detail: { ...detail, ...watched.detail } } : watched;
+      // The merge commit GitHub reports; GitHub can lag, so a few reads. Never the PR head.
+      let last = await deps.github.prMerged(slug, number);
+      for (let read = 1; !(last.merged && last.mergedSha) && read < MERGE_READS; read++) {
+        await sleep(MERGE_READ_PAUSE_MS);
+        last = await deps.github.prMerged(slug, number);
+      }
+      if (!last.merged) return { outcome: "pass", detail: { merged: { sha: null, at: now().toISOString(), by: "machine" }, prUrl: url, number, note: "GitHub did not report the merge commit" } };
+      return await recorded(last, last.mergedSha ? undefined : "GitHub did not report the merge commit");
     } catch (error) {
       return { outcome: "fail", detail: { error: messageOf(error) } };
     }
   };
 }
 
-export const shipRunner = (github: GitHub): StageRunner => shipRunnerWith({ exec: realExec, github });
+/** The shipping stage when the real stages are not built (agents off): it merges nothing and passes, as the other stubs do. */
+export const shipRunner = (_github: GitHub): StageRunner => async () => ({ outcome: "pass", detail: { note: "agents are off: nothing was merged" } });

@@ -99,8 +99,8 @@ describe("the ship monitor", () => {
   it("merges a green approved low-risk PR at the first poll when auto_merge allows it, with the head sha as the guard", async () => {
     const { run, github, slept } = setup({}, { policy: { autoMerge: "low" } });
     const result = await run();
-    expect(result).toMatchObject({ outcome: "pass", detail: { merged: { sha: HEAD, by: "machine" }, prUrl: REF.url, number: 3 } });
-    expect(calls(github, "mergePr")).toEqual([["mergePr", "o/a", 3, { sha: HEAD }]]);
+    expect(result).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD }, prUrl: REF.url, number: 3 } });
+    expect(calls(github, "mergePr")).toEqual([]);
     expect(slept).toEqual([]);
   });
 
@@ -114,15 +114,15 @@ describe("the ship monitor", () => {
     expect(notes.filter((n) => /auto-merge/.test(n))).toHaveLength(1);
   });
 
-  it("does not merge a PR no person approved or looked at, and merges once the preview gate was approved", async () => {
+  it("says a merge is due only for a PR a person looked at (the preview gate approved)", async () => {
     let polls = 0;
     const unseen = { prFacts: async () => node({ reviewDecision: null }), prMerged: async () => (++polls < 2 ? open : merged) };
     const none = setup(unseen, { policy: { autoMerge: "low" }, approvals: [] });
-    await none.run();
+    expect(await none.run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "person" } } });
     expect(calls(none.github, "mergePr")).toEqual([]);
     const looked = setup({ prFacts: async () => node({ reviewDecision: null }) }, { policy: { autoMerge: "low" }, approvals: [{ kind: "awaiting_ship", decision: "approved", response: {} } as never] });
-    await looked.run();
-    expect(calls(looked.github, "mergePr")).toHaveLength(1);
+    expect(await looked.run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
+    expect(calls(looked.github, "mergePr")).toEqual([]);
   });
 
   it("says ship.ready once, the first poll readiness is true, and ship.approval_needed when a person has to merge", async () => {
@@ -138,9 +138,9 @@ describe("the ship monitor", () => {
     expect(emitted.map(([kind]) => kind)).toEqual(["ship.ready"]);
   });
 
-  it("calls a merge that followed its own request the machine's, even when seen on a later poll (a merge queue)", async () => {
-    let polls = 0;
-    const { run } = setup({ prMerged: async () => (++polls < 2 ? open : merged), mergePr: async () => ({ queued: true }) }, { policy: { autoMerge: "low" } });
+  it("calls a merge that followed its own queueing the machine's, even when seen on a later poll", async () => {
+    await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), startedAt: START.toISOString(), queued: true });
+    const { run } = setup({ prMerged: async () => merged }, { policy: { autoMerge: "low" } });
     expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
   });
 
@@ -151,15 +151,15 @@ describe("the ship monitor", () => {
     expect(none.notes.join("\n")).toMatch(/ship approver/);
 
     const approved = setup({}, { policy: { autoMerge: "medium" }, pack: pack("high"), approvals: [{ kind: "awaiting_ship", decision: "approved", response: { approver: "bo" } } as never] });
-    expect(await approved.run()).toMatchObject({ detail: { merged: { by: "machine" } } });
+    expect(await approved.run()).toMatchObject({ detail: { ready: { head: HEAD } } });
   });
 
   it("waits through a freeze window and merges after it", async () => {
     const freeze = [{ from: "2026-11-04T00:00:00Z", to: "2026-11-04T12:03:00Z", reason: "release week" }];
     const { run, github, slept, notes } = setup({}, { policy: { autoMerge: "low", freeze } });
-    expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
     expect(slept).toEqual([60_000, 60_000, 60_000]);
-    expect(calls(github, "mergePr")).toHaveLength(1);
+    expect(calls(github, "mergePr")).toEqual([]);
     expect(notes.filter((n) => /freeze: release week/.test(n))).toHaveLength(1);
   });
 
@@ -169,7 +169,7 @@ describe("the ship monitor", () => {
       { prFacts: async () => node({ body: "Depends on #7" }), prMerged: async (_slug, n) => (n === 7 ? (++seven < 2 ? open : merged) : open) },
       { policy: { autoMerge: "low" } },
     );
-    expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
     expect(notes.join("\n")).toMatch(/blocked by #7/);
   });
 
@@ -182,9 +182,9 @@ describe("the ship monitor", () => {
       },
       { policy: { autoMerge: "low" }, codeowners: "src/ @ana\n" },
     );
-    expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
     expect(notes.join("\n")).toMatch(/no owner of src\/a.ts approved \(@ana\)/);
-    expect(calls(github, "mergePr")).toHaveLength(1);
+    expect(calls(github, "mergePr")).toEqual([]);
   });
 
   it("names a team it cannot resolve as a blocker instead of passing it", async () => {
@@ -196,14 +196,11 @@ describe("the ship monitor", () => {
     expect(notes.join("\n")).toMatch(/owner @acme\/core cannot be resolved/);
   });
 
-  it("asks the merge queue once: a PR sitting in the queue is not merged again, and a merge seen later is the machine's", async () => {
-    let polls = 0;
-    const mergePr = vi.fn(async () => ({ queued: true as const }));
-    const { run, github } = setup({ mergePr, prMerged: async () => (++polls < 4 ? open : merged) }, { policy: { autoMerge: "low" } });
-    expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
-    expect(mergePr).toHaveBeenCalledTimes(1);
-    expect(await loadCursor(stateDir, "t1")).toMatchObject({ queued: true });
-    expect(calls(github, "mergePr")).toHaveLength(1);
+  it("returns at once for a PR the machine queued: the merge stage waits for the queue, the watch never asks to merge", async () => {
+    await saveCursor(stateDir, "t1", { ...emptyCursor({ slug: "o/a", number: 3 }), startedAt: START.toISOString(), queued: true });
+    const { run, github } = setup({}, { policy: { autoMerge: "low" } });
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { queued: true, number: 3 } });
+    expect(calls(github, "mergePr")).toEqual([]);
   });
 
   it("reads CODEOWNERS at the PR's base branch through the port, never from the worktree", async () => {
@@ -217,7 +214,7 @@ describe("the ship monitor", () => {
       pollMs: 1,
       sleep: async () => {},
     })({ task: { id: "t2", repoPath: "/r", worktreePath: "/nonexistent" }, approvals: [], signal: new AbortController().signal } as unknown as StageContext, REF);
-    expect(result).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
+    expect(result).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
     expect(fileAtRef.mock.calls.map((c) => [c[1], c[2]])).toEqual([["main", ".github/CODEOWNERS"], ["main", "CODEOWNERS"]]);
   });
 
@@ -292,14 +289,6 @@ describe("the ship monitor", () => {
     const abort = new AbortController();
     abort.abort();
     expect(await setup({}, { abort }).run()).toEqual({ outcome: "fail", detail: { error: "aborted" } });
-  });
-
-  it("retries a failed merge once on the next poll, then escalates with GitHub's words", async () => {
-    const mergePr = vi.fn().mockRejectedValue(new Error("merging o/a#3 failed (409): Head branch was modified"));
-    const { run, notes } = setup({ mergePr }, { policy: { autoMerge: "low" } });
-    expect(await run()).toMatchObject({ outcome: "escalated", detail: { reason: expect.stringContaining("Head branch was modified") } });
-    expect(mergePr).toHaveBeenCalledTimes(2);
-    expect(notes.join("\n")).toMatch(/the merge failed/);
   });
 
   it("goes on polling when GitHub fails a read", async () => {
@@ -719,7 +708,7 @@ describe("the review loop: what the security pass found", () => {
     expect(blocked.notes.some((n) => n.includes(`the fix at ${HEAD.slice(0, 7)} has no approval on it`))).toBe(true);
 
     const ok = setup({ prReviews: async () => fresh }, { policy: { autoMerge: "low" } });
-    expect(await ok.run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
+    expect(await ok.run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
 
     const dismissed = setup({ prReviews: async () => [...fresh, { author: "ana", state: "CHANGES_REQUESTED", commitId: HEAD, at: "t2" }] }, { policy: { autoMerge: "low" }, maxWaitMs: 120_000 });
     await dismissed.run();
@@ -729,7 +718,7 @@ describe("the review loop: what the security pass found", () => {
   it("keeps the monitor's reviews for the merge check even when the repo has no CODEOWNERS", async () => {
     const { run, github } = setup({ prReviews: async () => [] }, { policy: { autoMerge: "low" }, maxWaitMs: 120_000 });
     await run();
-    expect(calls(github, "mergePr")).toHaveLength(1);
+    expect(calls(github, "mergePr")).toEqual([]);
   });
 
   it("flattens a reviewer's text and redacts a token before it goes into an escalation", async () => {
@@ -747,9 +736,9 @@ describe("the review loop: what the security pass found", () => {
       { prActivity: async (_s, _n, since) => (since === null ? [commentAct()] : []), viewer: async () => ({ login: "me", teams: [] }) },
       { policy: { autoMerge: "low" }, loop: world.loop, evidence: world.evidence },
     );
-    expect(await run()).toMatchObject({ outcome: "pass", detail: { merged: { by: "machine" } } });
+    expect(await run()).toMatchObject({ outcome: "pass", detail: { ready: { head: HEAD } } });
     expect(slept).toEqual([60_000]);
-    expect(calls(github, "mergePr")).toHaveLength(1);
+    expect(calls(github, "mergePr")).toEqual([]);
   });
 
   it("hands a PR that has had ten answers to a person", async () => {
