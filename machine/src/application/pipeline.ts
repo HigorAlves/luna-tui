@@ -14,7 +14,7 @@ import { type CardFields, type ContextMissing, type DedupContext, contextComplet
 import { type ContextDeps, contextSetup, correctionsOf } from "./context-setup.ts";
 import { type DedupAnswer, checkDuplicates } from "./intake-dedup.ts";
 import type { Candidate } from "../domain/similarity.ts";
-import { type CardFieldsInput, appendSource, cardFieldsOf, cardOf, mergeFields, unmergeFields, withDemand } from "../domain/card-fields.ts";
+import { type CardFieldsInput, appendSource, cardFieldsOf, cardOf, channelOf, mergeFields, unmergeFields, withDemand } from "../domain/card-fields.ts";
 import { canSeeKept, contextAsk, mergedNotice, questionsComment } from "../domain/notices.ts";
 import { triageVerdicts } from "../domain/triage-policy.ts";
 import { packForState, packStates } from "../domain/packs.ts";
@@ -1064,7 +1064,7 @@ export class Pipeline {
   }
 
   /** What a person gives the context gate: a repository, a project or more text. The card goes back through the check; complete, it goes on as a start would. */
-  async provideContext(id: string, given: { repoPath?: string; project?: string; text?: string }): Promise<TaskRow> {
+  async provideContext(id: string, given: { repoPath?: string; project?: string; text?: string; reporterChannel?: string }): Promise<TaskRow> {
     const task = await this.get(id);
     const open = (await this.approvals(id)).find((a) => a.kind === "awaiting_setup" && a.decision === null && a.requested.kind === "context");
     if (task.state !== "awaiting_setup" || !open) throw new NoContextGateError(id, task.state);
@@ -1072,10 +1072,13 @@ export class Pipeline {
     const text = given.text?.trim().slice(0, 20_000);
     const card = cardOf(task);
     const project = given.project?.trim().slice(0, 120) || card.project;
+    // A reporter with no channel cannot be asked: a person names the channel to reach them on. Only an existing reporter takes it; none is made up.
+    const channel = given.reporterChannel ? channelOf(given.reporterChannel) : "";
+    const reporter = card.reporter && channel ? { ...card.reporter, channel } : null;
     await this.store.updateTask(id, {
       ...(given.repoPath ? { repoPath: given.repoPath } : {}),
       ...(text ? { description: task.description ? `${task.description}\n\n${text}` : text } : {}),
-      card: { ...card, project },
+      card: { ...card, project, ...(reporter ? { reporter } : {}) },
     });
     const resolved = card.resolved;
     if (resolved) {
@@ -1090,7 +1093,7 @@ export class Pipeline {
       });
       return this.get(id);
     }
-    const decision: DecisionRecord = { decision: "answered", response: { ...(given.repoPath ? { repoPath: given.repoPath } : {}), ...(given.project ? { project: given.project } : {}), text: Boolean(text) } };
+    const decision: DecisionRecord = { decision: "answered", response: { ...(given.repoPath ? { repoPath: given.repoPath } : {}), ...(given.project ? { project: given.project } : {}), ...(reporter ? { reporterChannel: true } : {}), text: Boolean(text) } };
     // The card is whole: now it is checked for a duplicate, as a card that was whole at start is.
     if (this.dedupDeps && !cardOf(await this.get(id)).dedup?.chosen && !cardOf(await this.get(id)).dedup) {
       const checked = await this.dedupCheck(id, decision);
