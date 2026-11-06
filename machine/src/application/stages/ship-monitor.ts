@@ -55,7 +55,7 @@ export interface ShipMonitorDeps {
   /** A stacked card's parent, and the default branch: what the checklist's `stack` item reads. Absent, the item is always ok (a card read before the stack existed). */
   stack?: {
     facts: (slug: string, task: StageContext["task"]) => Promise<StackFacts | null>;
-    defaultBranch: (repoPath: string) => Promise<string | null>;
+    defaultBranch: (repoPath: string, slug?: string) => Promise<string | null>;
     /** What the watch does when the parent changed or merged (slice 9); absent, the watch only reports the checklist's `stack` item. */
     /** The commit the card's workspace records as its base (default: `stackOf`). */
     recordedBase?: (worktreePath: string) => Promise<string | null>;
@@ -223,7 +223,7 @@ export async function readShipFacts(deps: ShipFactsDeps, context: StageContext, 
       const recordedBase = task.worktreePath ? await (deps.stack.recordedBase ?? (async (path: string) => (await stackOf(path)).sha))(task.worktreePath).catch(() => null) : null;
       stackFacts = { parent: facts.parent, defaultBranch: facts.defaultBranch, recordedBase };
     }
-    const defaultBranch = facts !== "unreadable" && facts ? facts.defaultBranch : task.repoPath ? await deps.stack.defaultBranch(task.repoPath).catch(() => null) : null;
+    const defaultBranch = facts !== "unreadable" && facts ? facts.defaultBranch : task.repoPath ? await deps.stack.defaultBranch(task.repoPath, slug).catch(() => null) : null;
     stack = { stacked: facts === "unreadable" || facts !== null, baseRef: pr.baseRef, defaultBranch };
   }
   const readiness = mergeReadiness({
@@ -498,7 +498,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
       const stuck = (why: string): Outcome => ({ result: escalated(why, "other", { verdict: "conflict_unresolvable", options: ["rebase the branch by hand and approve", "merge the default branch into the branch and approve"] }) });
       const wt = task.worktreePath;
       const branch = task.branch;
-      const defaultOf = async (repoPath: string) => defaultBranch ?? (await stack.defaultBranch(repoPath));
+      const defaultOf = async (repoPath: string) => defaultBranch ?? (await stack.defaultBranch(repoPath, slug));
       if (sf.parent.state === "gone") {
         // A person retargeted the PR to the default branch: the card has left its stack, and its diff is what the PR shows.
         if (defaultBranch && prBase === defaultBranch && wt && task.repoPath) {

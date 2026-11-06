@@ -405,6 +405,12 @@ export class OctokitGitHub implements GitHub {
     await call(`commenting on ${slug}#${number}`, () => this.octokit.rest.issues.createComment({ owner, repo, issue_number: number, body }));
   }
 
+  async defaultBranch(slug: string): Promise<string | null> {
+    const { owner, repo } = repoRef(slug);
+    const { data } = await call(`reading the default branch of ${slug}`, () => this.octokit.rest.repos.get({ owner, repo }));
+    return typeof data.default_branch === "string" && data.default_branch.length > 0 ? data.default_branch : null;
+  }
+
   async createIssue(slug: string, issue: { title: string; body: string; labels?: string[] }): Promise<{ number: number; url: string }> {
     const { owner, repo } = repoRef(slug);
     const { data } = await call(`creating an issue in ${slug}`, () => this.octokit.rest.issues.create({ owner, repo, title: issue.title, body: issue.body, ...(issue.labels && issue.labels.length > 0 ? { labels: issue.labels } : {}) }));

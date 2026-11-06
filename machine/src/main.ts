@@ -103,7 +103,6 @@ import { noTokenGitHub } from "./application/github.ts";
 import { realDeliverRunner } from "./application/stages/deliver.ts";
 import { stackFactsOf } from "./application/stack.ts";
 import { similarCards } from "./application/size-estimate.ts";
-import { defaultBranch as hostDefaultBranch } from "./adapters/git/worktree.ts";
 import { shipRunner } from "./application/stages/ship.ts";
 import { StubStages } from "./application/stages/stubs.ts";
 import { verifyRunner } from "./application/stages/verify.ts";
@@ -252,6 +251,8 @@ const buildDecisions: { decide: Decide | null; budget?: (taskId: string) => Prom
 const verifyDecisions: { decide: Decide | null } = { decide: null };
 /** Evidence's format decision runs through PackRuns as the `evidence` client: bound once it exists. */
 const evidenceDecisions: { decide: ((context: EvidenceContext, repoPath: string | null) => Promise<Record<string, unknown>>) | null } = { decide: null };
+/** The default branch is GitHub's answer for the repository (never the host's clone): unknown is null, and every rule that needs it fails closed. */
+const githubDefaultBranch = async (_repoPath: string, slug?: string): Promise<string | null> => (slug ? await github.defaultBranch(slug).catch(() => null) : null);
 /** A stacked card's parent, read from the pipeline's rows and GitHub's facts; what the workspace, Deliver, the checklist and the merge rule read. */
 const stackDeps = {
   baseFor: (task: Parameters<typeof pipeline.baseOf>[0]) => pipeline.baseOf(task),
@@ -266,13 +267,13 @@ const stackDeps = {
           const number = (await pipeline.latestStageFinish(id, "delivering"))?.detail?.prNumber;
           return typeof number === "number" ? number : null;
         },
-        defaultBranch: hostDefaultBranch,
+        defaultBranch: githubDefaultBranch,
         merged: (id) => pipeline.mergeRecorded(id),
       },
       slug,
       task,
     ),
-  defaultBranch: hostDefaultBranch,
+  defaultBranch: githubDefaultBranch,
 };
 /** Ship's review-loop decisions run through PackRuns as the `ship` client: bound once it exists. */
 const shipDecisions: { decide: ShipDecide | null } = { decide: null };

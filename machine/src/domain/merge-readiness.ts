@@ -118,6 +118,7 @@ export function mergeReadiness(input: MergeReadinessInput): MergeReadiness {
   if ((input.dependenciesListed ?? 0) > MAX_DEPENDENCIES) push("blocked", `too many dependencies listed (${input.dependenciesListed})`);
   for (const d of dependencies) if (!d.merged && !d.closed) push("blocked", `blocked by #${d.number}`);
   if (input.stack?.stacked) push("stack", "waits for its parent to merge");
+  else if (input.stack && !input.stack.defaultBranch) push("stack", "the default branch could not be read: the machine does not merge");
   else if (input.stack && input.stack.defaultBranch && input.stack.baseRef && input.stack.baseRef !== input.stack.defaultBranch) push("stack", `targets ${input.stack.baseRef}, not ${input.stack.defaultBranch}: the machine merges only into the default branch`);
   const staleDays = input.staleDays ?? STALE_DAYS;
   if (pr.headCommittedAt) {

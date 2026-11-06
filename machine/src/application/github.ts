@@ -145,6 +145,8 @@ export interface GitHub {
   listReadyIssues(slug: string, label: string): Promise<GhIssue[]>;
   commentOnIssue(slug: string, number: number, body: string): Promise<void>;
   /** Opens a new issue in `slug` (a split's child ticket). A write: only on a person's tap. */
+  /** The repository's default branch as GitHub says it, or null when it cannot be read. */
+  defaultBranch(slug: string): Promise<string | null>;
   createIssue(slug: string, issue: { title: string; body: string; labels?: string[] }): Promise<{ number: number; url: string }>;
   /** The open PR whose head is `branch`, or null. */
   findPr(slug: string, branch: string): Promise<PrRef | null>;
@@ -201,6 +203,7 @@ export function noTokenGitHub(): GitHub {
     threadResolved: () => Promise.resolve(false),
     listReadyIssues: refuse,
     commentOnIssue: refuse,
+    defaultBranch: async () => null,
     createIssue: refuse,
     findPr: refuse,
     openPr: refuse,

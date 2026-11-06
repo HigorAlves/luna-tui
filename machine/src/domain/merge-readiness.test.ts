@@ -313,8 +313,8 @@ describe("the stack item of the checklist", () => {
     expect(r.canAutoMerge).toBe(false);
   });
 
-  it("says nothing about the target when the default branch is not known", () => {
-    expect(item(mergeReadiness(input({ stack: { stacked: false, baseRef: "release/2", defaultBranch: null } })))).toMatchObject({ ok: true });
+  it("fails closed when the default branch is not known: the card is not ready", () => {
+    expect(item(mergeReadiness(input({ stack: { stacked: false, baseRef: "release/2", defaultBranch: null } })))).toMatchObject({ ok: false, detail: expect.stringContaining("default branch") });
   });
 });
 

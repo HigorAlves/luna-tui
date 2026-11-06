@@ -1394,6 +1394,12 @@ describe("a merge that is not a ship (wave 15)", () => {
     expect(await into("task/parent")).toEqual({ outcome: "fail", detail: { prClosed: true, mergedInto: "task/parent" } });
     expect(await into("main")).toMatchObject({ outcome: "pass", detail: { merged: { sha: "m1" } } });
   });
+  it("is not a ship either when the default branch cannot be read: closed, never logged as a merge", async () => {
+    const github = fakeGitHub({ viewer: async () => ({ login: "me", teams: [] }), prMerged: async () => merged, prFacts: async () => node({ baseRefName: "main" }) });
+    const deps = { github, policies: { for: async () => policyWith({ autoMerge: "low" }) }, evidence: { load: async () => pack() }, stateDir, pollMs: 1, readCodeowners: async () => null, now: () => START, stack: { facts: async () => null, defaultBranch: async () => null } };
+    const context = { task: { id: "t1", repoPath: "/repo", worktreePath: "/wt", branch: "hardness/t1" }, approvals: [], signal: new AbortController().signal } as unknown as StageContext;
+    expect(await shipMonitor(deps as never)(context, REF)).toMatchObject({ outcome: "fail", detail: { prClosed: true } });
+  });
 });
 
 describe("a parent that changed or merged (wave 15)", () => {
