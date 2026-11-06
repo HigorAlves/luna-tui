@@ -59,7 +59,7 @@ In shipping order:
     - fastembed's model (`BAAI/bge-small-en-v1.5`, about 67 MB) downloads on first use into the Hugging Face cache (`HF_HOME`).
     - With an LLM key set and no `EMBEDDING_*` setting, Cognee embeds with OpenAI.
     - Office formats need the `unstructured` extra, which the image leaves out.
-  - The REST API takes text, files and URLs into named datasets. HTTP search takes a query, a search type and a list of datasets, but not `node_set`, `top_k` or `only_context`. It exposes `GET /api/v1/quotas/usage`.
+  - The REST API takes text, files, URLs and repository paths into named datasets, each with `external_metadata`. HTTP search takes a query, a search type, a list of datasets, `topK`, `onlyContext`, `nodeName` and a `codeQuery` (the docs said otherwise; the image's OpenAPI and M0 say so).
   - The API is multi-user by default (`ENABLE_BACKEND_ACCESS_CONTROL`), with login endpoints.
 - **Ports.** Laminar already publishes `127.0.0.1:8000` and `8001` in our `compose.yaml`.
 
@@ -97,14 +97,15 @@ In shipping order:
   - `LLM_PROVIDER=openai`, with the key read from `~/.config/hardness/cognee-openai-key` (mode 600, like the machine's other secrets).
   - The key is its own, not the `OPENAI_API_KEY` of the `openai:*` engines. We recommend a separate OpenAI project with its own monthly budget, so memory's spend has a hard ceiling and shows on its own line.
   - `LLM_MODEL` comes from the model catalog: `contracts/src/models.ts` gets a `cognee` entry with its price. `pnpm start` renders `~/.config/hardness/cognee.env` from the catalog, so no model ID is written in `compose.yaml`.
-  - **No key, no memory.** Without the file the service is not started and the port is `noMemory()`. Luna works as before.
+  - **No key: local mode.** Without the file, Cognee runs keyless. It extracts with its local GLiNER model (a shallower graph, no answer-writing search), and recall and the code graph work as with a key. The Floor says which mode memory is in. `memory: off` in `luna.yaml` or `MACHINE_MEMORY=off` turns it off; then the port is `noMemory()` and Luna works as before.
 - **Embeddings, local.**
   - `EMBEDDING_PROVIDER=fastembed` with `BAAI/bge-small-en-v1.5`, set explicitly; with a key present Cognee would otherwise embed with OpenAI.
   - Recall never calls OpenAI, so search is fast, free, and works while OpenAI is down.
-  - `HF_HOME` points at a `cognee-models` volume, filled once on first start.
+  - `HF_HOME` and `FASTEMBED_CACHE_PATH` point under `/cognee-storage/models` on the `cognee-data` volume, filled once on first start. (The image runs as uid 1000 and only `/cognee-storage` is its own: a separate volume mounted elsewhere is root's and the download fails.)
   - The embedder's ID is in the catalog at zero price.
 - **Network.** Cognee sits on an internal compose network with the machine. Its only way out is the machine's egress proxy, whose list allows `api.openai.com`, plus `huggingface.co` and its CDN while `cognee-models` is empty.
-- **Other settings.** Auth stays on, with one machine user whose password the machine keeps in `~/.config/hardness/cognee-password`; the UI logs in as that user. Cognee's auto-feedback is off.
+- **Other settings.** Auth stays on, with one machine user (`machine@luna.example.com`: Cognee refuses reserved domains such as `.local`) whose password the machine keeps in `~/.config/hardness/cognee-password`; the UI logs in as that user. `FASTAPI_USERS_JWT_SECRET` is set from `~/.config/hardness/cognee-jwt-secret`, or every token dies when the container restarts. Cognee's auto-feedback is off.
+- **Dataset names.** Cognee refuses dots and spaces in a name; colons are fine. `repoSlug()` is already safe, and a channel or project id is made safe the same way.
 - **Formats.** v1 indexes md, txt and pdf. Office formats are listed as skipped (Q8).
 - **The UI.**
   - Where: Cognee's `frontend` service, on its own profile `memory-ui`, which `pnpm start` brings up by default as it does `observe`.
@@ -208,7 +209,8 @@ Two graphs, each with one job.
 **Cognee's code graph of `main`, for Q&A.**
 - **What it holds.** Cognee's code pipeline (the `enola` extractor, a core dependency) builds modules, symbols, routes, services, storage, request flows, `calls` and `imports` edges. Docstrings and docs link to their symbols with `describes` edges. Its core makes no model calls.
 - **Why it is in memory.** It shares a store with card history and documents. A question can go from a symbol to the RFC that describes it to the card whose escalation changed it, in one graph.
-- **When it is built.** On the trigger that rebuilds Graphify's graph of `main` (the ship monitor sees a merge), with the poll as fallback, from a clean checkout of `origin/<default>` into `code:<repo>`.
+- **When it is built.** On the trigger that rebuilds Graphify's graph of `main` (the ship monitor sees a merge), with the poll as fallback, into `code:<repo>`.
+- **How it is fed.** Cognee reads a repository from a path it can see (`ACCEPT_LOCAL_FILE_PATH=true`, `COGNEE_ALLOWED_LOCAL_FILE_ROOTS=/repos`), and its extractor writes a `.enola` folder inside it, so the path must be writable. The machine exports `origin/<default>` from the card-independent repository it already keeps with `git archive` (no `.git`, so nothing in it is ever handed to git again) into `<state>/memory/code/<slug>/<commit>/`, mounted at `/repos`, and adds `/repos/<slug>/<commit>`. The previous commit's copy is deleted once the new graph is built.
 - **How it is queried.** `memory_recall` `scope: "code"` uses `SearchType.CODE`. The pipeline's own stages keep reading Graphify.
 - **Unverified.** That the code pipeline can be started and queried over the REST API alone, with no change to Cognee. M0 checks. If it cannot, Q&A falls back to Graphify's graph of `main`, linked to memory by file path, and M5b is dropped (Q5).
 
@@ -244,6 +246,20 @@ Two graphs, each with one job.
 
 M2 to M5b depend on M1; M6 depends on M2, M5 and M5b. G1 depends on nothing here and can run in parallel.
 
+## Implementation notes (M0, 2026-11-06)
+
+The spike ran the official image (`cognee/cognee@sha256:84584ead…`, 3.79 GB, Cognee's enola 0.4.30) on this machine, keyless, on Docker Desktop.
+
+- **Go.** Everything the design needs is in the REST API of the unchanged image.
+- **Writes.** `POST /add` takes `raw_data` items with `external_metadata` (`{"luna_id": …}`) and a `node_set`, and returns one data id per item. `GET /datasets/{id}/data` returns each item's `externalMetadata`, so `reconcile()` maps Cognee's items to our rows by `luna_id`, not by parsing text.
+- **Recall.** `POST /search` with `searchType: CHUNKS`, `onlyContext: true`, `verbose: true` returns `objects_result` with a score, the chunk's text, its `document_id` (the data id) and its `external_metadata`, in 0.07 to 0.15 s. A dataset with no graph yet returns an error for that dataset only. `GRAPH_COMPLETION` with `onlyContext` returns the graph's triplets with no model call (0.12 s), useful context for the ask surfaces.
+- **Keyless.** `cognify` with no key extracts with GLiNER, which Cognee installs on first use (about a minute, so its index needs the egress list once, like the embedder). That made "local mode" the default without a key, instead of memory off.
+- **The code graph.** A local path is detected as a code project. The read-only mount failed (the extractor writes `.enola` inside the repository). A writable `git archive` copy of `main` (1,638 files) built in 12 s: 9,783 nodes, 24,087 edges, 7,196 symbols (2,042 with docs), 17 flows. Facts by language: TypeScript 8,708, Rust 1,422, markdown 1,008. Q5 is answered: TypeScript and Rust are both covered (the board's `client.rs` functions are symbols). Keyless, the 674 document files of the project are left out of the code graph (their pipeline needs a model); the repository's docs reach memory through `<repo>:docs` anyway.
+- **Code reads.** `capabilities`, `architecture` (it found the machine's Hono routes), `search`, `impact_analysis` and `ask` (a no-model, ranked walk; 0.05 s) answer through `searchType: CODE` with a `codeQuery`.
+- **Auth and paths.** Register refuses reserved e-mail domains. Without `FASTAPI_USERS_JWT_SECRET` tokens die on restart. The image runs as uid 1000 and only `/cognee-storage` is writable by it, so the model caches live there.
+- **Resources.** 1.65 GB of memory after the code graph, on a host with 7.7 GB for Docker.
+- **Pending a key:** the OpenAI cost of a `cognify` (Q2), what `/sessions/cost-by-model` reports, `GRAPH_COMPLETION`'s written answers (Q7), and PDFs outside a code project.
+
 ## Alternatives considered
 
 ### A bridge: Cognee's LLM calls answered by the machine on a Codex engine
@@ -275,7 +291,7 @@ M2 to M5b depend on M1; M6 depends on M2, M5 and M5b. G1 depends on nothing here
 - **Q2. Cost.** What does a closed card, the repo's docs, and a company folder of a given size cost in OpenAI tokens? M0 measures; the OpenAI project's budget and `memory.daily_cognify_items` are the guards.
 - **Q3. Should answers cite only, or also act?** Preferred: cite only. Opening a card from an answer is a later wave.
 - **Q4. The company folder's scope.** One folder for the whole machine, or one per team? Preferred: one folder in v1, with subfolders becoming their own datasets later.
-- **Q5. Does `enola` cover TypeScript and Rust well, over REST?** Cognee's docs name full support for Python only. If M0 shows weak coverage, M5b is dropped and Q&A uses Graphify's graph of `main`.
+- **Q5. Does `enola` cover TypeScript and Rust well, over REST?** Answered by M0: yes (TypeScript 8,708 facts, Rust 1,422 on this repo, 12 s). M5b goes ahead.
 - **Q6. Two graphs of `main`.** If M5b's answers prove better after three months, should the pipeline's stages move to Cognee's graph and Graphify keep only the branch graph? Preferred: decide then, from data.
 - **Q7. Who writes answers on the ask surfaces?** Either Cognee's `GRAPH_COMPLETION` over the viewer's datasets (on the OpenAI key) or our `memory_answer` pack over recalled items (on Codex). M0 compares them on the question set. Preferred: the one with more correct citations.
 - **Q8. Office formats.** docx, pptx and xlsx need Cognee's `unstructured` extra, which the official image leaves out. Should we convert them to PDF or markdown on the machine before upload, or build Cognee's image with that extra (`COGNEE_EXTRAS=docs`, still their Dockerfile, unchanged)? Preferred: their Dockerfile with the extra, if M0 shows the image size is acceptable.

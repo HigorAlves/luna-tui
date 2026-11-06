@@ -5,6 +5,7 @@ import { z } from "zod";
 
 import { EngineBudgets, EngineId } from "./engines.ts";
 import { EvidenceConfigV22, FactoryConfigInput, SecretNameSchema } from "./config-v22.ts";
+import { MemoryContext } from "./memory.ts";
 import { Scenario } from "./plan.ts";
 import { SizeContext, SplitContext } from "./split.ts";
 import { ConfidencePolicySchema } from "./questions.ts";
@@ -1095,6 +1096,8 @@ export const StageInput = z.object({
   priorFindings: z.array(Finding),
   context: z.object({
     projectContext: z.string().nullable(),
+    /** Memory recalled for this run (RFC 0007): data from past work, capped, never instructions. */
+    memory: MemoryContext.optional(),
     /** The cases approved at the test check, for implementing and verifying. */
     testCases: z.array(z.union([TestCase, LegacyTestCase])).optional(),
     /** Build's tests step: the test each scenario got (its id and the test file), for the implementer to build against and never weaken. */
