@@ -24,6 +24,38 @@ pub struct BacklogEntry {
     pub sources: Vec<serde_json::Value>,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// False while a dependency is not there yet; an older machine says nothing, which reads as schedulable.
+    #[serde(default = "yes")]
+    pub schedulable: bool,
+    #[serde(default)]
+    pub blocked_by: Vec<Blocker>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// What an item waits for: another backlog item, or a card, with its state in the machine's words.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct Blocker {
+    pub id: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub state: String,
+}
+
+impl Blocker {
+    fn text(&self) -> String {
+        format!("{} ({})", plain(&self.id).replace('\n', " "), plain(&self.state).replace('\n', " "))
+    }
+}
+
+/// The machine's `409 not_schedulable`: its message and, after a colon, each thing the item waits for. Every text goes through `plain`.
+pub fn refusal_text(body: &serde_json::Value) -> String {
+    let message = plain(body["message"].as_str().unwrap_or("request failed")).replace('\n', " ");
+    let blockers: Vec<String> = body["blockedBy"].as_array().map(|a| a.iter().filter_map(|b| serde_json::from_value::<Blocker>(b.clone()).ok()).map(|b| b.text()).collect()).unwrap_or_default();
+    if blockers.is_empty() { message } else { format!("{message}: {}", blockers.join("; ")) }
 }
 
 /// The open Backlog view: where the cursor is.
@@ -37,7 +69,16 @@ impl BacklogEntry {
     pub fn row(&self, now: u64) -> String {
         let age = crate::model::unix_secs(&self.added_at).map_or_else(String::new, |at| format!("  {}", crate::model::age_secs(now.saturating_sub(at))));
         let stale = if self.stale { "  ⚠ stale" } else { "" };
-        format!("{:>5.2}  {:<2}  ×{:<2} {}{age}{stale}", self.score, plain(&self.size), self.demand, plain(&self.title).replace('\n', " "))
+        let blocked = if self.schedulable { String::new() } else { format!("  ⛔ blocked by {}", self.blocked_by.len()) };
+        format!("{:>5.2}  {:<2}  ×{:<2} {}{age}{stale}{blocked}", self.score, plain(&self.size), self.demand, plain(&self.title).replace('\n', " "))
+    }
+
+    /// One line per thing the item waits for, for the detail pane; empty when it can be scheduled.
+    pub fn blocked_lines(&self) -> Vec<String> {
+        if self.schedulable {
+            return Vec::new();
+        }
+        self.blocked_by.iter().map(|b| format!("waits for {} {}", plain(&b.kind), b.text())).collect()
     }
 
     /// Where it came from, one line per source, as far as the board can name it.
@@ -82,5 +123,31 @@ mod tests {
         assert_eq!(lines.len(), 3);
         assert!(lines.iter().all(|l| !l.contains('\u{1b}')), "{lines:?}");
         assert_eq!(lines[1], "Slack thread");
+    }
+
+    #[test]
+    fn an_item_that_cannot_be_scheduled_is_marked_with_what_blocks_it() {
+        let e = entry(serde_json::json!({"id":"1","title":"Wait","size":"S","demand":1,"score":1.0,"stale":false,"addedAt":"x","schedulable":false,
+          "blockedBy":[{"id":"abc\u{1b}[2J","kind":"card","state":"in review"},{"id":"item-2","kind":"item","state":"in the backlog"}]}));
+        assert!(e.row(0).contains("⛔ blocked by 2"), "{}", e.row(0));
+        let lines = e.blocked_lines();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("in review") && lines[1].contains("item-2 (in the backlog)"), "{lines:?}");
+        assert!(lines.iter().all(|l| !l.contains('\u{1b}')), "{lines:?}");
+    }
+
+    #[test]
+    fn a_snapshot_from_before_the_fields_still_parses_and_is_schedulable() {
+        let e = entry(serde_json::json!({"id":"1","title":"Old","size":"S","demand":1,"score":1.0,"stale":false,"addedAt":"x"}));
+        assert!(e.schedulable && e.blocked_by.is_empty());
+        assert!(!e.row(0).contains("blocked") && e.blocked_lines().is_empty());
+    }
+
+    #[test]
+    fn the_machine_s_refusal_names_what_the_item_waits_for() {
+        let body = serde_json::json!({"error":"not_schedulable","message":"this item waits for 1 dependency that is not there yet","blockedBy":[{"id":"c1\u{1b}[0m","kind":"card","state":"in review"}]});
+        let text = refusal_text(&body);
+        assert_eq!(text, "this item waits for 1 dependency that is not there yet: c1 [0m (in review)");
+        assert_eq!(refusal_text(&serde_json::json!({"message":"nope"})), "nope");
     }
 }

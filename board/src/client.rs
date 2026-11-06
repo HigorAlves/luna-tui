@@ -128,6 +128,10 @@ impl Machine {
             .map_err(|e| (String::new(), format!("unexpected reply from the machine: {e}")))?;
         if status >= 400 {
             let code = body["error"].as_str().unwrap_or_default().to_string();
+            // A 409 `not_schedulable` names what the item waits for: the message carries it.
+            if body["blockedBy"].is_array() {
+                return Err((code, crate::backlog::refusal_text(&body)));
+            }
             return Err((code, body["message"].as_str().unwrap_or("request failed").to_string()));
         }
         Ok(body)
@@ -883,5 +887,42 @@ mod pr_tests {
         assert_eq!(path_segment("a/b?c d"), "a%2Fb%3Fc%20d");
         assert_eq!(dismiss_body(None), json!({}));
         assert_eq!(dismiss_body(Some(" no ")), json!({"reason":"no"}));
+    }
+}
+
+#[cfg(test)]
+mod refusal_tests {
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+    };
+
+    use super::*;
+
+    #[test]
+    fn promoting_a_blocked_item_returns_the_machine_s_refusal_with_what_blocks_it() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut reader = BufReader::new(stream);
+                let mut length = 0usize;
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 || line == "\r\n" {
+                        break;
+                    }
+                    if let Some(value) = line.to_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap_or(0);
+                    }
+                }
+                let mut body = vec![0; length];
+                let _ = reader.read_exact(&mut body);
+                let json = r#"{"error":"not_schedulable","message":"this item waits for 1 dependency that is not there yet","blockedBy":[{"id":"c1","kind":"card","state":"unreadable"}]}"#;
+                let _ = reader.into_inner().write_all(format!("HTTP/1.1 409 Conflict\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{json}", json.len()).as_bytes());
+            }
+        });
+        let error = Machine::at(&format!("http://{addr}")).backlog_act("item-1", "promote").unwrap_err();
+        assert_eq!(error, "this item waits for 1 dependency that is not there yet: c1 (unreadable)");
     }
 }

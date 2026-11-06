@@ -420,7 +420,11 @@ pub fn gate_strip(task: &Task, detail: Option<&TaskDetail>) -> Option<Line<'stat
             let what = if a.requested["split"]["via"].as_str() == Some("tickets") { format!("{n} ticket{}", if n == 1 { "" } else { "s" }) } else { format!("{n} card{}", if n == 1 { "" } else { "s" }) };
             let who = match a.names_needed() {
                 1 => String::new(),
-                needed => format!(" ({} names: two people, not one)", if needed == 2 { "two".to_string() } else { needed.to_string() }),
+                needed => {
+                    let word = if needed == 2 { "two".to_string() } else { needed.to_string() };
+                    let outside = if matches!(a.requested["approvalRule"]["outside"].as_str(), Some("at_approval" | "required")) { ", one outside the owning team when CODEOWNERS applies" } else { "" };
+                    format!(" ({word} names: {word} different people{outside})")
+                }
             };
             format!("a approve the split ({what}){who} · r send back · N reject · :whole keep it as one card")
         }
@@ -761,7 +765,7 @@ fn overview_lines(task: &Task, detail: Option<&TaskDetail>, width: usize, now: u
     if let Some(stage) = &task.resume_to {
         lines.push(muted(format!("Continues  {}", continues_line(&task.state, stage).trim_start_matches("Continues at: "))));
     }
-    lines.extend(stack_lines(task));
+    lines.extend(stack_lines(task, detail));
     if let Some(reason) = &task.archive_reason {
         lines.push(muted(if reason == "split" { "Archived   split into smaller changes".to_string() } else { format!("Archived   {reason}") }));
     } else if let Some(reason) = &task.reason {
@@ -1023,7 +1027,7 @@ fn gate_facts(approval: &Approval) -> Vec<Line<'static>> {
         lines.push(Line::from(spans));
     }
     if let Some(rule) = approval.rule_line() {
-        lines.push(Line::from(vec![label("Rule"), Span::from(rule).fg(c(SUBTEXT0))]));
+        lines.push(Line::from(vec![label("Rule"), Span::from(plain(&rule)).fg(c(SUBTEXT0))]));
     }
     if let Some(approvals) = approval.approvals_line() {
         lines.push(Line::from(vec![label("Approvals"), Span::from(approvals)]));
@@ -1070,8 +1074,17 @@ fn split_facts(approval: &Approval) -> Vec<Line<'static>> {
     lines
 }
 
+/// What the machine says the card waits for: the `text` of its latest `card.held` event, unless a `card.released` came after it.
+fn held_text(detail: Option<&TaskDetail>) -> Option<String> {
+    let last = detail?.events.iter().rev().find(|e| e.kind == "card.held" || e.kind == "card.released")?;
+    if last.kind != "card.held" {
+        return None;
+    }
+    last.payload["text"].as_str().filter(|t| !t.trim().is_empty()).map(String::from)
+}
+
 /// A card's place in a split or a stack: where it came from, what it waits for, what it is built on, what it was split into. Nothing for a card with none of them.
-fn stack_lines(task: &Task) -> Vec<Line<'static>> {
+fn stack_lines(task: &Task, detail: Option<&TaskDetail>) -> Vec<Line<'static>> {
     let short = |id: &str| plain(&id.chars().take(8).collect::<String>());
     let mut lines = Vec::new();
     if let (Some(from), Some(part)) = (&task.split_from, &task.split_part) {
@@ -1087,7 +1100,10 @@ fn stack_lines(task: &Task) -> Vec<Line<'static>> {
         lines.push(muted(format!("Stack      Risk floor {} (its origin's: a part is never lower)", plain(floor))));
     }
     if task.start_when_ready && task.state == "draft" {
-        lines.push(muted("Stack      Waiting: held until its dependencies have an open PR or have merged".to_string()));
+        match held_text(detail) {
+            Some(text) => lines.push(muted(format!("Stack      {}", plain(&text).replace('\n', " ")))),
+            None => lines.push(muted("Stack      Waiting: held until its dependencies have an open PR or have merged".to_string())),
+        }
     }
     if !task.split_into.is_empty() {
         lines.push(muted(format!("Stack      Split into {}", task.split_into.iter().map(|i| short(i)).collect::<Vec<_>>().join(", "))));
@@ -2228,6 +2244,36 @@ mod tests {
         assert!(text.contains("Risk floor high"), "{text}");
         let plain: Task = serde_json::from_str(TASK).unwrap();
         assert!(!overview_lines(&plain, None, 100, 0).iter().any(|l| l.to_string().contains("Stacked") || l.to_string().contains("Part ")), "a card with no stack shows nothing of one");
+    }
+
+    #[test]
+    fn a_split_gate_shows_who_may_approve_in_the_machine_s_words_and_the_outside_condition_in_the_strip() {
+        let high = SPLIT_GATE.replace(r#""risk":{"level":"low"}"#, r#""risk":{"level":"high"},"approvalRule":{"needed":2,"outside":"at_approval","text":"Needs 2 different approvers. When CODEOWNERS names owners at the tap, one must be outside them (@ana\u001b[2J)."}"#);
+        let (task, detail) = at_gate(&high, "awaiting_approval");
+        let text = plan_lines(&task, Some(&detail), 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("Rule       Needs 2 different approvers"), "{text}");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        let strip = gate_strip(&task, Some(&detail)).unwrap().to_string();
+        assert!(strip.contains("two different people") && strip.contains("one outside the owning team when CODEOWNERS applies"), "{strip}");
+        let (task, detail) = at_gate(SPLIT_GATE, "awaiting_approval");
+        assert!(!gate_strip(&task, Some(&detail)).unwrap().to_string().contains("outside"));
+    }
+
+    #[test]
+    fn a_held_card_says_what_it_waits_for_from_the_machine_s_hold_event_and_stops_when_released() {
+        let held = |events: &str| {
+            let json = TASK.replace("\"state\":\"implementing\"", "\"state\":\"draft\"").replace("\"createdAt\"", "\"startWhenReady\":true,\"createdAt\"");
+            let task: Task = serde_json::from_str(&json).unwrap();
+            let detail: TaskDetail = serde_json::from_str(&format!(r#"{{"task":{json},"stageRuns":[],"approvals":[],"events":{events}}}"#)).unwrap();
+            overview_lines(&task, Some(&detail), 100, 0).iter().map(|l| l.to_string()).collect::<Vec<_>>().join("\n")
+        };
+        let hold = r#"{"taskId":"t","kind":"card.held","at":"2026-11-06T10:00:00Z","payload":{"reason":"dependency","waitingOn":["b"],"text":"Waiting for bbbbbbbb: its PR is not open yet\u001b[31m"}}"#;
+        let text = held(&format!("[{hold}]"));
+        assert!(text.contains("Waiting for bbbbbbbb: its PR is not open yet"), "{text}");
+        assert!(!text.contains('\u{1b}'), "{text:?}");
+        let released = r#"{"taskId":"t","kind":"card.released","at":"2026-11-06T11:00:00Z","payload":{}}"#;
+        assert!(!held(&format!("[{hold},{released}]")).contains("its PR is not open yet"));
+        assert!(held("[]").contains("held until its dependencies"), "no event: the fixed words stay");
     }
 
     #[test]

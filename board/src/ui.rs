@@ -1295,6 +1295,7 @@ fn render_backlog(frame: &mut Frame, area: Rect, app: &App, state: &crate::backl
                 lines.push(Line::from(Span::from(format!("repo {}", crate::detail::plain(repo))).fg(c(SUBTEXT0))));
             }
             lines.extend(item.source_lines().into_iter().map(|s| Line::from(Span::from(format!("from {s}")).fg(c(SUBTEXT0)))));
+            lines.extend(item.blocked_lines().into_iter().map(|s| Line::from(Span::from(format!("⛔ {s}")).fg(c(RED)))));
             lines.push(Line::default());
             lines.extend(crate::detail::plain(&item.text).lines().take(12).map(|l| Line::from(l.to_string())));
             lines
