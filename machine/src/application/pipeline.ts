@@ -665,6 +665,8 @@ export class Pipeline {
   /** A person's correction of the Triage Record while the card waits at a gate. The record's version rises and the corrected fields are the
    *  person's (`decisionBy: person`, `editedFields`); each correction is ground truth for the `triage_signals` reading that said otherwise. */
   async editRecord(id: string, patch: { kind?: string; typeOfWork?: string; size?: string; riskPrelim?: string; priority?: string }): Promise<TaskRow> {
+    const taskRepo = (await this.get(id)).repoPath;
+    const approvers = (await this.policyFor(taskRepo)).factory.plan.approvers;
     const { record, classification, fields } = await this.store.withTaskLock(id, async (task, tx) => {
       if (!task.record) throw new RecordNotEditableError(id, "triage has not written one");
       if (task.state !== "awaiting_answers" && task.state !== "awaiting_approval") throw new RecordNotEditableError(id, `the card is ${task.state}: a record is corrected at triage's questions or at the plan gate`);
@@ -702,7 +704,18 @@ export class Pipeline {
       const gateRisk = gate?.requested.risk as { level?: unknown } | undefined;
       if (gate && gate.kind === "awaiting_approval" && gate.requested.outcome === undefined && gateRisk && typeof next.risk === "string") {
         const level = maxRisk(next.risk as Risk, (typeof gateRisk.level === "string" ? gateRisk.level : "none") as Risk);
-        if (level !== gateRisk.level) await tx.updateApprovalRequested(gate, { ...gate.requested, risk: { ...gateRisk, level }, ...(Array.isArray(gate.requested.approvers) ? { approvers: [] } : {}) });
+        if (level !== gateRisk.level) {
+          // The approvers rule and the owners it reads follow the new level, as `editPlan` computes them: High needs the repo's names for high
+          // (two by default) and the owners CODEOWNERS names for the plan's files.
+          const gateNow = { ...gate.requested, risk: { ...gateRisk, level } };
+          const ownersNow: OwnersState = level === "high" ? await this.ruleOwnersOf(taskRepo, gateNow) : { state: "skipped" };
+          await tx.updateApprovalRequested(gate, {
+            ...gateNow,
+            approvalRule: approvalRule(level === "high" || level === "medium" ? level : "low", approvers, ownersNow),
+            ...(level === "high" ? { ruleOwners: ownersNow } : {}),
+            ...(Array.isArray(gate.requested.approvers) ? { approvers: [] } : {}),
+          });
+        }
       }
       return { record: next as TriageRecord, classification: task.classification, fields: changed };
     });

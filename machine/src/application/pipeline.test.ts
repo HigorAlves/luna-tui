@@ -619,6 +619,21 @@ describe("the triage record: a correction and its ground truth", () => {
     expect((await p.decide(id, "approved", undefined, undefined, { approver: "cy" })).state).not.toBe("awaiting_approval");
   });
 
+  it("a correction to High at the plan gate recomputes the approval rule and the owners: the first approval for the lower level is void, High needs two different names", async () => {
+    const { p, id } = await setup();
+    const store = new PgTaskStore(db);
+    const gate = (await p.approvals(id)).find((a) => a.decision === null)!;
+    await store.withTaskLock(id, async (_t, tx) => tx.updateApprovalRequested(gate, { ...gate.requested, risk: { level: "low", machine: "low", scores: {} }, approvalRule: { needed: 1, outside: "none" }, approvers: ["ana"] }));
+    await p.editRecord(id, { riskPrelim: "high" });
+    const open = (await p.approvals(id)).find((a) => a.decision === null)!;
+    expect(open.requested).toMatchObject({ risk: { level: "high" }, approvalRule: { needed: 2 }, approvers: [] });
+    expect(open.requested.ruleOwners).toBeDefined();
+    // ana's first approval, given for the lower level, is void: she counts once now, and the same name cannot close a High gate.
+    expect((await p.decide(id, "approved", undefined, undefined, { approver: "ana" })).state).toBe("awaiting_approval");
+    await expect(p.decide(id, "approved", undefined, undefined, { approver: "ana" })).rejects.toBeInstanceOf(SameApproverError);
+    expect((await p.decide(id, "approved", undefined, undefined, { approver: "bo" })).state).not.toBe("awaiting_approval");
+  });
+
   it("reads the card's own record risk at the decision too: a gate written before the correction still needs two names", async () => {
     const { p, id } = await setup();
     const store = new PgTaskStore(db);
