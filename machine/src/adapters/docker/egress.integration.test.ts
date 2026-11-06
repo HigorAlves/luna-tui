@@ -56,12 +56,22 @@ const via = (target, after) => new Promise((resolve) => {
   });
   s.on("close", () => { clearTimeout(t); resolve({ status: buf.split("\\r\\n")[0] || "CLOSED", body: buf }); });
 });
+const http = (url) => new Promise((resolve) => {
+  const s = net.connect(3128, proxy);
+  let buf = "";
+  const t = setTimeout(() => { s.destroy(); resolve({ status: "TIMEOUT", body: buf }); }, 6000);
+  s.on("error", (e) => { clearTimeout(t); resolve({ status: e.code, body: buf }); });
+  s.on("connect", () => s.write("GET " + url + " HTTP/1.1\\r\\nHost: x\\r\\nConnection: close\\r\\n\\r\\n"));
+  s.on("data", (d) => { buf += d.toString(); });
+  s.on("close", () => { clearTimeout(t); resolve({ status: buf.split("\\r\\n")[0] || "CLOSED", body: buf }); });
+});
 (async () => {
   const out = [];
   for (const op of ops) {
     if (op.op === "tcp") out.push(await tcp(op.host, op.port));
     else if (op.op === "lookup") { try { out.push({ ok: true, address: (await dns.lookup(op.name)).address }); } catch (e) { out.push({ ok: false, code: e.code }); } }
     else if (op.op === "via") out.push(await via(op.target, op.after || ""));
+    else if (op.op === "http") out.push(await http(op.url));
   }
   console.log("RESULT " + JSON.stringify(out));
 })();
@@ -147,6 +157,15 @@ describe.skipIf(!ready)("a container on a card network, against Docker", () => {
     const [refused] = await probe(strict, [{ op: "via", target: `${SERVER_HOST}:8080`, after: get }], "strict");
     expect(refused!.status).toBe("HTTP/1.1 403 Forbidden");
     expect(await strict.blocked()).toContainEqual(expect.objectContaining({ host: SERVER_HOST, port: 8080, reason: "private_address" }));
+  }, 120_000);
+
+  it("refuses a plain HTTP request to any other host or port, an address, and the listed private server on a port it was not listed for", async () => {
+    const urls = ["http://evil.example.com/", `http://${SERVER_HOST}:9999/`, "http://127.0.0.1/", "http://169.254.169.254/latest/meta-data/", "http://example.com:8080/"];
+    const results = await probe(list, urls.map((url) => ({ op: "http", url })), "plain-http");
+    for (const [i, r] of results.entries()) expect(r.status, urls[i]).toBe("HTTP/1.1 403 Forbidden");
+    // the listed private entry on its own port is answered over plain HTTP (the trace endpoint's case)
+    const [ok] = await probe(list, [{ op: "http", url: `http://${SERVER_HOST}:8080/` }], "plain-http-listed");
+    expect(ok!.body).toContain("hello-from-srv");
   }, 120_000);
 
   it("has no gateway address that accepts a connection, and one run reaches neither another run's proxy nor its services", async () => {
