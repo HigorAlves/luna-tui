@@ -3,7 +3,7 @@
 //   pnpm eval --pack <p> --engine <e> ...                    replay a pack's cases (run.ts)
 //   pnpm eval harvest --pack <decision> [--since <date>] [--with-truth] [--all]
 //   pnpm eval dataset push --pack <decision> [--queue <id or name>] [--records]
-//   pnpm eval dataset pull --pack <decision>
+//   pnpm eval dataset pull --pack <decision> [--write-labels]
 //   pnpm eval records [--task <id>] [--pack <p>] [--since <date>] [--sizes]   one line per decision record: what the machine did, its state, its truth
 //   pnpm eval label --pack <p> --record <id> --set <question>=<value>... [--note <text>]   a person's label, written on this computer
 //   pnpm eval label --pack <p> --next                         the oldest record with no person label, and the command to label it
@@ -74,7 +74,7 @@ if (command === "harvest") {
   console.log(`wrote ${out.written.length}: ${out.written.join(", ") || "-"}\nkept (already cases) ${out.kept.length}`);
   for (const r of out.refused) console.log(`refused ${r.id}: ${r.reason}`);
 } else if (command === "dataset" && (sub === "push" || sub === "pull")) {
-  const { values } = parseArgs({ args: process.argv.slice(4), options: { pack: { type: "string" }, queue: { type: "string" }, records: { type: "boolean", default: false }, all: { type: "boolean", default: false } } });
+  const { values } = parseArgs({ args: process.argv.slice(4), options: { pack: { type: "string" }, queue: { type: "string" }, records: { type: "boolean", default: false }, all: { type: "boolean", default: false }, "write-labels": { type: "boolean", default: false } } });
   const pack = decisionOf(values.pack);
   const t = await telemetry();
   if (sub === "push") {
@@ -83,8 +83,10 @@ if (command === "harvest") {
     console.log(`dataset ${out.dataset.name}: ${out.dataset.pushed} datapoint(s) pushed`);
     if (out.queue) console.log(`queue ${out.queue.name}: ${out.queue.pushed} item(s) pushed`);
   } else {
-    const out = await runPull(EVALS, pack, t, log());
+    // Labels are written back onto records only with --write-labels, each printed first; the trace tool's data is not trusted to label by itself.
+    const out = await runPull(EVALS, pack, t, { records: log(), writeLabels: values["write-labels"], print: (line) => console.log(printable(line)) });
     console.log(`wrote ${out.written.length}: ${out.written.join(", ") || "-"}\nkept (already cases) ${out.kept.length}\nlabels written back to records ${out.labelled.length}`);
+    if (out.pending.length > 0) console.log(`${out.pending.length} pulled label(s) could go onto records here: nothing was written; read the cases, then pass --write-labels`);
     for (const s of out.skipped) console.log(`skipped ${s.taskId}: ${s.reason}`);
   }
   await t.flush();

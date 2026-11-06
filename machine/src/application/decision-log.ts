@@ -14,8 +14,8 @@ const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 const HISTORY_MAX = 20;
-/** For one question a person's word beats a fact, a fact beats an outcome; a truth with no kind is a fact. */
-const RANK: Record<TruthKind, number> = { person: 3, fact: 2, outcome: 1 };
+/** For one question a person's word at the board or the command line beats a fact, a fact beats a label pulled from the queue (the trace tool holds the data it came from), that beats an outcome; a truth with no kind is a fact. */
+const RANK: Record<TruthKind, number> = { person: 4, fact: 3, queue: 2, outcome: 1 };
 const kindOf = (truth: Pick<DecisionTruth, "kind">): TruthKind => truth.kind ?? "fact";
 
 /** `incoming` laid over `existing` by question: it takes a question when its kind ranks at least as high as the label there

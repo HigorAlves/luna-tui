@@ -35,7 +35,8 @@ export async function runPush(evalsDir: string, pack: PackId, telemetry: Pick<Te
   const dataset = { name: pack as string, ...(await telemetry.datasets.push(pack, datapointsOf(pack, cases))) };
   if (!options.queue) return { dataset };
   const extra = ownRecords(options.records ?? [], options.all)
-    .filter((r) => !r.truth && !cases.some((c) => c.expect.recordId === r.id))
+    // The same state check as the label push: no truth, not private, not refused by the scrub, and context kept.
+    .filter((r) => labelState(r) === "queue" && !cases.some((c) => c.expect.recordId === r.id))
     // Scrubbed like a harvest: a record the scrub refuses never leaves the machine.
     .flatMap((r) => {
       const scrubbed = scrubContext(r.context);
@@ -82,18 +83,42 @@ export interface PullReport {
   written: string[];
   kept: string[];
   skipped: Array<{ taskId: string; reason: string }>;
-  /** Records a pulled label was written back to as a person's truth. */
+  /** Records a pulled label was written back to as a queue truth (only with `writeLabels`). */
   labelled: string[];
+  /** Records a pulled label could be written back to, which were not (no `writeLabels`). */
+  pending: string[];
 }
 
-/** The dataset's labelled datapoints as cases, never overwriting one that exists; with `labels`, a datapoint naming a `recordId` also sets a `person` truth (`person_queue`) on that record while it exists. */
-export async function runPull(evalsDir: string, pack: PackId, telemetry: Pick<Telemetry, "datasets">, labels?: { setTruth(pack: PackId, id: string, truth: DecisionTruth): Promise<boolean> }): Promise<PullReport> {
+const hasPerson = (record: DecisionRecord): boolean => record.truth?.kind === "person" || (record.truth?.history ?? []).some((entry) => entry.kind === "person");
+
+/** The dataset's labelled datapoints as cases, never overwriting one that exists. A datapoint's record id is trusted only for a record that is here, in the `queue` state
+ *  with no person's label; any other keeps the case but drops the id. Writing a label back onto the record (a `queue` truth, below any person's) happens only with `writeLabels`,
+ *  and every label is handed to `print` before it is written. Without a record source nothing is written back and no id is kept. */
+export async function runPull(
+  evalsDir: string,
+  pack: PackId,
+  telemetry: Pick<Telemetry, "datasets">,
+  options: { records?: { read(pack: PackId, id: string): Promise<DecisionRecord | null>; setTruth(pack: PackId, id: string, truth: DecisionTruth): Promise<boolean> }; writeLabels?: boolean; print?: (line: string) => void } = {},
+): Promise<PullReport> {
   const { cases, skipped } = casesOfDatapoints(pack, await telemetry.datasets.pull(pack));
-  const report: PullReport = { written: [], kept: [], skipped, labelled: [] };
+  const report: PullReport = { written: [], kept: [], skipped, labelled: [], pending: [] };
   for (const files of cases) {
-    (writeCase(evalsDir, pack, files) ? report.written : report.kept).push(files.id);
     const { recordId, label } = files.expect;
-    if (labels && recordId && label && (await labels.setTruth(pack, recordId, { label, source: "person_queue", kind: "person", at: new Date().toISOString() }))) report.labelled.push(recordId);
+    const record = recordId && options.records ? await options.records.read(pack, recordId).catch(() => null) : null;
+    const trusted = record !== null && labelState(record) === "queue" && !hasPerson(record);
+    if (recordId && !trusted) {
+      delete files.expect.recordId;
+      delete files.expect.traceId;
+      report.skipped.push({ taskId: files.id, reason: "the datapoint names a record that is not waiting for a label here: the case is kept without the record id" });
+    }
+    (writeCase(evalsDir, pack, files) ? report.written : report.kept).push(files.id);
+    if (!trusted || !recordId || !label) continue;
+    if (!options.writeLabels) {
+      report.pending.push(recordId);
+      continue;
+    }
+    options.print?.(`label ${pack}/${recordId}: ${Object.entries(label).map(([q, v]) => `${q}=${JSON.stringify(Object.values(v)[0])}`).join(" ")}`);
+    if (await options.records!.setTruth(pack, recordId, { label, source: "person_queue", kind: "queue", at: new Date().toISOString() })) report.labelled.push(recordId);
   }
   return report;
 }

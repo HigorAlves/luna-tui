@@ -10,7 +10,7 @@ import { type ContextPackId, contextSchema, isContextPack } from "@hardness/mach
 import type { EvalCase } from "./cases.ts";
 import { TOKEN_SHAPE, scrubContext } from "./scrub.ts";
 import { type CaseFiles, caseIdOf, caseOf } from "./harvest.ts";
-import { type Label, checksOf, labelOfAnswer } from "./labels.ts";
+import { type Label, checkLabel, checksOf, labelOfAnswer } from "./labels.ts";
 
 /** What a case gave the pack: its input's context under the pack's own key, without the project context. */
 export function contextOf(evalCase: EvalCase): Record<string, unknown> {
@@ -79,8 +79,14 @@ export function casesOfDatapoints(pack: PackId, datapoints: Datapoint[], options
       result.skipped.push({ taskId: point.taskId, reason: "refused: a token-shaped string in the target" });
       continue;
     }
+    // A pulled label is held to the pack's own questions and labels, as the command line's is: anything else is skipped.
+    const checked = checkLabel(pack, point.target);
+    if (!checked.ok) {
+      result.skipped.push({ taskId: point.taskId, reason: `refused: the label is not valid for ${pack}: ${checked.reason}` });
+      continue;
+    }
     const recordId = typeof point.metadata?.recordId === "string" ? point.metadata.recordId : undefined;
-    result.cases.push(caseOf(pack, id, scrubbed.value, point.target, recordId ? { recordId } : {}));
+    result.cases.push(caseOf(pack, id, scrubbed.value, checked.label, recordId ? { recordId } : {}));
   }
   return result;
 }

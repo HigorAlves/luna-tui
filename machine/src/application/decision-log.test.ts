@@ -125,4 +125,16 @@ describe("DecisionLog", () => {
     expect(first.note).toBe("one-off");
     expect(mergeTruth(first, { label: { worth: { value: false } }, source: "person_cli", kind: "person", at: "b" }).note).toBe("one-off");
   });
+
+  it("ranks a label pulled from the queue below a person's and a fact, above an outcome, and never over a person's", () => {
+    const queue = { label: { worth: { value: false } }, source: "person_queue", kind: "queue" as const, at: "q" };
+    const person = mergeTruth(undefined, { label: { worth: { value: true } }, source: "person_cli", kind: "person", at: "a" });
+    expect(mergeTruth(person, queue)).toBe(person);
+    const fact = mergeTruth(undefined, { label: { worth: { value: true } }, source: "slice_green", kind: "fact", at: "a" });
+    expect(mergeTruth(fact, queue)).toBe(fact);
+    const outcome = mergeTruth(undefined, { label: { worth: { value: true } }, source: "pr_merged", kind: "outcome", at: "a" });
+    expect(mergeTruth(outcome, queue).label).toEqual({ worth: { value: false } });
+    const held = mergeTruth(undefined, queue);
+    expect(mergeTruth(held, { label: { worth: { value: true } }, source: "person_cli", kind: "person", at: "b" }).label).toEqual({ worth: { value: true } });
+  });
 });

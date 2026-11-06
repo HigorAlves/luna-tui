@@ -10,7 +10,7 @@ import { PackId } from "./stage.ts";
 const Verdict = z.enum(["proceed", "flag", "ask"]);
 
 /** Whose word a label is: a `person` said it, a `fact` settled it, an `outcome` is consistent with the answer but partly caused by it. */
-export const TruthKind = z.enum(["person", "fact", "outcome"]);
+export const TruthKind = z.enum(["person", "queue", "fact", "outcome"]);
 export type TruthKind = z.infer<typeof TruthKind>;
 
 /** What a person or a later fact says the answer should have been: one label per question, in the answer's shape. */

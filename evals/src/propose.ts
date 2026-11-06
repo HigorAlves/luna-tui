@@ -27,7 +27,8 @@ export function answersOf(pack: PackId, records: DecisionRecord[], options: { wi
       const spec = decision.questions[question];
       const entry = record.answer[question];
       if (!spec || entry === undefined || entry === null || typeof entry !== "object") continue;
-      if (kinds.get(question) === "outcome" && !options.withOutcome) continue;
+      // An outcome and a label pulled from the queue are lower-trust: counted only with the flag.
+      if ((kinds.get(question) === "outcome" || kinds.get(question) === "queue") && !options.withOutcome) continue;
       const right = matches(record.answer, { [question]: label as Record<string, unknown> });
       if (right === null) continue;
       (out[question] ??= []).push({ confidence: confidenceOf(spec, entry), right });

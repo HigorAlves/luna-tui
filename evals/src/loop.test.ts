@@ -115,18 +115,82 @@ describe("label push", () => {
   });
 });
 
-describe("pull writes the label back", () => {
-  it("sets a person truth (person_queue) on the record a datapoint names, when it still exists, as well as writing the case", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "loop-"));
-    const t = fakeTelemetry([
-      { taskId: "reviewed-9", data: { ship: retro }, target: { worth: { value: false } }, metadata: { recordId: "11111111-aaaa" } },
-      { taskId: "reviewed-8", data: { ship: retro }, target: { worth: { value: true } }, metadata: { recordId: "gone" } },
-    ]);
+describe("pull and what it writes back", () => {
+  const waiting = (id: string, over: Partial<DecisionRecord> = {}): DecisionRecord => ({ ...record(id), origin: "machine", ...over });
+  const mem = (records: DecisionRecord[]) => {
     const set: Array<[string, string, unknown]> = [];
-    const out = await runPull(dir, "worth_learning", t, { setTruth: async (pack, id, truth) => (set.push([pack, id, truth]), id !== "gone") });
+    return { set, source: { read: async (_p: unknown, id: string) => records.find((r) => r.id === id) ?? null, setTruth: async (pack: string, id: string, truth: unknown) => (set.push([pack, id, truth]), true) } };
+  };
+  const points = (): Datapoint[] => [
+    { taskId: "reviewed-9", data: { ship: retro }, target: { worth: { value: false } }, metadata: { recordId: "11111111-aaaa" } },
+    { taskId: "reviewed-8", data: { ship: retro }, target: { worth: { value: true } }, metadata: { recordId: "gone" } },
+  ];
+
+  it("writes nothing back without the flag, and says which records a label could go to", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "loop-"));
+    const { set, source } = mem([waiting("11111111-aaaa")]);
+    const out = await runPull(dir, "worth_learning", fakeTelemetry(points()), { records: source });
+    expect(set).toEqual([]);
+    expect(out.pending).toEqual(["11111111-aaaa"]);
+    expect(out.labelled).toEqual([]);
+  });
+
+  it("with the flag prints each label first, then writes a queue truth on a record that waits for a label; a record that is not here keeps the case without its id", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "loop-"));
+    const { set, source } = mem([waiting("11111111-aaaa")]);
+    const lines: string[] = [];
+    const out = await runPull(dir, "worth_learning", fakeTelemetry(points()), { records: source, writeLabels: true, print: (line) => lines.push(line) });
     expect(out.written.sort()).toEqual(["reviewed-8", "reviewed-9"]);
-    expect(set).toHaveLength(2);
-    expect(set[0]![2]).toMatchObject({ label: { worth: { value: false } }, source: "person_queue", kind: "person" });
+    expect(lines).toEqual(["label worth_learning/11111111-aaaa: worth=false"]);
+    expect(set).toHaveLength(1);
+    expect(set[0]![2]).toMatchObject({ label: { worth: { value: false } }, source: "person_queue", kind: "queue" });
     expect(out.labelled).toEqual(["11111111-aaaa"]);
+    const cases = loadCases(dir, "worth_learning");
+    expect(cases.find((c) => c.id === "reviewed-8")!.expect.recordId).toBeUndefined();
+  });
+
+  it("refuses a record that has a person's label, is private, or is a client's: no label is written", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "loop-"));
+    const labelled = waiting("11111111-aaaa", { truth: { label: { worth: { value: true } }, source: "person_cli", kind: "person", at: "t" } });
+    const { set, source } = mem([labelled]);
+    const out = await runPull(dir, "worth_learning", fakeTelemetry([points()[0]!]), { records: source, writeLabels: true });
+    expect(set).toEqual([]);
+    expect(out.labelled).toEqual([]);
+    const priv = mem([waiting("11111111-aaaa", { private: true })]);
+    await runPull(mkdtempSync(join(tmpdir(), "loop-")), "worth_learning", fakeTelemetry([points()[0]!]), { records: priv.source, writeLabels: true });
+    expect(priv.set).toEqual([]);
+  });
+
+  it("writes nothing back when no record source is given", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "loop-"));
+    const out = await runPull(dir, "worth_learning", fakeTelemetry(points()), { writeLabels: true });
+    expect(out.labelled).toEqual([]);
+    expect(out.pending).toEqual([]);
+  });
+
+  it("skips a datapoint whose label is not valid for the pack: an unknown question, a label the question does not have, a wrong type, extra keys", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "loop-"));
+    const bad: Datapoint[] = [
+      { taskId: "bad-1", data: { ship: retro }, target: { nothing: { value: true } } },
+      { taskId: "bad-2", data: { ship: retro }, target: { worth: { choice: "maybe" } } },
+      { taskId: "bad-3", data: { ship: retro }, target: { worth: { value: "yes" } } },
+      { taskId: "bad-4", data: { ship: retro }, target: { worth: { value: true, extra: "text" } } },
+      { taskId: "good-1", data: { ship: retro }, target: { worth: { value: true } } },
+    ];
+    const out = await runPull(dir, "worth_learning", fakeTelemetry(bad), {});
+    expect(out.written).toEqual(["good-1"]);
+    expect(out.skipped.map((s) => s.taskId)).toEqual(["bad-1", "bad-2", "bad-3", "bad-4"]);
+    expect(out.skipped[0]!.reason).toMatch(/not valid for worth_learning/);
+  });
+});
+
+describe("dataset push --queue", () => {
+  it("sends only records in the queue state: not a private one, not one with a truth, not one the scrub refuses, not a client's", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "loop-"));
+    const t = fakeTelemetry();
+    const own = (id: string, over: Partial<DecisionRecord> = {}): DecisionRecord => ({ ...record(id), origin: "machine", ...over });
+    const token = `x ${"gh"}p_${"d".repeat(30)}`;
+    await runPush(dir, "worth_learning", t, { queue: "q", records: [own("aaaa1111"), own("bbbb2222", { private: true }), own("cccc3333", { truth: { label: {}, source: "x", at: "t" } }), own("dddd4444", { context: { ship: { ...retro, note: token } } }), own("eeee5555", { origin: "client" }), own("ffff6666", { context: {} })] });
+    expect(t.sent.queue[0]![1].map((i) => i.idempotencyKey)).toEqual(["aaaa1111"]);
   });
 });

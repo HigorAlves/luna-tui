@@ -24,7 +24,7 @@ export function labelState(record: DecisionRecord): LabelState {
   if (record.truth) {
     const kinds = kindsOf(record.truth);
     const answered = Object.entries(record.answer).filter(([, entry]) => entry !== null && typeof entry === "object").map(([question]) => question);
-    const settled = (question: string) => kinds.get(question) === "person" || kinds.get(question) === "fact";
+    const settled = (question: string) => kinds.get(question) === "person" || kinds.get(question) === "fact" || kinds.get(question) === "queue";
     const covered = answered.length > 0 ? answered.every(settled) : [...kinds.values()].some((kind) => kind !== "outcome");
     return covered ? "labelled" : "to_confirm";
   }
