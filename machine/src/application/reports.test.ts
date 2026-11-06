@@ -60,6 +60,18 @@ describe("buildReportOf", () => {
 });
 
 describe("verifyReportOf", () => {
+  it("keeps a finding that moved a line and is still raised unresolved", () => {
+    const runs = [run("verifying", 1), run("implementing", 2, { outputCommit: "fixsha" }), run("verifying", 2)];
+    const events = [
+      finished("verifying", 1, "failed", { findings: [finding("Null deref", 10)] }),
+      finished("implementing", 2, "passed"),
+      finished("verifying", 2, "failed", { findings: [finding("Null deref", 11)] }),
+    ];
+    const findings = verifyReportOf(task, runs, events)?.findings ?? [];
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.resolution).toBeUndefined();
+  });
+
   const coverage = { files: [], total: { added: 10, covered: 9 }, report: "lcov.info" };
 
   it("assembles the verify from the last verifying finish, the PR and the e2e finish", () => {
