@@ -75,6 +75,18 @@ describe("the backlog routes", () => {
     expect((await call("POST", `/backlog/${a.body.id}/promote`)).status).toBe(404);
   });
 
+  it("promote hands the card the floor the item's source carries (`stackOf`), and no stack when there is none", async () => {
+    const made: any[] = [];
+    const wrapped = { createTask: async (input: any) => (made.push(input), pipeline.createTask(input)), dependencyStates: (ids: readonly string[]) => pipeline.dependencyStates(ids) };
+    const withFloor = new Backlog({ store: new PgBacklogStore(db), pipeline: wrapped as never, staleDays: 14, stackOf: async () => ({ riskFloor: "high" }) });
+    const a = await add("From a ticket");
+    await withFloor.promote(a.body.id);
+    expect(made[0].stack).toEqual({ riskFloor: "high" });
+    const b = await add("Plain");
+    await new Backlog({ store: new PgBacklogStore(db), pipeline: wrapped as never, staleDays: 14, stackOf: async () => ({}) }).promote(b.body.id);
+    expect(made[1].stack).toBeUndefined();
+  });
+
   it("two promotes of one item at once make one card", async () => {
     const a = await add("Race me");
     const both = await Promise.all([call("POST", `/backlog/${a.body.id}/promote`), call("POST", `/backlog/${a.body.id}/promote`)]);

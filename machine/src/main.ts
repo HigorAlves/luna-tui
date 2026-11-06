@@ -666,7 +666,7 @@ if (packRuns) planDecisions.split.decompose = async (split) => (await packRuns.r
 if (packRuns) planDecisions.split.check = async (split) => tagged(await packRuns.run({ pack: "split_check", context: { split }, stage: "plan" }, "plan"));
 // The size prompt's similar cards: closed cards with a counted diff that the card's own audience may see, nearest first.
 planDecisions.size.similar = async (task, card) => similarCards({ ...card, repo: task.repoPath }, await pipeline.closedSized(task), { now: new Date(), lookbackDays: (await policies.for(task.repoPath)).factory.dedup.lookback_days });
-planDecisions.split.depthOf = (task) => splitDepth((id) => pipeline.get(id).catch(() => null), task);
+planDecisions.split.depthOf = (task) => splitDepth((id) => pipeline.get(id).catch(() => null), task, () => ticketMachine.originHops(task));
 planDecisions.split.via = (task) => pipeline.splitVia(task);
 if (packRuns) verifyDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "verify" }, "verify"));
 if (packRuns) evidenceDecisions.decide = async (evidence) => tagged(await packRuns.run({ pack: "evidence_format", context: { evidence }, stage: "evidence" }, "evidence"));
@@ -675,7 +675,7 @@ buildDecisions.budget = (taskId) => pipeline.buildBudgetState(taskId);
 if (packRuns) buildDecisions.decide = async (pack, check) => tagged(await packRuns.run({ pack, context: { check }, stage: "build" }, "build"));
 const jiraTasks = config.jira ? new JiraTasks({ jira: jiraApi, site: config.jira.site, pipeline, expiry: jiraExpiry }) : undefined;
 /** The shared backlog; the duplicate check reads and bumps it through the pipeline's `dedup` port. */
-const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days, onDecline: (row) => ticketMachine.declineFromBacklog(row.sources) });
+const backlog = new Backlog({ store: new PgBacklogStore(db), pipeline, staleDays: FACTORY_DEFAULTS.backlog.stale_days, onDecline: (row) => ticketMachine.declineFromBacklog(row.sources), stackOf: (sources) => ticketMachine.stackOfSources(sources) });
 /** The Ticket Machine: Jira and GitHub tickets in scope are read, checked, assessed and drafted, then held for a person's tap. Every model call is a pack through `packRuns`; the port's writes are reached only from the tap routes. */
 const ticketPack = async (pack: "ticket_validity" | "ticket_assess" | "ticket_recommend" | "ticket_reply", context: TicketContext): Promise<unknown> => {
   if (!packRuns) throw new Error("agents are off: the ticket machine has no model to ask");

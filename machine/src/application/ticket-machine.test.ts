@@ -653,6 +653,38 @@ describe("a ticket's split (wave 15)", () => {
     expect(x.creates).toEqual([]);
   });
 
+  it("Schedule keeps a split's dependency: the item waits on its sibling's backlog item or card, and one the sibling has neither is refused", async () => {
+    const { x } = await proposed();
+    await x.machine.splitChildren("PAY-12", SPLIT_KIDS as never, { id: "gate-1", floor: "high" });
+    await expect(x.machine.schedule("PAY-102")).rejects.toThrow(/PAY-101 is not in the backlog or a card yet/);
+    expect(x.items).toEqual([]);
+    await x.machine.schedule("PAY-101");
+    await x.machine.schedule("PAY-102");
+    expect(x.items.find((i) => i.title === "child PAY-102" || i.sources.some((s: any) => s.key === "PAY-102"))).toMatchObject({ dependsOn: ["b1"] });
+    await x.store.setMachine("PAY-101", { cardId: "card-a" });
+    await x.store.setMachine("PAY-102", { status: "assessed" });
+    await x.machine.schedule("PAY-102");
+    expect(x.items.find((i) => i.sources.some((s: any) => s.key === "PAY-102"))).toMatchObject({ dependsOn: ["card-a"] });
+  });
+
+  it("a promoted item gets the ticket's risk floor back, and only a ticket's item does", async () => {
+    const { x } = await proposed();
+    await x.machine.splitChildren("PAY-12", SPLIT_KIDS as never, { id: "gate-1", floor: "high" });
+    expect(await x.machine.stackOfSources([{ kind: "jira", key: "PAY-102", url: "u" }])).toEqual({ riskFloor: "high" });
+    expect(await x.machine.stackOfSources([{ kind: "jira", key: "PAY-12", url: "u" }])).toEqual({});
+    expect(await x.machine.stackOfSources([{ kind: "slack", channel: "C1", ts: "1" }])).toEqual({});
+  });
+
+  it("a child ticket's card is counted as deep as its lineage, though its card has no splitFrom", async () => {
+    const { x } = await proposed();
+    await x.machine.splitChildren("PAY-12", SPLIT_KIDS as never, { id: "gate-1", floor: "high" });
+    await x.store.setMachine("PAY-101", { cardId: "card-a" });
+    const task = { id: "card-a", source: { kind: "jira", key: "PAY-101", url: "u" } };
+    expect(await x.machine.originHops(task)).toBe(1);
+    expect(await x.machine.originHops({ id: "card-z", source: { kind: "jira", key: "PAY-101", url: "u" } })).toBe(0);
+    expect(await x.machine.originHops({ id: "card-q", source: { kind: "jira", key: "PAY-12", url: "u" } })).toBe(0);
+  });
+
   it("a ticket that depends on another needs that ticket's card first; then its card waits on it with the floor kept", async () => {
     const { x } = await proposed();
     await x.machine.splitChildren("PAY-12", SPLIT_KIDS as never, { id: "gate-1", floor: "high" });

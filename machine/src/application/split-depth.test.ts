@@ -24,4 +24,12 @@ describe("splitDepth", () => {
     expect(await splitDepth(get, rows.loop!)).toBeGreaterThanOrEqual(2);
     expect(await splitDepth(get, rows.loop!)).toBeLessThanOrEqual(11);
   });
+
+  it("counts the tickets above a card's own ticket when its card has no splitFrom: a child ticket's card is depth 2, a grandchild's 3", async () => {
+    expect(await splitDepth(get, rows.root!, async () => 0)).toBe(1);
+    expect(await splitDepth(get, rows.root!, async () => 1)).toBe(2);
+    expect(await splitDepth(get, rows.root!, async () => 2)).toBe(3);
+    expect(await splitDepth(get, rows.child!, async () => 1)).toBe(2);
+    expect(await splitDepth(get, rows.root!, async () => Promise.reject(new Error("unreadable")))).toBe(1);
+  });
 });

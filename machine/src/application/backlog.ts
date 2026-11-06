@@ -50,6 +50,8 @@ export interface BacklogOptions {
   now?: () => Date;
   /** Called after a declined item has been removed (the ticket machine drafts the decline reply for a ticket's item). Never throws into the caller. */
   onDecline?: (row: BacklogRow) => Promise<void>;
+  /** What a promoted item's card keeps of where it came from (a ticket's risk floor): read at promotion; a failure adds nothing. */
+  stackOf?: (sources: BacklogRow["sources"]) => Promise<{ riskFloor?: "low" | "medium" | "high" }>;
 }
 
 /** The item waits for something: 409 `not_schedulable`, with what. Nothing was removed. */
@@ -134,6 +136,7 @@ export class Backlog {
     if (blockedBy.length > 0) throw new NotSchedulableError(blockedBy);
     // Its dependencies that are cards: what the new card waits for (an id that is gone is dropped).
     const cardDeps = item.dependsOn.length > 0 && this.options.pipeline.dependencyStates ? [...(await this.options.pipeline.dependencyStates(item.dependsOn)).keys()] : [];
+    const carried = (await this.options.stackOf?.(item.sources).catch(() => null)) ?? {};
     if (!(await this.options.store.remove(id))) throw new BacklogItemNotFoundError(id);
     const first = item.sources.find((s): s is TaskSource => "kind" in s);
     try {
@@ -145,7 +148,7 @@ export class Backlog {
         ...(item.repo?.startsWith("/") ? { repoPath: item.repo } : {}),
         hints: { size: item.size, urgency: String(item.scores.time) },
         ...(item.repo ? { links: {} } : {}),
-        ...(cardDeps.length > 0 ? { stack: { dependsOn: cardDeps } } : {}),
+        ...(cardDeps.length > 0 || carried.riskFloor ? { stack: { ...(cardDeps.length > 0 ? { dependsOn: cardDeps } : {}), ...(carried.riskFloor ? { riskFloor: carried.riskFloor } : {}) } } : {}),
       });
       // Every other item that named this one now names the card.
       await this.options.store.replaceDependency(id, made.id).catch((error: unknown) => console.warn(`backlog: dependencies were not moved to the new card: ${error instanceof Error ? error.message : String(error)}`));

@@ -227,7 +227,16 @@ export class TicketMachine implements TicketIntake {
     const last = [...row.assessments].reverse().find((a) => a.outcome === "workable");
     if (!last || !this.deps.backlog) throw new TicketRefusal("only a ticket assessed as workable goes to the backlog");
     const repo = row.machineLinks.find((l) => l.kind === "repo")?.target ?? null;
-    const placed = await this.deps.backlog.upsertFromSource(backlogInput(row.canonical, repo, last as unknown as AssessmentRecord), { createIfMissing: true });
+    // A ticket that waits on others (a split's sibling) waits on what each became: its card, or its backlog item. One that is neither yet is not scheduled first.
+    const dependsOn: string[] = [];
+    for (const target of row.machineLinks.filter((l) => l.kind === "depends_on").map((l) => l.target)) {
+      const other = await this.deps.store.get(target);
+      const otherLast = other ? [...other.assessments].reverse().find((a) => a.outcome === "workable") : undefined;
+      const id = other?.cardId ?? (other && otherLast ? (await this.deps.backlog.upsertFromSource(backlogInput(other.canonical, other.machineLinks.find((l) => l.kind === "repo")?.target ?? null, otherLast as unknown as AssessmentRecord), { createIfMissing: false }))?.id : undefined);
+      if (!id) throw new TicketRefusal(`${target} is not in the backlog or a card yet: schedule it first`);
+      dependsOn.push(id);
+    }
+    const placed = await this.deps.backlog.upsertFromSource(backlogInput(row.canonical, repo, last as unknown as AssessmentRecord, dependsOn), { createIfMissing: true });
     if (!placed) throw new TicketRefusal("the backlog did not take the ticket");
     await this.deps.store.setMachine(key, { status: "scheduled" });
     await this.acknowledge(key);
@@ -447,6 +456,32 @@ export class TicketMachine implements TicketIntake {
     return row && row.cardId === task.id ? { tool: row.canonical.tool, key } : null;
   }
 
+  /** What a backlog item that came from a ticket carries onto its card when it is promoted: the risk floor its split set. Empty for any other item. */
+  async stackOfSources(sources: unknown[]): Promise<{ riskFloor?: "low" | "medium" | "high" }> {
+    for (const src of sources) {
+      const x = src as Record<string, unknown>;
+      const key = x.kind === "jira" && typeof x.key === "string" ? x.key : x.kind === "github" ? `${String(x.repo)}#${String(x.number)}` : null;
+      if (!key || !(JIRA_KEY.test(key) || GITHUB_KEY.test(key))) continue;
+      const floor = (await this.deps.store.get(key))?.machineLinks.find((l) => l.kind === "risk_floor")?.target;
+      if (floor === "low" || floor === "medium" || floor === "high") return { riskFloor: floor };
+    }
+    return {};
+  }
+
+  /** How many tickets sit above a card's own ticket in a chain of splits (0 for a card whose ticket is not a part): a child ticket's card is as deep as its lineage, though its card has no `splitFrom`. */
+  async originHops(task: { id: string; source?: unknown; sources?: unknown }): Promise<number> {
+    const own = await this.ticketOfCard(task);
+    let hops = 0;
+    let key: string | null = own?.key ?? null;
+    while (key && hops < 10) {
+      const origin = (await this.deps.store.get(key))?.machineLinks.find((l) => l.kind === "origin")?.target ?? null;
+      if (!origin) break;
+      hops += 1;
+      key = origin;
+    }
+    return hops;
+  }
+
   private async row(key: string): Promise<TicketRow> {
     const row = await this.deps.store.get(parseTicketKey(key));
     if (!row) throw new TicketNotFound(key);
@@ -555,7 +590,7 @@ export class TicketMachine implements TicketIntake {
 }
 
 /** The backlog item for a ticket: its five urgency sub-scores as the scores, its size, and its ticket as the source. */
-function backlogInput(t: CanonicalTicket, repo: string | null, r: AssessmentRecord): BacklogAddInput {
+function backlogInput(t: CanonicalTicket, repo: string | null, r: AssessmentRecord, dependsOn: string[] = []): BacklogAddInput {
   const v = (k: "who" | "what" | "impact" | "time" | "demand") => Math.min(3, Math.max(1, r.subScores[k].value));
   return {
     title: t.title.slice(0, 300),
@@ -564,7 +599,7 @@ function backlogInput(t: CanonicalTicket, repo: string | null, r: AssessmentReco
     repo,
     scores: { who: v("who"), what: v("what"), impact: v("impact"), time: v("time"), demand: v("demand") },
     size: r.size,
-    dependsOn: [],
+    dependsOn,
   };
 }
 
