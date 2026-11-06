@@ -289,7 +289,7 @@ export function shipMonitor(deps: ShipMonitorDeps): ShipMonitor {
         await note(`the comment from ${a.actor ?? "ghost"} is on no open thread; nothing to answer`);
         return {};
       }
-      found ??= { id: a.id, path: null, line: null, comments: [{ author: a.actor ?? "ghost", body: a.body, at: a.at }] };
+      found ??= { id: a.id, path: null, line: null, comments: [{ author: a.actor ?? "ghost", body: a.body, at: a.at, association: a.association }] };
       // Only the repository's own people (and the machine's own replies) can instruct: a comment from anyone else, or with an association GitHub did
       // not give, never reaches the fix agent or the re-plan, and reaches the reader and the decisions only inside a block marked as untrusted data.
       const trustedComment = (c: { author: string; association?: string | null }) => c.author.toLowerCase() === mine || TRUSTED.has(c.association ?? "");

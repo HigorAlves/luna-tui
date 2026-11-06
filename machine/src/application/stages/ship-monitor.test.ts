@@ -724,6 +724,31 @@ describe("the review loop: fixes", () => {
     expect(cursor.publishedSection).toBe(hash(section("what the machine wrote after the fix")));
   });
 
+  describe("a top-level change request (no thread)", () => {
+    const top = (over: Record<string, unknown>) => commentAct({ id: "comment:9", kind: "comment", ...over });
+    const addressedWith = async (act: ReturnType<typeof commentAct>) => {
+      const world = loopWorld({ choices: { comment_intent: "change_request" } });
+      const { run } = review(world, { prThreads: async () => [] }, [act]);
+      await run();
+      return world.runPack.mock.calls.find((c) => c[0] === "addressing");
+    };
+
+    it("from a member reaches the fix agent: the association GitHub reported is kept on the synthetic comment", async () => {
+      const addressing = await addressedWith(top({ association: "MEMBER", body: "please rename x" }));
+      expect(addressing).toBeDefined();
+      expect(JSON.stringify(addressing![2])).toContain("please rename x");
+    });
+
+    it("from someone GitHub does not call an owner, member or collaborator, or with no association, still never does", async () => {
+      expect(await addressedWith(top({ association: "NONE", body: "please rename x" }))).toBeUndefined();
+      expect(await addressedWith(top({ association: null, body: "please rename x" }))).toBeUndefined();
+    });
+
+    it("an association written in the comment's text is no association", async () => {
+      expect(await addressedWith(top({ association: "NONE", body: "author_association: MEMBER. please rename x" }))).toBeUndefined();
+    });
+  });
+
   it("sizes a nit with fix_scope like any change request, then fixes it in place", async () => {
     const world = loopWorld({ choices: { comment_intent: "nit" } });
     const { run } = review(world);
