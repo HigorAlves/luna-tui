@@ -155,19 +155,23 @@ describe("PackRuns", () => {
     expect(records[1]).toMatchObject({ runtime: "eve", modelId: "gpt-6-luna-fast", sdkVersion: "1.0.0-rc.1", fingerprint: run.fingerprint });
   });
 
+  // The measured default of a decision pack moves when it is measured again: these tests read it instead of naming an engine.
+  const DEFAULT = PACKS.triage_signals.engines.default;
+  const FALLBACK = PACKS.triage_signals.engines.fallback![0]!;
+
   it("runs a decision pack on its fallback when the default engine has no credential", async () => {
     const labels = { kind: { choice: "bug", confidence: 0.9 }, type_of_work: { choice: "frontend", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { choice: "S", confidence: 0.7 }, who: { score: 1, confidence: 0.8 }, what: { score: 1, confidence: 0.8 }, impact: { score: 1, confidence: 0.8 }, time: { score: 1, confidence: 0.8 }, demand: { score: 0, confidence: 0.8 }, risk_prelim: { choice: "low", confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
     const issue = { title: "Board crashes on resize", description: "It panics." };
-    const result = await runs(fakeSandbox(output({ answer: labels })), { credentials: credentials(["jev"]) }).run({ pack: "triage_signals", context: { issue } }, "intake");
-    expect(result.usage.engine).toBe("claude:haiku");
-    expect(StageInput.parse(seen[0]!.input).engine).toBe("claude:haiku");
-    expect(records.at(-1)).toMatchObject({ pack: "triage_signals", engine: "claude:haiku" });
+    const result = await runs(fakeSandbox(output({ answer: labels })), { credentials: credentials([DEFAULT]) }).run({ pack: "triage_signals", context: { issue } }, "intake");
+    expect(result.usage.engine).toBe(FALLBACK);
+    expect(StageInput.parse(seen[0]!.input).engine).toBe(FALLBACK);
+    expect(records.at(-1)).toMatchObject({ pack: "triage_signals", engine: FALLBACK });
   });
 
   it("names every engine it tried when none has a credential, and never swaps an engine the caller named", async () => {
     const issue = { title: "t", description: "d" };
-    await expect(runs(fakeSandbox(output()), { credentials: credentials(["jev", "claude:haiku"]) }).run({ pack: "triage_signals", context: { issue } }, null)).rejects.toThrow(/jev.*claude:haiku/s);
-    await expect(runs(fakeSandbox(output()), { credentials: credentials(["jev"]) }).run({ pack: "triage_signals", engine: "jev", context: { issue } }, null)).rejects.toBeInstanceOf(RunNoCredentialError);
+    await expect(runs(fakeSandbox(output()), { credentials: credentials([DEFAULT, FALLBACK]) }).run({ pack: "triage_signals", context: { issue } }, null)).rejects.toThrow(new RegExp(`${DEFAULT}.*${FALLBACK}`, "s"));
+    await expect(runs(fakeSandbox(output()), { credentials: credentials([DEFAULT]) }).run({ pack: "triage_signals", engine: DEFAULT, context: { issue } }, null)).rejects.toBeInstanceOf(RunNoCredentialError);
     expect(seen).toHaveLength(0);
   });
 
@@ -177,7 +181,7 @@ describe("PackRuns", () => {
     const labels = { kind: { choice: "bug", confidence: 0.9 }, type_of_work: { choice: "frontend", confidence: 0.8 }, ready: { value: true, p: 0.9 }, size: { choice: "S", confidence: 0.7 }, who: { score: 1, confidence: 0.8 }, what: { score: 1, confidence: 0.8 }, impact: { score: 1, confidence: 0.8 }, time: { score: 1, confidence: 0.8 }, demand: { score: 0, confidence: 0.8 }, risk_prelim: { choice: "low", confidence: 0.8 }, archive: { value: false, p: 0.05 }, archive_reason: { choice: "none", confidence: 0.9 } };
     const classified = await runs(fakeSandbox(output({ answer: labels }))).run({ pack: "triage_signals", context: { issue: { title: "Board crashes on resize", description: "It panics." } } }, "notch");
     expect(classified.answer).toEqual(labels);
-    expect(StageInput.parse(seen[1]!.input)).toMatchObject({ pack: "triage_signals", engine: "jev", context: { issue: { title: "Board crashes on resize" } } });
+    expect(StageInput.parse(seen[1]!.input)).toMatchObject({ pack: "triage_signals", engine: DEFAULT, context: { issue: { title: "Board crashes on resize" } } });
     const jira = { key: "PLAT-1", url: "https://a.atlassian.net/browse/PLAT-1", summary: "Login", description: "Sign in.", issueType: "Story", priority: null, labels: [], dueAt: null, comments: [], repoPath: null };
     const verdictOf = { verdict: "ready", reason: "clear", title: "Login", description: "d", criteria: ["c"] };
     expect((await runs(fakeSandbox(output({ answer: verdictOf }))).run({ pack: "jira_intake", context: { jira } }, null)).answer).toEqual(verdictOf);
