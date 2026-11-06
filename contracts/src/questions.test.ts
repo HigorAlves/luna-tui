@@ -153,6 +153,15 @@ describe("the plan stage's decision packs", () => {
     }
   });
 
+  it("frame_privacy asks one exposure choice (none, credential, personal_data) on the check context, a decision with no task state", () => {
+    const pack = PACKS.frame_privacy;
+    expect(pack.kind).toBe("decision");
+    expect(Object.keys(pack.questions)).toEqual(["exposure"]);
+    expect(Object.keys((pack.questions.exposure as { criteria: object }).criteria)).toEqual(["none", "credential", "personal_data"]);
+    expect(pack.policy.exposure).toMatchObject({ proceed: 0.7, flag: 0.5 });
+    expect(PACK_LIMITS.frame_privacy).toEqual({ maxTurns: 1, timeoutMs: pack.timeoutMs, writable: false });
+  });
+
   it("evidence_format answers with the diagram's labels: video, screenshots_or_terminal, text_only", () => {
     const criteria = (PACKS.evidence_format.questions.format as { criteria: Record<string, string> }).criteria;
     expect(Object.keys(criteria)).toEqual(["video", "screenshots_or_terminal", "text_only"]);

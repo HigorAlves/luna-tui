@@ -12,6 +12,7 @@ import {
   EvidenceContext,
   ShipContext,
   VideoContext,
+  CheckContext,
   EvidencePack,
   EvalJudgeAnswer,
   CodeMapAnswer,
@@ -204,9 +205,9 @@ describe("StageOutput", () => {
 describe("PackId", () => {
   it("has the eleven stage packs, each named after a task state, plus the Slack, chat and Jira intake triages, the issue classifier and the eval judge", () => {
     expect([...PackId.options].sort()).toEqual(
-      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "evidence_format", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "pr_reply"].sort(),
+      ["setup", "triage", "test_design", "plan", "plan_fast", "test_design_fast", "implementing", "build_tests", "verifying", "e2e", "evidence", "ci_watch", "reviewing_memory", "reviewing", "addressing", "slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "code_map", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "video_script", "recording", "video_qa", "video_fix", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning", "pr_reply"].sort(),
     );
-    const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "evidence_format", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning"];
+    const onDemand: string[] = ["slack_triage", "jira_intake", "triage_signals", "risk_score", "coverage_check", "plan_check", "eval_judge", "chat_triage", "red_check", "scope_check", "escalation_reason", "finding_classify", "e2e_failure_cause", "ci_failure_class", "frame_privacy", "evidence_format", "event_class", "comment_intent", "fix_scope", "evidence_valid", "worth_learning"];
     // The planner runs in the test_design state (the machine's RUNS_IN), so it names no state of its own.
     const runsInAnotherState: string[] = ["plan", "plan_fast", "test_design_fast", "build_tests", "code_map", "video_script", "recording", "video_qa", "video_fix", "pr_reply"];
     for (const pack of PackId.options) {
@@ -501,6 +502,12 @@ describe("TriageRecord and EvidencePack", () => {
     expect(VideoContext.shape.budgetS.safeParse(90).success).toBe(true);
     expect(VideoContext.shape.budgetS.safeParse(-1).success).toBe(false);
   });
+  it("take a frames check context for frame_privacy, and a context from before it still parses", () => {
+    expect(CheckContext.safeParse({ kind: "frames", frames: { texts: ["Cart total $12"] } }).success).toBe(true);
+    expect(CheckContext.safeParse({ kind: "frames", frames: { texts: Array.from({ length: 41 }, () => "x") } }).success).toBe(false);
+    expect(CheckContext.safeParse({ kind: "frames", frames: { texts: ["x".repeat(1001)] } }).success).toBe(false);
+    expect(CheckContext.safeParse({ kind: "red" }).success).toBe(true);
+  });
   it("take a media entry's scanned flag, optional", () => {
     const media = { kind: "screenshot", label: "a.png", url: "/x/a.png" };
     expect(EvidencePack.parse({ ...evidence, media: [media] }).media[0]).not.toHaveProperty("scanned");
@@ -627,3 +634,4 @@ describe("VideoContext", () => {
     expect(StageInput.parse({ ...stageInputExample, schema: 3, context: { projectContext: null, video: context } }).context.video).toEqual(context);
   });
 });
+ 

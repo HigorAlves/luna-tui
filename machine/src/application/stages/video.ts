@@ -8,7 +8,7 @@
 import { cp, mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import { join, relative } from "node:path";
 
-import { type EvidencePack, type FactoryConfig, PACKS, type QaTarget, type TestCase, type TriageRecord, type VideoContext, type VideoFixCard, VideoQaAnswer } from "@hardness/contracts";
+import { type DecisionOverrides, type EvidencePack, type FactoryConfig, PACKS, type QaTarget, type TestCase, type TriageRecord, type VideoContext, type VideoFixCard, VideoQaAnswer } from "@hardness/contracts";
 import { z } from "zod";
 
 import { safe as safeLine } from "../../domain/evidence-markdown.ts";
@@ -17,6 +17,8 @@ import { Timeline, checkTimeline } from "../../../runner-video/tools/lib/timelin
 import type { SandboxResult, SandboxRun } from "../../adapters/docker/docker.ts";
 import { headCommit as worktreeHead, resetWorktree } from "../../adapters/git/worktree.ts";
 import { copyRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
+import { judgePrivacy, privacyTexts } from "../frame-privacy.ts";
+import type { Decide } from "./check-decide.ts";
 import { type VideoTool, readFrames, runVideoTool } from "../video-jobs.ts";
 import { screenFindings } from "../../domain/screen-text.ts";
 import type { StageContext, StageResult } from "../ports.ts";
@@ -36,6 +38,9 @@ export interface VideoPipelineDeps {
   log?: (line: string) => void;
   /** The repository's `evidence` section of luna.yaml (`policies.for(repo).factory.evidence`): the voice and the language. Absent, the defaults. */
   config?: (repoPath: string | null) => Promise<FactoryConfig["evidence"]>;
+  /** The late-bound decision runner (read at call time) and the repository's bars: frame_privacy judges the on-screen text no pattern decided. */
+  decide?: () => Decide | null;
+  overrides?: (repoPath: string | null) => Promise<Record<string, DecisionOverrides>>;
 }
 
 export interface VideoInput {
@@ -52,7 +57,7 @@ export interface VideoInput {
 }
 
 export type VideoOutcome =
-  | { ok: true; video: PackVideo; media: Media[]; jobDir: string; usage: { turns: number; costUsd: number } }
+  | { ok: true; video: PackVideo; media: Media[]; jobDir: string; usage: { turns: number; costUsd: number }; /** Something the pack should say (the on-screen text was not judged). */ note?: string }
   | { ok: false; reason: string; degrade: "captures"; video?: PackVideo; rateLimited?: boolean; usage: { turns: number; costUsd: number } };
 
 export type VideoPipeline = (context: StageContext, input: VideoInput) => Promise<VideoOutcome>;
@@ -298,8 +303,10 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       rateLimited?: boolean;
     }
     let hitKinds: string[] = [];
+    let privacyNote: string | null = null;
     const judge = async (timeline: Timeline, tag: string): Promise<Judged> => {
       hitKinds = [];
+      privacyNote = null;
       const reportRaw = await readJson(jobDir, "qa/report.json", SMALL * 10);
       const report = Report.safeParse(reportRaw);
       if (!report.success) return { shipped: false, answer: null, measured: [], report: null, error: "the measure job left no usable report.json" };
@@ -317,6 +324,15 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       const hits = screenFindings([...read.map((f) => ({ ...(f.t !== undefined ? { t: f.t } : {}), ...(f.file !== undefined ? { file: f.file } : {}), text: f.text })), ...(transcript !== null ? [{ file: "transcript", text: transcript }] : [])]);
       for (const hit of hits) measured.push({ t: null, scene: null, element: null, text: hit.place === "transcript" ? `a ${hit.kind} is in the narration: do not say it` : `a ${hit.kind} is on screen at ${hit.place}: do not show it`, priority: "P0" });
       hitKinds = [...new Set(hits.map((h) => h.kind))];
+      // What no pattern decides: asked once per film, only when the patterns found nothing.
+      if (hits.length === 0) {
+        const repo = context.task.repoPath ?? null;
+        const judgedText = await judgePrivacy(deps.decide?.() ?? null, (await deps.overrides?.(repo).catch(() => ({}))) ?? {}, privacyTexts(read), repo);
+        if (judgedText === "exposed") {
+          measured.push({ t: null, scene: null, element: null, text: "the on-screen text may show a credential or personal data: do not show it", priority: "P0" });
+          hitKinds = ["credential or personal data"];
+        } else if (judgedText === "not_judged") privacyNote = "the on-screen text was not judged";
+      }
       const sheets: string[] = [];
       for (const name of ["beats_sheet.jpg", "hook_sheet.jpg", "phone_sheet.jpg"]) if (await trusted(jobDir, `qa/${name}`, 50 * 1024 * 1024)) sheets.push(`/evidence/qa/${name}`);
       // The critic reads the timeline beside the job's other files, at /evidence/timeline.json.
@@ -397,7 +413,7 @@ export function videoPipeline(deps: VideoPipelineDeps): VideoPipeline {
       if (path) media.push({ kind, label, url: path });
     }
     note(`ready after ${rounds} round${rounds === 1 ? "" : "s"}`);
-    return { ok: true, video, media, jobDir, usage: { ...spent } };
+    return { ok: true, video, media, jobDir, usage: { ...spent }, ...(privacyNote ? { note: privacyNote } : {}) };
 
     async function packVideo(j: Judged, count: number, verdict: "ship" | "degraded"): Promise<PackVideo> {
       const meta = (await readJson(jobDir, "meta.json", SMALL)) as { durationS?: unknown } | null;

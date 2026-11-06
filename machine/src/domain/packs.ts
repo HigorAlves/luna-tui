@@ -31,6 +31,7 @@ const RUNS_IN: Partial<Record<PackId, TaskState[]>> = {
   finding_classify: [],
   e2e_failure_cause: [],
   ci_failure_class: [],
+  frame_privacy: [],
   // A decision on the evidence context, run on demand by the evidence stage.
   evidence_format: [],
   // The video pipeline runs inside evidence, sub-run by sub-run; `evidence` stays first in PACKS so the state still picks it.

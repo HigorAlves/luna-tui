@@ -25,6 +25,7 @@ import { prAddressRunner } from "../application/stages/pr-address.ts";
 import { prReviewRunner } from "../application/stages/pr-review.ts";
 import { videoPipeline } from "../application/stages/video.ts";
 import { scanImages } from "../application/video-jobs.ts";
+import { judgePrivacy } from "../application/frame-privacy.ts";
 import { setupRunner } from "../application/stages/setup.ts";
 import { shipRunnerWith } from "../application/stages/ship.ts";
 import { type ShipDecide } from "../application/stages/ship-fixes.ts";
@@ -274,6 +275,7 @@ export async function buildRealStages(
       policies: { for: (repoPath) => policies.for(repoPath) },
       headCommit,
       videoImage: async () => videoImage,
+      privacy: async (texts, repoPath) => judgePrivacy(verifyDecisions?.decide ?? null, (await policies.for(repoPath)).decisions, texts, repoPath),
       ...(videoImage ? { scanImages: (dir: string, signal: AbortSignal) => scanImages({ sandbox: runSandbox, image: config.runnerVideoImage }, { id: dir.split("/").pop() ?? "shots", dir, signal }) } : {}),
       video: videoImage
         ? videoPipeline({
@@ -282,6 +284,8 @@ export async function buildRealStages(
             stateDir: config.stateDir,
             runPack: (pack, subContext, extra) => runAgent(deps, subContext, pack, extra),
             config: async (repoPath) => (await policies.for(repoPath)).factory.evidence,
+            decide: () => verifyDecisions?.decide ?? null,
+            overrides: async (repoPath) => (await policies.for(repoPath)).decisions,
           })
         : null,
     }),

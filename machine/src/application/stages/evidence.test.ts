@@ -383,6 +383,26 @@ describe("evidenceStage", () => {
       expect(JSON.stringify(result)).not.toContain(token);
     });
 
+    it("asks frame_privacy once over the screenshots' text; a credential leaves them out with a note", async () => {
+      browserRun();
+      const asked: string[][] = [];
+      const { run, saved } = stage({ scanImages: async () => [{ file: "a.png", text: "Cart" }, { file: "b.png", text: "Key" }], privacy: async (texts) => (asked.push(texts), "exposed") });
+      await run(taskContext());
+      const pack = (saved[0]![1] as { evidence: { media: { kind: string }[]; note?: string } }).evidence;
+      expect(asked).toEqual([["Cart", "Key"]]);
+      expect(pack.media.filter((m) => m.kind === "screenshot")).toEqual([]);
+      expect(pack.note).toMatch(/2 screenshot.*left out.*personal data or a credential/);
+    });
+
+    it("says the on-screen text was not judged when there is no decision, and keeps the pattern-checked screenshots", async () => {
+      browserRun();
+      const { run, saved } = stage({ scanImages: async () => [{ file: "a.png", text: "Cart" }], privacy: async () => "not_judged" });
+      await run(taskContext());
+      const pack = (saved[0]![1] as { evidence: { media: { kind: string }[]; note?: string } }).evidence;
+      expect(pack.media.some((m) => m.kind === "screenshot")).toBe(true);
+      expect(pack.note).toMatch(/on-screen text was not judged/);
+    });
+
     it("marks every screenshot scanned: false when the reader cannot run, and keeps them", async () => {
       browserRun();
       const { pack } = await shot(null);

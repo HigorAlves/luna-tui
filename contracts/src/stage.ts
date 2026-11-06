@@ -144,6 +144,8 @@ export const PackId = z.enum([
   "e2e_failure_cause",
   // A decision on what kind of CI failure a red job is (a check context, run on demand): a real failure, a flake, an environment failure, a drift from the base.
   "ci_failure_class",
+  // A decision on whether the text read off a film or screenshots shows a credential or personal data (a check context of kind frames): what no pattern decides.
+  "frame_privacy",
   // Not a task stage: the replay evals' judge, grading another pack's answer to an eval case.
   "eval_judge",
   // Not a task stage: triages a batch of chat items (Slack or Teams) a client sends to POST /runs.
@@ -640,7 +642,9 @@ export type PlanContext = z.infer<typeof PlanContext>;
 
 /** What the checks (red_check, scope_check, finding_classify, e2e_failure_cause) judge: a red slice's failing output, the facts of a change's scope, a review finding, or a failed browser run. */
 export const CheckContext = z.object({
-  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci"]),
+  kind: z.enum(["red", "scope", "finding", "e2e", "escalation", "ci", "frames"]),
+  /** frames: the distinct on-screen texts of a film or its screenshots, flattened and capped by the machine (40 texts of 1000 characters): data for frame_privacy. */
+  frames: z.object({ texts: z.array(z.string().max(1000)).max(40) }).optional(),
   /** ci: the failing job and the tail of its log, flattened and capped by the machine: data for ci_failure_class. */
   ci: z.object({ job: z.string(), log: z.string() }).optional(),
   slice: z.object({ id: z.number().int(), title: z.string(), acceptance: z.array(z.string()) }).optional(),

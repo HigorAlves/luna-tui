@@ -38,7 +38,7 @@ beforeEach(() => {
   mkdirSync(stateDir);
 });
 
-function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("pass" | "fail")[]; recorder?: "ok" | "escalated" | "no-timing" | "symlink" | "inside-link"; heads?: string[]; answerOnly?: boolean; concurrent?: boolean; narrateFails?: boolean; narrateWaitsForAbort?: boolean; recorderWaitsForAbort?: boolean; config?: { voice?: string | null; language?: string | null; budgetS?: number; regenerate?: number }; metaDurationS?: number; frames?: unknown[] | "none" | "bad-tool"; transcript?: string } = {}) {
+function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("pass" | "fail")[]; recorder?: "ok" | "escalated" | "no-timing" | "symlink" | "inside-link"; heads?: string[]; answerOnly?: boolean; concurrent?: boolean; narrateFails?: boolean; narrateWaitsForAbort?: boolean; recorderWaitsForAbort?: boolean; config?: { voice?: string | null; language?: string | null; budgetS?: number; regenerate?: number }; metaDurationS?: number; frames?: unknown[] | "none" | "bad-tool"; transcript?: string; privacy?: { choice: string; confidence: number } | "throw" | "off" } = {}) {
   const calls: { pack: string; runId: string; extra: AgentExtra; at: number; signal?: AbortSignal }[] = [];
   const flags = { recordingBeforeNarrateReturned: false, recorderSawAbort: false, narrateSawAbort: false, recInTimelineAtStart: null as string | null };
   const heads = [...(opts.heads ?? [])];
@@ -123,7 +123,14 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
   };
   const notes: string[] = [];
   const config = async () => ({ video_budget_s: opts.config?.budgetS ?? 240, regenerate: opts.config?.regenerate ?? 1, tts: { voice: opts.config?.voice ?? null, language: opts.config?.language ?? null }, storage: "release_asset" as const, retention_days: 180 });
-  const pipeline = videoPipeline({ sandbox, image: "video:1", stateDir, runPack, git, log: () => {}, ...(opts.config ? { config } : {}) });
+  const asked: { pack: string; check: unknown }[] = [];
+  const decide = opts.privacy === "off" ? null : async (pack: string, check: unknown) => {
+    asked.push({ pack, check });
+    if (opts.privacy === "throw") throw new Error("down");
+    const p = opts.privacy ?? { choice: "none", confidence: 0.9 };
+    return { exposure: p };
+  };
+  const pipeline = videoPipeline({ decide: () => decide as never, sandbox, image: "video:1", stateDir, runPack, git, log: () => {}, ...(opts.config ? { config } : {}) });
   const worktree = join(root, "wt");
   const context = (runId = "run-1"): StageContext =>
     ({ task: { id: "11111111-2222-3333-4444-555555555555", worktreePath: worktree }, stage: "evidence", attempt: 1, runId, approvals: [], signal: new AbortController().signal, note: async (t: string) => void notes.push(t) }) as unknown as StageContext;
@@ -132,7 +139,7 @@ function harness(opts: { scripts?: unknown[]; critics?: unknown[]; reports?: ("p
   writeFileSync(join(qa, "steps.jsonl"), '{"scenario":"a","step":"click"}\n{"scenario":"a","step":"fill"}\n');
   writeFileSync(join(qa, "qa-manifest.json"), JSON.stringify({ video: { chapters: [{ title: "A", start: 0 }] } }));
   const input = (over: Partial<VideoInput> = {}): VideoInput => ({ scenarios, record: null, pack: { summary: "s", howToVerify: "h", risk: "low" }, e2eDir: qa, target: { name: "local", baseUrl: "http://127.0.0.1:3000", credential: null }, fixCards: [], ...over });
-  return { pipeline, context, input, calls, tools, notes, git, worktree, flags };
+  return { pipeline, context, input, calls, tools, notes, git, worktree, flags, asked };
 }
 
 describe("videoPipeline", () => {
@@ -457,6 +464,45 @@ describe("videoPipeline", () => {
         const out = await h.pipeline(h.context(), h.input());
         expect(out, frames).toMatchObject({ ok: false, degrade: "captures", reason: "the frame check could not run" });
         expect(h.calls.map((c) => c.pack)).not.toContain("video_qa");
+      }
+    });
+  });
+
+  describe("frame_privacy, after the pattern check found nothing", () => {
+    it("asks once per film with the distinct on-screen texts, and ships on none at proceed", async () => {
+      const h = harness({ frames: [{ t: 0, text: "Cart" }, { t: 2, text: "Cart" }, { t: 4, text: "Total $12" }] });
+      const out = await h.pipeline(h.context(), h.input());
+      expect(out.ok).toBe(true);
+      expect(h.asked).toEqual([{ pack: "frame_privacy", check: { kind: "frames", frames: { texts: ["Cart", "Total $12"] } } }]);
+    });
+
+    it("turns a credential into a P0 card for the fix round, then degrades with the kind, never the text", async () => {
+      const h = harness({ privacy: { choice: "credential", confidence: 0.9 } });
+      const out = await h.pipeline(h.context(), h.input());
+      const fix = h.calls.find((c) => c.pack === "video_fix")!;
+      expect(fix.extra.video!.fixCards).toContainEqual(expect.objectContaining({ priority: "P0", text: expect.stringMatching(/credential/) }));
+      expect(out).toMatchObject({ ok: false, degrade: "captures", reason: expect.stringMatching(/credential/) });
+    });
+
+    it("counts none under the proceed bar as a card too", async () => {
+      const h = harness({ privacy: { choice: "none", confidence: 0.6 } });
+      await h.pipeline(h.context(), h.input());
+      expect(h.calls.map((c) => c.pack)).toContain("video_fix");
+    });
+
+    it("is not asked when a pattern already hit", async () => {
+      const token = "gh" + "p_" + "a".repeat(36);
+      const h = harness({ frames: [{ t: 1, text: token }] });
+      await h.pipeline(h.context(), h.input());
+      expect(h.asked).toEqual([]);
+    });
+
+    it("keeps the pattern check and says the text was not judged when there is no decision or it fails", async () => {
+      for (const privacy of ["off", "throw"] as const) {
+        const h = harness({ privacy });
+        const out = await h.pipeline(h.context(), h.input());
+        expect(out.ok, privacy).toBe(true);
+        expect(out.ok && out.note).toMatch(/on-screen text was not judged/);
       }
     });
   });

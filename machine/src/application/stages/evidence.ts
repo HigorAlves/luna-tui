@@ -16,6 +16,7 @@ import { approvedCases, approvedPlan, approvedScenarios } from "../../domain/sta
 import { EvidenceStore, MAX_MEDIA_BYTES, safeName } from "../evidence-store.ts";
 import { copyRegularFile, hashRegularFile, readRegularFile } from "../../adapters/fs/bounded.ts";
 import { screenFindings } from "../../domain/screen-text.ts";
+import { privacyTexts } from "../frame-privacy.ts";
 import type { StageContext, StageResult, StageRunner } from "../ports.ts";
 import type { VideoPipeline } from "./video.ts";
 
@@ -235,6 +236,8 @@ export interface EvidenceStageDeps extends EvidenceDeps {
   video?: VideoPipeline | null;
   /** Reads the text on the image files directly in a folder (the video image's `frames --images`); null when it could not run. Absent when there is no video image. */
   scanImages?: (dir: string, signal: AbortSignal) => Promise<{ file: string; text: string }[] | null>;
+  /** frame_privacy over the screenshots' text, once, after the pattern check found nothing (`judgePrivacy`); absent, the text is not judged. */
+  privacy?: (texts: string[], repoPath: string | null) => Promise<"clear" | "exposed" | "not_judged">;
   now?: () => Date;
 }
 
@@ -413,6 +416,7 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
       });
       spent = out.usage;
       if (out.ok) {
+        if (out.note) addNote(out.note);
         video = out.video;
         filmMedia = out.media;
       } else {
@@ -459,6 +463,14 @@ export function evidenceStage(deps: EvidenceStageDeps): StageRunner {
         for (const p of shots) scanned.set(p.label, true);
         for (const p of left) picked.splice(picked.indexOf(p), 1);
         if (left.length > 0) addNote(`${left.length} screenshot(s) left out: a ${[...new Set(hits.map((h) => h.kind))].join(", a ")} was on screen`);
+        else if (deps.privacy) {
+          const judgedText = await deps.privacy(privacyTexts(frames), task.repoPath).catch(() => "not_judged" as const);
+          if (judgedText === "exposed") {
+            const count = shots.length;
+            for (const p of shots) picked.splice(picked.indexOf(p), 1);
+            addNote(`${count} screenshot(s) left out: the on-screen text may show personal data or a credential`);
+          } else if (judgedText === "not_judged") addNote("the on-screen text was not judged");
+        }
       }
     }
     for (const m of filmMedia) picked.push({ path: m.url, label: m.label, kind: m.kind });
