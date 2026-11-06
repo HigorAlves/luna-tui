@@ -45,6 +45,7 @@ import { type RunFacts, runFacts } from "../domain/task.ts";
 import { applyPolicy } from "@hardness/contracts";
 import type { DecisionAppender } from "./decision-log.ts";
 import { outputError, runPackOnce } from "./stages/run-once.ts";
+import { currentTask } from "./task-scope.ts";
 import { type Telemetry, noTelemetry } from "./telemetry.ts";
 
 /** How many `POST /runs` calls run at once; the rest wait. */
@@ -122,7 +123,8 @@ export interface PackRunsPort {
 /** The port the machine's own code calls: every call is marked `own`, so its decision records read `origin: "machine"`. The HTTP route gets the
  *  runs themselves, never this wrapper. */
 export function ownCalls(runs: PackRunsPort): PackRunsPort {
-  return { run: (input, client, signal, options) => runs.run(input, client, signal, { ...options, own: true }) };
+  // A call made while a card's stage runs names the card (`task-scope.ts`); a call that already names one keeps its own.
+  return { run: (input, client, signal, options) => runs.run(input.taskId === undefined && currentTask() !== undefined ? { ...input, taskId: currentTask()! } : input, client, signal, { ...options, own: true }) };
 }
 
 export interface PackRunsDeps {

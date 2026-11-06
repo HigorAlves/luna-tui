@@ -14,6 +14,7 @@ import { NO_RETRIES, TransitionError } from "../domain/transition.ts";
 import type { StageContext, StageResult, StageRunner } from "./ports.ts";
 import { loadConfig } from "../config.ts";
 import { StubStages } from "./stages/stubs.ts";
+import { currentTask } from "./task-scope.ts";
 import { withTriageSignals } from "./stages/triage-signals.ts";
 import { PgTaskStore } from "../adapters/persistence/task-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
@@ -1130,6 +1131,16 @@ describe("ground truth", () => {
     expect((await p.decide(id, "approved")).state).toBe("awaiting_ship");
     expect(calls).toBe(0);
     expect((await p.events(id)).filter((e) => e.kind.startsWith("ground_truth"))).toEqual([]);
+  });
+
+  it("runs the stage inside the card's scope, so a decision call it makes carries the card's id", async () => {
+    const seen: Array<string | undefined> = [];
+    const p = new Pipeline(db, (stage) => async (input) => (seen.push(currentTask()), stubs.runnerFor(stage)(input)), { inline: true, policies: previewOn, hasConfig: () => true });
+    const task = await p.createTask({ title: "Login page", criteria: ["Bad password shows an error"] });
+    await p.start(task.id);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(new Set(seen)).toEqual(new Set([task.id]));
+    expect(currentTask()).toBeUndefined();
   });
 
   it("logs a writer that fails and approves anyway", async () => {

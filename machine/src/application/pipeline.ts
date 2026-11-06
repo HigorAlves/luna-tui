@@ -52,6 +52,7 @@ import type { CommitFact, PriorityTruthEntry } from "./ground-truth.ts";
 import { budgetRowsOf, buildBudget, rateLimitWaitMs } from "../domain/build-budget.ts";
 import { DECIDED_REASONS, type DecidedEscalation, decideEscalation } from "./stages/escalation.ts";
 import { type Decide } from "./stages/check-decide.ts";
+import { withTask } from "./task-scope.ts";
 import { buildEntryOf } from "../domain/build-entry.ts";
 import { replanOf } from "../domain/replan.ts";
 import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, outsideSatisfied, ownersStateOf, ruleFiles, sameName } from "../domain/approvers.ts";
@@ -2586,8 +2587,9 @@ export class Pipeline {
           this.offPool.delete(id);
           result = spentBefore;
         } else {
+          const named = stage;
           try {
-            result = await this.runStage(id, stage, controller.signal, resume, fallback);
+            result = await withTask(id, () => this.runStage(id, named, controller.signal, resume, fallback));
           } finally {
             this.offPool.delete(id);
           }
@@ -3006,7 +3008,7 @@ export class Pipeline {
     const lastDetail = objectOf(last?.payload.detail);
     const agentReason = EscalationReason.safeParse(detail.escalation);
     const limits = (await this.policyFor(task.repoPath)).factory.build;
-    const decision = await decideEscalation({
+    const decision = await withTask(id, async () => decideEscalation({
       stage: "implementing",
       summary: text(detail.summary) || reasonText,
       agent: { ...(agentReason.success ? { reason: agentReason.data } : {}), text: text(detail.reason) },
@@ -3021,7 +3023,7 @@ export class Pipeline {
       decide: this.escalationDecide.decide,
       repoPath: task.repoPath,
       overrides: (await this.policyFor(task.repoPath)).decisions,
-    });
+    }));
     return { decision, reasonText };
   }
 

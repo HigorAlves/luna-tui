@@ -8,6 +8,7 @@ import { ZodError } from "zod";
 
 import { type Credentials, NoCredentialError } from "../adapters/credentials/index.ts";
 import type { SandboxResult, SandboxRun } from "../adapters/docker/docker.ts";
+import { withTask } from "./task-scope.ts";
 import { type RunEnd, type RunStart, type Telemetry, noTelemetry } from "./telemetry.ts";
 import { EngineNotAllowedError, NotOnDemandError, PACK_RUNS_DIR, type PackRunRecord, PackRuns, QueueFullError, ownCalls, RunAbortedError, RunFailedError, RunNoCredentialError, RunOverBudgetError, RunRateLimitedError } from "./pack-runs.ts";
 
@@ -537,6 +538,36 @@ describe("decision records", () => {
         const { appended } = await keep2({});
         expect(appended[0]!.repo).toBe("shop");
         expect(appended[0]!.context).toEqual({ dedup });
+      });
+
+      it("reaches a stage call through the card's scope: the record names the card, and each switch acts on it", async () => {
+        const seenTasks: Array<string | undefined> = [];
+        const policy = (over: Record<string, unknown>) => async (taskId: string | undefined) => (seenTasks.push(taskId), (await learning(over)()));
+        const call = async (over: Record<string, unknown>) => {
+          const appended: DecisionRecord[] = [];
+          const { telemetry, spans } = recordingTelemetry();
+          const own = ownCalls(runs(fakeSandbox(output({ answer: slots })), { telemetry, decisions: { append: async (record) => void appended.push(record) }, learning: policy(over) }));
+          await withTask("card-7", () => own.run({ pack: "intake_dedup", context: { dedup }, stage: "plan" }, "plan"));
+          return { appended, spans };
+        };
+        const full = await call({});
+        expect(full.appended[0]).toMatchObject({ taskId: "card-7", repo: "shop" });
+        expect(seenTasks).toEqual(["card-7"]);
+        expect((await call({ records: false })).appended).toEqual([]);
+        expect((await call({ context: "answers" })).appended[0]!.context).toEqual({});
+        const meta = await call({ traces: "metadata" });
+        expect(meta.spans[0]!.end).not.toHaveProperty("transcriptPath");
+        expect(meta.spans[0]!.end).not.toHaveProperty("input");
+        expect(meta.spans[0]!.end).not.toHaveProperty("output");
+      });
+
+      it("names no card for a call made outside any scope, and keeps a card the call already names", async () => {
+        const appended: DecisionRecord[] = [];
+        const own = ownCalls(runs(fakeSandbox(output({ answer: slots })), { decisions: { append: async (record) => void appended.push(record) } }));
+        await own.run({ pack: "intake_dedup", context: { dedup } }, "intake");
+        await withTask("card-7", () => own.run({ pack: "intake_dedup", context: { dedup }, taskId: "card-9" }, "intake"));
+        expect(appended[0]!.taskId).toBeUndefined();
+        expect(appended[1]!.taskId).toBe("card-9");
       });
 
       it("writes no record for a repository that asks for none", async () => {
