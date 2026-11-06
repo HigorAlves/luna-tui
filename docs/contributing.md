@@ -5,7 +5,7 @@ Issues and pull requests are welcome.
 Before sending a change, run:
 
 ```sh
-pnpm test             # machine, contracts, factory and the evals' grading
+pnpm test             # machine, contracts, factory and the evals' grading (the evals tests also check every decision case's reading against the pack's own criteria: see evals/README.md)
 pnpm typecheck
 pnpm board:test       # board (Rust)
 cd board && cargo clippy --all-targets -- -D warnings -A clippy::large_enum_variant   # the board's lint: CI fails on any Rust warning

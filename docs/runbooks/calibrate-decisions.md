@@ -2,6 +2,8 @@
 
 The decision packs answer typed questions with a confidence, and the machine acts on an answer only above the pack's bar. Which engine answers each slot is not a guess: it is read from `contracts/src/decision-defaults.json`, which `pnpm eval defaults --write` writes from the scorecard over every baseline (RFC 0005 wave 7). This runbook is how to produce that evidence and change a default.
 
+For one pack, step by step, with the labelling and the case readings, see [revisit a decision's default engine](revisit-a-default-engine.md). The rule as it is now: an engine qualifies with coverage 0.6 and four graded cases (and 20 labelled answers for the three packs measured answer by answer); the default is the qualifying engine with the highest acted-on accuracy, a tie going to Jev, else the cheaper; an engine that acted on every case and was right on every one wins outright; a default moves only on eight graded cases and six labelled; the owner's pins are never moved.
+
 ## Run the baselines
 
 Each decision pack has seed cases under `evals/<pack>/cases/` (two clear, one borderline, one adversarial; more come from `pnpm eval harvest`, see `evals/README.md`). A baseline is one engine's run of one pack:
