@@ -13,7 +13,7 @@ import type { Candidate } from "../domain/similarity.ts";
 import { buildValidityContext } from "./ticket-validity.ts";
 import type { AssessAnswer } from "../domain/ticket-score.ts";
 import { type AssessDeps, type AssessmentRecord, assessTicket } from "./ticket-assess.ts";
-import { type Draft, type RecommendDeps, type ReplyDeps, assessmentDraft, declineDraft, parkDraft, reminderDraft, editDraft, ignoreDraft, splitDraft, needsInfoDraft, notOursDraft, recommendWithDecision } from "./ticket-drafts.ts";
+import { type Draft, type RecommendDeps, type ReplyDeps, assessmentDraft, declineDraft, parkDraft, reminderDraft, editDraft, ignoreDraft, splitDraft, draftHash, needsInfoDraft, notOursDraft, recommendWithDecision } from "./ticket-drafts.ts";
 import { ticketClocks } from "../domain/ticket-sla.ts";
 import { enrichTicket } from "./ticket-enrich.ts";
 import { type SizeDecision, type SizedCard, similarCards, sizeContextOf, sizeDecisionOf } from "./size-estimate.ts";
@@ -331,18 +331,22 @@ export class TicketMachine implements TicketIntake {
    * goes on), then the origin is marked `epic`. A failure puts the draft back to `waiting` with what was made.
    */
   private async approveSplit(row: TicketRow, draft: Draft, hash: string): Promise<void> {
-    const children = z.array(SplitChild).safeParse(draft.children);
-    if (!children.success) throw new TicketRefusal("the split draft holds no readable children");
-    this.childTexts(row.canonical, children.data, new Map());
+    if (draft.rev !== 2) throw new TicketRefusal("this split draft is from an older version: it has to be drafted again before it can be approved");
     let claimed = false;
+    let held: unknown = null;
     await this.deps.store.updateDrafts(row.key, (current) => {
       const cur = (current as unknown as Draft[]).find((d) => d.id === draft.id);
-      if (!cur || (cur.status !== "waiting" && cur.status !== "edited") || hashOf(cur.text) !== hash) return current;
+      if (!cur || cur.rev !== 2 || (cur.status !== "waiting" && cur.status !== "edited") || draftHash(cur) !== hash) return current;
       claimed = true;
+      held = cur.children;
       return (current as unknown as Draft[]).map((d) => (d.id === draft.id ? { ...d, status: "posting" as const } : d)) as unknown as Record<string, unknown>[];
     });
     if (!claimed) throw new TicketRefusal("the draft is already being posted, or it changed since you read it");
+    // The children are the ones read under the lock, with the hash the person saw.
+    const children = z.array(SplitChild).safeParse(held);
     try {
+      if (!children.success) throw new TicketRefusal("the split draft holds no readable children");
+      this.childTexts(row.canonical, children.data, new Map());
       await this.splitChildren(row.key, children.data, { id: draft.id, draft: draft.id });
     } catch (error) {
       await this.deps.store.updateDrafts(row.key, (current) => (current as unknown as Draft[]).map((d) => (d.id === draft.id && d.status === "posting" ? { ...d, status: "waiting" as const } : d)) as unknown as Record<string, unknown>[]);
@@ -452,7 +456,7 @@ export class TicketMachine implements TicketIntake {
     if (!draft) throw new TicketRefusal("no such draft on this ticket");
     if (draft.status === "posting") throw new TicketRefusal("the draft is being posted right now");
     if (draft.status === "posted" || draft.status === "ignored") throw new TicketRefusal(`the draft is already ${draft.status}`);
-    if (hashOf(draft.text) !== hash) throw new TicketRefusal("the draft changed since you read it: read it again");
+    if (draftHash(draft) !== hash) throw new TicketRefusal("the draft changed since you read it: read it again");
     return draft;
   }
 
@@ -465,7 +469,7 @@ export class TicketMachine implements TicketIntake {
     await this.deps.store.updateDrafts(row.key, (current) => {
       const ds = current as unknown as Draft[];
       const cur = ds.find((d) => d.id === before.id);
-      if (!cur || (cur.status !== "waiting" && cur.status !== "edited") || hashOf(cur.text) !== hash) return current;
+      if (!cur || (cur.status !== "waiting" && cur.status !== "edited") || draftHash(cur) !== hash) return current;
       claimed = true;
       return ds.map((d) => (d.id === before.id ? { ...to, status: "posting" as const } : d)) as unknown as Record<string, unknown>[];
     });
@@ -563,6 +567,6 @@ function backlogInput(t: CanonicalTicket, repo: string | null, r: AssessmentReco
 }
 
 function viewOf(row: TicketRow): TicketView {
-  return { key: row.key, canonical: row.canonical, status: row.machineStatus, assessments: row.assessments, drafts: (row.drafts as unknown as Draft[]).map((d) => ({ ...d, hash: hashOf(d.text) })), cardId: row.cardId, clocks: row.clocks };
+  return { key: row.key, canonical: row.canonical, status: row.machineStatus, assessments: row.assessments, drafts: (row.drafts as unknown as Draft[]).map((d) => ({ ...d, hash: draftHash(d) })), cardId: row.cardId, clocks: row.clocks };
 }
 void (null as unknown as AssessAnswer);

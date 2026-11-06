@@ -2,6 +2,8 @@
 // and the needs-info comment are built by script in fixed words and numbers; the decline reply is written by the `ticket_reply` pack. Every
 // text goes through `postable()` and is refused when it carries a token-shaped string, whether it came from the pack or from an edit.
 // What was done to a draft (edited, ignored) is kept on it.
+import { createHash, randomUUID } from "node:crypto";
+
 import type { SplitChild, TicketContext } from "@hardness/contracts";
 
 import { carriesSecret, postable } from "../domain/postable.ts";
@@ -22,6 +24,14 @@ export interface Draft {
   /** A split draft: the proposed children, and the ones the tap already made (position and key), so a retry goes on and never makes a child twice. */
   children?: SplitChild[];
   created?: Array<{ n: number; key: string }>;
+  /** 2 on a split draft made with a unique id and the children-covering hash; a split draft without it is from before and is only ever re-drafted. */
+  rev?: number;
+}
+
+/** What a person's tap names: the sha256 of the shown text, and for a split draft of its id and the canonical JSON of the children (everything a child is made from), so a different set never passes. */
+export function draftHash(d: Pick<Draft, "kind" | "id" | "text" | "children">): string {
+  const body = d.kind === "split" ? JSON.stringify({ id: d.id, children: (d.children ?? []).map((c) => ({ title: c.title, goal: c.goal, acceptance_criteria: c.acceptance_criteria, depends_on: c.depends_on, order: c.order })) }) : d.text;
+  return createHash("sha256").update(body).digest("hex").slice(0, 16);
 }
 
 const fresh = (ticket: string, kind: Draft["kind"], text: string): Draft => ({ id: `${ticket}:${kind}`, ticket, kind, status: "waiting", text: postable(text), history: [] });
@@ -35,7 +45,7 @@ export function assessmentDraft(ticket: string, r: AssessmentRecord, recommended
 /** The proposal of a split for a ticket: numbered, each with the estimate and what it comes after. Machine-built from model-written titles; nothing is created until a tap. */
 export function splitDraft(ticket: string, children: SplitChild[]): Draft {
   const text = children.map((c, i) => `${i + 1}. ${c.title}, about ${c.est_loc} lines${c.depends_on.length > 0 ? `, after ${c.depends_on.join(", ")}` : ""}.`).join(" ");
-  return { id: `${ticket}:split`, ticket, kind: "split", status: "waiting", text: postable(text, 6000), history: [], children };
+  return { id: `${ticket}:split:${randomUUID()}`, ticket, kind: "split", status: "waiting", text: postable(text, 6000), history: [], children, rev: 2 };
 }
 
 export function needsInfoDraft(ticket: string, missing: string[]): Draft {

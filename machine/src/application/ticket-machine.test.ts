@@ -7,6 +7,7 @@ import { PgTicketStore } from "../adapters/persistence/ticket-store.ts";
 import { freshTestDatabase } from "../test/database.ts";
 import type { AssessAnswer } from "../domain/ticket-score.ts";
 import { TicketMachine, TicketNotFound, TicketRefusal, parseTicketKey } from "./ticket-machine.ts";
+import { draftHash } from "./ticket-drafts.ts";
 import type { Tickets } from "./tickets.ts";
 import type { ValidityAnswer } from "./ticket-validity.ts";
 
@@ -477,7 +478,8 @@ describe("a ticket's split (wave 15)", () => {
     const row = (await x.store.get("PAY-12"))!;
     return { x, row, draft: (row.drafts as any[]).find((d) => d.kind === "split") };
   };
-  const tap = (draft: any) => ({ draft: draft.id, hash: createHash("sha256").update(draft.text).digest("hex").slice(0, 16) });
+  const tap = (draft: any) => ({ draft: draft.id, hash: draftHash(draft) });
+  const seen = async (x: { machine: TicketMachine }) => ((await x.machine.view("PAY-12")).drafts as any[]).find((d) => d.kind === "split" && d.status !== "posted");
 
   it("a split proposal for a ticket writes nothing before the tap: a draft with the children, the status split_proposed, no create, no comment", async () => {
     const { x, row, draft } = await proposed();
@@ -607,6 +609,38 @@ describe("a ticket's split (wave 15)", () => {
     jira.x.port.create = async (origin, child, options) => (jiraSeen.push(options), makeJ(origin, child, options));
     await jira.x.machine.approve("PAY-12", tap(jira.draft));
     expect(jiraSeen).toEqual([{}, {}]);
+  });
+
+  it("a re-drafted split gets its own id and hash: a first tap that failed after one child leaves nothing the second proposal reuses", async () => {
+    const kids = [kid("Part A"), kid("Part B", { depends_on: [1], order: 2 })];
+    const { x } = await proposed({ split: { children: kids, failAt: 2 } });
+    const first = await seen(x);
+    await expect(x.machine.approve("PAY-12", tap(first))).rejects.toBeInstanceOf(TicketRefusal);
+    expect(x.creates.map((c) => c.title)).toEqual(["Part A"]);
+    // The ticket is read again and the decomposer now gives other children.
+    kids.splice(0, 2, kid("Other X"), kid("Other Y", { depends_on: [1], order: 2 }));
+    await x.machine.ingest(ticket(), { ...ctx, force: true });
+    const second = await seen(x);
+    expect(second.id).not.toBe(first.id);
+    expect(second.hash).not.toBe(first.hash);
+    await expect(x.machine.approve("PAY-12", tap(first))).rejects.toBeInstanceOf(TicketRefusal);
+    await x.machine.approve("PAY-12", tap(second));
+    expect(x.creates.map((c) => c.title)).toEqual(["Part A", "Other X", "Other Y"]);
+    const row = (await x.store.get("PAY-12"))!;
+    expect(row.machineLinks.filter((l) => l.kind === "child").map((l) => l.target).sort()).toEqual(["PAY-101", "PAY-102", "PAY-103"].sort());
+    expect(row.machineLinks.some((l) => l.kind === "split_part" && l.target.startsWith(`${second.id}:1:PAY-102`))).toBe(true);
+  });
+
+  it("the hash covers the children, not only the shown text: the old text-only hash is refused, and a draft stored before this fix is never approved", async () => {
+    const { x, draft } = await proposed();
+    const textOnly = createHash("sha256").update(draft.text).digest("hex").slice(0, 16);
+    await expect(x.machine.approve("PAY-12", { draft: draft.id, hash: textOnly })).rejects.toBeInstanceOf(TicketRefusal);
+    const row = (await x.store.get("PAY-12"))!;
+    const old = { ...draft, id: "PAY-12:split", status: "waiting" };
+    delete (old as any).rev;
+    await x.store.setDrafts("PAY-12", [old, ...(row.drafts as any[]).filter((d) => d.kind !== "split")]);
+    await expect(x.machine.approve("PAY-12", { draft: old.id, hash: textOnly })).rejects.toBeInstanceOf(TicketRefusal);
+    expect(x.creates).toEqual([]);
   });
 
   it("a ticket that depends on another needs that ticket's card first; then its card waits on it with the floor kept", async () => {
