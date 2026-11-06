@@ -37,6 +37,7 @@ import type { Policy } from "../domain/policy.ts";
 import { CONFIG_FILE, PolicyStore } from "./policy.ts";
 
 import { replanOf } from "../domain/replan.ts";
+import { controlPlaneFiles } from "../domain/control-plane.ts";
 import { type OwnersFound, type OwnersState, applyRiskOverride, approvalRule, outsideSatisfied, ownersStateOf, ruleFiles, sameName } from "../domain/approvers.ts";
 import { bareLink } from "../domain/jira-link.ts";
 import { findJiraKey, issueUrl } from "./jira.ts";
@@ -608,6 +609,18 @@ export class Pipeline {
         const moved = change("risk", applied.risk);
         if (moved || JSON.stringify(overrides.risk) !== JSON.stringify(applied.override)) overrides.risk = applied.override;
       }
+      // Steps that touch the control plane (CI, ownership, luna.yaml, a lockfile) make the plan high risk, as at the plan stage: the machine's floor rises
+      // with them, so the approvers rule and Ship read the high level and a person's lower override is shown, not applied.
+      let riskRaised: string | undefined;
+      const control = stepped ? controlPlaneFiles(stepped.steps.flatMap((step) => [...(step.files ?? []), ...(step.touchpoints ?? [])])) : [];
+      if (control.length > 0) {
+        const now = (after.risk as (PlanRisk & { machine?: Risk }) | undefined) ?? (objectOf(requested.risk) ?? { level: "low" }) as PlanRisk & { machine?: Risk };
+        if (now.level !== "high" || now.machine !== "high") {
+          change("risk", { ...now, level: "high", machine: "high" });
+          if (overrides.risk !== undefined) overrides.risk = { ...(objectOf(overrides.risk) ?? {}), applied: false };
+          riskRaised = `a step touches a control-plane file: ${control.slice(0, 5).join(", ")}`;
+        }
+      }
       if (patch.map) {
         const { reason, ...fixes } = patch.map;
         const current = (objectOf(requested.map) ?? { components: [], files: [], entry_points: [], owners: [], confidence: 0 }) as Record<string, unknown>;
@@ -632,6 +645,7 @@ export class Pipeline {
           ...(revised ? { plan: revised } : {}),
           ...(covered ? { coverageReport: covered.stored, flagged } : {}),
           ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
+          ...(riskRaised ? { riskRaised } : {}),
           ...("risk" in after || "map" in after || requested.approvalRule !== undefined ? { approvalRule: approvalRule(level === "high" || level === "medium" ? level : "low", approvers, ownersNow) } : {}),
           ...(level === "high" && ("risk" in after || "map" in after || "slices" in after || requested.ruleOwners !== undefined) ? { ruleOwners: ownersNow } : {}),
           ...(Array.isArray(requested.approvers) ? { approvers: [] } : {}),

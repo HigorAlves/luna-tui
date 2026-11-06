@@ -1019,6 +1019,23 @@ describe("editing the plan before approving", () => {
       expect(requested.revisions).toEqual([expect.objectContaining({ before: { slices, rollback: "revert" }, after: expect.objectContaining({ slices: [expect.objectContaining({ title: "Cap a coupon" })], rollback: "git revert, then run the down migration" }) })]);
     });
 
+    it("raises the plan to high when edited steps touch the control plane, as the plan stage does, and holds it for two names", async () => {
+      const id = await atGate("low");
+      await pipeline.editPlan(id, { steps: [{ description: "Deploy it", files: ["src/a.ts", ".github/workflows/deploy.yml"], done_when: ["it ships"], est_loc: 10 }] });
+      const { requested } = await gate(id);
+      expect(requested.risk).toMatchObject({ level: "high", machine: "high" });
+      expect(requested.approvalRule).toMatchObject({ needed: 2 });
+      await expect(pipeline.decide(id, "approved")).rejects.toBeInstanceOf(ApproverRequiredError);
+      expect((await pipeline.decide(id, "approved", undefined, undefined, { approver: "ana" })).state).toBe("awaiting_approval");
+      // A lockfile or CODEOWNERS is the same; plain files leave a low plan low.
+      const other = await atGate("low");
+      await pipeline.editPlan(other, { steps: [{ description: "Bump", files: ["pnpm-lock.yaml"], done_when: ["x"], est_loc: 1 }] });
+      expect((await gate(other)).requested.risk).toMatchObject({ level: "high" });
+      const plain = await atGate("low");
+      await pipeline.editPlan(plain, { steps: [{ description: "Edit", files: ["src/b.ts"], done_when: ["x"], est_loc: 1 }] });
+      expect((await gate(plain)).requested.risk).toMatchObject({ level: "low" });
+    });
+
     it("applies a raised risk at once: the level the approvers rule reads rises, the machine's own is kept, the reason is ground truth", async () => {
       const id = await atGate("medium");
       await pipeline.editPlan(id, { risk: { level: "high", reason: "touches billing" } });
